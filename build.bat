@@ -1,0 +1,36 @@
+@echo off
+echo ========================================
+echo    DataPyn - Build EXE
+echo ========================================
+echo.
+
+REM Ativar ambiente virtual
+call .venv\Scripts\activate
+
+REM Verificar se PyInstaller está instalado
+pip show pyinstaller >nul 2>&1
+if errorlevel 1 (
+    echo Instalando PyInstaller...
+    pip install pyinstaller
+)
+
+echo.
+echo Gerando executavel...
+echo.
+
+REM Executar PyInstaller com o spec file
+pyinstaller datapyn.spec --clean
+
+echo.
+if exist "dist\DataPyn.exe" (
+    echo ========================================
+    echo    Build concluido com sucesso!
+    echo    Executavel: dist\DataPyn.exe
+    echo ========================================
+) else (
+    echo ========================================
+    echo    ERRO: Build falhou!
+    echo ========================================
+)
+
+pause
