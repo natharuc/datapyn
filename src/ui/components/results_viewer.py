@@ -214,13 +214,24 @@ class ResultsViewer(QWidget):
         self.toolbar = QToolBar()
         self._apply_toolbar_style()
         
+        # Combobox de destino (Clipboard ou File)
+        self.export_destination = QComboBox()
+        self.export_destination.addItem("📋 Clipboard", "clipboard")
+        self.export_destination.addItem("📁 Arquivo", "file")
+        self.export_destination.setFixedWidth(110)
+        self.export_destination.setToolTip("Destino da exportação")
+        self.toolbar.addWidget(self.export_destination)
+        self.toolbar.addSeparator()
+        
         # Botões da toolbar
-        self.btn_export_csv = QPushButton("Exportar CSV")
-        self.btn_export_excel = QPushButton("Exportar Excel")
-        self.btn_copy = QPushButton("Copiar")
+        self.btn_export_csv = QPushButton("CSV")
+        self.btn_export_excel = QPushButton("Excel")
+        self.btn_export_json = QPushButton("JSON")
+        self.btn_copy = QPushButton("Copiar Tudo")
         
         self.toolbar.addWidget(self.btn_export_csv)
         self.toolbar.addWidget(self.btn_export_excel)
+        self.toolbar.addWidget(self.btn_export_json)
         self.toolbar.addWidget(self.btn_copy)
         
         # Info label
@@ -242,6 +253,7 @@ class ResultsViewer(QWidget):
         # Conectar sinais
         self.btn_export_csv.clicked.connect(self._export_csv)
         self.btn_export_excel.clicked.connect(self._export_excel)
+        self.btn_export_json.clicked.connect(self._export_json)
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
     
     def _apply_toolbar_style(self):
@@ -316,30 +328,45 @@ class ResultsViewer(QWidget):
         self.model.update_data(pd.DataFrame())
         self.info_label.setText("Nenhum resultado")
     
+    def _get_export_destination(self) -> str:
+        """Retorna o destino selecionado: 'clipboard' ou 'file'"""
+        return self.export_destination.currentData()
+    
+    def _show_clipboard_success(self, format_name: str):
+        """Mostra feedback de sucesso ao copiar para clipboard"""
+        self.info_label.setText(f"✓ {format_name} copiado para clipboard!")
+    
     def _export_csv(self):
-        """Exporta para CSV com diálogo de configuração"""
+        """Exporta para CSV (clipboard ou arquivo)"""
         if self.current_df is None:
             return
         
-        # Mostrar diálogo de configuração
+        destination = self._get_export_destination()
+        
+        if destination == "clipboard":
+            # Exportar para clipboard
+            from PyQt6.QtWidgets import QApplication
+            csv_text = self.current_df.to_csv(index=False)
+            QApplication.instance().clipboard().setText(csv_text)
+            self._show_clipboard_success("CSV")
+            return
+        
+        # Exportar para arquivo
         dialog = CSVExportDialog(self, theme_manager=self.theme_manager)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         
-        # Obter configurações
         delimiter = dialog.get_delimiter()
         encoding = dialog.get_encoding()
         include_header = dialog.get_include_header()
         open_folder = dialog.get_open_folder()
         
-        # Selecionar arquivo
         filename, _ = QFileDialog.getSaveFileName(
             self, "Salvar CSV", "", "CSV Files (*.csv)"
         )
         if not filename:
             return
         
-        # Garantir extensão .csv
         if not filename.lower().endswith('.csv'):
             filename += '.csv'
         
@@ -352,29 +379,69 @@ class ResultsViewer(QWidget):
                 header=include_header
             )
             
-            # Abrir pasta com arquivo selecionado
             if open_folder:
-                # Windows: abre Explorer com arquivo selecionado
                 subprocess.run(['explorer', '/select,', os.path.normpath(filename)])
                 
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao exportar CSV:\n{str(e)}")
     
     def _export_excel(self):
-        """Exporta para Excel"""
-        if self.current_df is not None:
-            from PyQt6.QtWidgets import QFileDialog
-            filename, _ = QFileDialog.getSaveFileName(
-                self, "Salvar Excel", "", "Excel Files (*.xlsx)"
-            )
-            if filename:
+        """Exporta para Excel (clipboard ou arquivo)"""
+        if self.current_df is None:
+            return
+        
+        destination = self._get_export_destination()
+        
+        if destination == "clipboard":
+            # Excel no clipboard - formato tab-separated que Excel entende
+            from PyQt6.QtWidgets import QApplication
+            excel_text = self.current_df.to_csv(index=False, sep='\t')
+            QApplication.instance().clipboard().setText(excel_text)
+            self._show_clipboard_success("Excel (tab)")
+            return
+        
+        # Exportar para arquivo
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Salvar Excel", "", "Excel Files (*.xlsx)"
+        )
+        if filename:
+            if not filename.lower().endswith('.xlsx'):
+                filename += '.xlsx'
+            try:
                 self.current_df.to_excel(filename, index=False)
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Erro ao exportar Excel:\n{str(e)}")
+    
+    def _export_json(self):
+        """Exporta para JSON (clipboard ou arquivo)"""
+        if self.current_df is None:
+            return
+        
+        destination = self._get_export_destination()
+        
+        if destination == "clipboard":
+            from PyQt6.QtWidgets import QApplication
+            json_text = self.current_df.to_json(orient='records', indent=2, force_ascii=False)
+            QApplication.instance().clipboard().setText(json_text)
+            self._show_clipboard_success("JSON")
+            return
+        
+        # Exportar para arquivo
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Salvar JSON", "", "JSON Files (*.json)"
+        )
+        if filename:
+            if not filename.lower().endswith('.json'):
+                filename += '.json'
+            try:
+                self.current_df.to_json(filename, orient='records', indent=2, force_ascii=False)
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Erro ao exportar JSON:\n{str(e)}")
     
     def _copy_to_clipboard(self):
-        """Copia seleção para clipboard"""
+        """Copia dados formatados para clipboard"""
         from PyQt6.QtWidgets import QApplication
         if self.current_df is not None:
-            self.current_df.to_clipboard(index=False)
-            QApplication.instance().clipboard().setText(
-                self.current_df.to_string(index=False)
-            )
+            text = self.current_df.to_string(index=False)
+            QApplication.instance().clipboard().setText(text)
+            self._show_clipboard_success("Tabela")

@@ -19,10 +19,10 @@ echo.
 
 REM Criar ambiente virtual
 echo [1/4] Criando ambiente virtual...
-if exist venv (
+if exist .venv (
     echo Ambiente virtual ja existe. Pulando...
 ) else (
-    python -m venv venv
+    python -m venv .venv
     if errorlevel 1 (
         echo [ERRO] Falha ao criar ambiente virtual
         pause
@@ -34,7 +34,7 @@ echo.
 
 REM Ativar ambiente virtual
 echo [2/4] Ativando ambiente virtual...
-call venv\Scripts\activate.bat
+call .venv\Scripts\activate.bat
 if errorlevel 1 (
     echo [ERRO] Falha ao ativar ambiente virtual
     pause
@@ -65,7 +65,7 @@ echo.
 echo Para executar o DataPyn:
 echo   1. Execute: run.bat
 echo   OU
-echo   2. Ative o ambiente: venv\Scripts\activate
+echo   2. Ative o ambiente: .venv\Scripts\activate
 echo      Depois execute: python main.py
 echo.
 echo Consulte o README.md para mais informacoes.
