@@ -268,7 +268,7 @@ class CodeBlock(QFrame):
         """Define estado de aguardando na fila"""
         self._is_waiting = waiting
         if waiting:
-            self.run_btn.setText("⏸")
+            self.run_btn.setText("Pausar")
             self.status_label.setText("⏳ Aguardando...")
             self.status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
             self.cancel_btn.hide()
@@ -311,15 +311,15 @@ class CodeBlock(QFrame):
     def _format_execution_time(self, seconds: float) -> str:
         """Formata o tempo de execução para exibição"""
         if seconds < 0.001:
-            return f"✓ {seconds*1000000:.0f}µs"
+            return f"{seconds*1000000:.0f}µs"
         elif seconds < 1:
-            return f"✓ {seconds*1000:.0f}ms"
+            return f"{seconds*1000:.0f}ms"
         elif seconds < 60:
-            return f"✓ {seconds:.2f}s"
+            return f"{seconds:.2f}s"
         else:
             mins = int(seconds // 60)
             secs = seconds % 60
-            return f"✓ {mins}m {secs:.1f}s"
+            return f"{mins}m {secs:.1f}s"
     
     def focus_editor(self):
         self.editor.setFocus()

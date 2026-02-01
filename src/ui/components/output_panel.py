@@ -117,10 +117,10 @@ class OutputPanel(QWidget):
         # Ícones por nível
         icons = {
             'info': '',
-            'success': '✓',
-            'warning': '⚠️',
-            'error': '❌',
-            'debug': '🔍'
+            'success': '[OK]',
+            'warning': '[AVISO]',
+            'error': '[ERRO]',
+            'debug': '[DEBUG]'
         }
         icon = icons.get(level, '')
         

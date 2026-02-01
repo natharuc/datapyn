@@ -3,10 +3,10 @@ Diálogo unificado para criar e editar conexões
 """
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
-    QSpinBox, QComboBox, QCheckBox, QFormLayout, QGroupBox,
-    QLabel, QColorDialog, QMessageBox
+    QSpinBox, QComboBox, QCheckBox, QFormLayout, QFrame,
+    QLabel, QColorDialog, QMessageBox, QProgressDialog
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 
 from src.database import DatabaseConnector
@@ -17,6 +17,46 @@ try:
     HAS_QTAWESOME = True
 except ImportError:
     HAS_QTAWESOME = False
+
+
+class ConnectionTestWorker(QThread):
+    """Worker para testar conexão em background"""
+    
+    finished = pyqtSignal(bool, str)  # success, message
+    
+    def __init__(self, db_type, host, port, database, username, password, use_windows_auth=False):
+        super().__init__()
+        self.db_type = db_type
+        self.host = host
+        self.port = port
+        self.database = database
+        self.username = username
+        self.password = password
+        self.use_windows_auth = use_windows_auth
+    
+    def run(self):
+        try:
+            connector = DatabaseConnector()
+            
+            kwargs = {}
+            if self.use_windows_auth:
+                kwargs['use_windows_auth'] = True
+            
+            connector.connect(
+                db_type=self.db_type,
+                host=self.host,
+                port=self.port,
+                database=self.database,
+                username=self.username if not self.use_windows_auth else '',
+                password=self.password if not self.use_windows_auth else '',
+                **kwargs
+            )
+            
+            connector.disconnect()
+            self.finished.emit(True, "Conexão testada com sucesso!")
+            
+        except Exception as e:
+            self.finished.emit(False, f"Erro: {str(e)}")
 
 
 class ConnectionEditDialog(QDialog):
@@ -49,8 +89,25 @@ class ConnectionEditDialog(QDialog):
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
         
         # Grupo de informações básicas
-        basic_group = QGroupBox("Informações da Conexão")
-        basic_layout = QFormLayout(basic_group)
+        basic_group = QFrame()
+        basic_group.setFrameShape(QFrame.Shape.StyledPanel)
+        basic_group_layout = QVBoxLayout(basic_group)
+        basic_group_layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Header
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        if HAS_QTAWESOME:
+            icon_label.setPixmap(qta.icon('mdi.database-cog', color='#64b5f6').pixmap(20, 20))
+        header.addWidget(icon_label)
+        title = QLabel("INFORMAÇÕES DA CONEXÃO")
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        header.addWidget(title)
+        header.addStretch()
+        basic_group_layout.addLayout(header)
+        
+        basic_layout = QFormLayout()
+        basic_group_layout.addLayout(basic_layout)
         
         self.txt_name = QLineEdit()
         self.txt_name.setPlaceholderText("Nome para identificar a conexão")
@@ -77,8 +134,25 @@ class ConnectionEditDialog(QDialog):
         layout.addWidget(basic_group)
         
         # Grupo de autenticação
-        auth_group = QGroupBox("Autenticação")
-        auth_layout = QFormLayout(auth_group)
+        auth_group = QFrame()
+        auth_group.setFrameShape(QFrame.Shape.StyledPanel)
+        auth_group_layout = QVBoxLayout(auth_group)
+        auth_group_layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Header
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        if HAS_QTAWESOME:
+            icon_label.setPixmap(qta.icon('mdi.lock', color='#64b5f6').pixmap(20, 20))
+        header.addWidget(icon_label)
+        title = QLabel("AUTENTICAÇÃO")
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        header.addWidget(title)
+        header.addStretch()
+        auth_group_layout.addLayout(header)
+        
+        auth_layout = QFormLayout()
+        auth_group_layout.addLayout(auth_layout)
         
         self.chk_windows_auth = QCheckBox("Usar Windows Authentication")
         self.chk_windows_auth.stateChanged.connect(self._toggle_windows_auth)
@@ -99,8 +173,25 @@ class ConnectionEditDialog(QDialog):
         layout.addWidget(auth_group)
         
         # Grupo de organização
-        org_group = QGroupBox("Organização")
-        org_layout = QFormLayout(org_group)
+        org_group = QFrame()
+        org_group.setFrameShape(QFrame.Shape.StyledPanel)
+        org_group_layout = QVBoxLayout(org_group)
+        org_group_layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Header
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        if HAS_QTAWESOME:
+            icon_label.setPixmap(qta.icon('mdi.folder-cog', color='#64b5f6').pixmap(20, 20))
+        header.addWidget(icon_label)
+        title = QLabel("ORGANIZAÇÃO")
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        header.addWidget(title)
+        header.addStretch()
+        org_group_layout.addLayout(header)
+        
+        org_layout = QFormLayout()
+        org_group_layout.addLayout(org_layout)
         
         self.cmb_group = QComboBox()
         self.cmb_group.addItem('[Sem grupo]', '')
@@ -131,18 +222,18 @@ class ConnectionEditDialog(QDialog):
         # Botões
         buttons_layout = QHBoxLayout()
         
-        btn_test = QPushButton("Testar Conexão")
+        btn_test = QPushButton(" Testar Conexão")
         btn_test.setObjectName("btnTest")
         if HAS_QTAWESOME:
-            btn_test.setIcon(qta.icon('fa5s.plug', color='white'))
+            btn_test.setIcon(qta.icon('mdi.lan-connect', color='white'))
         btn_test.clicked.connect(self._test_connection)
         buttons_layout.addWidget(btn_test)
         
         buttons_layout.addStretch()
         
-        btn_save = QPushButton("Salvar")
+        btn_save = QPushButton(" Salvar")
         if HAS_QTAWESOME:
-            btn_save.setIcon(qta.icon('fa5s.save', color='white'))
+            btn_save.setIcon(qta.icon('mdi.content-save', color='white'))
         btn_save.clicked.connect(self._on_save)
         buttons_layout.addWidget(btn_save)
         
@@ -244,38 +335,41 @@ class ConnectionEditDialog(QDialog):
             )
     
     def _test_connection(self):
-        """Testa a conexão com as configurações atuais"""
-        self.lbl_status.setText("Testando conexão...")
-        self.lbl_status.setStyleSheet("color: #ffa500;")
+        """Testa a conexão com as configurações atuais em background"""
+        # Criar loading dialog
+        db_name = self.txt_database.text() or self.txt_host.text()
+        self.loading_dialog = QProgressDialog(self)
+        self.loading_dialog.setWindowTitle("Testando Conexão")
+        self.loading_dialog.setLabelText(f"Testando conexão com {db_name}...")
+        self.loading_dialog.setCancelButton(None)
+        self.loading_dialog.setRange(0, 0)  # Indeterminate progress
+        self.loading_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.loading_dialog.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
+        self.loading_dialog.setMinimumWidth(300)
+        self.loading_dialog.show()
         
-        # Forçar atualização da UI
-        from PyQt6.QtWidgets import QApplication
-        QApplication.processEvents()
+        # Criar e iniciar worker
+        self.test_worker = ConnectionTestWorker(
+            db_type=self.cmb_type.currentText(),
+            host=self.txt_host.text(),
+            port=self.spin_port.value(),
+            database=self.txt_database.text(),
+            username=self.txt_username.text(),
+            password=self.txt_password.text(),
+            use_windows_auth=self.chk_windows_auth.isChecked()
+        )
+        self.test_worker.finished.connect(self._on_test_finished)
+        self.test_worker.start()
+    
+    def _on_test_finished(self, success: bool, message: str):
+        """Callback quando teste de conexão termina"""
+        self.loading_dialog.close()
         
-        try:
-            connector = DatabaseConnector()
-            
-            kwargs = {}
-            if self.chk_windows_auth.isChecked():
-                kwargs['use_windows_auth'] = True
-            
-            connector.connect(
-                db_type=self.cmb_type.currentText(),
-                host=self.txt_host.text(),
-                port=self.spin_port.value(),
-                database=self.txt_database.text(),
-                username=self.txt_username.text() if not self.chk_windows_auth.isChecked() else '',
-                password=self.txt_password.text() if not self.chk_windows_auth.isChecked() else '',
-                **kwargs
-            )
-            
-            self.lbl_status.setText("Conexão testada com sucesso!")
+        if success:
+            self.lbl_status.setText(message)
             self.lbl_status.setStyleSheet("color: #4ec9b0; font-weight: bold;")
-            
-            connector.disconnect()
-            
-        except Exception as e:
-            self.lbl_status.setText(f"Erro: {str(e)}")
+        else:
+            self.lbl_status.setText(message)
             self.lbl_status.setStyleSheet("color: #f48771;")
     
     def _on_save(self):

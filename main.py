@@ -6,6 +6,7 @@ import os
 import logging
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
+from qt_material import apply_stylesheet
 from src.ui import MainWindow
 
 
@@ -36,6 +37,17 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DataPyn")
     app.setOrganizationName("DataPyn")
+    
+    # ⚡ APLICAR MATERIAL DESIGN THEME
+    extra = {
+        # Cores customizadas
+        'danger': '#dc3545',
+        'warning': '#ffc107',
+        'success': '#28a745',
+        'primaryColor': '#0d6efd',
+        'primaryLightColor': '#4dabf7',
+    }
+    apply_stylesheet(app, theme='dark_blue.xml', extra=extra)
     
     # Definir ícone da aplicação (afeta todas as janelas)
     icon_path = get_icon_path()

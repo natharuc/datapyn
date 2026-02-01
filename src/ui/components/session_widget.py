@@ -177,7 +177,7 @@ class SessionWidget(QWidget):
     def _on_execute_sql(self, query: str):
         """Executa SQL em background"""
         if not self.session.is_connected:
-            self.append_output("❌ Erro: Nenhuma conexão ativa nesta sessão", error=True)
+            self.append_output("[ERRO] Nenhuma conexão ativa nesta sessão", error=True)
             self.status_changed.emit("Erro: Sem conexão")
             # Processar próximo da fila mesmo com erro
             self._process_next_in_queue()
@@ -222,12 +222,12 @@ class SessionWidget(QWidget):
         self.editor.mark_execution_finished(current_block)
         
         if error:
-            self.append_output(f"❌ Erro SQL: {error}", error=True)
+            self.append_output(f"[ERRO SQL] {error}", error=True)
             self.session.finish_execution(False, f"Erro: {error[:50]}...")
             self.bottom_tabs.show_output()
         else:
             rows = len(df) if df is not None else 0
-            self.append_output(f"✓ Query executada: {rows:,} linhas")
+            self.append_output(f"Query executada: {rows:,} linhas")
             self.bottom_tabs.set_results(df, "df")
             self.session.finish_execution(True, f"SQL: {rows:,} linhas")
             
@@ -290,7 +290,7 @@ class SessionWidget(QWidget):
         self.editor.mark_execution_finished(current_block)
         
         if error:
-            self.append_output(f"❌ Erro Python:\n{error}", error=True)
+            self.append_output(f"[ERRO PYTHON]\n{error}", error=True)
             self.session.finish_execution(False, "Erro Python")
             self.bottom_tabs.show_output()
         else:
@@ -300,7 +300,7 @@ class SessionWidget(QWidget):
             if result is not None:
                 if isinstance(result, pd.DataFrame):
                     self.bottom_tabs.set_results(result, "result")
-                    self.append_output(f"✓ DataFrame: {len(result):,} linhas")
+                    self.append_output(f"DataFrame: {len(result):,} linhas")
                 else:
                     self.append_output(f"→ {repr(result)}")
             

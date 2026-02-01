@@ -1,8 +1,26 @@
 """
 Botões estilizados reutilizáveis
 
-Componentes de botões com estilos consistentes.
+DEPRECATED: Use src.design_system.Button ao invés deste
+Mantido para compatibilidade com código legado.
 """
+from src.design_system import (
+    Button as NewButton,
+    PrimaryButton as NewPrimaryButton,
+    SecondaryButton as NewSecondaryButton,
+    DangerButton as NewDangerButton,
+    SuccessButton as NewSuccessButton,
+    GhostButton as NewGhostButton,
+)
+
+# Aliases para compatibilidade
+Button = NewButton
+PrimaryButton = NewPrimaryButton
+SecondaryButton = NewSecondaryButton
+DangerButton = NewDangerButton
+SuccessButton = NewSuccessButton
+GhostButton = NewGhostButton
+
 from PyQt6.QtWidgets import QPushButton, QToolButton
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon
@@ -15,7 +33,7 @@ except ImportError:
 
 
 class StyledButton(QPushButton):
-    """Botão estilizado base"""
+    """Botão estilizado base - DEPRECATED"""
     
     STYLES = {
         'primary': """

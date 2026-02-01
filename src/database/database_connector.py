@@ -101,19 +101,46 @@ class DatabaseConnector:
         """
         Executa uma query SQL e retorna um DataFrame
         
+        Tenta sempre buscar resultados primeiro. Se não houver dados,
+        retorna mensagem de sucesso com linhas afetadas.
+        
         Args:
-            query: Query SQL a ser executada
+            query: Query SQL a ser executada (pode conter múltiplos comandos)
             
         Returns:
-            pd.DataFrame: Resultado da query
+            pd.DataFrame: Resultado da query ou mensagem de execução
         """
         if not self.engine:
             raise ConnectionError("Não há conexão ativa com o banco de dados")
         
         try:
-            df = pd.read_sql(query, self.engine)
-            logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
-            return df
+            # Tenta buscar resultados (SELECT, SHOW, etc)
+            try:
+                df = pd.read_sql(query, self.engine)
+                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
+                return df
+            except Exception as fetch_error:
+                # Se falhou porque não retorna dados, executa como statement
+                error_msg = str(fetch_error).lower()
+                if 'does not return rows' in error_msg or 'no result' in error_msg or 'closed automatically' in error_msg:
+                    # Comando que não retorna dados (INSERT, UPDATE, DELETE, etc)
+                    with self.engine.connect() as conn:
+                        result = conn.execute(text(query))
+                        conn.commit()
+                        rows_affected = result.rowcount
+                        
+                        # Retorna DataFrame informativo
+                        if rows_affected >= 0:
+                            msg = f"✓ Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                        else:
+                            msg = "✓ Comando executado com sucesso."
+                        
+                        logger.info(msg)
+                        return pd.DataFrame({'Resultado': [msg]})
+                else:
+                    # Outro tipo de erro - propaga
+                    raise
+                    
         except Exception as e:
             logger.error(f"Erro ao executar query: {str(e)}")
             raise

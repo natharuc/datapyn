@@ -11,6 +11,7 @@ import pandas as pd
 from typing import Optional
 import subprocess
 import os
+import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 
@@ -216,9 +217,11 @@ class ResultsViewer(QWidget):
         
         # Combobox de destino (Clipboard ou File)
         self.export_destination = QComboBox()
-        self.export_destination.addItem("📋 Clipboard", "clipboard")
-        self.export_destination.addItem("📁 Arquivo", "file")
-        self.export_destination.setFixedWidth(110)
+        self.export_destination.addItem("Clipboard", "clipboard")
+        self.export_destination.setItemIcon(0, qta.icon('mdi.clipboard-text', color='#64b5f6'))
+        self.export_destination.addItem("Arquivo", "file")
+        self.export_destination.setItemIcon(1, qta.icon('mdi.file-export', color='#64b5f6'))
+        self.export_destination.setMinimumWidth(140)
         self.export_destination.setToolTip("Destino da exportação")
         self.toolbar.addWidget(self.export_destination)
         self.toolbar.addSeparator()
@@ -334,7 +337,7 @@ class ResultsViewer(QWidget):
     
     def _show_clipboard_success(self, format_name: str):
         """Mostra feedback de sucesso ao copiar para clipboard"""
-        self.info_label.setText(f"✓ {format_name} copiado para clipboard!")
+        self.info_label.setText(f"{format_name} copiado!")
     
     def _export_csv(self):
         """Exporta para CSV (clipboard ou arquivo)"""

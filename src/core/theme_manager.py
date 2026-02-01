@@ -226,32 +226,16 @@ class ThemeManager:
     """Gerencia temas da aplicação"""
     
     def __init__(self, config_path: str = None):
-        if config_path is None:
-            config_path = Path.home() / '.datapyn' / 'theme.json'
-        
-        self.config_path = Path(config_path)
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        self.current_theme = self._load_theme()
+        # Sempre usar tema dark (VS Code)
+        self.current_theme = 'dark'
     
     def _load_theme(self) -> str:
-        """Carrega tema salvo ou retorna padrão"""
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, 'r') as f:
-                    data = json.load(f)
-                    theme = data.get('theme', 'dark')
-                    if theme in THEMES:
-                        return theme
-            except:
-                pass
+        """Sempre retorna tema dark"""
         return 'dark'
     
     def save_theme(self, theme_name: str):
-        """Salva tema escolhido"""
-        if theme_name in THEMES:
-            self.current_theme = theme_name
-            with open(self.config_path, 'w') as f:
-                json.dump({'theme': theme_name}, f)
+        """Não faz nada - tema é fixo"""
+        pass
     
     def get_current_theme(self) -> Dict[str, Any]:
         """Retorna configuração do tema atual"""

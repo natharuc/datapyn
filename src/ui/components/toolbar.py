@@ -1,85 +1,54 @@
 """
-Toolbar principal da aplicação
-
-Barra de ferramentas simplificada.
+Toolbar principal da aplicação - Material Design
 """
-from PyQt6.QtWidgets import QToolBar, QWidget
-from PyQt6.QtCore import pyqtSignal
-
-from .buttons import ToolbarButton
-
-try:
-    import qtawesome as qta
-    HAS_QTAWESOME = True
-except ImportError:
-    HAS_QTAWESOME = False
+from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy
+from PyQt6.QtCore import pyqtSignal, QSize
+import qtawesome as qta
 
 
 class MainToolbar(QToolBar):
-    """Toolbar principal simplificada"""
+    """Toolbar Material Design"""
     
-    # Sinais emitidos quando botões são clicados
     new_connection_clicked = pyqtSignal()
     new_tab_clicked = pyqtSignal()
-    run_clicked = pyqtSignal()  # Executar (F5)
+    run_clicked = pyqtSignal()
     
     def __init__(self, theme_manager=None, parent=None):
         super().__init__("Principal", parent)
-        
         self.theme_manager = theme_manager
         self.setMovable(False)
-        self._setup_style()
+        self.setIconSize(QSize(20, 20))
         self._setup_buttons()
     
-    def _setup_style(self):
-        """Configura estilo da toolbar"""
-        self.setStyleSheet("""
-            QToolBar {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #3e3e42;
-                spacing: 5px;
-                padding: 3px 8px;
-            }
-            QToolBar::separator {
-                background-color: #3e3e42;
-                width: 1px;
-                margin: 5px 8px;
-            }
-        """)
-    
     def _setup_buttons(self):
-        """Configura botões da toolbar"""
-        # Botão Nova Aba
-        self.btn_new_tab = ToolbarButton("+ Nova Aba")
-        if HAS_QTAWESOME:
-            self.btn_new_tab.setIcon(qta.icon('fa5s.plus', color='#4ec9b0'))
+        """Botões com ícones Material"""
+        # Nova Aba
+        self.btn_new_tab = QPushButton(" Nova Aba")
+        self.btn_new_tab.setIcon(qta.icon('mdi.tab-plus', color='white'))
         self.btn_new_tab.clicked.connect(self.new_tab_clicked.emit)
         self.addWidget(self.btn_new_tab)
         
         self.addSeparator()
         
-        # Botão Nova Conexão
-        self.btn_new_conn = ToolbarButton("Conexão")
-        if HAS_QTAWESOME:
-            self.btn_new_conn.setIcon(qta.icon('fa5s.plug', color='#569cd6'))
+        # Nova Conexão
+        self.btn_new_conn = QPushButton(" Conexão")
+        self.btn_new_conn.setIcon(qta.icon('mdi.database-plus', color='white'))
         self.btn_new_conn.clicked.connect(self.new_connection_clicked.emit)
         self.addWidget(self.btn_new_conn)
         
         self.addSeparator()
         
-        # Botão Executar (F5)
-        self.btn_run = ToolbarButton("▶ Executar (F5)")
-        if HAS_QTAWESOME:
-            self.btn_run.setIcon(qta.icon('fa5s.play', color='#4ec9b0'))
+        # Executar (destaque verde)
+        self.btn_run = QPushButton(" Executar (F5)")
+        self.btn_run.setIcon(qta.icon('mdi.play-circle', color='#4caf50'))
+        self.btn_run.setObjectName("success")
         self.btn_run.clicked.connect(self.run_clicked.emit)
         self.addWidget(self.btn_run)
         
-        # Spacer para empurrar resto para direita
+        # Spacer
         spacer = QWidget()
-        spacer.setStyleSheet("background: transparent;")
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
     
     def apply_theme(self):
-        """Aplica tema à toolbar"""
-        # TODO: Adaptar cores ao tema
         pass

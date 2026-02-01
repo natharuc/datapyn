@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTreeWidget, 
     QTreeWidgetItem, QMenu, QInputDialog, QMessageBox, QSplitter,
     QWidget, QLabel, QFormLayout, QLineEdit, QSpinBox, QComboBox,
-    QCheckBox, QColorDialog, QGroupBox
+    QCheckBox, QColorDialog, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QAction
@@ -34,6 +34,7 @@ class ConnectionsManagerDialog(QDialog):
         
         self.setWindowTitle("Gerenciar Conexões")
         self.resize(900, 600)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         
         self._setup_ui()
         self._load_connections()
@@ -56,15 +57,15 @@ class ConnectionsManagerDialog(QDialog):
         # Toolbar de grupos
         toolbar_layout = QHBoxLayout()
         
-        btn_new_group = QPushButton("Novo Grupo")
+        btn_new_group = QPushButton(" Novo Grupo")
         if HAS_QTAWESOME:
-            btn_new_group.setIcon(qta.icon('fa5s.folder-plus', color='#4ec9b0'))
+            btn_new_group.setIcon(qta.icon('mdi.folder-plus', color='#4ec9b0'))
         btn_new_group.clicked.connect(self._new_group)
         toolbar_layout.addWidget(btn_new_group)
         
-        btn_new_conn = QPushButton("Nova Conexão")
+        btn_new_conn = QPushButton(" Nova Conexão")
         if HAS_QTAWESOME:
-            btn_new_conn.setIcon(qta.icon('fa5s.plus-circle', color='#569cd6'))
+            btn_new_conn.setIcon(qta.icon('mdi.database-plus', color='#569cd6'))
         btn_new_conn.clicked.connect(self._new_connection)
         toolbar_layout.addWidget(btn_new_conn)
         
@@ -88,8 +89,25 @@ class ConnectionsManagerDialog(QDialog):
         right_layout.setContentsMargins(0, 0, 0, 0)
         
         # Grupo de informações
-        info_group = QGroupBox("Detalhes da Conexão")
-        info_layout = QFormLayout(info_group)
+        info_group = QFrame()
+        info_group.setFrameShape(QFrame.Shape.StyledPanel)
+        info_group_layout = QVBoxLayout(info_group)
+        info_group_layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Header
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        if HAS_QTAWESOME:
+            icon_label.setPixmap(qta.icon('mdi.information', color='#64b5f6').pixmap(20, 20))
+        header.addWidget(icon_label)
+        title = QLabel("DETALHES DA CONEXÃO")
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        header.addWidget(title)
+        header.addStretch()
+        info_group_layout.addLayout(header)
+        
+        info_layout = QFormLayout()
+        info_group_layout.addLayout(info_layout)
         
         self.lbl_name = QLabel("-")
         self.lbl_type = QLabel("-")
@@ -114,23 +132,23 @@ class ConnectionsManagerDialog(QDialog):
         # Botões de ação
         actions_layout = QHBoxLayout()
         
-        self.btn_connect = QPushButton("Conectar")
+        self.btn_connect = QPushButton(" Conectar")
         if HAS_QTAWESOME:
-            self.btn_connect.setIcon(qta.icon('fa5s.plug', color='#4ec9b0'))
+            self.btn_connect.setIcon(qta.icon('mdi.lan-connect', color='#4ec9b0'))
         self.btn_connect.clicked.connect(self._connect_selected)
         self.btn_connect.setEnabled(False)
         actions_layout.addWidget(self.btn_connect)
         
-        self.btn_edit = QPushButton("Editar")
+        self.btn_edit = QPushButton(" Editar")
         if HAS_QTAWESOME:
-            self.btn_edit.setIcon(qta.icon('fa5s.edit', color='#569cd6'))
+            self.btn_edit.setIcon(qta.icon('mdi.pencil', color='#569cd6'))
         self.btn_edit.clicked.connect(self._edit_selected)
         self.btn_edit.setEnabled(False)
         actions_layout.addWidget(self.btn_edit)
         
-        self.btn_delete = QPushButton("Excluir")
+        self.btn_delete = QPushButton(" Excluir")
         if HAS_QTAWESOME:
-            self.btn_delete.setIcon(qta.icon('fa5s.trash', color='#f48771'))
+            self.btn_delete.setIcon(qta.icon('mdi.delete', color='#f48771'))
         self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_delete.setEnabled(False)
         actions_layout.addWidget(self.btn_delete)
@@ -167,7 +185,7 @@ class ConnectionsManagerDialog(QDialog):
             item.setData(0, Qt.ItemDataRole.UserRole, {'type': 'group', 'name': group_name})
             
             if HAS_QTAWESOME:
-                item.setIcon(0, qta.icon('fa5s.folder', color='#dcdcaa'))
+                item.setIcon(0, qta.icon('mdi.folder', color='#dcdcaa'))
             
             # Aplicar cor se definida
             if group_data.get('color'):
@@ -196,7 +214,7 @@ class ConnectionsManagerDialog(QDialog):
                 elif db_type == 'postgresql':
                     icon_color = '#336791'
                 
-                item.setIcon(0, qta.icon('fa5s.database', color=icon_color))
+                item.setIcon(0, qta.icon('mdi.database', color=icon_color))
             
             # Aplicar cor se definida
             if conn_config.get('color'):
@@ -342,14 +360,21 @@ class ConnectionsManagerDialog(QDialog):
     
     def _new_group(self):
         """Cria novo grupo"""
-        name, ok = QInputDialog.getText(self, "Novo Grupo", "Nome do grupo:")
-        if ok and name:
-            if name in self.connection_manager.get_groups():
-                QMessageBox.warning(self, "Aviso", "Já existe um grupo com este nome!")
-                return
-            
-            self.connection_manager.create_group(name)
-            self._load_connections()
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("Novo Grupo")
+        dialog.setLabelText("Nome do grupo:")
+        dialog.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
+        dialog.resize(400, 150)
+        
+        if dialog.exec() == QInputDialog.DialogCode.Accepted:
+            name = dialog.textValue()
+            if name:
+                if name in self.connection_manager.get_groups():
+                    QMessageBox.warning(self, "Aviso", "Já existe um grupo com este nome!")
+                    return
+                
+                self.connection_manager.create_group(name)
+                self._load_connections()
     
     def _rename_group(self):
         """Renomeia grupo selecionado"""

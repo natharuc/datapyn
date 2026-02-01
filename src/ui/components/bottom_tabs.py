@@ -5,6 +5,7 @@ Contém as abas de Resultados, Output e Variáveis.
 """
 from PyQt6.QtWidgets import QTabWidget, QWidget
 from PyQt6.QtCore import pyqtSignal
+import qtawesome as qta
 from typing import Optional
 import pandas as pd
 
@@ -31,15 +32,18 @@ class BottomTabs(QTabWidget):
         """Configura UI"""
         # Tab: Resultados
         self.results_viewer = ResultsViewer(theme_manager=self.theme_manager)
-        self.addTab(self.results_viewer, "📊 Resultados")
+        self.addTab(self.results_viewer, "Resultados")
+        self.setTabIcon(0, qta.icon('mdi.table-eye', color='#64b5f6'))
         
         # Tab: Output/Logs
         self.output_panel = OutputPanel(theme_manager=self.theme_manager)
-        self.addTab(self.output_panel, "📝 Output")
+        self.addTab(self.output_panel, "Output")
+        self.setTabIcon(1, qta.icon('mdi.console', color='#64b5f6'))
         
         # Tab: Variáveis
         self.variables_panel = VariablesPanel(theme_manager=self.theme_manager)
-        self.addTab(self.variables_panel, "🔢 Variáveis")
+        self.addTab(self.variables_panel, "Variáveis")
+        self.setTabIcon(2, qta.icon('mdi.variable', color='#64b5f6'))
     
     def _setup_style(self):
         """Configura estilo"""

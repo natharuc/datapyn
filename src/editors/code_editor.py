@@ -13,16 +13,10 @@ class CodeEditor(QsciScintilla):
     """
     Editor de código baseado em QScintilla.
     
-    Implementa os métodos da interface ICodeEditor (sem herança direta
-    devido a conflito de metaclass com ABC).
-    
-    Para trocar a implementação, crie outra classe com os mesmos métodos.
-    
-    Suporta:
-        - Python syntax highlighting
-        - SQL syntax highlighting  
-        - Cross-syntax (Python com SQL embutido)
-        - Temas customizáveis via ThemeManager
+    Simples e direto:
+    - Python = lexer Python
+    - SQL e Cross-Syntax = lexer SQL
+    - Tema dark sempre aplicado
     """
     
     # Signals da interface
@@ -67,8 +61,15 @@ class CodeEditor(QsciScintilla):
         # Margens (números de linha)
         self.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
         self.setMarginWidth(0, "00000")
-        self.setMarginsForegroundColor(QColor("#6e7681"))
+        self.setMarginsForegroundColor(QColor("#858585"))  # Cinza mais claro
         self.setMarginsBackgroundColor(QColor("#1e1e1e"))
+        
+        # Forçar cores da margem via stylesheet (qt-material não sobrescreve)
+        self.setStyleSheet("""
+            QsciScintilla {
+                border: none;
+            }
+        """)
         
         # Indentação
         self.setIndentationGuides(True)
@@ -112,134 +113,70 @@ class CodeEditor(QsciScintilla):
     
     def _setup_lexer(self):
         """Configura o lexer baseado na linguagem atual."""
-        if self._language == 'sql':
+        if self._language == 'sql' or self._language == 'cross':
             self._setup_sql_lexer()
         else:
-            # Python e Cross usam lexer Python
             self._setup_python_lexer()
     
     def _setup_python_lexer(self):
-        """Configura lexer Python."""
+        """Configura lexer Python com tema dark."""
         lexer = QsciLexerPython(self)
-        
-        # Cores padrão (tema escuro)
-        colors = self._get_python_colors()
-        
-        lexer.setColor(QColor(colors['default']), QsciLexerPython.Default)
-        lexer.setPaper(QColor(colors['background']), QsciLexerPython.Default)
-        lexer.setColor(QColor(colors['comment']), QsciLexerPython.Comment)
-        lexer.setColor(QColor(colors['comment']), QsciLexerPython.CommentBlock)
-        lexer.setColor(QColor(colors['keyword']), QsciLexerPython.Keyword)
-        lexer.setColor(QColor(colors['string']), QsciLexerPython.SingleQuotedString)
-        lexer.setColor(QColor(colors['string']), QsciLexerPython.DoubleQuotedString)
-        lexer.setColor(QColor(colors['string']), QsciLexerPython.TripleSingleQuotedString)
-        lexer.setColor(QColor(colors['string']), QsciLexerPython.TripleDoubleQuotedString)
-        lexer.setColor(QColor(colors['number']), QsciLexerPython.Number)
-        lexer.setColor(QColor(colors['operator']), QsciLexerPython.Operator)
-        lexer.setColor(QColor(colors['identifier']), QsciLexerPython.Identifier)
-        lexer.setColor(QColor(colors['function']), QsciLexerPython.FunctionMethodName)
-        lexer.setColor(QColor(colors['class']), QsciLexerPython.ClassName)
-        lexer.setColor(QColor(colors['decorator']), QsciLexerPython.Decorator)
-        
-        # Aplicar fonte ao lexer
         font = QFont("Consolas", 11)
-        lexer.setFont(font)
         
+        # Background dark
+        lexer.setDefaultPaper(QColor("#1e1e1e"))
+        lexer.setDefaultColor(QColor("#d4d4d4"))
+        
+        # Cores Python (VS Code Dark)
+        lexer.setColor(QColor("#d4d4d4"), QsciLexerPython.Default)
+        lexer.setColor(QColor("#6a9955"), QsciLexerPython.Comment)
+        lexer.setColor(QColor("#6a9955"), QsciLexerPython.CommentBlock)
+        lexer.setColor(QColor("#569cd6"), QsciLexerPython.Keyword)
+        lexer.setColor(QColor("#ce9178"), QsciLexerPython.SingleQuotedString)
+        lexer.setColor(QColor("#ce9178"), QsciLexerPython.DoubleQuotedString)
+        lexer.setColor(QColor("#ce9178"), QsciLexerPython.TripleSingleQuotedString)
+        lexer.setColor(QColor("#ce9178"), QsciLexerPython.TripleDoubleQuotedString)
+        lexer.setColor(QColor("#b5cea8"), QsciLexerPython.Number)
+        lexer.setColor(QColor("#d4d4d4"), QsciLexerPython.Operator)
+        lexer.setColor(QColor("#9cdcfe"), QsciLexerPython.Identifier)
+        lexer.setColor(QColor("#dcdcaa"), QsciLexerPython.FunctionMethodName)
+        lexer.setColor(QColor("#4ec9b0"), QsciLexerPython.ClassName)
+        lexer.setColor(QColor("#c586c0"), QsciLexerPython.Decorator)
+        
+        lexer.setDefaultFont(font)
         self.setLexer(lexer)
+        
+        # Reforçar cores da margem após definir lexer
+        self.setMarginsForegroundColor(QColor("#858585"))
+        self.setMarginsBackgroundColor(QColor("#1e1e1e"))
     
     def _setup_sql_lexer(self):
-        """Configura lexer SQL."""
+        """Configura lexer SQL com tema dark."""
         lexer = QsciLexerSQL(self)
-        
-        # Cores padrão (tema escuro)
-        colors = self._get_sql_colors()
-        
-        lexer.setColor(QColor(colors['default']), QsciLexerSQL.Default)
-        lexer.setPaper(QColor(colors['background']), QsciLexerSQL.Default)
-        lexer.setColor(QColor(colors['comment']), QsciLexerSQL.Comment)
-        lexer.setColor(QColor(colors['comment']), QsciLexerSQL.CommentLine)
-        lexer.setColor(QColor(colors['comment']), QsciLexerSQL.CommentDoc)
-        lexer.setColor(QColor(colors['keyword']), QsciLexerSQL.Keyword)
-        lexer.setColor(QColor(colors['string']), QsciLexerSQL.SingleQuotedString)
-        lexer.setColor(QColor(colors['string']), QsciLexerSQL.DoubleQuotedString)
-        lexer.setColor(QColor(colors['number']), QsciLexerSQL.Number)
-        lexer.setColor(QColor(colors['operator']), QsciLexerSQL.Operator)
-        lexer.setColor(QColor(colors['identifier']), QsciLexerSQL.Identifier)
-        
-        # Aplicar fonte ao lexer
         font = QFont("Consolas", 11)
-        lexer.setFont(font)
         
+        # Background dark
+        lexer.setDefaultPaper(QColor("#1e1e1e"))
+        lexer.setDefaultColor(QColor("#d4d4d4"))
+        
+        # Cores SQL (VS Code Dark)
+        lexer.setColor(QColor("#d4d4d4"), QsciLexerSQL.Default)
+        lexer.setColor(QColor("#6a9955"), QsciLexerSQL.Comment)
+        lexer.setColor(QColor("#6a9955"), QsciLexerSQL.CommentLine)
+        lexer.setColor(QColor("#6a9955"), QsciLexerSQL.CommentDoc)
+        lexer.setColor(QColor("#569cd6"), QsciLexerSQL.Keyword)
+        lexer.setColor(QColor("#ce9178"), QsciLexerSQL.SingleQuotedString)
+        lexer.setColor(QColor("#ce9178"), QsciLexerSQL.DoubleQuotedString)
+        lexer.setColor(QColor("#b5cea8"), QsciLexerSQL.Number)
+        lexer.setColor(QColor("#d4d4d4"), QsciLexerSQL.Operator)
+        lexer.setColor(QColor("#9cdcfe"), QsciLexerSQL.Identifier)
+        
+        lexer.setDefaultFont(font)
         self.setLexer(lexer)
-    
-    def _get_python_colors(self) -> dict:
-        """Retorna cores para Python baseado no tema."""
-        # Cores padrão (VS Code Dark)
-        defaults = {
-            'background': '#1e1e1e',
-            'default': '#d4d4d4',
-            'comment': '#6a9955',
-            'keyword': '#569cd6',
-            'string': '#ce9178',
-            'number': '#b5cea8',
-            'operator': '#d4d4d4',
-            'identifier': '#9cdcfe',
-            'function': '#dcdcaa',
-            'class': '#4ec9b0',
-            'decorator': '#c586c0',
-        }
         
-        if self.theme_manager:
-            try:
-                # Pegar cores do tema
-                theme_colors = self.theme_manager.get_python_colors()
-                editor_colors = self.theme_manager.get_editor_colors()
-                
-                # Mesclar cores do tema com padrões
-                defaults['background'] = str(editor_colors.get('background', defaults['background']))
-                defaults['comment'] = str(theme_colors.get('comment', defaults['comment']))
-                defaults['keyword'] = str(theme_colors.get('keyword', defaults['keyword']))
-                defaults['string'] = str(theme_colors.get('string', defaults['string']))
-                defaults['number'] = str(theme_colors.get('number', defaults['number']))
-                defaults['identifier'] = str(theme_colors.get('identifier', defaults['identifier']))
-                defaults['function'] = str(theme_colors.get('function', defaults['function']))
-                defaults['class'] = str(theme_colors.get('classname', defaults['class']))
-            except:
-                pass
-        
-        return defaults
-    
-    def _get_sql_colors(self) -> dict:
-        """Retorna cores para SQL baseado no tema."""
-        # Cores padrão (VS Code Dark)
-        defaults = {
-            'background': '#1e1e1e',
-            'default': '#d4d4d4',
-            'comment': '#6a9955',
-            'keyword': '#569cd6',
-            'string': '#ce9178',
-            'number': '#b5cea8',
-            'operator': '#d4d4d4',
-            'identifier': '#9cdcfe',
-        }
-        
-        if self.theme_manager:
-            try:
-                # Pegar cores do tema
-                theme_colors = self.theme_manager.get_sql_colors()
-                editor_colors = self.theme_manager.get_editor_colors()
-                
-                # Mesclar cores do tema com padrões
-                defaults['background'] = str(editor_colors.get('background', defaults['background']))
-                defaults['comment'] = str(theme_colors.get('comment', defaults['comment']))
-                defaults['keyword'] = str(theme_colors.get('keyword', defaults['keyword']))
-                defaults['string'] = str(theme_colors.get('string', defaults['string']))
-                defaults['number'] = str(theme_colors.get('number', defaults['number']))
-                defaults['identifier'] = str(theme_colors.get('identifier', defaults['identifier']))
-            except:
-                pass
-        
-        return defaults
+        # Reforçar cores da margem após definir lexer
+        self.setMarginsForegroundColor(QColor("#858585"))
+        self.setMarginsBackgroundColor(QColor("#1e1e1e"))
     
     def _setup_shortcuts(self):
         """Configura atalhos de teclado."""
@@ -281,13 +218,11 @@ class CodeEditor(QsciScintilla):
         self.setText("")
     
     def set_language(self, language: str) -> None:
-        """Define a linguagem para syntax highlighting."""
+        """Define a linguagem e atualiza o lexer."""
         language = language.lower()
         if language in ('python', 'sql', 'cross'):
-            old_language = self._language
             self._language = language
-            if old_language != language:
-                self._setup_lexer()
+            self._setup_lexer()
     
     def get_language(self) -> str:
         """Retorna a linguagem atual."""
@@ -303,10 +238,10 @@ class CodeEditor(QsciScintilla):
         if not self.theme_manager:
             return
         
-        # Reconfigurar lexer com novas cores
+        # Reconfigura o lexer com as cores do tema
         self._setup_lexer()
         
-        # Atualizar cores do editor
+        # Atualiza cores do editor
         colors = self.theme_manager.get_editor_colors()
         
         self.setMarginsBackgroundColor(QColor(colors.get('margin_bg', '#1e1e1e')))

@@ -402,7 +402,7 @@ class MainWindow(QMainWindow):
             self._quick_connect(conn_name)
     
     def _quick_connect(self, connection_name: str):
-        """Conecta rapidamente a uma conexão salva (em background)"""
+        """Conecta rapidamente a uma conexão salva (em background com loading)"""
         # Verificar se já há uma conexão em andamento
         if hasattr(self, '_conn_thread') and self._conn_thread and self._conn_thread.isRunning():
             QMessageBox.information(
@@ -421,17 +421,17 @@ class MainWindow(QMainWindow):
         if not config.get('use_windows_auth', False):
             password = config.get('password', '')
         
-        # Atualizar UI para "conectando..." com cor cinza
-        self.action_label.setText(f"Conectando a {connection_name}...")
-        self.action_label.setStyleSheet("""
-            QLabel {
-                color: #888888;
-                padding: 0 15px;
-                font-style: italic;
-            }
-        """)
-        self.statusbar.setStyleSheet("QStatusBar { background-color: #4a4a4a; color: white; }")
-        QApplication.processEvents()  # Atualiza UI imediatamente
+        # Criar loading dialog
+        from PyQt6.QtWidgets import QProgressDialog
+        self.connection_loading = QProgressDialog(self)
+        self.connection_loading.setWindowTitle("Conectando")
+        self.connection_loading.setLabelText(f"Conectando a {connection_name}...")
+        self.connection_loading.setCancelButton(None)
+        self.connection_loading.setRange(0, 0)  # Indeterminate
+        self.connection_loading.setWindowModality(Qt.WindowModality.WindowModal)
+        self.connection_loading.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
+        self.connection_loading.setMinimumWidth(300)
+        self.connection_loading.show()
         
         # Criar thread e worker para conexão em background
         self._conn_thread = QThread()
@@ -451,19 +451,15 @@ class MainWindow(QMainWindow):
     
     def _on_connection_finished(self, connection_name: str, success: bool, error: str):
         """Callback quando conexão termina (sucesso ou erro)"""
+        # Fechar loading dialog
+        if hasattr(self, 'connection_loading'):
+            self.connection_loading.close()
+        
         # Parar thread (se existir - pode não existir em testes)
         if hasattr(self, '_conn_thread') and self._conn_thread:
             self._conn_thread.quit()
             self._conn_thread.wait()
             self._conn_thread = None  # Limpar referência
-        
-        # Restaurar estilo do action_label
-        self.action_label.setStyleSheet("""
-            QLabel {
-                color: #cccccc;
-                padding: 0 15px;
-            }
-        """)
         
         if success:
             self.connection_manager.mark_connection_used(connection_name)
@@ -475,12 +471,9 @@ class MainWindow(QMainWindow):
             
             self._update_connection_status()
             self.action_label.setText(f"Conectado a {connection_name}")
-            # Aplicar tema atual para restaurar cor da statusbar
-            self._apply_app_theme()
         else:
             self.action_label.setText("Falha na conexão")
-            self.statusbar.setStyleSheet("QStatusBar { background-color: #8b0000; color: white; }")
-            QMessageBox.critical(self, "Erro de Conexão", f"Não foi possível conectar:\n{error}")
+            QMessageBox.critical(self, "Erro de Conexão", f"Não foi possível conectar:\n\n{error}")
     
     def _create_menus(self):
         """Cria os menus"""
@@ -583,23 +576,8 @@ class MainWindow(QMainWindow):
         clear_results_action.triggered.connect(self._clear_results)
         run_menu.addAction(clear_results_action)
         
-        # Menu Exibir (Temas)
+        # Menu Exibir
         view_menu = menubar.addMenu("E&xibir")
-        
-        # Submenu de Temas
-        theme_menu = view_menu.addMenu("&Tema")
-        self.theme_actions = {}
-        current_theme = self.theme_manager.get_theme_name()
-        
-        for theme_id, theme_name in self.theme_manager.get_available_themes():
-            action = QAction(theme_name, self)
-            action.setCheckable(True)
-            action.setChecked(theme_id == current_theme)
-            action.triggered.connect(lambda checked, t=theme_id: self._change_theme(t))
-            theme_menu.addAction(action)
-            self.theme_actions[theme_id] = action
-        
-        view_menu.addSeparator()
         
         # Toggle do dock de conexões
         toggle_dock_action = QAction("Painel de &Conexões", self)
@@ -1701,7 +1679,9 @@ class MainWindow(QMainWindow):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Ícone/emoji grande
-        icon_label = QLabel("📝")
+        icon_label = QLabel()
+        if hasattr(qta, 'icon'):
+            icon_label.setPixmap(qta.icon('mdi.note-text', color='#64b5f6').pixmap(16, 16))
         icon_label.setStyleSheet("font-size: 72px;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon_label)

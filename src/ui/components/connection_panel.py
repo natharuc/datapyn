@@ -1,103 +1,80 @@
 """
-Painel de conexões
-
-Sidebar lateral com gerenciamento de conexões ao banco de dados.
+Painel de conexões - Material Design Flat
 """
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-                             QLabel, QListWidget, QListWidgetItem, QPushButton,
-                             QDockWidget)
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFrame,
+                             QLabel, QListWidget, QListWidgetItem, QPushButton)
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
-
-from .buttons import PrimaryButton, SecondaryButton, DangerButton
-from .inputs import StyledLabel
-
-try:
-    import qtawesome as qta
-    HAS_QTAWESOME = True
-except ImportError:
-    HAS_QTAWESOME = False
+import qtawesome as qta
 
 
 class ConnectionItem(QListWidgetItem):
-    """Item de conexão na lista"""
+    """Item de conexão"""
     
     def __init__(self, name: str, config: dict):
         super().__init__()
-        
         self.connection_name = name
         self.config = config
         
-        # Texto e tooltip
+        # Ícone + texto
+        icon = qta.icon('mdi.database', color='#64b5f6')
+        self.setIcon(icon)
         self.setText(name)
         
         db_type = config.get('db_type', 'SQL Server')
         host = config.get('host', '')
         database = config.get('database', '')
         self.setToolTip(f"{db_type}\n{host}/{database}")
-        
-        # Cor personalizada
-        color = config.get('color', '')
-        if color:
-            self.setForeground(QColor(color))
 
 
-class ActiveConnectionWidget(QGroupBox):
-    """Widget mostrando conexão ativa"""
+class ActiveConnectionWidget(QFrame):
+    """Widget de conexão ativa - flat design"""
     
     disconnect_clicked = pyqtSignal()
     
     def __init__(self, parent=None):
-        super().__init__("Conexão Ativa", parent)
-        
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         self._setup_ui()
-        self._setup_style()
         self.set_disconnected()
     
     def _setup_ui(self):
-        """Configura UI"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         
-        # Nome da conexão
-        self.name_label = StyledLabel("Nenhuma", 'title')
+        # Header com ícone
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        icon_label.setPixmap(qta.icon('mdi.connection', color='#64b5f6').pixmap(20, 20))
+        header.addWidget(icon_label)
+        title = QLabel("CONEXÃO ATIVA")
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
+        
+        # Nome
+        self.name_label = QLabel("Nenhuma")
+        self.name_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(self.name_label)
         
-        # Info (servidor/banco)
-        self.info_label = StyledLabel("", 'hint')
+        # Info
+        self.info_label = QLabel("")
         self.info_label.setWordWrap(True)
+        self.info_label.setStyleSheet("color: #888; font-size: 12px;")
         layout.addWidget(self.info_label)
         
-        # Botão desconectar
-        self.btn_disconnect = DangerButton("Desconectar", 'fa5s.unlink')
+        # Botão
+        self.btn_disconnect = QPushButton(" Desconectar")
+        self.btn_disconnect.setIcon(qta.icon('mdi.link-off', color='white'))
+        self.btn_disconnect.setObjectName("danger")
         self.btn_disconnect.setEnabled(False)
         self.btn_disconnect.clicked.connect(self.disconnect_clicked.emit)
         layout.addWidget(self.btn_disconnect)
     
-    def _setup_style(self):
-        """Configura estilo"""
-        self.setStyleSheet("""
-            QGroupBox {
-                background-color: #252526;
-                border: 1px solid #3e3e42;
-                border-radius: 4px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 5px;
-                color: #9cdcfe;
-                font-weight: bold;
-            }
-        """)
-    
     def set_connection(self, name: str, host: str = "", database: str = "", db_type: str = ""):
-        """Define conexão ativa"""
+        """Define conexão"""
         self.name_label.setText(name)
-        self.name_label.set_style('success')
         
         info_parts = []
         if host:
@@ -113,86 +90,59 @@ class ActiveConnectionWidget(QGroupBox):
     def set_disconnected(self):
         """Define como desconectado"""
         self.name_label.setText("Nenhuma")
-        self.name_label.set_style('hint')
         self.info_label.setText("")
         self.btn_disconnect.setEnabled(False)
 
 
-class ConnectionsList(QGroupBox):
-    """Lista de conexões salvas"""
+class ConnectionsList(QFrame):
+    """Lista de conexões - flat design"""
     
-    connection_double_clicked = pyqtSignal(str)  # connection_name
+    connection_double_clicked = pyqtSignal(str)
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
     
     def __init__(self, parent=None):
-        super().__init__("Conexões Salvas", parent)
-        
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         self._setup_ui()
-        self._setup_style()
     
     def _setup_ui(self):
-        """Configura UI"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         
-        # Lista de conexões
+        # Header
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        icon_label.setPixmap(qta.icon('mdi.database-cog', color='#64b5f6').pixmap(20, 20))
+        header.addWidget(icon_label)
+        title = QLabel("CONEXÕES SALVAS")
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
+        
+        # Lista
         self.list_widget = QListWidget()
         self.list_widget.setMinimumHeight(150)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        self.list_widget.setStyleSheet("""
-            QListWidget {
-                background-color: #2d2d30;
-                border: 1px solid #3e3e42;
-                border-radius: 3px;
-                color: #cccccc;
-            }
-            QListWidget::item {
-                padding: 6px 10px;
-                border-bottom: 1px solid #3e3e42;
-            }
-            QListWidget::item:hover {
-                background-color: #3e3e42;
-            }
-            QListWidget::item:selected {
-                background-color: #094771;
-            }
-        """)
         layout.addWidget(self.list_widget)
         
         # Botões
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(5)
         
-        self.btn_new = PrimaryButton("+ Nova", 'fa5s.plus')
+        self.btn_new = QPushButton(" Nova")
+        self.btn_new.setIcon(qta.icon('mdi.plus-circle', color='white'))
+        self.btn_new.setObjectName("primary")
         self.btn_new.clicked.connect(self.new_connection_clicked.emit)
         btn_layout.addWidget(self.btn_new)
         
-        self.btn_manage = SecondaryButton("Gerenciar")
+        self.btn_manage = QPushButton(" Gerenciar")
+        self.btn_manage.setIcon(qta.icon('mdi.cog', color='white'))
         self.btn_manage.clicked.connect(self.manage_connections_clicked.emit)
         btn_layout.addWidget(self.btn_manage)
         
         layout.addLayout(btn_layout)
-    
-    def _setup_style(self):
-        """Configura estilo"""
-        self.setStyleSheet("""
-            QGroupBox {
-                background-color: #252526;
-                border: 1px solid #3e3e42;
-                border-radius: 4px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 5px;
-                color: #9cdcfe;
-                font-weight: bold;
-            }
-        """)
     
     def _on_item_double_clicked(self, item: QListWidgetItem):
         """Emite sinal quando item é clicado duas vezes"""
@@ -233,37 +183,21 @@ class ConnectionPanel(QWidget):
         self.theme_manager = theme_manager
         
         self._setup_ui()
-        self._setup_style()
         self._connect_signals()
         
-        # Carregar conexões se tiver manager
         if self.connection_manager:
             self.refresh_connections()
     
     def _setup_ui(self):
-        """Configura UI"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
         
-        # Widget de conexão ativa
         self.active_widget = ActiveConnectionWidget()
         layout.addWidget(self.active_widget)
         
-        # Lista de conexões
         self.connections_list = ConnectionsList()
         layout.addWidget(self.connections_list)
         
         layout.addStretch()
-    
-    def _setup_style(self):
-        """Configura estilo"""
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #252526;
-                color: #cccccc;
-            }
-        """)
     
     def _connect_signals(self):
         """Conecta sinais internos aos externos"""
