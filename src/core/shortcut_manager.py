@@ -12,21 +12,31 @@ class ShortcutManager:
     """Gerencia atalhos de teclado configuráveis"""
     
     DEFAULT_SHORTCUTS = {
+        # Execução
         'execute_sql': 'F5',
-        'execute_python': 'Shift+Return',
-        'execute_cross_syntax': 'Ctrl+Shift+F5',
+        'execute_all': 'Ctrl+F5',
+        'clear_results': 'Ctrl+Shift+C',
+        
+        # Arquivo
+        'new_file': 'Ctrl+N',
+        'open_file': 'Ctrl+O',
+        'save_file': 'Ctrl+S',
+        'save_as': 'Ctrl+Shift+S',
+        
+        # Sessões
         'new_tab': 'Ctrl+T',
         'close_tab': 'Ctrl+W',
-        'save_file': 'Ctrl+S',
-        'open_file': 'Ctrl+O',
+        
+        # Edição
         'find': 'Ctrl+F',
         'replace': 'Ctrl+H',
-        'comment': 'Ctrl+/',
-        'format_code': 'Ctrl+Shift+F',
-        'clear_results': 'Ctrl+Shift+C',
-        'focus_editor': 'Alt+1',
-        'focus_results': 'Alt+2',
-        'toggle_fullscreen': 'F11',
+        
+        # Conexões
+        'manage_connections': 'Ctrl+Shift+M',
+        'new_connection': 'Ctrl+Shift+D',
+        
+        # Ferramentas
+        'settings': 'Ctrl+,',
     }
     
     def __init__(self, config_path: str = None):

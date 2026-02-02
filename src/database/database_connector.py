@@ -101,8 +101,8 @@ class DatabaseConnector:
         """
         Executa uma query SQL e retorna um DataFrame
         
-        Tenta sempre buscar resultados primeiro. Se não houver dados,
-        retorna mensagem de sucesso com linhas afetadas.
+        Suporta múltiplos comandos SQL. Para queries com múltiplos comandos,
+        executa todos e tenta capturar resultados do último SELECT.
         
         Args:
             query: Query SQL a ser executada (pode conter múltiplos comandos)
@@ -114,36 +114,146 @@ class DatabaseConnector:
             raise ConnectionError("Não há conexão ativa com o banco de dados")
         
         try:
-            # Tenta buscar resultados (SELECT, SHOW, etc)
-            try:
-                df = pd.read_sql(query, self.engine)
-                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
-                return df
-            except Exception as fetch_error:
-                # Se falhou porque não retorna dados, executa como statement
-                error_msg = str(fetch_error).lower()
-                if 'does not return rows' in error_msg or 'no result' in error_msg or 'closed automatically' in error_msg:
-                    # Comando que não retorna dados (INSERT, UPDATE, DELETE, etc)
-                    with self.engine.connect() as conn:
-                        result = conn.execute(text(query))
-                        conn.commit()
-                        rows_affected = result.rowcount
-                        
-                        # Retorna DataFrame informativo
-                        if rows_affected >= 0:
-                            msg = f"✓ Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
-                        else:
-                            msg = "✓ Comando executado com sucesso."
-                        
-                        logger.info(msg)
-                        return pd.DataFrame({'Resultado': [msg]})
-                else:
-                    # Outro tipo de erro - propaga
-                    raise
+            # Remove comandos GO (SQL Server)
+            query_clean = query.replace('GO\n', '\n').replace('GO ', ' ')
+            
+            # Para SQL Server, executar como batch e capturar resultados
+            if self.db_type == 'mssql':
+                return self._execute_mssql_batch(query_clean)
+            
+            # Para outros bancos, usar lógica antiga
+            return self._execute_generic_query(query_clean)
                     
         except Exception as e:
             logger.error(f"Erro ao executar query: {str(e)}")
             raise
+    
+    def _execute_mssql_batch(self, query: str) -> pd.DataFrame:
+        """Executa batch de comandos SQL Server e retorna último resultado"""
+        try:
+            # Separar comandos por ponto e vírgula
+            commands = [cmd.strip() for cmd in query.split(';') if cmd.strip()]
+            
+            if len(commands) == 0:
+                return pd.DataFrame({'Resultado': ['Nenhum comando para executar']})
+            
+            # Executar todos os comandos
+            last_df = None
+            
+            with self.engine.connect() as conn:
+                for i, cmd in enumerate(commands):
+                    cmd_upper = cmd.strip().upper()
+                    
+                    # Verificar se é SELECT que retorna dados (não SELECT INTO)
+                    is_select_result = (
+                        cmd_upper.startswith('SELECT') and 
+                        ' INTO ' not in cmd_upper
+                    )
+                    
+                    if is_select_result:
+                        # Executar e capturar resultado
+                        try:
+                            result = conn.execute(text(cmd))
+                            if result.returns_rows:
+                                df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                                if not df.empty:
+                                    last_df = df
+                        except Exception as e:
+                            # Se falhar, tentar pd.read_sql
+                            try:
+                                last_df = pd.read_sql(cmd, self.engine)
+                            except:
+                                # Executar como statement normal
+                                conn.execute(text(cmd))
+                    else:
+                        # Executar como statement
+                        conn.execute(text(cmd))
+                
+                conn.commit()
+            
+            # Se capturou algum resultado, retornar
+            if last_df is not None and not last_df.empty:
+                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(last_df)}")
+                return last_df
+            
+            # Nenhum resultado - retornar mensagem de sucesso
+            msg = "✓ Comando executado com sucesso."
+            logger.info(msg)
+            return pd.DataFrame({'Resultado': [msg]})
+                
+        except Exception as e:
+            # Se falhar, tentar pd.read_sql (para SELECTs simples)
+            try:
+                df = pd.read_sql(query, self.engine)
+                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
+                return df
+            except:
+                raise e
+    
+    def _execute_generic_query(self, query: str) -> pd.DataFrame:
+        """Executa query genérica para bancos não-MSSQL"""
+        # Separa por ponto e vírgula para detectar múltiplos comandos
+        commands = [cmd.strip() for cmd in query.split(';') if cmd.strip()]
+        
+        if len(commands) > 1:
+            # Múltiplos comandos - executa todos menos o último
+            with self.engine.connect() as conn:
+                for cmd in commands[:-1]:
+                    conn.execute(text(cmd))
+                conn.commit()
+            
+            # Tenta executar o último comando e buscar resultados
+            last_command = commands[-1]
+            last_upper = last_command.strip().upper()
+            
+            if last_upper.startswith('SELECT') or last_upper.startswith('SHOW'):
+                # Último comando é SELECT - busca resultados
+                try:
+                    df = pd.read_sql(last_command, self.engine)
+                    logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
+                    return df
+                except:
+                    # Falhou - executa como statement
+                    with self.engine.connect() as conn:
+                        result = conn.execute(text(last_command))
+                        conn.commit()
+                        msg = "✓ Comando executado com sucesso."
+                        logger.info(msg)
+                        return pd.DataFrame({'Resultado': [msg]})
+            else:
+                # Último comando não é SELECT
+                with self.engine.connect() as conn:
+                    result = conn.execute(text(last_command))
+                    conn.commit()
+                    rows_affected = result.rowcount
+                    
+                    if rows_affected >= 0:
+                        msg = f"✓ Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                    else:
+                        msg = "✓ Comando executado com sucesso."
+                    
+                    logger.info(msg)
+                    return pd.DataFrame({'Resultado': [msg]})
+        else:
+            # Comando único - tenta buscar resultados
+            try:
+                df = pd.read_sql(query, self.engine)
+                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
+                return df
+            except:
+                # Não retorna dados - executa como statement
+                with self.engine.connect() as conn:
+                    result = conn.execute(text(query))
+                    conn.commit()
+                    rows_affected = result.rowcount
+                    
+                    if rows_affected >= 0:
+                        msg = f"✓ Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                    else:
+                        msg = "✓ Comando executado com sucesso."
+                    
+                    logger.info(msg)
+                    return pd.DataFrame({'Resultado': [msg]})
     
     def execute_statement(self, statement: str) -> int:
         """

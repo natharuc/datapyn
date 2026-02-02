@@ -15,10 +15,14 @@ class WorkspaceManager:
         
         self.config_path = Path(config_path)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Guarda o caminho do arquivo de workspace atual (quando usuário abre/salva um arquivo específico)
+        self.current_file_path: Optional[Path] = None
     
     def save_workspace(self, tabs: List[Dict[str, Any]], active_tab: int, 
                       active_connection: str = None, window_geometry: Dict = None,
-                      splitter_sizes: List[int] = None, dock_visible: bool = True):
+                      splitter_sizes: List[int] = None, dock_visible: bool = True,
+                      file_path: str = None):
         """
         Salva estado do workspace
         
@@ -29,6 +33,7 @@ class WorkspaceManager:
             window_geometry: Dict com x, y, width, height, maximized
             splitter_sizes: Lista com tamanhos do splitter [editor, results]
             dock_visible: Se o dock de conexões está visível
+            file_path: Caminho para salvar arquivo (se None, usa current_file_path ou config_path padrão)
         """
         workspace = {
             'tabs': tabs,
@@ -39,12 +44,24 @@ class WorkspaceManager:
             'dock_visible': dock_visible
         }
         
-        with open(self.config_path, 'w', encoding='utf-8') as f:
+        # Determinar onde salvar
+        if file_path:
+            save_path = Path(file_path)
+            self.current_file_path = save_path
+        elif self.current_file_path:
+            save_path = self.current_file_path
+        else:
+            save_path = self.config_path
+        
+        with open(save_path, 'w', encoding='utf-8') as f:
             json.dump(workspace, f, indent=2, ensure_ascii=False)
     
-    def load_workspace(self) -> Dict[str, Any]:
+    def load_workspace(self, file_path: str = None) -> Dict[str, Any]:
         """
         Carrega estado do workspace
+        
+        Args:
+            file_path: Caminho do arquivo para carregar (se None, usa config_path padrão)
         
         Returns:
             Dict com 'tabs', 'active_tab', 'active_connection', 'window_geometry', etc
@@ -58,11 +75,18 @@ class WorkspaceManager:
             'dock_visible': True
         }
         
-        if not self.config_path.exists():
+        # Determinar de onde carregar
+        if file_path:
+            load_path = Path(file_path)
+            self.current_file_path = load_path
+        else:
+            load_path = self.config_path
+        
+        if not load_path.exists():
             return default
         
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
+            with open(load_path, 'r', encoding='utf-8') as f:
                 workspace = json.load(f)
                 
             # Validação básica

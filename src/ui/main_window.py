@@ -337,6 +337,7 @@ class MainWindow(QMainWindow):
         self.session_tabs.session_closed.connect(self._close_session_tab)
         self.session_tabs.session_renamed.connect(self._on_session_renamed)
         self.session_tabs.session_changed.connect(self._on_session_tab_changed)
+        self.session_tabs.duplicate_session.connect(self._duplicate_session)
         
         session_layout.addWidget(self.session_tabs)
         
@@ -483,24 +484,29 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("&Arquivo")
         
         new_action = QAction("&Novo", self)
-        new_action.setShortcut(QKeySequence.StandardKey.New)
+        # Atalho gerenciado por ShortcutManager (Ctrl+N)
         new_action.triggered.connect(self._new_file)
         file_menu.addAction(new_action)
         
         open_action = QAction("&Abrir...", self)
-        open_action.setShortcut(QKeySequence.StandardKey.Open)
+        # Atalho gerenciado por ShortcutManager (Ctrl+O)
         open_action.triggered.connect(self._open_file)
         file_menu.addAction(open_action)
         
         save_action = QAction("&Salvar", self)
-        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        # Atalho gerenciado por ShortcutManager (Ctrl+S)
         save_action.triggered.connect(self._save_file)
         file_menu.addAction(save_action)
+        
+        save_as_action = QAction("Salvar &Como...", self)
+        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+S)
+        save_as_action.triggered.connect(self._save_file_as)
+        file_menu.addAction(save_as_action)
         
         file_menu.addSeparator()
         
         exit_action = QAction("Sai&r", self)
-        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        exit_action.setShortcut(QKeySequence.StandardKey.Quit)  # Manter Quit padrão do sistema
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
@@ -510,7 +516,7 @@ class MainWindow(QMainWindow):
         manage_conn_action = QAction("&Gerenciar Conexões...", self)
         if HAS_QTAWESOME:
             manage_conn_action.setIcon(self.icons['database'])
-        manage_conn_action.setShortcut("Ctrl+Shift+M")
+        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+M)
         manage_conn_action.triggered.connect(self._manage_connections)
         conn_menu.addAction(manage_conn_action)
         
@@ -519,7 +525,7 @@ class MainWindow(QMainWindow):
         new_conn_action = QAction("&Nova Conexão...", self)
         if HAS_QTAWESOME:
             new_conn_action.setIcon(self.icons['plug'])
-        new_conn_action.setShortcut("Ctrl+Shift+N")
+        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+D)
         new_conn_action.triggered.connect(self._new_connection)
         conn_menu.addAction(new_conn_action)
         
@@ -535,44 +541,23 @@ class MainWindow(QMainWindow):
         run_current_action = QAction("Executar &Bloco Atual", self)
         if HAS_QTAWESOME:
             run_current_action.setIcon(self.icons['play'])
-        run_current_action.setShortcut("F5")
+        # Atalho gerenciado por ShortcutManager (F5)
         run_current_action.triggered.connect(self._execute_current_block)
         run_menu.addAction(run_current_action)
         
         run_all_action = QAction("Executar &Todos os Blocos", self)
         if HAS_QTAWESOME:
             run_all_action.setIcon(qta.icon('fa5s.forward'))
-        run_all_action.setShortcut("Ctrl+F5")
+        # Atalho gerenciado por ShortcutManager (Ctrl+F5)
         run_all_action.triggered.connect(self._execute_all_blocks)
         run_menu.addAction(run_all_action)
-        
-        run_menu.addSeparator()
-        
-        run_sql_action = QAction("Forçar Executar como &SQL", self)
-        if HAS_QTAWESOME:
-            run_sql_action.setIcon(self.icons['database'])
-        run_sql_action.triggered.connect(self._force_execute_sql)
-        run_menu.addAction(run_sql_action)
-        
-        run_python_action = QAction("Forçar Executar como &Python", self)
-        if HAS_QTAWESOME:
-            run_python_action.setIcon(qta.icon('fa5b.python'))
-        run_python_action.setShortcut("Shift+Return")
-        run_python_action.triggered.connect(self._force_execute_python)
-        run_menu.addAction(run_python_action)
-        
-        run_cross_action = QAction("Forçar Executar como &Cross", self)
-        if HAS_QTAWESOME:
-            run_cross_action.setIcon(qta.icon('fa5s.code'))
-        run_cross_action.triggered.connect(self._force_execute_cross)
-        run_menu.addAction(run_cross_action)
         
         run_menu.addSeparator()
         
         clear_results_action = QAction("&Limpar Resultados", self)
         if HAS_QTAWESOME:
             clear_results_action.setIcon(self.icons['trash'])
-        clear_results_action.setShortcut("Ctrl+Shift+C")
+        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+C)
         clear_results_action.triggered.connect(self._clear_results)
         run_menu.addAction(clear_results_action)
         
@@ -592,7 +577,7 @@ class MainWindow(QMainWindow):
         settings_action = QAction("&Configurações de Atalhos...", self)
         if HAS_QTAWESOME:
             settings_action.setIcon(self.icons['cog'])
-        settings_action.setShortcut("Ctrl+,")
+        # Atalho gerenciado por ShortcutManager (Ctrl+,)
         settings_action.triggered.connect(self._show_settings)
         tools_menu.addAction(settings_action)
         
@@ -692,9 +677,178 @@ class MainWindow(QMainWindow):
             self.execution_label.setText("")
     
     def _setup_shortcuts(self):
-        """Configura atalhos customizados"""
-        # Os atalhos principais já estão nos editores
-        pass
+        """Configura atalhos globais da aplicação"""
+        from PyQt6.QtGui import QShortcut, QKeySequence
+        from PyQt6.QtCore import Qt
+        
+        # Guardar shortcuts como atributos para evitar garbage collection
+        self._shortcuts = []
+        
+        # Mapear ações para callbacks
+        shortcuts_map = {
+            # Execução
+            'execute_sql': self._execute_current_block,
+            'execute_all': self._execute_all_blocks,
+            'clear_results': self._clear_results,
+            
+            # Arquivo
+            'new_file': self._new_file,
+            'open_file': self._open_file,
+            'save_file': self._save_file,
+            'save_as': self._save_file_as,
+            
+            # Sessões
+            'new_tab': self._new_session,
+            'close_tab': self._close_current_session,
+            
+            # Edição
+            'find': self._show_find_dialog,
+            'replace': self._show_replace_dialog,
+            
+            # Conexões
+            'manage_connections': self._manage_connections,
+            'new_connection': self._new_connection,
+            
+            # Ferramentas
+            'settings': self._show_settings,
+        }
+        
+        # Criar atalhos a partir do ShortcutManager
+        for action, callback in shortcuts_map.items():
+            key_sequence = self.shortcut_manager.get_shortcut(action)
+            if key_sequence:
+                shortcut = QShortcut(QKeySequence(key_sequence), self)
+                shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                shortcut.activated.connect(callback)
+                self._shortcuts.append(shortcut)
+    
+    def _new_session(self):
+        """Cria nova sessão/aba"""
+        session = self.session_manager.create_session()
+        self._create_session_widget(session)
+        # Focar na nova aba
+        for i in range(self.session_tabs.count()):
+            if self.session_tabs.tabText(i).startswith("Session"):
+                widget = self.session_tabs.widget(i)
+                if isinstance(widget, SessionWidget) and widget.session.session_id == session.session_id:
+                    self.session_tabs.setCurrentIndex(i)
+                    break
+    
+    def _close_current_session(self):
+        """Fecha a sessão/aba atual"""
+        current_index = self.session_tabs.currentIndex()
+        if current_index >= 0:
+            widget = self.session_tabs.widget(current_index)
+            if isinstance(widget, SessionWidget):
+                # Confirmar fechamento se houver código não salvo
+                if widget.editor.toPlainText().strip():
+                    reply = QMessageBox.question(
+                        self,
+                        "Fechar Sessão",
+                        "Tem certeza que deseja fechar esta sessão?\n\nO código não salvo será perdido.",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.No:
+                        return
+                
+                # Remover sessão
+                session_id = widget.session.session_id
+                self.session_manager.remove_session(session_id)
+                if session_id in self._session_widgets:
+                    del self._session_widgets[session_id]
+                
+                # Remover aba
+                self.session_tabs.removeTab(current_index)
+                
+                # Se não há mais sessões, mostrar empty state
+                if not self._session_widgets:
+                    self._show_empty_state()
+    
+    def _duplicate_session(self, index: int):
+        """Duplica uma sessão"""
+        widget = self.session_tabs.widget(index)
+        if not widget or not hasattr(widget, 'editor'):
+            return
+        
+        # Criar nova sessão
+        session = self.session_manager.create_session()
+        new_widget = SessionWidget(session, theme_manager=self.theme_manager)
+        
+        # Copiar todo o conteúdo do editor
+        source_blocks = widget.editor.get_blocks()
+        
+        # Remover blocos existentes na nova sessão (exceto o último)
+        new_blocks = new_widget.editor.get_blocks()
+        for b in new_blocks[:-1]:
+            new_widget.editor.remove_block(b)
+        
+        # Se fonte tem blocos, usa o primeiro bloco vazio da nova sessão
+        if source_blocks:
+            # Usar primeiro bloco existente
+            first_new_block = new_widget.editor.get_blocks()[0]
+            first_new_block.set_language(source_blocks[0].get_language())
+            first_new_block.editor.setText(source_blocks[0].editor.text())
+            
+            # Adicionar os demais blocos
+            for block in source_blocks[1:]:
+                new_block = new_widget.editor.add_block(language=block.get_language())
+                new_block.editor.setText(block.editor.text())
+        
+        # Copiar file_path se existir
+        if hasattr(widget, 'file_path'):
+            new_widget.file_path = widget.file_path
+        
+        # Registrar e adicionar aba
+        self._session_widgets[session.session_id] = new_widget
+        
+        # Nome da nova aba
+        original_name = self.session_tabs.tabText(index)
+        new_name = f"{original_name} (cópia)"
+        
+        # Inserir antes do último tab (botão nova aba)
+        insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
+        tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
+        
+        # Configurar botão de fechar customizado
+        self.session_tabs._setup_close_button(tab_index)
+        
+        self.session_tabs.setCurrentIndex(tab_index)
+    
+    def _show_find_dialog(self):
+        """Mostra diálogo de busca no editor atual"""
+        widget = self._get_current_session_widget()
+        if widget and widget.editor:
+            # Implementação simples de busca com QInputDialog
+            from PyQt6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, "Buscar", "Texto a buscar:")
+            if ok and text:
+                # Buscar no editor
+                editor = widget.editor
+                if hasattr(editor, 'findFirst'):
+                    editor.findFirst(text, False, False, False, True)
+    
+    def _show_replace_dialog(self):
+        """Mostra diálogo de substituir no editor atual"""
+        widget = self._get_current_session_widget()
+        if widget and widget.editor:
+            # Implementação simples de substituição
+            from PyQt6.QtWidgets import QInputDialog
+            find_text, ok1 = QInputDialog.getText(self, "Substituir", "Buscar:")
+            if ok1 and find_text:
+                replace_text, ok2 = QInputDialog.getText(self, "Substituir", "Substituir por:")
+                if ok2:
+                    # Substituir no editor
+                    editor = widget.editor
+                    if hasattr(editor, 'findFirst') and hasattr(editor, 'replace'):
+                        while editor.findFirst(find_text, False, False, False, True):
+                            editor.replace(replace_text)
+    
+    def _add_block_to_current_session(self):
+        """Adiciona novo bloco de código na sessão atual"""
+        widget = self._get_current_session_widget()
+        if widget and widget.editor:
+            widget.editor.add_block()
     
     def _manage_connections(self):
         """Abre diálogo de gerenciamento de conexões"""
@@ -855,10 +1009,10 @@ class MainWindow(QMainWindow):
         if not editor:
             return
         
-        # Se é um BlockEditor, usa o método dele
+        # Se é um BlockEditor, usa a execução inteligente (mesma lógica do botão)
         from src.editors.block_editor import BlockEditor
         if isinstance(editor, BlockEditor):
-            editor.execute_focused_block()
+            editor._execute_smart()
         else:
             # Editor antigo - executa como Python por padrão
             code = editor.get_selected_or_all_text().strip()
@@ -1376,59 +1530,153 @@ class MainWindow(QMainWindow):
             editor.clear()
     
     def _open_file(self):
-        """Abre arquivo SQL ou Python na aba atual"""
+        """Abre workspace ou arquivo de código"""
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Abrir Arquivo", "", "SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)"
+            self, 
+            "Abrir Workspace", 
+            "", 
+            "DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)"
         )
         if filename:
+            # Verifica se é workspace
+            if filename.endswith('.dpw'):
+                self._open_workspace(filename)
+            else:
+                # Criar NOVA aba para o arquivo
+                self._open_code_file(filename)
+    
+    def _open_code_file(self, filename: str):
+        """Abre arquivo de código em nova aba"""
+        try:
+            # 1. Ler conteúdo do arquivo
             with open(filename, 'r', encoding='utf-8') as f:
                 content = f.read()
-                editor = self._get_current_editor()
-                if editor:
-                    # Limpa blocos existentes e cria um novo com o conteúdo
-                    editor.clear()
-                    
-                    # Detecta tipo de arquivo e ajusta linguagem
-                    if filename.endswith('.py'):
-                        language = 'python'
-                    else:
-                        language = 'sql'
-                    
-                    # Configura o primeiro bloco
-                    blocks = editor.get_blocks()
-                    if blocks:
-                        blocks[0].set_language(language)
-                        blocks[0].set_code(content)
-                    
-                    # Atualizar título da aba
-                    import os
-                    tab_title = os.path.basename(filename)
-                    current_index = self.session_tabs.currentIndex()
-                    self.session_tabs.setTabText(current_index, tab_title)
-    
-    def _save_file(self):
-        """Salva arquivo da aba atual"""
-        editor = self._get_current_editor()
-        if not editor:
-            return
-        
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Salvar Arquivo", "", "SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)"
-        )
-        if filename:
-            content = editor.text()
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(content)
-            self.action_label.setText(f"Arquivo salvo: {filename}")
             
-            # Atualizar título da aba
+            # 2. Detectar linguagem
+            if filename.endswith('.py'):
+                language = 'python'
+            else:
+                language = 'sql'
+            
+            # 3. Criar nova sessão
             import os
             tab_title = os.path.basename(filename)
-            current_index = self.session_tabs.currentIndex()
-            self.session_tabs.setTabText(current_index, tab_title)
+            session = self.session_manager.create_session(title=tab_title)
             
-            # Salvar sessões
-            self._save_sessions()
+            # 4. Criar widget da sessão
+            widget = SessionWidget(session, theme_manager=self.theme_manager)
+            widget.file_path = filename
+            
+            # 5. Configurar conteúdo
+            blocks = widget.editor.get_blocks()
+            if blocks:
+                # Usar primeiro bloco existente
+                blocks[0].set_language(language)
+                blocks[0].editor.setText(content)
+            
+            # 6. Conectar sinais
+            widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
+            widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
+            
+            # 7. Registrar widget
+            self._session_widgets[session.session_id] = widget
+            
+            # 8. Adicionar aba (antes do botão +)
+            tab_count = self.session_tabs.count()
+            if tab_count > 0 and self.session_tabs.tabText(tab_count - 1).strip() == "+":
+                index = self.session_tabs.insertTab(tab_count - 1, widget, tab_title)
+                self.session_tabs._setup_close_button(index)
+            else:
+                index = self.session_tabs.add_session(widget, tab_title)
+            
+            # 9. Focar na nova aba
+            self.session_tabs.setCurrentIndex(index)
+            self.action_label.setText(f"Arquivo aberto: {tab_title}")
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Erro", f"Erro ao abrir arquivo: {e}")
+    
+    def _save_file(self):
+        """Salva workspace no arquivo atual ou pede novo caminho"""
+        # Se já tem arquivo de workspace atual, salva direto
+        if self.workspace_manager.current_file_path:
+            self._save_workspace_to_file(str(self.workspace_manager.current_file_path))
+            import os
+            filename = os.path.basename(self.workspace_manager.current_file_path)
+            self.action_label.setText(f"Workspace salvo: {filename}")
+        else:
+            # Pede novo caminho (Salvar Como)
+            self._save_file_as()
+    
+    def _save_file_as(self):
+        """Salva workspace em novo arquivo"""
+        filename, _ = QFileDialog.getSaveFileName(
+            self, 
+            "Salvar Workspace Como", 
+            "", 
+            "DataPyn Workspace (*.dpw);;All Files (*.*)"
+        )
+        if filename:
+            # Garantir extensão .dpw
+            if not filename.endswith('.dpw'):
+                filename += '.dpw'
+            
+            self._save_workspace_to_file(filename)
+            
+            import os
+            self.action_label.setText(f"Workspace salvo: {os.path.basename(filename)}")
+    
+    def _open_workspace(self, filename: str):
+        """Abre um workspace de um arquivo específico"""
+        try:
+            # Carregar workspace do arquivo
+            workspace = self.workspace_manager.load_workspace(filename)
+            
+            # Recarregar sessões (já implementado)
+            self._restore_sessions()
+            
+            import os
+            self.action_label.setText(f"Workspace aberto: {os.path.basename(filename)}")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Erro ao Abrir Workspace",
+                f"Erro ao carregar workspace:\n{str(e)}"
+            )
+    
+    def _save_workspace_to_file(self, filename: str):
+        """Salva workspace em arquivo específico"""
+        # Sincronizar sessão atual
+        widget = self._get_current_session_widget()
+        if widget:
+            widget.sync_to_session()
+        
+        # Salvar via SessionManager
+        self.session_manager.save_sessions()
+        
+        # Salvar geometria da janela
+        window_geometry = {
+            'x': self.geometry().x(),
+            'y': self.geometry().y(),
+            'width': self.geometry().width(),
+            'height': self.geometry().height(),
+            'maximized': self.isMaximized()
+        }
+        
+        dock_visible = self.connections_dock.isVisible() if hasattr(self, 'connections_dock') else True
+        
+        # Salvar no workspace manager com caminho específico
+        self.workspace_manager.save_workspace(
+            tabs=[],
+            active_tab=0,
+            active_connection=None,
+            window_geometry=window_geometry,
+            splitter_sizes=[],
+            dock_visible=dock_visible,
+            file_path=filename  # Passa o caminho do arquivo
+        )
     
     def _update_status(self):
         """Atualiza status periodicamente"""
@@ -1768,8 +2016,12 @@ class MainWindow(QMainWindow):
         tab_count = self.session_tabs.count()
         if tab_count > 0 and self.session_tabs.tabText(tab_count - 1).strip() == "+":
             index = self.session_tabs.insertTab(tab_count - 1, widget, session.title)
+            # Configurar botão de fechar customizado
+            self.session_tabs._setup_close_button(index)
         else:
             index = self.session_tabs.addTab(widget, session.title)
+            # Configurar botão de fechar customizado
+            self.session_tabs._setup_close_button(index)
         
         self.session_tabs.setCurrentIndex(index)
         
@@ -1783,27 +2035,6 @@ class MainWindow(QMainWindow):
         
         widget.session.title = new_name.strip()
         self._save_sessions()
-    
-    def _rename_session_tab(self, index: int):
-        """Renomeia aba de sessão ao dar duplo clique (método legado)"""
-        widget = self.session_tabs.widget(index)
-        if not isinstance(widget, SessionWidget):
-            return
-        
-        current_name = self.session_tabs.tabText(index)
-        
-        from PyQt6.QtWidgets import QInputDialog
-        new_name, ok = QInputDialog.getText(
-            self,
-            "Renomear Sessão",
-            "Novo nome:",
-            text=current_name
-        )
-        
-        if ok and new_name.strip():
-            self.session_tabs.setTabText(index, new_name.strip())
-            widget.session.title = new_name.strip()
-            self._save_sessions()
     
     def _close_session_tab(self, index: int):
         """Fecha aba de sessão"""
@@ -1819,7 +2050,10 @@ class MainWindow(QMainWindow):
             session_id = widget.session.session_id
             widget.cleanup()
             self.session_manager.close_session(session_id)
-            del self._session_widgets[session_id]
+            
+            # Remover do dicionário apenas se existir
+            if session_id in self._session_widgets:
+                del self._session_widgets[session_id]
             
             self.session_tabs.removeTab(index)
             self._save_sessions()

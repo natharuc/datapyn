@@ -3,9 +3,12 @@ Tabs de sessão
 
 Gerencia as abas de sessão da IDE.
 """
-from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog
+from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QAction
+import qtawesome as qta
+import subprocess
+import os
 
 
 class SessionTabBar(QTabBar):
@@ -17,6 +20,7 @@ class SessionTabBar(QTabBar):
         super().__init__(parent)
         
         self._setup_style()
+        self._setup_context_menu()
     
     def _setup_style(self):
         """Configura estilo"""
@@ -38,10 +42,11 @@ class SessionTabBar(QTabBar):
                 background-color: #3e3e42;
             }
             QTabBar::close-button {
-                image: url(close.png);
                 subcontrol-position: right;
                 margin-right: 6px;
                 padding: 2px;
+                width: 14px;
+                height: 14px;
             }
             QTabBar::close-button:hover {
                 background-color: #f48771;
@@ -49,21 +54,144 @@ class SessionTabBar(QTabBar):
             }
         """)
     
-    def mouseDoubleClickEvent(self, event):
-        """Renomear aba ao dar duplo clique"""
-        index = self.tabAt(event.pos())
-        if index >= 0:
-            current_name = self.tabText(index)
-            new_name, ok = QInputDialog.getText(
-                self, "Renomear Sessão",
-                "Novo nome:",
-                text=current_name
-            )
-            if ok and new_name:
+    def _setup_context_menu(self):
+        """Configura context menu"""
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+    
+    def _show_context_menu(self, pos):
+        """Mostra context menu"""
+        index = self.tabAt(pos)
+        if index < 0:
+            return
+        
+        menu = QMenu(self)
+        
+        # Obter caminho do arquivo se existir
+        tab_widget = self.parent()
+        widget = tab_widget.widget(index)
+        file_path = getattr(widget, 'file_path', None) if widget else None
+        
+        # 1. Abrir local do arquivo
+        if file_path and os.path.exists(file_path):
+            open_location_action = QAction(qta.icon('mdi.folder-open'), "Abrir Local do Arquivo", self)
+            open_location_action.triggered.connect(lambda: self._open_file_location(file_path))
+            menu.addAction(open_location_action)
+            menu.addSeparator()
+        
+        # 2. Fechar tudo
+        close_all_action = QAction(qta.icon('mdi.close-box-multiple'), "Fechar Tudo", self)
+        close_all_action.triggered.connect(lambda: self._close_all_tabs())
+        menu.addAction(close_all_action)
+        
+        # 3. Fechar todas as outras
+        close_others_action = QAction(qta.icon('mdi.close-box-outline'), "Fechar Todas as Outras", self)
+        close_others_action.triggered.connect(lambda: self._close_other_tabs(index))
+        menu.addAction(close_others_action)
+        
+        menu.addSeparator()
+        
+        # 4. Renomear
+        rename_action = QAction(qta.icon('mdi.pencil'), "Renomear", self)
+        rename_action.triggered.connect(lambda: self._rename_tab_inline(index))
+        menu.addAction(rename_action)
+        
+        # 5. Duplicar
+        duplicate_action = QAction(qta.icon('mdi.content-copy'), "Duplicar", self)
+        duplicate_action.triggered.connect(lambda: self._duplicate_tab(index))
+        menu.addAction(duplicate_action)
+        
+        menu.addSeparator()
+        
+        # 5. Fechar
+        close_action = QAction(qta.icon('mdi.close'), "Fechar", self)
+        close_action.triggered.connect(lambda: self._close_tab(index))
+        menu.addAction(close_action)
+        
+        menu.exec(self.mapToGlobal(pos))
+    
+    def _open_file_location(self, file_path):
+        """Abre o local do arquivo no explorer"""
+        folder = os.path.dirname(file_path)
+        if os.path.exists(folder):
+            if os.name == 'nt':  # Windows
+                subprocess.run(['explorer', '/select,', file_path])
+            elif os.name == 'posix':  # Linux/Mac
+                subprocess.run(['xdg-open', folder])
+    
+    def _close_all_tabs(self):
+        """Fecha todas as abas"""
+        tab_widget = self.parent()
+        if tab_widget:
+            # Fechar de trás para frente para evitar mudanças de índice
+            for i in range(tab_widget.count() - 1, -1, -1):
+                tab_widget.session_closed.emit(i)
+    
+    def _close_other_tabs(self, keep_index):
+        """Fecha todas as abas exceto a especificada"""
+        tab_widget = self.parent()
+        if tab_widget:
+            # Fechar de trás para frente
+            for i in range(tab_widget.count() - 1, -1, -1):
+                if i != keep_index:
+                    tab_widget.session_closed.emit(i)
+    
+    def _rename_tab_inline(self, index):
+        """Renomeia a aba usando input inline"""
+        if index < 0:
+            return
+        
+        # Criar QLineEdit para edição inline
+        line_edit = QLineEdit(self)
+        line_edit.setText(self.tabText(index))
+        line_edit.selectAll()
+        line_edit.setStyleSheet("""
+            QLineEdit {
+                background-color: #3e3e42;
+                color: #ffffff;
+                border: 1px solid #007acc;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+        """)
+        
+        # Função para salvar o novo nome
+        def save_name():
+            new_name = line_edit.text().strip()
+            if new_name:
                 self.setTabText(index, new_name)
                 self.tab_renamed.emit(index, new_name)
+            line_edit.deleteLater()
         
-        super().mouseDoubleClickEvent(event)
+        # Conectar Enter para salvar
+        line_edit.returnPressed.connect(save_name)
+        line_edit.editingFinished.connect(save_name)
+        
+        # Posicionar o line_edit sobre a aba
+        tab_rect = self.tabRect(index)
+        line_edit.setGeometry(tab_rect.adjusted(4, 4, -30, -4))
+        line_edit.show()
+        line_edit.setFocus()
+    
+    def _duplicate_tab(self, index):
+        """Duplica a aba"""
+        tab_widget = self.parent()
+        if tab_widget and hasattr(tab_widget, 'duplicate_session'):
+            tab_widget.duplicate_session.emit(index)
+    
+    def _close_tab(self, index):
+        """Fecha uma aba"""
+        tab_widget = self.parent()
+        if tab_widget:
+            tab_widget.session_closed.emit(index)
+    
+    def mouseDoubleClickEvent(self, event):
+        """Renomear aba ao dar duplo clique usando input inline"""
+        index = self.tabAt(event.pos())
+        if index >= 0:
+            self._rename_tab_inline(index)
+        else:
+            super().mouseDoubleClickEvent(event)
 
 
 class SessionTabs(QTabWidget):
@@ -74,6 +202,7 @@ class SessionTabs(QTabWidget):
     session_closed = pyqtSignal(int)   # index
     session_renamed = pyqtSignal(int, str)  # index, new_name
     new_session_requested = pyqtSignal()
+    duplicate_session = pyqtSignal(int)  # index - duplicar sessão
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,6 +221,30 @@ class SessionTabs(QTabWidget):
         self.setTabsClosable(True)
         self.setMovable(True)
         self.setDocumentMode(True)
+    
+    def _setup_close_button(self, index):
+        """Configura ícone X no botão de fechar da aba"""
+        from PyQt6.QtWidgets import QToolButton
+        
+        # Criar botão customizado
+        close_btn = QToolButton()
+        close_btn.setIcon(qta.icon('mdi.close', color='#cccccc', scale_factor=1.4))
+        close_btn.setFixedSize(20, 20)
+        close_btn.setStyleSheet("""
+            QToolButton {
+                background: transparent;
+                border: none;
+                border-radius: 2px;
+                margin-right: 10px;
+            }
+            QToolButton:hover {
+                background-color: #3e3e42;
+            }
+        """)
+        close_btn.clicked.connect(lambda: self.tabCloseRequested.emit(index))
+        
+        # Substituir botão padrão
+        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, close_btn)
     
     def _setup_style(self):
         """Configura estilo"""
@@ -123,6 +276,9 @@ class SessionTabs(QTabWidget):
             Índice da nova aba
         """
         index = self.addTab(widget, name)
+        
+        # Configurar botão de fechar customizado
+        self._setup_close_button(index)
         
         if make_current:
             self.setCurrentIndex(index)
