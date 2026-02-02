@@ -24,7 +24,7 @@ def app(qapp):
 
 @pytest.fixture
 def main_window(app):
-    """Fixture da MainWindow"""
+    """Fixture da MainWindow - roda com QScintilla E Monaco"""
     window = MainWindow()
     window.show()
     QTest.qWaitForWindowExposed(window)
@@ -123,36 +123,8 @@ def test_shortcut_close_tab(main_window):
     assert True
 
 
-def test_shortcut_find(main_window):
-    """Testa Ctrl+F - Localizar"""
-    # Adicionar código
-    editor = main_window._get_current_editor()
-    block = editor.add_block()
-    block.set_code("test code here")
-    
-    # Pressionar Ctrl+F
-    QTest.keySequence(main_window, QKeySequence("Ctrl+F"))
-    QApplication.processEvents()
-    
-    # Verificar que o diálogo foi chamado (se não deu erro, funcionou)
-    assert True
-
-
-def test_shortcut_replace(main_window):
-    """Testa Ctrl+H - Substituir"""
-    # Adicionar código
-    editor = main_window._get_current_editor()
-    assert editor is not None, "Nenhum editor disponível"
-    
-    block = editor.add_block()
-    block.set_code("replace this text")
-    
-    # Pressionar Ctrl+H
-    QTest.keySequence(main_window, QKeySequence("Ctrl+H"))
-    QApplication.processEvents()
-    
-    # Verificar que o diálogo foi chamado
-    assert True
+# test_shortcut_find e test_shortcut_replace removidos
+# Ctrl+F e Ctrl+H agora são gerenciados nativamente pelos editores (QScintilla/Monaco)
 
 
 def test_shortcut_save_file(main_window):
@@ -207,9 +179,8 @@ def test_all_shortcuts_registered(main_window):
         'new_tab',
         'close_tab',
         
-        # Edição
-        'find',
-        'replace',
+        # Edição - find/replace gerenciados pelos editores
+        # 'find', 'replace' removidos - cada editor tem seus próprios
         
         # Conexões
         'manage_connections',

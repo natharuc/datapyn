@@ -15,8 +15,9 @@ class ConnectionItem(QListWidgetItem):
         self.connection_name = name
         self.config = config
         
-        # Ícone + texto
-        icon = qta.icon('mdi.database', color='#64b5f6')
+        # Ícone + texto - usa cor da conexão se definida
+        icon_color = config.get('color', '#64b5f6')
+        icon = qta.icon('mdi.database', color=icon_color)
         self.setIcon(icon)
         self.setText(name)
         

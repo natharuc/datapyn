@@ -48,7 +48,7 @@ def mock_all_dialogs():
 
 @pytest.fixture
 def main_window(qapp, qtbot, tmp_path):
-    """Cria MainWindow para testes"""
+    """Cria MainWindow para testes - agora usa apenas QScintilla"""
     from src.ui.main_window import MainWindow
     
     with patch('src.ui.main_window.ConnectionManager') as MockConnManager, \
@@ -300,20 +300,35 @@ class TestLogging:
             output = main_window.python_output.toPlainText()
             assert "Test message" in output
     
-    def test_show_error_adds_red_text(self, main_window, qtbot):
-        """_show_error deve adicionar texto vermelho"""
-        main_window._show_error("Test error")
-        
-        if main_window.python_output:
-            html = main_window.python_output.toHtml()
-            assert "Test error" in html
+    def test_show_error_displays_message_box(self, main_window, qtbot):
+        """_show_error deve exibir QMessageBox.Critical"""
+        with patch('src.ui.main_window.QMessageBox') as mock_msgbox:
+            mock_instance = Mock()
+            mock_msgbox.return_value = mock_instance
+            
+            main_window._show_error("Test Title", "Test error message")
+            
+            # Verificar que QMessageBox foi criado e configurado corretamente
+            mock_msgbox.assert_called_once_with(main_window)
+            mock_instance.setIcon.assert_called_once_with(mock_msgbox.Icon.Critical)
+            mock_instance.setWindowTitle.assert_called_once_with("Test Title")
+            mock_instance.setText.assert_called_once_with("Test error message")
+            mock_instance.exec.assert_called_once()
     
-    def test_show_error_switches_to_output_tab(self, main_window, qtbot):
-        """_show_error deve trocar para aba de output"""
-        if main_window.bottom_tabs:
-            main_window.bottom_tabs.setCurrentIndex(0)  # Começa em resultados
-            main_window._show_error("Test error")
-            assert main_window.bottom_tabs.currentIndex() == 1  # Output
+    def test_show_info_displays_message_box(self, main_window, qtbot):
+        """_show_info deve exibir QMessageBox.Information"""
+        with patch('src.ui.main_window.QMessageBox') as mock_msgbox:
+            mock_instance = Mock()
+            mock_msgbox.return_value = mock_instance
+            
+            main_window._show_info("Info Title", "Info message")
+            
+            # Verificar que QMessageBox foi criado e configurado corretamente
+            mock_msgbox.assert_called_once_with(main_window)
+            mock_instance.setIcon.assert_called_once_with(mock_msgbox.Icon.Information)
+            mock_instance.setWindowTitle.assert_called_once_with("Info Title")
+            mock_instance.setText.assert_called_once_with("Info message")
+            mock_instance.exec.assert_called_once()
 
 
 # === TESTES DE VARIÁVEIS ===
@@ -403,29 +418,7 @@ class TestFileOperations:
 
 
 # === TESTES DE TEMA ===
-
-
-class TestThemeOperations:
-    """Testa operações de tema"""
-    
-    def test_apply_app_theme_no_error(self, main_window, qtbot):
-        """_apply_app_theme não deve dar erro"""
-        main_window._apply_app_theme()
-    
-    def test_change_theme_no_error(self, main_window, qtbot):
-        """_change_theme não deve dar erro"""
-        themes = main_window.theme_manager.get_available_themes()
-        if themes:
-            # Pode ser lista de dicts ou lista de tuplas
-            if isinstance(themes[0], dict):
-                theme_id = themes[0].get('id', themes[0].get('name'))
-            elif isinstance(themes[0], (list, tuple)):
-                theme_id = themes[0][0]
-            else:
-                theme_id = str(themes[0])
-            
-            if theme_id:
-                main_window._change_theme(theme_id)
+# Removidos - tema fixo em 'dark'
 
 
 # === TESTES DE STATUS BAR ===

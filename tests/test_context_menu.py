@@ -17,7 +17,7 @@ from src.ui.main_window import MainWindow
 
 @pytest.fixture
 def main_window(qapp):
-    """Fixture da MainWindow"""
+    """Fixture da MainWindow - roda com QScintilla E Monaco"""
     window = MainWindow()
     window.show()
     QTest.qWaitForWindowExposed(window)

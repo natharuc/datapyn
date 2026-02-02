@@ -62,32 +62,7 @@ class SqlWorker(QObject):
             self.finished.emit(None, str(e))
 
 
-class ConnectionWorker(QObject):
-    """Worker para conectar ao banco em background"""
-    finished = pyqtSignal(bool, str)  # (success, error_msg)
-    
-    def __init__(self, connection_manager, conn_name, config, password):
-        super().__init__()
-        self.connection_manager = connection_manager
-        self.conn_name = conn_name
-        self.config = config
-        self.password = password
-    
-    def run(self):
-        try:
-            self.connection_manager.create_connection(
-                self.conn_name,
-                self.config['db_type'],
-                self.config['host'],
-                self.config['port'],
-                self.config['database'],
-                self.config.get('username', ''),
-                self.password,
-                use_windows_auth=self.config.get('use_windows_auth', False)
-            )
-            self.finished.emit(True, '')
-        except Exception as e:
-            self.finished.emit(False, str(e))
+# ConnectionWorker REMOVIDO - cada aba gerencia sua própria conexão via SessionWidget
 
 
 class PythonWorker(QObject):
@@ -146,8 +121,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Managers
-        self.connection_manager = ConnectionManager()
+        # Managers (ConnectionManager agora é APENAS para configurações, não conexões ativas)
+        self.connection_manager = ConnectionManager()  # Só para gerenciar configs salvas
         self.results_manager = ResultsManager()
         self.shortcut_manager = ShortcutManager()
         self.workspace_manager = WorkspaceManager()
@@ -403,18 +378,24 @@ class MainWindow(QMainWindow):
             self._quick_connect(conn_name)
     
     def _quick_connect(self, connection_name: str):
-        """Conecta rapidamente a uma conexão salva (em background com loading)"""
-        # Verificar se já há uma conexão em andamento
-        if hasattr(self, '_conn_thread') and self._conn_thread and self._conn_thread.isRunning():
-            QMessageBox.information(
-                self, "Aguarde", 
-                "Uma conexão já está em andamento. Aguarde ela terminar."
-            )
-            return
+        """
+        Conecta a ABA ATUAL a um banco de dados.
+        CADA ABA tem sua própria conexão isolada.
+        """
+        # Obter widget da aba atual
+        current_widget = self._get_current_session_widget()
+        if not current_widget:
+            # Criar nova aba automaticamente se não houver nenhuma
+            self._new_session()
+            current_widget = self._get_current_session_widget()
+            if not current_widget:
+                self._show_warning("Erro", "Não foi possível criar nova aba")
+                return
         
+        # Obter config (apenas metadados, não conexão)
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
-            QMessageBox.warning(self, "Erro", f"Conexão '{connection_name}' não encontrada")
+            self._show_warning("Erro", f"Conexão '{connection_name}' não encontrada")
             return
         
         # Pegar senha se necessário
@@ -422,59 +403,14 @@ class MainWindow(QMainWindow):
         if not config.get('use_windows_auth', False):
             password = config.get('password', '')
         
-        # Criar loading dialog
-        from PyQt6.QtWidgets import QProgressDialog
-        self.connection_loading = QProgressDialog(self)
-        self.connection_loading.setWindowTitle("Conectando")
-        self.connection_loading.setLabelText(f"Conectando a {connection_name}...")
-        self.connection_loading.setCancelButton(None)
-        self.connection_loading.setRange(0, 0)  # Indeterminate
-        self.connection_loading.setWindowModality(Qt.WindowModality.WindowModal)
-        self.connection_loading.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
-        self.connection_loading.setMinimumWidth(300)
-        self.connection_loading.show()
-        
-        # Criar thread e worker para conexão em background
-        self._conn_thread = QThread()
-        self._conn_worker = ConnectionWorker(
-            self.connection_manager, connection_name, config, password
-        )
-        self._conn_worker.moveToThread(self._conn_thread)
-        
-        # Conectar sinais
-        self._conn_thread.started.connect(self._conn_worker.run)
-        self._conn_worker.finished.connect(
-            lambda success, error: self._on_connection_finished(connection_name, success, error)
-        )
-        
-        # Iniciar
-        self._conn_thread.start()
-    
-    def _on_connection_finished(self, connection_name: str, success: bool, error: str):
-        """Callback quando conexão termina (sucesso ou erro)"""
-        # Fechar loading dialog
-        if hasattr(self, 'connection_loading'):
-            self.connection_loading.close()
-        
-        # Parar thread (se existir - pode não existir em testes)
-        if hasattr(self, '_conn_thread') and self._conn_thread:
-            self._conn_thread.quit()
-            self._conn_thread.wait()
-            self._conn_thread = None  # Limpar referência
+        # DELEGAR para a aba - ela gerencia sua própria conexão
+        success = current_widget.connect_to_database(connection_name, password)
         
         if success:
-            self.connection_manager.mark_connection_used(connection_name)
-            
-            # Definir conexão na sessão focada
-            connector = self.connection_manager.get_connection(connection_name)
-            if self.session_manager.focused_session and connector:
-                self.session_manager.focused_session.set_connection(connection_name, connector)
-            
             self._update_connection_status()
-            self.action_label.setText(f"Conectado a {connection_name}")
+            self.action_label.setText(f"Aba conectada a {connection_name}")
         else:
-            self.action_label.setText("Falha na conexão")
-            QMessageBox.critical(self, "Erro de Conexão", f"Não foi possível conectar:\n\n{error}")
+            self.action_label.setText("Falha na conexão (veja output da aba)")
     
     def _create_menus(self):
         """Cria os menus"""
@@ -661,13 +597,19 @@ class MainWindow(QMainWindow):
         """Atualiza o label com o tempo de execução"""
         if self._is_executing:
             elapsed = self._execution_timer.elapsed() / 1000.0
-            mode = f"[{self._execution_mode}] " if self._execution_mode else ""
-            self.execution_label.setText(f"{mode}Executando {elapsed:.2f}s")
+            mode = f"{self._execution_mode}" if self._execution_mode else "Código"
+            # Ícone animado + texto mais visível
+            icon = qta.icon('fa5s.spinner', color='#FFD700', animation=qta.Spin(self.execution_label))
+            self.execution_label.setPixmap(icon.pixmap(16, 16))
+            self.execution_label.setText(f"  Executando {mode} {elapsed:.1f}s")
             self.execution_label.setStyleSheet("""
                 QLabel {
                     color: #FFD700;
                     font-weight: bold;
-                    padding: 0 10px;
+                    padding: 4px 12px;
+                    background: rgba(255, 215, 0, 0.15);
+                    border-left: 3px solid #FFD700;
+                    border-radius: 2px;
                 }
             """)
     
@@ -701,9 +643,10 @@ class MainWindow(QMainWindow):
             'new_tab': self._new_session,
             'close_tab': self._close_current_session,
             
-            # Edição
-            'find': self._show_find_dialog,
-            'replace': self._show_replace_dialog,
+            # Edição - REMOVIDOS find/replace para não conflitar com editores
+            # Monaco e QScintilla têm seus próprios Ctrl+F e Ctrl+H nativos
+            # 'find': self._show_find_dialog,
+            # 'replace': self._show_replace_dialog,
             
             # Conexões
             'manage_connections': self._manage_connections,
@@ -741,7 +684,8 @@ class MainWindow(QMainWindow):
             widget = self.session_tabs.widget(current_index)
             if isinstance(widget, SessionWidget):
                 # Confirmar fechamento se houver código não salvo
-                if widget.editor.toPlainText().strip():
+                has_code = any(block.get_code().strip() for block in widget.editor.get_blocks())
+                if has_code:
                     reply = QMessageBox.question(
                         self,
                         "Fechar Sessão",
@@ -754,7 +698,7 @@ class MainWindow(QMainWindow):
                 
                 # Remover sessão
                 session_id = widget.session.session_id
-                self.session_manager.remove_session(session_id)
+                self.session_manager.close_session(session_id)
                 if session_id in self._session_widgets:
                     del self._session_widgets[session_id]
                 
@@ -895,7 +839,7 @@ class MainWindow(QMainWindow):
             self.action_label.setText(f"Conectado a {name}")
             
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao conectar:\n{str(e)}")
+            self._show_error("Erro", f"Erro ao conectar:\n{str(e)}")
     
     def _new_connection(self):
         """Abre diálogo para nova conexão"""
@@ -929,6 +873,35 @@ class MainWindow(QMainWindow):
             self._refresh_connections_list()
             self._log(f"Conexão '{name}' criada com sucesso")
             self.action_label.setText(f"Conexão '{name}' criada")
+    
+    # === Métodos auxiliares para diálogos com ícones ===
+    
+    def _show_warning(self, title: str, message: str):
+        """Mostra warning com ícone"""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+    
+    def _show_error(self, title: str, message: str):
+        """Mostra erro com ícone"""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+    
+    def _show_info(self, title: str, message: str):
+        """Mostra informação com ícone"""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
     
     def _disconnect(self):
         """Desconecta a sessão atual"""
@@ -1093,7 +1066,7 @@ class MainWindow(QMainWindow):
         # Usar conexão da sessão atual
         session = self.session_manager.focused_session
         if not session or not session.is_connected:
-            QMessageBox.warning(self, "Atenção", "Não há conexão ativa nesta sessão. Conecte-se a um banco de dados primeiro.")
+            self._show_warning("Atenção", "Nenhuma conexão ativa nesta sessão. Conecte-se a um banco de dados primeiro.")
             return
         
         connector = session.connector
@@ -1157,7 +1130,7 @@ class MainWindow(QMainWindow):
         thread.wait()
         
         if error:
-            self._show_error(f"[SQL] Erro: {error}")
+            self._show_error_output(f"[SQL] Erro: {error}")
             self.action_label.setText("[SQL] Erro ao executar")
             self._send_notification("Query SQL", f"Erro: {error[:50]}...", success=False)
         else:
@@ -1227,7 +1200,7 @@ class MainWindow(QMainWindow):
         thread.wait()
         
         if error:
-            self._show_error(f"[ERRO]\n{error}")
+            self._show_error_output(f"[ERRO]\n{error}")
             self.action_label.setText("[Python] Erro ao executar")
             return
         
@@ -1299,7 +1272,7 @@ class MainWindow(QMainWindow):
         if not is_valid:
             self._stop_execution_timer()
             self._mark_tab_running(False, running_tab_index)
-            self._show_error(f"[Cross-Syntax] Erro de sintaxe: {error}")
+            self._show_error_output(f"[Cross-Syntax] Erro de sintaxe: {error}")
             self.action_label.setText("[Cross-Syntax] Erro de sintaxe")
             return
         
@@ -1359,7 +1332,7 @@ class MainWindow(QMainWindow):
             widget.editor.mark_execution_finished()
         
         if error:
-            self._show_error(f"[ERRO Cross-Syntax]\n{error}")
+            self._show_error_output(f"[ERRO Cross-Syntax]\n{error}")
             self.action_label.setText("[Cross-Syntax] Erro ao executar")
             self._send_notification("Cross-Syntax", f"Erro: {error[:50]}...", success=False)
             return
@@ -1481,7 +1454,7 @@ class MainWindow(QMainWindow):
         if self.python_output:
             self.python_output.append(f"[{timestamp}] {message}")
     
-    def _show_error(self, error_msg: str):
+    def _show_error_output(self, error_msg: str):
         """Mostra erro no Output em vermelho e alterna para a aba de Output"""
         if not self.python_output:
             return
@@ -1686,22 +1659,7 @@ class MainWindow(QMainWindow):
             session.clear_connection()
             self._update_connection_status()
     
-    def _change_theme(self, theme_id: str):
-        """Muda o tema da aplicação"""
-        self.theme_manager.save_theme(theme_id)
-        
-        # Atualizar checkmarks do menu
-        for tid, action in self.theme_actions.items():
-            action.setChecked(tid == theme_id)
-        
-        # Aplicar tema nos SessionWidgets
-        for widget in self._session_widgets.values():
-            widget.apply_theme()
-        
-        # Aplicar tema na aplicação
-        self._apply_app_theme()
-        
-        self.action_label.setText(f"Tema alterado para: {self.theme_manager.get_current_theme()['name']}")
+    # _change_theme removido - tema fixo em 'dark'
     
     def _apply_app_theme(self):
         """Aplica tema na aplicação (não nos editores)"""
@@ -1929,8 +1887,8 @@ class MainWindow(QMainWindow):
         # Ícone/emoji grande
         icon_label = QLabel()
         if hasattr(qta, 'icon'):
-            icon_label.setPixmap(qta.icon('mdi.note-text', color='#64b5f6').pixmap(16, 16))
-        icon_label.setStyleSheet("font-size: 72px;")
+            icon_label.setPixmap(qta.icon('mdi.note-text', color='#64b5f6').pixmap(96, 96))
+        icon_label.setStyleSheet("font-size: 96px;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon_label)
         
@@ -1982,12 +1940,8 @@ class MainWindow(QMainWindow):
         # Adicionar como "aba" invisível ou substituir conteúdo
         self._empty_state_widget.setStyleSheet("background-color: #1e1e1e;")
         
-        # Inserir antes do + (se existir)
-        tab_count = self.session_tabs.count()
-        if tab_count > 0 and self.session_tabs.tabText(tab_count - 1).strip() == "+":
-            index = self.session_tabs.insertTab(tab_count - 1, self._empty_state_widget, "")
-        else:
-            index = self.session_tabs.addTab(self._empty_state_widget, "")
+        # Adicionar aba do empty state
+        index = self.session_tabs.addTab(self._empty_state_widget, "")
         
         # Esconder o tab do estado vazio
         self.session_tabs.tabBar().setTabVisible(index, False)
@@ -2012,18 +1966,8 @@ class MainWindow(QMainWindow):
         # Guardar referência
         self._session_widgets[session.session_id] = widget
         
-        # Adicionar aba (antes do + se existir)
-        tab_count = self.session_tabs.count()
-        if tab_count > 0 and self.session_tabs.tabText(tab_count - 1).strip() == "+":
-            index = self.session_tabs.insertTab(tab_count - 1, widget, session.title)
-            # Configurar botão de fechar customizado
-            self.session_tabs._setup_close_button(index)
-        else:
-            index = self.session_tabs.addTab(widget, session.title)
-            # Configurar botão de fechar customizado
-            self.session_tabs._setup_close_button(index)
-        
-        self.session_tabs.setCurrentIndex(index)
+        # Adicionar aba usando método do SessionTabs (já lida com botão +)
+        index = self.session_tabs.add_session(widget, session.title)
         
         return widget
     
@@ -2040,7 +1984,7 @@ class MainWindow(QMainWindow):
         """Fecha aba de sessão"""
         widget = self.session_tabs.widget(index)
         if not isinstance(widget, SessionWidget):
-            return
+            return  # Ignorar se não é uma SessionWidget (ex: aba do botão +)
         
         # Guard para evitar criar sessão ao fechar
         self._closing_session = True
@@ -2058,8 +2002,9 @@ class MainWindow(QMainWindow):
             self.session_tabs.removeTab(index)
             self._save_sessions()
             
-            # Verificar se não há mais sessões
-            session_count = sum(1 for i in range(self.session_tabs.count()) if isinstance(self.session_tabs.widget(i), SessionWidget))
+            # Verificar se não há mais sessões REAIS (ignorar aba do botão +)
+            session_count = sum(1 for i in range(self.session_tabs.count()) 
+                              if isinstance(self.session_tabs.widget(i), SessionWidget))
             if session_count == 0:
                 self._show_empty_state()
         finally:
@@ -2192,12 +2137,6 @@ class MainWindow(QMainWindow):
         # Fila de sessões para carregar incrementalmente
         self._sessions_to_load = list(self.session_manager.sessions)
         
-        # Adicionar botão + como aba
-        add_tab_widget = QWidget()
-        add_tab_index = self.session_tabs.addTab(add_tab_widget, " + ")
-        self.session_tabs.tabBar().setTabButton(add_tab_index, QTabBar.ButtonPosition.RightSide, None)
-        self.session_tabs.tabBar().setTabButton(add_tab_index, QTabBar.ButtonPosition.LeftSide, None)
-        
         self._restoring_sessions = False
         
         # Iniciar carregamento das sessões incrementalmente
@@ -2210,12 +2149,20 @@ class MainWindow(QMainWindow):
     def _load_next_session(self):
         """Carrega a próxima sessão da fila"""
         if not self._sessions_to_load:
-            # Todas as sessões carregadas, focar na sessão ativa
+            # Focar na sessão ativa
             focused = self.session_manager.focused_session
             if focused:
                 index = self.session_manager.get_session_index(focused.session_id)
                 if index >= 0:
                     self.session_tabs.setCurrentIndex(index)
+                
+                # Atualizar indicador de conexão (se existir connection_panel)
+                if focused.is_connected and hasattr(self, 'connection_panel'):
+                    # database_name removido - Session só tem connection_name
+                    self.connection_panel.set_active_connection(
+                        focused.connection_name,
+                        focused.connection_name  # usar connection_name no lugar de database_name
+                    )
             return
         
         session = self._sessions_to_load.pop(0)
@@ -2305,6 +2252,31 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Ao fechar a janela"""
+        # Verificar se há execução em andamento
+        has_running = any(
+            widget._is_executing 
+            for widget in self._session_widgets.values()
+            if hasattr(widget, '_is_executing')
+        )
+        
+        if has_running:
+            reply = QMessageBox.question(
+                self,
+                "Execução em andamento",
+                "Há código sendo executado. Deseja cancelar e fechar a aplicação?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+            
+            # Cancelar todas as execuções
+            for widget in self._session_widgets.values():
+                if hasattr(widget, '_cancel_requested'):
+                    widget._cancel_requested = True
+        
         # Salvar sessões antes de fechar
         self._save_sessions()
         

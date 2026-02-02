@@ -27,9 +27,8 @@ class ShortcutManager:
         'new_tab': 'Ctrl+T',
         'close_tab': 'Ctrl+W',
         
-        # Edição
-        'find': 'Ctrl+F',
-        'replace': 'Ctrl+H',
+        # Edição - find/replace são gerenciados pelos editores (QScintilla/Monaco)
+        # Cada editor tem seus próprios Ctrl+F e Ctrl+H nativos
         
         # Conexões
         'manage_connections': 'Ctrl+Shift+M',

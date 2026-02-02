@@ -182,7 +182,8 @@ class PandasModel(QAbstractTableModel):
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
-                return str(self._df.columns[section])
+                # Manter case original do banco de dados
+                return self._df.columns[section]
             else:
                 return str(section + 1)
         
@@ -259,6 +260,9 @@ class ResultsViewer(QWidget):
         self.model = PandasModel(theme_manager=self.theme_manager)
         self.table_view.setModel(self.model)
         
+        # Ajustar colunas automaticamente pelo conteúdo do cabeçalho
+        self.table_view.horizontalHeader().setSectionResizeMode(self.table_view.horizontalHeader().ResizeMode.ResizeToContents)
+        
         layout.addWidget(self.table_view)
         
         # Conectar sinais
@@ -313,6 +317,7 @@ class ResultsViewer(QWidget):
                 padding: 5px;
                 border: 1px solid {colors['border']};
                 font-weight: bold;
+                text-transform: none;
             }}
         """)
     

@@ -446,6 +446,36 @@ class SessionWidget(QWidget):
         elif self.session.code:
             self.set_code(self.session.code)
     
+    # === CONEXÃO ===
+    
+    def connect_to_database(self, connection_name: str, password: str = '') -> bool:
+        """
+        Conecta esta sessão a um banco de dados
+        
+        Args:
+            connection_name: Nome da conexão
+            password: Senha (se necessário)
+            
+        Returns:
+            True se conectou com sucesso, False caso contrário
+        """
+        try:
+            success = self.session.connect(connection_name, password)
+            
+            if success:
+                self.append_output(f"✓ Conectado a {connection_name}")
+                self.status_changed.emit(f"Conectado a {connection_name}")
+            else:
+                self.append_output(f"✗ Falha ao conectar a {connection_name}", error=True)
+                self.status_changed.emit("Erro na conexão")
+            
+            return success
+            
+        except Exception as e:
+            self.append_output(f"[ERRO] {str(e)}", error=True)
+            self.status_changed.emit("Erro na conexão")
+            return False
+    
     # === CLEANUP ===
     
     def cleanup(self):

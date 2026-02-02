@@ -31,7 +31,7 @@ class TestCodeBlock:
     
     def test_block_creation(self, block):
         """Bloco deve ser criado com valores padrão"""
-        assert block.get_language() == 'python'
+        assert block.get_language() == 'sql'  # Padrão agora é SQL
         assert block.get_code() == ''
         assert not block.is_focused()
     
@@ -57,11 +57,13 @@ class TestCodeBlock:
     
     def test_language_change_updates_lexer(self, block):
         """Mudar linguagem deve atualizar o lexer"""
-        block.set_language('sql')
-        assert block.editor.get_language() == 'sql'
-        
+        # Começar com Python (diferente do padrão SQL)
         block.set_language('python')
         assert block.editor.get_language() == 'python'
+        
+        # Mudar para SQL
+        block.set_language('sql')
+        assert block.editor.get_language() == 'sql'
     
     def test_execute_signal_emitted(self, block, qtbot):
         """Clicar no botão executar deve emitir sinal"""
@@ -75,8 +77,9 @@ class TestCodeBlock:
     
     def test_language_changed_signal(self, block, qtbot):
         """Mudar linguagem deve emitir sinal"""
+        # Bloco começa em SQL (index 1), mudar para Python (index 0) para garantir mudança
         with qtbot.waitSignal(block.language_changed, timeout=1000):
-            block.lang_combo.setCurrentIndex(1)  # SQL
+            block.lang_combo.setCurrentIndex(0)  # Python
     
     def test_to_dict_serialization(self, block):
         """Deve serializar corretamente"""
@@ -106,8 +109,8 @@ class TestCodeBlock:
         
         block.set_running(False)
         assert block.run_btn.text() == "▶"
-        # Após execução, mostra tempo de execução (✓ seguido de tempo)
-        assert "✓" in block.status_label.text() or block.status_label.text() == ""
+        # Após execução, mostra tempo de execução (µs, ms ou s)
+        assert any(unit in block.status_label.text() for unit in ["µs", "ms", "s"]) or block.status_label.text() == ""
 
 
 class TestBlockEditor:

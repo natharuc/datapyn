@@ -201,13 +201,13 @@ class TestShortcutManagerAPI:
         
         assert isinstance(shortcuts, dict)
         assert 'execute_sql' in shortcuts
-        assert 'execute_python' in shortcuts
-        assert 'execute_cross_syntax' in shortcuts
+        assert 'execute_all' in shortcuts
+        assert 'new_tab' in shortcuts
     
     def test_get_shortcut(self, shortcut_manager):
         """Deve retornar atalho específico"""
         assert shortcut_manager.get_shortcut('execute_sql') == 'F5'
-        assert shortcut_manager.get_shortcut('execute_python') == 'Shift+Return'
+        assert shortcut_manager.get_shortcut('execute_all') == 'Ctrl+F5'
     
     def test_set_shortcut(self, shortcut_manager):
         """Deve definir atalho"""

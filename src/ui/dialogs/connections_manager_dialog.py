@@ -207,7 +207,10 @@ class ConnectionsManagerDialog(QDialog):
             if HAS_QTAWESOME:
                 db_type = conn_config.get('db_type', '')
                 icon_color = '#569cd6'
-                if db_type == 'sqlserver':
+                # Usa cor configurada ou cor do tipo de banco
+                if conn_config.get('color'):
+                    icon_color = conn_config['color']
+                elif db_type == 'sqlserver':
                     icon_color = '#cc3e44'
                 elif db_type == 'mysql':
                     icon_color = '#00758f'

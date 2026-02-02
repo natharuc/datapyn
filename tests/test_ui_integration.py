@@ -41,7 +41,7 @@ def mock_all_dialogs():
 
 @pytest.fixture
 def main_window(qapp, qtbot, tmp_path):
-    """Cria MainWindow para testes"""
+    """Cria MainWindow para testes - agora usa apenas QScintilla"""
     from src.ui.main_window import MainWindow
     
     # Mock do ConnectionManager para não depender de banco real
@@ -184,67 +184,89 @@ class TestConnectionManagement:
     """Testes de gerenciamento de conexões"""
     
     def test_connection_manager_exists(self, main_window):
-        """Deve ter ConnectionManager"""
+        """Deve ter ConnectionManager para configurações"""
         assert hasattr(main_window, 'connection_manager')
     
-    def test_quick_connect_updates_ui(self, main_window, qtbot):
-        """Conectar deve atualizar a UI (status bar)"""
-        # Mock para simular conexão bem-sucedida
-        main_window.connection_manager.get_connection = Mock(return_value=Mock(is_connected=True))
-        
-        # Simular callback de conexão bem-sucedida
-        main_window._on_connection_finished('Test Connection', True, '')
-        
-        # Verificar que status foi atualizado
-        assert 'Test Connection' in main_window.action_label.text() or 'Conectado' in main_window.action_label.text()
+    def test_session_widget_has_own_connection_manager(self, main_window, qtbot):
+        """Cada SessionWidget deve ter seu próprio ConnectionManager"""
+        widget = main_window.session_tabs.currentWidget()
+        assert hasattr(widget, 'connection_manager')
+        assert widget.connection_manager is not None
+        # Deve ser instância diferente do MainWindow
+        assert widget.connection_manager is not main_window.connection_manager
     
-    def test_connection_failure_shows_error(self, main_window, qtbot):
-        """Falha de conexão deve mostrar erro"""
-        # Mock MessageBox para não bloquear teste
-        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok):
-            main_window._on_connection_finished('Test Connection', False, 'Erro de teste')
+    def test_session_widget_can_connect(self, main_window, qtbot):
+        """SessionWidget deve poder conectar independentemente (teste simplificado)"""
+        widget = main_window.session_tabs.currentWidget()
         
-        # Verificar que status indica falha
-        assert 'Falha' in main_window.action_label.text()
-    
-    def test_session_receives_connection(self, main_window, qtbot):
-        """Sessão focada deve receber a conexão"""
-        # Setup mock
+        # Verificar que tem ConnectionManager isolado
+        assert hasattr(widget, 'connection_manager')
+        assert widget.connection_manager is not main_window.connection_manager
+        
+        # Verificar que método connect_to_database existe
+        assert hasattr(widget, 'connect_to_database')
+        assert callable(widget.connect_to_database)
+        
+        # Testar conexão simulada diretamente no Session
         mock_connector = Mock()
         mock_connector.is_connected = True
-        main_window.connection_manager.get_connection = Mock(return_value=mock_connector)
         
-        # Simular conexão bem-sucedida
-        main_window._on_connection_finished('Test Connection', True, '')
+        widget.session.set_connection('Test Connection', mock_connector)
         
-        # Verificar que sessão focada tem a conexão
-        focused = main_window.session_manager.focused_session
-        if focused:
-            assert focused.connection_name == 'Test Connection'
+        # Verificar que sessão tem a conexão
+        assert widget.session.is_connected
+        assert widget.session.connection_name == 'Test Connection'
     
-    def test_double_connection_blocked(self, main_window, qtbot):
-        """Duplo clique em conexão enquanto outra conecta deve ser bloqueado"""
-        # Simular thread em execução
-        mock_thread = Mock()
-        mock_thread.isRunning.return_value = True
-        main_window._conn_thread = mock_thread
+    def test_session_widget_connection_error_isolated(self, main_window, qtbot):
+        """Erro de conexão em uma aba não deve afetar outras"""
+        widget1 = main_window.session_tabs.currentWidget()
         
-        # Tentar conectar - deve mostrar mensagem
-        with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as mock_info:
-            main_window._quick_connect('Test Connection')
-            mock_info.assert_called_once()
+        # Criar segunda aba
+        main_window._new_session()
+        widget2 = main_window.session_tabs.currentWidget()
+        
+        # Mock falha na conexão do widget1
+        widget1.connection_manager.get_connection_config = Mock(side_effect=Exception("Erro de teste"))
+        
+        # Tentar conectar widget1 - deve falhar silenciosamente (erro no output da aba)
+        widget1.connect_to_database('Bad Connection')
+        
+        # widget2 não deve ser afetado
+        assert not widget2.session.is_connected
+        assert widget2.connection_manager is not widget1.connection_manager
     
-    def test_connection_thread_cleaned_after_finish(self, main_window, qtbot):
-        """Thread deve ser limpa após conexão terminar"""
-        # Simular callback de conexão
-        main_window._conn_thread = Mock()
-        main_window._conn_thread.quit = Mock()
-        main_window._conn_thread.wait = Mock()
+    def test_session_widget_disconnect_isolated(self, main_window, qtbot):
+        """Desconectar uma aba não afeta outras"""
+        widget1 = main_window.session_tabs.currentWidget()
         
-        main_window._on_connection_finished('Test', True, '')
+        # Criar e conectar segunda aba
+        main_window._new_session()
+        widget2 = main_window.session_tabs.currentWidget()
         
-        # Thread deve ser None
-        assert main_window._conn_thread is None
+        # Mock conexões
+        mock_conn1 = Mock()
+        mock_conn1.is_connected = True
+        mock_conn1.disconnect = Mock()
+        
+        mock_conn2 = Mock()
+        mock_conn2.is_connected = True
+        mock_conn2.disconnect = Mock()
+        
+        widget1.session._connector = mock_conn1
+        widget1.session._connection_name = 'Conn1'
+        
+        widget2.session._connector = mock_conn2
+        widget2.session._connection_name = 'Conn2'
+        
+        # Mock close_all para não afetar os mocks
+        widget1.connection_manager.close_all = Mock()
+        
+        # Desconectar apenas widget1
+        widget1.disconnect_database()
+        
+        # widget1 desconectado, widget2 continua conectado
+        assert not widget1.session.is_connected
+        assert widget2.session.is_connected
 
 
 # === TESTES DE EDITOR ===
@@ -285,21 +307,15 @@ class TestEditorFunctionality:
 
 
 class TestThemeManagement:
-    """Testes de gerenciamento de tema"""
+    """Testes de gerenciamento de tema - tema fixo em 'dark'"""
     
     def test_theme_manager_exists(self, main_window):
         """Deve ter ThemeManager"""
         assert hasattr(main_window, 'theme_manager')
     
-    def test_theme_manager_has_themes(self, main_window):
-        """ThemeManager deve ter temas disponíveis"""
-        themes = main_window.theme_manager.get_available_themes()
-        assert len(themes) > 0
-    
-    def test_current_theme_exists(self, main_window):
-        """Deve ter tema atual definido"""
-        current = main_window.theme_manager.get_current_theme()
-        assert current is not None
+    def test_current_theme_is_dark(self, main_window):
+        """Tema atual deve ser sempre 'dark'"""
+        assert main_window.theme_manager.get_theme_name() == 'dark'
 
 
 # === TESTES DE SALVAR/CARREGAR ===

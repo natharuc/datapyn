@@ -14,16 +14,16 @@ class TestShortcutManager:
         shortcuts = shortcut_manager.get_all_shortcuts()
         
         assert 'execute_sql' in shortcuts
-        assert 'execute_python' in shortcuts
-        assert 'execute_cross_syntax' in shortcuts
+        assert 'execute_all' in shortcuts
         assert 'save_file' in shortcuts
         assert 'open_file' in shortcuts
+        assert 'new_tab' in shortcuts
     
     def test_default_shortcut_values(self, shortcut_manager):
         """Atalhos padrão devem ter valores corretos"""
         assert shortcut_manager.get_shortcut('execute_sql') == 'F5'
-        assert shortcut_manager.get_shortcut('execute_python') == 'Shift+Return'
-        assert shortcut_manager.get_shortcut('execute_cross_syntax') == 'Ctrl+Shift+F5'
+        assert shortcut_manager.get_shortcut('execute_all') == 'Ctrl+F5'
+        assert shortcut_manager.get_shortcut('new_tab') == 'Ctrl+T'
     
     def test_set_shortcut(self, shortcut_manager):
         """Deve permitir alterar atalho"""

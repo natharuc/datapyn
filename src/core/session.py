@@ -104,6 +104,62 @@ class Session(QObject):
         self.connection_changed.emit(connection_name)
         self.status_changed.emit(f"Conectado a {connection_name}")
     
+    def connect(self, connection_name: str, password: str = '') -> bool:
+        """
+        Conecta a sessão a um banco de dados usando ConnectionManager
+        
+        Args:
+            connection_name: Nome da conexão
+            password: Senha (se necessário)
+            
+        Returns:
+            True se conectou com sucesso
+        """
+        try:
+            from src.database.connection_manager import ConnectionManager
+            from src.database.database_connector import DatabaseConnector
+            
+            # Desconectar conexão atual se existir
+            if self._connector:
+                self.clear_connection()
+            
+            # Obter configuração
+            manager = ConnectionManager()
+            config = manager.get_connection_config(connection_name)
+            
+            if not config:
+                print(f"[ERRO] Conexão '{connection_name}' não encontrada")
+                return False
+            
+            # Criar nova conexão
+            connector = DatabaseConnector()
+            
+            # Usar senha fornecida ou salva
+            pwd = password if password else config.get('password', '')
+            
+            # Conectar
+            connector.connect(
+                db_type=config['db_type'],
+                host=config['host'],
+                port=config['port'],
+                database=config['database'],
+                username=config.get('username', ''),
+                password=pwd,
+                use_windows_auth=config.get('use_windows_auth', False)
+            )
+            
+            if connector.is_connected:
+                self.set_connection(connection_name, connector)
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            import traceback
+            print(f"[ERRO] Falha ao conectar: {str(e)}")
+            traceback.print_exc()
+            return False
+    
     def clear_connection(self):
         """Remove a conexão desta sessão"""
         self._connection_name = None

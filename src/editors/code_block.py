@@ -2,7 +2,7 @@
 CodeBlock - Um bloco de código individual com seletor de linguagem
 
 Similar a uma célula de notebook Jupyter.
-Usa CodeEditor (QScintilla) seguindo interface ICodeEditor.
+Usa editor configurável via editor_config (QScintilla ou Monaco).
 """
 import time
 from PyQt6.QtWidgets import (
@@ -13,7 +13,7 @@ from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint
 from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
 
 from src.core.theme_manager import ThemeManager
-from src.editors.code_editor import CodeEditor
+from src.editors.editor_config import get_code_editor_class
 
 
 class CodeBlock(QFrame):
@@ -38,7 +38,7 @@ class CodeBlock(QFrame):
         'cross': '#6B4C9A'
     }
     
-    def __init__(self, theme_manager: ThemeManager = None, parent=None):
+    def __init__(self, theme_manager: ThemeManager = None, parent=None, default_language='sql'):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
         self._is_focused = False
@@ -49,9 +49,12 @@ class CodeBlock(QFrame):
         self._resize_start_height = 0
         self._execution_start_time = 0
         self._last_execution_time = None
+        self._default_language = default_language
         
         self._setup_ui()
         self._connect_signals()
+        # Configurar linguagem inicial explicitamente (setCurrentIndex não dispara signal durante init)
+        self.editor.set_language(self._default_language)
         self._update_style()
     
     def _setup_ui(self):
@@ -102,30 +105,53 @@ class CodeBlock(QFrame):
         self.lang_combo.addItem("Python", "python")
         self.lang_combo.addItem("SQL", "sql")
         self.lang_combo.addItem("Cross-Syntax", "cross")
+        # Definir SQL como padrão
+        if self._default_language == 'sql':
+            self.lang_combo.setCurrentIndex(1)
+        elif self._default_language == 'cross':
+            self.lang_combo.setCurrentIndex(2)
+        else:
+            self.lang_combo.setCurrentIndex(0)
         self.lang_combo.setFixedWidth(120)
         control_layout.addWidget(self.lang_combo)
         
-        # Status
+        # Status - estilo mais moderno
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #888;
+                font-size: 11px;
+                padding: 3px 8px;
+                background: transparent;
+                border-radius: 3px;
+            }
+        """)
         control_layout.addWidget(self.status_label)
         
-        # Botão cancelar (visível apenas durante execução)
-        self.cancel_btn = QPushButton("✕")
-        self.cancel_btn.setFixedSize(20, 20)
-        self.cancel_btn.setToolTip("Cancelar execução")
+        # Botão cancelar (visível apenas durante execução) - estilo moderno flat
+        try:
+            import qtawesome as qta
+            self.cancel_btn = QPushButton()
+            self.cancel_btn.setIcon(qta.icon('mdi.stop-circle-outline', color='#e74c3c'))
+            self.cancel_btn.setText("Cancelar")
+        except:
+            self.cancel_btn = QPushButton("Cancelar")
+        
+        self.cancel_btn.setFixedHeight(24)
+        self.cancel_btn.setToolTip("Cancelar execução (Esc)")
         self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cancel_btn.setStyleSheet("""
             QPushButton {
-                background: #c0392b;
-                color: white;
-                border: none;
-                border-radius: 10px;
-                font-size: 12px;
-                font-weight: bold;
+                background: transparent;
+                color: #e74c3c;
+                border: 1px solid #e74c3c;
+                border-radius: 3px;
+                padding: 2px 8px;
+                font-size: 10px;
             }
             QPushButton:hover {
                 background: #e74c3c;
+                color: white;
             }
         """)
         self.cancel_btn.hide()  # Escondido por padrão
@@ -140,19 +166,23 @@ class CodeBlock(QFrame):
         self.run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         control_layout.addWidget(self.run_btn)
         
-        # Botão remover
-        self.remove_btn = QPushButton("✕")
+        # Botão remover - ícone melhor
+        try:
+            import qtawesome as qta
+            self.remove_btn = QPushButton()
+            self.remove_btn.setIcon(qta.icon('mdi.close-circle', color='#999', scale_factor=1.1))
+        except:
+            self.remove_btn = QPushButton("✖")
+        
         self.remove_btn.setFixedSize(28, 28)
         self.remove_btn.setToolTip("Remover bloco")
         self.remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.remove_btn.setStyleSheet("""
             QPushButton {
-                background: #3e3e42;
-                color: #ccc;
+                background: transparent;
+                color: #999;
                 border: none;
-                border-radius: 4px;
-                font-size: 14px;
-                font-weight: bold;
+                border-radius: 14px;
             }
             QPushButton:hover {
                 background: #e74c3c;
@@ -171,9 +201,13 @@ class CodeBlock(QFrame):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(0)
         
-        # Code Editor (QScintilla - implementa ICodeEditor)
-        self.editor = CodeEditor(theme_manager=self.theme_manager)
-        editor_layout.addWidget(self.editor.get_widget())
+        # Code Editor (configurável via editor_config - implementa ICodeEditor)
+        EditorClass = get_code_editor_class()
+        self.editor = EditorClass(theme_manager=self.theme_manager)
+        
+        # Compatibilidade: get_widget() para QScintilla, direto para Monaco
+        editor_widget = self.editor.get_widget() if hasattr(self.editor, 'get_widget') else self.editor
+        editor_layout.addWidget(editor_widget)
         
         layout.addWidget(self.editor_container, 1)  # stretch=1 para expandir
         
@@ -269,8 +303,16 @@ class CodeBlock(QFrame):
         self._is_waiting = waiting
         if waiting:
             self.run_btn.setText("Pausar")
-            self.status_label.setText("⏳ Aguardando...")
-            self.status_label.setStyleSheet("color: #95a5a6; font-size: 10px;")
+            self.status_label.setText("⏱ Aguardando")
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    color: #95a5a6;
+                    font-size: 11px;
+                    padding: 3px 8px;
+                    background: rgba(149, 165, 166, 0.1);
+                    border-radius: 3px;
+                }
+            """)
             self.cancel_btn.hide()
         else:
             if not self._is_running:
@@ -282,8 +324,16 @@ class CodeBlock(QFrame):
         if running:
             self._execution_start_time = time.time()
             self.run_btn.setText("◼")
-            self.status_label.setText("⏳ Executando...")
-            self.status_label.setStyleSheet("color: #f39c12; font-size: 10px;")
+            self.status_label.setText("▶ Executando")
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    color: #f39c12;
+                    font-size: 11px;
+                    padding: 3px 8px;
+                    background: rgba(243, 156, 18, 0.1);
+                    border-radius: 3px;
+                }
+            """)
             self.cancel_btn.show()  # Mostra botão de cancelar
         else:
             self.run_btn.setText("▶")
@@ -292,11 +342,27 @@ class CodeBlock(QFrame):
                 elapsed = time.time() - self._execution_start_time
                 self._last_execution_time = elapsed
                 self._execution_start_time = 0
-                self.status_label.setText(self._format_execution_time(elapsed))
-                self.status_label.setStyleSheet("color: #2ecc71; font-size: 10px;")
+                self.status_label.setText(f"✓ {self._format_execution_time(elapsed)}")
+                self.status_label.setStyleSheet("""
+                    QLabel {
+                        color: #2ecc71;
+                        font-size: 11px;
+                        padding: 3px 8px;
+                        background: rgba(46, 204, 113, 0.1);
+                        border-radius: 3px;
+                    }
+                """)
             else:
                 self.status_label.setText("")
-                self.status_label.setStyleSheet("color: #888; font-size: 10px;")
+                self.status_label.setStyleSheet("""
+                    QLabel {
+                        color: #888;
+                        font-size: 11px;
+                        padding: 3px 8px;
+                        background: transparent;
+                        border-radius: 3px;
+                    }
+                """)
     
     def set_cancelled(self):
         """Define estado de cancelado"""
@@ -304,8 +370,35 @@ class CodeBlock(QFrame):
         self._is_waiting = False
         self.run_btn.setText("▶")
         self.cancel_btn.hide()
-        self.status_label.setText("⊘ Cancelado")
-        self.status_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
+        self.status_label.setText("✕ Cancelado")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #e74c3c;
+                font-size: 11px;
+                padding: 3px 8px;
+                background: rgba(231, 76, 60, 0.1);
+                border-radius: 3px;
+            }
+        """)
+        self._execution_start_time = 0
+    
+    def set_error(self):
+        """Define estado de erro"""
+        self._is_running = False
+        self._is_waiting = False
+        self.run_btn.setText("▶")
+        self.cancel_btn.hide()
+        self.status_label.setText("⚠ Erro")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #e74c3c;
+                font-size: 11px;
+                padding: 3px 8px;
+                background: rgba(231, 76, 60, 0.15);
+                border-radius: 3px;
+                font-weight: bold;
+            }
+        """)
         self._execution_start_time = 0
     
     def _format_execution_time(self, seconds: float) -> str:

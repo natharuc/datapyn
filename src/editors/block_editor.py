@@ -218,10 +218,13 @@ class BlockEditor(QWidget):
         self._current_executing_block = block
         block.set_running(True)
     
-    def mark_execution_finished(self, block: CodeBlock = None):
+    def mark_execution_finished(self, block: CodeBlock = None, has_error: bool = False):
         """Marca que a execução de um bloco terminou"""
         if block:
-            block.set_running(False)
+            if has_error:
+                block.set_error()
+            else:
+                block.set_running(False)
             # Remove da fila se ainda estiver lá
             if block in self._execution_queue_blocks:
                 self._execution_queue_blocks.remove(block)
@@ -263,7 +266,7 @@ class BlockEditor(QWidget):
     
     # === Gerenciamento de Blocos ===
     
-    def add_block(self, language: str = 'python', code: str = '', after_block: CodeBlock = None) -> CodeBlock:
+    def add_block(self, language: str = 'sql', code: str = '', after_block: CodeBlock = None) -> CodeBlock:
         """
         Adiciona um novo bloco.
         
@@ -275,8 +278,7 @@ class BlockEditor(QWidget):
         Returns:
             O novo bloco criado
         """
-        block = CodeBlock(theme_manager=self.theme_manager)
-        block.set_language(language)
+        block = CodeBlock(theme_manager=self.theme_manager, default_language=language)
         if code:
             block.set_code(code)
         

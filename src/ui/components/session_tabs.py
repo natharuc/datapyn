@@ -43,14 +43,14 @@ class SessionTabBar(QTabBar):
             }
             QTabBar::close-button {
                 subcontrol-position: right;
-                margin-right: 6px;
-                padding: 2px;
-                width: 14px;
-                height: 14px;
+                margin-right: 20px;
+                padding: 0px;
+                width: 50px;
+                height: 50px;
             }
             QTabBar::close-button:hover {
-                background-color: #f48771;
-                border-radius: 2px;
+                background-color: rgba(231, 76, 60, 0.9);
+                border-radius: 3px;
             }
         """)
     
@@ -167,9 +167,9 @@ class SessionTabBar(QTabBar):
         line_edit.returnPressed.connect(save_name)
         line_edit.editingFinished.connect(save_name)
         
-        # Posicionar o line_edit sobre a aba
+        # Posicionar o line_edit sobre a aba (deixar 60px à direita para o close button)
         tab_rect = self.tabRect(index)
-        line_edit.setGeometry(tab_rect.adjusted(4, 4, -30, -4))
+        line_edit.setGeometry(tab_rect.adjusted(8, 6, -60, -6))
         line_edit.show()
         line_edit.setFocus()
     
@@ -223,25 +223,48 @@ class SessionTabs(QTabWidget):
         self.setDocumentMode(True)
     
     def _setup_close_button(self, index):
-        """Configura ícone X no botão de fechar da aba"""
+        """Configura ícone X no botão de fechar da aba - elegante e compacto"""
         from PyQt6.QtWidgets import QToolButton
+        from PyQt6.QtCore import Qt
         
-        # Criar botão customizado
+        # Criar botão customizado compacto e elegante com ícone X
         close_btn = QToolButton()
-        close_btn.setIcon(qta.icon('mdi.close', color='#cccccc', scale_factor=1.4))
-        close_btn.setFixedSize(20, 20)
+        close_btn.setIcon(qta.icon('mdi.close', color='#cccccc', scale_factor=1.0))
+        close_btn.setFixedSize(50, 50)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet("""
             QToolButton {
                 background: transparent;
                 border: none;
-                border-radius: 2px;
-                margin-right: 10px;
             }
             QToolButton:hover {
-                background-color: #3e3e42;
+                background-color: rgba(231, 76, 60, 0.8);
             }
         """)
-        close_btn.clicked.connect(lambda: self.tabCloseRequested.emit(index))
+        
+        # Atualizar ícone no hover para branco
+        def on_hover_enter(event):
+            close_btn.setIcon(qta.icon('mdi.close', color='#ffffff', scale_factor=1.0))
+            QToolButton.enterEvent(close_btn, event)
+        
+        def on_hover_leave(event):
+            close_btn.setIcon(qta.icon('mdi.close', color='#cccccc', scale_factor=1.0))
+            QToolButton.leaveEvent(close_btn, event)
+        
+        close_btn.enterEvent = on_hover_enter
+        close_btn.leaveEvent = on_hover_leave
+        
+        # IMPORTANTE: Buscar índice dinamicamente no momento do click
+        # porque os índices mudam quando abas são removidas
+        def request_close():
+            # Encontrar o índice atual desta aba pelo botão
+            for i in range(self.count()):
+                btn = self.tabBar().tabButton(i, QTabBar.ButtonPosition.RightSide)
+                if btn == close_btn:
+                    self.tabCloseRequested.emit(i)
+                    return
+        
+        close_btn.clicked.connect(request_close)
         
         # Substituir botão padrão
         self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, close_btn)
@@ -275,6 +298,7 @@ class SessionTabs(QTabWidget):
         Returns:
             Índice da nova aba
         """
+        # Adicionar aba normalmente
         index = self.addTab(widget, name)
         
         # Configurar botão de fechar customizado
@@ -286,9 +310,8 @@ class SessionTabs(QTabWidget):
         return index
     
     def remove_session(self, index: int):
-        """Remove sessão"""
-        if self.count() > 1:
-            self.removeTab(index)
+        """Remove sessão (permite fechar última aba)"""
+        self.removeTab(index)
     
     def rename_session(self, index: int, name: str):
         """Renomeia sessão"""
@@ -314,3 +337,18 @@ class SessionTabs(QTabWidget):
         if name.startswith("⏳ "):
             return name[3:]
         return name
+
+    def refresh_close_buttons(self):
+        """Reaplica o botão de fechar customizado em todas as abas (exceto a última 'nova aba').
+
+        Use isto quando o estilo foi alterado em runtime para forçar atualização dos botões.
+        """
+        total = self.count()
+        # Não tocar na última aba que é o botão de nova aba (index = total-1)
+        for i in range(total - 1):
+            # Reaplica o botão customizado
+            try:
+                self._setup_close_button(i)
+            except Exception:
+                # Não falhar se uma aba estiver em processo de remoção
+                continue

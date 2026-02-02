@@ -45,7 +45,7 @@ def theme_manager():
 
 @pytest.fixture
 def main_window(qapp, tmp_path, monkeypatch):
-    """Cria MainWindow para testes GUI"""
+    """Cria MainWindow para testes GUI - agora usa apenas QScintilla"""
     # Evita salvar configurações reais
     monkeypatch.setenv('DATAPYN_CONFIG_PATH', str(tmp_path))
     

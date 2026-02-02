@@ -371,6 +371,7 @@ class ThemeManager:
                 padding: 5px;
                 border: 1px solid {c['border']};
                 font-weight: bold;
+                text-transform: none;
             }}
             QTableView {{
                 background-color: {c['background']};

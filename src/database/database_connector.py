@@ -6,6 +6,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 import logging
+import pyodbc
 
 
 logger = logging.getLogger(__name__)
@@ -130,35 +131,31 @@ class DatabaseConnector:
     
     def _execute_mssql_batch(self, query: str) -> pd.DataFrame:
         """Executa batch de comandos SQL Server e retorna último resultado"""
+        import pyodbc
+        
+        last_error = None  # Declarar ANTES do try para ser acessível no finally
+        cursor = None
+        raw_conn = None
+        
         try:
             # Usar raw connection do pyodbc para acessar nextset()
             raw_conn = self.engine.raw_connection()
             cursor = raw_conn.cursor()
             
-            try:
-                # Executar query completa
-                cursor.execute(query)
-                
-                # Capturar todos os result sets
-                dataframes = []
-                result_set_count = 0
-                
-                # Processar primeiro result set
+            # Executar query completa
+            cursor.execute(query)
+            
+            # Capturar todos os result sets
+            dataframes = []
+            result_set_count = 0
+            
+            # Processar todos os result sets em um loop
+            while True:
                 result_set_count += 1
-                if cursor.description:  # Tem colunas (é um SELECT)
-                    columns = [col[0] for col in cursor.description]
-                    rows = cursor.fetchall()
-                    logger.info(f"Result set {result_set_count}: {len(rows)} linhas, colunas: {columns}")
-                    if rows:
-                        df = pd.DataFrame.from_records(rows, columns=columns)
-                        dataframes.append(df)
-                else:
-                    logger.info(f"Result set {result_set_count}: sem descrição (não retorna dados)")
                 
-                # Processar próximos result sets
-                while cursor.nextset():
-                    result_set_count += 1
-                    if cursor.description:  # Tem colunas
+                try:
+                    if cursor.description:  # Tem colunas (é um SELECT)
+                        # Preservar case original das colunas
                         columns = [col[0] for col in cursor.description]
                         rows = cursor.fetchall()
                         logger.info(f"Result set {result_set_count}: {len(rows)} linhas, colunas: {columns}")
@@ -167,40 +164,96 @@ class DatabaseConnector:
                             dataframes.append(df)
                     else:
                         logger.info(f"Result set {result_set_count}: sem descrição (não retorna dados)")
+                except pyodbc.Error as e:
+                    last_error = str(e)
+                    logger.error(f"Erro PYODBC no result set {result_set_count}: {last_error}")
+                    break  # Para ao encontrar erro
+                except Exception as e:
+                    last_error = str(e)
+                    logger.error(f"Erro GENERICO no result set {result_set_count}: {last_error}")
+                    break  # Para ao encontrar erro
                 
-                # Commit
-                raw_conn.commit()
-                
-                logger.info(f"Total de result sets: {result_set_count}, DataFrames capturados: {len(dataframes)}")
-                
-                # Se capturou resultados, retornar o último
-                if dataframes:
-                    logger.info(f"Retornando último DataFrame com {len(dataframes[-1])} linhas")
-                    return dataframes[-1]
-                
-                # Nenhum resultado - retornar mensagem de sucesso
-                rows_affected = cursor.rowcount
-                if rows_affected >= 0:
-                    msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
-                else:
-                    msg = "Comando executado com sucesso."
-                
-                logger.info(msg)
-                return pd.DataFrame({'Resultado': [msg]})
-                
-            finally:
-                cursor.close()
-                raw_conn.close()
-                
+                # Tentar próximo result set
+                try:
+                    logger.info(f"Tentando nextset após result set {result_set_count}...")
+                    has_next = cursor.nextset()
+                    logger.info(f"nextset retornou: {has_next}")
+                    
+                    # CRÍTICO: pyodbc NÃO lança exceção em nextset() quando há erro!
+                    # O erro fica em cursor.messages - precisamos verificar ANTES de continuar
+                    if hasattr(cursor, 'messages') and cursor.messages:
+                        logger.info(f"Mensagens após nextset: {cursor.messages}")
+                        for msg in cursor.messages:
+                            # Mensagens são tuplas: (estado_sql, mensagem)
+                            if len(msg) >= 2:
+                                sql_state = msg[0]
+                                error_msg = msg[1]
+                                logger.info(f"SQL State: {sql_state}, Mensagem: {error_msg}")
+                                
+                                # Estados SQL de erro começam com classe 01-99 (exceto 01 que é warning)
+                                # 42S02 = Invalid object name
+                                # 42000 = Syntax error
+                                if sql_state and sql_state != '01000':  # 01000 é informational
+                                    last_error = error_msg
+                                    logger.error(f"ERRO SQL detectado em messages: {last_error}")
+                                    break
+                    
+                    if last_error:
+                        break  # Para se encontrou erro nas mensagens
+                    
+                    if not has_next:
+                        break
+                except pyodbc.Error as e:
+                    # Erro ao tentar próximo result set - pode ser erro SQL
+                    last_error = str(e)
+                    logger.error(f"Erro PYODBC ao processar nextset: {last_error}")
+                    break
+                except Exception as e:
+                    last_error = str(e)
+                    logger.error(f"Erro GENERICO ao processar nextset: {last_error}")
+                    break
+            
+            # Se houve erro, lançar exceção para reportar ao usuário
+            if last_error:
+                raise Exception(last_error)
+            
+            # Commit
+            raw_conn.commit()
+            
+            logger.info(f"Total de result sets: {result_set_count}, DataFrames capturados: {len(dataframes)}")
+            
+            # Se capturou resultados, retornar o último
+            if dataframes:
+                logger.info(f"Retornando último DataFrame com {len(dataframes[-1])} linhas")
+                return dataframes[-1]
+            
+            # Nenhum resultado - retornar mensagem de sucesso
+            rows_affected = cursor.rowcount
+            if rows_affected >= 0:
+                msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+            else:
+                msg = "Comando executado com sucesso."
+            
+            logger.info(msg)
+            return pd.DataFrame({'Resultado': [msg]})
+            
         except Exception as e:
             logger.error(f"Erro ao executar batch SQL Server: {str(e)}")
-            # Fallback para pd.read_sql
-            try:
-                df = pd.read_sql(query, self.engine)
-                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
-                return df
-            except:
-                raise e
+            raise  # Re-lançar erro para o usuário ver
+        
+        finally:
+            # Fechar cursor e conexão
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            
+            if raw_conn:
+                try:
+                    raw_conn.close()
+                except:
+                    pass
     
     def _execute_generic_query(self, query: str) -> pd.DataFrame:
         """Executa query genérica para bancos não-MSSQL"""
