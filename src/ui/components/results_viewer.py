@@ -24,6 +24,14 @@ class CSVExportDialog(QDialog):
         self.theme_manager = theme_manager or ThemeManager()
         self.setWindowTitle("Exportar CSV")
         self.setMinimumWidth(400)
+        
+        # Remover botões maximizar/minimizar
+        self.setWindowFlags(
+            Qt.WindowType.Dialog |
+            Qt.WindowType.WindowTitleHint |
+            Qt.WindowType.WindowCloseButtonHint
+        )
+        
         self._setup_ui()
         self._load_settings()
     
@@ -60,9 +68,9 @@ class CSVExportDialog(QDialog):
         
         layout.addLayout(form)
         
-        # Botões
+        # Botões (invertendo ordem: Cancel, OK)
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -344,17 +352,7 @@ class ResultsViewer(QWidget):
         if self.current_df is None:
             return
         
-        destination = self._get_export_destination()
-        
-        if destination == "clipboard":
-            # Exportar para clipboard
-            from PyQt6.QtWidgets import QApplication
-            csv_text = self.current_df.to_csv(index=False)
-            QApplication.instance().clipboard().setText(csv_text)
-            self._show_clipboard_success("CSV")
-            return
-        
-        # Exportar para arquivo
+        # Sempre abrir diálogo de configuração
         dialog = CSVExportDialog(self, theme_manager=self.theme_manager)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -363,6 +361,23 @@ class ResultsViewer(QWidget):
         encoding = dialog.get_encoding()
         include_header = dialog.get_include_header()
         open_folder = dialog.get_open_folder()
+        
+        destination = self._get_export_destination()
+        
+        if destination == "clipboard":
+            # Exportar para clipboard com configurações
+            from PyQt6.QtWidgets import QApplication
+            csv_text = self.current_df.to_csv(
+                index=False,
+                sep=delimiter,
+                encoding=encoding,
+                header=include_header
+            )
+            QApplication.instance().clipboard().setText(csv_text)
+            self._show_clipboard_success("CSV")
+            return
+        
+        # Exportar para arquivo
         
         filename, _ = QFileDialog.getSaveFileName(
             self, "Salvar CSV", "", "CSV Files (*.csv)"

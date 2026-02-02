@@ -118,7 +118,7 @@ class DatabaseConnector:
             query_clean = query.replace('GO\n', '\n').replace('GO ', ' ')
             
             # Para SQL Server, executar como batch e capturar resultados
-            if self.db_type == 'mssql':
+            if self.db_type == 'sqlserver':
                 return self._execute_mssql_batch(query_clean)
             
             # Para outros bancos, usar lógica antiga
@@ -131,58 +131,70 @@ class DatabaseConnector:
     def _execute_mssql_batch(self, query: str) -> pd.DataFrame:
         """Executa batch de comandos SQL Server e retorna último resultado"""
         try:
-            # Separar comandos por ponto e vírgula
-            commands = [cmd.strip() for cmd in query.split(';') if cmd.strip()]
+            # Usar raw connection do pyodbc para acessar nextset()
+            raw_conn = self.engine.raw_connection()
+            cursor = raw_conn.cursor()
             
-            if len(commands) == 0:
-                return pd.DataFrame({'Resultado': ['Nenhum comando para executar']})
-            
-            # Executar todos os comandos
-            last_df = None
-            
-            with self.engine.connect() as conn:
-                for i, cmd in enumerate(commands):
-                    cmd_upper = cmd.strip().upper()
-                    
-                    # Verificar se é SELECT que retorna dados (não SELECT INTO)
-                    is_select_result = (
-                        cmd_upper.startswith('SELECT') and 
-                        ' INTO ' not in cmd_upper
-                    )
-                    
-                    if is_select_result:
-                        # Executar e capturar resultado
-                        try:
-                            result = conn.execute(text(cmd))
-                            if result.returns_rows:
-                                df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                                if not df.empty:
-                                    last_df = df
-                        except Exception as e:
-                            # Se falhar, tentar pd.read_sql
-                            try:
-                                last_df = pd.read_sql(cmd, self.engine)
-                            except:
-                                # Executar como statement normal
-                                conn.execute(text(cmd))
-                    else:
-                        # Executar como statement
-                        conn.execute(text(cmd))
+            try:
+                # Executar query completa
+                cursor.execute(query)
                 
-                conn.commit()
-            
-            # Se capturou algum resultado, retornar
-            if last_df is not None and not last_df.empty:
-                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(last_df)}")
-                return last_df
-            
-            # Nenhum resultado - retornar mensagem de sucesso
-            msg = "✓ Comando executado com sucesso."
-            logger.info(msg)
-            return pd.DataFrame({'Resultado': [msg]})
+                # Capturar todos os result sets
+                dataframes = []
+                result_set_count = 0
+                
+                # Processar primeiro result set
+                result_set_count += 1
+                if cursor.description:  # Tem colunas (é um SELECT)
+                    columns = [col[0] for col in cursor.description]
+                    rows = cursor.fetchall()
+                    logger.info(f"Result set {result_set_count}: {len(rows)} linhas, colunas: {columns}")
+                    if rows:
+                        df = pd.DataFrame.from_records(rows, columns=columns)
+                        dataframes.append(df)
+                else:
+                    logger.info(f"Result set {result_set_count}: sem descrição (não retorna dados)")
+                
+                # Processar próximos result sets
+                while cursor.nextset():
+                    result_set_count += 1
+                    if cursor.description:  # Tem colunas
+                        columns = [col[0] for col in cursor.description]
+                        rows = cursor.fetchall()
+                        logger.info(f"Result set {result_set_count}: {len(rows)} linhas, colunas: {columns}")
+                        if rows:
+                            df = pd.DataFrame.from_records(rows, columns=columns)
+                            dataframes.append(df)
+                    else:
+                        logger.info(f"Result set {result_set_count}: sem descrição (não retorna dados)")
+                
+                # Commit
+                raw_conn.commit()
+                
+                logger.info(f"Total de result sets: {result_set_count}, DataFrames capturados: {len(dataframes)}")
+                
+                # Se capturou resultados, retornar o último
+                if dataframes:
+                    logger.info(f"Retornando último DataFrame com {len(dataframes[-1])} linhas")
+                    return dataframes[-1]
+                
+                # Nenhum resultado - retornar mensagem de sucesso
+                rows_affected = cursor.rowcount
+                if rows_affected >= 0:
+                    msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                else:
+                    msg = "Comando executado com sucesso."
+                
+                logger.info(msg)
+                return pd.DataFrame({'Resultado': [msg]})
+                
+            finally:
+                cursor.close()
+                raw_conn.close()
                 
         except Exception as e:
-            # Se falhar, tentar pd.read_sql (para SELECTs simples)
+            logger.error(f"Erro ao executar batch SQL Server: {str(e)}")
+            # Fallback para pd.read_sql
             try:
                 df = pd.read_sql(query, self.engine)
                 logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
@@ -217,7 +229,7 @@ class DatabaseConnector:
                     with self.engine.connect() as conn:
                         result = conn.execute(text(last_command))
                         conn.commit()
-                        msg = "✓ Comando executado com sucesso."
+                        msg = "Comando executado com sucesso."
                         logger.info(msg)
                         return pd.DataFrame({'Resultado': [msg]})
             else:
@@ -228,9 +240,9 @@ class DatabaseConnector:
                     rows_affected = result.rowcount
                     
                     if rows_affected >= 0:
-                        msg = f"✓ Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                        msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
                     else:
-                        msg = "✓ Comando executado com sucesso."
+                        msg = "Comando executado com sucesso."
                     
                     logger.info(msg)
                     return pd.DataFrame({'Resultado': [msg]})
@@ -248,9 +260,9 @@ class DatabaseConnector:
                     rows_affected = result.rowcount
                     
                     if rows_affected >= 0:
-                        msg = f"✓ Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                        msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
                     else:
-                        msg = "✓ Comando executado com sucesso."
+                        msg = "Comando executado com sucesso."
                     
                     logger.info(msg)
                     return pd.DataFrame({'Resultado': [msg]})
