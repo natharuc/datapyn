@@ -115,6 +115,15 @@ class DatabaseConnector:
             raise ConnectionError("Não há conexão ativa com o banco de dados")
         
         try:
+            # Detectar comando USE para atualizar banco atual
+            import re
+            use_match = re.search(r'\bUSE\s+\[?(\w+)\]?\s*;?\s*$', query.strip(), re.IGNORECASE | re.MULTILINE)
+            if use_match:
+                new_db = use_match.group(1)
+                logger.info(f"Detectado comando USE {new_db}")
+                # Atualizar banco atual
+                self.connection_params['database'] = new_db
+            
             # Remove comandos GO (SQL Server)
             query_clean = query.replace('GO\n', '\n').replace('GO ', ' ')
             

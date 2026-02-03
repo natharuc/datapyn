@@ -60,6 +60,11 @@ def temp_python_file():
 
 def test_open_sql_file(main_window, temp_sql_file):
     """Testa abertura de arquivo SQL"""
+    # Criar uma sessão primeiro (main_window não cria sessão inicial)
+    main_window._new_session()
+    QApplication.processEvents()
+    QTest.qWait(100)
+    
     # Simular abertura de arquivo
     widget = main_window._get_current_session_widget()
     assert widget is not None
@@ -95,6 +100,11 @@ def test_open_sql_file(main_window, temp_sql_file):
 
 def test_open_python_file(main_window, temp_python_file):
     """Testa abertura de arquivo Python"""
+    # Criar uma sessão primeiro
+    main_window._new_session()
+    QApplication.processEvents()
+    QTest.qWait(100)
+    
     widget = main_window._get_current_session_widget()
     assert widget is not None
     
@@ -125,8 +135,14 @@ def test_open_python_file(main_window, temp_python_file):
 
 def test_duplicate_session(main_window):
     """Testa duplicação de sessão"""
+    # Criar uma sessão primeiro
+    main_window._new_session()
+    QApplication.processEvents()
+    QTest.qWait(100)
+    
     # Criar conteúdo na sessão atual
     widget = main_window._get_current_session_widget()
+    assert widget is not None
     
     # Remover blocos extras (manter só 1)
     blocks = widget.editor.get_blocks()
@@ -231,6 +247,11 @@ def test_close_other_tabs(main_window):
 
 def test_file_path_preserved_on_duplicate(main_window, temp_sql_file):
     """Testa que file_path é preservado ao duplicar"""
+    # Criar uma sessão primeiro
+    main_window._new_session()
+    QApplication.processEvents()
+    QTest.qWait(100)
+    
     widget = main_window._get_current_session_widget()
     assert widget is not None, "Widget não pode ser None"
     widget.file_path = temp_sql_file

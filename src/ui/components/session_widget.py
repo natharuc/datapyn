@@ -106,6 +106,7 @@ class SessionWidget(QWidget):
     execute_python = pyqtSignal(str)  # code
     execute_cross_syntax = pyqtSignal(str)  # code
     status_changed = pyqtSignal(str)  # status message
+    connection_changed = pyqtSignal(str, str)  # (connection_name, database)
     
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -278,6 +279,12 @@ class SessionWidget(QWidget):
             # Salvar no namespace da sessão
             self.session.set_variable('df', df)
             self.session.set_variable('_last_result', df)
+            
+            # Verificar se banco mudou (comando USE)
+            if self.session.connector:
+                current_db = self.session.connector.get_current_database()
+                if self.session.connection_name:
+                    self.connection_changed.emit(self.session.connection_name, current_db)
         
         # Processar próximo da fila se houver
         self._is_executing = False
@@ -532,6 +539,14 @@ class SessionWidget(QWidget):
         if config:
             self._connection_color = config.get('color', '#007ACC') or '#007ACC'
         
+        # Cancelar conexão anterior se ainda estiver rodando
+        try:
+            if self._connection_thread and self._connection_thread.isRunning():
+                self._connection_thread.quit()
+                self._connection_thread.wait(500)  # Esperar até 500ms
+        except RuntimeError:
+            pass  # Thread já foi deletada
+        
         # Mostrar loading overlay
         self._show_loading(f"Conectando a {connection_name}...")
         
@@ -561,6 +576,10 @@ class SessionWidget(QWidget):
         if success:
             self.append_output(message)
             self.status_changed.emit(message)
+            # Emitir sinal de mudança de conexão
+            if self.session.connection_name and self.session.connector:
+                db = self.session.connector.get_current_database() if hasattr(self.session.connector, 'get_current_database') else ''
+                self.connection_changed.emit(self.session.connection_name, db)
         else:
             self.append_output(message, error=True)
             self.status_changed.emit("Erro na conexão")

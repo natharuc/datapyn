@@ -102,6 +102,7 @@ class ConnectionsList(QFrame):
     connection_double_clicked = pyqtSignal(str)
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
+    edit_connection_clicked = pyqtSignal(str)  # Sinal para editar conexão diretamente
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -181,8 +182,8 @@ class ConnectionsList(QFrame):
         menu.exec(self.list_widget.mapToGlobal(pos))
     
     def _edit_connection(self, conn_name: str):
-        """Emite sinal para editar conexao"""
-        self.manage_connections_clicked.emit()
+        """Emite sinal para editar conexao diretamente"""
+        self.edit_connection_clicked.emit(conn_name)
     
     def refresh(self, connections: list):
         """Atualiza lista de conexoes
@@ -206,6 +207,7 @@ class ConnectionPanel(QWidget):
     disconnect_clicked = pyqtSignal()
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
+    edit_connection_clicked = pyqtSignal(str)  # connection_name para editar
     
     def __init__(self, connection_manager=None, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -243,6 +245,9 @@ class ConnectionPanel(QWidget):
         )
         self.connections_list.manage_connections_clicked.connect(
             self.manage_connections_clicked.emit
+        )
+        self.connections_list.edit_connection_clicked.connect(
+            self.edit_connection_clicked.emit
         )
     
     def set_active_connection(self, name: str, host: str = "", 

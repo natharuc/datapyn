@@ -336,6 +336,7 @@ class MainWindow(QMainWindow):
         self.connection_panel.connection_requested.connect(self._quick_connect)
         self.connection_panel.new_connection_clicked.connect(self._new_connection)
         self.connection_panel.manage_connections_clicked.connect(self._manage_connections)
+        self.connection_panel.edit_connection_clicked.connect(self._edit_connection)
         self.connection_panel.disconnect_clicked.connect(self._disconnect)
         
         # Criar dock widget
@@ -379,12 +380,18 @@ class MainWindow(QMainWindow):
     
     def _quick_connect(self, connection_name: str):
         """
-        Cria uma NOVA ABA e conecta a um banco de dados.
+        Conecta a um banco de dados.
+        - Se não há aba: cria nova aba
+        - Se há aba atual: troca a conexão dessa aba
         A conexão acontece em background (não trava a aplicação).
         """
-        # SEMPRE criar nova aba para conexão
-        self._new_session()
+        # Obter aba atual
         current_widget = self._get_current_session_widget()
+        
+        # Se não há aba, criar uma nova
+        if not current_widget:
+            self._new_session()
+            current_widget = self._get_current_session_widget()
         
         if not current_widget:
             self._show_warning("Erro", "Não foi possível criar nova aba")
@@ -835,6 +842,49 @@ class MainWindow(QMainWindow):
             self._refresh_connections_list()
             self._log(f"Conexão '{name}' criada com sucesso")
             self.action_label.setText(f"Conexão '{name}' criada")
+    
+    def _edit_connection(self, connection_name: str):
+        """Abre dialogo para editar uma conexao especifica"""
+        # Obter config da conexão
+        config = self.connection_manager.get_connection_config(connection_name)
+        if not config:
+            self._show_warning("Erro", f"Conexão '{connection_name}' não encontrada")
+            return
+        
+        dialog = ConnectionEditDialog(
+            connection_name=connection_name,
+            config=config,
+            groups=self.connection_manager.get_groups(),
+            theme_manager=self.theme_manager,
+            parent=self
+        )
+        
+        if dialog.exec():
+            name, new_config = dialog.get_result()
+            
+            # Se mudou o nome, deletar antiga
+            if name != connection_name:
+                self.connection_manager.delete_connection(connection_name)
+            
+            # Salva a conexão
+            self.connection_manager.save_connection_config(
+                name,
+                new_config['db_type'],
+                new_config['host'],
+                new_config['port'],
+                new_config['database'],
+                new_config.get('username', ''),
+                new_config.get('save_password', False),
+                new_config.get('password', ''),
+                new_config.get('group', ''),
+                new_config.get('use_windows_auth', False),
+                new_config.get('color', '')
+            )
+            
+            self._update_connection_status()
+            self._refresh_connections_list()
+            self._log(f"Conexão '{name}' atualizada com sucesso")
+            self.action_label.setText(f"Conexão '{name}' atualizada")
     
     # === Métodos auxiliares para diálogos com ícones ===
     
@@ -1934,12 +1984,17 @@ class MainWindow(QMainWindow):
         # Conectar sinais do widget
         widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
         widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
+        widget.connection_changed.connect(lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db))
         
         # Guardar referência
         self._session_widgets[session.session_id] = widget
         
         # Adicionar aba usando método do SessionTabs (já lida com botão +)
         index = self.session_tabs.add_session(widget, session.title)
+        
+        # Focar automaticamente no editor da nova aba
+        if widget.editor and hasattr(widget.editor, 'setFocus'):
+            widget.editor.setFocus()
         
         return widget
     
@@ -2049,6 +2104,53 @@ class MainWindow(QMainWindow):
         # Só atualiza se for a sessão focada
         if self.session_manager.focused_session == session:
             self.action_label.setText(message)
+    
+    def _on_session_connection_changed(self, session, connection_name: str, database: str):
+        """
+        SERVIÇO CENTRALIZADO: Gerencia mudanças de conexão de sessão
+        
+        Este método centraliza TODAS as atualizações quando uma sessão conecta/troca de banco:
+        - Atualiza painel de conexões ativas
+        - Destaca conexão na lista
+        - Atualiza status bar
+        
+        Args:
+            session: Sessão que mudou a conexão
+            connection_name: Nome da conexão
+            database: Nome do banco de dados atual
+        """
+        # Só atualiza se for a sessão focada
+        if self.session_manager.focused_session != session:
+            return
+        
+        # Obter config da conexão
+        config = self.connection_manager.get_connection_config(connection_name)
+        if not config:
+            return
+        
+        host = config.get('host', 'localhost')
+        db_type = config.get('db_type', '')
+        
+        # Usar o banco retornado (pode ter mudado via USE)
+        current_db = database if database else config.get('database', '')
+        
+        # === ATUALIZAR PAINEL DE CONEXÕES ATIVAS ===
+        self.connection_panel.set_active_connection(
+            connection_name,
+            host=host,
+            database=current_db,
+            db_type=db_type
+        )
+        
+        # === DESTACAR CONEXÃO NA LISTA ===
+        for i in range(self.connections_list.count()):
+            item = self.connections_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == connection_name:
+                self.connections_list.setCurrentItem(item)
+                break
+        
+        # === ATUALIZAR STATUS BAR ===
+        self.action_label.setText(f"Conectado: {connection_name} ({current_db})")
     
     def _get_current_session_widget(self) -> SessionWidget:
         """Retorna SessionWidget da aba ativa"""
