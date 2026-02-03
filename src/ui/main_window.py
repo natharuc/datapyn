@@ -379,18 +379,16 @@ class MainWindow(QMainWindow):
     
     def _quick_connect(self, connection_name: str):
         """
-        Conecta a ABA ATUAL a um banco de dados.
-        CADA ABA tem sua própria conexão isolada.
+        Cria uma NOVA ABA e conecta a um banco de dados.
+        A conexão acontece em background (não trava a aplicação).
         """
-        # Obter widget da aba atual
+        # SEMPRE criar nova aba para conexão
+        self._new_session()
         current_widget = self._get_current_session_widget()
+        
         if not current_widget:
-            # Criar nova aba automaticamente se não houver nenhuma
-            self._new_session()
-            current_widget = self._get_current_session_widget()
-            if not current_widget:
-                self._show_warning("Erro", "Não foi possível criar nova aba")
-                return
+            self._show_warning("Erro", "Não foi possível criar nova aba")
+            return
         
         # Obter config (apenas metadados, não conexão)
         config = self.connection_manager.get_connection_config(connection_name)
@@ -403,14 +401,12 @@ class MainWindow(QMainWindow):
         if not config.get('use_windows_auth', False):
             password = config.get('password', '')
         
-        # DELEGAR para a aba - ela gerencia sua própria conexão
-        success = current_widget.connect_to_database(connection_name, password)
+        # DELEGAR para a aba - ela gerencia conexão em background
+        # Retorna True imediatamente (assíncrono)
+        current_widget.connect_to_database(connection_name, password)
         
-        if success:
-            self._update_connection_status()
-            self.action_label.setText(f"Aba conectada a {connection_name}")
-        else:
-            self.action_label.setText("Falha na conexão (veja output da aba)")
+        # Atualizar status (a aba mostrará o loading internamente)
+        self.action_label.setText(f"Conectando a {connection_name}...")
     
     def _create_menus(self):
         """Cria os menus"""

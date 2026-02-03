@@ -5,7 +5,7 @@ Contém todos os componentes de uma sessão:
 - Editor de código (UnifiedEditor)
 - BottomTabs (Resultados, Output, Variáveis)
 """
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QLabel
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 import pandas as pd
@@ -19,6 +19,27 @@ from src.core.session import Session
 from src.core.theme_manager import ThemeManager
 from src.editors import BlockEditor
 from src.ui.components.bottom_tabs import BottomTabs
+
+
+class SessionConnectionWorker(QObject):
+    """Worker para conectar ao banco em background"""
+    finished = pyqtSignal(bool, str)  # (success, message)
+    
+    def __init__(self, session, connection_name, password):
+        super().__init__()
+        self.session = session
+        self.connection_name = connection_name
+        self.password = password
+    
+    def run(self):
+        try:
+            success = self.session.connect(self.connection_name, self.password)
+            if success:
+                self.finished.emit(True, f"✓ Conectado a {self.connection_name}")
+            else:
+                self.finished.emit(False, f"✗ Falha ao conectar a {self.connection_name}")
+        except Exception as e:
+            self.finished.emit(False, f"[ERRO] {str(e)}")
 
 
 class SessionSqlWorker(QObject):
@@ -95,11 +116,19 @@ class SessionWidget(QWidget):
         # Workers ativos
         self._sql_thread: Optional[QThread] = None
         self._python_thread: Optional[QThread] = None
+        self._connection_thread: Optional[QThread] = None
+        self._connection_worker: Optional[SessionConnectionWorker] = None
+        
+        # Cor da conexão (será definida ao conectar)
+        self._connection_color: str = '#007ACC'  # Default: azul primário
         
         # Fila de execução para múltiplos blocos
         self._execution_queue: list = []  # Lista de (language, code, block)
         self._is_executing: bool = False
         self._cancel_requested: bool = False  # Flag de cancelamento
+        
+        # Overlay de loading
+        self._loading_overlay: Optional[QLabel] = None
         
         self._setup_ui()
         self._connect_signals()
@@ -139,6 +168,13 @@ class SessionWidget(QWidget):
         self.splitter.setSizes([360, 240])
         
         layout.addWidget(self.splitter)
+        
+        # Overlay de loading (inicialmente oculto)
+        self._loading_overlay = QLabel(self)
+        self._loading_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Estilo será definido dinamicamente em _show_loading
+        self._loading_overlay.hide()
+        self._loading_overlay.raise_()
     
     # === Propriedades de compatibilidade ===
     
@@ -480,40 +516,109 @@ class SessionWidget(QWidget):
     
     def connect_to_database(self, connection_name: str, password: str = '') -> bool:
         """
-        Conecta esta sessão a um banco de dados
+        Conecta esta sessão a um banco de dados (em background)
         
         Args:
             connection_name: Nome da conexão
             password: Senha (se necessário)
             
         Returns:
-            True se conectou com sucesso, False caso contrário
+            True (sempre, pois é assíncrono)
         """
-        try:
-            success = self.session.connect(connection_name, password)
-            
-            if success:
-                self.append_output(f"✓ Conectado a {connection_name}")
-                self.status_changed.emit(f"Conectado a {connection_name}")
-            else:
-                self.append_output(f"✗ Falha ao conectar a {connection_name}", error=True)
-                self.status_changed.emit("Erro na conexão")
-            
-            return success
-            
-        except Exception as e:
-            self.append_output(f"[ERRO] {str(e)}", error=True)
+        # Obter cor da conexão
+        from src.database.connection_manager import ConnectionManager
+        manager = ConnectionManager()
+        config = manager.get_connection_config(connection_name)
+        if config:
+            self._connection_color = config.get('color', '#007ACC') or '#007ACC'
+        
+        # Mostrar loading overlay
+        self._show_loading(f"Conectando a {connection_name}...")
+        
+        # Criar worker e thread
+        self._connection_thread = QThread()
+        self._connection_worker = SessionConnectionWorker(self.session, connection_name, password)
+        self._connection_worker.moveToThread(self._connection_thread)
+        
+        # Conectar sinais
+        self._connection_thread.started.connect(self._connection_worker.run)
+        self._connection_worker.finished.connect(self._on_connection_finished)
+        self._connection_worker.finished.connect(self._connection_thread.quit)
+        self._connection_worker.finished.connect(self._connection_worker.deleteLater)
+        self._connection_thread.finished.connect(self._connection_thread.deleteLater)
+        
+        # Iniciar
+        self._connection_thread.start()
+        
+        return True
+    
+    def _on_connection_finished(self, success: bool, message: str):
+        """Callback quando conexão termina"""
+        # Esconder loading
+        self._hide_loading()
+        
+        # Mostrar resultado
+        if success:
+            self.append_output(message)
+            self.status_changed.emit(message)
+        else:
+            self.append_output(message, error=True)
             self.status_changed.emit("Erro na conexão")
-            return False
+    
+    def _show_loading(self, message: str):
+        """Mostra overlay de loading"""
+        if self._loading_overlay:
+            self._loading_overlay.setText(message)
+            # Aplicar estilo com cor dinâmica
+            self._loading_overlay.setStyleSheet(f"""
+                QLabel {{
+                    background-color: rgba(30, 30, 30, 230);
+                    color: {self._connection_color};
+                    font-size: 16px;
+                    font-weight: bold;
+                    border: 3px solid {self._connection_color};
+                    border-radius: 10px;
+                    padding: 30px 50px;
+                }}
+            """)
+            # Ajustar tamanho e posição
+            self._loading_overlay.resize(self.size())
+            self._loading_overlay.move(0, 0)
+            self._loading_overlay.show()
+            self._loading_overlay.raise_()
+    
+    def _hide_loading(self):
+        """Esconde overlay de loading"""
+        if self._loading_overlay:
+            self._loading_overlay.hide()
+    
+    def resizeEvent(self, event):
+        """Ajusta overlay de loading ao redimensionar"""
+        super().resizeEvent(event)
+        if self._loading_overlay and self._loading_overlay.isVisible():
+            self._loading_overlay.resize(self.size())
     
     # === CLEANUP ===
     
     def cleanup(self):
         """Limpa recursos"""
-        if self._sql_thread and self._sql_thread.isRunning():
-            self._sql_thread.quit()
-            self._sql_thread.wait()
+        try:
+            if self._sql_thread and self._sql_thread.isRunning():
+                self._sql_thread.quit()
+                self._sql_thread.wait()
+        except RuntimeError:
+            pass  # Thread já foi deletada
         
-        if self._python_thread and self._python_thread.isRunning():
-            self._python_thread.quit()
-            self._python_thread.wait()
+        try:
+            if self._python_thread and self._python_thread.isRunning():
+                self._python_thread.quit()
+                self._python_thread.wait()
+        except RuntimeError:
+            pass  # Thread já foi deletada
+        
+        try:
+            if self._connection_thread and self._connection_thread.isRunning():
+                self._connection_thread.quit()
+                self._connection_thread.wait()
+        except RuntimeError:
+            pass  # Thread já foi deletada
