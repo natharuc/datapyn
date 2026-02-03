@@ -13,6 +13,7 @@ import sys
 import traceback
 from io import StringIO
 from typing import Optional, Dict, Any
+from datetime import datetime
 
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
@@ -171,6 +172,13 @@ class SessionWidget(QWidget):
         
         # Conectar sinais da sessão
         self.session.variables_changed.connect(self._update_variables_view)
+    def _format_log(self, log_type: str, message: str = '') -> str:
+        """Formata mensagem de log com timestamp e tipo"""
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        if message:
+            return f"[{timestamp}][{log_type}] {message}"
+        return f"[{timestamp}][{log_type}]"
+    
     
     # === EXECUÇÃO SQL ===
     
@@ -183,7 +191,6 @@ class SessionWidget(QWidget):
             self._process_next_in_queue()
             return
         
-        # Se já está executando, adiciona na fila
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
             self._execution_queue.append(('sql', query))
             return
@@ -191,7 +198,6 @@ class SessionWidget(QWidget):
         self._is_executing = True
         self.session.start_execution('sql')
         self.status_changed.emit("Executando SQL...")
-        self.append_output(f"▶ Executando SQL...")
         
         # Criar worker e thread
         self._sql_thread = QThread()
@@ -222,14 +228,16 @@ class SessionWidget(QWidget):
         self.editor.mark_execution_finished(current_block)
         
         if error:
-            self.append_output(f"[ERRO SQL] {error}", error=True)
+            self.append_output(self._format_log('SQL', f"ERRO: {error}"), error=True)
             self.session.finish_execution(False, f"Erro: {error[:50]}...")
+            self.status_changed.emit("Erro SQL")
             self.bottom_tabs.show_output()
         else:
             rows = len(df) if df is not None else 0
-            self.append_output(f"Query executada: {rows:,} linhas")
+            self.append_output(self._format_log('SQL', f"{rows:,} linhas"))
             self.bottom_tabs.set_results(df, "df")
             self.session.finish_execution(True, f"SQL: {rows:,} linhas")
+            self.status_changed.emit(f"✓ SQL: {rows:,} linhas")
             
             # Salvar no namespace da sessão
             self.session.set_variable('df', df)
@@ -251,8 +259,6 @@ class SessionWidget(QWidget):
         self._is_executing = True
         self.session.start_execution('python')
         self.status_changed.emit("Executando Python...")
-        self.append_output(f"▶ Executando Python...")
-        
         # Preparar namespace com df se existir
         namespace = self.session.namespace.copy()
         namespace['pd'] = pd
@@ -290,19 +296,42 @@ class SessionWidget(QWidget):
         self.editor.mark_execution_finished(current_block)
         
         if error:
-            self.append_output(f"[ERRO PYTHON]\n{error}", error=True)
+            self.append_output(self._format_log('PYTHON', f"ERRO:\n{error}"), error=True)
             self.session.finish_execution(False, "Erro Python")
+            self.status_changed.emit("Erro Python")
             self.bottom_tabs.show_output()
         else:
+            has_dataframe_result = False
+            has_output = bool(output)
+            
             if output:
-                self.append_output(output)
+                self.append_output(self._format_log('PYTHON', output))
             
             if result is not None:
                 if isinstance(result, pd.DataFrame):
+                    has_dataframe_result = True
                     self.bottom_tabs.set_results(result, "result")
-                    self.append_output(f"DataFrame: {len(result):,} linhas")
+                    self.append_output(self._format_log('PYTHON', f"DataFrame: {len(result):,} linhas"))
+                    self.status_changed.emit(f"✓ Python: DataFrame {len(result):,} linhas")
                 else:
-                    self.append_output(f"→ {repr(result)}")
+                    self.append_output(self._format_log('PYTHON', f"{repr(result)}"))
+                    has_output = True
+            
+            # Lógica dinâmica de exibição de abas:
+            # - Se gerou DataFrame -> mostra Resultados
+            # - Se tem output mas não DataFrame -> mostra Output
+            # - Se não tem nada -> não muda aba
+            if has_dataframe_result:
+                # DataFrame tem prioridade - já foi setado acima, mostra grid automaticamente
+                pass
+            elif has_output:
+                # Tem output mas não é DataFrame -> mostra Output
+                self.bottom_tabs.show_output()
+            
+            if not result and has_output:
+                self.status_changed.emit("✓ Python executado")
+            elif not result and not has_output:
+                self.status_changed.emit("✓ Python executado")
             
             # Atualizar namespace da sessão
             if updated_namespace:
@@ -354,7 +383,8 @@ class SessionWidget(QWidget):
             self._python_thread.quit()
             self._python_thread.wait(1000)
         
-        self.append_output("⊘ Execução cancelada pelo usuário", error=True)
+        self.append_output(self._format_log('CANCELADO', 'Execução cancelada pelo usuário'), error=True)
+        self.bottom_tabs.show_output()
     
     def _process_next_in_queue(self):
         """Processa o próximo item da fila de execução"""
