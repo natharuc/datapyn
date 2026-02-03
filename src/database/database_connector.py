@@ -1,7 +1,7 @@
 """
 Conector de banco de dados com suporte para múltiplos SGBDs
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Union
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -98,18 +98,18 @@ class DatabaseConnector:
         else:
             raise ValueError(f"Tipo de banco não suportado: {db_type}")
     
-    def execute_query(self, query: str) -> pd.DataFrame:
+    def execute_query(self, query: str) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """
-        Executa uma query SQL e retorna um DataFrame
+        Executa uma query SQL e retorna um DataFrame ou lista de DataFrames
         
-        Suporta múltiplos comandos SQL. Para queries com múltiplos comandos,
-        executa todos e tenta capturar resultados do último SELECT.
+        Suporta múltiplos comandos SQL. Para queries com múltiplos SELECTs,
+        retorna uma lista de DataFrames (um para cada SELECT).
         
         Args:
             query: Query SQL a ser executada (pode conter múltiplos comandos)
             
         Returns:
-            pd.DataFrame: Resultado da query ou mensagem de execução
+            Union[pd.DataFrame, List[pd.DataFrame]]: Resultado da query ou lista de resultados
         """
         if not self.engine:
             raise ConnectionError("Não há conexão ativa com o banco de dados")
@@ -231,10 +231,15 @@ class DatabaseConnector:
             
             logger.info(f"Total de result sets: {result_set_count}, DataFrames capturados: {len(dataframes)}")
             
-            # Se capturou resultados, retornar o último
+            # Se capturou múltiplos resultados, retornar lista de DataFrames
+            if len(dataframes) > 1:
+                logger.info(f"Retornando lista com {len(dataframes)} DataFrames")
+                return dataframes
+            
+            # Se capturou um único resultado, retornar diretamente
             if dataframes:
-                logger.info(f"Retornando último DataFrame com {len(dataframes[-1])} linhas")
-                return dataframes[-1]
+                logger.info(f"Retornando único DataFrame com {len(dataframes[0])} linhas")
+                return dataframes[0]
             
             # Nenhum resultado - retornar mensagem de sucesso
             rows_affected = cursor.rowcount
@@ -270,44 +275,42 @@ class DatabaseConnector:
         commands = [cmd.strip() for cmd in query.split(';') if cmd.strip()]
         
         if len(commands) > 1:
-            # Múltiplos comandos - executa todos menos o último
+            # Múltiplos comandos - executar todos e capturar resultados dos SELECTs
+            dataframes = []
+            
             with self.engine.connect() as conn:
-                for cmd in commands[:-1]:
-                    conn.execute(text(cmd))
+                for cmd in commands:
+                    cmd_upper = cmd.strip().upper()
+                    
+                    if cmd_upper.startswith('SELECT') or cmd_upper.startswith('SHOW'):
+                        # É SELECT - captura resultado
+                        try:
+                            df = pd.read_sql(cmd, self.engine)
+                            logger.info(f"SELECT executado: {len(df)} linhas retornadas")
+                            dataframes.append(df)
+                        except Exception as e:
+                            logger.error(f"Erro ao executar SELECT: {str(e)}")
+                            raise
+                    else:
+                        # Não é SELECT - executa como statement
+                        conn.execute(text(cmd))
+                
                 conn.commit()
             
-            # Tenta executar o último comando e buscar resultados
-            last_command = commands[-1]
-            last_upper = last_command.strip().upper()
+            # Se capturou múltiplos resultados, retornar lista de DataFrames
+            if len(dataframes) > 1:
+                logger.info(f"Retornando lista com {len(dataframes)} DataFrames")
+                return dataframes
             
-            if last_upper.startswith('SELECT') or last_upper.startswith('SHOW'):
-                # Último comando é SELECT - busca resultados
-                try:
-                    df = pd.read_sql(last_command, self.engine)
-                    logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
-                    return df
-                except:
-                    # Falhou - executa como statement
-                    with self.engine.connect() as conn:
-                        result = conn.execute(text(last_command))
-                        conn.commit()
-                        msg = "Comando executado com sucesso."
-                        logger.info(msg)
-                        return pd.DataFrame({'Resultado': [msg]})
-            else:
-                # Último comando não é SELECT
-                with self.engine.connect() as conn:
-                    result = conn.execute(text(last_command))
-                    conn.commit()
-                    rows_affected = result.rowcount
-                    
-                    if rows_affected >= 0:
-                        msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
-                    else:
-                        msg = "Comando executado com sucesso."
-                    
-                    logger.info(msg)
-                    return pd.DataFrame({'Resultado': [msg]})
+            # Se capturou um único resultado, retornar diretamente
+            if dataframes:
+                logger.info(f"Retornando único DataFrame com {len(dataframes[0])} linhas")
+                return dataframes[0]
+            
+            # Nenhum SELECT executado - retornar mensagem de sucesso
+            msg = "Comandos executados com sucesso."
+            logger.info(msg)
+            return pd.DataFrame({'Resultado': [msg]})
         else:
             # Comando único - tenta buscar resultados
             try:

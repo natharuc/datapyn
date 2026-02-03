@@ -270,15 +270,36 @@ class SessionWidget(QWidget):
             self.status_changed.emit("Erro SQL")
             self.bottom_tabs.show_output()
         else:
-            rows = len(df) if df is not None else 0
-            self.append_output(self._format_log('SQL', f"{rows:,} linhas"))
-            self.bottom_tabs.set_results(df, "df")
-            self.session.finish_execution(True, f"SQL: {rows:,} linhas")
-            self.status_changed.emit(f"✓ SQL: {rows:,} linhas")
-            
-            # Salvar no namespace da sessão
-            self.session.set_variable('df', df)
-            self.session.set_variable('_last_result', df)
+            # Verificar se retornou lista de DataFrames (múltiplos SELECTs)
+            if isinstance(df, list):
+                # Múltiplos DataFrames - criar variáveis df, df1, df2, etc.
+                total_rows = sum(len(d) for d in df)
+                self.append_output(self._format_log('SQL', f"{len(df)} consultas, {total_rows:,} linhas totais"))
+                
+                # Criar variáveis df, df1, df2, ...
+                for i, dataframe in enumerate(df):
+                    var_name = 'df' if i == 0 else f'df{i}'
+                    self.session.set_variable(var_name, dataframe)
+                    self.append_output(self._format_log('SQL', f"{var_name}: {len(dataframe):,} linhas"))
+                
+                # Exibir apenas o último DataFrame no grid
+                last_df = df[-1]
+                self.bottom_tabs.set_results(last_df, f"df{len(df)-1}" if len(df) > 1 else "df")
+                self.session.set_variable('_last_result', last_df)
+                
+                self.session.finish_execution(True, f"SQL: {len(df)} consultas")
+                self.status_changed.emit(f"✓ SQL: {len(df)} consultas")
+            else:
+                # DataFrame único
+                rows = len(df) if df is not None else 0
+                self.append_output(self._format_log('SQL', f"{rows:,} linhas"))
+                self.bottom_tabs.set_results(df, "df")
+                self.session.finish_execution(True, f"SQL: {rows:,} linhas")
+                self.status_changed.emit(f"✓ SQL: {rows:,} linhas")
+                
+                # Salvar no namespace da sessão
+                self.session.set_variable('df', df)
+                self.session.set_variable('_last_result', df)
             
             # Verificar se banco mudou (comando USE)
             if self.session.connector:
