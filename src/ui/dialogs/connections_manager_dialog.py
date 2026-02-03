@@ -78,6 +78,7 @@ class ConnectionsManagerDialog(QDialog):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemClicked.connect(self._on_item_clicked)
+        # Duplo clique deve EDITAR conexão ou renomear grupo inline
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         left_layout.addWidget(self.tree)
         
@@ -253,10 +254,17 @@ class ConnectionsManagerDialog(QDialog):
             self.btn_delete.setEnabled(True)
     
     def _on_item_double_clicked(self, item, column):
-        """Ao dar duplo clique"""
+        """Ao dar duplo clique - edita conexão ou renomeia grupo inline"""
         data = item.data(0, Qt.ItemDataRole.UserRole)
-        if data and data['type'] == 'connection':
-            self._connect_selected()
+        if not data:
+            return
+        
+        if data['type'] == 'connection':
+            # Conexão: abrir edição
+            self._edit_selected()
+        elif data['type'] == 'group':
+            # Grupo: editar inline (como nas abas)
+            self._rename_group_inline(item)
     
     def _show_connection_details(self, name: str):
         """Mostra detalhes de uma conexão"""
@@ -339,12 +347,6 @@ class ConnectionsManagerDialog(QDialog):
             menu.addAction(act_delete)
         
         elif data['type'] == 'group':
-            act_rename = QAction("Renomear Grupo", self)
-            if HAS_QTAWESOME:
-                act_rename.setIcon(qta.icon('fa5s.i-cursor'))
-            act_rename.triggered.connect(self._rename_group)
-            menu.addAction(act_rename)
-            
             act_color = QAction("Mudar Cor", self)
             if HAS_QTAWESOME:
                 act_color.setIcon(qta.icon('fa5s.palette'))
@@ -379,22 +381,52 @@ class ConnectionsManagerDialog(QDialog):
                 self.connection_manager.create_group(name)
                 self._load_connections()
     
-    def _rename_group(self):
-        """Renomeia grupo selecionado"""
-        if not self.selected_group:
+    def _rename_group_inline(self, item: QTreeWidgetItem):
+        """Renomeia grupo inline (editável diretamente no item)"""
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or data['type'] != 'group':
             return
         
-        new_name, ok = QInputDialog.getText(
-            self, "Renomear Grupo", "Novo nome:", text=self.selected_group
-        )
-        if ok and new_name and new_name != self.selected_group:
-            if new_name in self.connection_manager.get_groups():
-                QMessageBox.warning(self, "Aviso", "Já existe um grupo com este nome!")
+        old_name = data['name']
+        
+        # Tornar item editável
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        self.tree.editItem(item, 0)
+        
+        # Conectar sinal para validar após edição
+        def on_item_changed(changed_item, column):
+            if changed_item != item:
                 return
             
-            self.connection_manager.rename_group(self.selected_group, new_name)
+            new_name = changed_item.text(0).strip()
+            
+            # Desconectar sinal para evitar loop
+            try:
+                self.tree.itemChanged.disconnect(on_item_changed)
+            except:
+                pass
+            
+            # Validar novo nome
+            if not new_name or new_name == old_name:
+                # Restaurar nome antigo
+                changed_item.setText(0, old_name)
+                changed_item.setFlags(changed_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                return
+            
+            if new_name in self.connection_manager.get_groups():
+                QMessageBox.warning(self, "Aviso", "Já existe um grupo com este nome!")
+                changed_item.setText(0, old_name)
+                changed_item.setFlags(changed_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                return
+            
+            # Renomear grupo
+            self.connection_manager.rename_group(old_name, new_name)
             self.selected_group = new_name
-            self._load_connections()
+            changed_item.setFlags(changed_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            # Atualizar data do item
+            changed_item.setData(0, Qt.ItemDataRole.UserRole, {'type': 'group', 'name': new_name})
+            
+        self.tree.itemChanged.connect(on_item_changed)
     
     def _change_group_color(self):
         """Muda cor do grupo"""

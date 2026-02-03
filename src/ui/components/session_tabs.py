@@ -112,11 +112,13 @@ class SessionTabBar(QTabBar):
     
     def _open_file_location(self, file_path):
         """Abre o local do arquivo no explorer"""
-        folder = os.path.dirname(file_path)
-        if os.path.exists(folder):
+        import os.path
+        if os.path.exists(file_path):
             if os.name == 'nt':  # Windows
-                subprocess.run(['explorer', '/select,', file_path])
+                # Comando correto: explorer.exe /select,"caminho"
+                subprocess.run(['explorer.exe', f'/select,"{file_path}"'])
             elif os.name == 'posix':  # Linux/Mac
+                folder = os.path.dirname(file_path)
                 subprocess.run(['xdg-open', folder])
     
     def _close_all_tabs(self):

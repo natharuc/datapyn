@@ -803,46 +803,11 @@ class MainWindow(QMainWindow):
         self._refresh_connections_list()
     
     def _connect_from_manager(self, name: str, config: dict):
-        """Conecta a partir do gerenciador de conexões"""
-        try:
-            # Se for autenticação Windows, não precisa de senha
-            password = ''
-            if not config.get('use_windows_auth', False):
-                password = config.get('password', '')
-                if not password:
-                    from PyQt6.QtWidgets import QInputDialog
-                    dialog = QInputDialog(self)
-                    dialog.setWindowTitle("Senha Necessária")
-                    dialog.setLabelText(f"Digite a senha para a conexão '{name}':")
-                    dialog.setTextEchoMode(QLineEdit.EchoMode.Password)
-                    dialog.resize(400, 150)
-                    if not dialog.exec():
-                        return
-                    password = dialog.textValue()
-            
-            connector = self.connection_manager.create_connection(
-                name,
-                config['db_type'],
-                config['host'],
-                config['port'],
-                config['database'],
-                config.get('username', ''),
-                password,
-                use_windows_auth=config.get('use_windows_auth', False)
-            )
-            
-            # Marcar como usada
-            self.connection_manager.mark_connection_used(name)
-            
-            # Atualizar status
-            self._update_connection_status()
-            self.action_label.setText(f"Conectado a {name}")
-            
-        except Exception as e:
-            self._show_error("Erro", f"Erro ao conectar:\n{str(e)}")
+        """Conecta a partir do gerenciador de conexoes - mesmo comportamento do painel lateral"""
+        self._quick_connect(name)
     
     def _new_connection(self):
-        """Abre diálogo para nova conexão"""
+        """Abre dialogo para nova conexao"""
         dialog = ConnectionEditDialog(
             connection_name=None,
             config=None,
@@ -1506,9 +1471,9 @@ class MainWindow(QMainWindow):
         """Abre workspace ou arquivo de código"""
         filename, _ = QFileDialog.getOpenFileName(
             self, 
-            "Abrir Workspace", 
+            "Abrir Arquivo", 
             "", 
-            "DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)"
+            "Arquivos Suportados (*.sql *.py *.dpw);;DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)"
         )
         if filename:
             # Verifica se é workspace
@@ -1539,6 +1504,8 @@ class MainWindow(QMainWindow):
             # 4. Criar widget da sessão
             widget = SessionWidget(session, theme_manager=self.theme_manager)
             widget.file_path = filename
+            widget._original_content = content  # Salvar conteúdo original
+            widget._is_modified = False  # Inicialmente não modificado
             
             # 5. Configurar conteúdo
             blocks = widget.editor.get_blocks()
@@ -1550,6 +1517,9 @@ class MainWindow(QMainWindow):
             # 6. Conectar sinais
             widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
             widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
+            
+            # Conectar sinal de modificação do editor
+            widget.editor.content_changed.connect(lambda: self._on_editor_modified(widget))
             
             # 7. Registrar widget
             self._session_widgets[session.session_id] = widget
@@ -1606,13 +1576,18 @@ class MainWindow(QMainWindow):
             # Carregar workspace do arquivo
             workspace = self.workspace_manager.load_workspace(filename)
             
-            # Recarregar sessões (já implementado)
+            # Fechar todas as sessões atuais
+            self._close_all_sessions()
+            
+            # Recarregar sessões do workspace
             self._restore_sessions()
             
             import os
             self.action_label.setText(f"Workspace aberto: {os.path.basename(filename)}")
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             QMessageBox.critical(
                 self,
                 "Erro ao Abrir Workspace",

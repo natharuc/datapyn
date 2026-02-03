@@ -1,21 +1,22 @@
 """
-Painel de conexões - Material Design Flat
+Painel de conexoes - Material Design Flat
 """
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFrame,
-                             QLabel, QListWidget, QListWidgetItem, QPushButton)
+                             QLabel, QListWidget, QListWidgetItem, QPushButton, QMenu)
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction
 import qtawesome as qta
 
 
 class ConnectionItem(QListWidgetItem):
-    """Item de conexão"""
+    """Item de conexao"""
     
     def __init__(self, name: str, config: dict):
         super().__init__()
         self.connection_name = name
         self.config = config
         
-        # Ícone + texto - usa cor da conexão se definida
+        # Icone + texto - usa cor da conexao se definida
         icon_color = config.get('color', '#64b5f6')
         icon = qta.icon('mdi.database', color=icon_color)
         self.setIcon(icon)
@@ -28,7 +29,7 @@ class ConnectionItem(QListWidgetItem):
 
 
 class ActiveConnectionWidget(QFrame):
-    """Widget de conexão ativa - flat design"""
+    """Widget de conexao ativa - flat design"""
     
     disconnect_clicked = pyqtSignal()
     
@@ -43,12 +44,12 @@ class ActiveConnectionWidget(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         
-        # Header com ícone
+        # Header com icone
         header = QHBoxLayout()
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon('mdi.connection', color='#64b5f6').pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("CONEXÃO ATIVA")
+        title = QLabel("CONEXAO ATIVA")
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
@@ -65,7 +66,7 @@ class ActiveConnectionWidget(QFrame):
         self.info_label.setStyleSheet("color: #888; font-size: 12px;")
         layout.addWidget(self.info_label)
         
-        # Botão
+        # Botao
         self.btn_disconnect = QPushButton(" Desconectar")
         self.btn_disconnect.setIcon(qta.icon('mdi.link-off', color='white'))
         self.btn_disconnect.setObjectName("danger")
@@ -74,7 +75,7 @@ class ActiveConnectionWidget(QFrame):
         layout.addWidget(self.btn_disconnect)
     
     def set_connection(self, name: str, host: str = "", database: str = "", db_type: str = ""):
-        """Define conexão"""
+        """Define conexao"""
         self.name_label.setText(name)
         
         info_parts = []
@@ -96,7 +97,7 @@ class ActiveConnectionWidget(QFrame):
 
 
 class ConnectionsList(QFrame):
-    """Lista de conexões - flat design"""
+    """Lista de conexoes - flat design"""
     
     connection_double_clicked = pyqtSignal(str)
     new_connection_clicked = pyqtSignal()
@@ -117,7 +118,7 @@ class ConnectionsList(QFrame):
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon('mdi.database-cog', color='#64b5f6').pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("CONEXÕES SALVAS")
+        title = QLabel("CONEXOES SALVAS")
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
@@ -127,9 +128,12 @@ class ConnectionsList(QFrame):
         self.list_widget = QListWidget()
         self.list_widget.setMinimumHeight(150)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        # Context menu
+        self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.list_widget)
         
-        # Botões
+        # Botoes
         btn_layout = QHBoxLayout()
         
         self.btn_new = QPushButton(" Nova")
@@ -146,7 +150,7 @@ class ConnectionsList(QFrame):
         layout.addLayout(btn_layout)
     
     def _on_item_double_clicked(self, item: QListWidgetItem):
-        """Emite sinal quando item é clicado duas vezes"""
+        """Emite sinal quando item e clicado duas vezes"""
         if isinstance(item, ConnectionItem):
             self.connection_double_clicked.emit(item.connection_name)
         else:
@@ -154,8 +158,34 @@ class ConnectionsList(QFrame):
             if conn_name:
                 self.connection_double_clicked.emit(conn_name)
     
+    def _show_context_menu(self, pos):
+        """Mostra menu de contexto na conexao"""
+        item = self.list_widget.itemAt(pos)
+        if not item:
+            return
+        
+        conn_name = item.data(Qt.ItemDataRole.UserRole)
+        if not conn_name:
+            return
+        
+        menu = QMenu(self)
+        
+        connect_action = QAction(qta.icon('mdi.lan-connect', color='#4ec9b0'), " Conectar", self)
+        connect_action.triggered.connect(lambda: self.connection_double_clicked.emit(conn_name))
+        menu.addAction(connect_action)
+        
+        edit_action = QAction(qta.icon('mdi.pencil', color='#569cd6'), " Editar", self)
+        edit_action.triggered.connect(lambda: self._edit_connection(conn_name))
+        menu.addAction(edit_action)
+        
+        menu.exec(self.list_widget.mapToGlobal(pos))
+    
+    def _edit_connection(self, conn_name: str):
+        """Emite sinal para editar conexao"""
+        self.manage_connections_clicked.emit()
+    
     def refresh(self, connections: list):
-        """Atualiza lista de conexões
+        """Atualiza lista de conexoes
         
         Args:
             connections: Lista de tuplas (name, config)
@@ -169,7 +199,7 @@ class ConnectionsList(QFrame):
 
 
 class ConnectionPanel(QWidget):
-    """Painel de conexões (widget para dock)"""
+    """Painel de conexoes (widget para dock)"""
     
     # Sinais
     connection_requested = pyqtSignal(str)  # connection_name
@@ -217,7 +247,7 @@ class ConnectionPanel(QWidget):
     
     def set_active_connection(self, name: str, host: str = "", 
                               database: str = "", db_type: str = ""):
-        """Define conexão ativa"""
+        """Define conexao ativa"""
         self.active_widget.set_connection(name, host, database, db_type)
     
     def set_disconnected(self):
@@ -225,7 +255,7 @@ class ConnectionPanel(QWidget):
         self.active_widget.set_disconnected()
     
     def refresh_connections(self, connections: list = None):
-        """Atualiza lista de conexões
+        """Atualiza lista de conexoes
         
         Args:
             connections: Lista de tuplas (name, config) ou None para usar connection_manager
