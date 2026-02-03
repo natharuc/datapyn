@@ -382,14 +382,15 @@ class MainWindow(QMainWindow):
         """
         Conecta a um banco de dados.
         - Se não há aba: cria nova aba
-        - Se há aba atual: troca a conexão dessa aba
+        - Se há aba atual conectando: cria nova aba
+        - Se há aba atual disponível: troca a conexão dessa aba
         A conexão acontece em background (não trava a aplicação).
         """
         # Obter aba atual
         current_widget = self._get_current_session_widget()
         
-        # Se não há aba, criar uma nova
-        if not current_widget:
+        # Se não há aba ou a aba atual está conectando, criar uma nova
+        if not current_widget or current_widget.is_connecting():
             self._new_session()
             current_widget = self._get_current_session_widget()
         
@@ -2121,6 +2122,13 @@ class MainWindow(QMainWindow):
                 )
             else:
                 self.connection_panel.set_active_connection(session.connection_name)
+            
+            # Destacar conexão na lista
+            for i in range(self.connections_list.count()):
+                item = self.connections_list.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == session.connection_name:
+                    self.connections_list.setCurrentItem(item)
+                    break
         else:
             # Desconectado
             self.connection_status_bar.setText("Desconectado")
@@ -2190,6 +2198,15 @@ class MainWindow(QMainWindow):
         
         # === ATUALIZAR STATUS BAR ===
         self.action_label.setText(f"Conectado: {connection_name} ({current_db})")
+        
+        # === DEFINIR COR DA ABA ===
+        color = config.get('color', '#007ACC') or '#007ACC'
+        # Encontrar índice da aba desta sessão
+        for i in range(self.session_tabs.count()):
+            widget = self.session_tabs.widget(i)
+            if isinstance(widget, SessionWidget) and widget.session == session:
+                self.session_tabs.set_tab_connection_color(i, color)
+                break
     
     def _get_current_session_widget(self) -> SessionWidget:
         """Retorna SessionWidget da aba ativa"""

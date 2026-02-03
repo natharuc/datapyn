@@ -588,6 +588,13 @@ class SessionWidget(QWidget):
         
         return True
     
+    def is_connecting(self) -> bool:
+        """Verifica se está em processo de conexão"""
+        try:
+            return self._connection_thread is not None and self._connection_thread.isRunning()
+        except RuntimeError:
+            return False  # Thread foi deletada
+    
     def _on_connection_finished(self, success: bool, message: str):
         """Callback quando conexão termina"""
         # Esconder loading

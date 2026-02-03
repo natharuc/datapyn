@@ -5,8 +5,9 @@ Gerencia as abas de sessão da IDE.
 """
 from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QAction
+from PyQt6.QtGui import QColor, QAction, QPainter, QPen
 import qtawesome as qta
+from typing import Dict
 import subprocess
 import os
 
@@ -18,6 +19,7 @@ class SessionTabBar(QTabBar):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._tab_colors: Dict[int, str] = {}  # Armazena cor por índice da aba
         
         self._setup_style()
         self._setup_context_menu()
@@ -194,6 +196,39 @@ class SessionTabBar(QTabBar):
             self._rename_tab_inline(index)
         else:
             super().mouseDoubleClickEvent(event)
+    
+    def set_tab_connection_color(self, index: int, color: str):
+        """Define cor da conexão para uma aba específica"""
+        self._tab_colors[index] = color
+        self.update()  # Força repaint
+    
+    def clear_tab_connection_color(self, index: int):
+        """Remove cor da conexão de uma aba"""
+        if index in self._tab_colors:
+            del self._tab_colors[index]
+            self.update()
+    
+    def paintEvent(self, event):
+        """Override para pintar bordas coloridas nas abas"""
+        # Pintar normalmente primeiro
+        super().paintEvent(event)
+        
+        # Pintar bordas coloridas
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        for index, color in self._tab_colors.items():
+            if index < self.count():  # Verifica se índice ainda é válido
+                rect = self.tabRect(index)
+                if rect.isValid():
+                    # Pintar linha colorida na parte inferior da aba
+                    pen = QPen(QColor(color))
+                    pen.setWidth(3)
+                    painter.setPen(pen)
+                    painter.drawLine(
+                        rect.left() + 2, rect.bottom() - 1,
+                        rect.right() - 2, rect.bottom() - 1
+                    )
 
 
 class SessionTabs(QTabWidget):
@@ -313,6 +348,8 @@ class SessionTabs(QTabWidget):
     
     def remove_session(self, index: int):
         """Remove sessão (permite fechar última aba)"""
+        # Limpar cor da aba antes de remover
+        self.tab_bar.clear_tab_connection_color(index)
         self.removeTab(index)
     
     def rename_session(self, index: int, name: str):
@@ -322,6 +359,10 @@ class SessionTabs(QTabWidget):
     def set_tab_color(self, index: int, color: str):
         """Define cor do tab (para indicar status)"""
         self.tabBar().setTabTextColor(index, QColor(color))
+    
+    def set_tab_connection_color(self, index: int, color: str):
+        """Define faixa colorida no tab para indicar conexão ativa"""
+        self.tab_bar.set_tab_connection_color(index, color)
     
     def set_tab_running(self, index: int, is_running: bool):
         """Indica se sessão está executando"""
