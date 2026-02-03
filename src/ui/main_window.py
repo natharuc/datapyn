@@ -743,7 +743,7 @@ class MainWindow(QMainWindow):
         if hasattr(widget, 'file_path'):
             new_widget.file_path = widget.file_path
         
-        # Registrar e adicionar aba
+        # Registrar widget
         self._session_widgets[session.session_id] = new_widget
         
         # Nome da nova aba

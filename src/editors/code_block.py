@@ -282,6 +282,8 @@ class CodeBlock(QFrame):
         index = self.lang_combo.findData(lang)
         if index >= 0:
             self.lang_combo.setCurrentIndex(index)
+            # Garantir que o editor seja atualizado mesmo em mudanças programáticas
+            self._on_language_changed()
     
     def get_code(self) -> str:
         return self.editor.get_text()

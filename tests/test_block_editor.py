@@ -540,30 +540,30 @@ class TestRealWorldScenarios:
     def test_scenario_change_mind_about_language(self, widget, qtbot):
         """Cenário: Usuário muda de ideia sobre linguagem
         
-        1. Começa escrevendo Python
-        2. Percebe que é SQL
-        3. Muda para SQL
+        1. Começa escrevendo SQL (default)
+        2. Percebe que é Python
+        3. Muda para Python
         4. Executa
         """
         editor = widget.editor
         blocks = editor.get_blocks()
         
-        # Usuário começa com Python (padrão)
-        assert blocks[0].get_language() == 'python'
-        
-        # Escreve código
-        blocks[0].set_code('SELECT * FROM users')
-        
-        # Percebe que é SQL, muda
-        blocks[0].set_language('sql')
-        
-        # Verifica que linguagem mudou
+        # Usuário começa com SQL (padrão)
         assert blocks[0].get_language() == 'sql'
         
-        # Verifica que código ainda está lá
-        assert blocks[0].get_code() == 'SELECT * FROM users'
+        # Escreve código pensando que é SQL
+        blocks[0].set_code('print("Hello")')
         
-        # Simula execução - deve usar SQL
+        # Percebe que é Python, muda
+        blocks[0].set_language('python')
+        
+        # Verifica que linguagem mudou
+        assert blocks[0].get_language() == 'python'
+        
+        # Verifica que código ainda está lá
+        assert blocks[0].get_code() == 'print("Hello")'
+        
+        # Simula execução - deve usar Python agora
         sql_executed = []
         python_executed = []
         editor.execute_sql.connect(lambda c: sql_executed.append(c))
@@ -571,9 +571,9 @@ class TestRealWorldScenarios:
         
         editor._execute_block(blocks[0])
         
-        # Deve ter executado como SQL
-        assert sql_executed == ['SELECT * FROM users']
-        assert python_executed == []
+        # Deve ter executado como Python
+        assert python_executed == ['print("Hello")']
+        assert sql_executed == []
     
     def test_scenario_mixed_execution(self, widget, qtbot):
         """Cenário: Execução mista de blocos

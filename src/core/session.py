@@ -160,6 +160,15 @@ class Session(QObject):
             traceback.print_exc()
             return False
     
+    def disconnect(self):
+        """Desconecta o banco de dados desta sessão"""
+        if self._connector and self._connector.is_connected:
+            try:
+                self._connector.disconnect()
+            except:
+                pass
+        self.clear_connection()
+    
     def clear_connection(self):
         """Remove a conexão desta sessão"""
         self._connection_name = None

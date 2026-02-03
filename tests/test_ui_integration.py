@@ -188,20 +188,20 @@ class TestConnectionManagement:
         assert hasattr(main_window, 'connection_manager')
     
     def test_session_widget_has_own_connection_manager(self, main_window, qtbot):
-        """Cada SessionWidget deve ter seu próprio ConnectionManager"""
+        """SessionWidget tem acesso a conexões via Session"""
         widget = main_window.session_tabs.currentWidget()
-        assert hasattr(widget, 'connection_manager')
-        assert widget.connection_manager is not None
-        # Deve ser instância diferente do MainWindow
-        assert widget.connection_manager is not main_window.connection_manager
+        # SessionWidget gerencia conexões via Session, não via connection_manager próprio
+        assert hasattr(widget, 'session')
+        assert widget.session is not None
+        assert hasattr(widget, 'connect_to_database')
     
     def test_session_widget_can_connect(self, main_window, qtbot):
         """SessionWidget deve poder conectar independentemente (teste simplificado)"""
         widget = main_window.session_tabs.currentWidget()
         
-        # Verificar que tem ConnectionManager isolado
-        assert hasattr(widget, 'connection_manager')
-        assert widget.connection_manager is not main_window.connection_manager
+        # Verificar que tem Session isolada
+        assert hasattr(widget, 'session')
+        assert widget.session is not None
         
         # Verificar que método connect_to_database existe
         assert hasattr(widget, 'connect_to_database')
@@ -225,15 +225,13 @@ class TestConnectionManagement:
         main_window._new_session()
         widget2 = main_window.session_tabs.currentWidget()
         
-        # Mock falha na conexão do widget1
-        widget1.connection_manager.get_connection_config = Mock(side_effect=Exception("Erro de teste"))
-        
-        # Tentar conectar widget1 - deve falhar silenciosamente (erro no output da aba)
+        # Tentar conectar widget1 com nome inválido - deve falhar silenciosamente
         widget1.connect_to_database('Bad Connection')
         
         # widget2 não deve ser afetado
         assert not widget2.session.is_connected
-        assert widget2.connection_manager is not widget1.connection_manager
+        # Sessions são isoladas
+        assert widget2.session is not widget1.session
     
     def test_session_widget_disconnect_isolated(self, main_window, qtbot):
         """Desconectar uma aba não afeta outras"""
@@ -258,11 +256,8 @@ class TestConnectionManagement:
         widget2.session._connector = mock_conn2
         widget2.session._connection_name = 'Conn2'
         
-        # Mock close_all para não afetar os mocks
-        widget1.connection_manager.close_all = Mock()
-        
         # Desconectar apenas widget1
-        widget1.disconnect_database()
+        widget1.session.disconnect()
         
         # widget1 desconectado, widget2 continua conectado
         assert not widget1.session.is_connected
