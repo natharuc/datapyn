@@ -422,9 +422,9 @@ class MainWindow(QMainWindow):
         # Menu Arquivo
         file_menu = menubar.addMenu("&Arquivo")
         
-        new_action = QAction("&Novo", self)
-        # Atalho gerenciado por ShortcutManager (Ctrl+N)
-        new_action.triggered.connect(self._new_file)
+        new_action = QAction("&Nova Aba", self)
+        # Atalho gerenciado por ShortcutManager (Ctrl+T)
+        new_action.triggered.connect(self._new_session)
         file_menu.addAction(new_action)
         
         open_action = QAction("&Abrir...", self)
@@ -637,7 +637,6 @@ class MainWindow(QMainWindow):
             'clear_results': self._clear_results,
             
             # Arquivo
-            'new_file': self._new_file,
             'open_file': self._open_file,
             'save_file': self._save_file,
             'save_as': self._save_file_as,
@@ -661,6 +660,51 @@ class MainWindow(QMainWindow):
         }
         
         # Criar atalhos a partir do ShortcutManager
+        for action, callback in shortcuts_map.items():
+            key_sequence = self.shortcut_manager.get_shortcut(action)
+            if key_sequence:
+                shortcut = QShortcut(QKeySequence(key_sequence), self)
+                shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                shortcut.activated.connect(callback)
+                self._shortcuts.append(shortcut)
+    
+    def _reload_shortcuts(self):
+        """Re-registra todos os atalhos (chamado quando usuário altera configurações)"""
+        from PyQt6.QtGui import QShortcut, QKeySequence
+        from PyQt6.QtCore import Qt
+        
+        # Limpar atalhos antigos
+        for shortcut in self._shortcuts:
+            shortcut.setEnabled(False)
+            shortcut.deleteLater()
+        self._shortcuts.clear()
+        
+        # Mapear ações para callbacks
+        shortcuts_map = {
+            # Execução
+            'execute_sql': self._execute_current_block,
+            'execute_all': self._execute_all_blocks,
+            'clear_results': self._clear_results,
+            
+            # Arquivo
+            'open_file': self._open_file,
+            'save_file': self._save_file,
+            'save_as': self._save_file_as,
+            
+            # Sessões
+            'new_tab': self._new_session,
+            'close_tab': self._close_current_session,
+            'add_block': self._add_block_to_current_session,
+            
+            # Conexões
+            'manage_connections': self._manage_connections,
+            'new_connection': self._new_connection,
+            
+            # Ferramentas
+            'settings': self._show_settings,
+        }
+        
+        # Criar novos atalhos
         for action, callback in shortcuts_map.items():
             key_sequence = self.shortcut_manager.get_shortcut(action)
             if key_sequence:
@@ -1870,13 +1914,8 @@ class MainWindow(QMainWindow):
     def _show_settings(self):
         """Mostra diálogo de configurações"""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
-        if dialog.exec():
-            QMessageBox.information(
-                self,
-                "Atalhos Salvos",
-                "Os atalhos foram salvos com sucesso!\n\n"
-                "Nota: Alguns atalhos podem exigir reinicialização da aplicação."
-            )
+        dialog.shortcuts_changed.connect(self._reload_shortcuts)
+        dialog.exec()
     
     def _new_session(self):
         """Cria nova sessão"""
@@ -1992,9 +2031,9 @@ class MainWindow(QMainWindow):
         # Adicionar aba usando método do SessionTabs (já lida com botão +)
         index = self.session_tabs.add_session(widget, session.title)
         
-        # Focar automaticamente no editor da nova aba
-        if widget.editor and hasattr(widget.editor, 'setFocus'):
-            widget.editor.setFocus()
+        # Focar automaticamente no primeiro bloco (com delay para garantir renderização)
+        if widget.editor and hasattr(widget.editor, 'focus_first_block'):
+            QTimer.singleShot(50, widget.editor.focus_first_block)
         
         return widget
     

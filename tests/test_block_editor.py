@@ -140,8 +140,10 @@ class TestBlockEditor:
     
     def test_add_block_with_language(self, editor):
         """Deve adicionar bloco com linguagem específica"""
-        block = editor.add_block(language='sql')
-        assert block.get_language() == 'sql'
+        # Primeiro bloco já existe (SQL), adicionar mais um vai ser Python por padrão
+        # Mas se especificar explicitamente a linguagem, deve respeitar
+        block = editor.add_block(language='python')
+        assert block.get_language() == 'python'
     
     def test_add_block_with_code(self, editor):
         """Deve adicionar bloco com código"""

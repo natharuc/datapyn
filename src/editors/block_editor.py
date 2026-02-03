@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QPushButton,
     QHBoxLayout, QFrame, QSizePolicy, QSpacerItem
 )
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent
 from typing import List, Optional
 
@@ -266,18 +266,25 @@ class BlockEditor(QWidget):
     
     # === Gerenciamento de Blocos ===
     
-    def add_block(self, language: str = 'sql', code: str = '', after_block: CodeBlock = None) -> CodeBlock:
+    def add_block(self, language: str = None, code: str = '', after_block: CodeBlock = None) -> CodeBlock:
         """
         Adiciona um novo bloco.
         
         Args:
-            language: 'python', 'sql', ou 'cross'
+            language: 'python', 'sql', ou 'cross'. Se None, usa 'sql' para primeiro bloco e 'python' para segundo
             code: Código inicial
             after_block: Se especificado, insere após este bloco
         
         Returns:
             O novo bloco criado
         """
+        # Se linguagem não especificada, usa SQL para primeiro bloco e Python para todos os outros
+        if language is None:
+            if len(self._blocks) == 0:
+                language = 'sql'  # Primeiro bloco
+            else:
+                language = 'python'  # Segundo bloco em diante
+        
         block = CodeBlock(theme_manager=self.theme_manager, default_language=language)
         if code:
             block.set_code(code)
@@ -308,6 +315,9 @@ class BlockEditor(QWidget):
         
         # Re-adicionar botão no final
         self.blocks_layout.addWidget(self.add_button_container)
+        
+        # Focar no novo bloco após renderização
+        QTimer.singleShot(50, block.focus_editor)
         
         self.content_changed.emit()
         return block
@@ -360,6 +370,11 @@ class BlockEditor(QWidget):
     def get_focused_block(self) -> Optional[CodeBlock]:
         """Retorna o bloco focado atual"""
         return self._focused_block
+    
+    def focus_first_block(self):
+        """Foca no primeiro bloco de código"""
+        if self._blocks:
+            self._blocks[0].focus_editor()
     
     def get_blocks(self) -> List[CodeBlock]:
         """Retorna lista de todos os blocos"""

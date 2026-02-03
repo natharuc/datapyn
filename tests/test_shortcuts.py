@@ -170,7 +170,6 @@ def test_all_shortcuts_registered(main_window):
         'clear_results',
         
         # Arquivo
-        'new_file',
         'open_file',
         'save_file',
         'save_as',
@@ -178,6 +177,7 @@ def test_all_shortcuts_registered(main_window):
         # Sessões
         'new_tab',
         'close_tab',
+        'add_block',
         
         # Edição - find/replace gerenciados pelos editores
         # 'find', 'replace' removidos - cada editor tem seus próprios

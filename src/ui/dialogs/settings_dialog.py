@@ -4,7 +4,7 @@ Diálogo para configurar atalhos de teclado
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QPushButton, QLabel, QHeaderView,
                              QKeySequenceEdit, QMessageBox, QGroupBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QKeySequence
 from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
@@ -12,6 +12,8 @@ from src.core.theme_manager import ThemeManager
 
 class SettingsDialog(QDialog):
     """Diálogo de configurações"""
+    
+    shortcuts_changed = pyqtSignal()  # Sinal emitido quando atalhos são salvos
     
     def __init__(self, shortcut_manager: ShortcutManager, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -174,7 +176,6 @@ class SettingsDialog(QDialog):
             'clear_results': 'Limpar Resultados',
             
             # Arquivo
-            'new_file': 'Novo Arquivo',
             'open_file': 'Abrir Arquivo',
             'save_file': 'Salvar Arquivo',
             'save_as': 'Salvar Como...',
@@ -313,10 +314,13 @@ class SettingsDialog(QDialog):
             shortcut = shortcut_item.text()
             self.shortcut_manager.set_shortcut(action, shortcut)
         
+        # Emitir sinal para MainWindow re-registrar atalhos
+        self.shortcuts_changed.emit()
+        
         QMessageBox.information(
             self,
             "Sucesso",
-            "Configurações salvas com sucesso!\n\nReinicie o DataPyn para aplicar todas as mudanças."
+            "Configurações salvas com sucesso!"
         )
         self.accept()
     

@@ -18,7 +18,6 @@ class ShortcutManager:
         'clear_results': 'Ctrl+Shift+C',
         
         # Arquivo
-        'new_file': 'Ctrl+N',
         'open_file': 'Ctrl+O',
         'save_file': 'Ctrl+S',
         'save_as': 'Ctrl+Shift+S',
