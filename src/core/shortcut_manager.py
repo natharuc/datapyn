@@ -26,6 +26,7 @@ class ShortcutManager:
         # Sessões
         'new_tab': 'Ctrl+T',
         'close_tab': 'Ctrl+W',
+        'add_block': 'Ctrl+Shift+T',
         
         # Edição - find/replace são gerenciados pelos editores (QScintilla/Monaco)
         # Cada editor tem seus próprios Ctrl+F e Ctrl+H nativos

@@ -182,6 +182,7 @@ class SettingsDialog(QDialog):
             # Sessões
             'new_tab': 'Nova Aba',
             'close_tab': 'Fechar Aba',
+            'add_block': 'Adicionar Bloco',
             
             # Edição
             'find': 'Localizar',

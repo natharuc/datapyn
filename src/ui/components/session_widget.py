@@ -328,9 +328,9 @@ class SessionWidget(QWidget):
                 # Tem output mas não é DataFrame -> mostra Output
                 self.bottom_tabs.show_output()
             
-            if not result and has_output:
+            if result is None and has_output:
                 self.status_changed.emit("✓ Python executado")
-            elif not result and not has_output:
+            elif result is None and not has_output:
                 self.status_changed.emit("✓ Python executado")
             
             # Atualizar namespace da sessão

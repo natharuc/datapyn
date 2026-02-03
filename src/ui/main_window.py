@@ -642,6 +642,7 @@ class MainWindow(QMainWindow):
             # Sessões
             'new_tab': self._new_session,
             'close_tab': self._close_current_session,
+            'add_block': self._add_block_to_current_session,
             
             # Edição - REMOVIDOS find/replace para não conflitar com editores
             # Monaco e QScintilla têm seus próprios Ctrl+F e Ctrl+H nativos
