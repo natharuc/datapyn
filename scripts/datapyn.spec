@@ -26,11 +26,11 @@ hiddenimports = [
 
 # Dados adicionais (assets)
 datas = [
-    ('src/assets/*', 'src/assets'),
+    ('source/src/assets/*', 'source/src/assets'),
 ]
 
 a = Analysis(
-    ['main.py'],
+    ['source/main.py'],
     pathex=[],
     binaries=[],
     datas=datas,
@@ -67,5 +67,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='src/assets/datapyn-logo.ico',  # Ícone do EXE
+    icon='source/src/assets/datapyn-logo.ico',  # Ícone do EXE
 )

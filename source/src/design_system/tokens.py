@@ -155,9 +155,9 @@ DARK_COLORS = ColorPalette(
     text_inverse="#ffffff",
     
     # Interactive
-    interactive_primary="#0e639c",
-    interactive_primary_hover="#1177bb",
-    interactive_primary_active="#094771",
+    interactive_primary="#3369FF",
+    interactive_primary_hover="#4d7fff",
+    interactive_primary_active="#2952cc",
     interactive_secondary="#3c3c3c",
     interactive_secondary_hover="#4a4a4a",
     interactive_secondary_active="#333333",
@@ -207,9 +207,9 @@ LIGHT_COLORS = ColorPalette(
     text_inverse="#ffffff",
     
     # Interactive
-    interactive_primary="#1976d2",
-    interactive_primary_hover="#1e88e5",
-    interactive_primary_active="#1565c0",
+    interactive_primary="#3369FF",
+    interactive_primary_hover="#4d7fff",
+    interactive_primary_active="#2952cc",
     interactive_secondary="#e0e0e0",
     interactive_secondary_hover="#d0d0d0",
     interactive_secondary_active="#c0c0c0",

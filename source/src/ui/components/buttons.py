@@ -25,6 +25,8 @@ from PyQt6.QtWidgets import QPushButton, QToolButton
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon
 
+from src.design_system.tokens import get_colors
+
 try:
     import qtawesome as qta
     HAS_QTAWESOME = True
@@ -32,135 +34,141 @@ except ImportError:
     HAS_QTAWESOME = False
 
 
-class StyledButton(QPushButton):
-    """Botão estilizado base - DEPRECATED"""
-    
-    STYLES = {
-        'primary': """
-            QPushButton {
-                background-color: #0e639c;
-                color: white;
+def _get_styles():
+    """Retorna estilos usando cores do design system"""
+    colors = get_colors()
+    return {
+        'primary': f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
+                color: {colors.text_inverse};
                 border: none;
                 padding: 6px 16px;
                 border-radius: 3px;
                 font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #1177bb;
-            }
-            QPushButton:pressed {
-                background-color: #094771;
-            }
-            QPushButton:disabled {
-                background-color: #3e3e42;
-                color: #6e6e6e;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary_hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.interactive_primary_active};
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_elevated};
+                color: {colors.text_disabled};
+            }}
         """,
-        'secondary': """
-            QPushButton {
-                background-color: #3c3c3c;
-                color: #cccccc;
-                border: 1px solid #555555;
+        'secondary': f"""
+            QPushButton {{
+                background-color: {colors.interactive_secondary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_strong};
                 padding: 6px 16px;
                 border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #4a4a4a;
-                border-color: #666666;
-            }
-            QPushButton:pressed {
-                background-color: #333333;
-            }
-            QPushButton:disabled {
-                background-color: #2d2d30;
-                color: #6e6e6e;
-                border-color: #3e3e42;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_secondary_hover};
+                border-color: {colors.border_strong};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.interactive_secondary_active};
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_disabled};
+                border-color: {colors.border_default};
+            }}
         """,
-        'danger': """
-            QPushButton {
-                background-color: #8b0000;
-                color: white;
+        'danger': f"""
+            QPushButton {{
+                background-color: {colors.danger};
+                color: {colors.text_inverse};
                 border: none;
                 padding: 6px 16px;
                 border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #a52a2a;
-            }
-            QPushButton:pressed {
-                background-color: #5c0000;
-            }
-            QPushButton:disabled {
-                background-color: #3e3e42;
-                color: #6e6e6e;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.danger_hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.danger_active};
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_elevated};
+                color: {colors.text_disabled};
+            }}
         """,
-        'success': """
-            QPushButton {
-                background-color: #2e7d32;
-                color: white;
+        'success': f"""
+            QPushButton {{
+                background-color: {colors.success};
+                color: {colors.text_inverse};
                 border: none;
                 padding: 6px 16px;
                 border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #388e3c;
-            }
-            QPushButton:pressed {
-                background-color: #1b5e20;
-            }
-            QPushButton:disabled {
-                background-color: #3e3e42;
-                color: #6e6e6e;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.success_hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.success_active};
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_elevated};
+                color: {colors.text_disabled};
+            }}
         """,
-        'ghost': """
-            QPushButton {
+        'ghost': f"""
+            QPushButton {{
                 background-color: transparent;
-                color: #cccccc;
+                color: {colors.text_primary};
                 border: none;
                 padding: 6px 16px;
                 border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-            QPushButton:pressed {
-                background-color: rgba(255, 255, 255, 0.05);
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_tertiary};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.bg_secondary};
+            }}
         """,
-        'toolbar': """
-            QPushButton {
+        'toolbar': f"""
+            QPushButton {{
                 background-color: transparent;
-                color: #cccccc;
+                color: {colors.text_primary};
                 border: none;
                 padding: 5px 12px;
                 border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #3e3e42;
-            }
-            QPushButton:pressed {
-                background-color: #094771;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_elevated};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.interactive_primary_active};
+            }}
         """
     }
+
+
+class StyledButton(QPushButton):
+    """Botao estilizado base - DEPRECATED"""
     
     def __init__(self, text: str = "", icon_name: str = None, 
                  style: str = 'primary', parent=None):
         super().__init__(text, parent)
         
         self._style_type = style
-        self.setStyleSheet(self.STYLES.get(style, self.STYLES['primary']))
+        styles = _get_styles()
+        self.setStyleSheet(styles.get(style, styles['primary']))
         
         if icon_name and HAS_QTAWESOME:
             self.setIcon(qta.icon(icon_name, color='white'))
     
     def set_style(self, style: str):
-        """Muda o estilo do botão"""
+        """Muda o estilo do botao"""
         self._style_type = style
-        self.setStyleSheet(self.STYLES.get(style, self.STYLES['primary']))
+        styles = _get_styles()
+        self.setStyleSheet(styles.get(style, styles['primary']))
 
 
 class PrimaryButton(StyledButton):
@@ -200,7 +208,7 @@ class ToolbarButton(StyledButton):
 
 
 class IconButton(QToolButton):
-    """Botão apenas com ícone"""
+    """Botao apenas com icone"""
     
     def __init__(self, icon_name: str, tooltip: str = "", size: int = 24, parent=None):
         super().__init__(parent)
@@ -208,19 +216,20 @@ class IconButton(QToolButton):
         if HAS_QTAWESOME:
             self.setIcon(qta.icon(icon_name, color='#cccccc'))
         
+        colors = get_colors()
         self.setIconSize(QSize(size, size))
         self.setToolTip(tooltip)
-        self.setStyleSheet("""
-            QToolButton {
+        self.setStyleSheet(f"""
+            QToolButton {{
                 background-color: transparent;
                 border: none;
                 padding: 4px;
                 border-radius: 3px;
-            }
-            QToolButton:hover {
+            }}
+            QToolButton:hover {{
                 background-color: #3e3e42;
-            }
-            QToolButton:pressed {
-                background-color: #094771;
-            }
+            }}
+            QToolButton:pressed {{
+                background-color: {colors.interactive_primary_active};
+            }}
         """)

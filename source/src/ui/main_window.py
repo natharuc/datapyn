@@ -43,6 +43,7 @@ from src.ui.components.session_tabs import SessionTabs
 from src.ui.components.connection_panel import ConnectionPanel
 from src.ui.components.toolbar import MainToolbar
 from src.ui.components.statusbar import MainStatusBar
+from src.design_system.tokens import get_colors, DARK_COLORS
 
 
 class SqlWorker(QObject):
@@ -217,80 +218,83 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DataPyn - IDE SQL + Python")
         self.setGeometry(100, 100, 1400, 900)
         
+        # Carregar cores do design system
+        colors = get_colors()
+        
         # Tema escuro
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1e1e1e;
-            }
-            QMenuBar {
-                background-color: #2d2d30;
-                color: #cccccc;
-                border-bottom: 1px solid #3e3e42;
-            }
-            QMenuBar::item:selected {
-                background-color: #3e3e42;
-            }
-            QMenu {
-                background-color: #2d2d30;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
+        self.setStyleSheet(f"""
+            QMainWindow {{
+                background-color: {colors.bg_primary};
+            }}
+            QMenuBar {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                border-bottom: 1px solid {colors.border_default};
+            }}
+            QMenuBar::item:selected {{
+                background-color: {colors.bg_elevated};
+            }}
+            QMenu {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
                 padding: 5px 0px;
-            }
-            QMenu::item {
+            }}
+            QMenu::item {{
                 padding: 6px 40px 6px 30px;
                 min-width: 180px;
-            }
-            QMenu::item:selected {
-                background-color: #094771;
-            }
-            QMenu::icon {
+            }}
+            QMenu::item:selected {{
+                background-color: {colors.interactive_primary_active};
+            }}
+            QMenu::icon {{
                 padding-left: 10px;
-            }
-            QToolBar {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #3e3e42;
+            }}
+            QToolBar {{
+                background-color: {colors.bg_tertiary};
+                border-bottom: 1px solid {colors.border_default};
                 spacing: 5px;
-            }
-            QStatusBar {
-                background-color: #007acc;
-                color: white;
-            }
-            QTabWidget::pane {
-                border: 1px solid #3e3e42;
-                background-color: #1e1e1e;
-            }
-            QTabBar::tab {
-                background-color: #2d2d30;
-                color: #cccccc;
+            }}
+            QStatusBar {{
+                background-color: {colors.interactive_primary};
+                color: {colors.text_inverse};
+            }}
+            QTabWidget::pane {{
+                border: 1px solid {colors.border_default};
+                background-color: {colors.bg_primary};
+            }}
+            QTabBar::tab {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
                 padding: 8px 20px;
-                border: 1px solid #3e3e42;
+                border: 1px solid {colors.border_default};
                 border-bottom: none;
-            }
-            QTabBar::tab:selected {
-                background-color: #1e1e1e;
-                color: #ffffff;
-            }
-            QTabBar::tab:hover {
-                background-color: #3e3e42;
-            }
-            QSplitter::handle {
-                background-color: #3e3e42;
-            }
-            QPushButton {
-                background-color: #0e639c;
-                color: white;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {colors.bg_primary};
+                color: {colors.text_inverse};
+            }}
+            QTabBar::tab:hover {{
+                background-color: {colors.bg_elevated};
+            }}
+            QSplitter::handle {{
+                background-color: {colors.border_default};
+            }}
+            QPushButton {{
+                background-color: {colors.interactive_primary};
+                color: {colors.text_inverse};
                 border: none;
                 padding: 5px 15px;
                 border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #1177bb;
-            }
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #d4d4d4;
-                border: 1px solid #3e3e42;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary_hover};
+            }}
+            QTextEdit {{
+                background-color: {colors.bg_primary};
+                color: {colors.editor_fg};
+                border: 1px solid {colors.border_default};
+            }}
         """)
         
         # Widget central
@@ -1975,11 +1979,12 @@ class MainWindow(QMainWindow):
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle_label)
         
-        # Botão iniciar
+        # Botao iniciar
+        colors = get_colors()
         start_button = QPushButton("  Iniciar  ")
-        start_button.setStyleSheet("""
-            QPushButton {
-                background-color: #007acc;
+        start_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
                 color: white;
                 border: none;
                 padding: 12px 40px;
@@ -1987,13 +1992,13 @@ class MainWindow(QMainWindow):
                 font-weight: bold;
                 border-radius: 4px;
                 margin-top: 30px;
-            }
-            QPushButton:hover {
-                background-color: #005a9e;
-            }
-            QPushButton:pressed {
-                background-color: #004578;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary_hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.interactive_primary_active};
+            }}
         """)
         start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         start_button.clicked.connect(self._new_session)
