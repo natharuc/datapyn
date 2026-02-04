@@ -145,30 +145,15 @@ def test_imports():
         return True
 
 
-def test_qt_display():
+def test_qt_display(qtbot):
     """Testa se a interface gráfica funciona"""
-    print("\n" + "=" * 50)
-    print("TESTE DE INTERFACE GRÁFICA")
-    print("=" * 50)
-    print("\nTentando criar uma janela de teste...")
+    from PyQt6.QtWidgets import QLabel
     
-    try:
-        from PyQt6.QtWidgets import QApplication, QMessageBox
-        
-        app = QApplication(sys.argv)
-        
-        msg = QMessageBox()
-        msg.setWindowTitle("Teste DataPyn")
-        msg.setText("✅ Interface gráfica funcionando!\n\nSe você está vendo esta mensagem, o PyQt6 está configurado corretamente.")
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.exec()
-        
-        print("✅ Interface gráfica OK!")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Erro na interface gráfica: {e}")
-        return False
+    # Criar widget simples para testar
+    label = QLabel("✅ Interface gráfica funcionando!")
+    qtbot.addWidget(label)
+    
+    assert label.text() == "✅ Interface gráfica funcionando!"
 
 
 if __name__ == '__main__':

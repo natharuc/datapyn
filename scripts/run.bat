@@ -4,17 +4,20 @@ echo   Iniciando DataPyn IDE...
 echo ========================================
 echo.
 
+REM Navegar para a raiz do projeto
+cd /d "%~dp0.."
+
 REM Verificar se .venv existe
 if not exist .venv (
     echo [ERRO] Ambiente virtual nao encontrado!
-    echo Execute install.bat primeiro.
+    echo Execute scripts\install.bat primeiro.
     pause
     exit /b 1
 )
 
 REM Ativar ambiente virtual e executar
 call .venv\Scripts\activate.bat
-python main.py
+python source\main.py
 
 REM Se houver erro
 if errorlevel 1 (

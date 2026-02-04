@@ -4,6 +4,9 @@ echo    DataPyn - Build EXE
 echo ========================================
 echo.
 
+REM Navegar para a raiz do projeto
+cd /d "%~dp0.."
+
 REM Ativar ambiente virtual
 call .venv\Scripts\activate
 
@@ -19,7 +22,7 @@ echo Gerando executavel...
 echo.
 
 REM Executar PyInstaller com o spec file
-pyinstaller datapyn.spec --clean
+pyinstaller scripts\datapyn.spec --clean
 
 echo.
 if exist "dist\DataPyn.exe" (

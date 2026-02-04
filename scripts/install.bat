@@ -4,6 +4,9 @@ echo   DataPyn IDE - Script de Instalacao
 echo ========================================
 echo.
 
+REM Navegar para a raiz do projeto
+cd /d "%~dp0.."
+
 REM Verificar se Python está instalado
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -63,10 +66,10 @@ echo   Instalacao concluida com sucesso!
 echo ========================================
 echo.
 echo Para executar o DataPyn:
-echo   1. Execute: run.bat
+echo   1. Execute: scripts\run.bat
 echo   OU
 echo   2. Ative o ambiente: .venv\Scripts\activate
-echo      Depois execute: python main.py
+echo      Depois execute: python source\main.py
 echo.
 echo Consulte o README.md para mais informacoes.
 echo.

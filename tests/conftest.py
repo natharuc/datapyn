@@ -9,8 +9,11 @@ from unittest.mock import MagicMock, patch
 import tempfile
 import json
 
-# Adicionar src ao path
-src_path = str(Path(__file__).parent.parent / 'src')
+# Adicionar source/src ao path
+source_path = str(Path(__file__).parent.parent / 'source')
+src_path = str(Path(__file__).parent.parent / 'source' / 'src')
+if source_path not in sys.path:
+    sys.path.insert(0, source_path)
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
