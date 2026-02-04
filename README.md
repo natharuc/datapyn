@@ -134,5 +134,7 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 ---
 
 <p align="center">
-  Feito com ❤️ e ☕
+  Feito com ❤️, ☕ e 🤖 IA
+  <br>
+  <sub>Com carinho por um humano incrível e seu copiloto</sub>
 </p>
