@@ -1,5 +1,5 @@
 """
-Inputs estilizados reutilizáveis
+Inputs estilizados reutilizaveis
 
 Componentes de entrada de dados com estilos consistentes.
 """
@@ -9,191 +9,211 @@ from PyQt6.QtWidgets import (QLineEdit, QTextEdit, QSpinBox, QComboBox,
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
+from src.design_system.tokens import get_colors
+
+
+def _get_line_edit_style():
+    colors = get_colors()
+    return f"""
+        QLineEdit {{
+            background-color: {colors.interactive_secondary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_strong};
+            border-radius: 3px;
+            padding: 6px 10px;
+            selection-background-color: {colors.interactive_primary_active};
+        }}
+        QLineEdit:focus {{
+            border-color: {colors.interactive_primary};
+        }}
+        QLineEdit:disabled {{
+            background-color: {colors.bg_tertiary};
+            color: {colors.text_disabled};
+        }}
+        QLineEdit::placeholder {{
+            color: {colors.text_disabled};
+        }}
+    """
+
+
+def _get_text_edit_style():
+    colors = get_colors()
+    return f"""
+        QTextEdit {{
+            background-color: {colors.bg_primary};
+            color: {colors.editor_fg};
+            border: 1px solid {colors.border_default};
+            border-radius: 3px;
+            padding: 8px;
+            selection-background-color: {colors.interactive_primary_active};
+        }}
+        QTextEdit:focus {{
+            border-color: {colors.interactive_primary};
+        }}
+    """
+
+
+def _get_spinbox_style():
+    colors = get_colors()
+    return f"""
+        QSpinBox {{
+            background-color: {colors.interactive_secondary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_strong};
+            border-radius: 3px;
+            padding: 4px 8px;
+        }}
+        QSpinBox:focus {{
+            border-color: {colors.interactive_primary};
+        }}
+        QSpinBox::up-button, QSpinBox::down-button {{
+            background-color: {colors.interactive_secondary_hover};
+            border: none;
+            width: 20px;
+        }}
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+            background-color: {colors.bg_elevated};
+        }}
+        QSpinBox::up-arrow {{
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-bottom: 6px solid {colors.text_primary};
+            width: 0;
+            height: 0;
+        }}
+        QSpinBox::down-arrow {{
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 6px solid {colors.text_primary};
+            width: 0;
+            height: 0;
+        }}
+    """
+
+
+def _get_combobox_style():
+    colors = get_colors()
+    return f"""
+        QComboBox {{
+            background-color: {colors.interactive_secondary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_strong};
+            border-radius: 3px;
+            padding: 6px 10px;
+            min-width: 100px;
+        }}
+        QComboBox:focus {{
+            border-color: {colors.interactive_primary};
+        }}
+        QComboBox::drop-down {{
+            border: none;
+            width: 25px;
+        }}
+        QComboBox::down-arrow {{
+            image: none;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid {colors.text_primary};
+            width: 0;
+            height: 0;
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {colors.bg_tertiary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_default};
+            selection-background-color: {colors.interactive_primary_active};
+        }}
+    """
+
+
+def _get_checkbox_style():
+    colors = get_colors()
+    return f"""
+        QCheckBox {{
+            color: {colors.text_primary};
+            spacing: 8px;
+        }}
+        QCheckBox::indicator {{
+            width: 18px;
+            height: 18px;
+            border: 1px solid {colors.border_strong};
+            border-radius: 3px;
+            background-color: {colors.interactive_secondary};
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: {colors.interactive_primary};
+            border-color: {colors.interactive_primary};
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {colors.interactive_primary};
+        }}
+        QCheckBox:disabled {{
+            color: {colors.text_disabled};
+        }}
+    """
+
 
 class StyledLineEdit(QLineEdit):
     """Campo de texto estilizado"""
     
-    STYLE = """
-        QLineEdit {
-            background-color: #3c3c3c;
-            color: #cccccc;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 6px 10px;
-            selection-background-color: #094771;
-        }
-        QLineEdit:focus {
-            border-color: #0e639c;
-        }
-        QLineEdit:disabled {
-            background-color: #2d2d30;
-            color: #6e6e6e;
-        }
-        QLineEdit::placeholder {
-            color: #6e6e6e;
-        }
-    """
-    
     def __init__(self, placeholder: str = "", parent=None):
         super().__init__(parent)
-        self.setStyleSheet(self.STYLE)
+        self.setStyleSheet(_get_line_edit_style())
         if placeholder:
             self.setPlaceholderText(placeholder)
 
 
 class StyledTextEdit(QTextEdit):
-    """Área de texto estilizada"""
-    
-    STYLE = """
-        QTextEdit {
-            background-color: #1e1e1e;
-            color: #d4d4d4;
-            border: 1px solid #3e3e42;
-            border-radius: 3px;
-            padding: 8px;
-            selection-background-color: #094771;
-        }
-        QTextEdit:focus {
-            border-color: #0e639c;
-        }
-    """
+    """Area de texto estilizada"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(self.STYLE)
+        self.setStyleSheet(_get_text_edit_style())
         self.setFont(QFont("Consolas", 10))
 
 
 class StyledSpinBox(QSpinBox):
     """SpinBox estilizado"""
     
-    STYLE = """
-        QSpinBox {
-            background-color: #3c3c3c;
-            color: #cccccc;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 4px 8px;
-        }
-        QSpinBox:focus {
-            border-color: #0e639c;
-        }
-        QSpinBox::up-button, QSpinBox::down-button {
-            background-color: #4a4a4a;
-            border: none;
-            width: 20px;
-        }
-        QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-            background-color: #5a5a5a;
-        }
-        QSpinBox::up-arrow {
-            image: none;
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-bottom: 6px solid #cccccc;
-            width: 0;
-            height: 0;
-        }
-        QSpinBox::down-arrow {
-            image: none;
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-top: 6px solid #cccccc;
-            width: 0;
-            height: 0;
-        }
-    """
-    
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(self.STYLE)
+        self.setStyleSheet(_get_spinbox_style())
 
 
 class StyledComboBox(QComboBox):
     """ComboBox estilizado"""
     
-    STYLE = """
-        QComboBox {
-            background-color: #3c3c3c;
-            color: #cccccc;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 6px 10px;
-            min-width: 100px;
-        }
-        QComboBox:focus {
-            border-color: #0e639c;
-        }
-        QComboBox::drop-down {
-            border: none;
-            width: 25px;
-        }
-        QComboBox::down-arrow {
-            image: none;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 6px solid #cccccc;
-            width: 0;
-            height: 0;
-        }
-        QComboBox QAbstractItemView {
-            background-color: #2d2d30;
-            color: #cccccc;
-            border: 1px solid #3e3e42;
-            selection-background-color: #094771;
-        }
-    """
-    
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(self.STYLE)
+        self.setStyleSheet(_get_combobox_style())
 
 
 class StyledCheckBox(QCheckBox):
     """CheckBox estilizado"""
     
-    STYLE = """
-        QCheckBox {
-            color: #cccccc;
-            spacing: 8px;
-        }
-        QCheckBox::indicator {
-            width: 18px;
-            height: 18px;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            background-color: #3c3c3c;
-        }
-        QCheckBox::indicator:checked {
-            background-color: #0e639c;
-            border-color: #0e639c;
-        }
-        QCheckBox::indicator:hover {
-            border-color: #0e639c;
-        }
-        QCheckBox:disabled {
-            color: #6e6e6e;
-        }
-    """
-    
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
-        self.setStyleSheet(self.STYLE)
+        self.setStyleSheet(_get_checkbox_style())
 
 
 class StyledLabel(QLabel):
     """Label estilizado"""
     
-    STYLES = {
-        'default': "color: #cccccc;",
-        'title': "color: #ffffff; font-size: 14px; font-weight: bold;",
-        'subtitle': "color: #9cdcfe; font-size: 12px;",
-        'hint': "color: #6e6e6e; font-size: 11px;",
-        'success': "color: #4ec9b0;",
-        'warning': "color: #dcdcaa;",
-        'error': "color: #f48771;",
-        'info': "color: #569cd6;"
-    }
+    @staticmethod
+    def _get_label_styles():
+        colors = get_colors()
+        return {
+            'default': f"color: {colors.text_primary};",
+            'title': f"color: {colors.text_inverse}; font-size: 14px; font-weight: bold;",
+            'subtitle': f"color: {colors.info}; font-size: 12px;",
+            'hint': f"color: {colors.text_disabled}; font-size: 11px;",
+            'success': f"color: {colors.success};",
+            'warning': f"color: {colors.warning};",
+            'error': f"color: {colors.danger};",
+            'info': f"color: {colors.info};"
+        }
     
     def __init__(self, text: str = "", style: str = 'default', parent=None):
         super().__init__(text, parent)
@@ -201,7 +221,8 @@ class StyledLabel(QLabel):
     
     def set_style(self, style: str):
         """Muda o estilo do label"""
-        self.setStyleSheet(self.STYLES.get(style, self.STYLES['default']))
+        styles = self._get_label_styles()
+        self.setStyleSheet(styles.get(style, styles['default']))
 
 
 class FormField(QWidget):
