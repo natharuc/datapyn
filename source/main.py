@@ -45,7 +45,7 @@ def main():
         'warning': '#ffc107',
         'success': '#28a745',
         'primaryColor': '#0d6efd',
-        'primaryLightColor': '#4dabf7',
+        'primaryLightColor': '#0d6efd',
     }
     apply_stylesheet(app, theme='dark_blue.xml', extra=extra)
     
