@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from qt_material import apply_stylesheet
 from src.ui import MainWindow
+from src.design_system.tokens import get_colors
 
 
 # Configurar logging
@@ -22,7 +23,7 @@ logging.basicConfig(
 
 
 def get_icon_path():
-    """Retorna caminho do ícone, funciona tanto em dev quanto no EXE"""
+    """Retorna caminho do icone, funciona tanto em dev quanto no EXE"""
     if getattr(sys, 'frozen', False):
         # Executando como EXE (PyInstaller)
         base_path = sys._MEIPASS
@@ -33,19 +34,22 @@ def get_icon_path():
 
 
 def main():
-    """Função principal"""
+    """Funcao principal"""
     app = QApplication(sys.argv)
     app.setApplicationName("DataPyn")
     app.setOrganizationName("DataPyn")
     
-    # ⚡ APLICAR MATERIAL DESIGN THEME
+    # Obter cores do design system
+    colors = get_colors()
+    
+    # APLICAR MATERIAL DESIGN THEME
     extra = {
-        # Cores customizadas
-        'danger': '#dc3545',
-        'warning': '#ffc107',
-        'success': '#28a745',
-        'primaryColor': '#0d6efd',
-        'primaryLightColor': '#0d6efd',
+        # Cores customizadas do design system
+        'danger': colors.danger,
+        'warning': colors.warning,
+        'success': colors.success,
+        'primaryColor': colors.interactive_primary,
+        'primaryLightColor': colors.interactive_primary_hover,
     }
     apply_stylesheet(app, theme='dark_blue.xml', extra=extra)
     

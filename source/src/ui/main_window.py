@@ -1979,11 +1979,12 @@ class MainWindow(QMainWindow):
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle_label)
         
-        # Botão iniciar
+        # Botao iniciar
+        colors = get_colors()
         start_button = QPushButton("  Iniciar  ")
-        start_button.setStyleSheet("""
-            QPushButton {
-                background-color: #007acc;
+        start_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
                 color: white;
                 border: none;
                 padding: 12px 40px;
@@ -1991,13 +1992,13 @@ class MainWindow(QMainWindow):
                 font-weight: bold;
                 border-radius: 4px;
                 margin-top: 30px;
-            }
-            QPushButton:hover {
-                background-color: #005a9e;
-            }
-            QPushButton:pressed {
-                background-color: #004578;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary_hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.interactive_primary_active};
+            }}
         """)
         start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         start_button.clicked.connect(self._new_session)

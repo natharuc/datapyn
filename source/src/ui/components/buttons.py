@@ -208,7 +208,7 @@ class ToolbarButton(StyledButton):
 
 
 class IconButton(QToolButton):
-    """Botão apenas com ícone"""
+    """Botao apenas com icone"""
     
     def __init__(self, icon_name: str, tooltip: str = "", size: int = 24, parent=None):
         super().__init__(parent)
@@ -216,19 +216,20 @@ class IconButton(QToolButton):
         if HAS_QTAWESOME:
             self.setIcon(qta.icon(icon_name, color='#cccccc'))
         
+        colors = get_colors()
         self.setIconSize(QSize(size, size))
         self.setToolTip(tooltip)
-        self.setStyleSheet("""
-            QToolButton {
+        self.setStyleSheet(f"""
+            QToolButton {{
                 background-color: transparent;
                 border: none;
                 padding: 4px;
                 border-radius: 3px;
-            }
-            QToolButton:hover {
+            }}
+            QToolButton:hover {{
                 background-color: #3e3e42;
-            }
-            QToolButton:pressed {
-                background-color: #094771;
-            }
+            }}
+            QToolButton:pressed {{
+                background-color: {colors.interactive_primary_active};
+            }}
         """)
