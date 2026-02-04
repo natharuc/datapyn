@@ -16,19 +16,19 @@
 
 ---
 
-## ✨ Features
+## Features
 
-- 🔗 **Multi-database** — SQL Server, MySQL, PostgreSQL, MariaDB, SQLite
-- 🐍 **Python integrado** — Manipule resultados SQL com Pandas diretamente
-- 📊 **Visualização** — Tabelas interativas com exportação para Excel/CSV
-- 🎨 **Temas** — Interface moderna com Material Design (dark/light)
-- ⚡ **Atalhos** — Produtividade máxima com atalhos de teclado
-- 💾 **Workspaces** — Salve e restaure suas sessões de trabalho
-- 🔒 **Seguro** — Credenciais armazenadas com criptografia
+- **Multi-database** — SQL Server, MySQL, PostgreSQL, MariaDB, SQLite
+- **Python integrado** — Manipule resultados SQL com Pandas diretamente
+- **Visualização** — Tabelas interativas com exportação para Excel/CSV
+- **Temas** — Interface moderna com Material Design (dark/light)
+- **Atalhos** — Produtividade máxima com atalhos de teclado
+- **Workspaces** — Salve e restaure suas sessões de trabalho
+- **Seguro** — Credenciais armazenadas com criptografia
 
 ---
 
-## 🚀 Instalação
+## Instalação
 
 ### Windows
 
@@ -65,7 +65,7 @@ python source/main.py
 
 ---
 
-## ⌨️ Atalhos de Teclado
+## Atalhos de Teclado
 
 | Atalho | Ação |
 |--------|------|
@@ -80,7 +80,7 @@ python source/main.py
 
 ---
 
-## 📁 Estrutura do Projeto
+## Estrutura do Projeto
 
 ```
 datapyn/
@@ -101,7 +101,7 @@ datapyn/
 
 ---
 
-## 🧪 Testes
+## Testes
 
 ```bash
 # Executar todos os testes
@@ -116,7 +116,7 @@ pytest tests/test_mixed_executor.py -v
 
 ---
 
-## 🛠️ Build (Executável)
+## Build (Executável)
 
 ```bash
 # Gerar executável standalone
@@ -127,14 +127,14 @@ scripts\build.bat
 
 ---
 
-## 📝 Licença
+## Licença
 
 Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
 
 ---
 
 <p align="center">
-  Feito com ❤️, ☕ e 🤖 IA
+  Feito com amor, café e IA
   <br>
   <sub>Com carinho por um humano incrível e seu copiloto</sub>
 </p>
