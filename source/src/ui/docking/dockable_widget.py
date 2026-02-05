@@ -7,7 +7,7 @@ diferentes posições com indicadores visuais.
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, 
-    QFrame, QPushButton, QSizePolicy
+    QFrame, QPushButton, QSizePolicy, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QMimeData, QSize
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QDrag, QPixmap, QFont
@@ -35,13 +35,14 @@ class DockableWidget(QWidget):
     dock_request = pyqtSignal(object, int)  # (widget, position)
     visibilityChanged = pyqtSignal(bool)  # (visible)
     
-    def __init__(self, title: str = "", parent=None):
+    def __init__(self, title: str = "", parent=None, show_header: bool = False):
         super().__init__(parent)
         
         self.title = title
         self.widgets: Dict[str, QWidget] = {}  # título -> widget
         self.is_floating = False
         self.drag_start_position = QPoint()
+        self.show_header = show_header
         
         self._setup_ui()
         self._setup_style()
@@ -55,9 +56,10 @@ class DockableWidget(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
         
-        # Header com título e controles
-        self.header = self._create_header()
-        self.layout.addWidget(self.header)
+        # Header com título e controles (opcional)
+        if self.show_header:
+            self.header = self._create_header()
+            self.layout.addWidget(self.header)
         
         # Container de abas
         self.tab_widget = DragDropTabWidget(self)
@@ -105,8 +107,7 @@ class DockableWidget(QWidget):
         self.setStyleSheet("""
             DockableWidget {
                 background-color: #2d2d30;
-                border: 1px solid #404040;
-                border-radius: 4px;
+                border: none;
             }
             QFrame {
                 background-color: #3c3c3c;
@@ -145,7 +146,8 @@ class DockableWidget(QWidget):
     def set_title(self, title: str):
         """Define título do painel"""
         self.title = title
-        self.title_label.setText(title)
+        if self.show_header and hasattr(self, 'title_label'):
+            self.title_label.setText(title)
     
     def _toggle_floating(self):
         """Alterna entre flutuante e ancorado"""
@@ -206,11 +208,21 @@ class DragDropTabWidget(QTabWidget):
         super().__init__(parent)
         
         self.setAcceptDrops(True)
-        self.setMovable(True)
+        self.setMovable(False)  # Desabilita movable padrão para usar nosso sistema
         self.setTabsClosable(True)
         
         # Personalizar barra de abas
         self.tabBar().setMouseTracking(True)
+        
+        # Configurar drag nas abas 
+        self.tabBar().setAcceptDrops(True)
+        
+        # State tracking
+        self.drag_start_position = QPoint()
+        self._dragging = False
+        
+        # Desabilita drag padrão do TabBar
+        self.tabBar().setMovable(False)
         
         self._setup_style()
     
@@ -218,36 +230,55 @@ class DragDropTabWidget(QTabWidget):
         """Configura estilo das abas"""
         self.setStyleSheet("""
             QTabWidget::pane {
-                border: 1px solid #404040;
+                border: none;
                 background-color: #2d2d30;
+                top: -1px;
             }
             QTabBar::tab {
                 background-color: #3c3c3c;
                 color: #cccccc;
-                padding: 6px 12px;
-                margin-right: 2px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                border: 1px solid #404040;
-                border-bottom: none;
+                padding: 8px 16px;
+                margin: 0px;
+                border: none;
+                border-bottom: 2px solid transparent;
+                min-width: 80px;
             }
             QTabBar::tab:selected {
-                background-color: #007acc;
-                color: white;
+                background-color: #2d2d30;
+                color: #ffffff;
+                border-bottom: 2px solid #007acc;
             }
             QTabBar::tab:hover {
-                background-color: #505050;
+                background-color: #404040;
+                color: #ffffff;
+            }
+            QTabBar::tab:first {
+                margin-left: 0px;
+            }
+            QTabBar::tab:last {
+                margin-right: 0px;
             }
             QTabBar::close-button {
-                image: url(icon:mdi.close);
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cGF0aCBkPSJNMTIgNEw0IDEyTTQgNEwxMiAxMiIgc3Ryb2tlPSIjY2NjIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4=);
                 subcontrol-position: right;
+                margin: 2px;
+                padding: 2px;
+                border-radius: 2px;
+            }
+            QTabBar::close-button:hover {
+                background-color: rgba(255, 255, 255, 0.1);
             }
         """)
     
     def mousePressEvent(self, event):
         """Inicia drag se for botão esquerdo"""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.drag_start_position = event.pos()
+            # Verifica se clicou em uma aba
+            tab_index = self.tabBar().tabAt(event.pos())
+            if tab_index >= 0:
+                self.drag_start_position = event.pos()
+                self._dragging = False
+                print(f"DEBUG: Mouse press na aba {tab_index}")
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
@@ -255,35 +286,58 @@ class DragDropTabWidget(QTabWidget):
         if not (event.buttons() & Qt.MouseButton.LeftButton):
             return super().mouseMoveEvent(event)
             
-        # Verifica distância mínima para iniciar drag
-        if ((event.pos() - self.drag_start_position).manhattanLength() < 
-            QApplication.startDragDistance()):
+        # Verifica se temos posição inicial válida
+        if not hasattr(self, 'drag_start_position'):
+            return super().mouseMoveEvent(event)
+            
+        # Verifica distância mínima para iniciar drag (mais tolerante)
+        drag_distance = (event.pos() - self.drag_start_position).manhattanLength()
+        if drag_distance < 10:  # Distância fixa menor que startDragDistance padrão
             return super().mouseMoveEvent(event)
         
-        # Obtém aba sob o cursor
+        # Obtém aba sob o cursor da posição inicial
         tab_index = self.tabBar().tabAt(self.drag_start_position)
         if tab_index < 0:
             return super().mouseMoveEvent(event)
         
+        # Previne múltiplos drags
+        if hasattr(self, '_dragging') and self._dragging:
+            return
+            
+        print(f"DEBUG: Iniciando drag da aba {tab_index}")
         self._start_drag(tab_index)
+        
+        # Não chama super() para evitar processamento padrão
+        event.accept()
     
     def _start_drag(self, tab_index: int):
         """Inicia operação de drag"""
+        self._dragging = True
+        
         tab_text = self.tabText(tab_index)
         tab_widget = self.widget(tab_index)
         
+        print(f"DEBUG: Drag iniciado - {tab_text}")
+        
         if not tab_widget:
+            self._dragging = False
             return
+        
+        # Guarda informações antes de remover
+        removed_widget = tab_widget
         
         # Criar dados do drag
         drag = QDrag(self)
         mime_data = QMimeData()
         mime_data.setText(f"datapyn_tab:{tab_text}")
+        
+        # Adiciona referência direta ao widget no drag
+        drag.tab_widget = removed_widget
+        drag.tab_title = tab_text
         drag.setMimeData(mime_data)
         
         # Criar pixmap da aba
-        tab_rect = self.tabBar().tabRect(tab_index)
-        pixmap = QPixmap(tab_rect.size())
+        pixmap = QPixmap(120, 30)
         pixmap.fill(QColor(60, 60, 60, 200))
         
         painter = QPainter(pixmap)
@@ -294,12 +348,24 @@ class DragDropTabWidget(QTabWidget):
         drag.setPixmap(pixmap)
         drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
         
+        # Remove a aba agora antes do drag
+        self.removeTab(tab_index)
+        
         # Executar drag
         result = drag.exec(Qt.DropAction.MoveAction)
         
+        print(f"DEBUG: Drag result - {result}")
+        
         if result == Qt.DropAction.MoveAction:
             # Emitir sinal de aba destacada
-            self.tab_detached.emit(tab_text, tab_widget)
+            self.tab_detached.emit(tab_text, removed_widget)
+            print(f"DEBUG: Aba destacada emitida - {tab_text}")
+        else:
+            # Drag cancelado, readiciona a aba
+            self.insertTab(tab_index, removed_widget, tab_text)
+            print(f"DEBUG: Drag cancelado, aba recolocada - {tab_text}")
+            
+        self._dragging = False
     
     def dragEnterEvent(self, event):
         """Aceita drops de abas"""
@@ -314,18 +380,36 @@ class DragDropTabWidget(QTabWidget):
         tab_title = event.mimeData().text().replace("datapyn_tab:", "")
         position = self._get_drop_position(event.pos())
         
-        self.tab_dropped.emit(tab_title, None, position.value, event.pos())
-        event.acceptProposedAction()
+        # Pega referência ao widget do drag (se disponível)
+        source_drag = event.source()
+        dropped_widget = None
+        if hasattr(source_drag, 'tab_widget'):
+            dropped_widget = source_drag.tab_widget
+        
+        if position == DockPosition.CENTER and dropped_widget:
+            # Adiciona diretamente como aba neste painel
+            self.addTab(dropped_widget, tab_title)
+            event.acceptProposedAction()
+        else:
+            # Emitir sinal para docking manager processar
+            self.tab_dropped.emit(tab_title, dropped_widget, position.value, event.pos())
+            event.acceptProposedAction()
     
     def _get_drop_position(self, pos: QPoint):
         """Determina posição de drop baseada na posição do cursor"""
         rect = self.rect()
         
-        # Dividir em áreas
-        left_area = QRect(0, 0, rect.width() // 4, rect.height())
-        right_area = QRect(3 * rect.width() // 4, 0, rect.width() // 4, rect.height())
-        top_area = QRect(0, 0, rect.width(), rect.height() // 4)
-        bottom_area = QRect(0, 3 * rect.height() // 4, rect.width(), rect.height() // 4)
+        # Margens para áreas de docking
+        margin = 30  # Área de borda para criar novos painéis
+        
+        # Áreas de borda para split
+        left_area = QRect(0, 0, margin, rect.height())
+        right_area = QRect(rect.width() - margin, 0, margin, rect.height())
+        top_area = QRect(0, 0, rect.width(), margin)
+        bottom_area = QRect(0, rect.height() - margin, rect.width(), margin)
+        
+        # Centro para adicionar como aba
+        center_area = QRect(margin, margin, rect.width() - 2*margin, rect.height() - 2*margin)
         
         if left_area.contains(pos):
             return DockPosition.LEFT
@@ -335,5 +419,7 @@ class DragDropTabWidget(QTabWidget):
             return DockPosition.TOP
         elif bottom_area.contains(pos):
             return DockPosition.BOTTOM
+        elif center_area.contains(pos):
+            return DockPosition.CENTER  # Adicionar como aba
         else:
-            return DockPosition.TAB
+            return DockPosition.TAB  # Fallback

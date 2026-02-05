@@ -7,10 +7,11 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QPushButton, QFileDialog, QLineEdit, QTabBar,
                              QGroupBox, QListWidget, QListWidgetItem, QFrame,
                              QApplication)
-from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject, QSettings
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
 import sys
 import re
+import logging
 import traceback
 from io import StringIO
 from datetime import datetime
@@ -188,6 +189,13 @@ class MainWindow(DockingMainWindow):
         # Agora chama super().__init__() que vai inicializar o docking system
         super().__init__()
         
+        # Habilita aninhamento avançado e configurações especiais de dock
+        self.setDockNestingEnabled(True)
+        self.setCorner(Qt.Corner.TopLeftCorner, Qt.DockWidgetArea.LeftDockWidgetArea)
+        self.setCorner(Qt.Corner.BottomLeftCorner, Qt.DockWidgetArea.LeftDockWidgetArea) 
+        self.setCorner(Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
+        
         # Finalizar configuração do docking system
         self.finish_docking_setup()
         
@@ -272,9 +280,163 @@ class MainWindow(DockingMainWindow):
             @property 
             def variables_panel(self):
                 return self.main_window.global_variables_panel
+            
+            def log(self, message, prefix="INFO"):
+                """Compatibilidade: log para output global"""
+                if self.main_window.global_output_panel:
+                    self.main_window.global_output_panel.log(message, prefix)
+            
+            def log_error(self, message):
+                """Compatibilidade: log de erro para output global"""
+                if self.main_window.global_output_panel:
+                    self.main_window.global_output_panel.error(message)
+                    
+            def error(self, message):
+                """Compatibilidade: alias para log_error"""
+                self.log_error(message)
+                
+            def log_success(self, message):
+                """Compatibilidade: log de sucesso para output global"""
+                if self.main_window.global_output_panel:
+                    self.main_window.global_output_panel.success(message)
+                    
+            def log_warning(self, message):
+                """Compatibilidade: log de warning para output global"""
+                if self.main_window.global_output_panel:
+                    self.main_window.global_output_panel.warning(message)
+                    
+            def set_results(self, df, title="Resultado", query_info=None):
+                """Compatibilidade: define resultados no painel global"""
+                if self.main_window.global_results_viewer:
+                    self.main_window.global_results_viewer.display_dataframe(df, title)
+                    
+            def set_variables(self, variables_dict):
+                """Compatibilidade: define variáveis no painel global"""
+                if self.main_window.global_variables_panel:
+                    self.main_window.global_variables_panel.set_variables(variables_dict)
+                    
+            def show_output(self):
+                """Compatibilidade: mostra painel de output"""
+                self.main_window.show_panel('results')
+                
+            def clear_output(self):
+                """Compatibilidade: limpa output global"""
+                if self.main_window.global_output_panel:
+                    self.main_window.global_output_panel.clear()
+                    
+            @property
+            def output_text(self):
+                """Compatibilidade: acesso ao texto do output global"""
+                if self.main_window.global_output_panel:
+                    return self.main_window.global_output_panel
+                return None
         
         return DockableBottomTabsCompat(self)
-    
+        
+    def _get_bottom_tabs_instance(self):
+        """Retorna uma instancia unica do BottomTabs para compatibilidade"""
+        if not hasattr(self, '_bottom_tabs_cache'):
+            # Criar instância única da classe de compatibilidade
+            class DockableBottomTabsCompat:
+                def __init__(self, main_window):
+                    self.main_window = main_window
+                    
+                def setCurrentIndex(self, index):
+                    """Simula mudança de aba ativa"""
+                    if index == 0:  # Results
+                        self.main_window.show_panel('results')
+                        results_panel = self.main_window.get_panel('results')
+                        if results_panel and results_panel.tab_widget.count() > 0:
+                            results_panel.tab_widget.setCurrentIndex(0)
+                    elif index == 1:  # Output  
+                        self.main_window.show_panel('results')
+                        results_panel = self.main_window.get_panel('results') 
+                        if results_panel:
+                            for i in range(results_panel.tab_widget.count()):
+                                if results_panel.tab_widget.tabText(i) == 'Output':
+                                    results_panel.tab_widget.setCurrentIndex(i)
+                                    break
+                    elif index == 2:  # Variables
+                        self.main_window.show_panel('variables')
+                
+                @property  
+                def results_viewer(self):
+                    return self.main_window.global_results_viewer
+                    
+                @property
+                def output_panel(self):
+                    return self.main_window.global_output_panel
+                    
+                @property 
+                def variables_panel(self):
+                    return self.main_window.global_variables_panel
+                
+                def log(self, message, prefix="INFO"):
+                    """Compatibilidade: log para output global"""
+                    if self.main_window.global_output_panel:
+                        self.main_window.global_output_panel.log(message, prefix)
+                
+                def log_error(self, message):
+                    """Compatibilidade: log de erro para output global"""
+                    if self.main_window.global_output_panel:
+                        self.main_window.global_output_panel.error(message)
+                        
+                def error(self, message):
+                    """Compatibilidade: alias para log_error"""
+                    self.log_error(message)
+                    
+                def log_success(self, message):
+                    """Compatibilidade: log de sucesso para output global"""
+                    if self.main_window.global_output_panel:
+                        self.main_window.global_output_panel.success(message)
+                        
+                def log_warning(self, message):
+                    """Compatibilidade: log de warning para output global"""
+                    if self.main_window.global_output_panel:
+                        self.main_window.global_output_panel.warning(message)
+                        
+                def set_results(self, df, title="Resultado", query_info=None):
+                    """Compatibilidade: define resultados no painel global"""
+                    if self.main_window.global_results_viewer:
+                        self.main_window.global_results_viewer.display_dataframe(df, title)
+                        
+                def set_variables(self, variables_dict):
+                    """Compatibilidade: define variaveis no painel global"""
+                    if self.main_window.global_variables_panel:
+                        self.main_window.global_variables_panel.set_variables(variables_dict)
+                        
+                def show_output(self):
+                    """Compatibilidade: mostra painel de output"""
+                    self.main_window.show_panel('results')
+                    
+                def clear_output(self):
+                    """Compatibilidade: limpa output global"""
+                    if self.main_window.global_output_panel:
+                        self.main_window.global_output_panel.clear()
+                        
+                @property
+                def output_text(self):
+                    """Compatibilidade: acesso ao texto do output global"""
+                    if self.main_window.global_output_panel:
+                        return self.main_window.global_output_panel
+                    return None
+            
+            self._bottom_tabs_cache = DockableBottomTabsCompat(self)
+        return self._bottom_tabs_cache
+
+    @property
+    def bottom_tabs(self):
+        """Retorna instancia compartilhada do BottomTabs"""
+        return self._get_bottom_tabs_instance()
+        
+    def _create_bottom_tabs_compat(self):
+        """Cria o objeto de compatibilidade com BottomTabs"""
+        # Retorna um mock object que redireciona para os painéis dockable
+        class DockableBottomTabsCompat:
+            pass
+        
+        return DockableBottomTabsCompat()
+
     def show(self):
         """Sobrescreve show para restaurar geometria da janela"""
         super().show()
@@ -411,6 +573,16 @@ class MainWindow(DockingMainWindow):
         
         # Configurar painéis dockable (Results, Output, Variables)
         self._setup_dockable_panels()
+        
+        # Restaurar layout de dock widgets após criar todos os docks
+        # DESABILITADO: self._restore_dock_layout()
+        # SEMPRE USA LAYOUT PADRÃO por enquanto
+        print("DEBUG: [MODO SUPER SEGURO] Sempre aplicando layout padrão - save/restore completamente desabilitado")
+        self._setup_default_layout()
+        
+        # Configurar auto-save de layout quando dock widgets mudarem  
+        # DESABILITADO: self._setup_auto_save_layout()
+        print("DEBUG: Auto-save desabilitado por segurança")
     
     def _create_connections_dock(self):
         """Cria painel lateral de conexões usando ConnectionPanel"""
@@ -430,7 +602,8 @@ class MainWindow(DockingMainWindow):
         
         # Criar dock widget
         self.connections_dock = QDockWidget("Conexões", self)
-        self.connections_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.connections_dock.setObjectName("ConnectionsDock")  # Para saveState/restoreState
+        self.connections_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.connections_dock.setWidget(self.connection_panel)
         self.connections_dock.setStyleSheet("""
             QDockWidget {
@@ -446,6 +619,16 @@ class MainWindow(DockingMainWindow):
         
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
         
+        # Configurar política de tamanho para ocupar lateral completa
+        self.connections_dock.setMinimumWidth(200)
+        self.connections_dock.setMaximumWidth(400)
+        
+        # Configurar features para permitir reposicionamento total
+        features = (QDockWidget.DockWidgetFeature.DockWidgetMovable | 
+                   QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+                   QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.connections_dock.setFeatures(features)
+        
         # Criar propriedades de compatibilidade
         self._setup_connection_panel_compat()
     
@@ -458,35 +641,74 @@ class MainWindow(DockingMainWindow):
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect
     
     def _setup_dockable_panels(self):
-        """Configura painéis dockable (Results, Output, Variables)"""
+        """Configura painéis dockable (Results, Output, Variables) usando QDockWidget"""
         
         # Painéis globais (compartilhados entre todas as sessões)
         self.global_results_viewer = ResultsViewer(theme_manager=self.theme_manager)
         self.global_output_panel = OutputPanel(theme_manager=self.theme_manager) 
         self.global_variables_panel = VariablesPanel(theme_manager=self.theme_manager)
         
-        # Results Panel (bottom por padrão)
-        self.add_dockable_panel(
-            name='results',
-            widget=self.global_results_viewer,
-            title='Results',
-            position='bottom',
-            visible=True
-        )
+        # Results Panel - usando QDockWidget igual Conexões
+        self.results_dock = QDockWidget("Results", self)
+        self.results_dock.setObjectName("ResultsDock")  # Importante para saveState/restoreState
+        self.results_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.results_dock.setWidget(self.global_results_viewer)
+        self.results_dock.setStyleSheet("""
+            QDockWidget {
+                background-color: #252526;
+                color: #cccccc;
+                titlebar-close-icon: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cGF0aCBkPSJNMTIgNEw0IDEyTTQgNEwxMiAxMiIgc3Ryb2tlPSIjY2NjIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4=);
+                titlebar-normal-icon: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB4PSIzIiB5PSIzIiB3aWR0aD0iMTAiIGhlaWdodD0iMTAiIHN0cm9rZT0iI2NjYyIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIi8+Cjwvc3ZnPg==);
+            }
+            QDockWidget::title {
+                background-color: #2d2d30;
+                padding: 8px;
+                font-weight: bold;
+            }
+        """)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
         
-        # Output Panel (mesma área que Results, como aba) 
-        results_panel = self.get_panel('results')
-        if results_panel:
-            results_panel.add_tab(self.global_output_panel, 'Output')
+        # Output Panel - usando QDockWidget igual Conexões  
+        self.output_dock = QDockWidget("Output", self)
+        self.output_dock.setObjectName("OutputDock")  # Importante para saveState/restoreState
+        self.output_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.output_dock.setWidget(self.global_output_panel)
+        self.output_dock.setStyleSheet("""
+            QDockWidget {
+                background-color: #252526;
+                color: #cccccc;
+            }
+            QDockWidget::title {
+                background-color: #2d2d30;
+                padding: 8px;
+                font-weight: bold;
+            }
+        """)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
         
-        # Variables Panel (right por padrão)
-        self.add_dockable_panel(
-            name='variables', 
-            widget=self.global_variables_panel,
-            title='Variables',
-            position='right',
-            visible=True
-        )
+        # Variables Panel - usando QDockWidget igual Conexões
+        self.variables_dock = QDockWidget("Variables", self)
+        self.variables_dock.setObjectName("VariablesDock")  # Importante para saveState/restoreState
+        self.variables_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.variables_dock.setWidget(self.global_variables_panel)
+        self.variables_dock.setStyleSheet("""
+            QDockWidget {
+                background-color: #252526;
+                color: #cccccc;
+            }
+            QDockWidget::title {
+                background-color: #2d2d30;
+                padding: 8px;
+                font-weight: bold;
+            }
+        """)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
+        
+        # Tabifica Results e Output por padrão (fica em abas)
+        self.tabifyDockWidget(self.results_dock, self.output_dock)
+        
+        # Results fica como aba ativa
+        self.results_dock.raise_()
         
         # Nota: ResultsManager não tem sinais PyQt (é classe Python normal)
         # A sincronização dos painéis será feita manualmente nos métodos de execução
@@ -494,7 +716,7 @@ class MainWindow(DockingMainWindow):
     def _on_result_added(self, name: str, data):
         """Callback quando um resultado é adicionado"""
         # Atualiza o painel de resultados global
-        self.global_results_viewer.show_data(data)
+        self.global_results_viewer.display_dataframe(data, name)
         
         # Mostra o painel de resultados se estiver oculto
         self.show_panel('results')
@@ -508,15 +730,29 @@ class MainWindow(DockingMainWindow):
         """Mostra output no painel global"""
         self.global_output_panel.append_output(text)
         
-        # Mostra o painel e seleciona a aba Output
-        results_panel = self.get_panel('results')
-        if results_panel:
-            # Encontra o índice da aba Output
-            for i in range(results_panel.tab_widget.count()):
-                if results_panel.tab_widget.tabText(i) == 'Output':
-                    results_panel.tab_widget.setCurrentIndex(i)
-                    break
-        self.show_panel('results')
+        # Mostra o painel de output
+        self.show_panel('output')
+    
+    def show_panel(self, name: str):
+        """Mostra painel específico usando QDockWidget"""
+        if name == 'results':
+            self.results_dock.show()
+            self.results_dock.raise_()
+        elif name == 'output':
+            self.output_dock.show()
+            self.output_dock.raise_()
+        elif name == 'variables':
+            self.variables_dock.show()
+            self.variables_dock.raise_()
+    
+    def hide_panel(self, name: str):
+        """Esconde painel específico usando QDockWidget"""
+        if name == 'results':
+            self.results_dock.hide()
+        elif name == 'output':
+            self.output_dock.hide()
+        elif name == 'variables':
+            self.variables_dock.hide()
     
     def _refresh_connections_list(self):
         """Atualiza lista de conexões salvas"""
@@ -527,6 +763,218 @@ class MainWindow(DockingMainWindow):
         conn_name = item.data(Qt.ItemDataRole.UserRole)
         if conn_name:
             self._quick_connect(conn_name)
+    
+    def _toggle_panel_visibility(self, panel_name: str, visible: bool):
+        """Controla visibilidade de um painel"""
+        if visible:
+            self.show_panel(panel_name)
+        else:
+            self.hide_panel(panel_name)
+    
+    def _toggle_output_tab(self, visible: bool):
+        """Controla visibilidade do painel Output"""
+        if visible:
+            self.show_panel('output')
+        else:
+            self.hide_panel('output')
+    
+    def _restore_default_layout(self):
+        """Restaura o layout padrão dos painéis"""
+        # Mostra todos os docks na posição padrão
+        self.results_dock.show()
+        self.output_dock.show() 
+        self.variables_dock.show()
+        self.connections_dock.show()
+        
+        # Redefine posições
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
+        
+        # Tabifica Results e Output
+        self.tabifyDockWidget(self.results_dock, self.output_dock)
+        self.results_dock.raise_()
+        
+        # Atualiza ações do menu
+        if hasattr(self, 'results_action'):
+            self.results_action.setChecked(True)
+        if hasattr(self, 'output_action'):
+            self.output_action.setChecked(True)
+        if hasattr(self, 'variables_action'):
+            self.variables_action.setChecked(True)
+        if hasattr(self, 'connections_action'):
+            self.connections_action.setChecked(True)
+    
+    def _save_dock_layout(self):
+        """DESABILITADO - Não salva layout automaticamente por segurança"""
+        print("DEBUG: [SUPER SEGURO] Save automático desabilitado por segurança")
+        return
+    
+    def _restore_dock_layout(self):
+        """Restaura layout dos dock widgets com validação robusta"""
+        try:
+            settings = QSettings('DataPyn', 'MainWindow')
+            
+            # Verifica se deve resetar (se segurar Shift ao abrir)
+            modifiers = QApplication.keyboardModifiers()
+            if modifiers == Qt.KeyboardModifier.ShiftModifier:
+                print("DEBUG: Shift pressionado - resetando layout para padrão")
+                self._clear_saved_layout()
+                self._setup_default_layout()
+                return
+            
+            # Restaura geometria da janela
+            geometry = settings.value('geometry')
+            geometry_restored = False
+            if geometry and len(geometry) > 20:
+                success = self.restoreGeometry(geometry)
+                geometry_restored = success
+                print(f"DEBUG: Geometria restaurada - Sucesso: {success}, Dados: {len(geometry)} bytes")
+                if not success:
+                    print("DEBUG: Falha ao restaurar geometria")
+            else:
+                print("DEBUG: Geometria inválida ou inexistente - usando padrão")
+            
+            # Restaura estado dos docks
+            window_state = settings.value('windowState')
+            state_restored = False
+            if window_state and len(window_state) > 50:
+                success = self.restoreState(window_state)
+                state_restored = success
+                print(f"DEBUG: Estado dos docks restaurado - Sucesso: {success}, Dados: {len(window_state)} bytes")
+                
+                if success:
+                    # Força atualização da interface após restaurar
+                    QApplication.processEvents()
+                    # Verifica se o layout ficou válido após restaurar
+                    QTimer.singleShot(500, self._validate_restored_layout)
+                else:
+                    print("DEBUG: Falha ao restaurar estado dos docks")
+                    state_restored = False
+            else:
+                print("DEBUG: Estado dos docks inválido ou inexistente - usando padrão")
+            
+            # Se não conseguiu restaurar nada OU falhou, usa padrão
+            if not geometry_restored and not state_restored:
+                print("DEBUG: Nada foi restaurado ou houve falhas - aplicando layout padrão")
+                self._setup_default_layout()
+                
+        except Exception as e:
+            print(f"DEBUG: Erro ao restaurar layout: {e} - usando layout padrão")
+            self._setup_default_layout()
+    
+    def _setup_auto_save_layout(self):
+        """DESABILITADO - Auto-save desabilitado por segurança"""
+        print("DEBUG: [SUPER SEGURO] Auto-save permanentemente desabilitado")
+        return
+    
+    def _on_dock_changed(self):
+        """DESABILITADO - Não reage a mudanças de dock por segurança"""
+        print("DEBUG: [SUPER SEGURO] Mudança de dock ignorada - save desabilitado")
+    
+    def _clear_saved_layout(self):
+        """Limpa layout salvo (para reset)"""
+        try:
+            settings = QSettings('DataPyn', 'MainWindow')
+            settings.remove('geometry')
+            settings.remove('windowState')
+            settings.sync()
+            print("DEBUG: Layout salvo removido com sucesso")
+        except Exception as e:
+            print(f"DEBUG: Erro ao limpar layout salvo: {e}")
+    
+    def _setup_default_layout(self):
+        """Configura layout padrão simples e confiável"""
+        print("DEBUG: [SUPER SEGURO] Configurando layout padrão SIMPLIFICADO")
+        
+        try:
+            # Força todos visíveis e não-flutuantes
+            all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
+            for dock in all_docks:
+                if dock:
+                    dock.setVisible(True)
+                    dock.setFloating(False)
+            
+            # Posições simples - sem remoção/readição complexa
+            print("DEBUG: Aplicando layout super simples...")
+            
+            # Janela no tamanho padrão
+            self.setGeometry(100, 100, 1400, 900) 
+            
+            # Força show de todos
+            self.connections_dock.show()
+            self.results_dock.show() 
+            self.output_dock.show()
+            self.variables_dock.show()
+            
+            print("DEBUG: Layout padrão SIMPLIFICADO aplicado")
+            
+        except Exception as e:
+            print(f"DEBUG: ERRO no layout simplificado: {e}")
+            # Fallback absoluto
+            try:
+                self.connections_dock.show()
+                self.results_dock.show()
+                self.output_dock.show() 
+                self.variables_dock.show()
+            except:
+                pass
+    
+    def _is_layout_valid(self):
+        """Verifica se o layout atual está sano"""
+        try:
+            # Verifica se todos os docks existem e estão visíveis
+            required_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
+            
+            for dock in required_docks:
+                if dock is None:
+                    print(f"DEBUG: Dock None encontrado")
+                    return False
+            
+            # Verifica geometria da janela
+            geom = self.geometry()
+            if geom.width() < 400 or geom.height() < 300:
+                print(f"DEBUG: Janela muito pequena: {geom.width()}x{geom.height()}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"DEBUG: Erro ao validar layout: {e}")
+            return False
+    
+    def _validate_restored_layout(self):
+        """Valida layout após restaurar e corrige se necessário"""
+        if not self._is_layout_valid():
+            print("DEBUG: Layout restaurado está inválido - aplicando padrão")
+            self._clear_saved_layout()  # Remove o layout corrompido
+            self._setup_default_layout()
+    
+    def _reset_layout_completely(self):
+        """Reseta layout completamente (limpa configurações e aplica padrão)"""
+        reply = QMessageBox.question(
+            self, 
+            "Confirmar Reset",
+            "Isso irá resetar completamente o layout dos painéis.\nTodas as configurações de layout serão perdidas.\n\nContinuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            print("DEBUG: Resetando layout completamente por solicitação do usuário")
+            self._clear_saved_layout()
+            self._setup_default_layout()
+            QMessageBox.information(
+                self,
+                "Layout Resetado",
+                "Layout dos painéis foi resetado para o padrão."
+            )
+    
+    def closeEvent(self, event):
+        """DESABILITADO - Não salva layout ao fechar por segurança"""
+        print("DEBUG: [SUPER SEGURO] Fechando sem salvar layout (modo seguro ativo)")
+        super().closeEvent(event)
     
     def _quick_connect(self, connection_name: str):
         """
@@ -684,12 +1132,54 @@ class MainWindow(DockingMainWindow):
         # Menu Exibir
         view_menu = menubar.addMenu("E&xibir")
         
-        # Toggle do dock de conexões
-        toggle_dock_action = QAction("Painel de &Conexões", self)
-        toggle_dock_action.setCheckable(True)
-        toggle_dock_action.setChecked(True)
-        toggle_dock_action.triggered.connect(lambda checked: self.connections_dock.setVisible(checked))
-        view_menu.addAction(toggle_dock_action)
+        # Submenu Painéis
+        panels_menu = view_menu.addMenu("&Painéis")
+        
+        # Toggle do painel de resultados
+        results_action = QAction("&Resultados", self)
+        results_action.setCheckable(True)
+        results_action.setChecked(True)
+        results_action.triggered.connect(lambda checked: self._toggle_panel_visibility('results', checked))
+        panels_menu.addAction(results_action)
+        self.results_action = results_action
+        
+        # Toggle do painel de output
+        output_action = QAction("&Output", self)
+        output_action.setCheckable(True)
+        output_action.setChecked(True)
+        output_action.triggered.connect(lambda checked: self._toggle_output_tab(checked))
+        panels_menu.addAction(output_action)
+        self.output_action = output_action
+        
+        # Toggle do painel de variáveis
+        variables_action = QAction("&Variáveis", self)
+        variables_action.setCheckable(True)
+        variables_action.setChecked(True)
+        variables_action.triggered.connect(lambda checked: self._toggle_panel_visibility('variables', checked))
+        panels_menu.addAction(variables_action)
+        self.variables_action = variables_action
+        
+        # Toggle do painel de conexões
+        connections_action = QAction("&Conexões", self)
+        connections_action.setCheckable(True)
+        connections_action.setChecked(True)
+        connections_action.triggered.connect(lambda checked: self.connections_dock.setVisible(checked))
+        panels_menu.addAction(connections_action)
+        self.connections_action = connections_action
+        
+        view_menu.addSeparator()
+        
+        # Restaurar visão padrão
+        restore_action = QAction("&Restaurar Visão Padrão", self)
+        restore_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        restore_action.triggered.connect(self._restore_default_layout)
+        view_menu.addAction(restore_action)
+        
+        # Resetar layout completamente (limpa configurações salvas)
+        reset_layout_action = QAction("Reset &Completo de Layout", self)
+        reset_layout_action.setShortcut(QKeySequence("Ctrl+Shift+Alt+R"))
+        reset_layout_action.triggered.connect(self._reset_layout_completely)
+        view_menu.addAction(reset_layout_action)
         
         # Menu Ferramentas
         tools_menu = menubar.addMenu("&Ferramentas")
@@ -711,6 +1201,7 @@ class MainWindow(DockingMainWindow):
     def _create_toolbar(self):
         """Cria a toolbar usando MainToolbar"""
         self.main_toolbar = MainToolbar(theme_manager=self.theme_manager)
+        self.main_toolbar.setObjectName("MainToolbar")  # Para saveState/restoreState
         self.addToolBar(self.main_toolbar)
         
         # Conectar sinais
@@ -2726,8 +3217,8 @@ class MainWindow(DockingMainWindow):
                 # Pedir caminho para arquivo único
                 self._save_single_file_as(context)
         else:
-            # Contexto workspace - usar sistema atual
-            self._save_file()
+            # Contexto workspace - usar workspace_manager diretamente
+            self.workspace_manager.save_workspace()
     
     def _save_single_file(self, file_path: str, file_type: str):
         """Salva conteúdo em arquivo único (sql/py)"""

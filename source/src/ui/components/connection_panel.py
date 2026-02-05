@@ -112,7 +112,7 @@ class ConnectionsList(QFrame):
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(12, 12, 12, 12)  # Volta margem normal
         layout.setSpacing(8)
         
         # Header
@@ -242,14 +242,17 @@ class ConnectionPanel(QWidget):
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)  # Padding geral de 10px em todos os lados
         
         self.active_widget = ActiveConnectionWidget()
+        self.active_widget.setMaximumHeight(150)  # Fixa altura da conexão ativa
         layout.addWidget(self.active_widget)
         
         self.connections_list = ConnectionsList()
-        layout.addWidget(self.connections_list)
+        # Faz a lista ocupar todo espaço restante
+        layout.addWidget(self.connections_list, 1)  # stretch=1
         
-        layout.addStretch()
+        # Remove addStretch() para deixar connections_list ocupar tudo
     
     def _connect_signals(self):
         """Conecta sinais internos aos externos"""

@@ -193,7 +193,7 @@ class TestPythonExecution:
         
         df = pd.DataFrame({'x': [1, 2], 'y': [3, 4]})
         
-        main_window._on_python_finished(df, "", None, mock_thread, 0)
+        main_window._on_python_finished(df, "", None, {}, mock_thread, 0)
         
         # Deve mostrar sucesso
         assert 'sucesso' in main_window.action_label.text().lower() or 'linhas' in main_window.action_label.text().lower()
@@ -206,7 +206,7 @@ class TestPythonExecution:
         
         result = [{'a': 1}, {'a': 2}]
         
-        main_window._on_python_finished(result, "", None, mock_thread, 0)
+        main_window._on_python_finished(result, "", None, {}, mock_thread, 0)
         
         # Deve funcionar sem erro
         assert main_window.action_label.text()  # Tem algum texto
@@ -217,7 +217,7 @@ class TestPythonExecution:
         mock_thread.quit = Mock()
         mock_thread.wait = Mock()
         
-        main_window._on_python_finished(None, "", "SyntaxError: invalid syntax", mock_thread, 0)
+        main_window._on_python_finished(None, "", "SyntaxError: invalid syntax", {}, mock_thread, 0)
         
         assert 'Erro' in main_window.action_label.text()
     
@@ -227,7 +227,7 @@ class TestPythonExecution:
         mock_thread.quit = Mock()
         mock_thread.wait = Mock()
         
-        main_window._on_python_finished(None, "Hello World", None, mock_thread, 0)
+        main_window._on_python_finished(None, "Hello World", None, {}, mock_thread, 0)
         
         # Deve ter adicionado ao output
         if main_window.python_output:
@@ -577,7 +577,7 @@ class TestFullIntegration:
         mock_thread.quit = Mock()
         mock_thread.wait = Mock()
         
-        main_window._on_python_finished(2, "2\n", None, mock_thread, 0)
+        main_window._on_python_finished(2, "2\n", None, {}, mock_thread, 0)
         
         # 3. Verificar output
         if main_window.python_output:

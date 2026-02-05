@@ -180,8 +180,11 @@ class SessionWidget(QWidget):
     @property
     def bottom_tabs(self):
         """Compatibilidade: retorna objeto que delega para painéis dockable"""
-        main_window = self._get_main_window()
-        return main_window.bottom_tabs if main_window else None
+        # Sempre retornar o mesmo objeto para manter consistência 
+        if not hasattr(self, '_bottom_tabs_cache'):
+            main_window = self._get_main_window()
+            self._bottom_tabs_cache = main_window.bottom_tabs if main_window else None
+        return self._bottom_tabs_cache
     
     def _get_main_window(self):
         """Obtém referência à MainWindow"""
@@ -209,14 +212,14 @@ class SessionWidget(QWidget):
         """Define resultados no painel global"""
         main_window = self._get_main_window()
         if main_window and main_window.global_results_viewer:
-            main_window.global_results_viewer.show_data(data)
+            main_window.global_results_viewer.display_dataframe(data, name)
             main_window.show_panel('results')
     
     def _log_error(self, text):
         """Registra erro no output global"""
         main_window = self._get_main_window()
         if main_window and main_window.global_output_panel:
-            main_window.global_output_panel.log_error(text)
+            main_window.global_output_panel.error(text)
             self._show_output()
     
     def _log(self, text):
@@ -235,7 +238,7 @@ class SessionWidget(QWidget):
         """Define variáveis no painel global"""
         main_window = self._get_main_window()
         if main_window and main_window.global_variables_panel:
-            main_window.global_variables_panel.refresh_variables(variables_dict)
+            main_window.global_variables_panel.set_variables(variables_dict)  # Corrigido de refresh_variables para set_variables
     
     def _connect_signals(self):
         """Conecta sinais do editor"""

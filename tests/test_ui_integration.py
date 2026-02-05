@@ -412,8 +412,8 @@ class TestExecutionWithoutDB:
             # Tentar executar SQL
             widget._on_execute_sql("SELECT 1")
             
-            # Deve ter mensagem de erro no output
-            output_text = widget.output_text.toPlainText()
+            # Deve ter mensagem de erro no output global
+            output_text = main_window.global_output_panel.get_text()  # Usar painel global
             assert 'Erro' in output_text or 'conexão' in output_text.lower()
 
 

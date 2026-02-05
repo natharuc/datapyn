@@ -124,9 +124,9 @@ class DockingManager(QObject):
         widget.tab_detached.connect(self._on_tab_detached)
         widget.tab_dropped.connect(self._on_tab_dropped)
         
-    def create_dockable_panel(self, name: str, title: str = "") -> DockableWidget:
+    def create_dockable_panel(self, name: str, title: str = "", show_header: bool = False) -> DockableWidget:
         """Cria um novo painel dockable"""
-        panel = DockableWidget(title or name)
+        panel = DockableWidget(title or name, show_header=show_header)
         self.register_dockable(name, panel)
         return panel
     
@@ -164,6 +164,8 @@ class DockingManager(QObject):
         self.drag_widget = widget
         self.is_dragging = True
         
+        print(f"DEBUG: Aba destacada - {title}")
+        
         # Mostra indicadores
         cursor_pos = QCursor.pos()
         target_widget = QApplication.widgetAt(cursor_pos)
@@ -175,15 +177,40 @@ class DockingManager(QObject):
     
     def _on_tab_dropped(self, title: str, widget: QWidget, position: int, pos: QPoint):
         """Quando uma aba é solta"""
+        # Encontra o widget sob o cursor
+        cursor_pos = QCursor.pos()
+        target_widget = QApplication.widgetAt(cursor_pos)
+        
+        # Verifica se foi solto sobre um painel dockable existente
+        target_panel = self._find_target_dockable_panel(target_widget)
+        
         self._finish_drag()
         
         # Converte int de volta para DockPosition
         dock_position = DockPosition(position)
         
-        # Processa o drop baseado na posição
-        target_area = self._position_to_area(dock_position)
-        if target_area:
-            self._create_or_add_to_panel(title, widget, target_area)
+        if target_panel and dock_position == DockPosition.CENTER:
+            # Adiciona diretamente ao painel existente como nova aba
+            target_panel.add_tab(widget, title)
+        else:
+            # Processa o drop baseado na posição
+            target_area = self._position_to_area(dock_position)
+            if target_area:
+                self._create_or_add_to_panel(title, widget, target_area, target_panel)
+                
+    def _find_target_dockable_panel(self, widget: QWidget) -> Optional[DockableWidget]:
+        """Encontra painel dockable mais próximo do widget"""
+        if not widget:
+            return None
+            
+        # Percorre hierarquia para cima procurando DockableWidget
+        current = widget
+        while current:
+            if isinstance(current, DockableWidget):
+                return current
+            current = current.parent()
+            
+        return None
     
     def _update_drag_state(self):
         """Atualiza estado durante o drag"""
@@ -192,19 +219,72 @@ class DockingManager(QObject):
             return
         
         cursor_pos = QCursor.pos()
+        target_widget = QApplication.widgetAt(cursor_pos)
         
-        # Atualiza indicadores
-        highlighted_position = self.indicators.update_highlight(cursor_pos)
+        # Encontra painel dockable sob o cursor
+        target_panel = self._find_target_dockable_panel(target_widget)
         
-        # Mostra preview se houver posição válida
-        if highlighted_position:
-            preview_rect = self._calculate_preview_rect(highlighted_position, cursor_pos)
-            if preview_rect.isValid():
-                self.preview.show_preview(preview_rect)
+        if target_panel:
+            # Mostra indicadores específicos do painel
+            self.indicators.show_at_widget(target_panel, cursor_pos)
+            highlighted_position = self.indicators.update_highlight(cursor_pos)
+            
+            if highlighted_position:
+                preview_rect = self._calculate_preview_rect_for_panel(highlighted_position, target_panel)
+                if preview_rect.isValid():
+                    self.preview.show_preview(preview_rect)
+                else:
+                    self.preview.hide_preview()
             else:
                 self.preview.hide_preview()
         else:
-            self.preview.hide_preview()
+            # Fallback para áreas gerais
+            if target_widget:
+                self.indicators.show_at_widget(target_widget, cursor_pos)
+                highlighted_position = self.indicators.update_highlight(cursor_pos)
+                
+                if highlighted_position:
+                    preview_rect = self._calculate_preview_rect(highlighted_position, cursor_pos)
+                    if preview_rect.isValid():
+                        self.preview.show_preview(preview_rect)
+                    else:
+                        self.preview.hide_preview()
+                else:
+                    self.preview.hide_preview()
+            else:
+                self.indicators.hide_indicators()
+                self.preview.hide_preview()
+                
+    def _calculate_preview_rect_for_panel(self, position: DockPosition, panel: DockableWidget) -> QRect:
+        """Calcula retângulo do preview para um painel específico"""
+        if not panel.isVisible():
+            return QRect()
+            
+        panel_rect = panel.geometry()
+        global_rect = QRect(
+            panel.mapToGlobal(panel_rect.topLeft()),
+            panel_rect.size()
+        )
+        
+        if position == DockPosition.CENTER:
+            # Aba - destaca área de abas
+            tab_height = 30
+            return QRect(global_rect.x(), global_rect.y(), 
+                        global_rect.width(), tab_height)
+        elif position == DockPosition.LEFT:
+            return QRect(global_rect.x(), global_rect.y(),
+                        global_rect.width() // 2, global_rect.height())
+        elif position == DockPosition.RIGHT:
+            return QRect(global_rect.x() + global_rect.width() // 2, global_rect.y(),
+                        global_rect.width() // 2, global_rect.height())
+        elif position == DockPosition.TOP:
+            return QRect(global_rect.x(), global_rect.y(),
+                        global_rect.width(), global_rect.height() // 2)
+        elif position == DockPosition.BOTTOM:
+            return QRect(global_rect.x(), global_rect.y() + global_rect.height() // 2,
+                        global_rect.width(), global_rect.height() // 2)
+        
+        return QRect()
     
     def _calculate_preview_rect(self, position: DockPosition, cursor_pos: QPoint) -> QRect:
         """Calcula retângulo do preview baseado na posição"""
@@ -262,9 +342,14 @@ class DockingManager(QObject):
         }
         return mapping.get(position)
     
-    def _create_or_add_to_panel(self, title: str, widget: QWidget, area_name: str):
+    def _create_or_add_to_panel(self, title: str, widget: QWidget, area_name: str, target_panel: DockableWidget = None):
         """Cria painel ou adiciona a painel existente"""
         area = self.layout_areas[area_name]
+        
+        # Se foi especificado um painel alvo, adiciona diretamente a ele
+        if target_panel:
+            target_panel.add_tab(widget, title)
+            return target_panel
         
         # Procura painel existente na área
         existing_panel = None
@@ -277,11 +362,13 @@ class DockingManager(QObject):
         if existing_panel:
             # Adiciona como nova aba
             existing_panel.add_tab(widget, title)
+            return existing_panel
         else:
             # Cria novo painel
-            new_panel = DockableWidget(title)
+            new_panel = DockableWidget(title, show_header=False)
             new_panel.add_tab(widget, title)
             self.dock_widget(new_panel, area_name)
+            return new_panel
     
     def _finish_drag(self):
         """Finaliza operação de drag"""
@@ -302,47 +389,142 @@ class DockingManager(QObject):
     def save_layout(self) -> Dict[str, Any]:
         """Salva configuração atual do layout"""
         layout_config = {
+            'version': '1.0',
             'areas': {},
             'splitter_sizes': {
                 'main': self.main_splitter.sizes(),
                 'center': self.center_splitter.sizes()
-            }
+            },
+            'panels': {}
         }
         
         # Salva configuração de cada área
         for area_name, area_widget in self.layout_areas.items():
             if area_widget.isVisible() and area_widget.layout().count() > 0:
-                panels = []
+                panels_in_area = []
                 for i in range(area_widget.layout().count()):
                     item = area_widget.layout().itemAt(i)
                     if item and isinstance(item.widget(), DockableWidget):
                         panel = item.widget()
                         panel_config = {
                             'title': panel.title,
-                            'tabs': [panel.tabText(j) for j in range(panel.tab_widget.count())]
+                            'visible': panel.isVisible(),
+                            'tabs': []
                         }
-                        panels.append(panel_config)
+                        
+                        # Salva configuração das abas
+                        for j in range(panel.tab_widget.count()):
+                            tab_title = panel.tab_widget.tabText(j)
+                            tab_widget = panel.tab_widget.widget(j)
+                            panel_config['tabs'].append({
+                                'title': tab_title,
+                                'widget_class': tab_widget.__class__.__name__,
+                                'current': j == panel.tab_widget.currentIndex()
+                            })
+                        
+                        panels_in_area.append(panel_config)
                 
-                layout_config['areas'][area_name] = {
-                    'visible': True,
-                    'panels': panels
-                }
+                if panels_in_area:
+                    layout_config['areas'][area_name] = {
+                        'visible': True,
+                        'panels': panels_in_area
+                    }
+        
+        # Salva referências dos painéis registrados
+        for name, widget in self.dockable_widgets.items():
+            layout_config['panels'][name] = {
+                'title': widget.title,
+                'visible': widget.isVisible()
+            }
         
         return layout_config
     
     def load_layout(self, config: Dict[str, Any]):
         """Carrega configuração do layout"""
-        if 'splitter_sizes' in config:
-            sizes = config['splitter_sizes']
-            if 'main' in sizes:
-                self.main_splitter.setSizes(sizes['main'])
-            if 'center' in sizes:
-                self.center_splitter.setSizes(sizes['center'])
+        if not config or config.get('version') != '1.0':
+            return False
+            
+        try:
+            # Restaura tamanhos dos splitters
+            if 'splitter_sizes' in config:
+                sizes = config['splitter_sizes']
+                if 'main' in sizes and len(sizes['main']) == 3:
+                    self.main_splitter.setSizes(sizes['main'])
+                if 'center' in sizes and len(sizes['center']) == 3:
+                    self.center_splitter.setSizes(sizes['center'])
+            
+            # Restaura visibilidade das áreas
+            for area_name, area_config in config.get('areas', {}).items():
+                if area_name in self.layout_areas:
+                    area_widget = self.layout_areas[area_name]
+                    area_widget.setVisible(area_config.get('visible', False))
+            
+            return True
+            
+        except Exception as e:
+            print(f"Erro ao carregar layout: {e}")
+            return False
+    
+    def get_default_layout(self) -> Dict[str, Any]:
+        """Retorna configuração de layout padrão"""
+        return {
+            'version': '1.0',
+            'areas': {
+                'bottom': {'visible': True},
+                'right': {'visible': True}
+            },
+            'splitter_sizes': {
+                'main': [0, 800, 250],  # left, center, right
+                'center': [0, 600, 200]  # top, center, bottom
+            },
+            'panels': {}
+        }
         
-        # TODO: Restaurar painéis e abas
-        # (Implementar quando tiver widgets específicos para restaurar)
+    def restore_default_layout(self):
+        """Restaura layout padrão"""
+        default_config = self.get_default_layout()
+        self.load_layout(default_config)
+        
+        # Força ajuste dos tamanhos
+        self._adjust_splitter_sizes()
     
     def eventFilter(self, obj, event):
         """Filtro de eventos para capturar drags globais"""
-        # Por enquanto, apenas passa adiante
+        # Captura eventos de mouse para finalizar drag quando solto fora
+        if self.is_dragging and event.type() in [event.Type.MouseButtonRelease, event.Type.Drop]:
+            if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton:
+                print(f"DEBUG: Mouse release detectado durante drag - criando painel flutuante")
+                # Drop fora de área válida - criar painel flutuante
+                if self.drag_widget and self.drag_title:
+                    self._create_floating_panel()
+                self._finish_drag()
+                return True
+        
         return super().eventFilter(obj, event)
+        
+    def _create_floating_panel(self):
+        """Cria painel flutuante quando drop é fora de área válida"""
+        if not self.drag_widget or not self.drag_title:
+            return
+            
+        print(f"DEBUG: Criando painel flutuante para {self.drag_title}")
+        
+        # Cria novo painel
+        new_panel = DockableWidget(self.drag_title, show_header=True)
+        new_panel.add_tab(self.drag_widget, self.drag_title)
+        
+        # Torna flutuante
+        new_panel.setParent(None)
+        new_panel.setWindowFlags(Qt.WindowType.Window)
+        
+        # Posiciona próximo ao cursor
+        cursor_pos = QCursor.pos()
+        new_panel.move(cursor_pos.x() - 100, cursor_pos.y() - 50)
+        new_panel.resize(400, 300)
+        new_panel.show()
+        
+        # Registra painel
+        panel_name = f"floating_{len(self.dockable_widgets)}"
+        self.register_dockable(panel_name, new_panel)
+        
+        print(f"DEBUG: Painel flutuante criado - {self.drag_title}")

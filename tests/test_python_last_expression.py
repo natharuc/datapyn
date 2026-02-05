@@ -335,7 +335,7 @@ x
         assert error == ''
 
     def test_python_execution_worker_same_behavior(self):
-        """Testa que PythonExecutionWorker tem mesmo comportamento"""
+        """Testa que PythonWorker tem mesmo comportamento"""
         code = """
 data = {'A': [1, 2, 3], 'B': [4, 5, 6]}
 df = pd.DataFrame(data)
@@ -343,21 +343,21 @@ df
         """.strip()
         
         namespace = {'pd': pd}
-        worker = PythonExecutionWorker(code, namespace, False)
+        worker = PythonWorker(code, namespace, False)  # Usar PythonWorker correto com is_expression=False
         
         # Mock do signal
         result_captured = []
-        worker.execution_complete.connect(lambda result, stdout, stderr: result_captured.append((result, stdout, stderr)))
+        worker.finished.connect(lambda result, output, error, namespace: result_captured.append((result, output, error)))
         
         # Executar
         worker.run()
         
         # Verificar resultado
         assert len(result_captured) == 1
-        result, stdout, stderr = result_captured[0]
+        result, output, error = result_captured[0][:3]  # Pegar apenas os 3 primeiros parâmetros
         
         # Deve ter retornado o DataFrame
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 3
         assert list(result.columns) == ['A', 'B']
-        assert stderr == ''
+        assert error == ''

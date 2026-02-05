@@ -117,7 +117,8 @@ class DockingMainWindow(QMainWindow):
     def add_dockable_panel(self, name: str, widget: QWidget, 
                           title: str = "", 
                           position: str = "bottom",
-                          visible: bool = True) -> DockableWidget:
+                          visible: bool = True,
+                          show_header: bool = False) -> DockableWidget:
         """
         Adiciona um painel dockable
         
@@ -127,6 +128,7 @@ class DockingMainWindow(QMainWindow):
             title: Título do painel (usa name se vazio)
             position: Posição inicial ('left', 'right', 'top', 'bottom')
             visible: Se deve mostrar inicialmente
+            show_header: Se deve mostrar o header com título e controles
         """
         if name in self.panels:
             # Painel já existe, apenas adiciona como aba
@@ -135,7 +137,7 @@ class DockingMainWindow(QMainWindow):
             return existing_panel
         
         # Cria novo painel dockable
-        panel = self.docking_manager.create_dockable_panel(name, title or name)
+        panel = self.docking_manager.create_dockable_panel(name, title or name, show_header)
         panel.add_tab(widget, title or name)
         
         # Registra e ancora

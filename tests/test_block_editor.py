@@ -392,7 +392,10 @@ class TestSessionWidgetWithBlocks:
         
         # Mock para capturar output
         outputs = []
-        widget.bottom_tabs.log_error = lambda msg: outputs.append(msg)
+        
+        # Mock dos métodos de log diretamente no widget
+        widget._log_error = lambda msg: outputs.append(msg)
+        widget.append_output = lambda msg, error=False: outputs.append(msg) if error else None
         
         # Executa sem conexão
         widget._on_execute_sql('SELECT 1')

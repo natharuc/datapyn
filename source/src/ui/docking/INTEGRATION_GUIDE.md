@@ -138,7 +138,7 @@ def show_results(self, data):
         if results_panel:
             # Atualiza dados no results viewer
             results_viewer = results_panel.get_current_widget()
-            results_viewer.show_data(data)
+            results_viewer.display_dataframe(data, "results")
             # Mostra o painel se estiver oculto
             main_window.show_panel('results')
 
