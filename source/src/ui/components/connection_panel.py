@@ -100,6 +100,7 @@ class ConnectionsList(QFrame):
     """Lista de conexoes - flat design"""
     
     connection_double_clicked = pyqtSignal(str)
+    new_tab_connection_requested = pyqtSignal(str)  # Conectar sempre em nova aba
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
     edit_connection_clicked = pyqtSignal(str)  # Sinal para editar conexão diretamente
@@ -152,11 +153,22 @@ class ConnectionsList(QFrame):
     
     def _on_item_double_clicked(self, item: QListWidgetItem):
         """Emite sinal quando item e clicado duas vezes"""
+        from PyQt6.QtGui import QGuiApplication
+        
+        conn_name = None
         if isinstance(item, ConnectionItem):
-            self.connection_double_clicked.emit(item.connection_name)
+            conn_name = item.connection_name
         else:
             conn_name = item.data(Qt.ItemDataRole.UserRole)
-            if conn_name:
+        
+        if conn_name:
+            # Verificar se CTRL está pressionado
+            modifiers = QGuiApplication.keyboardModifiers()
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                # CTRL pressionado - sempre nova aba
+                self.new_tab_connection_requested.emit(conn_name)
+            else:
+                # Comportamento normal
                 self.connection_double_clicked.emit(conn_name)
     
     def _show_context_menu(self, pos):
@@ -174,6 +186,12 @@ class ConnectionsList(QFrame):
         connect_action = QAction(qta.icon('mdi.lan-connect', color='#4ec9b0'), " Conectar", self)
         connect_action.triggered.connect(lambda: self.connection_double_clicked.emit(conn_name))
         menu.addAction(connect_action)
+        
+        new_tab_action = QAction(qta.icon('mdi.tab-plus', color='#4ec9b0'), " Conectar em Nova Aba", self)
+        new_tab_action.triggered.connect(lambda: self.new_tab_connection_requested.emit(conn_name))
+        menu.addAction(new_tab_action)
+        
+        menu.addSeparator()
         
         edit_action = QAction(qta.icon('mdi.pencil', color='#569cd6'), " Editar", self)
         edit_action.triggered.connect(lambda: self._edit_connection(conn_name))
@@ -204,6 +222,7 @@ class ConnectionPanel(QWidget):
     
     # Sinais
     connection_requested = pyqtSignal(str)  # connection_name
+    new_tab_connection_requested = pyqtSignal(str)  # connection_name para nova aba
     disconnect_clicked = pyqtSignal()
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
@@ -239,6 +258,9 @@ class ConnectionPanel(QWidget):
         )
         self.connections_list.connection_double_clicked.connect(
             self.connection_requested.emit
+        )
+        self.connections_list.new_tab_connection_requested.connect(
+            self.new_tab_connection_requested.emit
         )
         self.connections_list.new_connection_clicked.connect(
             self.new_connection_clicked.emit

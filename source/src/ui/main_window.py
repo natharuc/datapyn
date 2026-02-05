@@ -67,8 +67,8 @@ class SqlWorker(QObject):
 
 
 class PythonWorker(QObject):
-    """Worker para executar Python em background"""
-    finished = pyqtSignal(object, str, str)  # (result, output, error)
+    """Worker centralizado para execução Python em background"""
+    finished = pyqtSignal(object, str, str, dict)  # (result, output, error, namespace)
     
     def __init__(self, code, namespace, is_expression):
         super().__init__()
@@ -82,20 +82,52 @@ class PythonWorker(QObject):
             old_stdout = sys.stdout
             sys.stdout = captured_output = StringIO()
             
-            result_value = None
-            
-            if self.is_expression:
-                result_value = eval(self.code, self.namespace)
-            else:
-                exec(self.code, self.namespace)
+            result_value = self._execute_centralized()
             
             sys.stdout = old_stdout
             output = captured_output.getvalue()
             
-            self.finished.emit(result_value, output, '')
+            # Retornar namespace atualizado
+            self.finished.emit(result_value, output, '', self.namespace)
         except Exception as e:
             sys.stdout = old_stdout
-            self.finished.emit(None, '', traceback.format_exc())
+            self.finished.emit(None, '', traceback.format_exc(), self.namespace)
+    
+    def _execute_centralized(self):
+        """Execução centralizada - todas as execuções Python passam aqui"""
+        code = self.code.strip()
+        if not code:
+            return None
+        
+        # Limpar linhas vazias e comentários
+        lines = [line for line in code.split('\n') if line.strip() and not line.strip().startswith('#')]
+        
+        if not lines:
+            return None
+        
+        # CASO 1: Uma linha só
+        if len(lines) == 1:
+            try:
+                # Tenta avaliar como expressão primeiro
+                return eval(lines[0], self.namespace)
+            except:
+                # Se falhar, executa como statement
+                exec(lines[0], self.namespace)
+                return None
+        
+        # CASO 2: Múltiplas linhas
+        # Executa todas exceto a última
+        exec_code = '\n'.join(lines[:-1])
+        exec(exec_code, self.namespace)
+        
+        # Tenta a última linha como expressão
+        last_line = lines[-1]
+        try:
+            return eval(last_line, self.namespace)
+        except:
+            # Se falhar, executa como statement
+            exec(last_line, self.namespace)
+            return None
 
 
 class CrossSyntaxWorker(QObject):
@@ -128,8 +160,12 @@ class MainWindow(QMainWindow):
         self.shortcut_manager = ShortcutManager()
         self.workspace_manager = WorkspaceManager()
         self.theme_manager = ThemeManager()
+        self.theme_manager.set_editor_theme('monokai')  # Tema específico para editores de código
         self.session_manager = SessionManager()  # Novo: Gerenciador de sessões
         self.mixed_executor = MixedLanguageExecutor(None, self.results_manager)
+        
+        # Aplicar tema após configurar tema dos editores
+        self._apply_app_theme()
         
         # Mapeia session_id -> SessionWidget
         self._session_widgets: dict = {}
@@ -346,6 +382,7 @@ class MainWindow(QMainWindow):
         
         # Conectar sinais
         self.connection_panel.connection_requested.connect(self._quick_connect)
+        self.connection_panel.new_tab_connection_requested.connect(self._connect_new_tab)
         self.connection_panel.new_connection_clicked.connect(self._new_connection)
         self.connection_panel.manage_connections_clicked.connect(self._manage_connections)
         self.connection_panel.edit_connection_clicked.connect(self._edit_connection)
@@ -427,6 +464,36 @@ class MainWindow(QMainWindow):
         
         # Atualizar status (a aba mostrará o loading internamente)
         self.action_label.setText(f"Conectando a {connection_name}...")
+    
+    def _connect_new_tab(self, connection_name: str):
+        """
+        Conecta a um banco de dados SEMPRE criando uma nova aba.
+        Usado quando CTRL+duplo-click ou 'Conectar em Nova Aba' no menu.
+        """
+        # Sempre criar nova aba
+        self._new_session()
+        current_widget = self._get_current_session_widget()
+        
+        if not current_widget:
+            self._show_warning("Erro", "Não foi possível criar nova aba")
+            return
+        
+        # Obter config (apenas metadados, não conexão)
+        config = self.connection_manager.get_connection_config(connection_name)
+        if not config:
+            self._show_warning("Erro", f"Conexão '{connection_name}' não encontrada")
+            return
+        
+        # Pegar senha se necessário
+        password = ''
+        if not config.get('use_windows_auth', False):
+            password = config.get('password', '')
+        
+        # DELEGAR para a aba - ela gerencia conexão em background
+        current_widget.connect_to_database(connection_name, password)
+        
+        # Atualizar status
+        self.action_label.setText(f"Conectando a {connection_name} (nova aba)...")
     
     def _create_menus(self):
         """Cria os menus"""
@@ -1237,12 +1304,8 @@ class MainWindow(QMainWindow):
         # Namespace com os DataFrames
         namespace = self.results_manager.get_namespace()
         
-        # Detectar se é expressão (para exibir resultado)
-        try:
-            compile(code, '<string>', 'eval')
-            is_expression = True
-        except:
-            is_expression = False
+        # Sempre usar a lógica centralizada
+        is_expression = False
         
         # Criar thread e worker
         thread = QThread()
@@ -1251,7 +1314,7 @@ class MainWindow(QMainWindow):
         
         # Conectar sinais
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda result, output, err: self._on_python_finished(result, output, err, thread, running_tab_index))
+        worker.finished.connect(lambda result, output, err, namespace: self._on_python_finished(result, output, err, namespace, thread, running_tab_index))
         
         # Manter referência
         self._worker_threads.append((thread, worker))
@@ -1259,9 +1322,12 @@ class MainWindow(QMainWindow):
         # Iniciar
         thread.start()
     
-    def _on_python_finished(self, result_value, output, error, thread, tab_index):
+    def _on_python_finished(self, result_value, output, error, updated_namespace, thread, tab_index):
         """Callback quando Python termina"""
         self._stop_execution_timer()
+        
+        # Salvar namespace atualizado
+        self.results_manager.update_namespace(updated_namespace)
         
         # Remover marcação de rodando
         self._mark_tab_running(False, tab_index)
@@ -1270,6 +1336,9 @@ class MainWindow(QMainWindow):
         self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
         thread.quit()
         thread.wait()
+        
+        logging.info(f"[MAIN_WINDOW] RETORNO DA EXECUÇÃO: \"\"\"{repr(result_value)}\"\"\"")
+        logging.info(f"[MAIN_WINDOW] FOI PRO CONSOLE: \"\"\"{output}\"\"\"")
         
         if error:
             self._show_error_output(f"[ERRO]\n{error}")
@@ -1284,6 +1353,7 @@ class MainWindow(QMainWindow):
         if result_value is not None:
             if isinstance(result_value, pd.DataFrame):
                 # DataFrame → TABELA
+                logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"DataFrame com {len(result_value)} linhas\"\"\"")
                 if self.results_viewer:
                     self.results_viewer.display_dataframe(result_value, 'result')
                 if self.bottom_tabs:
@@ -1295,28 +1365,35 @@ class MainWindow(QMainWindow):
                 # Lista/tupla → tentar converter para DataFrame
                 try:
                     df = pd.DataFrame(result_value)
+                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"Lista convertida para DataFrame com {len(df)} linhas\"\"\"")
                     if self.results_viewer:
                         self.results_viewer.display_dataframe(df, 'result')
                     if self.bottom_tabs:
                         self.bottom_tabs.setCurrentIndex(0)
                     self._log(f"[Python] Lista exibida como tabela ({len(result_value)} itens)")
                 except:
+                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"FALHOU - foi para console\"\"\"")
                     self._log(repr(result_value))
                     
             elif isinstance(result_value, dict):
                 # Dict → tentar converter para DataFrame
                 try:
                     df = pd.DataFrame([result_value]) if not isinstance(list(result_value.values())[0], (list, tuple)) else pd.DataFrame(result_value)
+                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"Dicionário convertido para DataFrame\"\"\"")
                     if self.results_viewer:
                         self.results_viewer.display_dataframe(df, 'result')
                     if self.bottom_tabs:
                         self.bottom_tabs.setCurrentIndex(0)
                     self._log(f"[Python] Dicionário exibido como tabela")
                 except:
+                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"FALHOU - foi para console\"\"\"")
                     self._log(repr(result_value))
             else:
                 # Número, string, etc → LOG
+                logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"NÃO - foi para console (tipo: {type(result_value)})\"\"\"")
                 self._log(repr(result_value))
+        else:
+            logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"NÃO - resultado é None\"\"\"\")")
         
         # Atualiza variáveis
         self._update_variables_view()

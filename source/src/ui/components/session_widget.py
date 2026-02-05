@@ -70,24 +70,8 @@ class SessionPythonWorker(QObject):
         self.is_expression = is_expression
     
     def run(self):
-        try:
-            old_stdout = sys.stdout
-            sys.stdout = captured_output = StringIO()
-            
-            result_value = None
-            
-            if self.is_expression:
-                result_value = eval(self.code, self.namespace)
-            else:
-                exec(self.code, self.namespace)
-            
-            sys.stdout = old_stdout
-            output = captured_output.getvalue()
-            
-            self.finished.emit(result_value, output, '', self.namespace)
-        except Exception as e:
-            sys.stdout = old_stdout
-            self.finished.emit(None, '', traceback.format_exc(), {})
+        """REMOVIDO - usar PythonWorker centralizado do main_window.py"""
+        raise NotImplementedError("Use PythonWorker do main_window.py - execução centralizada!")
 
 
 class SessionWidget(QWidget):
@@ -335,17 +319,25 @@ class SessionWidget(QWidget):
         except SyntaxError:
             pass
         
+        # Usar PythonWorker CENTRALIZADO do main_window  
+        from src.ui.main_window import PythonWorker
+        
         # Criar worker e thread
         self._python_thread = QThread()
-        self._python_worker = SessionPythonWorker(code, namespace, is_expression)
+        self._python_worker = PythonWorker(code, namespace, is_expression)
         self._python_worker.moveToThread(self._python_thread)
         
         self.session.register_thread(self._python_thread)
         
         self._python_thread.started.connect(self._python_worker.run)
-        self._python_worker.finished.connect(self._on_python_finished)
+        self._python_worker.finished.connect(self._on_python_finished_adapted)
         
         self._python_thread.start()
+    
+    def _on_python_finished_adapted(self, result, output: str, error: str, namespace: dict):
+        '''Adapter para usar PythonWorker centralizado'''
+        # Chama o callback original com namespace atualizado
+        self._on_python_finished(result, output, error, namespace)
     
     def _on_python_finished(self, result, output: str, error: str, updated_namespace: dict):
         """Callback quando Python termina"""

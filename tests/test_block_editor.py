@@ -892,7 +892,7 @@ class TestFileDragAndDrop:
     
     def test_drop_csv_creates_python_block(self, editor, qtbot):
         """Deve criar bloco Python ao soltar arquivo CSV"""
-        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
         
         initial_block_count = editor.get_block_count()
@@ -901,7 +901,7 @@ class TestFileDragAndDrop:
         mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.csv')])
         
         event = QDropEvent(
-            editor.rect().center(),
+            QPointF(editor.rect().center()),
             Qt.DropAction.CopyAction,
             mime_data,
             Qt.MouseButton.LeftButton,
@@ -927,7 +927,7 @@ class TestFileDragAndDrop:
     
     def test_drop_json_creates_python_block(self, editor, qtbot):
         """Deve criar bloco Python ao soltar arquivo JSON"""
-        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
         
         initial_block_count = editor.get_block_count()
@@ -936,7 +936,7 @@ class TestFileDragAndDrop:
         mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.json')])
         
         event = QDropEvent(
-            editor.rect().center(),
+            QPointF(editor.rect().center()),
             Qt.DropAction.CopyAction,
             mime_data,
             Qt.MouseButton.LeftButton,
@@ -962,7 +962,7 @@ class TestFileDragAndDrop:
     
     def test_drop_xlsx_creates_python_block(self, editor, qtbot):
         """Deve criar bloco Python ao soltar arquivo XLSX"""
-        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
         
         initial_block_count = editor.get_block_count()
@@ -971,7 +971,7 @@ class TestFileDragAndDrop:
         mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.xlsx')])
         
         event = QDropEvent(
-            editor.rect().center(),
+            QPointF(editor.rect().center()),
             Qt.DropAction.CopyAction,
             mime_data,
             Qt.MouseButton.LeftButton,
@@ -997,7 +997,7 @@ class TestFileDragAndDrop:
     
     def test_drop_multiple_files_creates_multiple_blocks(self, editor, qtbot):
         """Deve criar múltiplos blocos ao soltar múltiplos arquivos"""
-        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
         
         initial_block_count = editor.get_block_count()
@@ -1010,7 +1010,7 @@ class TestFileDragAndDrop:
         ])
         
         event = QDropEvent(
-            editor.rect().center(),
+            QPointF(editor.rect().center()),
             Qt.DropAction.CopyAction,
             mime_data,
             Qt.MouseButton.LeftButton,
@@ -1041,7 +1041,7 @@ class TestFileDragAndDrop:
     
     def test_drop_preserves_existing_blocks(self, editor, qtbot):
         """Soltar arquivo não deve afetar blocos existentes"""
-        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
         
         # Adicionar alguns blocos
@@ -1056,7 +1056,7 @@ class TestFileDragAndDrop:
         mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.csv')])
         
         event = QDropEvent(
-            editor.rect().center(),
+            QPointF(editor.rect().center()),
             Qt.DropAction.CopyAction,
             mime_data,
             Qt.MouseButton.LeftButton,

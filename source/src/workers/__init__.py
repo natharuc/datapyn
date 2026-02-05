@@ -116,62 +116,12 @@ class DatabaseConnectionWorker(BaseWorker):
 
 
 class PythonExecutionWorker(BaseWorker):
-    """
-    Worker para execução de código Python em background
-    
-    Captura stdout, stderr e retorna resultado da execução.
-    
-    Signals:
-        - execution_complete(result, stdout, stderr): Execução finalizada
-        - error(str): Erro na execução
-    """
-    execution_complete = pyqtSignal(object, str, str)  # (result, stdout, stderr)
+    """REMOVIDO - usar PythonWorker do main_window.py"""
+    execution_complete = pyqtSignal(object, str, str)
     
     def __init__(self, code: str, namespace: dict, is_expression: bool = False):
         super().__init__()
-        self.code = code
-        self.namespace = namespace
-        self.is_expression = is_expression
-    
-    def run(self):
-        """Executa código Python"""
-        self.started.emit()
-        
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        
-        try:
-            # Captura stdout e stderr
-            sys.stdout = captured_stdout = StringIO()
-            sys.stderr = captured_stderr = StringIO()
-            
-            result_value = None
-            
-            if self.is_expression:
-                # Avalia expressão
-                result_value = eval(self.code, self.namespace)
-            else:
-                # Executa código
-                exec(self.code, self.namespace)
-            
-            # Restaura stdout/stderr
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-            
-            stdout = captured_stdout.getvalue()
-            stderr = captured_stderr.getvalue()
-            
-            self.execution_complete.emit(result_value, stdout, stderr)
-            
-        except Exception as e:
-            # Restaura stdout/stderr
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-            
-            error_msg = f"Erro Python:\n{traceback.format_exc()}"
-            self.error.emit(error_msg)
-        finally:
-            self.finished.emit()
+        raise NotImplementedError("Use PythonWorker do main_window.py - execução centralizada!")
 
 
 class MixedSyntaxExecutionWorker(BaseWorker):
