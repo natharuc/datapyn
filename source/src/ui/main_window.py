@@ -140,6 +140,11 @@ class MainWindow(QMainWindow):
         # Threads para execução em background
         self._worker_threads = []  # Mantém referência para não ser coletado pelo GC
         
+        # Sistema de gerenciamento inteligente de arquivos
+        self._original_file_path = None      # Caminho do arquivo original aberto (sql/py/dpw)
+        self._original_file_type = None      # Tipo: 'sql', 'python', 'workspace'
+        self._current_context = 'workspace'   # Contexto atual: 'sql', 'python', 'workspace'
+        
         # Ícones
         self.icons = self._setup_icons()
         
@@ -159,6 +164,9 @@ class MainWindow(QMainWindow):
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self._update_status)
         self.status_timer.start(1000)
+        
+        # Atualizar título inicial da janela
+        self._update_window_title()
     
     # === PROPRIEDADES DE DELEGAÇÃO PARA SESSÃO ATUAL ===
     
@@ -729,6 +737,9 @@ class MainWindow(QMainWindow):
                 if isinstance(widget, SessionWidget) and widget.session.session_id == session.session_id:
                     self.session_tabs.setCurrentIndex(i)
                     break
+        
+        # Atualizar título da janela (contexto pode ter mudado)
+        self._update_window_title()
     
     def _close_current_session(self):
         """Fecha a sessão/aba atual"""
@@ -785,12 +796,12 @@ class MainWindow(QMainWindow):
             # Usar primeiro bloco existente
             first_new_block = new_widget.editor.get_blocks()[0]
             first_new_block.set_language(source_blocks[0].get_language())
-            first_new_block.editor.setText(source_blocks[0].editor.text())
+            first_new_block.set_code(source_blocks[0].get_code())
             
             # Adicionar os demais blocos
             for block in source_blocks[1:]:
                 new_block = new_widget.editor.add_block(language=block.get_language())
-                new_block.editor.setText(block.editor.text())
+                new_block.set_code(block.get_code())
         
         # Copiar file_path se existir
         if hasattr(widget, 'file_path'):
@@ -1586,11 +1597,19 @@ class MainWindow(QMainWindow):
             with open(filename, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            # 2. Detectar linguagem
+            # 2. Detectar linguagem e configurar contexto
             if filename.endswith('.py'):
                 language = 'python'
+                self._original_file_type = 'python'
+            elif filename.endswith('.dpw'):
+                language = 'sql'  # Padrão para workspace
+                self._original_file_type = 'workspace'
             else:
                 language = 'sql'
+                self._original_file_type = 'sql'
+            
+            # Armazenar caminho do arquivo original
+            self._original_file_path = filename
             
             # 3. Criar nova sessão
             import os
@@ -1608,7 +1627,7 @@ class MainWindow(QMainWindow):
             if blocks:
                 # Usar primeiro bloco existente
                 blocks[0].set_language(language)
-                blocks[0].editor.setText(content)
+                blocks[0].set_code(content)
             
             # 6. Conectar sinais
             widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
@@ -1632,21 +1651,16 @@ class MainWindow(QMainWindow):
             self.session_tabs.setCurrentIndex(index)
             self.action_label.setText(f"Arquivo aberto: {tab_title}")
             
+            # 10. Atualizar título da janela com contexto
+            self._update_window_title()
+            
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Erro", f"Erro ao abrir arquivo: {e}")
     
     def _save_file(self):
-        """Salva workspace no arquivo atual ou pede novo caminho"""
-        # Se já tem arquivo de workspace atual, salva direto
-        if self.workspace_manager.current_file_path:
-            self._save_workspace_to_file(str(self.workspace_manager.current_file_path))
-            import os
-            filename = os.path.basename(self.workspace_manager.current_file_path)
-            self.action_label.setText(f"Workspace salvo: {filename}")
-        else:
-            # Pede novo caminho (Salvar Como)
-            self._save_file_as()
+        """Sistema inteligente de salvamento"""
+        self._save_intelligently()
     
     def _save_file_as(self):
         """Salva workspace em novo arquivo"""
@@ -1721,6 +1735,21 @@ class MainWindow(QMainWindow):
             dock_visible=dock_visible,
             file_path=filename  # Passa o caminho do arquivo
         )
+        
+        # Limpar marcadores de modificação das abas
+        self._clear_modification_markers()
+    
+    def _clear_modification_markers(self):
+        """Remove asteriscos das abas e reseta flags de modificação"""
+        for i in range(self.session_tabs.count()):
+            widget = self.session_tabs.widget(i)
+            if hasattr(widget, '_is_modified'):
+                widget._is_modified = False
+            
+            # Remover asterisco do título da aba se existir
+            current_text = self.session_tabs.tabText(i)
+            if current_text.endswith(' *'):
+                self.session_tabs.setTabText(i, current_text[:-2])
     
     def _update_status(self):
         """Atualiza status periodicamente"""
@@ -1935,6 +1964,9 @@ class MainWindow(QMainWindow):
             
             session = self.session_manager.create_session()
             self._create_session_widget(session)
+            
+            # Atualizar título da janela (contexto pode ter mudado)
+            self._update_window_title()
         finally:
             self._creating_session = False
     
@@ -2026,6 +2058,10 @@ class MainWindow(QMainWindow):
         """Cria widget para uma sessão e adiciona à aba"""
         widget = SessionWidget(session, theme_manager=self.theme_manager)
         
+        # Definir file_path no widget se disponível na sessão
+        if hasattr(session, 'file_path') and session.file_path:
+            widget.file_path = session.file_path
+            
         # Conectar sinais do widget
         widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
         widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
@@ -2036,6 +2072,13 @@ class MainWindow(QMainWindow):
         
         # Adicionar aba usando método do SessionTabs (já lida com botão +)
         index = self.session_tabs.add_session(widget, session.title)
+        
+        # Durante restauração, aplicar cor da aba baseada na conexão da sessão
+        if hasattr(session, '_connection_name') and session._connection_name:
+            config = self.connection_manager.get_connection_config(session._connection_name)
+            if config:
+                color = config.get('color', '#007ACC') or '#007ACC'
+                self.session_tabs.set_tab_connection_color(index, color)
         
         # Focar automaticamente no primeiro bloco (com delay para garantir renderização)
         if widget.editor and hasattr(widget.editor, 'focus_first_block'):
@@ -2100,6 +2143,9 @@ class MainWindow(QMainWindow):
         widget = self.session_tabs.widget(index)
         if isinstance(widget, SessionWidget):
             self.session_manager.focus_session(widget.session.session_id)
+            
+        # Atualizar título da janela quando muda de aba
+        self._update_window_title()
     
     def _on_session_focused(self, session):
         """Callback quando uma sessão é focada"""
@@ -2150,6 +2196,9 @@ class MainWindow(QMainWindow):
             self.connection_panel.set_disconnected()
         
         self.action_label.setText(f"Sessão: {session.title}")
+        
+        # Atualizar título da janela quando sessão é focada
+        self._update_window_title()
     
     def _on_session_status_changed(self, session, message: str):
         """Callback quando status de uma sessão muda"""
@@ -2212,6 +2261,26 @@ class MainWindow(QMainWindow):
             if isinstance(widget, SessionWidget) and widget.session == session:
                 self.session_tabs.set_tab_connection_color(i, color)
                 break
+    
+    def _on_editor_modified(self, widget):
+        """Callback quando o conteúdo do editor é modificado"""
+        if not hasattr(widget, '_is_modified'):
+            widget._is_modified = False
+        
+        # Marcar widget como modificado
+        if not widget._is_modified:
+            widget._is_modified = True
+            
+            # Atualizar título da aba para indicar modificação
+            for i in range(self.session_tabs.count()):
+                if self.session_tabs.widget(i) == widget:
+                    current_text = self.session_tabs.tabText(i)
+                    if not current_text.endswith(' *'):
+                        self.session_tabs.setTabText(i, current_text + ' *')
+                    break
+        
+        # Atualizar título da janela (contexto pode ter mudado)
+        self._update_window_title()
     
     def _get_current_session_widget(self) -> SessionWidget:
         """Retorna SessionWidget da aba ativa"""
@@ -2385,6 +2454,163 @@ class MainWindow(QMainWindow):
         # Por agora, usa o método global
         self._execute_cross_syntax(code)
     
+    # =========================================================================
+    # Sistema de Gerenciamento Inteligente de Arquivos
+    # =========================================================================
+    
+    def _detect_file_context(self) -> str:
+        """
+        Detecta o contexto atual baseado no número de blocos e tipos
+        
+        Returns:
+            'sql'       - um bloco SQL apenas
+            'python'    - um bloco Python apenas  
+            'workspace' - múltiplos blocos ou arquivo .dpw
+        """
+        # Se tem múltiplas sessões = sempre workspace
+        if len(self._session_widgets) > 1:
+            return 'workspace'
+            
+        # Se arquivo original já é workspace
+        if self._original_file_type == 'workspace':
+            return 'workspace'
+            
+        # Se não há sessões mas há arquivo original sql/py, usa tipo do arquivo
+        current_widget = self._get_current_session_widget()
+        if not current_widget:
+            if self._original_file_type in ['sql', 'python']:
+                return self._original_file_type
+            return 'workspace'
+            
+        blocks = current_widget.editor.get_blocks()
+        
+        # Se tem mais de 1 bloco = workspace
+        if len(blocks) > 1:
+            return 'workspace'
+            
+        # Se tem 1 bloco apenas, usar tipo do arquivo original ou tipo do bloco
+        if len(blocks) == 1:
+            block_language = blocks[0].get_language()
+            if self._original_file_type in ['sql', 'python']:
+                # Se bloco é compatível com arquivo original
+                if (self._original_file_type == 'sql' and block_language == 'sql') or \
+                   (self._original_file_type == 'python' and block_language == 'python'):
+                    return self._original_file_type
+            else:
+                # Novo arquivo, usar linguagem do bloco
+                if block_language in ['sql', 'python']:
+                    return block_language
+        
+        # Fallback: se tem arquivo original sql/py, usar ele
+        if self._original_file_type in ['sql', 'python']:
+            return self._original_file_type
+            
+        return 'workspace'
+    
+    def _update_window_title(self):
+        """Atualiza título da janela com indicador de contexto"""
+        base_title = "DataPyn - IDE SQL + Python"
+        
+        # Detectar contexto atual
+        context = self._detect_file_context()
+        self._current_context = context
+        
+        # Adicionar indicador
+        if context == 'sql':
+            indicator = "[S]"
+        elif context == 'python':
+            indicator = "[P]"
+        else:
+            indicator = "[W]"
+            
+        # Adicionar nome do arquivo se disponível
+        file_info = ""
+        if self._original_file_path:
+            import os
+            filename = os.path.basename(self._original_file_path)
+            file_info = f" - {filename}"
+        elif self.workspace_manager.current_file_path:
+            import os
+            filename = os.path.basename(self.workspace_manager.current_file_path)
+            file_info = f" - {filename}"
+            
+        self.setWindowTitle(f"{indicator} {base_title}{file_info}")
+    
+    def _save_intelligently(self):
+        """Sistema inteligente de salvamento baseado no contexto"""
+        context = self._detect_file_context()
+        
+        if context in ['sql', 'python']:
+            # Contexto de arquivo único - salvar no arquivo original
+            if self._original_file_path:
+                self._save_single_file(self._original_file_path, context)
+            else:
+                # Pedir caminho para arquivo único
+                self._save_single_file_as(context)
+        else:
+            # Contexto workspace - usar sistema atual
+            self._save_file()
+    
+    def _save_single_file(self, file_path: str, file_type: str):
+        """Salva conteúdo em arquivo único (sql/py)"""
+        try:
+            current_widget = self._get_current_session_widget()
+            if not current_widget:
+                return
+                
+            blocks = current_widget.editor.get_blocks()
+            if not blocks:
+                return
+                
+            # Pegar conteúdo do primeiro bloco
+            content = blocks[0].get_code()
+            
+            # Salvar arquivo
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+            # Limpar marcador de modificação
+            current_widget._is_modified = False
+            self._clear_modification_markers()
+            
+            # Atualizar status
+            import os
+            filename = os.path.basename(file_path)
+            self.action_label.setText(f"Arquivo salvo: {filename}")
+            
+            self._update_window_title()
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Erro", f"Erro ao salvar arquivo: {e}")
+    
+    def _save_single_file_as(self, file_type: str):
+        """Pede caminho para salvar arquivo único"""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        if file_type == 'sql':
+            filter_text = "Arquivos SQL (*.sql);;Todos os arquivos (*.*)"
+            default_ext = '.sql'
+        else:
+            filter_text = "Arquivos Python (*.py);;Todos os arquivos (*.*)"
+            default_ext = '.py'
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self, 
+            f"Salvar Arquivo {file_type.upper()}", 
+            "", 
+            filter_text
+        )
+        
+        if filename:
+            # Garantir extensão correta
+            if not filename.endswith(default_ext):
+                filename += default_ext
+                
+            self._original_file_path = filename
+            self._original_file_type = file_type
+            self._save_single_file(filename, file_type)
+
     def closeEvent(self, event):
         """Ao fechar a janela"""
         # Verificar se há execução em andamento

@@ -241,6 +241,8 @@ class Session(QObject):
             'code': self._code,  # Compatibilidade
             'blocks': self._blocks,  # Novo: lista de blocos
             'created_at': self.created_at.isoformat(),
+            'file_path': getattr(self, 'file_path', None),  # Caminho do arquivo original
+            'original_file_type': getattr(self, 'original_file_type', None),  # Tipo do arquivo (sql/py/dpw)
             # Não serializa namespace (pode ter objetos não serializáveis)
             # Não serializa connector (precisa reconectar)
         }
@@ -255,6 +257,8 @@ class Session(QObject):
         session._connection_name = data.get('connection_name')
         session._code = data.get('code', '')
         session._blocks = data.get('blocks', [])
+        session.file_path = data.get('file_path')  # Restaurar caminho do arquivo
+        session.original_file_type = data.get('original_file_type')  # Restaurar tipo do arquivo
         if data.get('created_at'):
             try:
                 session.created_at = datetime.fromisoformat(data['created_at'])
