@@ -20,6 +20,7 @@
 
 - **Multi-database** — SQL Server, MySQL, PostgreSQL, MariaDB, SQLite
 - **Python integrado** — Manipule resultados SQL com Pandas diretamente
+- **Importação rápida** — Arraste arquivos CSV/JSON/XLSX para importar automaticamente
 - **Visualização** — Tabelas interativas com exportação para Excel/CSV
 - **Temas** — Interface moderna com Material Design (dark/light)
 - **Atalhos** — Produtividade máxima com atalhos de teclado
