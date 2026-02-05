@@ -33,12 +33,12 @@ class BlockEditor(QWidget):
     """
     
     # Sinais de execução
-    execute_sql = pyqtSignal(str)  # query
-    execute_python = pyqtSignal(str)  # code  
-    execute_cross_syntax = pyqtSignal(str)  # code
+    execute_sql = pyqtSignal(str, str)  # query, connection_name
+    execute_python = pyqtSignal(str, str)  # code, connection_name  
+    execute_cross_syntax = pyqtSignal(str, str)  # code, connection_name
     
     # Sinal para executar múltiplos blocos em sequência
-    # Emite lista de tuplas: [(language, code, block), ...]
+    # Emite lista de tuplas: [(language, code, connection_name, block), ...]
     execute_queue = pyqtSignal(list)
     
     # Sinal de cancelamento
@@ -47,7 +47,7 @@ class BlockEditor(QWidget):
     # Sinal quando conteúdo muda
     content_changed = pyqtSignal()
     
-    def __init__(self, theme_manager: ThemeManager = None, parent=None):
+    def __init__(self, theme_manager: ThemeManager = None, parent=None, default_connection=None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
         self._blocks: List[CodeBlock] = []
@@ -56,6 +56,7 @@ class BlockEditor(QWidget):
         self._execution_queue_blocks: List[CodeBlock] = []  # Blocos na fila de execução
         self._current_executing_block: Optional[CodeBlock] = None  # Bloco atualmente executando
         self._dragging_block: Optional[CodeBlock] = None  # Bloco sendo arrastado
+        self._default_connection = default_connection  # Conexão padrão para novos blocos
         
         self._setup_ui()
         
@@ -179,12 +180,15 @@ class BlockEditor(QWidget):
         """Emite o sinal de execução apropriado"""
         block.set_running(True)
         
+        # Obter conexão do bloco (pode ser vazia para usar padrão da aba)
+        connection_name = block.get_connection_name()
+        
         if language == 'sql':
-            self.execute_sql.emit(code)
+            self.execute_sql.emit(code, connection_name)
         elif language == 'python':
-            self.execute_python.emit(code)
+            self.execute_python.emit(code, connection_name)
         elif language == 'cross':
-            self.execute_cross_syntax.emit(code)
+            self.execute_cross_syntax.emit(code, connection_name)
         
         # Nota: o chamador precisa chamar mark_execution_finished depois
     
@@ -200,7 +204,9 @@ class BlockEditor(QWidget):
         for block in self._blocks:
             code = block.get_code().strip()
             if code:
-                queue.append((block.get_language(), code, block))
+                # Incluir conexão do bloco na fila
+                connection_name = block.get_connection_name()
+                queue.append((block.get_language(), code, connection_name, block))
                 self._execution_queue_blocks.append(block)
                 block.set_waiting(True)  # Marca como aguardando
         
@@ -267,7 +273,7 @@ class BlockEditor(QWidget):
     
     # === Gerenciamento de Blocos ===
     
-    def add_block(self, language: str = None, code: str = '', after_block: CodeBlock = None) -> CodeBlock:
+    def add_block(self, language: str = None, code: str = '', after_block: CodeBlock = None, connection_name: str = None) -> CodeBlock:
         """
         Adiciona um novo bloco.
         
@@ -275,6 +281,7 @@ class BlockEditor(QWidget):
             language: 'python', 'sql', ou 'cross'. Se None, usa 'sql' para primeiro bloco e 'python' para segundo
             code: Código inicial
             after_block: Se especificado, insere após este bloco
+            connection_name: Conexão para o bloco. Se None, usa conexão padrão da aba
         
         Returns:
             O novo bloco criado
@@ -286,7 +293,11 @@ class BlockEditor(QWidget):
             else:
                 language = 'python'  # Segundo bloco em diante
         
-        block = CodeBlock(theme_manager=self.theme_manager, default_language=language)
+        # Se conexão não especificada, usa conexão padrão da aba
+        if connection_name is None:
+            connection_name = self._default_connection
+        
+        block = CodeBlock(theme_manager=self.theme_manager, default_language=language, default_connection=connection_name)
         if code:
             block.set_code(code)
         
@@ -491,11 +502,28 @@ class BlockEditor(QWidget):
                 # Primeiro bloco já existe
                 self._blocks[0].set_language(data.get('language', 'python'))
                 self._blocks[0].set_code(data.get('code', ''))
+                if 'connection_name' in data:
+                    self._blocks[0].set_connection_name(data['connection_name'])
             else:
                 self.add_block(
                     language=data.get('language', 'python'),
-                    code=data.get('code', '')
+                    code=data.get('code', ''),
+                    connection_name=data.get('connection_name')
                 )
+    
+    def set_default_connection(self, connection_name: str):
+        """Define conexão padrão para novos blocos"""
+        self._default_connection = connection_name
+    
+    def update_available_connections(self, connections: list):
+        """
+        Atualiza lista de conexões disponíveis em todos os blocos
+        
+        Args:
+            connections: Lista de tuplas (name, display_name)
+        """
+        for block in self._blocks:
+            block.update_available_connections(connections)
     
     # === Compatibilidade com UnifiedEditor ===
     

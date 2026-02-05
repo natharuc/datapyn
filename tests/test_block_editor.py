@@ -89,6 +89,7 @@ class TestCodeBlock:
         data = block.to_dict()
         assert data['language'] == 'sql'
         assert data['code'] == 'SELECT 1'
+        assert 'connection_name' in data
     
     def test_from_dict_deserialization(self, theme_manager, qtbot):
         """Deve deserializar corretamente"""
@@ -98,6 +99,41 @@ class TestCodeBlock:
         
         assert block.get_language() == 'python'
         assert block.get_code() == 'x = 1'
+    
+    def test_connection_name_serialization(self, theme_manager, qtbot):
+        """Deve serializar e deserializar conexao"""
+        block = CodeBlock(theme_manager=theme_manager)
+        qtbot.addWidget(block)
+        block.set_connection_name('test_conn')
+        
+        data = block.to_dict()
+        assert data['connection_name'] == 'test_conn'
+        
+        # Deserializar
+        new_block = CodeBlock.from_dict(data, theme_manager)
+        qtbot.addWidget(new_block)
+        assert new_block.get_connection_name() == 'test_conn'
+    
+    def test_default_connection(self, theme_manager, qtbot):
+        """Deve inicializar com conexao padrao"""
+        block = CodeBlock(theme_manager=theme_manager, default_connection='default_conn')
+        qtbot.addWidget(block)
+        assert block._connection_name == 'default_conn'
+    
+    def test_update_available_connections(self, block):
+        """Deve atualizar lista de conexoes disponiveis"""
+        connections = [
+            ('conn1', 'Connection 1 (mysql://localhost/db1)'),
+            ('conn2', 'Connection 2 (postgres://host/db2)')
+        ]
+        block.update_available_connections(connections)
+        
+        # Deve ter 3 itens: (Padrao da aba) + 2 conexoes
+        assert block.conn_combo.count() == 3
+        assert block.conn_combo.itemText(0) == "(Padrão da aba)"
+        assert block.conn_combo.itemData(0) == ""
+        assert block.conn_combo.itemText(1) == "Connection 1 (mysql://localhost/db1)"
+        assert block.conn_combo.itemData(1) == "conn1"
     
     def test_running_state(self, block):
         """Deve mudar estado de execução e mostrar tempo"""
@@ -186,7 +222,9 @@ class TestBlockEditor:
         with qtbot.waitSignal(editor.execute_sql, timeout=1000) as blocker:
             editor._execute_block(blocks[0])
         
+        # Verifica query e connection_name
         assert blocker.args[0] == 'SELECT 1'
+        assert blocker.args[1] == ''  # Conexão vazia (padrão)
     
     def test_execute_python_signal(self, editor, qtbot):
         """Deve emitir sinal Python quando bloco é Python"""
@@ -452,6 +490,109 @@ class TestSessionWidgetWithBlocks:
         assert len(blocks) == 2
         assert blocks[0].get_language() == 'sql'
         assert blocks[1].get_language() == 'python'
+
+
+class TestBlockEditorConnections:
+    """Testes de funcionalidade de conexoes por bloco"""
+    
+    @pytest.fixture
+    def theme_manager(self):
+        return ThemeManager()
+    
+    @pytest.fixture
+    def editor(self, theme_manager, qtbot):
+        editor = BlockEditor(theme_manager=theme_manager, default_connection='default_conn')
+        qtbot.addWidget(editor)
+        return editor
+    
+    def test_default_connection_propagates_to_blocks(self, editor):
+        """Blocos devem herdar conexao padrao do editor"""
+        # Primeiro bloco criado no init deve ter conexão padrão
+        blocks = editor.get_blocks()
+        assert blocks[0]._connection_name == 'default_conn'
+    
+    def test_add_block_with_connection(self, editor):
+        """Deve adicionar bloco com conexao especifica"""
+        block = editor.add_block(connection_name='custom_conn')
+        assert block._connection_name == 'custom_conn'
+    
+    def test_add_block_inherits_default_connection(self, editor):
+        """Bloco sem conexao especificada herda padrao"""
+        block = editor.add_block()
+        assert block._connection_name == 'default_conn'
+    
+    def test_set_default_connection_updates_editor(self, editor):
+        """Deve atualizar conexao padrao do editor"""
+        editor.set_default_connection('new_default')
+        assert editor._default_connection == 'new_default'
+        
+        # Novos blocos devem usar nova conexão padrão
+        block = editor.add_block()
+        assert block._connection_name == 'new_default'
+    
+    def test_update_available_connections(self, editor):
+        """Deve atualizar conexoes disponiveis em todos os blocos"""
+        # Adicionar alguns blocos
+        editor.add_block()
+        editor.add_block()
+        
+        connections = [
+            ('conn1', 'Connection 1'),
+            ('conn2', 'Connection 2')
+        ]
+        
+        editor.update_available_connections(connections)
+        
+        # Todos os blocos devem ter as conexões atualizadas
+        for block in editor.get_blocks():
+            assert block.conn_combo.count() == 3  # (Padrão) + 2 conexões
+    
+    def test_serialize_with_connections(self, editor):
+        """Deve serializar blocos com suas conexoes"""
+        blocks = editor.get_blocks()
+        blocks[0].set_connection_name('conn1')
+        editor.add_block(connection_name='conn2')
+        
+        data = editor.to_list()
+        
+        assert len(data) == 2
+        assert data[0]['connection_name'] == 'conn1'
+        assert data[1]['connection_name'] == 'conn2'
+    
+    def test_deserialize_with_connections(self, editor):
+        """Deve deserializar blocos com suas conexoes"""
+        data = [
+            {'language': 'sql', 'code': 'SELECT 1', 'connection_name': 'conn1'},
+            {'language': 'python', 'code': 'x = 1', 'connection_name': 'conn2'}
+        ]
+        
+        editor.from_list(data)
+        
+        blocks = editor.get_blocks()
+        assert blocks[0].get_connection_name() == 'conn1'
+        assert blocks[1].get_connection_name() == 'conn2'
+    
+    def test_execute_queue_includes_connection(self, editor, qtbot):
+        """Execute queue deve incluir conexao de cada bloco"""
+        blocks = editor.get_blocks()
+        blocks[0].set_language('sql')
+        blocks[0].set_code('SELECT 1')
+        blocks[0].set_connection_name('conn1')
+        
+        editor.add_block(language='python', code='x = 1', connection_name='conn2')
+        
+        with qtbot.waitSignal(editor.execute_queue, timeout=1000) as blocker:
+            editor.execute_all_blocks()
+        
+        queue = blocker.args[0]
+        assert len(queue) == 2
+        # Formato: (language, code, connection_name, block)
+        assert queue[0][0] == 'sql'
+        assert queue[0][1] == 'SELECT 1'
+        assert queue[0][2] == 'conn1'
+        assert queue[1][0] == 'python'
+        assert queue[1][1] == 'x = 1'
+        assert queue[1][2] == 'conn2'
 
 
 class TestBlockEditorKeyboardShortcuts:

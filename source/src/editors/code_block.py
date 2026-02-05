@@ -38,7 +38,7 @@ class CodeBlock(QFrame):
         'cross': '#6B4C9A'
     }
     
-    def __init__(self, theme_manager: ThemeManager = None, parent=None, default_language='sql'):
+    def __init__(self, theme_manager: ThemeManager = None, parent=None, default_language='sql', default_connection=None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
         self._is_focused = False
@@ -50,6 +50,7 @@ class CodeBlock(QFrame):
         self._execution_start_time = 0
         self._last_execution_time = None
         self._default_language = default_language
+        self._connection_name = default_connection  # Conexão do bloco
         
         self._setup_ui()
         self._connect_signals()
@@ -114,6 +115,28 @@ class CodeBlock(QFrame):
             self.lang_combo.setCurrentIndex(0)
         self.lang_combo.setFixedWidth(120)
         control_layout.addWidget(self.lang_combo)
+        
+        # Seletor de conexão
+        self.conn_combo = QComboBox()
+        self.conn_combo.setFixedWidth(150)
+        self.conn_combo.setToolTip("Conexão de dados para este bloco")
+        self.conn_combo.setStyleSheet("""
+            QComboBox {
+                background: #2d2d30;
+                color: #ccc;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 2px 6px;
+            }
+            QComboBox:hover {
+                border-color: #007acc;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+        """)
+        control_layout.addWidget(self.conn_combo)
         
         # Status - estilo mais moderno
         self.status_label = QLabel("")
@@ -285,6 +308,64 @@ class CodeBlock(QFrame):
             # Garantir que o editor seja atualizado mesmo em mudanças programáticas
             self._on_language_changed()
     
+    def get_connection_name(self) -> str:
+        """Retorna nome da conexão selecionada ou valor persistido, ou string vazia"""
+        # Se o combo ainda não foi populado, usar o valor persistido
+        if self.conn_combo.count() == 0:
+            return self._connection_name or ''
+        
+        # Se não há índice válido selecionado, também usar o valor persistido
+        if self.conn_combo.currentIndex() < 0:
+            return self._connection_name or ''
+        
+        current = self.conn_combo.currentData()
+        if current:
+            return current
+        
+        # Se o dado atual é vazio/nulo mas temos um valor persistido, usar ele
+        return self._connection_name or ''
+    
+    def set_connection_name(self, conn_name: str):
+        """Define conexão selecionada"""
+        self._connection_name = conn_name
+        # Atualizar combo se já populado
+        index = self.conn_combo.findData(conn_name)
+        if index >= 0:
+            self.conn_combo.setCurrentIndex(index)
+    
+    def update_available_connections(self, connections: list):
+        """
+        Atualiza lista de conexões disponíveis
+        
+        Args:
+            connections: Lista de tuplas (name, display_name)
+        """
+        current = self.get_connection_name()
+        self.conn_combo.clear()
+        
+        # Adicionar opção "Padrão da aba"
+        self.conn_combo.addItem("(Padrão da aba)", "")
+        
+        # Adicionar conexões
+        for conn_name, display_name in connections:
+            self.conn_combo.addItem(display_name, conn_name)
+        
+        # Restaurar seleção ou usar padrão
+        if current:
+            index = self.conn_combo.findData(current)
+            if index >= 0:
+                self.conn_combo.setCurrentIndex(index)
+            else:
+                self.conn_combo.setCurrentIndex(0)  # Padrão da aba
+        elif self._connection_name:
+            index = self.conn_combo.findData(self._connection_name)
+            if index >= 0:
+                self.conn_combo.setCurrentIndex(index)
+            else:
+                self.conn_combo.setCurrentIndex(0)
+        else:
+            self.conn_combo.setCurrentIndex(0)  # Padrão da aba
+    
     def get_code(self) -> str:
         return self.editor.get_text()
     
@@ -427,14 +508,18 @@ class CodeBlock(QFrame):
         return {
             'language': self.get_language(), 
             'code': self.get_code(),
-            'height': self.editor_container.height()
+            'height': self.editor_container.height(),
+            'connection_name': self._connection_name or ''
         }
     
     @classmethod
-    def from_dict(cls, data: dict, theme_manager=None) -> 'CodeBlock':
-        block = cls(theme_manager=theme_manager)
+    def from_dict(cls, data: dict, theme_manager=None, default_connection=None) -> 'CodeBlock':
+        block = cls(theme_manager=theme_manager, default_connection=default_connection)
         block.set_language(data.get('language', 'python'))
         block.set_code(data.get('code', ''))
+        # Restaurar conexão se salva
+        if 'connection_name' in data:
+            block.set_connection_name(data['connection_name'])
         # Restaurar altura se salva
         if 'height' in data and data['height']:
             block._set_editor_height(data['height'])
