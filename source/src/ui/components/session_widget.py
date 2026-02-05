@@ -679,6 +679,9 @@ class SessionWidget(QWidget):
         if success:
             self.append_output(message)
             self.status_changed.emit(message)
+            # Atualizar conexão padrão dos blocos quando sessão conecta
+            if self.session.connection_name:
+                self.set_default_connection(self.session.connection_name)
             # Emitir sinal de mudança de conexão
             if self.session.connection_name and self.session.connector:
                 db = self.session.connector.get_current_database() if hasattr(self.session.connector, 'get_current_database') else ''

@@ -383,6 +383,29 @@ class MainWindow(QMainWindow):
     def _refresh_connections_list(self):
         """Atualiza lista de conexões salvas"""
         self.connection_panel.refresh_connections()
+        # Atualizar conexões disponíveis em todos os blocos
+        self._update_block_connections()
+    
+    def _update_block_connections(self):
+        """Atualiza lista de conexões disponíveis em todos os blocos de todas as sessões"""
+        # Obter todas as conexões salvas
+        saved_connections = self.connection_manager.get_saved_connections()
+        
+        # Criar lista de tuplas (name, display_name)
+        connections_list = []
+        for conn_name in saved_connections:
+            config = self.connection_manager.get_connection_config(conn_name)
+            if config:
+                db_type = config.get('db_type', '')
+                host = config.get('host', '')
+                database = config.get('database', '')
+                display_name = f"{conn_name} ({db_type}://{host}/{database})"
+                connections_list.append((conn_name, display_name))
+        
+        # Atualizar todos os widgets de sessão
+        for session_widget in self._session_widgets.values():
+            if isinstance(session_widget, SessionWidget):
+                session_widget.update_available_connections(connections_list)
     
     def _on_connection_double_click(self, item: QListWidgetItem):
         """Conecta ao dar duplo clique na conexão"""
@@ -2057,6 +2080,19 @@ class MainWindow(QMainWindow):
     def _create_session_widget(self, session):
         """Cria widget para uma sessão e adiciona à aba"""
         widget = SessionWidget(session, theme_manager=self.theme_manager)
+        
+        # Atualizar conexões disponíveis no widget
+        saved_connections = self.connection_manager.get_saved_connections()
+        connections_list = []
+        for conn_name in saved_connections:
+            config = self.connection_manager.get_connection_config(conn_name)
+            if config:
+                db_type = config.get('db_type', '')
+                host = config.get('host', '')
+                database = config.get('database', '')
+                display_name = f"{conn_name} ({db_type}://{host}/{database})"
+                connections_list.append((conn_name, display_name))
+        widget.update_available_connections(connections_list)
         
         # Definir file_path no widget se disponível na sessão
         if hasattr(session, 'file_path') and session.file_path:
