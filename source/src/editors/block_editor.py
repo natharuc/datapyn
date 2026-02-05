@@ -7,9 +7,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QPushButton,
     QHBoxLayout, QFrame, QSizePolicy, QSpacerItem
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
 from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent
 from typing import List, Optional
+import os
 
 from src.core.theme_manager import ThemeManager
 from src.editors.code_block import CodeBlock
@@ -569,18 +570,48 @@ class BlockEditor(QWidget):
             self._dragging_block = block
     
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Aceita drag de blocos"""
-        if event.mimeData().hasText():
-            text = event.mimeData().text()
+        """Aceita drag de blocos e arquivos"""
+        mime_data = event.mimeData()
+        
+        # Aceitar drag de blocos
+        if mime_data.hasText():
+            text = mime_data.text()
             if text.startswith("block:"):
                 event.acceptProposedAction()
+                return
+        
+        # Aceitar drag de arquivos CSV, JSON, XLSX
+        if mime_data.hasUrls():
+            urls = mime_data.urls()
+            for url in urls:
+                file_path = url.toLocalFile()
+                if file_path.lower().endswith(('.csv', '.json', '.xlsx', '.xls')):
+                    event.acceptProposedAction()
+                    return
     
     def dragMoveEvent(self, event):
         """Durante o drag, mostra onde o bloco será inserido"""
         event.acceptProposedAction()
     
     def dropEvent(self, event: QDropEvent):
-        """Quando um bloco é solto"""
+        """Quando um bloco ou arquivo é solto"""
+        mime_data = event.mimeData()
+        
+        # Processar drop de arquivos
+        if mime_data.hasUrls():
+            urls = mime_data.urls()
+            for url in urls:
+                file_path = url.toLocalFile()
+                if file_path.lower().endswith(('.csv', '.json', '.xlsx', '.xls')):
+                    import_code = self._generate_import_code(file_path)
+                    if import_code:
+                        # Criar novo bloco Python com código de importação
+                        self.add_block(language='python', code=import_code)
+                        self.content_changed.emit()
+            event.acceptProposedAction()
+            return
+        
+        # Processar drop de blocos (código existente)
         if not self._dragging_block:
             return
         
@@ -631,3 +662,33 @@ class BlockEditor(QWidget):
         self.blocks_layout.insertWidget(new_index, block)
         
         self.content_changed.emit()
+    
+    def _generate_import_code(self, file_path: str) -> Optional[str]:
+        """
+        Gera código de importação pandas baseado na extensão do arquivo.
+        
+        Args:
+            file_path: Caminho completo do arquivo
+            
+        Returns:
+            Código Python para importar o arquivo ou None se extensão não suportada
+        """
+        if not file_path:
+            return None
+        
+        # Normalizar caminho (usar raw string para Windows)
+        # Usar barras normais pois Python aceita em ambos os sistemas
+        normalized_path = file_path.replace('\\', '/')
+        
+        # Extrair extensão
+        _, ext = os.path.splitext(file_path.lower())
+        
+        # Gerar código baseado na extensão
+        if ext == '.csv':
+            return f"import pandas as pd\ndf = pd.read_csv('{normalized_path}')"
+        elif ext == '.json':
+            return f"import pandas as pd\ndf = pd.read_json('{normalized_path}')"
+        elif ext in ('.xlsx', '.xls'):
+            return f"import pandas as pd\ndf = pd.read_excel('{normalized_path}')"
+        
+        return None

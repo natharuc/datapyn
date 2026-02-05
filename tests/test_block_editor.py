@@ -734,3 +734,339 @@ result = hello()'''
         editor._execute_block(editor.get_blocks()[0])
         
         assert executed == [code]
+
+
+class TestFileDragAndDrop:
+    """Testes para arrastar e soltar arquivos CSV, JSON e XLSX"""
+    
+    @pytest.fixture
+    def theme_manager(self):
+        return ThemeManager()
+    
+    @pytest.fixture
+    def editor(self, theme_manager, qtbot):
+        editor = BlockEditor(theme_manager=theme_manager)
+        qtbot.addWidget(editor)
+        return editor
+    
+    def test_generate_import_code_csv(self, editor):
+        """Deve gerar código de importação para CSV"""
+        code = editor._generate_import_code('/path/to/data.csv')
+        assert code is not None
+        assert 'import pandas as pd' in code
+        assert "pd.read_csv('/path/to/data.csv')" in code
+        assert 'df = ' in code
+    
+    def test_generate_import_code_json(self, editor):
+        """Deve gerar código de importação para JSON"""
+        code = editor._generate_import_code('/path/to/data.json')
+        assert code is not None
+        assert 'import pandas as pd' in code
+        assert "pd.read_json('/path/to/data.json')" in code
+        assert 'df = ' in code
+    
+    def test_generate_import_code_xlsx(self, editor):
+        """Deve gerar código de importação para XLSX"""
+        code = editor._generate_import_code('/path/to/data.xlsx')
+        assert code is not None
+        assert 'import pandas as pd' in code
+        assert "pd.read_excel('/path/to/data.xlsx')" in code
+        assert 'df = ' in code
+    
+    def test_generate_import_code_xls(self, editor):
+        """Deve gerar código de importação para XLS"""
+        code = editor._generate_import_code('/path/to/data.xls')
+        assert code is not None
+        assert 'import pandas as pd' in code
+        assert "pd.read_excel('/path/to/data.xls')" in code
+        assert 'df = ' in code
+    
+    def test_generate_import_code_case_insensitive(self, editor):
+        """Deve reconhecer extensões em maiúsculas"""
+        code_csv = editor._generate_import_code('/path/to/DATA.CSV')
+        code_json = editor._generate_import_code('/path/to/DATA.JSON')
+        code_xlsx = editor._generate_import_code('/path/to/DATA.XLSX')
+        
+        assert code_csv is not None
+        assert 'pd.read_csv' in code_csv
+        assert code_json is not None
+        assert 'pd.read_json' in code_json
+        assert code_xlsx is not None
+        assert 'pd.read_excel' in code_xlsx
+    
+    def test_generate_import_code_unsupported_extension(self, editor):
+        """Deve retornar None para extensões não suportadas"""
+        code = editor._generate_import_code('/path/to/file.txt')
+        assert code is None
+        
+        code = editor._generate_import_code('/path/to/file.pdf')
+        assert code is None
+    
+    def test_generate_import_code_windows_path(self, editor):
+        """Deve normalizar caminhos do Windows"""
+        code = editor._generate_import_code(r'C:\Users\test\data.csv')
+        assert code is not None
+        assert 'C:/Users/test/data.csv' in code
+    
+    def test_generate_import_code_special_characters_in_path(self, editor):
+        """Deve lidar com caracteres especiais no caminho"""
+        code = editor._generate_import_code('/path/to/dados especiais.csv')
+        assert code is not None
+        assert 'dados especiais.csv' in code
+    
+    def test_drag_enter_accepts_csv_file(self, editor, qtbot):
+        """Deve aceitar arrasto de arquivo CSV"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDragEnterEvent
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.csv')])
+        
+        event = QDragEnterEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        editor.dragEnterEvent(event)
+        assert event.isAccepted()
+    
+    def test_drag_enter_accepts_json_file(self, editor, qtbot):
+        """Deve aceitar arrasto de arquivo JSON"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDragEnterEvent
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.json')])
+        
+        event = QDragEnterEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        editor.dragEnterEvent(event)
+        assert event.isAccepted()
+    
+    def test_drag_enter_accepts_xlsx_file(self, editor, qtbot):
+        """Deve aceitar arrasto de arquivo XLSX"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDragEnterEvent
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.xlsx')])
+        
+        event = QDragEnterEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        editor.dragEnterEvent(event)
+        assert event.isAccepted()
+    
+    def test_drag_enter_rejects_unsupported_file(self, editor, qtbot):
+        """Deve rejeitar arrasto de arquivo não suportado"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDragEnterEvent
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/file.txt')])
+        
+        event = QDragEnterEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        editor.dragEnterEvent(event)
+        assert not event.isAccepted()
+    
+    def test_drop_csv_creates_python_block(self, editor, qtbot):
+        """Deve criar bloco Python ao soltar arquivo CSV"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDropEvent
+        
+        initial_block_count = editor.get_block_count()
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.csv')])
+        
+        event = QDropEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+            editor.dropEvent(event)
+        
+        # Deve ter criado um novo bloco
+        assert editor.get_block_count() == initial_block_count + 1
+        
+        # O novo bloco deve ser Python
+        blocks = editor.get_blocks()
+        new_block = blocks[-1]
+        assert new_block.get_language() == 'python'
+        
+        # Deve conter código de importação
+        code = new_block.get_code()
+        assert 'import pandas as pd' in code
+        assert 'pd.read_csv' in code
+        assert '/path/to/data.csv' in code
+    
+    def test_drop_json_creates_python_block(self, editor, qtbot):
+        """Deve criar bloco Python ao soltar arquivo JSON"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDropEvent
+        
+        initial_block_count = editor.get_block_count()
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.json')])
+        
+        event = QDropEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+            editor.dropEvent(event)
+        
+        # Deve ter criado um novo bloco
+        assert editor.get_block_count() == initial_block_count + 1
+        
+        # O novo bloco deve ser Python
+        blocks = editor.get_blocks()
+        new_block = blocks[-1]
+        assert new_block.get_language() == 'python'
+        
+        # Deve conter código de importação
+        code = new_block.get_code()
+        assert 'import pandas as pd' in code
+        assert 'pd.read_json' in code
+        assert '/path/to/data.json' in code
+    
+    def test_drop_xlsx_creates_python_block(self, editor, qtbot):
+        """Deve criar bloco Python ao soltar arquivo XLSX"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDropEvent
+        
+        initial_block_count = editor.get_block_count()
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.xlsx')])
+        
+        event = QDropEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+            editor.dropEvent(event)
+        
+        # Deve ter criado um novo bloco
+        assert editor.get_block_count() == initial_block_count + 1
+        
+        # O novo bloco deve ser Python
+        blocks = editor.get_blocks()
+        new_block = blocks[-1]
+        assert new_block.get_language() == 'python'
+        
+        # Deve conter código de importação
+        code = new_block.get_code()
+        assert 'import pandas as pd' in code
+        assert 'pd.read_excel' in code
+        assert '/path/to/data.xlsx' in code
+    
+    def test_drop_multiple_files_creates_multiple_blocks(self, editor, qtbot):
+        """Deve criar múltiplos blocos ao soltar múltiplos arquivos"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDropEvent
+        
+        initial_block_count = editor.get_block_count()
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([
+            QUrl.fromLocalFile('/path/to/data1.csv'),
+            QUrl.fromLocalFile('/path/to/data2.json'),
+            QUrl.fromLocalFile('/path/to/data3.xlsx')
+        ])
+        
+        event = QDropEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+            editor.dropEvent(event)
+        
+        # Deve ter criado 3 novos blocos
+        assert editor.get_block_count() == initial_block_count + 3
+        
+        # Todos devem ser Python
+        blocks = editor.get_blocks()
+        assert blocks[-3].get_language() == 'python'
+        assert blocks[-2].get_language() == 'python'
+        assert blocks[-1].get_language() == 'python'
+        
+        # Verificar que cada um tem o código correto
+        assert 'data1.csv' in blocks[-3].get_code()
+        assert 'pd.read_csv' in blocks[-3].get_code()
+        
+        assert 'data2.json' in blocks[-2].get_code()
+        assert 'pd.read_json' in blocks[-2].get_code()
+        
+        assert 'data3.xlsx' in blocks[-1].get_code()
+        assert 'pd.read_excel' in blocks[-1].get_code()
+    
+    def test_drop_preserves_existing_blocks(self, editor, qtbot):
+        """Soltar arquivo não deve afetar blocos existentes"""
+        from PyQt6.QtCore import QMimeData, QUrl
+        from PyQt6.QtGui import QDropEvent
+        
+        # Adicionar alguns blocos
+        editor.get_blocks()[0].set_language('sql')
+        editor.get_blocks()[0].set_code('SELECT 1')
+        editor.add_block(language='python', code='print("test")')
+        
+        initial_blocks = [b.get_code() for b in editor.get_blocks()]
+        initial_count = editor.get_block_count()
+        
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile('/path/to/data.csv')])
+        
+        event = QDropEvent(
+            editor.rect().center(),
+            Qt.DropAction.CopyAction,
+            mime_data,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier
+        )
+        
+        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+            editor.dropEvent(event)
+        
+        # Blocos originais devem permanecer intactos
+        blocks = editor.get_blocks()
+        for i, original_code in enumerate(initial_blocks):
+            assert blocks[i].get_code() == original_code
