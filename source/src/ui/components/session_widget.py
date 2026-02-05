@@ -156,7 +156,11 @@ class SessionWidget(QWidget):
         editor_layout.setContentsMargins(5, 5, 5, 5)
         
         # Editor de blocos (substitui o UnifiedEditor)
-        self.editor = BlockEditor(theme_manager=self.theme_manager)
+        # Passa conexão da sessão como padrão para novos blocos
+        self.editor = BlockEditor(
+            theme_manager=self.theme_manager,
+            default_connection=session.connection_name
+        )
         editor_layout.addWidget(self.editor)
         
         self.splitter.addWidget(editor_container)
@@ -209,6 +213,36 @@ class SessionWidget(QWidget):
         
         # Conectar sinais da sessão
         self.session.variables_changed.connect(self._update_variables_view)
+    
+    def _get_connector_for_execution(self, connection_name: str = ''):
+        """
+        Obtém o conector apropriado para execução
+        
+        Args:
+            connection_name: Nome da conexão. Se vazio, usa conexão da sessão
+            
+        Returns:
+            DatabaseConnector ou None
+        """
+        # Se não foi especificada conexão, usa a da sessão
+        if not connection_name:
+            return self.session.connector
+        
+        # Se foi especificada, busca no ConnectionManager
+        try:
+            from src.database.connection_manager import ConnectionManager
+            manager = ConnectionManager()
+            connector = manager.get_connection(connection_name)
+            if connector:
+                return connector
+            # Se não encontrou conexão ativa, tenta usar a da sessão se o nome bate
+            if connection_name == self.session.connection_name:
+                return self.session.connector
+        except Exception:
+            pass
+        
+        return None
+    
     def _format_log(self, log_type: str, message: str = '') -> str:
         """Formata mensagem de log com timestamp e tipo"""
         timestamp = datetime.now().strftime('%H:%M:%S')
@@ -219,17 +253,26 @@ class SessionWidget(QWidget):
     
     # === EXECUÇÃO SQL ===
     
-    def _on_execute_sql(self, query: str):
-        """Executa SQL em background"""
-        if not self.session.is_connected:
-            self.append_output("[ERRO] Nenhuma conexão ativa nesta sessão", error=True)
+    def _on_execute_sql(self, query: str, connection_name: str = ''):
+        """
+        Executa SQL em background
+        
+        Args:
+            query: Query SQL a executar
+            connection_name: Nome da conexão a usar. Se vazio, usa conexão da sessão
+        """
+        # Determinar qual conexão usar
+        connector = self._get_connector_for_execution(connection_name)
+        
+        if not connector:
+            self.append_output("[ERRO] Nenhuma conexão ativa para este bloco", error=True)
             self.status_changed.emit("Erro: Sem conexão")
             # Processar próximo da fila mesmo com erro
             self._process_next_in_queue()
             return
         
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
-            self._execution_queue.append(('sql', query))
+            self._execution_queue.append(('sql', query, connection_name))
             return
         
         self._is_executing = True
@@ -238,7 +281,7 @@ class SessionWidget(QWidget):
         
         # Criar worker e thread
         self._sql_thread = QThread()
-        self._sql_worker = SessionSqlWorker(self.session.connector, query)
+        self._sql_worker = SessionSqlWorker(connector, query)
         self._sql_worker.moveToThread(self._sql_thread)
         
         # Registrar thread na sessão
@@ -313,19 +356,32 @@ class SessionWidget(QWidget):
     
     # === EXECUÇÃO PYTHON ===
     
-    def _on_execute_python(self, code: str):
-        """Executa Python em background"""
+    def _on_execute_python(self, code: str, connection_name: str = ''):
+        """
+        Executa Python em background
+        
+        Args:
+            code: Código Python a executar
+            connection_name: Nome da conexão a disponibilizar. Se vazio, usa conexão da sessão
+        """
         # Se já está executando, adiciona na fila
         if self._is_executing or (self._python_thread and self._python_thread.isRunning()):
-            self._execution_queue.append(('python', code))
+            self._execution_queue.append(('python', code, connection_name))
             return
         
         self._is_executing = True
         self.session.start_execution('python')
         self.status_changed.emit("Executando Python...")
+        
         # Preparar namespace com df se existir
         namespace = self.session.namespace.copy()
         namespace['pd'] = pd
+        
+        # Adicionar conexão ao namespace se disponível
+        connector = self._get_connector_for_execution(connection_name)
+        if connector:
+            namespace['conn'] = connector
+            namespace['connection'] = connector
         
         # Verificar se é expressão
         is_expression = False
@@ -409,8 +465,14 @@ class SessionWidget(QWidget):
     
     # === EXECUÇÃO CROSS-SYNTAX ===
     
-    def _on_execute_cross_syntax(self, code: str):
-        """Emite sinal para MainWindow processar cross-syntax"""
+    def _on_execute_cross_syntax(self, code: str, connection_name: str = ''):
+        """
+        Emite sinal para MainWindow processar cross-syntax
+        
+        Args:
+            code: Código cross-syntax a executar
+            connection_name: Nome da conexão (não utilizado para cross-syntax no momento)
+        """
         self.execute_cross_syntax.emit(code)
     
     # === FILA DE EXECUÇÃO ===
@@ -420,7 +482,7 @@ class SessionWidget(QWidget):
         Recebe uma fila de blocos para executar sequencialmente.
         
         Args:
-            queue: Lista de tuplas (language, code, block)
+            queue: Lista de tuplas (language, code, connection_name, block)
         """
         # Reset flag de cancelamento
         self._cancel_requested = False
@@ -465,22 +527,35 @@ class SessionWidget(QWidget):
         # Pega próximo da fila
         item = self._execution_queue.pop(0)
         
-        # Suporta formato antigo (language, code) e novo (language, code, block)
-        if len(item) == 3:
-            language, code, block = item
+        # Suporta formato novo (language, code, connection_name, block) e antigos
+        if len(item) == 4:
+            language, code, connection_name, block = item
             # Marca o bloco como executando
             self.editor.mark_block_started(block)
+        elif len(item) == 3:
+            # Formato antigo (language, code, block) ou (language, code, connection_name)
+            language, code, third = item
+            if isinstance(third, str):
+                # É connection_name
+                connection_name = third
+                block = None
+            else:
+                # É block
+                block = third
+                connection_name = ''
+                self.editor.mark_block_started(block)
         else:
             language, code = item
             block = None
+            connection_name = ''
         
         # Executa de acordo com a linguagem
         if language == 'sql':
-            self._on_execute_sql(code)
+            self._on_execute_sql(code, connection_name)
         elif language == 'python':
-            self._on_execute_python(code)
+            self._on_execute_python(code, connection_name)
         elif language == 'cross':
-            self._on_execute_cross_syntax(code)
+            self._on_execute_cross_syntax(code, connection_name)
             # Cross-syntax é síncrono (processado pela MainWindow)
             # Então continuamos para o próximo
             self._process_next_in_queue()
@@ -638,6 +713,24 @@ class SessionWidget(QWidget):
         """Esconde overlay de loading"""
         if self._loading_overlay:
             self._loading_overlay.hide()
+    
+    def update_available_connections(self, connections: list):
+        """
+        Atualiza lista de conexões disponíveis em todos os blocos
+        
+        Args:
+            connections: Lista de tuplas (name, display_name)
+        """
+        self.editor.update_available_connections(connections)
+    
+    def set_default_connection(self, connection_name: str):
+        """
+        Define conexão padrão para novos blocos
+        
+        Args:
+            connection_name: Nome da conexão
+        """
+        self.editor.set_default_connection(connection_name)
     
     def resizeEvent(self, event):
         """Ajusta overlay de loading ao redimensionar"""
