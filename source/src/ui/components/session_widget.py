@@ -18,7 +18,7 @@ from datetime import datetime
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
 from src.editors import BlockEditor
-from src.ui.components.bottom_tabs import BottomTabs
+# from src.ui.components.bottom_tabs import BottomTabs  # Removido - usando painéis globais
 
 
 class SessionConnectionWorker(QObject):
@@ -145,14 +145,10 @@ class SessionWidget(QWidget):
         
         self.splitter.addWidget(editor_container)
         
-        # === PARTE INFERIOR: BottomTabs (Resultados, Output, Variáveis) ===
-        self.bottom_tabs = BottomTabs(theme_manager=self.theme_manager)
-        self.splitter.addWidget(self.bottom_tabs)
+        # Nota: BottomTabs removido - usando painéis globais da MainWindow
+        # Layout agora é só o editor (painéis Results/Output/Variables são dockable)
         
-        # Tamanho inicial (60% editor, 40% resultados)
-        self.splitter.setSizes([360, 240])
-        
-        layout.addWidget(self.splitter)
+        layout.addWidget(self.editor)  # Layout simplificado: apenas editor
         
         # Overlay de loading (inicialmente oculto)
         self._loading_overlay = QLabel(self)
@@ -165,18 +161,81 @@ class SessionWidget(QWidget):
     
     @property
     def results_viewer(self):
-        """Compatibilidade: retorna o results_viewer do BottomTabs"""
-        return self.bottom_tabs.results_viewer
+        """Compatibilidade: delega para o painel global da MainWindow"""
+        main_window = self._get_main_window()
+        return main_window.global_results_viewer if main_window else None
     
     @property
     def output_text(self):
-        """Compatibilidade: retorna o output_text do BottomTabs"""
-        return self.bottom_tabs.output_text
+        """Compatibilidade: delega para o painel global da MainWindow"""
+        main_window = self._get_main_window()
+        return main_window.global_output_panel if main_window else None
     
     @property
     def variables_viewer(self):
-        """Compatibilidade: retorna o variables_panel do BottomTabs"""
-        return self.bottom_tabs.variables_panel
+        """Compatibilidade: delega para o painel global da MainWindow"""
+        main_window = self._get_main_window()
+        return main_window.global_variables_panel if main_window else None
+    
+    @property
+    def bottom_tabs(self):
+        """Compatibilidade: retorna objeto que delega para painéis dockable"""
+        main_window = self._get_main_window()
+        return main_window.bottom_tabs if main_window else None
+    
+    def _get_main_window(self):
+        """Obtém referência à MainWindow"""
+        parent = self.parent()
+        while parent and not hasattr(parent, 'global_results_viewer'):
+            parent = parent.parent()
+        return parent
+    
+    # === Métodos de delegação para painéis globais ===
+    
+    def _show_output(self):
+        """Mostra o painel de output"""
+        main_window = self._get_main_window()
+        if main_window:
+            main_window.show_panel('results')
+            # Seleciona aba Output
+            results_panel = main_window.get_panel('results')
+            if results_panel:
+                for i in range(results_panel.tab_widget.count()):
+                    if results_panel.tab_widget.tabText(i) == 'Output':
+                        results_panel.tab_widget.setCurrentIndex(i)
+                        break
+    
+    def _set_results(self, data, name="result"):
+        """Define resultados no painel global"""
+        main_window = self._get_main_window()
+        if main_window and main_window.global_results_viewer:
+            main_window.global_results_viewer.show_data(data)
+            main_window.show_panel('results')
+    
+    def _log_error(self, text):
+        """Registra erro no output global"""
+        main_window = self._get_main_window()
+        if main_window and main_window.global_output_panel:
+            main_window.global_output_panel.log_error(text)
+            self._show_output()
+    
+    def _log(self, text):
+        """Registra texto no output global"""
+        main_window = self._get_main_window()
+        if main_window and main_window.global_output_panel:
+            main_window.global_output_panel.log(text)
+    
+    def _clear_output(self):
+        """Limpa output global"""
+        main_window = self._get_main_window()
+        if main_window and main_window.global_output_panel:
+            main_window.global_output_panel.clear()
+    
+    def _set_variables(self, variables_dict):
+        """Define variáveis no painel global"""
+        main_window = self._get_main_window()
+        if main_window and main_window.global_variables_panel:
+            main_window.global_variables_panel.refresh_variables(variables_dict)
     
     def _connect_signals(self):
         """Conecta sinais do editor"""
@@ -252,7 +311,7 @@ class SessionWidget(QWidget):
             self.append_output(self._format_log('SQL', f"ERRO: {error}"), error=True)
             self.session.finish_execution(False, f"Erro: {error[:50]}...")
             self.status_changed.emit("Erro SQL")
-            self.bottom_tabs.show_output()
+            self._show_output()
         else:
             # Verificar se retornou lista de DataFrames (múltiplos SELECTs)
             if isinstance(df, list):
@@ -268,7 +327,7 @@ class SessionWidget(QWidget):
                 
                 # Exibir apenas o último DataFrame no grid
                 last_df = df[-1]
-                self.bottom_tabs.set_results(last_df, f"df{len(df)-1}" if len(df) > 1 else "df")
+                self._set_results(last_df, f"df{len(df)-1}" if len(df) > 1 else "df")
                 self.session.set_variable('_last_result', last_df)
                 
                 self.session.finish_execution(True, f"SQL: {len(df)} consultas")
@@ -277,7 +336,7 @@ class SessionWidget(QWidget):
                 # DataFrame único
                 rows = len(df) if df is not None else 0
                 self.append_output(self._format_log('SQL', f"{rows:,} linhas"))
-                self.bottom_tabs.set_results(df, "df")
+                self._set_results(df, "df")
                 self.session.finish_execution(True, f"SQL: {rows:,} linhas")
                 self.status_changed.emit(f"✓ SQL: {rows:,} linhas")
                 
@@ -355,7 +414,7 @@ class SessionWidget(QWidget):
             self.append_output(self._format_log('PYTHON', f"ERRO:\n{error}"), error=True)
             self.session.finish_execution(False, "Erro Python")
             self.status_changed.emit("Erro Python")
-            self.bottom_tabs.show_output()
+            self._show_output()
         else:
             has_dataframe_result = False
             has_output = bool(output)
@@ -366,7 +425,7 @@ class SessionWidget(QWidget):
             if result is not None:
                 if isinstance(result, pd.DataFrame):
                     has_dataframe_result = True
-                    self.bottom_tabs.set_results(result, "result")
+                    self._set_results(result, "result")
                     self.append_output(self._format_log('PYTHON', f"DataFrame: {len(result):,} linhas"))
                     self.status_changed.emit(f"✓ Python: DataFrame {len(result):,} linhas")
                 else:
@@ -382,7 +441,7 @@ class SessionWidget(QWidget):
                 pass
             elif has_output:
                 # Tem output mas não é DataFrame -> mostra Output
-                self.bottom_tabs.show_output()
+                self._show_output()
             
             if result is None and has_output:
                 self.status_changed.emit("✓ Python executado")
@@ -440,7 +499,7 @@ class SessionWidget(QWidget):
             self._python_thread.wait(1000)
         
         self.append_output(self._format_log('CANCELADO', 'Execução cancelada pelo usuário'), error=True)
-        self.bottom_tabs.show_output()
+        self._show_output()
     
     def _process_next_in_queue(self):
         """Processa o próximo item da fila de execução"""
@@ -482,13 +541,13 @@ class SessionWidget(QWidget):
     def append_output(self, text: str, error: bool = False):
         """Adiciona texto ao output"""
         if error:
-            self.bottom_tabs.log_error(text)
+            self._log_error(text)
         else:
-            self.bottom_tabs.log(text)
+            self._log(text)
     
     def clear_output(self):
         """Limpa o output"""
-        self.bottom_tabs.clear_output()
+        self._clear_output()
     
     # === VARIÁVEIS ===
     
@@ -501,14 +560,14 @@ class SessionWidget(QWidget):
         }
         
         # Usar o método do BottomTabs
-        self.bottom_tabs.set_variables(visible_vars)
+        self._set_variables(visible_vars)
     
     # === TEMA ===
     
     def apply_theme(self):
         """Aplica o tema atual"""
         self.editor.apply_theme()
-        self.bottom_tabs.set_theme_manager(self.theme_manager)
+        # Theme manager delegado para painéis globais - não necessário mais
     
     # === ESTADO ===
     

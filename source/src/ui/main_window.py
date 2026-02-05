@@ -43,6 +43,9 @@ from src.ui.components.session_tabs import SessionTabs
 from src.ui.components.connection_panel import ConnectionPanel
 from src.ui.components.toolbar import MainToolbar
 from src.ui.components.statusbar import MainStatusBar
+from src.ui.components.output_panel import OutputPanel
+from src.ui.components.variables_panel import VariablesPanel
+from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS
 
 
@@ -148,11 +151,12 @@ class CrossSyntaxWorker(QObject):
             self.finished.emit({}, traceback.format_exc())
 
 
-class MainWindow(QMainWindow):
+class MainWindow(DockingMainWindow):
     """Janela principal da IDE"""
     
     def __init__(self):
-        super().__init__()
+        # Inicializar atributos ANTES de chamar super().__init__()
+        # para evitar que DockingMainWindow._setup_ui() acesse atributos não inicializados
         
         # Managers (ConnectionManager agora é APENAS para configurações, não conexões ativas)
         self.connection_manager = ConnectionManager()  # Só para gerenciar configs salvas
@@ -163,9 +167,6 @@ class MainWindow(QMainWindow):
         self.theme_manager.set_editor_theme('monokai')  # Tema específico para editores de código
         self.session_manager = SessionManager()  # Novo: Gerenciador de sessões
         self.mixed_executor = MixedLanguageExecutor(None, self.results_manager)
-        
-        # Aplicar tema após configurar tema dos editores
-        self._apply_app_theme()
         
         # Mapeia session_id -> SessionWidget
         self._session_widgets: dict = {}
@@ -184,6 +185,16 @@ class MainWindow(QMainWindow):
         # Ícones
         self.icons = self._setup_icons()
         
+        # Agora chama super().__init__() que vai inicializar o docking system
+        super().__init__()
+        
+        # Finalizar configuração do docking system
+        self.finish_docking_setup()
+        
+        # Aplicar tema após configurar tema dos editores
+        self._apply_app_theme()
+        
+        # Configurar UI específica da MainWindow
         self._setup_ui()
         self._create_menus()
         self._create_toolbar()
@@ -226,9 +237,43 @@ class MainWindow(QMainWindow):
     
     @property
     def bottom_tabs(self):
-        """Retorna o bottom_tabs da sessão atual"""
-        widget = self._get_current_session_widget()
-        return widget.bottom_tabs if widget else None
+        """Retorna um objeto compatível com BottomTabs usando os painéis globais"""
+        # Retorna um mock object que redireciona para os painéis dockable
+        class DockableBottomTabsCompat:
+            def __init__(self, main_window):
+                self.main_window = main_window
+                
+            def setCurrentIndex(self, index):
+                """Simula mudança de aba ativa"""
+                if index == 0:  # Results
+                    self.main_window.show_panel('results')
+                    results_panel = self.main_window.get_panel('results')
+                    if results_panel and results_panel.tab_widget.count() > 0:
+                        results_panel.tab_widget.setCurrentIndex(0)
+                elif index == 1:  # Output  
+                    self.main_window.show_panel('results')
+                    results_panel = self.main_window.get_panel('results') 
+                    if results_panel:
+                        for i in range(results_panel.tab_widget.count()):
+                            if results_panel.tab_widget.tabText(i) == 'Output':
+                                results_panel.tab_widget.setCurrentIndex(i)
+                                break
+                elif index == 2:  # Variables
+                    self.main_window.show_panel('variables')
+            
+            @property  
+            def results_viewer(self):
+                return self.main_window.global_results_viewer
+                
+            @property
+            def output_panel(self):
+                return self.main_window.global_output_panel
+                
+            @property 
+            def variables_panel(self):
+                return self.main_window.global_variables_panel
+        
+        return DockableBottomTabsCompat(self)
     
     def show(self):
         """Sobrescreve show para restaurar geometria da janela"""
@@ -341,16 +386,7 @@ class MainWindow(QMainWindow):
             }}
         """)
         
-        # Widget central
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        # Layout principal
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
-        # Container para as abas de sessões
+        # Container para as abas de sessões (será a área central)
         session_container = QWidget()
         session_layout = QVBoxLayout(session_container)
         session_layout.setContentsMargins(5, 5, 5, 5)
@@ -364,13 +400,17 @@ class MainWindow(QMainWindow):
         
         session_layout.addWidget(self.session_tabs)
         
+        # Configurar área central com sessões no sistema de docking
+        self.set_central_content(session_container)
+        
         # Restaurar sessões
         self._restore_sessions()
         
-        main_layout.addWidget(session_container)
-        
-        # Dock para conexões (lateral esquerda)
+        # Dock para conexões (lateral esquerda) 
         self._create_connections_dock()
+        
+        # Configurar painéis dockable (Results, Output, Variables)
+        self._setup_dockable_panels()
     
     def _create_connections_dock(self):
         """Cria painel lateral de conexões usando ConnectionPanel"""
@@ -416,6 +456,67 @@ class MainWindow(QMainWindow):
         self.active_conn_name_label = self.connection_panel.active_widget.name_label
         self.active_conn_info_label = self.connection_panel.active_widget.info_label
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect
+    
+    def _setup_dockable_panels(self):
+        """Configura painéis dockable (Results, Output, Variables)"""
+        
+        # Painéis globais (compartilhados entre todas as sessões)
+        self.global_results_viewer = ResultsViewer(theme_manager=self.theme_manager)
+        self.global_output_panel = OutputPanel(theme_manager=self.theme_manager) 
+        self.global_variables_panel = VariablesPanel(theme_manager=self.theme_manager)
+        
+        # Results Panel (bottom por padrão)
+        self.add_dockable_panel(
+            name='results',
+            widget=self.global_results_viewer,
+            title='Results',
+            position='bottom',
+            visible=True
+        )
+        
+        # Output Panel (mesma área que Results, como aba) 
+        results_panel = self.get_panel('results')
+        if results_panel:
+            results_panel.add_tab(self.global_output_panel, 'Output')
+        
+        # Variables Panel (right por padrão)
+        self.add_dockable_panel(
+            name='variables', 
+            widget=self.global_variables_panel,
+            title='Variables',
+            position='right',
+            visible=True
+        )
+        
+        # Nota: ResultsManager não tem sinais PyQt (é classe Python normal)
+        # A sincronização dos painéis será feita manualmente nos métodos de execução
+    
+    def _on_result_added(self, name: str, data):
+        """Callback quando um resultado é adicionado"""
+        # Atualiza o painel de resultados global
+        self.global_results_viewer.show_data(data)
+        
+        # Mostra o painel de resultados se estiver oculto
+        self.show_panel('results')
+    
+    def _on_namespace_updated(self, namespace: dict):
+        """Callback quando o namespace é atualizado"""
+        # Atualiza o painel de variáveis global
+        self.global_variables_panel.refresh_variables(namespace)
+    
+    def show_output(self, text: str):
+        """Mostra output no painel global"""
+        self.global_output_panel.append_output(text)
+        
+        # Mostra o painel e seleciona a aba Output
+        results_panel = self.get_panel('results')
+        if results_panel:
+            # Encontra o índice da aba Output
+            for i in range(results_panel.tab_widget.count()):
+                if results_panel.tab_widget.tabText(i) == 'Output':
+                    results_panel.tab_widget.setCurrentIndex(i)
+                    break
+        self.show_panel('results')
     
     def _refresh_connections_list(self):
         """Atualiza lista de conexões salvas"""

@@ -39,14 +39,15 @@ class DockingMainWindow(QMainWindow):
         # Área central padrão (editores)
         self.central_content = QWidget()
         
-        self._setup_ui()
-        self._setup_menu_actions()
-        self._connect_signals()
-        
         # Timer para salvar layout automaticamente
         self.auto_save_timer = QTimer()
         self.auto_save_timer.timeout.connect(self._auto_save_layout)
         self.auto_save_timer.setSingleShot(True)
+    
+    def finish_docking_setup(self):
+        """Finaliza configuração do docking - chamado pela classe filha"""
+        self._setup_menu_actions()
+        self._connect_signals()
     
     def _setup_ui(self):
         """Configura interface base"""
