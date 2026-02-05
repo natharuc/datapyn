@@ -241,7 +241,6 @@ class SessionWidget(QWidget):
         except Exception:
             # Qualquer erro ao obter a conexão é tratado como "sem conexão ativa",
             # mas registramos para facilitar a depuração.
-            import traceback
             traceback.print_exc()
         
         return None
