@@ -12,6 +12,7 @@ pyodbc>=5.0.0
 mysql-connector-python>=8.0.0
 PyMySQL>=1.1.0
 psycopg2-binary>=2.9.0
+mariadb>=1.1.0
 
 # Data Processing
 pandas>=2.0.0

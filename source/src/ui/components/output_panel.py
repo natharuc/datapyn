@@ -179,3 +179,11 @@ class OutputPanel(QWidget):
     def get_html(self) -> str:
         """Retorna HTML"""
         return self.text_edit.toHtml()
+        
+    def toPlainText(self) -> str:
+        """Compatibilidade: retorna texto plano"""
+        return self.text_edit.toPlainText()
+        
+    def verticalScrollBar(self):
+        """Compatibilidade: retorna barra de scroll vertical"""
+        return self.text_edit.verticalScrollBar()

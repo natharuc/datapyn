@@ -225,17 +225,38 @@ THEMES = {
 class ThemeManager:
     """Gerencia temas da aplicação"""
     
-    def __init__(self, config_path: str = None):
-        # Sempre usar tema dark (VS Code)
-        self.current_theme = 'dark'
+    def __init__(self, config_path: str = None, initial_theme: str = 'dark'):
+        # Tema geral da aplicação
+        self.current_theme = initial_theme if initial_theme in THEMES else 'dark'
+        # Tema específico dos editores (se None, usa o tema geral)
+        self.editor_theme = None
     
     def _load_theme(self) -> str:
-        """Sempre retorna tema dark"""
-        return 'dark'
+        """Retorna tema atual"""
+        return self.current_theme
     
     def save_theme(self, theme_name: str):
-        """Não faz nada - tema é fixo"""
-        pass
+        """Define o tema atual"""
+        if theme_name in THEMES:
+            self.current_theme = theme_name
+    
+    def set_theme(self, theme_name: str):
+        """Define o tema atual"""
+        if theme_name in THEMES:
+            self.current_theme = theme_name
+            return True
+        return False
+    
+    def set_editor_theme(self, theme_name: str):
+        """Define tema específico para editores"""
+        if theme_name in THEMES:
+            self.editor_theme = theme_name
+            return True
+        return False
+    
+    def get_editor_theme_name(self) -> str:
+        """Retorna nome do tema dos editores (se definido) ou tema geral"""
+        return self.editor_theme or self.current_theme
     
     def get_current_theme(self) -> Dict[str, Any]:
         """Retorna configuração do tema atual"""
@@ -251,19 +272,25 @@ class ThemeManager:
     
     def get_editor_colors(self) -> Dict[str, QColor]:
         """Retorna cores do editor como QColor"""
-        theme = self.get_current_theme()
+        # Usar tema específico dos editores se definido
+        theme_name = self.editor_theme or self.current_theme
+        theme = THEMES.get(theme_name, THEMES['dark'])
         colors = theme['editor']
         return {k: QColor(v) for k, v in colors.items()}
     
     def get_sql_colors(self) -> Dict[str, QColor]:
         """Retorna cores SQL como QColor"""
-        theme = self.get_current_theme()
+        # Usar tema específico dos editores se definido
+        theme_name = self.editor_theme or self.current_theme
+        theme = THEMES.get(theme_name, THEMES['dark'])
         colors = theme['sql']
         return {k: QColor(v) for k, v in colors.items()}
     
     def get_python_colors(self) -> Dict[str, QColor]:
         """Retorna cores Python como QColor"""
-        theme = self.get_current_theme()
+        # Usar tema específico dos editores se definido
+        theme_name = self.editor_theme or self.current_theme
+        theme = THEMES.get(theme_name, THEMES['dark'])
         colors = theme['python']
         return {k: QColor(v) for k, v in colors.items()}
     
