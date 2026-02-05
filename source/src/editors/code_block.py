@@ -119,7 +119,7 @@ class CodeBlock(QFrame):
         # Seletor de conexão
         self.conn_combo = QComboBox()
         self.conn_combo.setFixedWidth(150)
-        self.conn_combo.setToolTip("Conexao de dados para este bloco")
+        self.conn_combo.setToolTip("Conexão de dados para este bloco")
         self.conn_combo.setStyleSheet("""
             QComboBox {
                 background: #2d2d30;
@@ -333,7 +333,7 @@ class CodeBlock(QFrame):
         self.conn_combo.clear()
         
         # Adicionar opção "Padrão da aba"
-        self.conn_combo.addItem("(Padrao da aba)", "")
+        self.conn_combo.addItem("(Padrão da aba)", "")
         
         # Adicionar conexões
         for conn_name, display_name in connections:

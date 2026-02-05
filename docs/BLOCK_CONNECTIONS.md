@@ -1,42 +1,42 @@
-# Conexoes por Bloco - Guia de Uso
+# Conexões por Bloco - Guia de Uso
 
-## Visao Geral
+## Visão Geral
 
-O DataPyn agora permite que cada bloco de codigo utilize uma conexao de banco de dados diferente. Isso possibilita trabalhar com multiplas fontes de dados na mesma aba de forma organizada.
+O DataPyn agora permite que cada bloco de código utilize uma conexão de banco de dados diferente. Isso possibilita trabalhar com múltiplas fontes de dados na mesma aba de forma organizada.
 
 ## Recursos Principais
 
-### 1. Selecao de Conexao por Bloco
+### 1. Seleção de Conexão por Bloco
 
-Cada bloco possui um seletor de conexao na barra de controle, ao lado do seletor de linguagem:
+Cada bloco possui um seletor de conexão na barra de controle, ao lado do seletor de linguagem:
 
-- **Padrao da aba**: Usa a conexao ativa da aba (comportamento anterior)
-- **Conexoes especificas**: Permite selecionar qualquer conexao salva no DataPyn
+- **Padrão da aba**: Usa a conexão ativa da aba (comportamento anterior)
+- **Conexões específicas**: Permite selecionar qualquer conexão salva no DataPyn
 
-### 2. Novos Blocos Herdam Conexao da Aba
+### 2. Novos Blocos Herdam Conexão da Aba
 
-Quando voce cria um novo bloco:
-- Por padrao, ele usa a conexao da aba (se houver uma conectada)
-- Voce pode alterar a conexao a qualquer momento usando o seletor
+Quando você cria um novo bloco:
+- Por padrão, ele usa a conexão da aba (se houver uma conectada)
+- Você pode alterar a conexão a qualquer momento usando o seletor
 
-### 3. Persistencia
+### 3. Persistência
 
-A conexao selecionada em cada bloco e salva quando voce:
+A conexão selecionada em cada bloco é salva quando você:
 - Salva a sessao/workspace
 - Fecha e reabre o DataPyn
 - Duplica uma aba
 
-## Usando Conexoes em Codigo Python
+## Usando Conexões em Código Python
 
-### Variavel `conn` ou `connection`
+### Variável `conn` ou `connection`
 
-Quando um bloco Python e executado, o objeto de conexao selecionado fica disponivel automaticamente no namespace como `conn` ou `connection`:
+Quando um bloco Python é executado, o objeto de conexão selecionado fica disponível automaticamente no namespace como `conn` ou `connection`:
 
 ```python
 # Exemplo 1: Executar query usando pandas
 import pandas as pd
 
-# A variavel 'conn' esta automaticamente disponivel
+# A variável 'conn' está automaticamente disponível
 df = pd.read_sql("SELECT * FROM users", conn)
 print(df.head())
 ```
@@ -60,9 +60,9 @@ with conn.connection.cursor() as cursor:
     conn.connection.commit()
 ```
 
-### Multiplas Conexoes em Blocos Diferentes
+### Múltiplas Conexões em Blocos Diferentes
 
-Voce pode trabalhar com multiplas fontes de dados em uma mesma aba:
+Você pode trabalhar com múltiplas fontes de dados em uma mesma aba:
 
 **Bloco 1** (Conexao: `DB_Producao` - Linguagem: SQL)
 ```sql

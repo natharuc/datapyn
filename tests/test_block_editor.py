@@ -130,7 +130,7 @@ class TestCodeBlock:
         
         # Deve ter 3 itens: (Padrao da aba) + 2 conexoes
         assert block.conn_combo.count() == 3
-        assert block.conn_combo.itemText(0) == "(Padrao da aba)"
+        assert block.conn_combo.itemText(0) == "(Padrão da aba)"
         assert block.conn_combo.itemData(0) == ""
         assert block.conn_combo.itemText(1) == "Connection 1 (mysql://localhost/db1)"
         assert block.conn_combo.itemData(1) == "conn1"
