@@ -576,7 +576,7 @@ class TestBlockEditorConnections:
         blocks[0].set_code('SELECT 1')
         blocks[0].set_connection_name('conn1')
         
-        block2 = editor.add_block(language='python', code='x = 1', connection_name='conn2')
+        editor.add_block(language='python', code='x = 1', connection_name='conn2')
         
         with qtbot.waitSignal(editor.execute_queue, timeout=1000) as blocker:
             editor.execute_all_blocks()

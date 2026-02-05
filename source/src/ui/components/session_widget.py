@@ -239,7 +239,10 @@ class SessionWidget(QWidget):
             if connection_name == self.session.connection_name:
                 return self.session.connector
         except Exception:
-            pass
+            # Qualquer erro ao obter a conexão é tratado como "sem conexão ativa",
+            # mas registramos para facilitar a depuração.
+            import traceback
+            traceback.print_exc()
         
         return None
     

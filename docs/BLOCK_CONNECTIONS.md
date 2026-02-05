@@ -37,27 +37,28 @@ Quando um bloco Python é executado, o objeto de conexão selecionado fica dispo
 import pandas as pd
 
 # A variável 'conn' está automaticamente disponível
-df = pd.read_sql("SELECT * FROM users", conn)
+# Use conn.engine para pandas (DatabaseConnector usa SQLAlchemy)
+df = pd.read_sql("SELECT * FROM users", conn.engine)
 print(df.head())
 ```
 
 ```python
 # Exemplo 2: Executar query diretamente na conexao
-# Para SQL Server, MySQL, PostgreSQL, etc.
+# Para operações com cursor, use o raw_connection do SQLAlchemy
 
-cursor = conn.connection.cursor()
+cursor = conn.engine.raw_connection().cursor()
 cursor.execute("SELECT COUNT(*) FROM orders")
 count = cursor.fetchone()[0]
 print(f"Total de pedidos: {count}")
+cursor.close()
 ```
 
 ```python
-# Exemplo 3: Usar SQLAlchemy-style
+# Exemplo 3: Usar transações com SQLAlchemy
 from sqlalchemy import text
 
-with conn.connection.cursor() as cursor:
-    cursor.execute("INSERT INTO logs (message) VALUES (?)", ("Nova entrada",))
-    conn.connection.commit()
+with conn.engine.begin() as connection:
+    connection.execute(text("INSERT INTO logs (message) VALUES (:msg)"), {"msg": "Nova entrada"})
 ```
 
 ### Múltiplas Conexões em Blocos Diferentes
@@ -76,8 +77,8 @@ WHERE order_date >= '2024-01-01'
 # conn aqui aponta para DB_Analytics
 import pandas as pd
 
-# Buscar dados de clientes do analytics
-customers_df = pd.read_sql("SELECT * FROM customer_segments", conn)
+# Buscar dados de clientes do analytics (use conn.engine)
+customers_df = pd.read_sql("SELECT * FROM customer_segments", conn.engine)
 
 # Juntar com dados de orders do bloco anterior (variavel 'df')
 result = df.merge(customers_df, on='customer_id')
@@ -125,7 +126,8 @@ VALUES ('analise_vendas', 100, GETDATE())
    - Conexao: `DB_Destination`
    - Linguagem: Python
    ```python
-   df.to_sql('tabela_destino', conn, if_exists='append', index=False)
+   # Use conn.engine para pandas
+   df.to_sql('tabela_destino', conn.engine, if_exists='append', index=False)
    ```
 
 ## Objetos Disponiveis no Namespace Python
@@ -135,11 +137,17 @@ Quando voce executa um bloco Python, os seguintes objetos estao disponiveis:
 | Variavel | Descricao |
 |----------|-----------|
 | `conn` | Objeto de conexao selecionado no bloco (DatabaseConnector) |
+| `conn.engine` | Motor SQLAlchemy para uso com pandas (`pd.read_sql`, `df.to_sql`) |
 | `connection` | Alias para `conn` |
 | `pd` | Pandas (import pandas as pd) |
 | `df` | DataFrame resultante do ultimo bloco SQL executado |
 | `df1`, `df2`, ... | DataFrames adicionais se o SQL retornou multiplos resultados |
 | `_last_result` | Resultado do ultimo bloco executado |
+
+**Importante**: Para operações com pandas, use `conn.engine` em vez de `conn` diretamente:
+- ✅ Correto: `pd.read_sql("SELECT * FROM table", conn.engine)`
+- ✅ Correto: `df.to_sql('table', conn.engine, if_exists='append')`
+- ❌ Incorreto: `pd.read_sql("SELECT * FROM table", conn)` (não funcionará)
 
 ## Notas Importantes
 
@@ -187,14 +195,14 @@ SELECT * FROM legacy_customers WHERE migrated = 0
 import pandas as pd
 
 # df contem dados do bloco anterior
-# conn aponta para DB_Target
+# conn aponta para DB_Target (use conn.engine para pandas)
 
 # Transformar dados
 df['full_name'] = df['first_name'] + ' ' + df['last_name']
 df['created_at'] = pd.to_datetime('now')
 
-# Carregar no banco de destino
-df.to_sql('customers', conn, if_exists='append', index=False)
+# Carregar no banco de destino (use conn.engine)
+df.to_sql('customers', conn.engine, if_exists='append', index=False)
 
 print(f"Migrados {len(df)} clientes")
 ```

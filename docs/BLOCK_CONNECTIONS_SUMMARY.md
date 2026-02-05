@@ -85,8 +85,8 @@ WHERE order_date >= '2024-01-01'
 ```python
 import pandas as pd
 
-# conn points to Analytics_DB
-segments = pd.read_sql("SELECT * FROM customer_segments", conn)
+# conn points to Analytics_DB (use conn.engine for pandas)
+segments = pd.read_sql("SELECT * FROM customer_segments", conn.engine)
 
 # Merge with orders from previous block (df variable)
 result = df.merge(segments, on='customer_id')
@@ -103,13 +103,13 @@ SELECT * FROM legacy_users
 **Block 2** - Transform & Load (Connection: `Target_DB`)
 ```python
 # df contains data from Block 1
-# conn points to Target_DB
+# conn points to Target_DB (use conn.engine for pandas)
 
 # Transform
 df['migrated_at'] = pd.to_datetime('now')
 
-# Load to target database
-df.to_sql('users', conn, if_exists='append', index=False)
+# Load to target database (use conn.engine)
+df.to_sql('users', conn.engine, if_exists='append', index=False)
 print(f"Migrated {len(df)} users")
 ```
 
@@ -147,7 +147,8 @@ namespace['connection'] = connector
 
 This allows users to write:
 ```python
-df = pd.read_sql("SELECT * FROM table", conn)
+# Use conn.engine for pandas operations (DatabaseConnector uses SQLAlchemy)
+df = pd.read_sql("SELECT * FROM table", conn.engine)
 ```
 
 ### Serialization Format

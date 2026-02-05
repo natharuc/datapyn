@@ -309,10 +309,21 @@ class CodeBlock(QFrame):
             self._on_language_changed()
     
     def get_connection_name(self) -> str:
-        """Retorna nome da conexão selecionada ou string vazia"""
+        """Retorna nome da conexão selecionada ou valor persistido, ou string vazia"""
+        # Se o combo ainda não foi populado, usar o valor persistido
+        if self.conn_combo.count() == 0:
+            return self._connection_name or ''
+        
+        # Se não há índice válido selecionado, também usar o valor persistido
         if self.conn_combo.currentIndex() < 0:
-            return ''
-        return self.conn_combo.currentData() or ''
+            return self._connection_name or ''
+        
+        current = self.conn_combo.currentData()
+        if current:
+            return current
+        
+        # Se o dado atual é vazio/nulo mas temos um valor persistido, usar ele
+        return self._connection_name or ''
     
     def set_connection_name(self, conn_name: str):
         """Define conexão selecionada"""
@@ -498,7 +509,7 @@ class CodeBlock(QFrame):
             'language': self.get_language(), 
             'code': self.get_code(),
             'height': self.editor_container.height(),
-            'connection_name': self.get_connection_name()
+            'connection_name': self._connection_name or ''
         }
     
     @classmethod
