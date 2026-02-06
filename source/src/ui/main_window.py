@@ -1670,7 +1670,7 @@ class MainWindow(DockingMainWindow):
             
             # Se mudou o nome, deletar antiga
             if name != connection_name:
-                self.connection_manager.delete_connection(connection_name)
+                self.connection_manager.delete_connection_config(connection_name)
             
             # Salva a conexão
             self.connection_manager.save_connection_config(

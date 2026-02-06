@@ -3,29 +3,189 @@ Painel de conexoes - Material Design Flat
 """
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFrame,
                              QLabel, QListWidget, QListWidgetItem, QPushButton, QMenu)
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QByteArray
+from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap, QPainter
+from PyQt6.QtSvg import QSvgRenderer
 import qtawesome as qta
+import os
+import re
+
+
+# Pasta de icones customizados
+ICONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'assets', 'icons', 'db')
+
+# Mapeamento de icones e cores por tipo de banco (fallback para qtawesome)
+DB_TYPE_ICONS = {
+    'sqlserver': {'icon': 'mdi.database', 'color': '#CC2927'},           # SQL Server - vermelho Microsoft
+    'mssql': {'icon': 'mdi.database', 'color': '#CC2927'},               # Alias
+    'mysql': {'icon': 'mdi.database-outline', 'color': '#00758F'},       # MySQL - azul
+    'mariadb': {'icon': 'mdi.database-marker', 'color': '#C0765A'},      # MariaDB - marrom/coral
+    'postgresql': {'icon': 'mdi.database-cog', 'color': '#336791'},      # PostgreSQL - azul
+    'postgres': {'icon': 'mdi.database-cog', 'color': '#336791'},        # Alias
+    'sqlite': {'icon': 'mdi.file-document-outline', 'color': '#003B57'}, # SQLite - azul escuro
+}
+
+
+def _normalize_db_type(db_type: str) -> str:
+    """Normaliza o nome do tipo de banco"""
+    db_type_lower = (db_type or '').lower().replace(' ', '').replace('_', '')
+    
+    if 'sql' in db_type_lower and 'server' in db_type_lower:
+        return 'sqlserver'
+    elif 'maria' in db_type_lower:
+        return 'mariadb'
+    elif 'postgre' in db_type_lower:
+        return 'postgresql'
+    elif 'mysql' in db_type_lower:
+        return 'mysql'
+    elif 'sqlite' in db_type_lower:
+        return 'sqlite'
+    
+    return db_type_lower
+
+
+def _load_svg_with_color(svg_path: str, color: str, size: int = 32) -> QIcon:
+    """Carrega SVG e aplica cor customizada
+    
+    Args:
+        svg_path: Caminho para o arquivo SVG
+        color: Cor em formato hex (#RRGGBB)
+        size: Tamanho do icone em pixels
+    
+    Returns:
+        QIcon com a cor aplicada
+    """
+    try:
+        with open(svg_path, 'r', encoding='utf-8') as f:
+            svg_content = f.read()
+        
+        # Substitui cores no CSS (dentro de <style> ou atributo style)
+        # Padroes: fill:#XXXXXX ou fill: #XXXXXX ou fill:rgb(...) etc
+        svg_content = re.sub(r'fill\s*:\s*#[0-9a-fA-F]{3,6}', f'fill:{color}', svg_content)
+        svg_content = re.sub(r'stroke\s*:\s*#[0-9a-fA-F]{3,6}', f'stroke:{color}', svg_content)
+        
+        # Substitui cores em atributos (fill="..." e stroke="...")
+        svg_content = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg_content)
+        svg_content = re.sub(r'stroke="[^"]*"', f'stroke="{color}"', svg_content)
+        
+        # Se nao tinha fill, adiciona no primeiro elemento de path/circle/rect
+        if 'fill=' not in svg_content and 'fill:' not in svg_content:
+            svg_content = re.sub(r'<(path|circle|rect|polygon)', f'<\\1 fill="{color}"', svg_content)
+        
+        # Renderiza o SVG
+        svg_bytes = QByteArray(svg_content.encode('utf-8'))
+        renderer = QSvgRenderer(svg_bytes)
+        
+        if not renderer.isValid():
+            return None
+        
+        # Cria pixmap e pinta o SVG
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        
+        return QIcon(pixmap)
+        
+    except Exception as e:
+        print(f"Erro ao carregar SVG {svg_path}: {e}")
+        return None
+
+
+def get_db_icon(db_type: str, custom_color: str = None) -> QIcon:
+    """Retorna icone para o tipo de banco
+    
+    Prioridade:
+    1. SVG customizado em assets/icons/db/{db_type}.svg
+    2. Icone padrao do qtawesome
+    
+    Args:
+        db_type: Tipo do banco (sqlserver, mysql, etc)
+        custom_color: Cor customizada (opcional, sobrescreve padrao)
+    
+    Returns:
+        QIcon com icone do banco
+    """
+    db_type_normalized = _normalize_db_type(db_type)
+    
+    # Pega cor padrao ou customizada
+    config = DB_TYPE_ICONS.get(db_type_normalized, {'icon': 'mdi.database', 'color': '#64b5f6'})
+    color = custom_color if custom_color else config['color']
+    
+    # Tenta carregar SVG customizado
+    svg_path = os.path.join(ICONS_DIR, f'{db_type_normalized}.svg')
+    if os.path.exists(svg_path):
+        icon = _load_svg_with_color(svg_path, color)
+        if icon:
+            return icon
+    
+    # Fallback para qtawesome
+    return qta.icon(config['icon'], color=color)
+
+
+class ConnectionItemWidget(QWidget):
+    """Widget customizado para item de conexao com nome e grupo em linhas separadas"""
+    
+    def __init__(self, name: str, group: str = '', icon: QIcon = None, parent=None):
+        super().__init__(parent)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(8)
+        
+        # Icone
+        if icon:
+            icon_label = QLabel()
+            icon_label.setPixmap(icon.pixmap(24, 24))
+            icon_label.setFixedSize(28, 28)
+            layout.addWidget(icon_label)
+        
+        # Container para textos
+        text_container = QWidget()
+        text_layout = QVBoxLayout(text_container)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(0)
+        
+        # Nome da conexao (linha principal)
+        self.name_label = QLabel(name)
+        self.name_label.setStyleSheet("font-size: 13px; font-weight: 500;")
+        text_layout.addWidget(self.name_label)
+        
+        # Grupo (linha secundaria - menor e cinza)
+        if group:
+            self.group_label = QLabel(group)
+            self.group_label.setStyleSheet("font-size: 10px;")
+            text_layout.addWidget(self.group_label)
+        
+        layout.addWidget(text_container)
+        layout.addStretch()
 
 
 class ConnectionItem(QListWidgetItem):
-    """Item de conexao"""
+    """Item de conexao com icone especifico por banco"""
     
     def __init__(self, name: str, config: dict):
         super().__init__()
         self.connection_name = name
         self.config = config
         
-        # Icone + texto - usa cor da conexao se definida
-        icon_color = config.get('color', '#64b5f6')
-        icon = qta.icon('mdi.database', color=icon_color)
-        self.setIcon(icon)
-        self.setText(name)
-        
         db_type = config.get('db_type', 'SQL Server')
         host = config.get('host', '')
         database = config.get('database', '')
-        self.setToolTip(f"{db_type}\n{host}/{database}")
+        group = config.get('group', '')
+        custom_color = config.get('color', '')
+        
+        # Icone especifico por tipo de banco (SVG customizado ou qtawesome)
+        self.icon = get_db_icon(db_type, custom_color if custom_color else None)
+        self.group = group
+        
+        # Tooltip completo
+        self.setToolTip(f"{db_type}\n{host}\n{database}")
+        
+        # Tamanho para acomodar 2 linhas se tiver grupo
+        self.setSizeHint(QSize(250, 48 if group else 36))
 
 
 class ActiveConnectionWidget(QFrame):
@@ -129,6 +289,10 @@ class ConnectionsList(QFrame):
         # Lista
         self.list_widget = QListWidget()
         self.list_widget.setMinimumHeight(150)
+        self.list_widget.setIconSize(QSize(28, 28))  # Icones maiores
+        self.list_widget.setSpacing(2)  # Espacamento entre itens
+        self.list_widget.setWordWrap(True)  # Permite quebra de linha
+        self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)  # Nao trunca com "..."
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         # Context menu
         self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -215,6 +379,10 @@ class ConnectionsList(QFrame):
             item = ConnectionItem(name, config)
             item.setData(Qt.ItemDataRole.UserRole, name)
             self.list_widget.addItem(item)
+            
+            # Widget customizado com nome e grupo separados
+            widget = ConnectionItemWidget(name, item.group, item.icon)
+            self.list_widget.setItemWidget(item, widget)
 
 
 class ConnectionPanel(QWidget):

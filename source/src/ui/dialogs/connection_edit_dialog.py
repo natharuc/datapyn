@@ -215,10 +215,6 @@ class ConnectionEditDialog(QDialog):
         
         layout.addWidget(org_group)
         
-        # Status de teste
-        self.lbl_status = QLabel("")
-        layout.addWidget(self.lbl_status)
-        
         # Botões
         buttons_layout = QHBoxLayout()
         
@@ -366,11 +362,9 @@ class ConnectionEditDialog(QDialog):
         self.loading_dialog.close()
         
         if success:
-            self.lbl_status.setText(message)
-            self.lbl_status.setStyleSheet("color: #4ec9b0; font-weight: bold;")
+            QMessageBox.information(self, "Sucesso", message)
         else:
-            self.lbl_status.setText(message)
-            self.lbl_status.setStyleSheet("color: #f48771;")
+            QMessageBox.critical(self, "Erro", message)
     
     def _on_save(self):
         """Valida e salva"""

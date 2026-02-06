@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTreeWidget, 
     QTreeWidgetItem, QMenu, QInputDialog, QMessageBox, QSplitter,
     QWidget, QLabel, QFormLayout, QLineEdit, QSpinBox, QComboBox,
-    QCheckBox, QColorDialog, QFrame
+    QCheckBox, QColorDialog, QFrame, QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QAction
@@ -18,6 +18,60 @@ try:
     HAS_QTAWESOME = True
 except ImportError:
     HAS_QTAWESOME = False
+
+
+class DraggableTreeWidget(QTreeWidget):
+    """TreeWidget com suporte a drag-and-drop de conexões para grupos"""
+    
+    item_dropped = pyqtSignal(str, str)  # connection_name, target_group ('' para raiz)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QTreeWidget.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    
+    def dropEvent(self, event):
+        """Processa drop de conexão em grupo"""
+        # Pega item sendo arrastado
+        dragged_item = self.currentItem()
+        if not dragged_item:
+            event.ignore()
+            return
+        
+        dragged_data = dragged_item.data(0, Qt.ItemDataRole.UserRole)
+        if not dragged_data or dragged_data.get('type') != 'connection':
+            # Só permite arrastar conexões, não grupos
+            event.ignore()
+            return
+        
+        connection_name = dragged_data.get('name', '')
+        
+        # Pega item de destino (onde soltou)
+        target_item = self.itemAt(event.position().toPoint())
+        target_group = ''
+        
+        if target_item:
+            target_data = target_item.data(0, Qt.ItemDataRole.UserRole)
+            if target_data:
+                if target_data.get('type') == 'group':
+                    # Soltou em um grupo
+                    target_group = target_data.get('name', '')
+                elif target_data.get('type') == 'connection':
+                    # Soltou em outra conexão - verifica se está dentro de grupo
+                    parent = target_item.parent()
+                    if parent:
+                        parent_data = parent.data(0, Qt.ItemDataRole.UserRole)
+                        if parent_data and parent_data.get('type') == 'group':
+                            target_group = parent_data.get('name', '')
+        
+        # Emite sinal para processar a mudança
+        self.item_dropped.emit(connection_name, target_group)
+        
+        # Ignora o evento padrão (vamos recarregar a árvore manualmente)
+        event.ignore()
 
 
 class ConnectionsManagerDialog(QDialog):
@@ -72,12 +126,13 @@ class ConnectionsManagerDialog(QDialog):
         toolbar_layout.addStretch()
         left_layout.addLayout(toolbar_layout)
         
-        # Árvore de conexões
-        self.tree = QTreeWidget()
+        # Árvore de conexões com suporte a drag-and-drop
+        self.tree = DraggableTreeWidget()
         self.tree.setHeaderLabels(["Conexões"])
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.item_dropped.connect(self._on_connection_dropped)
         # Duplo clique deve EDITAR conexão ou renomear grupo inline
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         left_layout.addWidget(self.tree)
@@ -253,6 +308,48 @@ class ConnectionsManagerDialog(QDialog):
             self.btn_edit.setEnabled(True)
             self.btn_delete.setEnabled(True)
     
+    def _on_connection_dropped(self, connection_name: str, target_group: str):
+        """Processa quando uma conexão é arrastada para um grupo"""
+        if not connection_name:
+            return
+        
+        # Pega configuração atual da conexão
+        config = self.connection_manager.get_connection_config(connection_name)
+        if not config:
+            return
+        
+        # Verifica se o grupo mudou
+        current_group = config.get('group', '')
+        if current_group == target_group:
+            return  # Não mudou nada
+        
+        # Atualiza o grupo da conexão
+        config['group'] = target_group
+        
+        # Salva a conexão com o novo grupo
+        self.connection_manager.save_connection_config(
+            connection_name,
+            config.get('db_type', 'sqlserver'),
+            config.get('host', ''),
+            config.get('port', 1433),
+            config.get('database', ''),
+            config.get('username', ''),
+            config.get('save_password', False),
+            config.get('password', ''),
+            target_group,  # Novo grupo
+            config.get('use_windows_auth', False),
+            config.get('color', '')
+        )
+        
+        # Recarrega a árvore
+        self._load_connections()
+        
+        # Feedback visual
+        if target_group:
+            print(f"Conexão '{connection_name}' movida para grupo '{target_group}'")
+        else:
+            print(f"Conexão '{connection_name}' removida do grupo")
+
     def _on_item_double_clicked(self, item, column):
         """Ao dar duplo clique - edita conexão ou renomeia grupo inline"""
         data = item.data(0, Qt.ItemDataRole.UserRole)
