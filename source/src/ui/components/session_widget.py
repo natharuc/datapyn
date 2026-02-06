@@ -199,14 +199,7 @@ class SessionWidget(QWidget):
         """Mostra o painel de output"""
         main_window = self._get_main_window()
         if main_window:
-            main_window.show_panel('results')
-            # Seleciona aba Output
-            results_panel = main_window.get_panel('results')
-            if results_panel:
-                for i in range(results_panel.tab_widget.count()):
-                    if results_panel.tab_widget.tabText(i) == 'Output':
-                        results_panel.tab_widget.setCurrentIndex(i)
-                        break
+            main_window.show_panel('output')
     
     def _set_results(self, data, name="result"):
         """Define resultados no painel global"""

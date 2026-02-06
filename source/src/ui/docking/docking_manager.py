@@ -491,7 +491,7 @@ class DockingManager(QObject):
     def eventFilter(self, obj, event):
         """Filtro de eventos para capturar drags globais"""
         # Captura eventos de mouse para finalizar drag quando solto fora
-        if self.is_dragging and event.type() in [event.Type.MouseButtonRelease, event.Type.Drop]:
+        if getattr(self, 'is_dragging', False) and event.type() in [event.Type.MouseButtonRelease, event.Type.Drop]:
             if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton:
                 print(f"DEBUG: Mouse release detectado durante drag - criando painel flutuante")
                 # Drop fora de área válida - criar painel flutuante
