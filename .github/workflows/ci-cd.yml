@@ -20,6 +20,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Disable ESM apt sources
+        # Disable Ubuntu Pro ESM sources to prevent firewall blocks during apt-get operations
         run: |
           sudo rm -f /etc/apt/sources.list.d/ubuntu-esm-*.list
           sudo sed -i '/esm\.ubuntu\.com/d' /etc/apt/sources.list
