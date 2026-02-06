@@ -8,10 +8,11 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGroupBox, QListWidget, QListWidgetItem, QFrame,
                              QApplication)
 from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject, QSettings
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor, QImage
 import sys
 import re
 import io
+import ast
 import logging
 import traceback
 from io import StringIO
@@ -75,37 +76,41 @@ class SqlWorker(QObject):
 class PythonWorker(QObject):
     """Worker centralizado para execucao Python em background"""
     finished = pyqtSignal(object, str, str, dict, list)  # (result, output, error, namespace, figures)
-    
+
     def __init__(self, code, namespace, is_expression):
         super().__init__()
         self.code = code
         self.namespace = namespace
         self.is_expression = is_expression
-    
+
     def run(self):
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
         try:
-            # Configurar matplotlib para backend nao-interativo (Agg)
-            # Isso evita o erro de GUI fora da main thread
+            # Configurar matplotlib para backend nao-interativo (Agg) com tema escuro
             self._setup_matplotlib_backend()
-            
+
             # Snapshot de DataFrames antes da execucao para detectar novos
             df_snapshot = {k: id(v) for k, v in self.namespace.items()
                           if isinstance(v, pd.DataFrame)}
-            
-            # Captura stdout
-            old_stdout = sys.stdout
-            sys.stdout = captured_output = StringIO()
-            
+
+            # Captura stdout E stderr no mesmo buffer
+            # Assim print(), logging.info(), warnings, sys.stderr.write()
+            # todos aparecem no output panel
+            captured = StringIO()
+            sys.stdout = captured
+            sys.stderr = captured
+
             result_value = self._execute_centralized()
-            
+
             sys.stdout = old_stdout
-            output = captured_output.getvalue()
-            
+            sys.stderr = old_stderr
+            output = captured.getvalue()
+
             # Capturar figuras matplotlib pendentes
             figures = self._capture_matplotlib_figures()
-            
+
             # Se resultado e None, verificar se novos DataFrames foram criados
-            # para exibi-los automaticamente no grid de resultados
             if result_value is None:
                 new_dfs = [(k, v) for k, v in self.namespace.items()
                            if isinstance(v, pd.DataFrame)
@@ -113,26 +118,46 @@ class PythonWorker(QObject):
                            and (k not in df_snapshot or id(v) != df_snapshot[k])]
                 if new_dfs:
                     result_value = new_dfs[-1][1]
-            
-            # Retornar namespace atualizado
+
+            # Processar resultado rico (PIL Image, plotly, matplotlib Figure como valor)
+            result_value, extra_figs = self._process_rich_result(
+                result_value, has_captured_figures=bool(figures))
+            figures.extend(extra_figs)
+
             self.finished.emit(result_value, output, '', self.namespace, figures)
         except Exception as e:
             sys.stdout = old_stdout
+            sys.stderr = old_stderr
             self.finished.emit(None, '', traceback.format_exc(), self.namespace, [])
-    
+
     def _setup_matplotlib_backend(self):
-        """Configura matplotlib para usar backend Agg (nao-interativo)"""
+        """Configura matplotlib para usar backend Agg (nao-interativo) com tema escuro"""
         try:
             import matplotlib
             matplotlib.use('Agg')
-            # Fechar figuras anteriores para evitar acumulacao
             import matplotlib.pyplot as plt
             plt.close('all')
-            # Substituir plt.show() por um no-op para nao travar
+            # Substituir plt.show() por no-op para nao travar
             plt.show = lambda *args, **kwargs: None
+            # Tema escuro para combinar com a IDE
+            plt.rcParams.update({
+                'figure.facecolor': '#1e1e1e',
+                'axes.facecolor': '#2d2d30',
+                'axes.edgecolor': '#555555',
+                'axes.labelcolor': '#d4d4d4',
+                'text.color': '#d4d4d4',
+                'xtick.color': '#d4d4d4',
+                'ytick.color': '#d4d4d4',
+                'grid.color': '#3e3e42',
+                'legend.facecolor': '#2d2d30',
+                'legend.edgecolor': '#555555',
+                'figure.edgecolor': '#1e1e1e',
+                'savefig.facecolor': '#1e1e1e',
+                'savefig.edgecolor': '#1e1e1e',
+            })
         except ImportError:
             pass  # matplotlib nao instalado, ignorar
-    
+
     def _capture_matplotlib_figures(self) -> list:
         """Captura todas as figuras matplotlib abertas como bytes PNG"""
         figures_data = []
@@ -141,61 +166,132 @@ class PythonWorker(QObject):
             fig_nums = plt.get_fignums()
             if not fig_nums:
                 return []
-            
+
             for num in fig_nums:
                 fig = plt.figure(num)
                 buf = io.BytesIO()
-                fig.savefig(buf, format='png', dpi=120,
+                fig.savefig(buf, format='png', dpi=150,
                            bbox_inches='tight',
                            facecolor=fig.get_facecolor(),
                            edgecolor='none')
                 buf.seek(0)
                 figures_data.append(buf.getvalue())
                 buf.close()
-            
+
             plt.close('all')
         except ImportError:
             pass  # matplotlib nao instalado
         except Exception as e:
-            logger.warning(f"Erro ao capturar figuras matplotlib: {e}")
-        
+            logging.warning(f"Erro ao capturar figuras matplotlib: {e}")
+
         return figures_data
-    
+
     def _execute_centralized(self):
-        """Execução centralizada - todas as execuções Python passam aqui"""
+        """Execucao centralizada usando AST - todas as execucoes Python passam aqui.
+
+        Usa o modulo ast para separar corretamente statements de expressoes,
+        sem quebrar blocos multi-linha (for, if, try, def, class etc).
+        """
         code = self.code.strip()
         if not code:
             return None
-        
-        # Limpar linhas vazias e comentários
-        lines = [line for line in code.split('\n') if line.strip() and not line.strip().startswith('#')]
-        
-        if not lines:
-            return None
-        
-        # CASO 1: Uma linha só
-        if len(lines) == 1:
-            try:
-                # Tenta avaliar como expressão primeiro
-                return eval(lines[0], self.namespace)
-            except:
-                # Se falhar, executa como statement
-                exec(lines[0], self.namespace)
-                return None
-        
-        # CASO 2: Múltiplas linhas
-        # Executa todas exceto a última
-        exec_code = '\n'.join(lines[:-1])
-        exec(exec_code, self.namespace)
-        
-        # Tenta a última linha como expressão
-        last_line = lines[-1]
+
         try:
-            return eval(last_line, self.namespace)
-        except:
-            # Se falhar, executa como statement
-            exec(last_line, self.namespace)
+            tree = ast.parse(code)
+        except SyntaxError:
+            # Deixar o exec levantar o erro com traceback correto
+            exec(code, self.namespace)
             return None
+
+        if not tree.body:
+            return None
+
+        last_node = tree.body[-1]
+
+        # Se o ultimo node e uma expressao (nao assignment, for, if, etc),
+        # executar tudo menos ele, depois avaliar a expressao e retornar o valor
+        if isinstance(last_node, ast.Expr):
+            if len(tree.body) > 1:
+                exec_module = ast.Module(body=tree.body[:-1], type_ignores=[])
+                ast.fix_missing_locations(exec_module)
+                exec(compile(exec_module, '<exec>', 'exec'), self.namespace)
+            expr = ast.Expression(body=last_node.value)
+            ast.fix_missing_locations(expr)
+            return eval(compile(expr, '<eval>', 'eval'), self.namespace)
+        else:
+            # Ultimo node e statement (assignment, for, if, etc) - executar tudo
+            exec(compile(tree, '<exec>', 'exec'), self.namespace)
+            return None
+
+    def _process_rich_result(self, result, has_captured_figures=False):
+        """Converte objetos ricos (PIL Image, plotly, matplotlib Figure) em PNG.
+
+        Returns:
+            (result, extra_figures): resultado processado e lista de bytes PNG adicionais
+        """
+        extra_figures = []
+        if result is None:
+            return result, extra_figures
+
+        # matplotlib Figure retornado como valor de expressao
+        try:
+            from matplotlib.figure import Figure as MplFigure
+            if isinstance(result, MplFigure):
+                if has_captured_figures:
+                    # Ja capturado por _capture_matplotlib_figures, nao duplicar
+                    return None, extra_figures
+                buf = io.BytesIO()
+                result.savefig(buf, format='png', dpi=150,
+                              bbox_inches='tight',
+                              facecolor=result.get_facecolor(),
+                              edgecolor='none')
+                buf.seek(0)
+                extra_figures.append(buf.getvalue())
+                buf.close()
+                return None, extra_figures
+        except ImportError:
+            pass
+
+        # PIL/Pillow Image
+        try:
+            from PIL import Image as PILImage
+            if isinstance(result, PILImage.Image):
+                buf = io.BytesIO()
+                # Converter RGBA para RGB se necessario (PNG suporta ambos)
+                result.save(buf, format='PNG')
+                buf.seek(0)
+                extra_figures.append(buf.getvalue())
+                buf.close()
+                return None, extra_figures
+        except ImportError:
+            pass
+
+        # Plotly Figure -> tenta converter para PNG (requer kaleido)
+        try:
+            import plotly.graph_objects as go
+            if isinstance(result, go.Figure):
+                try:
+                    img_bytes = result.to_image(format='png', scale=2,
+                                               width=800, height=500)
+                    extra_figures.append(img_bytes)
+                    return None, extra_figures
+                except Exception:
+                    # kaleido nao instalado ou erro - mostra como texto
+                    pass
+        except ImportError:
+            pass
+
+        # Objeto com _repr_png_() (convencao IPython)
+        if hasattr(result, '_repr_png_'):
+            try:
+                png_data = result._repr_png_()
+                if png_data:
+                    extra_figures.append(png_data)
+                    return None, extra_figures
+            except Exception:
+                pass
+
+        return result, extra_figures
 
 
 class CrossSyntaxWorker(QObject):
@@ -2008,34 +2104,51 @@ class MainWindow(DockingMainWindow):
         thread.start()
     
     def _display_matplotlib_figures(self, figures: list):
-        """Exibe figuras matplotlib capturadas no painel de output"""
-        import base64
-        
+        """Exibe figuras/imagens capturadas no painel de output.
+
+        Usa QTextDocument.addResource para inserir imagens de forma confiavel
+        no QTextEdit, sem depender de data-URIs (que podem falhar em certas
+        versoes do Qt).
+        """
+        from PyQt6.QtGui import QTextCursor, QTextDocument
+        from PyQt6.QtCore import QUrl
+
         output_panel = self.global_output_panel
         if not output_panel:
             return
-        
+
+        text_edit = output_panel.text_edit
+        doc = text_edit.document()
         timestamp = datetime.now().strftime("%H:%M:%S")
-        
+
         for i, fig_bytes in enumerate(figures):
-            b64_data = base64.b64encode(fig_bytes).decode('utf-8')
-            
+            img = QImage()
+            if not img.loadFromData(fig_bytes):
+                continue
+
+            # Registrar imagem como recurso no documento
+            img_name = f"figure_{id(fig_bytes)}_{i}.png"
+            url = QUrl(img_name)
+            doc.addResource(QTextDocument.ResourceType.ImageResource, url, img)
+
             label = f"Grafico {i + 1}" if len(figures) > 1 else "Grafico"
-            
+
+            # Limitar largura ao viewport
+            max_w = max(text_edit.viewport().width() - 30, 200)
+            display_w = min(img.width(), max_w)
+
             html = (
-                f'<span style="color: #808080;">[{timestamp}]</span> '
+                f'<br><span style="color: #808080;">[{timestamp}]</span> '
                 f'<span style="color: #4ec9b0;">[{label}]</span><br>'
-                f'<img src="data:image/png;base64,{b64_data}" '
-                f'style="max-width: 100%;"><br>'
+                f'<img src="{img_name}" width="{display_w}"><br>'
             )
-            output_panel.text_edit.append(html)
-        
+            text_edit.append(html)
+
         # Scroll para o final
-        from PyQt6.QtGui import QTextCursor
-        cursor = output_panel.text_edit.textCursor()
+        cursor = text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        output_panel.text_edit.setTextCursor(cursor)
-        
+        text_edit.setTextCursor(cursor)
+
         self.show_panel('output')
     
     def _handle_execution_result(self, result=None, error=None, execution_type="Unknown", additional_info=""):
@@ -2063,23 +2176,7 @@ class MainWindow(DockingMainWindow):
         import pandas as pd
         
         results_panel = self.global_results_viewer
-        
-        # Verificar se e uma figura matplotlib
-        try:
-            from matplotlib.figure import Figure as MplFigure
-            if isinstance(result, MplFigure):
-                buf = io.BytesIO()
-                result.savefig(buf, format='png', dpi=120,
-                              bbox_inches='tight',
-                              facecolor=result.get_facecolor(),
-                              edgecolor='none')
-                buf.seek(0)
-                self._display_matplotlib_figures([buf.getvalue()])
-                buf.close()
-                return True
-        except ImportError:
-            pass
-        
+
         if isinstance(result, pd.DataFrame):
             # DATAFRAME -> GRID (results)
             if results_panel:

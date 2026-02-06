@@ -951,3 +951,223 @@ class TestPythonWorkerMatplotlib:
         """MainWindow possui metodo _display_matplotlib_figures"""
         from src.ui.main_window import MainWindow
         assert hasattr(MainWindow, '_display_matplotlib_figures')
+
+
+# ===========================================================================
+# PythonWorker - execucao AST e captura stderr
+# ===========================================================================
+
+class TestPythonWorkerASTExecution:
+    """Testes para execucao baseada em AST e captura de stderr"""
+
+    def test_ast_for_loop_executes_correctly(self):
+        """Blocos for nao quebram com a execucao AST"""
+        import pandas as pd
+        from src.ui.main_window import PythonWorker
+
+        code = "total = 0\nfor i in range(5):\n    total += i"
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append((r, ns)))
+        worker.run()
+
+        assert len(results) == 1
+        assert results[0][0] is None  # for loop nao retorna valor
+        assert results[0][1]['total'] == 10
+
+    def test_ast_if_else_block(self):
+        """Blocos if/else executam corretamente"""
+        from src.ui.main_window import PythonWorker
+
+        code = "x = 5\nif x > 3:\n    y = 'grande'\nelse:\n    y = 'pequeno'\ny"
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert results[0] == 'grande'
+
+    def test_ast_function_definition_and_call(self):
+        """Definicao e chamada de funcao funciona"""
+        from src.ui.main_window import PythonWorker
+
+        code = "def quadrado(n):\n    return n ** 2\nquadrado(7)"
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert results[0] == 49
+
+    def test_ast_try_except_block(self):
+        """Blocos try/except executam corretamente"""
+        from src.ui.main_window import PythonWorker
+
+        code = "try:\n    x = 1 / 0\nexcept ZeroDivisionError:\n    x = -1"
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append((r, ns)))
+        worker.run()
+
+        assert results[0][0] is None
+        assert results[0][1]['x'] == -1
+
+    def test_ast_preserves_comments_and_blank_lines(self):
+        """Comentarios e linhas em branco nao quebram execucao"""
+        from src.ui.main_window import PythonWorker
+
+        code = "# comentario\nx = 42\n\n# outro\nx"
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert results[0] == 42
+
+    def test_stderr_captured_in_output(self):
+        """stderr e capturado junto com stdout"""
+        from src.ui.main_window import PythonWorker
+
+        code = "import sys\nprint('stdout_msg')\nsys.stderr.write('stderr_msg')"
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        outputs = []
+        worker.finished.connect(lambda r, o, e, ns, f: outputs.append(o))
+        worker.run()
+
+        assert 'stdout_msg' in outputs[0]
+        assert 'stderr_msg' in outputs[0]
+
+    def test_logging_output_captured(self):
+        """Mensagens de logging sao capturadas quando handler usa stderr"""
+        from src.ui.main_window import PythonWorker
+
+        # Criar logger com handler explicito apontando para sys.stderr
+        # (que no worker e nosso StringIO capturado)
+        code = ("import logging, sys\n"
+                "h = logging.StreamHandler(sys.stderr)\n"
+                "h.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))\n"
+                "lg = logging.getLogger('test_capture_abc')\n"
+                "lg.handlers.clear()\n"
+                "lg.addHandler(h)\n"
+                "lg.setLevel(logging.DEBUG)\n"
+                "lg.warning('test_warning_msg')")
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        outputs = []
+        worker.finished.connect(lambda r, o, e, ns, f: outputs.append(o))
+        worker.run()
+
+        assert 'test_warning_msg' in outputs[0]
+
+
+# ===========================================================================
+# PythonWorker - processamento de resultado rico
+# ===========================================================================
+
+class TestPythonWorkerRichResult:
+    """Testes para _process_rich_result"""
+
+    def test_none_result_unchanged(self):
+        """Resultado None nao e processado"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("", {}, False)
+        result, figs = worker._process_rich_result(None)
+        assert result is None
+        assert figs == []
+
+    def test_plain_value_unchanged(self):
+        """Valores simples (int, str) nao sao processados"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("", {}, False)
+        result, figs = worker._process_rich_result(42)
+        assert result == 42
+        assert figs == []
+
+    def test_dataframe_unchanged(self):
+        """DataFrames nao sao convertidos para imagem"""
+        import pandas as pd
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("", {}, False)
+        df = pd.DataFrame({'A': [1]})
+        result, figs = worker._process_rich_result(df)
+        assert isinstance(result, pd.DataFrame)
+        assert figs == []
+
+    def test_repr_png_object(self):
+        """Objetos com _repr_png_() sao convertidos"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("", {}, False)
+
+        # Mock de objeto com _repr_png_
+        obj = MagicMock()
+        obj._repr_png_ = MagicMock(return_value=b'fake_png_data')
+        # Garantir que isinstance checks nao interceptem
+        obj.__class__ = type('CustomObj', (), {'_repr_png_': lambda self: b'fake_png_data'})
+
+        result, figs = worker._process_rich_result(obj)
+        assert result is None
+        assert len(figs) == 1
+        assert figs[0] == b'fake_png_data'
+
+    def test_matplotlib_figure_with_captured_skips(self):
+        """matplotlib Figure ja capturado nao e duplicado"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("", {}, False)
+
+        try:
+            import matplotlib.pyplot as plt
+            fig = plt.figure()
+            plt.close(fig)
+
+            result, figs = worker._process_rich_result(fig, has_captured_figures=True)
+            assert result is None
+            assert figs == []  # Nao duplica
+        except ImportError:
+            pytest.skip("matplotlib nao instalado")
+
+    def test_matplotlib_figure_without_captured_converts(self):
+        """matplotlib Figure nao capturado e convertido para PNG"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("", {}, False)
+
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            fig = plt.figure()
+            plt.plot([1, 2, 3])
+            plt.close(fig)
+
+            result, figs = worker._process_rich_result(fig, has_captured_figures=False)
+            assert result is None
+            assert len(figs) == 1
+            assert len(figs[0]) > 0  # PNG bytes
+        except ImportError:
+            pytest.skip("matplotlib nao instalado")
+
+    def test_matplotlib_dark_theme_applied(self):
+        """_setup_matplotlib_backend aplica tema escuro"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("", {}, False)
+
+        try:
+            worker._setup_matplotlib_backend()
+            import matplotlib.pyplot as plt
+            assert plt.rcParams['figure.facecolor'] == '#1e1e1e'
+            assert plt.rcParams['axes.facecolor'] == '#2d2d30'
+            assert plt.rcParams['text.color'] == '#d4d4d4'
+        except ImportError:
+            pytest.skip("matplotlib nao instalado")
