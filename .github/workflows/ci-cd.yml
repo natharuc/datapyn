@@ -22,6 +22,9 @@ jobs:
       - name: Install MariaDB Connector/C dependencies (Ubuntu)
         run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
 
+      - name: Install OpenGL dependencies (Ubuntu)
+        run: sudo apt-get install -y freeglut3-dev
+
       - name: install requirements
         run: |
           pip install -r requirements.txt
