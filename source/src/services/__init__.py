@@ -10,6 +10,7 @@ from .connection_service import ConnectionService, ConnectionConfig
 from .session_lifecycle_service import SessionLifecycleService
 from .panel_manager import PanelManager, PanelSet
 from .file_import_service import FileImportService
+from .package_manager_service import PackageManagerService, PackageInfo, PackageOperationResult
 
 __all__ = [
     'QueryService',
@@ -22,4 +23,7 @@ __all__ = [
     'PanelManager',
     'PanelSet',
     'FileImportService',
+    'PackageManagerService',
+    'PackageInfo',
+    'PackageOperationResult',
 ]

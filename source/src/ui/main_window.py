@@ -36,6 +36,7 @@ from src.core.mixed_executor import MixedLanguageExecutor
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.ui.dialogs.settings_dialog import SettingsDialog
+from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
 
 # Componentes da UI
 from src.ui.components.results_viewer import ResultsViewer
@@ -1262,6 +1263,14 @@ class MainWindow(DockingMainWindow):
         
         # Menu Ferramentas
         tools_menu = menubar.addMenu("&Ferramentas")
+        
+        packages_action = QAction("Gerenciador de &Pacotes...", self)
+        if HAS_QTAWESOME:
+            packages_action.setIcon(qta.icon('fa5s.cube', color='#cccccc'))
+        packages_action.triggered.connect(self._show_package_manager)
+        tools_menu.addAction(packages_action)
+        
+        tools_menu.addSeparator()
         
         settings_action = QAction("&Configurações de Atalhos...", self)
         if HAS_QTAWESOME:
@@ -2750,6 +2759,11 @@ class MainWindow(DockingMainWindow):
             """
         )
     
+    def _show_package_manager(self):
+        """Mostra dialogo de gerenciamento de pacotes"""
+        dialog = PackageManagerDialog(theme_manager=self.theme_manager, parent=self)
+        dialog.exec()
+
     def _show_settings(self):
         """Mostra diálogo de configurações"""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
