@@ -17,6 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: install requirements
         run: |
           pip install -r requirements.txt
@@ -36,7 +38,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v4
         with:
-          python-version: "3.9"
+          python-version: "3.12"
 
       - name: Use Python Semantic Release to prepare release
         id: release
