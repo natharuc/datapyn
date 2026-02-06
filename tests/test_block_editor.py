@@ -753,34 +753,34 @@ class TestFileDragAndDrop:
         return editor
     
     def test_generate_import_code_csv(self, editor):
-        """Deve gerar código de importação para CSV"""
+        """Deve gerar codigo de importacao para CSV"""
         code = editor._generate_import_code('/path/to/data.csv')
         assert code is not None
-        assert 'import pandas as pd' in code
+        assert 'import pandas' not in code
         assert "pd.read_csv('/path/to/data.csv')" in code
         assert 'df = ' in code
     
     def test_generate_import_code_json(self, editor):
-        """Deve gerar código de importação para JSON"""
+        """Deve gerar codigo de importacao para JSON"""
         code = editor._generate_import_code('/path/to/data.json')
         assert code is not None
-        assert 'import pandas as pd' in code
+        assert 'import pandas' not in code
         assert "pd.read_json('/path/to/data.json')" in code
         assert 'df = ' in code
     
     def test_generate_import_code_xlsx(self, editor):
-        """Deve gerar código de importação para XLSX"""
+        """Deve gerar codigo de importacao para XLSX"""
         code = editor._generate_import_code('/path/to/data.xlsx')
         assert code is not None
-        assert 'import pandas as pd' in code
+        assert 'import pandas' not in code
         assert "pd.read_excel('/path/to/data.xlsx')" in code
         assert 'df = ' in code
     
     def test_generate_import_code_xls(self, editor):
-        """Deve gerar código de importação para XLS"""
+        """Deve gerar codigo de importacao para XLS"""
         code = editor._generate_import_code('/path/to/data.xls')
         assert code is not None
-        assert 'import pandas as pd' in code
+        assert 'import pandas' not in code
         assert "pd.read_excel('/path/to/data.xls')" in code
         assert 'df = ' in code
     
@@ -922,9 +922,9 @@ class TestFileDragAndDrop:
         new_block = blocks[-1]
         assert new_block.get_language() == 'python'
         
-        # Deve conter código de importação
+        # Deve conter codigo de importacao
         code = new_block.get_code()
-        assert 'import pandas as pd' in code
+        assert 'import pandas' not in code
         assert 'pd.read_csv' in code
         assert '/path/to/data.csv' in code
     
@@ -957,9 +957,9 @@ class TestFileDragAndDrop:
         new_block = blocks[-1]
         assert new_block.get_language() == 'python'
         
-        # Deve conter código de importação
+        # Deve conter codigo de importacao
         code = new_block.get_code()
-        assert 'import pandas as pd' in code
+        assert 'import pandas' not in code
         assert 'pd.read_json' in code
         assert '/path/to/data.json' in code
     
@@ -992,9 +992,9 @@ class TestFileDragAndDrop:
         new_block = blocks[-1]
         assert new_block.get_language() == 'python'
         
-        # Deve conter código de importação
+        # Deve conter codigo de importacao
         code = new_block.get_code()
-        assert 'import pandas as pd' in code
+        assert 'import pandas' not in code
         assert 'pd.read_excel' in code
         assert '/path/to/data.xlsx' in code
     

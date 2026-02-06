@@ -1,5 +1,5 @@
 """
-StatusBar Material Design
+StatusBar da aplicacao
 """
 from PyQt6.QtWidgets import QStatusBar, QLabel
 from PyQt6.QtCore import QTimer, QElapsedTimer
@@ -7,14 +7,30 @@ import qtawesome as qta
 
 
 class MainStatusBar(QStatusBar):
-    """StatusBar Material"""
+    """StatusBar principal"""
     
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
         
         self.theme_manager = theme_manager
+        self._setup_style()
         self._setup_widgets()
         self._setup_timer()
+    
+    def _setup_style(self):
+        """Configura estilo da statusbar"""
+        self.setStyleSheet("""
+            QStatusBar {
+                background-color: #252526;
+                border-top: 1px solid #3e3e42;
+                color: #999999;
+                font-size: 12px;
+            }
+            QStatusBar QLabel {
+                color: #999999;
+                padding: 0px 6px;
+            }
+        """)
     
     def _update_connection_icon(self, connected: bool, text: str = ""):
         """Atualiza ícone de conexão"""

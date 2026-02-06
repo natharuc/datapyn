@@ -259,13 +259,7 @@ class MainWindow(DockingMainWindow):
                     if results_panel and results_panel.tab_widget.count() > 0:
                         results_panel.tab_widget.setCurrentIndex(0)
                 elif index == 1:  # Output  
-                    self.main_window.show_panel('results')
-                    results_panel = self.main_window.get_panel('results') 
-                    if results_panel:
-                        for i in range(results_panel.tab_widget.count()):
-                            if results_panel.tab_widget.tabText(i) == 'Output':
-                                results_panel.tab_widget.setCurrentIndex(i)
-                                break
+                    self.main_window.show_panel('output')
                 elif index == 2:  # Variables
                     self.main_window.show_panel('variables')
             
@@ -317,7 +311,7 @@ class MainWindow(DockingMainWindow):
                     
             def show_output(self):
                 """Compatibilidade: mostra painel de output"""
-                self.main_window.show_panel('results')
+                self.main_window.show_panel('output')
                 
             def clear_output(self):
                 """Compatibilidade: limpa output global"""
@@ -349,13 +343,7 @@ class MainWindow(DockingMainWindow):
                         if results_panel and results_panel.tab_widget.count() > 0:
                             results_panel.tab_widget.setCurrentIndex(0)
                     elif index == 1:  # Output  
-                        self.main_window.show_panel('results')
-                        results_panel = self.main_window.get_panel('results') 
-                        if results_panel:
-                            for i in range(results_panel.tab_widget.count()):
-                                if results_panel.tab_widget.tabText(i) == 'Output':
-                                    results_panel.tab_widget.setCurrentIndex(i)
-                                    break
+                        self.main_window.show_panel('output')
                     elif index == 2:  # Variables
                         self.main_window.show_panel('variables')
                 
@@ -407,7 +395,7 @@ class MainWindow(DockingMainWindow):
                         
                 def show_output(self):
                     """Compatibilidade: mostra painel de output"""
-                    self.main_window.show_panel('results')
+                    self.main_window.show_panel('output')
                     
                 def clear_output(self):
                     """Compatibilidade: limpa output global"""
@@ -641,110 +629,188 @@ class MainWindow(DockingMainWindow):
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect
     
     def _setup_dockable_panels(self):
-        """Configura painéis dockable (Results, Output, Variables) usando QDockWidget"""
+        """Configura paineis dockable (Results, Output, Variables) usando QDockWidget.
         
-        # Painéis globais (compartilhados entre todas as sessões)
-        self.global_results_viewer = ResultsViewer(theme_manager=self.theme_manager)
-        self.global_output_panel = OutputPanel(theme_manager=self.theme_manager) 
-        self.global_variables_panel = VariablesPanel(theme_manager=self.theme_manager)
+        Cada dock contem um QStackedWidget. Cada sessao adiciona seus proprios
+        paineis (ResultsViewer, OutputPanel, VariablesPanel) ao stack.
+        Ao trocar de aba, troca-se a pagina visivel no stack.
+        """
+        from PyQt6.QtWidgets import QStackedWidget
         
-        # Results Panel - usando QDockWidget igual Conexões
-        self.results_dock = QDockWidget("Results", self)
-        self.results_dock.setObjectName("ResultsDock")  # Importante para saveState/restoreState
-        self.results_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.results_dock.setWidget(self.global_results_viewer)
-        self.results_dock.setStyleSheet("""
+        # Stacks - cada sessao terá sua pagina
+        self._results_stack = QStackedWidget()
+        self._output_stack = QStackedWidget()
+        self._variables_stack = QStackedWidget()
+        
+        # Mapeamento session_id -> indice no stack
+        self._session_panel_indices: dict = {}
+        
+        # Dock styling compartilhado
+        dock_style_bottom = """
             QDockWidget {
                 background-color: #252526;
                 color: #cccccc;
-                titlebar-close-icon: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cGF0aCBkPSJNMTIgNEw0IDEyTTQgNEwxMiAxMiIgc3Ryb2tlPSIjY2NjIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4=);
-                titlebar-normal-icon: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB4PSIzIiB5PSIzIiB3aWR0aD0iMTAiIGhlaWdodD0iMTAiIHN0cm9rZT0iI2NjYyIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIi8+Cjwvc3ZnPg==);
             }
             QDockWidget::title {
                 background-color: #2d2d30;
                 padding: 8px;
                 font-weight: bold;
             }
-        """)
+        """
+        
+        # Results Panel
+        self.results_dock = QDockWidget("Results", self)
+        self.results_dock.setObjectName("ResultsDock")
+        self.results_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.results_dock.setWidget(self._results_stack)
+        self.results_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
         
-        # Output Panel - usando QDockWidget igual Conexões  
+        # Output Panel
         self.output_dock = QDockWidget("Output", self)
-        self.output_dock.setObjectName("OutputDock")  # Importante para saveState/restoreState
+        self.output_dock.setObjectName("OutputDock")
         self.output_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.output_dock.setWidget(self.global_output_panel)
-        self.output_dock.setStyleSheet("""
-            QDockWidget {
-                background-color: #252526;
-                color: #cccccc;
-            }
-            QDockWidget::title {
-                background-color: #2d2d30;
-                padding: 8px;
-                font-weight: bold;
-            }
-        """)
+        self.output_dock.setWidget(self._output_stack)
+        self.output_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
         
-        # Variables Panel - usando QDockWidget igual Conexões
+        # Variables Panel
         self.variables_dock = QDockWidget("Variables", self)
-        self.variables_dock.setObjectName("VariablesDock")  # Importante para saveState/restoreState
+        self.variables_dock.setObjectName("VariablesDock")
         self.variables_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.variables_dock.setWidget(self.global_variables_panel)
-        self.variables_dock.setStyleSheet("""
-            QDockWidget {
-                background-color: #252526;
-                color: #cccccc;
-            }
-            QDockWidget::title {
-                background-color: #2d2d30;
-                padding: 8px;
-                font-weight: bold;
-            }
-        """)
+        self.variables_dock.setWidget(self._variables_stack)
+        self.variables_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
         
-        # Tabifica Results e Output por padrão (fica em abas)
+        # Tabifica Results e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
         
         # Results fica como aba ativa
         self.results_dock.raise_()
-        
-        # Nota: ResultsManager não tem sinais PyQt (é classe Python normal)
-        # A sincronização dos painéis será feita manualmente nos métodos de execução
     
-    def _on_result_added(self, name: str, data):
-        """Callback quando um resultado é adicionado"""
-        # Atualiza o painel de resultados global
-        self.global_results_viewer.display_dataframe(data, name)
+    def _create_session_panels(self, session_id: str):
+        """Cria paineis (Results, Output, Variables) para uma sessao e adiciona aos stacks."""
+        results = ResultsViewer(theme_manager=self.theme_manager)
+        output = OutputPanel(theme_manager=self.theme_manager)
+        variables = VariablesPanel(theme_manager=self.theme_manager)
         
-        # Mostra o painel de resultados se estiver oculto
-        self.show_panel('results')
+        r_idx = self._results_stack.addWidget(results)
+        o_idx = self._output_stack.addWidget(output)
+        v_idx = self._variables_stack.addWidget(variables)
+        
+        self._session_panel_indices[session_id] = {
+            'results_idx': r_idx,
+            'output_idx': o_idx,
+            'variables_idx': v_idx,
+            'results': results,
+            'output': output,
+            'variables': variables,
+        }
+        return results, output, variables
+    
+    def _remove_session_panels(self, session_id: str):
+        """Remove paineis de uma sessao dos stacks."""
+        info = self._session_panel_indices.pop(session_id, None)
+        if not info:
+            return
+        self._results_stack.removeWidget(info['results'])
+        self._output_stack.removeWidget(info['output'])
+        self._variables_stack.removeWidget(info['variables'])
+        info['results'].deleteLater()
+        info['output'].deleteLater()
+        info['variables'].deleteLater()
+    
+    def _switch_session_panels(self, session_id: str):
+        """Troca os stacks para exibir os paineis da sessao ativa."""
+        info = self._session_panel_indices.get(session_id)
+        if not info:
+            return
+        self._results_stack.setCurrentIndex(info['results_idx'])
+        self._output_stack.setCurrentIndex(info['output_idx'])
+        self._variables_stack.setCurrentIndex(info['variables_idx'])
+    
+    @property
+    def global_results_viewer(self):
+        """Retorna o ResultsViewer da sessao ativa."""
+        sid = self._get_active_session_id()
+        info = self._session_panel_indices.get(sid) if sid else None
+        return info['results'] if info else None
+    
+    @property
+    def global_output_panel(self):
+        """Retorna o OutputPanel da sessao ativa."""
+        sid = self._get_active_session_id()
+        info = self._session_panel_indices.get(sid) if sid else None
+        return info['output'] if info else None
+    
+    @property
+    def global_variables_panel(self):
+        """Retorna o VariablesPanel da sessao ativa."""
+        sid = self._get_active_session_id()
+        info = self._session_panel_indices.get(sid) if sid else None
+        return info['variables'] if info else None
+    
+    def _get_active_session_id(self) -> str:
+        """Retorna o session_id da aba ativa."""
+        widget = self._get_current_session_widget()
+        if widget and hasattr(widget, 'session'):
+            return widget.session.session_id
+        return None
     
     def _on_namespace_updated(self, namespace: dict):
-        """Callback quando o namespace é atualizado"""
-        # Atualiza o painel de variáveis global
-        self.global_variables_panel.refresh_variables(namespace)
+        """Callback quando o namespace e atualizado"""
+        panel = self.global_variables_panel
+        if panel:
+            panel.refresh_variables(namespace)
     
     def show_output(self, text: str):
-        """Mostra output no painel global"""
-        self.global_output_panel.append_output(text)
+        """Mostra output no painel da sessao ativa"""
+        panel = self.global_output_panel
+        if panel:
+            panel.append_output(text)
         
         # Mostra o painel de output
         self.show_panel('output')
     
     def show_panel(self, name: str):
-        """Mostra painel específico usando QDockWidget"""
-        if name == 'results':
-            self.results_dock.show()
-            self.results_dock.raise_()
-        elif name == 'output':
-            self.output_dock.show()
-            self.output_dock.raise_()
-        elif name == 'variables':
-            self.variables_dock.show()
-            self.variables_dock.raise_()
+        """Mostra painel especifico usando QDockWidget.
+        
+        Para docks tabificados (results/output), raise_() sozinho nao
+        funciona. Precisamos buscar o QTabBar do grupo e trocar a aba ativa.
+        """
+        dock_map = {
+            'results': self.results_dock,
+            'output': self.output_dock,
+            'variables': self.variables_dock,
+        }
+        dock = dock_map.get(name)
+        if dock is None:
+            return
+        
+        dock.show()
+        dock.raise_()
+        
+        # Para docks tabificados, raise_() nao troca a aba visivel.
+        # Precisamos encontrar o QTabBar que controla o grupo e selecionar
+        # a aba correspondente manualmente.
+        if name in ('results', 'output'):
+            self._activate_tabified_dock(dock)
     
+    def _activate_tabified_dock(self, dock: QDockWidget):
+        """Ativa a aba correta em um grupo de docks tabificados.
+        
+        Quando docks sao tabificados via tabifyDockWidget(), eles compartilham
+        um QTabBar interno do QMainWindow. raise_() sozinho nao troca a aba.
+        Este metodo encontra o QTabBar correto e seleciona a aba do dock.
+        """
+        from PyQt6.QtWidgets import QTabBar
+        target_title = dock.windowTitle()
+        for tab_bar in self.findChildren(QTabBar):
+            for i in range(tab_bar.count()):
+                if tab_bar.tabText(i) == target_title:
+                    tab_bar.setCurrentIndex(i)
+                    return
+
     def hide_panel(self, name: str):
         """Esconde painel específico usando QDockWidget"""
         if name == 'results':
@@ -1559,7 +1625,7 @@ class MainWindow(DockingMainWindow):
             
             self._update_connection_status()
             self._refresh_connections_list()
-            self._log(f"Conexão '{name}' criada com sucesso")
+            self._log_info(f"Conexão '{name}' criada com sucesso")
             self.action_label.setText(f"Conexão '{name}' criada")
     
     def _edit_connection(self, connection_name: str):
@@ -1602,7 +1668,7 @@ class MainWindow(DockingMainWindow):
             
             self._update_connection_status()
             self._refresh_connections_list()
-            self._log(f"Conexão '{name}' atualizada com sucesso")
+            self._log_info(f"Conexão '{name}' atualizada com sucesso")
             self.action_label.setText(f"Conexão '{name}' atualizada")
     
     # === Métodos auxiliares para diálogos com ícones ===
@@ -1815,7 +1881,7 @@ class MainWindow(DockingMainWindow):
                 # Atualiza statusbar
                 self._update_connection_status()
                 
-                self._log(f"[SQL] Banco alterado para: {database_name}")
+                self._log_info(f"[SQL] Banco alterado para: {database_name}")
                 self.action_label.setText(f"[SQL] Banco: {database_name}")
                 self._stop_execution_timer()
                 return
@@ -1848,6 +1914,79 @@ class MainWindow(DockingMainWindow):
         # Iniciar
         thread.start()
     
+    def _handle_execution_result(self, result=None, error=None, execution_type="Unknown", additional_info=""):
+        """
+        Método centralizado para tratar resultados de execução
+        
+        Args:
+            result: Resultado da execução (DataFrame, string, etc) ou None
+            error: Mensagem de erro ou None
+            execution_type: Tipo da execução ("SQL", "Python", "Cross-Syntax")
+            additional_info: Informação adicional para logs
+        """
+        if error:
+            # ERRO → OUTPUT (console)
+            self._show_error_output(f"[{execution_type}] {error}")
+            self.action_label.setText(f"[{execution_type}] Erro ao executar")
+            return False  # Indica erro
+        
+        if result is None:
+            # SEM RESULTADO → OUTPUT (console)
+            self.show_panel('output')
+            return True
+        
+        # SUCESSO -> Decidir painel baseado no tipo do resultado
+        import pandas as pd
+        
+        results_panel = self.global_results_viewer
+        
+        if isinstance(result, pd.DataFrame):
+            # DATAFRAME -> GRID (results)
+            if results_panel:
+                results_panel.display_dataframe(result, f'Resultado {execution_type}')
+            self.show_panel('results')
+            rows = len(result)
+            self._log_info(f"[{execution_type}] {additional_info or f'DataFrame exibido ({rows:,} linhas)'}")
+            return True
+        
+        elif isinstance(result, (list, tuple)) and len(result) > 0:
+            # LISTA/TUPLA → Tentar converter para DataFrame
+            try:
+                df = pd.DataFrame(result)
+                if len(df) > 0:
+                    if results_panel:
+                        results_panel.display_dataframe(df, f'Resultado {execution_type}')
+                    self.show_panel('results')
+                    self._log_info(f"[{execution_type}] Lista convertida para DataFrame ({len(df)} linhas)")
+                    return True
+            except:
+                pass
+            
+            # Se não conseguiu converter, vai para output
+            self._log(f"[{execution_type}] {repr(result)}")
+            return True
+        
+        elif isinstance(result, dict):
+            # DICT → Tentar converter para DataFrame
+            try:
+                df = pd.DataFrame([result]) if not isinstance(list(result.values())[0], (list, tuple)) else pd.DataFrame(result)
+                if results_panel:
+                    results_panel.display_dataframe(df, f'Resultado {execution_type}')
+                self.show_panel('results')  
+                self._log_info(f"[{execution_type}] Dicionário convertido para DataFrame")
+                return True
+            except:
+                pass
+            
+            # Se não conseguiu converter, vai para output
+            self._log(f"[{execution_type}] {repr(result)}")
+            return True
+        
+        else:
+            # OUTROS TIPOS → OUTPUT (console)
+            self._log(f"[{execution_type}] {repr(result)}")
+            return True
+
     def _on_sql_finished(self, df, error, thread, tab_index):
         """Callback quando SQL termina"""
         self._stop_execution_timer()
@@ -1860,19 +1999,23 @@ class MainWindow(DockingMainWindow):
         thread.quit()
         thread.wait()
         
+        # FORÇAR: Se há erro, SEMPRE mostrar output - não importa o que vier no df
         if error:
             self._show_error_output(f"[SQL] Erro: {error}")
-            self.action_label.setText("[SQL] Erro ao executar")
-            self._send_notification("Query SQL", f"Erro: {error[:50]}...", success=False)
-        else:
-            # Exibe resultado
-            if self.results_viewer:
-                self.results_viewer.display_dataframe(df, 'Resultado SQL')
-            if self.bottom_tabs:
-                self.bottom_tabs.setCurrentIndex(0)
-            
-            rows = len(df)
-            self._log(f"[SQL] Executado com sucesso ({rows:,} linhas retornadas)")
+            self.action_label.setText("[SQL] Erro ao executar") 
+            self._send_notification("Query SQL", f"Erro: {str(error)[:50]}...", success=False)
+            return
+        
+        # SÓ se não há erro, usar método centralizado
+        success = self._handle_execution_result(
+            result=df,
+            error=None,  # Garantir que error é None aqui
+            execution_type="SQL",
+            additional_info=f"Executado com sucesso ({len(df):,} linhas retornadas)" if df is not None else ""
+        )
+        
+        if success:
+            rows = len(df) if df is not None else 0
             self.action_label.setText(f"[SQL] {rows:,} linhas retornadas")
             self._send_notification("Query SQL", f"Concluída! {rows:,} linhas retornadas", success=True)
     
@@ -1932,64 +2075,27 @@ class MainWindow(DockingMainWindow):
         logging.info(f"[MAIN_WINDOW] RETORNO DA EXECUÇÃO: \"\"\"{repr(result_value)}\"\"\"")
         logging.info(f"[MAIN_WINDOW] FOI PRO CONSOLE: \"\"\"{output}\"\"\"")
         
+        # FORÇAR: Se há erro, SEMPRE mostrar output primeiro
         if error:
-            self._show_error_output(f"[ERRO]\n{error}")
+            self._show_error_output(f"[Python] Erro: {error}")
             self.action_label.setText("[Python] Erro ao executar")
             return
         
-        # Mostra output de print()
+        # Mostra output de print() primeiro (se houver)
         if output:
             self._log(output.strip())
         
-        # Exibir resultado de forma inteligente
-        if result_value is not None:
-            if isinstance(result_value, pd.DataFrame):
-                # DataFrame → TABELA
-                logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"DataFrame com {len(result_value)} linhas\"\"\"")
-                if self.results_viewer:
-                    self.results_viewer.display_dataframe(result_value, 'result')
-                if self.bottom_tabs:
-                    self.bottom_tabs.setCurrentIndex(0)
-                rows = len(result_value)
-                self._log(f"[Python] DataFrame exibido ({rows:,} linhas)")
-                
-            elif isinstance(result_value, (list, tuple)) and len(result_value) > 0:
-                # Lista/tupla → tentar converter para DataFrame
-                try:
-                    df = pd.DataFrame(result_value)
-                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"Lista convertida para DataFrame com {len(df)} linhas\"\"\"")
-                    if self.results_viewer:
-                        self.results_viewer.display_dataframe(df, 'result')
-                    if self.bottom_tabs:
-                        self.bottom_tabs.setCurrentIndex(0)
-                    self._log(f"[Python] Lista exibida como tabela ({len(result_value)} itens)")
-                except:
-                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"FALHOU - foi para console\"\"\"")
-                    self._log(repr(result_value))
-                    
-            elif isinstance(result_value, dict):
-                # Dict → tentar converter para DataFrame
-                try:
-                    df = pd.DataFrame([result_value]) if not isinstance(list(result_value.values())[0], (list, tuple)) else pd.DataFrame(result_value)
-                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"Dicionário convertido para DataFrame\"\"\"")
-                    if self.results_viewer:
-                        self.results_viewer.display_dataframe(df, 'result')
-                    if self.bottom_tabs:
-                        self.bottom_tabs.setCurrentIndex(0)
-                    self._log(f"[Python] Dicionário exibido como tabela")
-                except:
-                    logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"FALHOU - foi para console\"\"\"")
-                    self._log(repr(result_value))
-            else:
-                # Número, string, etc → LOG
-                logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"NÃO - foi para console (tipo: {type(result_value)})\"\"\"")
-                self._log(repr(result_value))
-        else:
-            logging.info(f"[MAIN_WINDOW] FOI PRO GRID: \"\"\"NÃO - resultado é None\"\"\"\")")
+        # SÓ se não há erro, usar método centralizado
+        success = self._handle_execution_result(
+            result=result_value,
+            error=None,  # Garantir que error é None aqui
+            execution_type="Python"
+        )
         
-        # Atualiza variáveis
-        self._update_variables_view()
-        self.action_label.setText("[Python] Executado com sucesso!")
+        if success:
+            # Atualiza variáveis
+            self._update_variables_view()
+            self.action_label.setText("[Python] Executado com sucesso!")
     
     def _execute_cross_syntax(self, code: str):
         """Executa código com sintaxe cross {{ SQL }} em background"""
@@ -2072,18 +2178,19 @@ class MainWindow(DockingMainWindow):
         if widget and hasattr(widget.editor, 'mark_execution_finished'):
             widget.editor.mark_execution_finished()
         
+        # FORÇAR: Se há erro, SEMPRE mostrar output primeiro
         if error:
-            self._show_error_output(f"[ERRO Cross-Syntax]\n{error}")
+            self._show_error_output(f"[Cross-Syntax] Erro: {error}")
             self.action_label.setText("[Cross-Syntax] Erro ao executar")
-            self._send_notification("Cross-Syntax", f"Erro: {error[:50]}...", success=False)
+            self._send_notification("Cross-Syntax", f"Erro: {str(error)[:50]}...", success=False)
             return
         
-        # Mostra output
-        if result.get('output'):
+        # Mostra output primeiro (se houver)
+        if result and result.get('output'):
             self._log(result['output'].strip())
         
         # Mostra queries executadas no log
-        if result.get('queries_executed'):
+        if result and result.get('queries_executed'):
             # Exibir variáveis criadas
             queries = self.mixed_executor.extract_queries(code)
             for var_name, sql in queries:
@@ -2092,27 +2199,27 @@ class MainWindow(DockingMainWindow):
                 if var_value is not None:
                     if isinstance(var_value, pd.DataFrame):
                         rows = len(var_value)
-                        self._log(f"[Cross-Syntax] Variável '{var_name}' criada ({rows:,} linhas)")
+                        self._log_info(f"[Cross-Syntax] Variável '{var_name}' criada ({rows:,} linhas)")
                     else:
-                        self._log(f"[Cross-Syntax] Variável '{var_name}' criada")
+                        self._log_info(f"[Cross-Syntax] Variável '{var_name}' criada")
         
-        # Atualiza resultados se houver DataFrame retornado
-        if result.get('result') is not None:
-            if isinstance(result['result'], pd.DataFrame):
-                if self.results_viewer:
-                    self.results_viewer.display_dataframe(result['result'], 'result')
-                if self.bottom_tabs:
-                    self.bottom_tabs.setCurrentIndex(0)
+        # SÓ se não há erro, usar método centralizado
+        success = self._handle_execution_result(
+            result=result.get('result') if result else None,
+            error=None,  # Garantir que error é None aqui
+            execution_type="Cross-Syntax"
+        )
         
-        # Atualiza variáveis - da sessão que executou, se ainda for a focada
-        if session == self.session_manager.focused_session:
-            self._update_variables_view()
-        
-        self.action_label.setText("[Cross-Syntax] Executado com sucesso!")
-        
-        # Notificação de sucesso
-        queries_count = result.get('queries_executed', 0)
-        self._send_notification("Cross-Syntax", f"Concluído! {queries_count} queries executadas", success=True)
+        if success:
+            # Atualiza variáveis - da sessão que executou, se ainda for a focada
+            if session == self.session_manager.focused_session:
+                self._update_variables_view()
+            
+            self.action_label.setText("[Cross-Syntax] Executado com sucesso!")
+            
+            # Notificação de sucesso
+            queries_count = result.get('queries_executed', 0) if result else 0
+            self._send_notification("Cross-Syntax", f"Concluído! {queries_count} queries executadas", success=True)
     
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
         """
@@ -2189,35 +2296,44 @@ class MainWindow(DockingMainWindow):
         self.activateWindow()
         self.show()
     
-    def _log(self, message: str):
-        """Adiciona mensagem ao log com timestamp"""
+    def _log_info(self, message: str):
+        """Adiciona mensagem ao log com timestamp (sem mostrar painel)"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
-        if self.python_output:
-            self.python_output.append(f"[{timestamp}] {message}")
+        if self.global_output_panel:
+            self.global_output_panel.text_edit.append(f"[{timestamp}] {message}")
+
+    def _log(self, message: str):
+        """Adiciona mensagem ao log com timestamp e mostra painel output"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+        if self.global_output_panel:
+            self.global_output_panel.text_edit.append(f"[{timestamp}] {message}")
+        
+        # Mostrar painel de output
+        self.show_panel('output')
     
     def _show_error_output(self, error_msg: str):
-        """Mostra erro no Output em vermelho e alterna para a aba de Output"""
-        if not self.python_output:
+        """Mostra erro no Output em vermelho e alterna para o painel de Output"""
+        if not self.global_output_panel:
             return
         # Adiciona timestamp e erro em vermelho usando HTML
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
         error_html = f'<span style="color: #ff6b6b; font-weight: bold;">[{timestamp}] {error_msg}</span>'
-        self.python_output.append(error_html)
+        self.global_output_panel.text_edit.append(error_html)
         
-        # Alterna para a aba de Output (índice 1)
-        if self.bottom_tabs:
-            self.bottom_tabs.setCurrentIndex(1)
+        # Mostrar painel de output
+        self.show_panel('output')
         
         # Scroll para o final
-        scrollbar = self.python_output.verticalScrollBar()
+        scrollbar = self.global_output_panel.text_edit.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
     
     def _update_variables_view(self):
-        """Atualiza visualização de variáveis em memória"""
-        if not self.variables_viewer:
+        """Atualiza visualizacao de variaveis em memoria"""
+        panel = self.global_variables_panel
+        if not panel:
             return
         vars_df = self.results_manager.get_variables_info()
-        self.variables_viewer.display_dataframe(vars_df, "Variáveis")
+        panel.display_dataframe(vars_df, "Variaveis")
     
     def _clear_results(self):
         """Limpa todos os resultados"""
@@ -2229,12 +2345,15 @@ class MainWindow(DockingMainWindow):
         
         if reply == QMessageBox.StandardButton.Yes:
             self.results_manager.clear_all()
-            if self.results_viewer:
-                self.results_viewer.clear()
-            if self.variables_viewer:
-                self.variables_viewer.clear()
-            if self.python_output:
-                self.python_output.clear()
+            results = self.global_results_viewer
+            if results:
+                results.clear()
+            variables = self.global_variables_panel
+            if variables:
+                variables.clear()
+            output = self.global_output_panel
+            if output:
+                output.text_edit.clear()
             self.action_label.setText("Resultados limpos")
     
     def _new_file(self):
@@ -2575,11 +2694,14 @@ class MainWindow(DockingMainWindow):
             }}
         """)
         
-        # Atualizar ResultsViewers se existirem (pode ser None se não houver sessão)
-        if hasattr(self, 'results_viewer') and self.results_viewer:
-            self.results_viewer.set_theme_manager(self.theme_manager)
-        if hasattr(self, 'variables_viewer') and self.variables_viewer:
-            self.variables_viewer.set_theme_manager(self.theme_manager)
+        # Atualizar paineis de todas as sessoes
+        if hasattr(self, '_session_panel_indices'):
+            for info in self._session_panel_indices.values():
+                info['results'].set_theme_manager(self.theme_manager)
+                if hasattr(info['output'], 'set_theme_manager'):
+                    info['output'].set_theme_manager(self.theme_manager)
+                if hasattr(info['variables'], 'set_theme_manager'):
+                    info['variables'].set_theme_manager(self.theme_manager)
         
         # Atualizar SessionWidgets
         if hasattr(self, '_session_widgets'):
@@ -2639,23 +2761,91 @@ class MainWindow(DockingMainWindow):
         finally:
             self._creating_session = False
     
+    def _handle_empty_state_drop(self, file_paths):
+        """Trata drop de arquivos na tela de estado vazio"""
+        import os
+        
+        data_files = []
+        code_files = []
+        
+        for file_path in file_paths:
+            ext = os.path.splitext(file_path.lower())[1]
+            if ext in ('.csv', '.json', '.xlsx', '.xls'):
+                data_files.append(file_path)
+            elif ext in ('.sql', '.py', '.dpw'):
+                code_files.append(file_path)
+        
+        # Abrir arquivos de codigo/workspace normalmente
+        for file_path in code_files:
+            if file_path.lower().endswith('.dpw'):
+                self._open_workspace(file_path)
+            else:
+                self._open_code_file(file_path)
+        
+        # Abrir arquivos de dados (csv, json, xlsx) com bloco de importacao
+        if data_files:
+            self._new_session()
+            current_index = self.session_tabs.currentIndex()
+            widget = self.session_tabs.widget(current_index)
+            
+            if widget and hasattr(widget, 'editor'):
+                editor = widget.editor
+                for file_path in data_files:
+                    import_code = editor._generate_import_code(file_path)
+                    if import_code:
+                        editor.add_block(language='python', code=import_code)
+                        editor.content_changed.emit()
+
     def _show_empty_state(self):
-        """Mostra estado vazio quando não há sessões"""
+        """Mostra estado vazio quando nao ha sessoes"""
         if hasattr(self, '_empty_state_widget') and self._empty_state_widget:
-            return  # Já está mostrando
+            return  # Ja esta mostrando
         
-        # Criar widget de estado vazio
+        # Criar widget de estado vazio com suporte a drag-and-drop
         from PyQt6.QtWidgets import QLabel, QPushButton
+        from PyQt6.QtGui import QDragEnterEvent, QDropEvent
         
-        self._empty_state_widget = QWidget()
+        main_window_ref = self
+        
+        class DropEmptyStateWidget(QWidget):
+            """Widget de estado vazio com suporte a drag-and-drop de arquivos"""
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.setAcceptDrops(True)
+            
+            def dragEnterEvent(self, event: QDragEnterEvent):
+                mime_data = event.mimeData()
+                if mime_data.hasUrls():
+                    for url in mime_data.urls():
+                        file_path = url.toLocalFile()
+                        if file_path.lower().endswith(('.csv', '.json', '.xlsx', '.xls', '.sql', '.py', '.dpw')):
+                            event.acceptProposedAction()
+                            return
+            
+            def dragMoveEvent(self, event):
+                event.acceptProposedAction()
+            
+            def dropEvent(self, event: QDropEvent):
+                mime_data = event.mimeData()
+                if mime_data.hasUrls():
+                    file_paths = []
+                    for url in mime_data.urls():
+                        file_path = url.toLocalFile()
+                        if file_path.lower().endswith(('.csv', '.json', '.xlsx', '.xls', '.sql', '.py', '.dpw')):
+                            file_paths.append(file_path)
+                    if file_paths:
+                        main_window_ref._handle_empty_state_drop(file_paths)
+                        event.acceptProposedAction()
+        
+        self._empty_state_widget = DropEmptyStateWidget()
         layout = QVBoxLayout(self._empty_state_widget)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        # Ícone/emoji grande
+        # Icone grande
         icon_label = QLabel()
         if hasattr(qta, 'icon'):
             icon_label.setPixmap(qta.icon('mdi.note-text', color='#64b5f6').pixmap(96, 96))
-        icon_label.setStyleSheet("font-size: 96px;")
+        icon_label.setStyleSheet("font-size: 96px; background: transparent;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon_label)
         
@@ -2666,16 +2856,18 @@ class MainWindow(DockingMainWindow):
             font-weight: bold;
             color: #cccccc;
             margin-top: 20px;
+            background: transparent;
         """)
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
-        # Subtítulo
-        subtitle_label = QLabel("Crie uma nova sessão para começar a programar")
+        # Subtitulo com dica de drag-and-drop
+        subtitle_label = QLabel("Crie uma nova sessao ou arraste um arquivo para comecar")
         subtitle_label.setStyleSheet("""
             font-size: 14px;
             color: #888888;
             margin-top: 10px;
+            background: transparent;
         """)
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle_label)
@@ -2705,7 +2897,7 @@ class MainWindow(DockingMainWindow):
         start_button.clicked.connect(self._new_session)
         layout.addWidget(start_button, alignment=Qt.AlignmentFlag.AlignCenter)
         
-        # Adicionar como "aba" invisível ou substituir conteúdo
+        # Adicionar como "aba" invisivel ou substituir conteudo
         self._empty_state_widget.setStyleSheet("background-color: #1e1e1e;")
         
         # Adicionar aba do empty state
@@ -2724,10 +2916,13 @@ class MainWindow(DockingMainWindow):
             self._empty_state_widget = None
     
     def _create_session_widget(self, session):
-        """Cria widget para uma sessão e adiciona à aba"""
+        """Cria widget para uma sessao e adiciona a aba"""
         widget = SessionWidget(session, theme_manager=self.theme_manager)
         
-        # Definir file_path no widget se disponível na sessão
+        # Criar paineis por sessao (Results, Output, Variables)
+        self._create_session_panels(session.session_id)
+        
+        # Definir file_path no widget se disponivel na sessao
         if hasattr(session, 'file_path') and session.file_path:
             widget.file_path = session.file_path
             
@@ -2779,7 +2974,10 @@ class MainWindow(DockingMainWindow):
             widget.cleanup()
             self.session_manager.close_session(session_id)
             
-            # Remover do dicionário apenas se existir
+            # Remover paineis da sessao dos stacks
+            self._remove_session_panels(session_id)
+            
+            # Remover do dicionario apenas se existir
             if session_id in self._session_widgets:
                 del self._session_widgets[session_id]
             
@@ -2812,6 +3010,8 @@ class MainWindow(DockingMainWindow):
         widget = self.session_tabs.widget(index)
         if isinstance(widget, SessionWidget):
             self.session_manager.focus_session(widget.session.session_id)
+            # Trocar paineis para a sessao ativa
+            self._switch_session_panels(widget.session.session_id)
             
         # Atualizar título da janela quando muda de aba
         self._update_window_title()

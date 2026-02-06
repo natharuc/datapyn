@@ -11,6 +11,7 @@ from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
 from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent
 from typing import List, Optional
 import os
+import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.editors.code_block import CodeBlock
@@ -87,33 +88,39 @@ class BlockEditor(QWidget):
         self.scroll_area.setWidget(self.blocks_container)
         main_layout.addWidget(self.scroll_area)
         
-        # Botão para adicionar novo bloco (no final)
+        # Botão para adicionar novo bloco (linha horizontal com +)
         self.add_button_container = QWidget()
         add_layout = QHBoxLayout(self.add_button_container)
         add_layout.setContentsMargins(8, 4, 8, 8)
         
-        self.add_btn = QPushButton("+ Adicionar Bloco")
-        self.add_btn.setToolTip("Adicionar novo bloco de código")
+        # Linha horizontal (como <hr/>)
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("QFrame { color: #555; }")
+        
+        # Botão pequeno com ícone + 
+        self.add_btn = QPushButton()
+        self.add_btn.setIcon(qta.icon('mdi.plus', color='#888'))
+        self.add_btn.setToolTip("Adicionar bloco")
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_btn.setFixedSize(24, 24)  # Botão pequeno 24x24
         self.add_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
-                color: #888;
-                border: 1px dashed #555;
-                border-radius: 4px;
-                padding: 8px 16px;
+                border: 1px solid #555;
+                border-radius: 12px;
             }
             QPushButton:hover {
                 background: #333;
-                color: #fff;
                 border-color: #888;
             }
         """)
         self.add_btn.clicked.connect(lambda: self.add_block())
         
-        add_layout.addStretch()
-        add_layout.addWidget(self.add_btn)
-        add_layout.addStretch()
+        # Layout: linha horizontal + botão +
+        add_layout.addWidget(line, 1)  # Linha ocupa todo espaço disponível
+        add_layout.addWidget(self.add_btn)  # Botão + no final
         
         # Adiciona o botão ao container dos blocos
         self.blocks_layout.addWidget(self.add_button_container)
@@ -580,12 +587,12 @@ class BlockEditor(QWidget):
                 event.acceptProposedAction()
                 return
         
-        # Aceitar drag de arquivos CSV, JSON, XLSX
+        # Aceitar drag de arquivos CSV, JSON, XLSX, SQL, PY, DPW
         if mime_data.hasUrls():
             urls = mime_data.urls()
             for url in urls:
                 file_path = url.toLocalFile()
-                if file_path.lower().endswith(('.csv', '.json', '.xlsx', '.xls')):
+                if file_path.lower().endswith(('.csv', '.json', '.xlsx', '.xls', '.sql', '.py')):
                     event.acceptProposedAction()
                     return
     
@@ -602,12 +609,28 @@ class BlockEditor(QWidget):
             urls = mime_data.urls()
             for url in urls:
                 file_path = url.toLocalFile()
-                if file_path.lower().endswith(('.csv', '.json', '.xlsx', '.xls')):
+                lower_path = file_path.lower()
+                if lower_path.endswith(('.csv', '.json', '.xlsx', '.xls')):
                     import_code = self._generate_import_code(file_path)
                     if import_code:
-                        # Criar novo bloco Python com código de importação
                         self.add_block(language='python', code=import_code)
                         self.content_changed.emit()
+                elif lower_path.endswith('.sql'):
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        self.add_block(language='sql', code=content)
+                        self.content_changed.emit()
+                    except Exception:
+                        pass
+                elif lower_path.endswith('.py'):
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        self.add_block(language='python', code=content)
+                        self.content_changed.emit()
+                    except Exception:
+                        pass
             event.acceptProposedAction()
             return
         
@@ -683,12 +706,13 @@ class BlockEditor(QWidget):
         # Extrair extensão
         _, ext = os.path.splitext(file_path.lower())
         
-        # Gerar código baseado na extensão
+        # Gerar codigo baseado na extensao
+        # pandas ja esta disponivel como 'pd' no namespace de execucao
         if ext == '.csv':
-            return f"import pandas as pd\ndf = pd.read_csv('{normalized_path}')"
+            return f"df = pd.read_csv('{normalized_path}')"
         elif ext == '.json':
-            return f"import pandas as pd\ndf = pd.read_json('{normalized_path}')"
+            return f"df = pd.read_json('{normalized_path}')"
         elif ext in ('.xlsx', '.xls'):
-            return f"import pandas as pd\ndf = pd.read_excel('{normalized_path}')"
+            return f"df = pd.read_excel('{normalized_path}')"
         
         return None

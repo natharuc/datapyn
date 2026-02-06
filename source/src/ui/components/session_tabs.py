@@ -27,28 +27,32 @@ class SessionTabBar(QTabBar):
     def _setup_style(self):
         """Configura estilo"""
         self.setStyleSheet("""
+            QTabBar {
+                background-color: #252526;
+            }
             QTabBar::tab {
                 background-color: #2d2d30;
-                color: #cccccc;
-                padding: 8px 20px;
+                color: #999999;
+                padding: 6px 16px;
                 padding-right: 28px;
-                border: 1px solid #3e3e42;
-                border-bottom: none;
-                margin-right: 2px;
+                border: none;
+                border-bottom: 2px solid transparent;
+                margin-right: 1px;
+                min-width: 80px;
             }
             QTabBar::tab:selected {
                 background-color: #1e1e1e;
                 color: #ffffff;
+                border-bottom: 2px solid #3369FF;
             }
             QTabBar::tab:hover:!selected {
-                background-color: #3e3e42;
+                background-color: #37373d;
+                color: #cccccc;
             }
             QTabBar::close-button {
                 subcontrol-position: right;
-                margin-right: 20px;
+                margin-right: 4px;
                 padding: 0px;
-                width: 50px;
-                height: 50px;
             }
             QTabBar::close-button:hover {
                 background-color: rgba(231, 76, 60, 0.9);
@@ -266,26 +270,27 @@ class SessionTabs(QTabWidget):
         
         # Criar botão customizado compacto e elegante com ícone X
         close_btn = QToolButton()
-        close_btn.setIcon(qta.icon('mdi.close', color='#cccccc', scale_factor=1.0))
-        close_btn.setFixedSize(50, 50)
+        close_btn.setIcon(qta.icon('mdi.close', color='#999999', scale_factor=0.7))
+        close_btn.setFixedSize(18, 18)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet("""
             QToolButton {
                 background: transparent;
                 border: none;
+                border-radius: 3px;
             }
             QToolButton:hover {
                 background-color: rgba(231, 76, 60, 0.8);
             }
         """)
         
-        # Atualizar ícone no hover para branco
+        # Atualizar icone no hover para branco
         def on_hover_enter(event):
-            close_btn.setIcon(qta.icon('mdi.close', color='#ffffff', scale_factor=1.0))
+            close_btn.setIcon(qta.icon('mdi.close', color='#ffffff', scale_factor=0.7))
             QToolButton.enterEvent(close_btn, event)
         
         def on_hover_leave(event):
-            close_btn.setIcon(qta.icon('mdi.close', color='#cccccc', scale_factor=1.0))
+            close_btn.setIcon(qta.icon('mdi.close', color='#999999', scale_factor=0.7))
             QToolButton.leaveEvent(close_btn, event)
         
         close_btn.enterEvent = on_hover_enter
@@ -310,7 +315,8 @@ class SessionTabs(QTabWidget):
         """Configura estilo"""
         self.setStyleSheet("""
             QTabWidget::pane {
-                border: 1px solid #3e3e42;
+                border: none;
+                border-top: 1px solid #3e3e42;
                 background-color: #1e1e1e;
             }
             QTabWidget::tab-bar {
