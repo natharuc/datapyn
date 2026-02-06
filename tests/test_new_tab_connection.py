@@ -10,6 +10,75 @@ from PyQt6.QtGui import QGuiApplication
 
 from source.src.ui.components.connection_panel import ConnectionsList, ConnectionPanel
 from source.src.ui.main_window import MainWindow
+from source.src.ui.components.session_widget import SessionWidget
+
+
+class TestNewTabInheritsConnection:
+    """Nova aba deve herdar a conexao da aba ativa"""
+
+    @pytest.fixture
+    def main(self, qtbot):
+        main_window = MainWindow()
+        main_window.show()
+        qtbot.addWidget(main_window)
+        return main_window
+
+    def test_new_session_captures_previous_connection(self, main, qtbot):
+        """_new_session deve herdar connection_name da aba ativa"""
+        # Criar sessao sem conexao (mockar connect para nao conectar de fato)
+        with patch('src.core.session.Session.connect', return_value=False):
+            main._new_session()
+
+        widget1 = main._get_current_session_widget()
+        assert widget1 is not None
+
+        # Forcar conexao simulada na sessao ativa
+        widget1.session._connection_name = "TesteConexao"
+        widget1.session._connector = MagicMock(is_connected=True)
+
+        # Criar nova sessao - deve herdar "TesteConexao"
+        connected_calls = []
+
+        def fake_connect(self_session, conn_name, password=''):
+            self_session._connection_name = conn_name
+            self_session._connector = MagicMock(is_connected=True)
+            connected_calls.append(conn_name)
+            return True
+
+        with patch('src.core.session.Session.connect', fake_connect):
+            main._new_session()
+
+        assert "TesteConexao" in connected_calls, \
+            f"Nova sessao deveria herdar 'TesteConexao', mas connect foi chamado com: {connected_calls}"
+
+    def test_new_session_without_connection_stays_disconnected(self, main, qtbot):
+        """Aba sem conexao ativa nao deve tentar conectar na nova aba"""
+        # Criar sessao sem conexao
+        with patch('src.core.session.Session.connect', return_value=False):
+            main._new_session()
+
+        widget1 = main._get_current_session_widget()
+        assert widget1 is not None
+        # Garantir que nao tem conexao
+        widget1.session._connection_name = None
+        widget1.session._connector = None
+
+        # Nova sessao nao deve chamar connect
+        with patch('src.core.session.Session.connect') as mock_connect:
+            main._new_session()
+            mock_connect.assert_not_called()
+
+    def test_new_session_from_empty_state_no_connection(self, main, qtbot):
+        """Se nenhuma aba tem conexao, nova aba nao deve tentar conectar"""
+        # Garantir que nenhuma aba ativa tem conexao
+        current = main._get_current_session_widget()
+        if current and hasattr(current, 'session'):
+            current.session._connection_name = None
+            current.session._connector = None
+
+        with patch('src.core.session.Session.connect') as mock_connect:
+            main._new_session()
+            mock_connect.assert_not_called()
 
 
 class TestNewTabConnection:
