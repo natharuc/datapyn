@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
 import sys
 import re
+import io
 import logging
 import traceback
 from io import StringIO
@@ -72,8 +73,8 @@ class SqlWorker(QObject):
 
 
 class PythonWorker(QObject):
-    """Worker centralizado para execução Python em background"""
-    finished = pyqtSignal(object, str, str, dict)  # (result, output, error, namespace)
+    """Worker centralizado para execucao Python em background"""
+    finished = pyqtSignal(object, str, str, dict, list)  # (result, output, error, namespace, figures)
     
     def __init__(self, code, namespace, is_expression):
         super().__init__()
@@ -83,6 +84,10 @@ class PythonWorker(QObject):
     
     def run(self):
         try:
+            # Configurar matplotlib para backend nao-interativo (Agg)
+            # Isso evita o erro de GUI fora da main thread
+            self._setup_matplotlib_backend()
+            
             # Captura stdout
             old_stdout = sys.stdout
             sys.stdout = captured_output = StringIO()
@@ -92,11 +97,55 @@ class PythonWorker(QObject):
             sys.stdout = old_stdout
             output = captured_output.getvalue()
             
+            # Capturar figuras matplotlib pendentes
+            figures = self._capture_matplotlib_figures()
+            
             # Retornar namespace atualizado
-            self.finished.emit(result_value, output, '', self.namespace)
+            self.finished.emit(result_value, output, '', self.namespace, figures)
         except Exception as e:
             sys.stdout = old_stdout
-            self.finished.emit(None, '', traceback.format_exc(), self.namespace)
+            self.finished.emit(None, '', traceback.format_exc(), self.namespace, [])
+    
+    def _setup_matplotlib_backend(self):
+        """Configura matplotlib para usar backend Agg (nao-interativo)"""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            # Fechar figuras anteriores para evitar acumulacao
+            import matplotlib.pyplot as plt
+            plt.close('all')
+            # Substituir plt.show() por um no-op para nao travar
+            plt.show = lambda *args, **kwargs: None
+        except ImportError:
+            pass  # matplotlib nao instalado, ignorar
+    
+    def _capture_matplotlib_figures(self) -> list:
+        """Captura todas as figuras matplotlib abertas como bytes PNG"""
+        figures_data = []
+        try:
+            import matplotlib.pyplot as plt
+            fig_nums = plt.get_fignums()
+            if not fig_nums:
+                return []
+            
+            for num in fig_nums:
+                fig = plt.figure(num)
+                buf = io.BytesIO()
+                fig.savefig(buf, format='png', dpi=120,
+                           bbox_inches='tight',
+                           facecolor=fig.get_facecolor(),
+                           edgecolor='none')
+                buf.seek(0)
+                figures_data.append(buf.getvalue())
+                buf.close()
+            
+            plt.close('all')
+        except ImportError:
+            pass  # matplotlib nao instalado
+        except Exception as e:
+            logger.warning(f"Erro ao capturar figuras matplotlib: {e}")
+        
+        return figures_data
     
     def _execute_centralized(self):
         """Execução centralizada - todas as execuções Python passam aqui"""
@@ -1944,6 +1993,37 @@ class MainWindow(DockingMainWindow):
         # Iniciar
         thread.start()
     
+    def _display_matplotlib_figures(self, figures: list):
+        """Exibe figuras matplotlib capturadas no painel de output"""
+        import base64
+        
+        output_panel = self.global_output_panel
+        if not output_panel:
+            return
+        
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        for i, fig_bytes in enumerate(figures):
+            b64_data = base64.b64encode(fig_bytes).decode('utf-8')
+            
+            label = f"Grafico {i + 1}" if len(figures) > 1 else "Grafico"
+            
+            html = (
+                f'<span style="color: #808080;">[{timestamp}]</span> '
+                f'<span style="color: #4ec9b0;">[{label}]</span><br>'
+                f'<img src="data:image/png;base64,{b64_data}" '
+                f'style="max-width: 100%;"><br>'
+            )
+            output_panel.text_edit.append(html)
+        
+        # Scroll para o final
+        from PyQt6.QtGui import QTextCursor
+        cursor = output_panel.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        output_panel.text_edit.setTextCursor(cursor)
+        
+        self.show_panel('output')
+    
     def _handle_execution_result(self, result=None, error=None, execution_type="Unknown", additional_info=""):
         """
         Método centralizado para tratar resultados de execução
@@ -1969,6 +2049,22 @@ class MainWindow(DockingMainWindow):
         import pandas as pd
         
         results_panel = self.global_results_viewer
+        
+        # Verificar se e uma figura matplotlib
+        try:
+            from matplotlib.figure import Figure as MplFigure
+            if isinstance(result, MplFigure):
+                buf = io.BytesIO()
+                result.savefig(buf, format='png', dpi=120,
+                              bbox_inches='tight',
+                              facecolor=result.get_facecolor(),
+                              edgecolor='none')
+                buf.seek(0)
+                self._display_matplotlib_figures([buf.getvalue()])
+                buf.close()
+                return True
+        except ImportError:
+            pass
         
         if isinstance(result, pd.DataFrame):
             # DATAFRAME -> GRID (results)
@@ -2079,7 +2175,7 @@ class MainWindow(DockingMainWindow):
         
         # Conectar sinais
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda result, output, err, namespace: self._on_python_finished(result, output, err, namespace, thread, running_tab_index))
+        worker.finished.connect(lambda result, output, err, namespace, figures: self._on_python_finished(result, output, err, namespace, figures, thread, running_tab_index))
         
         # Manter referência
         self._worker_threads.append((thread, worker))
@@ -2087,14 +2183,14 @@ class MainWindow(DockingMainWindow):
         # Iniciar
         thread.start()
     
-    def _on_python_finished(self, result_value, output, error, updated_namespace, thread, tab_index):
+    def _on_python_finished(self, result_value, output, error, updated_namespace, figures, thread, tab_index):
         """Callback quando Python termina"""
         self._stop_execution_timer()
         
         # Salvar namespace atualizado
         self.results_manager.update_namespace(updated_namespace)
         
-        # Remover marcação de rodando
+        # Remover marcacao de rodando
         self._mark_tab_running(False, tab_index)
         
         # Limpar thread da lista
@@ -2102,10 +2198,10 @@ class MainWindow(DockingMainWindow):
         thread.quit()
         thread.wait()
         
-        logging.info(f"[MAIN_WINDOW] RETORNO DA EXECUÇÃO: \"\"\"{repr(result_value)}\"\"\"")
+        logging.info(f"[MAIN_WINDOW] RETORNO DA EXECUCAO: \"\"\"{repr(result_value)}\"\"\"")
         logging.info(f"[MAIN_WINDOW] FOI PRO CONSOLE: \"\"\"{output}\"\"\"")
         
-        # FORÇAR: Se há erro, SEMPRE mostrar output primeiro
+        # FORCAR: Se ha erro, SEMPRE mostrar output primeiro
         if error:
             self._show_error_output(f"[Python] Erro: {error}")
             self.action_label.setText("[Python] Erro ao executar")
@@ -2115,15 +2211,23 @@ class MainWindow(DockingMainWindow):
         if output:
             self._log(output.strip())
         
-        # SÓ se não há erro, usar método centralizado
+        # Exibir figuras matplotlib capturadas (se houver)
+        if figures:
+            self._display_matplotlib_figures(figures)
+            if result_value is None and not output:
+                self.action_label.setText("[Python] Grafico exibido com sucesso!")
+                self._update_variables_view()
+                return
+        
+        # SO se nao ha erro, usar metodo centralizado
         success = self._handle_execution_result(
             result=result_value,
-            error=None,  # Garantir que error é None aqui
+            error=None,  # Garantir que error e None aqui
             execution_type="Python"
         )
         
         if success:
-            # Atualiza variáveis
+            # Atualiza variaveis
             self._update_variables_view()
             self.action_label.setText("[Python] Executado com sucesso!")
     

@@ -93,6 +93,7 @@ class PackageManagerDialog(QDialog):
         self._worker = None
         self._installed_names = set()
         self._current_view = "installed"  # 'installed' ou 'search'
+        self._pending_query = ""  # query usada na pesquisa atual
         self._setup_ui()
         self._load_installed()
 
@@ -308,6 +309,18 @@ class PackageManagerDialog(QDialog):
 
     # === Acoes ===
 
+    def _cleanup_worker(self):
+        """Limpa worker anterior para evitar sinais duplicados"""
+        if self._worker is not None:
+            try:
+                self._worker.finished.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            if self._worker.isRunning():
+                self._worker.quit()
+                self._worker.wait(2000)
+            self._worker = None
+
     def _on_search(self):
         """Pesquisa pacote no PyPI"""
         query = self.txt_search.text().strip()
@@ -318,6 +331,8 @@ class PackageManagerDialog(QDialog):
             return
 
         self._current_view = "search"
+        self._pending_query = query
+        self._cleanup_worker()
         self._set_loading(True, f"Pesquisando '{query}' no PyPI...")
 
         self._worker = _SearchWorker(self.service, query)
@@ -327,14 +342,16 @@ class PackageManagerDialog(QDialog):
     def _on_search_results(self, results: list):
         """Callback com resultados da pesquisa"""
         self._set_loading(False)
-        query = self.txt_search.text().strip()
+        query = self._pending_query or self.txt_search.text().strip()
 
         if not results:
             self.lbl_info.setText(
-                f"Nenhum pacote encontrado para '{query}'. "
-                "Verifique o nome exato do pacote."
+                f"Pacote '{query}' nao encontrado no PyPI. "
+                "Deseja tentar instalar mesmo assim?"
             )
             self.table.setRowCount(0)
+            # Mostrar opcao de instalar diretamente
+            self._show_direct_install_option(query)
             return
 
         self.lbl_info.setText(
@@ -343,10 +360,55 @@ class PackageManagerDialog(QDialog):
         )
         self._populate_table(results)
 
+    def _show_direct_install_option(self, package_name: str):
+        """Mostra opcao de instalar pacote diretamente quando nao encontrado"""
+        c = self.theme_manager.get_app_colors()
+        self.table.setRowCount(1)
+
+        name_item = QTableWidgetItem(package_name)
+        name_font = QFont()
+        name_font.setBold(True)
+        name_item.setFont(name_font)
+        name_item.setToolTip("Pacote nao encontrado — tentar instalar diretamente")
+        self.table.setItem(0, 0, name_item)
+
+        self.table.setItem(0, 1, QTableWidgetItem("-"))
+        self.table.setItem(0, 2, QTableWidgetItem("-"))
+
+        actions_widget = QWidget()
+        actions_layout = QHBoxLayout(actions_widget)
+        actions_layout.setContentsMargins(4, 2, 4, 2)
+        actions_layout.setSpacing(4)
+
+        btn_install = QPushButton("Instalar Mesmo Assim")
+        if HAS_QTAWESOME:
+            btn_install.setIcon(qta.icon("fa5s.download", color="white"))
+        btn_install.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c['accent']};
+                color: white;
+                border: none;
+                padding: 4px 14px;
+                border-radius: 3px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ opacity: 0.85; }}
+        """)
+        btn_install.clicked.connect(
+            lambda _, n=package_name: self._do_operation("install", n)
+        )
+        actions_layout.addWidget(btn_install)
+        actions_layout.addStretch()
+
+        self.table.setCellWidget(0, 3, actions_widget)
+        self.table.setRowHeight(0, 38)
+
     def _load_installed(self):
         """Carrega lista de pacotes instalados"""
         self._current_view = "installed"
         self.txt_search.clear()
+        self._cleanup_worker()
         self._set_loading(True, "Carregando pacotes instalados...")
 
         self._worker = _ListWorker(self.service)
@@ -510,6 +572,7 @@ class PackageManagerDialog(QDialog):
             "update": "Atualizando",
         }
         label = op_labels.get(operation, operation)
+        self._cleanup_worker()
         self._set_loading(True, f"{label} '{package_name}'...")
         self._set_buttons_enabled(False)
 
@@ -528,12 +591,9 @@ class PackageManagerDialog(QDialog):
             QMessageBox.information(
                 self, "Sucesso", result.message
             )
-            # Recarregar lista
-            if self._current_view == "installed":
-                self._load_installed()
-            else:
-                # Refazer pesquisa para atualizar status
-                self._on_search()
+            # Sempre recarregar lista de instalados apos operacao
+            # Usar QTimer para evitar conflitos com thread ainda ativa
+            QTimer.singleShot(100, self._load_installed)
         else:
             error_msg = result.error
             # Limitar tamanho do erro mostrado

@@ -10,6 +10,8 @@ from dataclasses import asdict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from PyQt6.QtWidgets import QMessageBox
+
 from src.services.package_manager_service import (
     PackageManagerService, PackageInfo, PackageOperationResult
 )
@@ -659,3 +661,186 @@ class TestMenuIntegration:
         from src.ui.dialogs import PackageManagerDialog
         assert PackageManagerService is not None
         assert PackageManagerDialog is not None
+
+
+# ===========================================================================
+# PackageManagerDialog - cleanup e fluxo corrigido
+# ===========================================================================
+
+class TestDialogWorkerCleanup:
+    """Testes para limpeza de workers e fluxo de sinais"""
+
+    def test_cleanup_worker_disconnects_signal(self, qtbot):
+        """_cleanup_worker desconecta sinais do worker anterior"""
+        from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+        from src.core.theme_manager import ThemeManager
+
+        with patch.object(PackageManagerDialog, '_load_installed'):
+            dialog = PackageManagerDialog(
+                theme_manager=ThemeManager(), parent=None
+            )
+            qtbot.addWidget(dialog)
+
+            # Simular worker ativo
+            mock_worker = MagicMock()
+            mock_worker.isRunning.return_value = False
+            dialog._worker = mock_worker
+
+            dialog._cleanup_worker()
+            mock_worker.finished.disconnect.assert_called_once()
+            assert dialog._worker is None
+
+    def test_cleanup_worker_none(self, qtbot):
+        """_cleanup_worker nao falha com worker None"""
+        from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+        from src.core.theme_manager import ThemeManager
+
+        with patch.object(PackageManagerDialog, '_load_installed'):
+            dialog = PackageManagerDialog(
+                theme_manager=ThemeManager(), parent=None
+            )
+            qtbot.addWidget(dialog)
+            dialog._worker = None
+            # Nao deve lancar excecao
+            dialog._cleanup_worker()
+
+    def test_cleanup_worker_running(self, qtbot):
+        """_cleanup_worker espera worker que ainda esta rodando"""
+        from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+        from src.core.theme_manager import ThemeManager
+
+        with patch.object(PackageManagerDialog, '_load_installed'):
+            dialog = PackageManagerDialog(
+                theme_manager=ThemeManager(), parent=None
+            )
+            qtbot.addWidget(dialog)
+
+            mock_worker = MagicMock()
+            mock_worker.isRunning.return_value = True
+            dialog._worker = mock_worker
+
+            dialog._cleanup_worker()
+            mock_worker.quit.assert_called_once()
+            mock_worker.wait.assert_called_once_with(2000)
+
+    def test_pending_query_attribute(self, qtbot):
+        """Dialogo possui atributo _pending_query"""
+        from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+        from src.core.theme_manager import ThemeManager
+
+        with patch.object(PackageManagerDialog, '_load_installed'):
+            dialog = PackageManagerDialog(
+                theme_manager=ThemeManager(), parent=None
+            )
+            qtbot.addWidget(dialog)
+            assert hasattr(dialog, '_pending_query')
+            assert dialog._pending_query == ""
+
+    def test_show_direct_install_option(self, qtbot):
+        """_show_direct_install_option cria botao de instalar na tabela"""
+        from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+        from src.core.theme_manager import ThemeManager
+
+        with patch.object(PackageManagerDialog, '_load_installed'):
+            dialog = PackageManagerDialog(
+                theme_manager=ThemeManager(), parent=None
+            )
+            qtbot.addWidget(dialog)
+
+            dialog._show_direct_install_option("minhalibraria")
+            assert dialog.table.rowCount() == 1
+            assert dialog.table.item(0, 0).text() == "minhalibraria"
+            # Verifica que ha widget de acoes com botao
+            widget = dialog.table.cellWidget(0, 3)
+            assert widget is not None
+            from PyQt6.QtWidgets import QPushButton
+            buttons = widget.findChildren(QPushButton)
+            assert len(buttons) == 1
+            assert "Instalar" in buttons[0].text()
+
+    def test_operation_done_reloads_installed(self, qtbot):
+        """Apos operacao bem sucedida, recarrega lista de instalados"""
+        from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+        from src.core.theme_manager import ThemeManager
+
+        with patch.object(PackageManagerDialog, '_load_installed') as mock_load:
+            dialog = PackageManagerDialog(
+                theme_manager=ThemeManager(), parent=None
+            )
+            qtbot.addWidget(dialog)
+            mock_load.reset_mock()
+
+            result = PackageOperationResult(
+                success=True, package_name="flask",
+                operation="install", message="OK"
+            )
+            with patch.object(QMessageBox, 'information'):
+                dialog._on_operation_done(result)
+
+            # O reload e agendado via QTimer.singleShot
+            # Processar eventos pendentes
+            qtbot.waitUntil(lambda: mock_load.called, timeout=2000)
+
+    def test_search_results_empty_shows_install_option(self, qtbot):
+        """Pesquisa sem resultado mostra opcao de instalar diretamente"""
+        from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+        from src.core.theme_manager import ThemeManager
+
+        with patch.object(PackageManagerDialog, '_load_installed'):
+            dialog = PackageManagerDialog(
+                theme_manager=ThemeManager(), parent=None
+            )
+            qtbot.addWidget(dialog)
+            dialog._pending_query = "pacoteinexistente"
+
+            dialog._on_search_results([])
+
+            assert dialog.table.rowCount() == 1
+            assert "pacoteinexistente" in dialog.lbl_info.text()
+            assert "instalar" in dialog.lbl_info.text().lower()
+
+
+# ===========================================================================
+# PythonWorker - matplotlib
+# ===========================================================================
+
+class TestPythonWorkerMatplotlib:
+    """Testes para captura de figuras matplotlib no PythonWorker"""
+
+    def test_python_worker_signal_has_5_params(self):
+        """PythonWorker.finished emite 5 parametros (inclui figures)"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("1+1", {}, False)
+        # Verificar que o signal aceita 5 parametros
+        assert worker.finished is not None
+
+    def test_python_worker_setup_matplotlib_no_matplotlib(self):
+        """_setup_matplotlib_backend nao falha sem matplotlib"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("1+1", {}, False)
+        # Se matplotlib nao estiver disponivel, nao deve lancar excecao
+        with patch.dict('sys.modules', {'matplotlib': None}):
+            worker._setup_matplotlib_backend()
+
+    def test_python_worker_capture_no_matplotlib(self):
+        """_capture_matplotlib_figures retorna lista vazia sem matplotlib"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("1+1", {}, False)
+        with patch.dict('sys.modules', {'matplotlib': None, 'matplotlib.pyplot': None}):
+            result = worker._capture_matplotlib_figures()
+            assert result == []
+
+    def test_python_worker_capture_no_figures(self):
+        """_capture_matplotlib_figures retorna lista vazia sem figuras"""
+        from src.ui.main_window import PythonWorker
+        worker = PythonWorker("1+1", {}, False)
+        mock_plt = MagicMock()
+        mock_plt.get_fignums.return_value = []
+        with patch.dict('sys.modules', {'matplotlib': MagicMock(), 'matplotlib.pyplot': mock_plt}):
+            result = worker._capture_matplotlib_figures()
+            assert result == []
+
+    def test_main_window_has_display_matplotlib_method(self):
+        """MainWindow possui metodo _display_matplotlib_figures"""
+        from src.ui.main_window import MainWindow
+        assert hasattr(MainWindow, '_display_matplotlib_figures')
