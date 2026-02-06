@@ -62,18 +62,23 @@ jobs:
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     concurrency: release
+    permissions:
+      id-token: write
+      contents: write
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v4
+          persist-credentials: false
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Use Python Semantic Release to prepare release
         id: release
-        uses: python-semantic-release/python-semantic-release@master
+        uses: python-semantic-release/python-semantic-release@v9.18.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          changelog: false
+          github_token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
