@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGroupBox, QListWidget, QListWidgetItem, QFrame,
                              QApplication)
 from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject, QSettings
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor, QImage
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
 import sys
 import re
 import io
@@ -2103,53 +2103,13 @@ class MainWindow(DockingMainWindow):
         # Iniciar
         thread.start()
     
-    def _display_matplotlib_figures(self, figures: list):
-        """Exibe figuras/imagens capturadas no painel de output.
-
-        Usa QTextDocument.addResource para inserir imagens de forma confiavel
-        no QTextEdit, sem depender de data-URIs (que podem falhar em certas
-        versoes do Qt).
-        """
-        from PyQt6.QtGui import QTextCursor, QTextDocument
-        from PyQt6.QtCore import QUrl
-
-        output_panel = self.global_output_panel
-        if not output_panel:
+    def _display_figures_in_results(self, figures: list, label: str = "Grafico"):
+        """Exibe figuras/imagens no painel de resultados."""
+        results_panel = self.global_results_viewer
+        if not results_panel or not figures:
             return
-
-        text_edit = output_panel.text_edit
-        doc = text_edit.document()
-        timestamp = datetime.now().strftime("%H:%M:%S")
-
-        for i, fig_bytes in enumerate(figures):
-            img = QImage()
-            if not img.loadFromData(fig_bytes):
-                continue
-
-            # Registrar imagem como recurso no documento
-            img_name = f"figure_{id(fig_bytes)}_{i}.png"
-            url = QUrl(img_name)
-            doc.addResource(QTextDocument.ResourceType.ImageResource, url, img)
-
-            label = f"Grafico {i + 1}" if len(figures) > 1 else "Grafico"
-
-            # Limitar largura ao viewport
-            max_w = max(text_edit.viewport().width() - 30, 200)
-            display_w = min(img.width(), max_w)
-
-            html = (
-                f'<br><span style="color: #808080;">[{timestamp}]</span> '
-                f'<span style="color: #4ec9b0;">[{label}]</span><br>'
-                f'<img src="{img_name}" width="{display_w}"><br>'
-            )
-            text_edit.append(html)
-
-        # Scroll para o final
-        cursor = text_edit.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        text_edit.setTextCursor(cursor)
-
-        self.show_panel('output')
+        results_panel.display_images(figures, label)
+        self.show_panel('results')
     
     def _handle_execution_result(self, result=None, error=None, execution_type="Unknown", additional_info=""):
         """
@@ -2309,42 +2269,51 @@ class MainWindow(DockingMainWindow):
         thread.quit()
         thread.wait()
         
-        logging.info(f"[MAIN_WINDOW] RETORNO DA EXECUCAO: \"\"\"{repr(result_value)}\"\"\"")
-        logging.info(f"[MAIN_WINDOW] FOI PRO CONSOLE: \"\"\"{output}\"\"\"")
-        
         # FORCAR: Se ha erro, SEMPRE mostrar output primeiro
         if error:
             self._show_error_output(f"[Python] Erro: {error}")
             self.action_label.setText("[Python] Erro ao executar")
             return
         
-        # Mostra output de print() primeiro (se houver)
+        # Mostra output de print()/stderr (se houver) -> painel output
         if output:
             self._log(output.strip())
         
-        # Exibir figuras matplotlib capturadas (se houver)
+        # Decidir o que mostrar no painel Results:
+        # Prioridade: figuras (graficos/imagens) > DataFrame > nada
         has_figures = bool(figures)
-        if has_figures:
-            self._display_matplotlib_figures(figures)
+        results_panel = self.global_results_viewer
         
-        # Usar metodo centralizado para tratar resultado
-        success = self._handle_execution_result(
-            result=result_value,
-            error=None,
-            execution_type="Python"
-        )
-        
-        if success:
+        if has_figures and result_value is not None and isinstance(result_value, pd.DataFrame):
+            # Graficos + DataFrame: mostrar graficos no results, dados ficam no namespace
+            if results_panel:
+                results_panel.display_images(figures, "Grafico")
+            self.show_panel('results')
             self._update_variables_view()
-            if has_figures and result_value is not None:
-                # Graficos + dados: mostrar output (graficos), dados ficam no grid
-                self.show_panel('output')
-                self.action_label.setText("[Python] Grafico + dados exibidos!")
-            elif has_figures:
-                self.show_panel('output')
-                self.action_label.setText("[Python] Grafico exibido com sucesso!")
-            else:
+            self.action_label.setText("[Python] Grafico + dados gerados!")
+        elif has_figures:
+            # So graficos: mostrar no results
+            if results_panel:
+                results_panel.display_images(figures, "Grafico")
+            self.show_panel('results')
+            self._update_variables_view()
+            self.action_label.setText("[Python] Grafico exibido!")
+        elif result_value is not None:
+            # Resultado sem graficos: usar handler centralizado
+            success = self._handle_execution_result(
+                result=result_value,
+                error=None,
+                execution_type="Python"
+            )
+            if success:
+                self._update_variables_view()
                 self.action_label.setText("[Python] Executado com sucesso!")
+        else:
+            # Sem resultado, sem graficos: so output
+            if output:
+                self.show_panel('output')
+            self._update_variables_view()
+            self.action_label.setText("[Python] Executado com sucesso!")
     
     def _execute_cross_syntax(self, code: str):
         """Executa código com sintaxe cross {{ SQL }} em background"""

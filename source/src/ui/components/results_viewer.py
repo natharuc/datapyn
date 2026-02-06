@@ -4,9 +4,10 @@ Visualizador de resultados em tabela
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableView, 
                              QLabel, QPushButton, QLineEdit, QToolBar,
                              QDialog, QFormLayout, QComboBox, QCheckBox,
-                             QDialogButtonBox, QFileDialog, QMessageBox)
+                             QDialogButtonBox, QFileDialog, QMessageBox,
+                             QStackedWidget, QScrollArea)
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QImage, QPixmap
 import pandas as pd
 from typing import Optional
 import subprocess
@@ -210,6 +211,7 @@ class ResultsViewer(QWidget):
         self.theme_manager = theme_manager or ThemeManager()
         self._setup_ui()
         self.current_df: Optional[pd.DataFrame] = None
+        self._current_image_bytes: Optional[bytes] = None
     
     def _setup_ui(self):
         """Configura a interface"""
@@ -253,23 +255,42 @@ class ResultsViewer(QWidget):
         
         layout.addWidget(self.toolbar)
         
-        # Tabela
+        # Botao salvar imagem (oculto por padrao)
+        self.btn_save_image = QPushButton("Salvar Imagem")
+        self.btn_save_image.setVisible(False)
+        self.toolbar.addWidget(self.btn_save_image)
+
+        # QStackedWidget: pagina 0 = tabela, pagina 1 = imagem
+        self.stack = QStackedWidget()
+
+        # Pagina 0 - Tabela
         self.table_view = QTableView()
         self._apply_table_style()
         
         self.model = PandasModel(theme_manager=self.theme_manager)
         self.table_view.setModel(self.model)
         
-        # Ajustar colunas automaticamente pelo conteúdo do cabeçalho
+        # Ajustar colunas automaticamente pelo conteudo do cabecalho
         self.table_view.horizontalHeader().setSectionResizeMode(self.table_view.horizontalHeader().ResizeMode.ResizeToContents)
-        
-        layout.addWidget(self.table_view)
+        self.stack.addWidget(self.table_view)  # index 0
+
+        # Pagina 1 - Imagem
+        self.image_scroll = QScrollArea()
+        self.image_scroll.setWidgetResizable(True)
+        self.image_scroll.setStyleSheet(f"background-color: {colors['background']};")
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_scroll.setWidget(self.image_label)
+        self.stack.addWidget(self.image_scroll)  # index 1
+
+        layout.addWidget(self.stack)
         
         # Conectar sinais
         self.btn_export_csv.clicked.connect(self._export_csv)
         self.btn_export_excel.clicked.connect(self._export_excel)
         self.btn_export_json.clicked.connect(self._export_json)
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
+        self.btn_save_image.clicked.connect(self._save_image)
     
     def _apply_toolbar_style(self):
         """Aplica estilo na toolbar baseado no tema"""
@@ -336,13 +357,153 @@ class ResultsViewer(QWidget):
         # Atualiza info
         rows = len(df)
         cols = len(df.columns)
-        self.info_label.setText(f"{var_name}: {rows:,} linhas × {cols} colunas")
+        self.info_label.setText(f"{var_name}: {rows:,} linhas x {cols} colunas")
+        
+        # Mostrar tabela e botoes de export
+        self.stack.setCurrentIndex(0)
+        self.btn_export_csv.setVisible(True)
+        self.btn_export_excel.setVisible(True)
+        self.btn_export_json.setVisible(True)
+        self.btn_copy.setVisible(True)
+        self.export_destination.setVisible(True)
+        self.btn_save_image.setVisible(False)
+    
+    def display_image(self, image_bytes: bytes, label: str = "Grafico"):
+        """Exibe uma imagem (PNG bytes) no painel de resultados.
+        
+        Args:
+            image_bytes: Bytes da imagem PNG
+            label: Texto descritivo para a info label
+        """
+        self._current_image_bytes = image_bytes
+        
+        img = QImage()
+        if not img.loadFromData(image_bytes):
+            return
+        
+        pixmap = QPixmap.fromImage(img)
+        
+        # Escalar ao viewport mantendo aspecto
+        viewport_w = self.image_scroll.viewport().width()
+        viewport_h = self.image_scroll.viewport().height()
+        if viewport_w < 100:
+            viewport_w = 800
+        if viewport_h < 100:
+            viewport_h = 600
+        
+        scaled = pixmap.scaled(
+            viewport_w - 20, viewport_h - 20,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+        
+        # Guardar pixmap original para redimensionar
+        self._original_pixmap = pixmap
+        
+        self.info_label.setText(f"{label} ({img.width()} x {img.height()} px)")
+        
+        # Mostrar imagem e botao salvar, esconder export de dados
+        self.stack.setCurrentIndex(1)
+        self.btn_export_csv.setVisible(False)
+        self.btn_export_excel.setVisible(False)
+        self.btn_export_json.setVisible(False)
+        self.btn_copy.setVisible(False)
+        self.export_destination.setVisible(False)
+        self.btn_save_image.setVisible(True)
+    
+    def display_images(self, images_bytes_list: list, label: str = "Graficos"):
+        """Exibe multiplas imagens combinadas verticalmente.
+        
+        Args:
+            images_bytes_list: Lista de bytes PNG
+            label: Texto descritivo
+        """
+        if not images_bytes_list:
+            return
+        
+        if len(images_bytes_list) == 1:
+            self.display_image(images_bytes_list[0], label)
+            return
+        
+        # Combinar imagens verticalmente
+        images = []
+        total_h = 0
+        max_w = 0
+        for img_bytes in images_bytes_list:
+            img = QImage()
+            if img.loadFromData(img_bytes):
+                images.append(img)
+                total_h += img.height() + 10  # 10px spacing
+                max_w = max(max_w, img.width())
+        
+        if not images:
+            return
+        
+        # Criar imagem combinada
+        from PyQt6.QtGui import QPainter
+        combined = QImage(max_w, total_h, QImage.Format.Format_ARGB32)
+        combined.fill(QColor('#1e1e1e'))
+        
+        painter = QPainter(combined)
+        y_offset = 0
+        for img in images:
+            x_offset = (max_w - img.width()) // 2
+            painter.drawImage(x_offset, y_offset, img)
+            y_offset += img.height() + 10
+        painter.end()
+        
+        # Salvar como bytes para o botao salvar
+        from PyQt6.QtCore import QBuffer, QIODevice
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        combined.save(buffer, 'PNG')
+        self._current_image_bytes = bytes(buffer.data())
+        buffer.close()
+
+        pixmap = QPixmap.fromImage(combined)
+        self._original_pixmap = pixmap
+        
+        # Escalar ao viewport
+        viewport_w = self.image_scroll.viewport().width()
+        viewport_h = self.image_scroll.viewport().height()
+        if viewport_w < 100:
+            viewport_w = 800
+        if viewport_h < 100:
+            viewport_h = 600
+        
+        scaled = pixmap.scaled(
+            viewport_w - 20, viewport_h - 20,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+        
+        self.info_label.setText(f"{label} ({len(images)} imagens)")
+        
+        # Mostrar imagem e botao salvar
+        self.stack.setCurrentIndex(1)
+        self.btn_export_csv.setVisible(False)
+        self.btn_export_excel.setVisible(False)
+        self.btn_export_json.setVisible(False)
+        self.btn_copy.setVisible(False)
+        self.export_destination.setVisible(False)
+        self.btn_save_image.setVisible(True)
     
     def clear(self):
-        """Limpa a visualização"""
+        """Limpa a visualizacao"""
         self.current_df = None
+        self._current_image_bytes = None
         self.model.update_data(pd.DataFrame())
+        self.image_label.clear()
         self.info_label.setText("Nenhum resultado")
+        self.stack.setCurrentIndex(0)
+        self.btn_save_image.setVisible(False)
+        self.btn_export_csv.setVisible(True)
+        self.btn_export_excel.setVisible(True)
+        self.btn_export_json.setVisible(True)
+        self.btn_copy.setVisible(True)
+        self.export_destination.setVisible(True)
     
     def _get_export_destination(self) -> str:
         """Retorna o destino selecionado: 'clipboard' ou 'file'"""
@@ -468,3 +629,36 @@ class ResultsViewer(QWidget):
             text = self.current_df.to_string(index=False)
             QApplication.instance().clipboard().setText(text)
             self._show_clipboard_success("Tabela")
+    
+    def _save_image(self):
+        """Salva a imagem exibida em arquivo"""
+        if not self._current_image_bytes:
+            return
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Salvar Imagem", "", "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
+        )
+        if filename:
+            if not any(filename.lower().endswith(ext) for ext in ('.png', '.jpg', '.jpeg')):
+                filename += '.png'
+            try:
+                with open(filename, 'wb') as f:
+                    f.write(self._current_image_bytes)
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Erro ao salvar imagem:\n{str(e)}")
+    
+    def resizeEvent(self, event):
+        """Reescala imagem quando o widget e redimensionado"""
+        super().resizeEvent(event)
+        if not hasattr(self, 'stack'):
+            return
+        if self.stack.currentIndex() == 1 and hasattr(self, '_original_pixmap'):
+            viewport_w = self.image_scroll.viewport().width()
+            viewport_h = self.image_scroll.viewport().height()
+            if viewport_w > 100 and viewport_h > 100:
+                scaled = self._original_pixmap.scaled(
+                    viewport_w - 20, viewport_h - 20,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.image_label.setPixmap(scaled)

@@ -3,6 +3,7 @@ Testes para o Gerenciador de Pacotes (PackageManagerService e PackageManagerDial
 """
 import pytest
 import sys
+import io
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -947,10 +948,10 @@ class TestPythonWorkerMatplotlib:
             result = worker._capture_matplotlib_figures()
             assert result == []
 
-    def test_main_window_has_display_matplotlib_method(self):
-        """MainWindow possui metodo _display_matplotlib_figures"""
+    def test_main_window_has_display_figures_method(self):
+        """MainWindow possui metodo _display_figures_in_results"""
         from src.ui.main_window import MainWindow
-        assert hasattr(MainWindow, '_display_matplotlib_figures')
+        assert hasattr(MainWindow, '_display_figures_in_results')
 
 
 # ===========================================================================
@@ -1171,3 +1172,92 @@ class TestPythonWorkerRichResult:
             assert plt.rcParams['text.color'] == '#d4d4d4'
         except ImportError:
             pytest.skip("matplotlib nao instalado")
+
+
+# ===========================================================================
+# ResultsViewer - exibicao de imagens
+# ===========================================================================
+
+class TestResultsViewerImage:
+    """Testes para display_image/display_images no ResultsViewer"""
+
+    def test_results_viewer_has_display_image(self):
+        """ResultsViewer possui metodo display_image"""
+        from src.ui.components.results_viewer import ResultsViewer
+        assert hasattr(ResultsViewer, 'display_image')
+        assert hasattr(ResultsViewer, 'display_images')
+
+    def test_results_viewer_has_stack_widget(self, qapp):
+        """ResultsViewer usa QStackedWidget com 2 paginas"""
+        from src.ui.components.results_viewer import ResultsViewer
+        viewer = ResultsViewer()
+        assert hasattr(viewer, 'stack')
+        assert viewer.stack.count() == 2
+
+    def test_display_image_switches_to_image_page(self, qapp):
+        """display_image mostra pagina de imagem (index 1)"""
+        from src.ui.components.results_viewer import ResultsViewer
+        viewer = ResultsViewer()
+
+        # Criar PNG via matplotlib
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(2, 2))
+            ax.plot([1, 2])
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png')
+            buf.seek(0)
+            png = buf.getvalue()
+            plt.close(fig)
+        except ImportError:
+            pytest.skip("matplotlib nao instalado")
+
+        viewer.display_image(png, "Teste")
+        assert viewer.stack.currentIndex() == 1
+        assert not viewer.btn_save_image.isHidden()
+        assert viewer.btn_export_csv.isHidden()
+
+    def test_display_dataframe_switches_to_table_page(self, qapp):
+        """display_dataframe mostra pagina de tabela (index 0)"""
+        import pandas as pd
+        from src.ui.components.results_viewer import ResultsViewer
+        viewer = ResultsViewer()
+
+        df = pd.DataFrame({'A': [1, 2, 3]})
+        viewer.display_dataframe(df, "teste")
+        assert viewer.stack.currentIndex() == 0
+        assert not viewer.btn_export_csv.isHidden()
+        assert viewer.btn_save_image.isHidden()
+
+    def test_clear_resets_to_table_page(self, qapp):
+        """clear() volta para pagina de tabela"""
+        from src.ui.components.results_viewer import ResultsViewer
+        viewer = ResultsViewer()
+        viewer.stack.setCurrentIndex(1)
+        viewer.clear()
+        assert viewer.stack.currentIndex() == 0
+        assert viewer._current_image_bytes is None
+
+    def test_display_images_single_calls_display_image(self, qapp):
+        """display_images com 1 item usa display_image"""
+        from src.ui.components.results_viewer import ResultsViewer
+        viewer = ResultsViewer()
+
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(2, 2))
+            ax.plot([1, 2, 3])
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png')
+            buf.seek(0)
+            png = buf.getvalue()
+            plt.close(fig)
+        except ImportError:
+            pytest.skip("matplotlib nao instalado")
+
+        viewer.display_images([png], "Teste")
+        assert viewer.stack.currentIndex() == 1
