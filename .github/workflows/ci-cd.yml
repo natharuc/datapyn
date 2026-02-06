@@ -25,10 +25,30 @@ jobs:
       - name: Install OpenGL dependencies (Ubuntu)
         run: sudo apt-get install -y freeglut3-dev
 
+      - name: Install Qt dependencies and Xvfb for headless testing
+        run: |
+          sudo apt-get install -y \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-xinerama0 \
+            libxcb-xfixes0 \
+            libxcb-shape0 \
+            libxcb-cursor0 \
+            libegl1 \
+            libegl-mesa0 \
+            libgl1 \
+            libglib2.0-0
+
       - name: install requirements
         run: |
           pip install -r requirements.txt
       - name: run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: pytest
 
   cd:
