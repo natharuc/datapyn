@@ -3,10 +3,10 @@ name: ci-cd
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
-      - master
+      - main
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     concurrency: release
 
     steps:
