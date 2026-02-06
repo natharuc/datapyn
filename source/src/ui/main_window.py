@@ -88,6 +88,10 @@ class PythonWorker(QObject):
             # Isso evita o erro de GUI fora da main thread
             self._setup_matplotlib_backend()
             
+            # Snapshot de DataFrames antes da execucao para detectar novos
+            df_snapshot = {k: id(v) for k, v in self.namespace.items()
+                          if isinstance(v, pd.DataFrame)}
+            
             # Captura stdout
             old_stdout = sys.stdout
             sys.stdout = captured_output = StringIO()
@@ -99,6 +103,16 @@ class PythonWorker(QObject):
             
             # Capturar figuras matplotlib pendentes
             figures = self._capture_matplotlib_figures()
+            
+            # Se resultado e None, verificar se novos DataFrames foram criados
+            # para exibi-los automaticamente no grid de resultados
+            if result_value is None:
+                new_dfs = [(k, v) for k, v in self.namespace.items()
+                           if isinstance(v, pd.DataFrame)
+                           and not k.startswith('_')
+                           and (k not in df_snapshot or id(v) != df_snapshot[k])]
+                if new_dfs:
+                    result_value = new_dfs[-1][1]
             
             # Retornar namespace atualizado
             self.finished.emit(result_value, output, '', self.namespace, figures)
@@ -2212,24 +2226,28 @@ class MainWindow(DockingMainWindow):
             self._log(output.strip())
         
         # Exibir figuras matplotlib capturadas (se houver)
-        if figures:
+        has_figures = bool(figures)
+        if has_figures:
             self._display_matplotlib_figures(figures)
-            if result_value is None and not output:
-                self.action_label.setText("[Python] Grafico exibido com sucesso!")
-                self._update_variables_view()
-                return
         
-        # SO se nao ha erro, usar metodo centralizado
+        # Usar metodo centralizado para tratar resultado
         success = self._handle_execution_result(
             result=result_value,
-            error=None,  # Garantir que error e None aqui
+            error=None,
             execution_type="Python"
         )
         
         if success:
-            # Atualiza variaveis
             self._update_variables_view()
-            self.action_label.setText("[Python] Executado com sucesso!")
+            if has_figures and result_value is not None:
+                # Graficos + dados: mostrar output (graficos), dados ficam no grid
+                self.show_panel('output')
+                self.action_label.setText("[Python] Grafico + dados exibidos!")
+            elif has_figures:
+                self.show_panel('output')
+                self.action_label.setText("[Python] Grafico exibido com sucesso!")
+            else:
+                self.action_label.setText("[Python] Executado com sucesso!")
     
     def _execute_cross_syntax(self, code: str):
         """Executa código com sintaxe cross {{ SQL }} em background"""

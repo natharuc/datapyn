@@ -801,6 +801,113 @@ class TestDialogWorkerCleanup:
 
 
 # ===========================================================================
+# PythonWorker - deteccao automatica de DataFrames
+# ===========================================================================
+
+class TestPythonWorkerDataFrameDetection:
+    """Testes para deteccao automatica de novos DataFrames quando resultado e None"""
+
+    def test_new_dataframe_detected_as_result(self):
+        """Quando ultima linha e assignment, DataFrame criado deve ser retornado"""
+        import pandas as pd
+        from src.ui.main_window import PythonWorker
+
+        code = "df_new = pd.DataFrame({'A': [1, 2, 3]})"
+        namespace = {'pd': pd}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert len(results) == 1
+        assert isinstance(results[0], pd.DataFrame)
+        assert len(results[0]) == 3
+
+    def test_multiple_new_dataframes_returns_last(self):
+        """Quando multiplos DataFrames sao criados, retorna o ultimo"""
+        import pandas as pd
+        from src.ui.main_window import PythonWorker
+
+        code = "df1 = pd.DataFrame({'A': [1]})\ndf2 = pd.DataFrame({'B': [2, 3]})"
+        namespace = {'pd': pd}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert len(results) == 1
+        assert isinstance(results[0], pd.DataFrame)
+        assert list(results[0].columns) == ['B']
+
+    def test_no_new_dataframe_result_stays_none(self):
+        """Sem novos DataFrames, resultado permanece None"""
+        from src.ui.main_window import PythonWorker
+
+        code = "x = 5\ny = 10\nprint(x + y)"
+        namespace = {}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert len(results) == 1
+        assert results[0] is None
+
+    def test_explicit_expression_takes_priority(self):
+        """Quando ultima linha E expressao valida, usa ela (nao a deteccao)"""
+        import pandas as pd
+        from src.ui.main_window import PythonWorker
+
+        code = "df1 = pd.DataFrame({'A': [1, 2]})\n42"
+        namespace = {'pd': pd}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert len(results) == 1
+        assert results[0] == 42
+
+    def test_modified_dataframe_detected(self):
+        """DataFrame reatribuido (mesmo nome) e detectado"""
+        import pandas as pd
+        from src.ui.main_window import PythonWorker
+
+        original = pd.DataFrame({'A': [1]})
+        code = "df = pd.DataFrame({'A': [1, 2, 3]})"
+        namespace = {'pd': pd, 'df': original}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert len(results) == 1
+        assert isinstance(results[0], pd.DataFrame)
+        assert len(results[0]) == 3
+
+    def test_private_vars_excluded(self):
+        """Variaveis que comecam com _ nao sao detectadas"""
+        import pandas as pd
+        from src.ui.main_window import PythonWorker
+
+        code = "_temp = pd.DataFrame({'A': [1]})"
+        namespace = {'pd': pd}
+        worker = PythonWorker(code, namespace, False)
+
+        results = []
+        worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
+        worker.run()
+
+        assert len(results) == 1
+        assert results[0] is None
+
+
+# ===========================================================================
 # PythonWorker - matplotlib
 # ===========================================================================
 
