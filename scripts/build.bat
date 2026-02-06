@@ -25,10 +25,11 @@ REM Executar PyInstaller com o spec file
 pyinstaller scripts\datapyn.spec --clean
 
 echo.
-if exist "dist\DataPyn.exe" (
+if exist "dist\DataPyn\DataPyn.exe" (
     echo ========================================
     echo    Build concluido com sucesso!
-    echo    Executavel: dist\DataPyn.exe
+    echo    Pasta: dist\DataPyn\
+    echo    Executavel: dist\DataPyn\DataPyn.exe
     echo ========================================
 ) else (
     echo ========================================

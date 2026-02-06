@@ -22,8 +22,13 @@ def main_window(qapp):
     window = MainWindow()
     window.show()
     QTest.qWaitForWindowExposed(window)
+    # Aguardar restauracao completa de todas as sessoes salvas
+    for _ in range(100):
+        QApplication.processEvents()
+        QTest.qWait(50)
+        if not hasattr(window, '_sessions_to_load') or not window._sessions_to_load:
+            break
     QApplication.processEvents()
-    QTest.qWait(500)
     return window
 
 

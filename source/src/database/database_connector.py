@@ -3,7 +3,7 @@ Conector de banco de dados com suporte para múltiplos SGBDs
 """
 from typing import Optional, Dict, Any, List, Union
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine
 import logging
 import pyodbc
@@ -50,6 +50,23 @@ class DatabaseConnector:
             )
             
             self.engine = create_engine(connection_string, pool_pre_ping=True)
+            
+            # Registrar evento no pool para garantir que toda conexao
+            # retirada do pool use o banco correto (resolve o problema
+            # com USE <db> que so afeta uma conexao do pool)
+            if db_type == 'sqlserver':
+                connector_ref = self
+                
+                @event.listens_for(self.engine, "checkout")
+                def on_checkout(dbapi_conn, connection_record, connection_proxy):
+                    current_db = connector_ref.connection_params.get('database', '')
+                    if current_db:
+                        try:
+                            cursor = dbapi_conn.cursor()
+                            cursor.execute(f"USE [{current_db}]")
+                            cursor.close()
+                        except Exception:
+                            pass  # Silenciar - o USE no batch vai pegar o erro
             
             # Testa a conexão
             with self.engine.connect() as conn:
@@ -150,6 +167,19 @@ class DatabaseConnector:
             # Usar raw connection do pyodbc para acessar nextset()
             raw_conn = self.engine.raw_connection()
             cursor = raw_conn.cursor()
+            
+            # CRITICO: Garantir que esta conexao do pool esta no banco correto.
+            # O pool do SQLAlchemy pode devolver qualquer conexao, e um comando
+            # USE anterior pode ter sido executado em outra conexao do pool.
+            current_db = self.connection_params.get('database', '')
+            if current_db:
+                try:
+                    cursor.execute(f"USE [{current_db}]")
+                    # Consumir possivel result set do USE
+                    while cursor.nextset():
+                        pass
+                except Exception as e:
+                    logger.warning(f"Falha ao definir banco [{current_db}]: {e}")
             
             # Executar query completa
             cursor.execute(query)

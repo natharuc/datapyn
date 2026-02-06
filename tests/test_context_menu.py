@@ -21,8 +21,13 @@ def main_window(qapp):
     window = MainWindow()
     window.show()
     QTest.qWaitForWindowExposed(window)
+    # Aguardar restauracao completa de todas as sessoes salvas
+    for _ in range(100):
+        QApplication.processEvents()
+        QTest.qWait(50)
+        if not hasattr(window, '_sessions_to_load') or not window._sessions_to_load:
+            break
     QApplication.processEvents()
-    QTest.qWait(500)
     return window
 
 
@@ -52,14 +57,14 @@ def test_duplicate_inserts_before_plus_button(main_window):
     count_after = main_window.session_tabs.count()
     assert count_after == count_before + 1
     
-    # Verificar que existe uma aba com "(cópia)" no nome
+    # Verificar que existe uma aba com "(copia)" no nome
     found_copy = False
     for i in range(count_after):
         tab_text = main_window.session_tabs.tabText(i)
-        if "(cópia)" in tab_text:
+        if "(copia)" in tab_text:
             found_copy = True
             break
-    assert found_copy, "Deve existir uma aba com '(cópia)' no nome"
+    assert found_copy, "Deve existir uma aba com '(copia)' no nome"
 
 
 def test_close_button_has_custom_icon(main_window):

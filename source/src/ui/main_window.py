@@ -36,6 +36,7 @@ from src.core.mixed_executor import MixedLanguageExecutor
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.ui.dialogs.settings_dialog import SettingsDialog
+from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
 
 # Componentes da UI
 from src.ui.components.results_viewer import ResultsViewer
@@ -682,6 +683,12 @@ class MainWindow(DockingMainWindow):
         self.variables_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
         
+        # Configurar tamanhos minimos para garantir visibilidade
+        self.results_dock.setMinimumHeight(180)
+        self.output_dock.setMinimumHeight(180)
+        self.variables_dock.setMinimumWidth(200)
+        self.variables_dock.setMinimumHeight(180)
+        
         # Tabifica Results e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
         
@@ -721,13 +728,20 @@ class MainWindow(DockingMainWindow):
         info['variables'].deleteLater()
     
     def _switch_session_panels(self, session_id: str):
-        """Troca os stacks para exibir os paineis da sessao ativa."""
+        """Troca os stacks para exibir os paineis da sessao ativa.
+        
+        Usa setCurrentWidget() em vez de setCurrentIndex() para evitar
+        bugs com indices invalidos apos remocao de widgets do stack.
+        """
         info = self._session_panel_indices.get(session_id)
         if not info:
             return
-        self._results_stack.setCurrentIndex(info['results_idx'])
-        self._output_stack.setCurrentIndex(info['output_idx'])
-        self._variables_stack.setCurrentIndex(info['variables_idx'])
+        if info['results']:
+            self._results_stack.setCurrentWidget(info['results'])
+        if info['output']:
+            self._output_stack.setCurrentWidget(info['output'])
+        if info['variables']:
+            self._variables_stack.setCurrentWidget(info['variables'])
     
     @property
     def global_results_viewer(self):
@@ -1250,6 +1264,14 @@ class MainWindow(DockingMainWindow):
         # Menu Ferramentas
         tools_menu = menubar.addMenu("&Ferramentas")
         
+        packages_action = QAction("Gerenciador de &Pacotes...", self)
+        if HAS_QTAWESOME:
+            packages_action.setIcon(qta.icon('fa5s.cube', color='#cccccc'))
+        packages_action.triggered.connect(self._show_package_manager)
+        tools_menu.addAction(packages_action)
+        
+        tools_menu.addSeparator()
+        
         settings_action = QAction("&Configurações de Atalhos...", self)
         if HAS_QTAWESOME:
             settings_action.setIcon(self.icons['cog'])
@@ -1451,102 +1473,110 @@ class MainWindow(DockingMainWindow):
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
     
-    def _new_session(self):
-        """Cria nova sessão/aba"""
-        session = self.session_manager.create_session()
-        self._create_session_widget(session)
-        # Focar na nova aba
-        for i in range(self.session_tabs.count()):
-            if self.session_tabs.tabText(i).startswith("Session"):
-                widget = self.session_tabs.widget(i)
-                if isinstance(widget, SessionWidget) and widget.session.session_id == session.session_id:
-                    self.session_tabs.setCurrentIndex(i)
-                    break
-        
-        # Atualizar título da janela (contexto pode ter mudado)
-        self._update_window_title()
+    # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
     
     def _close_current_session(self):
-        """Fecha a sessão/aba atual"""
+        """Fecha a sessao/aba atual - delega para _close_session_tab"""
         current_index = self.session_tabs.currentIndex()
         if current_index >= 0:
             widget = self.session_tabs.widget(current_index)
             if isinstance(widget, SessionWidget):
-                # Confirmar fechamento se houver código não salvo
+                # Confirmar fechamento se houver codigo nao salvo
                 has_code = any(block.get_code().strip() for block in widget.editor.get_blocks())
                 if has_code:
                     reply = QMessageBox.question(
                         self,
-                        "Fechar Sessão",
-                        "Tem certeza que deseja fechar esta sessão?\n\nO código não salvo será perdido.",
+                        "Fechar Sessao",
+                        "Tem certeza que deseja fechar esta sessao?\n\nO codigo nao salvo sera perdido.",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No
                     )
                     if reply == QMessageBox.StandardButton.No:
                         return
                 
-                # Remover sessão
-                session_id = widget.session.session_id
-                self.session_manager.close_session(session_id)
-                if session_id in self._session_widgets:
-                    del self._session_widgets[session_id]
-                
-                # Remover aba
-                self.session_tabs.removeTab(current_index)
-                
-                # Se não há mais sessões, mostrar empty state
-                if not self._session_widgets:
-                    self._show_empty_state()
+                # Delegar para _close_session_tab que faz cleanup completo
+                self._close_session_tab(current_index)
     
     def _duplicate_session(self, index: int):
-        """Duplica uma sessão"""
+        """Duplica uma sessao - cria nova sessao com paineis e copia conteudo"""
         widget = self.session_tabs.widget(index)
         if not widget or not hasattr(widget, 'editor'):
             return
         
-        # Criar nova sessão
-        session = self.session_manager.create_session()
-        new_widget = SessionWidget(session, theme_manager=self.theme_manager)
-        
-        # Copiar todo o conteúdo do editor
-        source_blocks = widget.editor.get_blocks()
-        
-        # Remover blocos existentes na nova sessão (exceto o último)
-        new_blocks = new_widget.editor.get_blocks()
-        for b in new_blocks[:-1]:
-            new_widget.editor.remove_block(b)
-        
-        # Se fonte tem blocos, usa o primeiro bloco vazio da nova sessão
-        if source_blocks:
-            # Usar primeiro bloco existente
-            first_new_block = new_widget.editor.get_blocks()[0]
-            first_new_block.set_language(source_blocks[0].get_language())
-            first_new_block.set_code(source_blocks[0].get_code())
+        # Guard para evitar que _on_session_tab_changed dispare _new_session
+        self._creating_session = True
+        try:
+            # Criar nova sessao com paineis
+            session = self.session_manager.create_session()
+            new_widget = SessionWidget(session, theme_manager=self.theme_manager)
             
-            # Adicionar os demais blocos
-            for block in source_blocks[1:]:
-                new_block = new_widget.editor.add_block(language=block.get_language())
-                new_block.set_code(block.get_code())
-        
-        # Copiar file_path se existir
-        if hasattr(widget, 'file_path'):
-            new_widget.file_path = widget.file_path
-        
-        # Registrar widget
-        self._session_widgets[session.session_id] = new_widget
-        
-        # Nome da nova aba
-        original_name = self.session_tabs.tabText(index)
-        new_name = f"{original_name} (cópia)"
-        
-        # Inserir antes do último tab (botão nova aba)
-        insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
-        tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
-        
-        # Configurar botão de fechar customizado
-        self.session_tabs._setup_close_button(tab_index)
-        
-        self.session_tabs.setCurrentIndex(tab_index)
+            # Criar paineis para a nova sessao
+            self._create_session_panels(session.session_id)
+            
+            # Copiar todo o conteudo do editor
+            source_blocks = widget.editor.get_blocks()
+            
+            # Remover blocos existentes na nova sessao (exceto o ultimo)
+            new_blocks = new_widget.editor.get_blocks()
+            for b in new_blocks[:-1]:
+                new_widget.editor.remove_block(b)
+            
+            # Se fonte tem blocos, usa o primeiro bloco vazio da nova sessao
+            if source_blocks:
+                first_new_block = new_widget.editor.get_blocks()[0]
+                first_new_block.set_language(source_blocks[0].get_language())
+                first_new_block.set_code(source_blocks[0].get_code())
+                
+                # Adicionar os demais blocos
+                for block in source_blocks[1:]:
+                    new_block = new_widget.editor.add_block(language=block.get_language())
+                    new_block.set_code(block.get_code())
+            
+            # Copiar file_path se existir
+            if hasattr(widget, 'file_path'):
+                new_widget.file_path = widget.file_path
+            
+            # Herdar conexao da sessao original
+            if hasattr(widget, 'session') and widget.session.connection_name:
+                try:
+                    connected = session.connect(widget.session.connection_name)
+                    if not connected:
+                        pass  # Conexao falhou, sessao fica sem conexao
+                except Exception:
+                    pass
+            
+            # Conectar sinais do widget
+            new_widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
+            new_widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
+            new_widget.connection_changed.connect(lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db))
+            
+            # Registrar widget
+            self._session_widgets[session.session_id] = new_widget
+            
+            # Nome da nova aba
+            original_name = self.session_tabs.tabText(index)
+            new_name = f"{original_name} (copia)"
+            
+            # Inserir antes do ultimo tab (botao nova aba)
+            insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
+            tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
+            
+            # Configurar botao de fechar customizado
+            self.session_tabs._setup_close_button(tab_index)
+            
+            # Aplicar cor da aba se sessao original tinha conexao
+            if session.connection_name:
+                config = self.connection_manager.get_connection_config(session.connection_name)
+                if config:
+                    color = config.get('color', '#007ACC') or '#007ACC'
+                    self.session_tabs.set_tab_connection_color(tab_index, color)
+            
+            self.session_tabs.setCurrentIndex(tab_index)
+            
+            # Trocar paineis para a nova sessao
+            self._switch_session_panels(session.session_id)
+        finally:
+            self._creating_session = False
     
     def _show_find_dialog(self):
         """Mostra diálogo de busca no editor atual"""
@@ -1649,7 +1679,7 @@ class MainWindow(DockingMainWindow):
             
             # Se mudou o nome, deletar antiga
             if name != connection_name:
-                self.connection_manager.delete_connection(connection_name)
+                self.connection_manager.delete_connection_config(connection_name)
             
             # Salva a conexão
             self.connection_manager.save_connection_config(
@@ -2379,9 +2409,9 @@ class MainWindow(DockingMainWindow):
                 self._open_code_file(filename)
     
     def _open_code_file(self, filename: str):
-        """Abre arquivo de código em nova aba"""
+        """Abre arquivo de codigo em nova aba com paineis completos"""
         try:
-            # 1. Ler conteúdo do arquivo
+            # 1. Ler conteudo do arquivo
             with open(filename, 'r', encoding='utf-8') as f:
                 content = f.read()
             
@@ -2390,7 +2420,7 @@ class MainWindow(DockingMainWindow):
                 language = 'python'
                 self._original_file_type = 'python'
             elif filename.endswith('.dpw'):
-                language = 'sql'  # Padrão para workspace
+                language = 'sql'
                 self._original_file_type = 'workspace'
             else:
                 language = 'sql'
@@ -2399,48 +2429,41 @@ class MainWindow(DockingMainWindow):
             # Armazenar caminho do arquivo original
             self._original_file_path = filename
             
-            # 3. Criar nova sessão
+            # 3. Se estava no estado vazio, remover placeholder e mostrar paineis
+            self._hide_empty_state()
+            
+            # 4. Criar nova sessao
             import os
             tab_title = os.path.basename(filename)
             session = self.session_manager.create_session(title=tab_title)
             
-            # 4. Criar widget da sessão
-            widget = SessionWidget(session, theme_manager=self.theme_manager)
+            # 5. Criar widget da sessao usando _create_session_widget (centralizado)
+            widget = self._create_session_widget(session)
             widget.file_path = filename
-            widget._original_content = content  # Salvar conteúdo original
-            widget._is_modified = False  # Inicialmente não modificado
+            widget._original_content = content
+            widget._is_modified = False
             
-            # 5. Configurar conteúdo
+            # 6. Configurar conteudo
             blocks = widget.editor.get_blocks()
             if blocks:
-                # Usar primeiro bloco existente
                 blocks[0].set_language(language)
                 blocks[0].set_code(content)
             
-            # 6. Conectar sinais
-            widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
-            widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
-            
-            # Conectar sinal de modificação do editor
+            # 7. Conectar sinal de modificacao do editor
             widget.editor.content_changed.connect(lambda: self._on_editor_modified(widget))
             
-            # 7. Registrar widget
-            self._session_widgets[session.session_id] = widget
+            # 8. Focar na aba criada
+            index = self.session_tabs.indexOf(widget)
+            if index >= 0:
+                self.session_tabs.setCurrentIndex(index)
             
-            # 8. Adicionar aba (antes do botão +)
-            tab_count = self.session_tabs.count()
-            if tab_count > 0 and self.session_tabs.tabText(tab_count - 1).strip() == "+":
-                index = self.session_tabs.insertTab(tab_count - 1, widget, tab_title)
-                self.session_tabs._setup_close_button(index)
-            else:
-                index = self.session_tabs.add_session(widget, tab_title)
-            
-            # 9. Focar na nova aba
-            self.session_tabs.setCurrentIndex(index)
             self.action_label.setText(f"Arquivo aberto: {tab_title}")
             
-            # 10. Atualizar título da janela com contexto
+            # 9. Atualizar titulo da janela com contexto
             self._update_window_title()
+            
+            # 10. Trocar paineis para a nova sessao
+            self._switch_session_panels(session.session_id)
             
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
@@ -2736,6 +2759,11 @@ class MainWindow(DockingMainWindow):
             """
         )
     
+    def _show_package_manager(self):
+        """Mostra dialogo de gerenciamento de pacotes"""
+        dialog = PackageManagerDialog(theme_manager=self.theme_manager, parent=self)
+        dialog.exec()
+
     def _show_settings(self):
         """Mostra diálogo de configurações"""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
@@ -2743,18 +2771,39 @@ class MainWindow(DockingMainWindow):
         dialog.exec()
     
     def _new_session(self):
-        """Cria nova sessão"""
+        """Cria nova sessão, herdando a conexão da aba atual (se houver)"""
         # Guard para evitar criação duplicada
         if hasattr(self, '_creating_session') and self._creating_session:
             return
         self._creating_session = True
         
         try:
+            # Capturar conexão da sessão ativa ANTES de criar a nova
+            previous_connection = None
+            current_widget = self._get_current_session_widget()
+            if current_widget and hasattr(current_widget, 'session'):
+                previous_connection = current_widget.session.connection_name
+            
             # Se está no estado vazio, remover o placeholder
             self._hide_empty_state()
             
             session = self.session_manager.create_session()
-            self._create_session_widget(session)
+            widget = self._create_session_widget(session)
+            
+            # Herdar conexão da aba anterior
+            if previous_connection:
+                try:
+                    connected = session.connect(previous_connection)
+                    if connected:
+                        # Aplicar cor da aba
+                        config = self.connection_manager.get_connection_config(previous_connection)
+                        if config:
+                            color = config.get('color', '#007ACC') or '#007ACC'
+                            idx = self.session_tabs.indexOf(widget)
+                            if idx >= 0:
+                                self.session_tabs.set_tab_connection_color(idx, color)
+                except Exception as e:
+                    print(f"[AVISO] Nao foi possivel herdar conexao: {e}")
             
             # Atualizar título da janela (contexto pode ter mudado)
             self._update_window_title()
@@ -2797,9 +2846,17 @@ class MainWindow(DockingMainWindow):
                         editor.content_changed.emit()
 
     def _show_empty_state(self):
-        """Mostra estado vazio quando nao ha sessoes"""
+        """Mostra estado vazio quando nao ha sessoes, escondendo paineis"""
         if hasattr(self, '_empty_state_widget') and self._empty_state_widget:
             return  # Ja esta mostrando
+        
+        # Esconder paineis inferiores (sem sessao, nao faz sentido mostralos)
+        if hasattr(self, 'results_dock'):
+            self.results_dock.hide()
+        if hasattr(self, 'output_dock'):
+            self.output_dock.hide()
+        if hasattr(self, 'variables_dock'):
+            self.variables_dock.hide()
         
         # Criar widget de estado vazio com suporte a drag-and-drop
         from PyQt6.QtWidgets import QLabel, QPushButton
@@ -2908,12 +2965,20 @@ class MainWindow(DockingMainWindow):
         self.session_tabs.setCurrentIndex(index)
     
     def _hide_empty_state(self):
-        """Remove estado vazio"""
+        """Remove estado vazio e restaura paineis"""
         if hasattr(self, '_empty_state_widget') and self._empty_state_widget:
             index = self.session_tabs.indexOf(self._empty_state_widget)
             if index >= 0:
                 self.session_tabs.removeTab(index)
             self._empty_state_widget = None
+        
+        # Restaurar paineis inferiores ao sair do estado vazio
+        if hasattr(self, 'results_dock'):
+            self.results_dock.show()
+        if hasattr(self, 'output_dock'):
+            self.output_dock.show()
+        if hasattr(self, 'variables_dock'):
+            self.variables_dock.show()
     
     def _create_session_widget(self, session):
         """Cria widget para uma sessao e adiciona a aba"""
@@ -2944,7 +3009,10 @@ class MainWindow(DockingMainWindow):
                 color = config.get('color', '#007ACC') or '#007ACC'
                 self.session_tabs.set_tab_connection_color(index, color)
         
-        # Focar automaticamente no primeiro bloco (com delay para garantir renderização)
+        # Trocar paineis para a nova sessao (garante que paineis vazios aparecam)
+        self._switch_session_panels(session.session_id)
+        
+        # Focar automaticamente no primeiro bloco (com delay para garantir renderizacao)
         if widget.editor and hasattr(widget.editor, 'focus_first_block'):
             QTimer.singleShot(50, widget.editor.focus_first_block)
         
@@ -3418,7 +3486,24 @@ class MainWindow(DockingMainWindow):
                 self._save_single_file_as(context)
         else:
             # Contexto workspace - usar workspace_manager diretamente
-            self.workspace_manager.save_workspace()
+            window_geometry = {
+                'x': self.geometry().x(),
+                'y': self.geometry().y(),
+                'width': self.geometry().width(),
+                'height': self.geometry().height(),
+                'maximized': self.isMaximized()
+            }
+            
+            dock_visible = self.connections_dock.isVisible() if hasattr(self, 'connections_dock') else True
+            
+            self.workspace_manager.save_workspace(
+                tabs=[],
+                active_tab=0,
+                active_connection=None,
+                window_geometry=window_geometry,
+                splitter_sizes=[],
+                dock_visible=dock_visible
+            )
     
     def _save_single_file(self, file_path: str, file_type: str):
         """Salva conteúdo em arquivo único (sql/py)"""
