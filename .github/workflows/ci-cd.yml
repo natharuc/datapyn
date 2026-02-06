@@ -19,10 +19,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install MariaDB Connector/C dependencies (Ubuntu)
+        run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
+
       - name: install requirements
         run: |
           pip install -r requirements.txt
-      - name: run tests 
+      - name: run tests
         run: pytest
 
   cd:
@@ -46,4 +49,3 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           changelog: false
-
