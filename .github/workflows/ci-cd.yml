@@ -1,0 +1,79 @@
+name: ci-cd
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Disable ESM apt sources
+        # Disable Ubuntu Pro ESM sources to prevent firewall blocks during apt-get operations
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/ubuntu-esm-*.list
+          sudo sed -i '/esm\.ubuntu\.com/d' /etc/apt/sources.list
+      - name: Install MariaDB Connector/C dependencies (Ubuntu)
+        run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
+
+      - name: Install OpenGL dependencies (Ubuntu)
+        run: sudo apt-get install -y freeglut3-dev
+
+      - name: Install Qt dependencies and Xvfb for headless testing
+        run: |
+          sudo apt-get install -y \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-xinerama0 \
+            libxcb-xfixes0 \
+            libxcb-shape0 \
+            libxcb-cursor0 \
+            libegl1 \
+            libegl-mesa0 \
+            libgl1 \
+            libglib2.0-0
+
+      - name: install requirements
+        run: |
+          pip install -r requirements.txt
+      - name: run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest
+
+  cd:
+    needs: ci
+    runs-on: ubuntu-latest
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    concurrency: release
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Use Python Semantic Release to prepare release
+        id: release
+        uses: python-semantic-release/python-semantic-release@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          changelog: false
