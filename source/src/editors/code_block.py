@@ -589,6 +589,9 @@ class CodeBlock(QFrame):
         }
         if self._connection_name:
             data['connection_name'] = self._connection_name
+            # Salvar db_type para restaurar icone correto
+            if hasattr(self, 'conn_panel') and self.conn_panel._db_type:
+                data['db_type'] = self.conn_panel._db_type
         return data
     
     @classmethod
@@ -599,9 +602,10 @@ class CodeBlock(QFrame):
         # Restaurar altura se salva
         if 'height' in data and data['height']:
             block._set_editor_height(data['height'])
-        # Restaurar conexao customizada
+        # Restaurar conexao customizada (com panel visual)
         if 'connection_name' in data:
-            block._connection_name = data['connection_name']
+            db_type = data.get('db_type')
+            block.set_connection_name(data['connection_name'], db_type)
         return block
     
     # === Drag ===

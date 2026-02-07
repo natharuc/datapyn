@@ -281,15 +281,43 @@ class SessionWidget(QWidget):
         """
         # Determinar qual conexao usar
         if connection_name:
-            # Buscar conexao especifica
+            # Buscar conexao especifica - auto-conectar se necessario
             from src.database.connection_manager import ConnectionManager
+            from src.database.database_connector import DatabaseConnector
             manager = ConnectionManager()
             connector = manager.get_connection(connection_name)
             if not connector or not connector.is_connected():
-                self.append_output(f"[ERRO] Conexao '{connection_name}' nao esta disponivel", error=True)
-                self.status_changed.emit("Erro: Conexao indisponivel")
-                self._process_next_in_queue()
-                return
+                # Tentar auto-conectar a partir da config salva
+                config = manager.get_connection_config(connection_name)
+                if config:
+                    try:
+                        connector = DatabaseConnector()
+                        connector.connect(
+                            db_type=config['db_type'],
+                            host=config['host'],
+                            port=config['port'],
+                            database=config['database'],
+                            username=config.get('username', ''),
+                            password=config.get('password', ''),
+                            use_windows_auth=config.get('use_windows_auth', False)
+                        )
+                        if connector.is_connected:
+                            manager.connections[connection_name] = connector
+                        else:
+                            self.append_output(f"[ERRO] Falha ao conectar a '{connection_name}'", error=True)
+                            self.status_changed.emit("Erro: Conexao falhou")
+                            self._process_next_in_queue()
+                            return
+                    except Exception as e:
+                        self.append_output(f"[ERRO] Erro ao conectar a '{connection_name}': {e}", error=True)
+                        self.status_changed.emit("Erro: Conexao falhou")
+                        self._process_next_in_queue()
+                        return
+                else:
+                    self.append_output(f"[ERRO] Conexao '{connection_name}' nao encontrada", error=True)
+                    self.status_changed.emit("Erro: Conexao indisponivel")
+                    self._process_next_in_queue()
+                    return
             conn_label = connection_name
         else:
             # Usar conexao padrao da sessao
@@ -660,20 +688,22 @@ class SessionWidget(QWidget):
             self.set_code(self.session.code)
     
     def _on_block_select_connection(self, block):
-        """Abre diálogo para selecionar conexão de um bloco SQL"""
+        """Abre dialogo para selecionar conexao de um bloco SQL"""
         try:
-            from src.ui.dialogs.connection_dialog import ConnectionDialog
-            from src.state.app_state import ApplicationState
+            from src.database.connection_manager import ConnectionManager
+            from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
             
-            dialog = ConnectionDialog(self)
+            manager = ConnectionManager()
+            dialog = ConnectionsManagerDialog(manager, self.theme_manager, self)
+            
             if dialog.exec():
-                selected = dialog.get_selected_connection()
-                if selected:
-                    conn_name = selected.get('name')
-                    db_type = selected.get('db_type', 'mysql')
+                conn_name = dialog.selected_connection
+                if conn_name:
+                    config = manager.get_connection_config(conn_name)
+                    db_type = config.get('db_type', 'mysql') if config else 'mysql'
                     block.set_connection_name(conn_name, db_type)
         except Exception as e:
-            print(f"Erro ao abrir diálogo de conexão: {e}")
+            print(f"Erro ao abrir dialogo de conexao: {e}")
     
     # === CONEXÃO ===
     

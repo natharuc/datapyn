@@ -34,7 +34,7 @@ class BlockEditor(QWidget):
     """
     
     # Sinais de execução
-    execute_sql = pyqtSignal(str)  # query
+    execute_sql = pyqtSignal(str, object, object)  # query, block_index, connection_name
     execute_python = pyqtSignal(str)  # code  
     execute_cross_syntax = pyqtSignal(str)  # code
     
@@ -190,7 +190,9 @@ class BlockEditor(QWidget):
         block.set_running(True)
         
         if language == 'sql':
-            self.execute_sql.emit(code)
+            block_index = self._blocks.index(block) if block in self._blocks else None
+            connection_name = block.get_connection_name()
+            self.execute_sql.emit(code, block_index, connection_name)
         elif language == 'python':
             self.execute_python.emit(code)
         elif language == 'cross':
@@ -506,14 +508,19 @@ class BlockEditor(QWidget):
         
         for i, data in enumerate(blocks_data):
             if i == 0:
-                # Primeiro bloco já existe
-                self._blocks[0].set_language(data.get('language', 'python'))
-                self._blocks[0].set_code(data.get('code', ''))
+                # Primeiro bloco ja existe
+                block = self._blocks[0]
+                block.set_language(data.get('language', 'python'))
+                block.set_code(data.get('code', ''))
             else:
-                self.add_block(
+                block = self.add_block(
                     language=data.get('language', 'python'),
                     code=data.get('code', '')
                 )
+            
+            # Restaurar conexao customizada se existir
+            if 'connection_name' in data:
+                block.set_connection_name(data['connection_name'], data.get('db_type'))
     
     # === Compatibilidade com UnifiedEditor ===
     
