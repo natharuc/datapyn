@@ -135,14 +135,14 @@ def test_imports():
             print(f"    {error}")
         print("\nExecute:")
         print("  pip install -r requirements.txt")
-        return False
+        assert False, f"Installation incomplete: {len(errors)} errors found"
     else:
         print("✅ INSTALAÇÃO OK!")
         print("=" * 50)
         print("\nTodos os módulos necessários estão instalados.")
         print("Você pode executar o DataPyn com:")
         print("  python main.py")
-        return True
+        assert True
 
 
 def test_qt_display(qtbot):

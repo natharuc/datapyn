@@ -15,18 +15,15 @@ def test_editor_config():
     print("TESTE: Configuração de Editor")
     print("=" * 60)
     
-    try:
-        from src.editors.editor_config import EDITOR_TYPE, get_code_editor_class
-        print(f"✅ Import editor_config OK")
-        print(f"📝 Editor configurado: {EDITOR_TYPE}")
-        
-        EditorClass = get_code_editor_class()
-        print(f"✅ Classe obtida: {EditorClass.__name__}")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Erro: {e}")
-        return False
+    from src.editors.editor_config import EDITOR_TYPE, get_code_editor_class
+    print(f"✅ Import editor_config OK")
+    print(f"📝 Editor configurado: {EDITOR_TYPE}")
+    
+    EditorClass = get_code_editor_class()
+    print(f"✅ Classe obtida: {EditorClass.__name__}")
+    
+    assert EditorClass is not None
+    assert hasattr(EditorClass, '__name__')
 
 def test_interface():
     """Testa interface ICodeEditor"""
@@ -34,24 +31,20 @@ def test_interface():
     print("TESTE: Interface ICodeEditor")
     print("=" * 60)
     
-    try:
-        from src.editors.interfaces import ICodeEditor
-        print(f"✅ Import ICodeEditor OK")
-        
-        # Verificar métodos da interface
-        expected_methods = [
-            'get_text', 'set_text', 'get_selected_text',
-            'has_selection', 'clear', 'set_language',
-            'get_language', 'set_theme', 'apply_theme'
-        ]
-        
-        protocol_annotations = getattr(ICodeEditor, '__annotations__', {})
-        print(f"✅ Protocol com {len(protocol_annotations)} atributos")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Erro: {e}")
-        return False
+    from src.editors.interfaces import ICodeEditor
+    print(f"✅ Import ICodeEditor OK")
+    
+    # Verificar métodos da interface
+    expected_methods = [
+        'get_text', 'set_text', 'get_selected_text',
+        'has_selection', 'clear', 'set_language',
+        'get_language', 'set_theme', 'apply_theme'
+    ]
+    
+    protocol_annotations = getattr(ICodeEditor, '__annotations__', {})
+    print(f"✅ Protocol com {len(protocol_annotations)} atributos")
+    
+    assert protocol_annotations is not None
 
 def test_implementations():
     """Testa implementações disponíveis"""
@@ -63,6 +56,7 @@ def test_implementations():
     try:
         from src.editors.code_editor import CodeEditor
         print(f"✅ CodeEditor (QScintilla) disponível")
+        assert CodeEditor is not None
     except Exception as e:
         print(f"⚠️  CodeEditor: {e}")
     
@@ -73,10 +67,9 @@ def test_implementations():
             print(f"✅ MonacoEditor disponível (monaco-qt instalado)")
         else:
             print(f"⚠️  MonacoEditor disponível (monaco-qt NÃO instalado)")
+        assert MonacoEditor is not None
     except Exception as e:
         print(f"⚠️  MonacoEditor: {e}")
-    
-    return True
 
 def test_code_block():
     """Testa CodeBlock usando editor configurável"""
@@ -84,31 +77,27 @@ def test_code_block():
     print("TESTE: CodeBlock com Editor Dinâmico")
     print("=" * 60)
     
-    try:
-        # Verificar se CodeBlock importa corretamente
-        import ast
-        code_block_file = Path(__file__).parent / 'src' / 'editors' / 'code_block.py'
-        
-        with open(code_block_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Verificar se usa get_code_editor_class
-        if 'get_code_editor_class' in content:
-            print(f"✅ CodeBlock usa get_code_editor_class()")
-        else:
-            print(f"❌ CodeBlock não usa get_code_editor_class()")
-            return False
-        
-        # Verificar se não importa CodeEditor diretamente
-        if 'from src.editors.code_editor import CodeEditor' in content:
-            print(f"⚠️  CodeBlock ainda importa CodeEditor diretamente")
-        else:
-            print(f"✅ CodeBlock não depende de implementação específica")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Erro: {e}")
-        return False
+    # Verificar se CodeBlock importa corretamente
+    import ast
+    code_block_file = Path(__file__).parent.parent / 'source' / 'src' / 'editors' / 'code_block.py'
+    
+    with open(code_block_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Verificar se usa get_code_editor_class
+    if 'get_code_editor_class' in content:
+        print(f"✅ CodeBlock usa get_code_editor_class()")
+    else:
+        print(f"❌ CodeBlock não usa get_code_editor_class()")
+        assert False, "CodeBlock não usa get_code_editor_class()"
+    
+    # Verificar se não importa CodeEditor diretamente
+    if 'from src.editors.code_editor import CodeEditor' in content:
+        print(f"⚠️  CodeBlock ainda importa CodeEditor diretamente")
+    else:
+        print(f"✅ CodeBlock não depende de implementação específica")
+    
+    assert 'get_code_editor_class' in content
 
 def show_how_to_switch():
     """Mostra como trocar de editor"""
