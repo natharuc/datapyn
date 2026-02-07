@@ -4,10 +4,9 @@ on:
   push:
     branches:
       - main
-  workflow_run:
-    workflows: ["Continuous Integration - Ruff"]
-    types:
-      - completed
+  pull_request:
+    branches:
+      - main
 
 jobs:
   test:
