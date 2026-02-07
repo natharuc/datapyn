@@ -4,7 +4,6 @@ Botões estilizados reutilizáveis
 DEPRECATED: Use src.design_system.Button ao invés deste
 Mantido para compatibilidade com código legado.
 """
-
 from src.design_system import (
     Button as NewButton,
     PrimaryButton as NewPrimaryButton,
@@ -30,7 +29,6 @@ from src.design_system.tokens import get_colors
 
 try:
     import qtawesome as qta
-
     HAS_QTAWESOME = True
 except ImportError:
     HAS_QTAWESOME = False
@@ -40,7 +38,7 @@ def _get_styles():
     """Retorna estilos usando cores do design system"""
     colors = get_colors()
     return {
-        "primary": f"""
+        'primary': f"""
             QPushButton {{
                 background-color: {colors.interactive_primary};
                 color: {colors.text_inverse};
@@ -60,7 +58,7 @@ def _get_styles():
                 color: {colors.text_disabled};
             }}
         """,
-        "secondary": f"""
+        'secondary': f"""
             QPushButton {{
                 background-color: {colors.interactive_secondary};
                 color: {colors.text_primary};
@@ -81,7 +79,7 @@ def _get_styles():
                 border-color: {colors.border_default};
             }}
         """,
-        "danger": f"""
+        'danger': f"""
             QPushButton {{
                 background-color: {colors.danger};
                 color: {colors.text_inverse};
@@ -100,7 +98,7 @@ def _get_styles():
                 color: {colors.text_disabled};
             }}
         """,
-        "success": f"""
+        'success': f"""
             QPushButton {{
                 background-color: {colors.success};
                 color: {colors.text_inverse};
@@ -119,7 +117,7 @@ def _get_styles():
                 color: {colors.text_disabled};
             }}
         """,
-        "ghost": f"""
+        'ghost': f"""
             QPushButton {{
                 background-color: transparent;
                 color: {colors.text_primary};
@@ -134,7 +132,7 @@ def _get_styles():
                 background-color: {colors.bg_secondary};
             }}
         """,
-        "toolbar": f"""
+        'toolbar': f"""
             QPushButton {{
                 background-color: transparent;
                 color: {colors.text_primary};
@@ -148,81 +146,76 @@ def _get_styles():
             QPushButton:pressed {{
                 background-color: {colors.interactive_primary_active};
             }}
-        """,
+        """
     }
 
 
 class StyledButton(QPushButton):
     """Botao estilizado base - DEPRECATED"""
-
-    def __init__(self, text: str = "", icon_name: str = None, style: str = "primary", parent=None):
+    
+    def __init__(self, text: str = "", icon_name: str = None, 
+                 style: str = 'primary', parent=None):
         super().__init__(text, parent)
-
+        
         self._style_type = style
         styles = _get_styles()
-        self.setStyleSheet(styles.get(style, styles["primary"]))
-
+        self.setStyleSheet(styles.get(style, styles['primary']))
+        
         if icon_name and HAS_QTAWESOME:
-            self.setIcon(qta.icon(icon_name, color="white"))
-
+            self.setIcon(qta.icon(icon_name, color='white'))
+    
     def set_style(self, style: str):
         """Muda o estilo do botao"""
         self._style_type = style
         styles = _get_styles()
-        self.setStyleSheet(styles.get(style, styles["primary"]))
+        self.setStyleSheet(styles.get(style, styles['primary']))
 
 
 class PrimaryButton(StyledButton):
     """Botão primário (ação principal)"""
-
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
-        super().__init__(text, icon_name, "primary", parent)
+        super().__init__(text, icon_name, 'primary', parent)
 
 
 class SecondaryButton(StyledButton):
     """Botão secundário"""
-
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
-        super().__init__(text, icon_name, "secondary", parent)
+        super().__init__(text, icon_name, 'secondary', parent)
 
 
 class DangerButton(StyledButton):
     """Botão de perigo (ações destrutivas)"""
-
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
-        super().__init__(text, icon_name, "danger", parent)
+        super().__init__(text, icon_name, 'danger', parent)
 
 
 class SuccessButton(StyledButton):
     """Botão de sucesso"""
-
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
-        super().__init__(text, icon_name, "success", parent)
+        super().__init__(text, icon_name, 'success', parent)
 
 
 class GhostButton(StyledButton):
     """Botão fantasma (sem background)"""
-
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
-        super().__init__(text, icon_name, "ghost", parent)
+        super().__init__(text, icon_name, 'ghost', parent)
 
 
 class ToolbarButton(StyledButton):
     """Botão para toolbar"""
-
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
-        super().__init__(text, icon_name, "toolbar", parent)
+        super().__init__(text, icon_name, 'toolbar', parent)
 
 
 class IconButton(QToolButton):
     """Botao apenas com icone"""
-
+    
     def __init__(self, icon_name: str, tooltip: str = "", size: int = 24, parent=None):
         super().__init__(parent)
-
+        
         if HAS_QTAWESOME:
-            self.setIcon(qta.icon(icon_name, color="#cccccc"))
-
+            self.setIcon(qta.icon(icon_name, color='#cccccc'))
+        
         colors = get_colors()
         self.setIconSize(QSize(size, size))
         self.setToolTip(tooltip)
