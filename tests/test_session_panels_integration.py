@@ -372,13 +372,22 @@ class TestFileOpenCreatesPanels:
 class TestEmptyStateTransitions:
     """Testa transicoes entre estado vazio e estado com sessoes"""
     
-    def test_initial_restore_shows_empty_or_sessions(self, main_window):
-        """Na inicializacao, ou mostra sessoes ou estado vazio"""
+    def test_initial_restore_shows_empty_or_sessions(self, main_window, qtbot):
+        """Nainicializacao, ou mostra sessoes ou estado vazio"""
+        # Aguardar processamento de eventos e restauração completa
+        qtbot.wait(100)
+        
         has_sessions = any(
             isinstance(main_window.session_tabs.widget(i), SessionWidget)
             for i in range(main_window.session_tabs.count())
         )
         has_empty = main_window._empty_state_widget is not None
+        
+        # Debug para CI
+        if not (has_sessions or has_empty):
+            print(f"DEBUG: tabs count: {main_window.session_tabs.count()}")
+            print(f"DEBUG: _empty_state_widget: {main_window._empty_state_widget}")
+            print(f"DEBUG: session_manager.sessions: {len(main_window.session_manager.sessions)}")
         
         # Deve ter uma ou outra
         assert has_sessions or has_empty
