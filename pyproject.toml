@@ -15,9 +15,6 @@ ignore_token_for_push = true
 line-length = 120
 
 [tool.ruff.lint]
-select = [
-    "I", # isort
-
-]
+select = []
 preview = true
 exclude = ["tests/*"]
