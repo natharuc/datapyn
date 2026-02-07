@@ -34,7 +34,7 @@ class BlockEditor(QWidget):
     """
     
     # Sinais de execução
-    execute_sql = pyqtSignal(str)  # query
+    execute_sql = pyqtSignal(str, object, object)  # query, block_name, connection_name
     execute_python = pyqtSignal(str)  # code  
     execute_cross_syntax = pyqtSignal(str)  # code
     
@@ -47,6 +47,9 @@ class BlockEditor(QWidget):
     
     # Sinal quando conteúdo muda
     content_changed = pyqtSignal()
+    
+    # Sinal quando bloco pede seleção de conexão
+    select_connection_for_block = pyqtSignal(object)  # CodeBlock
     
     def __init__(self, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -187,7 +190,9 @@ class BlockEditor(QWidget):
         block.set_running(True)
         
         if language == 'sql':
-            self.execute_sql.emit(code)
+            block_name = block.get_block_name()
+            connection_name = block.get_connection_name()
+            self.execute_sql.emit(code, block_name, connection_name)
         elif language == 'python':
             self.execute_python.emit(code)
         elif language == 'cross':
@@ -204,10 +209,17 @@ class BlockEditor(QWidget):
         queue = []
         self._execution_queue_blocks = []
         
-        for block in self._blocks:
+        for index, block in enumerate(self._blocks):
             code = block.get_code().strip()
             if code:
-                queue.append((block.get_language(), code, block))
+                # Tupla: (language, code, block, block_name, connection_name)
+                queue.append((
+                    block.get_language(),
+                    code,
+                    block,
+                    block.get_block_name(),
+                    block.get_connection_name()
+                ))
                 self._execution_queue_blocks.append(block)
                 block.set_waiting(True)  # Marca como aguardando
         
@@ -304,6 +316,7 @@ class BlockEditor(QWidget):
         block.cancel_requested.connect(lambda b: self.cancel_all_executions())
         block.focus_changed.connect(self._on_block_focus_changed)
         block.move_requested.connect(self._on_block_move_requested)
+        block.select_connection_requested.connect(self.select_connection_for_block.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
         
         # Determinar posição
@@ -326,6 +339,10 @@ class BlockEditor(QWidget):
         
         # Focar no novo bloco após renderização
         QTimer.singleShot(50, block.focus_editor)
+        
+        # Definir nome padrao se nao tiver
+        if not block.get_block_name():
+            block.set_block_name(f"bloco{len(self._blocks)}")
         
         self.content_changed.emit()
         return block
@@ -495,14 +512,23 @@ class BlockEditor(QWidget):
         
         for i, data in enumerate(blocks_data):
             if i == 0:
-                # Primeiro bloco já existe
-                self._blocks[0].set_language(data.get('language', 'python'))
-                self._blocks[0].set_code(data.get('code', ''))
+                # Primeiro bloco ja existe
+                block = self._blocks[0]
+                block.set_language(data.get('language', 'python'))
+                block.set_code(data.get('code', ''))
             else:
-                self.add_block(
+                block = self.add_block(
                     language=data.get('language', 'python'),
                     code=data.get('code', '')
                 )
+            
+            # Restaurar nome do bloco
+            if 'block_name' in data and data['block_name']:
+                block.set_block_name(data['block_name'])
+            
+            # Restaurar conexao customizada se existir
+            if 'connection_name' in data:
+                block.set_connection_name(data['connection_name'], data.get('db_type'))
     
     # === Compatibilidade com UnifiedEditor ===
     

@@ -271,13 +271,14 @@ class SessionTabs(QTabWidget):
         # Criar botão customizado compacto e elegante com ícone X
         close_btn = QToolButton()
         close_btn.setIcon(qta.icon('mdi.close', color='#999999', scale_factor=0.7))
-        close_btn.setFixedSize(18, 18)
+        close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet("""
             QToolButton {
                 background: transparent;
                 border: none;
-                border-radius: 3px;
+                margin-right: 0px;
+                border-radius: 0px;
             }
             QToolButton:hover {
                 background-color: rgba(231, 76, 60, 0.8);

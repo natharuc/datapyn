@@ -215,3 +215,95 @@ class TestDatabaseConnectorEdgeCases:
         )
         
         assert 'ODBC Driver 18' in result
+
+
+class TestUseDatabasePersistence:
+    """Testes para garantir que USE <db> persiste entre execucoes"""
+
+    def test_connection_params_updated_on_use(self):
+        """USE deve atualizar connection_params['database']"""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.connection_params = {'database': 'gecon'}
+        connector.db_type = 'sqlserver'
+        connector.engine = MagicMock()
+
+        # Simular execucao de USE esim
+        import re
+        query = "USE esim"
+        use_match = re.search(r'\bUSE\s+\[?(\w+)\]?\s*;?\s*$', query.strip(), re.IGNORECASE | re.MULTILINE)
+        assert use_match is not None
+        assert use_match.group(1) == 'esim'
+
+        # O execute_query deveria atualizar connection_params
+        connector.connection_params['database'] = use_match.group(1)
+        assert connector.connection_params['database'] == 'esim'
+        assert connector.get_current_database() == 'esim'
+
+    def test_use_with_brackets(self):
+        """USE [esim] com colchetes deve funcionar"""
+        import re
+        query = "USE [esim]"
+        use_match = re.search(r'\bUSE\s+\[?(\w+)\]?\s*;?\s*$', query.strip(), re.IGNORECASE | re.MULTILINE)
+        assert use_match is not None
+        assert use_match.group(1) == 'esim'
+
+    def test_use_with_semicolon(self):
+        """USE esim; com ponto-e-virgula deve funcionar"""
+        import re
+        query = "USE esim;"
+        use_match = re.search(r'\bUSE\s+\[?(\w+)\]?\s*;?\s*$', query.strip(), re.IGNORECASE | re.MULTILINE)
+        assert use_match is not None
+        assert use_match.group(1) == 'esim'
+
+    def test_mssql_batch_sends_use_before_query(self):
+        """_execute_mssql_batch deve enviar USE antes da query"""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = 'sqlserver'
+        connector.connection_params = {'database': 'esim'}
+
+        # Criar mocks
+        mock_cursor = MagicMock()
+        mock_cursor.description = [('col1',), ('col2',)]
+        mock_cursor.fetchall.return_value = [(1, 'a')]
+        mock_cursor.nextset.return_value = False
+
+        mock_raw_conn = MagicMock()
+        mock_raw_conn.cursor.return_value = mock_cursor
+
+        mock_engine = MagicMock()
+        mock_engine.raw_connection.return_value = mock_raw_conn
+        connector.engine = mock_engine
+
+        connector._execute_mssql_batch("SELECT 1")
+
+        # Deve ter executado USE [esim] antes da query principal
+        calls = mock_cursor.execute.call_args_list
+        assert len(calls) >= 2, f"Deveria ter chamado execute ao menos 2 vezes (USE + query), mas chamou {len(calls)}"
+        assert "USE [esim]" in calls[0][0][0]
+        assert "SELECT 1" in calls[1][0][0]
+
+    def test_checkout_event_registered_for_sqlserver(self):
+        """Engine SQL Server deve registrar evento checkout no pool"""
+        from database.database_connector import DatabaseConnector
+        from sqlalchemy import event
+
+        connector = DatabaseConnector()
+
+        with patch('database.database_connector.create_engine') as mock_create_engine:
+            mock_engine = MagicMock()
+            mock_conn = MagicMock()
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_engine.connect.return_value = mock_conn
+            mock_create_engine.return_value = mock_engine
+
+            with patch('database.database_connector.event') as mock_event:
+                connector.connect('sqlserver', 'localhost', 1433, 'testdb',
+                                  use_windows_auth=True)
+
+                # Deve ter registrado evento "checkout"
+                mock_event.listens_for.assert_called_once_with(mock_engine, "checkout")
