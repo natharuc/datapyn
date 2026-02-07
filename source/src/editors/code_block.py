@@ -15,7 +15,6 @@ import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.editors.editor_config import get_code_editor_class
-from src.ui.components.connection_panel import get_db_icon
 
 
 class BlockConnectionPanel(QFrame):
@@ -74,8 +73,9 @@ class BlockConnectionPanel(QFrame):
             self.name_label.setText(connection_name)
             self.name_label.setStyleSheet("color: #fff; font-size: 11px; font-weight: 500;")
             
-            # Icone colorido
+            # Icone colorido (importa aqui para evitar circular import)
             if db_type:
+                from src.ui.components.connection_panel import get_db_icon
                 icon = get_db_icon(db_type)
                 self.icon_label.setPixmap(icon.pixmap(20, 20))
             else:
