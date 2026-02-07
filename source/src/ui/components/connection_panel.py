@@ -3,8 +3,8 @@ Painel de conexoes - Material Design Flat
 """
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFrame,
                              QLabel, QListWidget, QListWidgetItem, QPushButton, QMenu)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QByteArray
-from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap, QPainter
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QByteArray, QMimeData
+from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap, QPainter, QDrag
 from PyQt6.QtSvg import QSvgRenderer
 import qtawesome as qta
 import os
@@ -163,6 +163,50 @@ class ConnectionItemWidget(QWidget):
         layout.addStretch()
 
 
+class DraggableConnectionList(QListWidget):
+    """QListWidget que permite arrastar conexões"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+    
+    def startDrag(self, supportedActions):
+        """Inicia drag de uma conexão"""
+        item = self.currentItem()
+        if not item:
+            return
+        
+        # Obter dados da conexão
+        conn_name = None
+        db_type = 'mysql'
+        
+        if isinstance(item, ConnectionItem):
+            conn_name = item.connection_name
+            db_type = item.config.get('db_type', 'mysql')
+        else:
+            conn_name = item.data(Qt.ItemDataRole.UserRole)
+        
+        if not conn_name:
+            return
+        
+        # Criar MimeData com informações da conexão
+        mime_data = QMimeData()
+        mime_data.setData('application/x-connection-name', conn_name.encode('utf-8'))
+        mime_data.setData('application/x-db-type', db_type.encode('utf-8'))
+        
+        # Criar drag
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        
+        # Ícone do drag
+        icon = get_db_icon(db_type)
+        drag.setPixmap(icon.pixmap(32, 32))
+        
+        # Executar drag
+        drag.exec(Qt.DropAction.CopyAction)
+
+
 class ConnectionItem(QListWidgetItem):
     """Item de conexao com icone especifico por banco"""
     
@@ -286,8 +330,8 @@ class ConnectionsList(QFrame):
         header.addStretch()
         layout.addLayout(header)
         
-        # Lista
-        self.list_widget = QListWidget()
+        # Lista (com drag enabled)
+        self.list_widget = DraggableConnectionList()
         self.list_widget.setMinimumHeight(150)
         self.list_widget.setIconSize(QSize(28, 28))  # Icones maiores
         self.list_widget.setSpacing(2)  # Espacamento entre itens

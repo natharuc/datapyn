@@ -256,6 +256,9 @@ class SessionWidget(QWidget):
         # Cancelamento
         self.editor.cancel_execution.connect(self._on_cancel_execution)
         
+        # Seleção de conexão para bloco específico
+        self.editor.select_connection_for_block.connect(self._on_block_select_connection)
+        
         # Conectar sinais da sessão
         self.session.variables_changed.connect(self._update_variables_view)
     def _format_log(self, log_type: str, message: str = '') -> str:
@@ -655,6 +658,22 @@ class SessionWidget(QWidget):
             self.editor.from_list(self.session.blocks)
         elif self.session.code:
             self.set_code(self.session.code)
+    
+    def _on_block_select_connection(self, block):
+        """Abre diálogo para selecionar conexão de um bloco SQL"""
+        try:
+            from src.ui.dialogs.connection_dialog import ConnectionDialog
+            from src.state.app_state import ApplicationState
+            
+            dialog = ConnectionDialog(self)
+            if dialog.exec():
+                selected = dialog.get_selected_connection()
+                if selected:
+                    conn_name = selected.get('name')
+                    db_type = selected.get('db_type', 'mysql')
+                    block.set_connection_name(conn_name, db_type)
+        except Exception as e:
+            print(f"Erro ao abrir diálogo de conexão: {e}")
     
     # === CONEXÃO ===
     
