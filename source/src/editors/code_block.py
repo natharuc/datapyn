@@ -4,10 +4,18 @@ CodeBlock - Um bloco de código individual com seletor de linguagem
 Similar a uma célula de notebook Jupyter.
 Usa editor configurável via editor_config (QScintilla ou Monaco).
 """
+
 import time
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, 
-    QPushButton, QLabel, QFrame, QSizePolicy, QLineEdit
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QComboBox,
+    QPushButton,
+    QLabel,
+    QFrame,
+    QSizePolicy,
+    QLineEdit,
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint
 from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
@@ -22,9 +30,10 @@ class BlockConnectionPanel(QFrame):
     Panel clicavel para selecionar conexao de um bloco SQL.
     Mostra icone + nome da conexao, aceita drag & drop.
     """
+
     connection_clicked = pyqtSignal()  # Usuario clicou no panel
     connection_dropped = pyqtSignal(str, str)  # connection_name, db_type (drag & drop)
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._connection_name = None
@@ -32,7 +41,7 @@ class BlockConnectionPanel(QFrame):
         self._setup_ui()
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-    
+
     def _setup_ui(self):
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         self.setLineWidth(1)
@@ -48,62 +57,63 @@ class BlockConnectionPanel(QFrame):
                 border-color: #555;
             }
         """)
-        
+
         self.setMinimumHeight(28)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 3, 6, 3)
         layout.setSpacing(4)
-        
+
         # Icone
         self.icon_label = QLabel()
         self.icon_label.setFixedSize(16, 16)
         self.icon_label.setScaledContents(True)
         layout.addWidget(self.icon_label)
-        
+
         # Nome da conexao
         self.name_label = QLabel("Padrao da aba")
         self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
         self.name_label.setMinimumWidth(40)
         layout.addWidget(self.name_label, 1)
-    
+
     def set_connection(self, connection_name: str = None, db_type: str = None):
         """Define a conexao a ser exibida"""
         self._connection_name = connection_name
         self._db_type = db_type
-        
+
         if connection_name:
             # Conexao customizada
             self.name_label.setText(connection_name)
             self.name_label.setStyleSheet("color: #fff; font-size: 11px; font-weight: 500;")
-            
+
             # Icone colorido (importa aqui para evitar circular import)
             if db_type:
                 from src.ui.components.connection_panel import get_db_icon
+
                 icon = get_db_icon(db_type)
                 self.icon_label.setPixmap(icon.pixmap(16, 16))
             else:
-                self.icon_label.setPixmap(qta.icon('mdi.database', color='#64b5f6').pixmap(16, 16))
+                self.icon_label.setPixmap(qta.icon("mdi.database", color="#64b5f6").pixmap(16, 16))
         else:
             # Padrao da aba
             self.name_label.setText("Padrao da aba")
             self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
-            self.icon_label.setPixmap(qta.icon('mdi.link-variant', color='#888').pixmap(16, 16))
-    
+            self.icon_label.setPixmap(qta.icon("mdi.link-variant", color="#888").pixmap(16, 16))
+
     def get_connection_name(self):
         """Retorna o nome da conexao atual (None = padrao da aba)"""
         return self._connection_name
-    
+
     def mousePressEvent(self, event):
         """Clique no panel"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.connection_clicked.emit()
         super().mousePressEvent(event)
-    
+
     def dragEnterEvent(self, event):
         """Aceita drag de conexoes"""
-        if event.mimeData().hasFormat('application/x-connection-name'):
+        if event.mimeData().hasFormat("application/x-connection-name"):
             event.acceptProposedAction()
             self.setStyleSheet("""
                 BlockConnectionPanel {
@@ -112,7 +122,7 @@ class BlockConnectionPanel(QFrame):
                     border-radius: 4px;
                 }
             """)
-    
+
     def dragLeaveEvent(self, event):
         """Remove highlight ao sair"""
         self.setStyleSheet("""
@@ -127,16 +137,20 @@ class BlockConnectionPanel(QFrame):
                 border-color: #555;
             }
         """)
-    
+
     def dropEvent(self, event):
         """Recebe conexao arrastada"""
-        if event.mimeData().hasFormat('application/x-connection-name'):
-            connection_name = event.mimeData().data('application/x-connection-name').data().decode('utf-8')
-            db_type = event.mimeData().data('application/x-db-type').data().decode('utf-8') if event.mimeData().hasFormat('application/x-db-type') else None
-            
+        if event.mimeData().hasFormat("application/x-connection-name"):
+            connection_name = event.mimeData().data("application/x-connection-name").data().decode("utf-8")
+            db_type = (
+                event.mimeData().data("application/x-db-type").data().decode("utf-8")
+                if event.mimeData().hasFormat("application/x-db-type")
+                else None
+            )
+
             self.connection_dropped.emit(connection_name, db_type)
             event.acceptProposedAction()
-            
+
             # Restaura estilo
             self.dragLeaveEvent(event)
 
@@ -144,12 +158,12 @@ class BlockConnectionPanel(QFrame):
 class CodeBlock(QFrame):
     """
     Um bloco de código individual.
-    
+
     Contém:
     - Barra de controle (linguagem, executar, remover)
     - Editor Monaco
     """
-    
+
     execute_requested = pyqtSignal(object)  # self
     remove_requested = pyqtSignal(object)  # self
     move_requested = pyqtSignal(object, int)  # self, new_index (-1 = drag started)
@@ -157,14 +171,10 @@ class CodeBlock(QFrame):
     focus_changed = pyqtSignal(object, bool)  # self, has_focus
     cancel_requested = pyqtSignal(object)  # self - para cancelar execução
     select_connection_requested = pyqtSignal(object)  # self - para abrir dialogo de conexoes
-    
-    LANGUAGE_COLORS = {
-        'python': '#3572A5',
-        'sql': '#E38C00',
-        'cross': '#6B4C9A'
-    }
-    
-    def __init__(self, theme_manager: ThemeManager = None, parent=None, default_language='sql'):
+
+    LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00", "cross": "#6B4C9A"}
+
+    def __init__(self, theme_manager: ThemeManager = None, parent=None, default_language="sql"):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
         self._is_focused = False
@@ -177,30 +187,30 @@ class CodeBlock(QFrame):
         self._last_execution_time = None
         self._default_language = default_language
         self._connection_name = None  # None = usa conexao da sessao
-        self._block_name = ''  # Nome do bloco (prefixo do namespace)
-        
+        self._block_name = ""  # Nome do bloco (prefixo do namespace)
+
         self._setup_ui()
         self._connect_signals()
         # Configurar linguagem inicial explicitamente (setCurrentIndex não dispara signal durante init)
         self.editor.set_language(self._default_language)
         self._update_style()
         self._update_connection_panel_visibility()  # Atualizar visibilidade do panel de conexao (depois da linguagem)
-    
+
     def _setup_ui(self):
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Plain)
         self.setLineWidth(2)
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
+
         # === Barra de controle ===
         self.control_bar = QWidget()
         self.control_bar.setFixedHeight(32)
         control_layout = QHBoxLayout(self.control_bar)
         control_layout.setContentsMargins(8, 4, 8, 4)
         control_layout.setSpacing(8)
-        
+
         # Drag handle
         self.drag_handle = QPushButton("≡")
         self.drag_handle.setFixedSize(24, 24)
@@ -222,28 +232,28 @@ class CodeBlock(QFrame):
         """)
         self.drag_handle.pressed.connect(self._start_drag)
         control_layout.addWidget(self.drag_handle)
-        
+
         # Indicador de linguagem
         self.lang_indicator = QFrame()
         self.lang_indicator.setFixedWidth(4)
         self.lang_indicator.setMinimumHeight(20)
         control_layout.addWidget(self.lang_indicator)
-        
+
         # Seletor de linguagem
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("Python", "python")
         self.lang_combo.addItem("SQL", "sql")
         self.lang_combo.addItem("Cross-Syntax", "cross")
         # Definir SQL como padrão
-        if self._default_language == 'sql':
+        if self._default_language == "sql":
             self.lang_combo.setCurrentIndex(1)
-        elif self._default_language == 'cross':
+        elif self._default_language == "cross":
             self.lang_combo.setCurrentIndex(2)
         else:
             self.lang_combo.setCurrentIndex(0)
         self.lang_combo.setFixedWidth(120)
         control_layout.addWidget(self.lang_combo)
-        
+
         # Campo de nome do bloco
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Nome do bloco")
@@ -264,7 +274,7 @@ class CodeBlock(QFrame):
             }
         """)
         control_layout.addWidget(self.name_input)
-        
+
         # Panel de conexao (so visivel para SQL)
         self.conn_panel = BlockConnectionPanel()
         self.conn_panel.setMinimumWidth(120)
@@ -273,7 +283,7 @@ class CodeBlock(QFrame):
         self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
         control_layout.addWidget(self.conn_panel)
         # Visibilidade sera definida por _update_connection_combo_visibility() abaixo
-        
+
         # Status - estilo mais moderno
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("""
@@ -286,16 +296,17 @@ class CodeBlock(QFrame):
             }
         """)
         control_layout.addWidget(self.status_label)
-        
+
         # Botão cancelar (visível apenas durante execução) - estilo moderno flat
         try:
             import qtawesome as qta
+
             self.cancel_btn = QPushButton()
-            self.cancel_btn.setIcon(qta.icon('mdi.stop-circle-outline', color='#e74c3c'))
+            self.cancel_btn.setIcon(qta.icon("mdi.stop-circle-outline", color="#e74c3c"))
             self.cancel_btn.setText("Cancelar")
         except:
             self.cancel_btn = QPushButton("Cancelar")
-        
+
         self.cancel_btn.setFixedHeight(24)
         self.cancel_btn.setToolTip("Cancelar execução (Esc)")
         self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -315,24 +326,25 @@ class CodeBlock(QFrame):
         """)
         self.cancel_btn.hide()  # Escondido por padrão
         control_layout.addWidget(self.cancel_btn)
-        
+
         control_layout.addStretch()
-        
+
         # Botão executar
         self.run_btn = QPushButton("▶")
         self.run_btn.setFixedSize(28, 24)
         self.run_btn.setToolTip("Executar (F5)")
         self.run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         control_layout.addWidget(self.run_btn)
-        
+
         # Botão remover - ícone melhor
         try:
             import qtawesome as qta
+
             self.remove_btn = QPushButton()
-            self.remove_btn.setIcon(qta.icon('mdi.close-circle', color='#999', scale_factor=1.1))
+            self.remove_btn.setIcon(qta.icon("mdi.close-circle", color="#999", scale_factor=1.1))
         except:
             self.remove_btn = QPushButton("✖")
-        
+
         self.remove_btn.setFixedSize(28, 28)
         self.remove_btn.setToolTip("Remover bloco")
         self.remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -349,9 +361,9 @@ class CodeBlock(QFrame):
             }
         """)
         control_layout.addWidget(self.remove_btn)
-        
+
         layout.addWidget(self.control_bar)
-        
+
         # === Container do Editor (redimensionável) ===
         self.editor_container = QWidget()
         self.editor_container.setMinimumHeight(80)
@@ -359,17 +371,17 @@ class CodeBlock(QFrame):
         editor_layout = QVBoxLayout(self.editor_container)
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(0)
-        
+
         # Code Editor (configurável via editor_config - implementa ICodeEditor)
         EditorClass = get_code_editor_class()
         self.editor = EditorClass(theme_manager=self.theme_manager)
-        
+
         # Compatibilidade: get_widget() para QScintilla, direto para Monaco
-        editor_widget = self.editor.get_widget() if hasattr(self.editor, 'get_widget') else self.editor
+        editor_widget = self.editor.get_widget() if hasattr(self.editor, "get_widget") else self.editor
         editor_layout.addWidget(editor_widget)
-        
+
         layout.addWidget(self.editor_container, 1)  # stretch=1 para expandir
-        
+
         # === Resize handle ===
         self.resize_handle = QFrame()
         self.resize_handle.setFixedHeight(6)
@@ -382,9 +394,9 @@ class CodeBlock(QFrame):
         self.resize_handle.mouseMoveEvent = self._resize_move
         self.resize_handle.mouseReleaseEvent = self._resize_end
         layout.addWidget(self.resize_handle)
-        
+
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    
+
     def _connect_signals(self):
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
         self.conn_panel.connection_clicked.connect(self._on_connection_panel_clicked)
@@ -395,45 +407,45 @@ class CodeBlock(QFrame):
         self.editor.execute_requested.connect(lambda: self.execute_requested.emit(self))
         self.editor.SCN_FOCUSIN.connect(self._on_focus_in)
         self.editor.SCN_FOCUSOUT.connect(self._on_focus_out)
-    
+
     def _on_focus_in(self):
         self._is_focused = True
         self._update_style()
         self.focus_changed.emit(self, True)
-    
+
     def _on_focus_out(self):
         self._is_focused = False
         self._update_style()
         self.focus_changed.emit(self, False)
-    
+
     def _on_language_changed(self):
         lang = self.lang_combo.currentData()
         self.editor.set_language(lang)
         self._update_connection_panel_visibility()
         self._update_style()
         self.language_changed.emit(self, lang)
-    
+
     def _on_connection_panel_clicked(self):
         """Panel de conexao foi clicado - emite sinal para abrir dialogo"""
         self.select_connection_requested.emit(self)
-    
+
     def _on_connection_dropped(self, connection_name: str, db_type: str):
         """Conexao foi arrastada para o panel"""
         self._connection_name = connection_name
         self.conn_panel.set_connection(connection_name, db_type)
-    
+
     def _update_connection_panel_visibility(self):
         """Atualiza visibilidade do panel de conexao (so SQL)"""
         lang = self.lang_combo.currentData()
-        is_sql = (lang == 'sql')
+        is_sql = lang == "sql"
         self.conn_panel.setVisible(is_sql)
-    
+
     def _update_style(self):
         lang = self.get_language()
-        color = self.LANGUAGE_COLORS.get(lang, '#888')
-        
+        color = self.LANGUAGE_COLORS.get(lang, "#888")
+
         self.lang_indicator.setStyleSheet(f"background-color: {color};")
-        
+
         self.run_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {color};
@@ -444,57 +456,57 @@ class CodeBlock(QFrame):
             }}
             QPushButton:hover {{ background: {color}dd; }}
         """)
-        
+
         if self._is_focused:
             self.setStyleSheet(f"CodeBlock {{ border: 2px solid {color}; border-radius: 4px; }}")
         else:
             self.setStyleSheet("CodeBlock { border: 1px solid #444; border-radius: 4px; }")
-    
+
     # === API Pública ===
-    
+
     def get_language(self) -> str:
         return self.lang_combo.currentData()
-    
+
     def set_language(self, lang: str):
         index = self.lang_combo.findData(lang)
         if index >= 0:
             self.lang_combo.setCurrentIndex(index)
             # Garantir que o editor seja atualizado mesmo em mudanças programáticas
             self._on_language_changed()
-    
+
     def get_code(self) -> str:
         return self.editor.get_text()
-    
+
     def set_code(self, code: str):
         self.editor.set_text(code)
-    
+
     def get_selected_text(self) -> str:
         return self.editor.get_selected_text()
-    
+
     def has_selection(self) -> bool:
         return self.editor.has_selection()
-    
+
     def get_block_name(self) -> str:
         """Retorna nome do bloco (usado como prefixo do namespace)"""
         return self.name_input.text().strip()
-    
+
     def set_block_name(self, name: str):
         """Define nome do bloco"""
         self._block_name = name
         self.name_input.setText(name)
-    
+
     def get_connection_name(self) -> str:
         """Retorna nome da conexao customizada ou None (usa padrao da aba)"""
         return self._connection_name
-    
+
     def set_connection_name(self, conn_name: str, db_type: str = None):
         """Define conexao customizada para este bloco"""
         self._connection_name = conn_name
         self.conn_panel.set_connection(conn_name, db_type)
-    
+
     def is_focused(self) -> bool:
         return self._is_focused
-    
+
     def set_waiting(self, waiting: bool):
         """Define estado de aguardando na fila"""
         self._is_waiting = waiting
@@ -514,7 +526,7 @@ class CodeBlock(QFrame):
         else:
             if not self._is_running:
                 self.run_btn.setText("▶")
-    
+
     def set_running(self, running: bool):
         self._is_running = running
         self._is_waiting = False  # Não está mais aguardando
@@ -560,7 +572,7 @@ class CodeBlock(QFrame):
                         border-radius: 3px;
                     }
                 """)
-    
+
     def set_cancelled(self):
         """Define estado de cancelado"""
         self._is_running = False
@@ -578,7 +590,7 @@ class CodeBlock(QFrame):
             }
         """)
         self._execution_start_time = 0
-    
+
     def set_error(self):
         """Define estado de erro"""
         self._is_running = False
@@ -597,101 +609,101 @@ class CodeBlock(QFrame):
             }
         """)
         self._execution_start_time = 0
-    
+
     def _format_execution_time(self, seconds: float) -> str:
         """Formata o tempo de execução para exibição"""
         if seconds < 0.001:
-            return f"{seconds*1000000:.0f}µs"
+            return f"{seconds * 1000000:.0f}µs"
         elif seconds < 1:
-            return f"{seconds*1000:.0f}ms"
+            return f"{seconds * 1000:.0f}ms"
         elif seconds < 60:
             return f"{seconds:.2f}s"
         else:
             mins = int(seconds // 60)
             secs = seconds % 60
             return f"{mins}m {secs:.1f}s"
-    
+
     def focus_editor(self):
         self.editor.setFocus()
-    
+
     def apply_theme(self):
         self.editor.apply_theme()
         self._update_style()
-    
+
     def to_dict(self) -> dict:
         data = {
-            'language': self.get_language(), 
-            'code': self.get_code(),
-            'height': self.editor_container.height(),
-            'block_name': self.get_block_name()
+            "language": self.get_language(),
+            "code": self.get_code(),
+            "height": self.editor_container.height(),
+            "block_name": self.get_block_name(),
         }
         if self._connection_name:
-            data['connection_name'] = self._connection_name
+            data["connection_name"] = self._connection_name
             # Salvar db_type para restaurar icone correto
-            if hasattr(self, 'conn_panel') and self.conn_panel._db_type:
-                data['db_type'] = self.conn_panel._db_type
+            if hasattr(self, "conn_panel") and self.conn_panel._db_type:
+                data["db_type"] = self.conn_panel._db_type
         return data
-    
+
     @classmethod
-    def from_dict(cls, data: dict, theme_manager=None) -> 'CodeBlock':
+    def from_dict(cls, data: dict, theme_manager=None) -> "CodeBlock":
         block = cls(theme_manager=theme_manager)
-        block.set_language(data.get('language', 'python'))
-        block.set_code(data.get('code', ''))
+        block.set_language(data.get("language", "python"))
+        block.set_code(data.get("code", ""))
         # Restaurar altura se salva
-        if 'height' in data and data['height']:
-            block._set_editor_height(data['height'])
+        if "height" in data and data["height"]:
+            block._set_editor_height(data["height"])
         # Restaurar nome do bloco
-        if 'block_name' in data and data['block_name']:
-            block.set_block_name(data['block_name'])
+        if "block_name" in data and data["block_name"]:
+            block.set_block_name(data["block_name"])
         # Restaurar conexao customizada (com panel visual)
-        if 'connection_name' in data:
-            db_type = data.get('db_type')
-            block.set_connection_name(data['connection_name'], db_type)
+        if "connection_name" in data:
+            db_type = data.get("db_type")
+            block.set_connection_name(data["connection_name"], db_type)
         return block
-    
+
     # === Drag ===
-    
+
     def _start_drag(self):
         self.drag_handle.setCursor(Qt.CursorShape.ClosedHandCursor)
-        
+
         drag = QDrag(self)
         mime_data = QMimeData()
         mime_data.setText(f"block:{id(self)}")
         drag.setMimeData(mime_data)
-        
+
         pixmap = QPixmap(self.size())
         pixmap.fill(QColor(60, 60, 60, 200))
         painter = QPainter(pixmap)
         painter.setPen(QColor(200, 200, 200))
         painter.drawText(10, 20, f"[{self.get_language().upper()}] Bloco")
         painter.end()
-        
+
         drag.setPixmap(pixmap)
         drag.setHotSpot(QPoint(pixmap.width() // 2, 10))
-        
+
         self.move_requested.emit(self, -1)
         drag.exec(Qt.DropAction.MoveAction)
-        
+
         self.drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
-    
+
     # === Resize (só o editor_container) ===
-    
+
     def _resize_start(self, event):
         self._is_resizing = True
         self._resize_start_y = event.globalPosition().y()
         self._resize_start_height = self.editor_container.height()
-    
+
     def _resize_move(self, event):
         if not self._is_resizing:
             return
         delta = event.globalPosition().y() - self._resize_start_y
         new_height = max(80, self._resize_start_height + delta)
         self._set_editor_height(int(new_height))
-    
+
     def _resize_end(self, event):
         if self._is_resizing:
             self._is_resizing = False
-    
+
     def _set_editor_height(self, height: int):
         """Define altura fixa do editor container"""
         self.editor_container.setFixedHeight(height)

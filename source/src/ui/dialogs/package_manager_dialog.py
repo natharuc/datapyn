@@ -4,24 +4,36 @@ Dialogo de Gerenciamento de Pacotes Python (pip)
 Permite ao usuario pesquisar, instalar, atualizar e
 desinstalar pacotes Python diretamente no DataPyn.
 """
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLineEdit,
-                             QTableWidget, QTableWidgetItem, QPushButton,
-                             QLabel, QHeaderView, QMessageBox, QWidget,
-                             QProgressBar, QAbstractItemView, QFrame,
-                             QApplication)
+
+from PyQt6.QtWidgets import (
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QPushButton,
+    QLabel,
+    QHeaderView,
+    QMessageBox,
+    QWidget,
+    QProgressBar,
+    QAbstractItemView,
+    QFrame,
+    QApplication,
+)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
 import logging
 
 try:
     import qtawesome as qta
+
     HAS_QTAWESOME = True
 except ImportError:
     HAS_QTAWESOME = False
 
-from src.services.package_manager_service import (
-    PackageManagerService, PackageInfo, PackageOperationResult
-)
+from src.services.package_manager_service import PackageManagerService, PackageInfo, PackageOperationResult
 from src.core.theme_manager import ThemeManager
 
 logger = logging.getLogger(__name__)
@@ -29,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 class _ListWorker(QThread):
     """Worker para listar pacotes em background"""
+
     finished = pyqtSignal(list)
 
     def __init__(self, service: PackageManagerService):
@@ -42,6 +55,7 @@ class _ListWorker(QThread):
 
 class _SearchWorker(QThread):
     """Worker para pesquisar pacotes em background"""
+
     finished = pyqtSignal(list)
 
     def __init__(self, service: PackageManagerService, query: str):
@@ -56,10 +70,10 @@ class _SearchWorker(QThread):
 
 class _InstallWorker(QThread):
     """Worker para instalar/desinstalar/atualizar em background"""
+
     finished = pyqtSignal(object)  # PackageOperationResult
 
-    def __init__(self, service: PackageManagerService,
-                 operation: str, package_name: str, version: str = ""):
+    def __init__(self, service: PackageManagerService, operation: str, package_name: str, version: str = ""):
         super().__init__()
         self.service = service
         self.operation = operation
@@ -78,7 +92,7 @@ class _InstallWorker(QThread):
                 success=False,
                 package_name=self.package_name,
                 operation=self.operation,
-                error=f"Operacao desconhecida: {self.operation}"
+                error=f"Operacao desconhecida: {self.operation}",
             )
         self.finished.emit(result)
 
@@ -103,13 +117,11 @@ class PackageManagerDialog(QDialog):
         self.setModal(True)
         self.setMinimumSize(780, 560)
         self.resize(820, 600)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint
-        )
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
         c = self.theme_manager.get_app_colors()
-        dim_color = '#999999'  # cor secundaria para texto menos importante
+        dim_color = "#999999"  # cor secundaria para texto menos importante
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -136,20 +148,18 @@ class PackageManagerDialog(QDialog):
         search_row.setSpacing(8)
 
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText(
-            "Digite o nome do pacote (ex: matplotlib, requests, scikit-learn)..."
-        )
+        self.txt_search.setPlaceholderText("Digite o nome do pacote (ex: matplotlib, requests, scikit-learn)...")
         self.txt_search.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {c['border']};
-                color: {c['foreground']};
-                border: 1px solid {c['border']};
+                background-color: {c["border"]};
+                color: {c["foreground"]};
+                border: 1px solid {c["border"]};
                 padding: 10px 12px;
                 border-radius: 4px;
                 font-size: 12px;
             }}
             QLineEdit:focus {{
-                border-color: {c['accent']};
+                border-color: {c["accent"]};
             }}
         """)
         self.txt_search.returnPressed.connect(self._on_search)
@@ -160,7 +170,7 @@ class PackageManagerDialog(QDialog):
             self.btn_search.setIcon(qta.icon("fa5s.search", color="white"))
         self.btn_search.setStyleSheet(f"""
             QPushButton {{
-                background-color: {c['accent']};
+                background-color: {c["accent"]};
                 color: white;
                 border: none;
                 padding: 10px 20px;
@@ -169,11 +179,11 @@ class PackageManagerDialog(QDialog):
                 font-size: 12px;
             }}
             QPushButton:hover {{
-                background-color: {c['accent']};
+                background-color: {c["accent"]};
                 opacity: 0.85;
             }}
             QPushButton:disabled {{
-                background-color: {c['border']};
+                background-color: {c["border"]};
                 color: {dim_color};
             }}
         """)
@@ -182,13 +192,11 @@ class PackageManagerDialog(QDialog):
 
         self.btn_show_installed = QPushButton("Instalados")
         if HAS_QTAWESOME:
-            self.btn_show_installed.setIcon(
-                qta.icon("fa5s.list", color="white")
-            )
+            self.btn_show_installed.setIcon(qta.icon("fa5s.list", color="white"))
         self.btn_show_installed.setStyleSheet(f"""
             QPushButton {{
-                background-color: {c['border']};
-                color: {c['foreground']};
+                background-color: {c["border"]};
+                color: {c["foreground"]};
                 border: none;
                 padding: 10px 16px;
                 border-radius: 4px;
@@ -207,11 +215,11 @@ class PackageManagerDialog(QDialog):
         # --- Info label ---
         self.lbl_info = QLabel("")
         self.lbl_info.setStyleSheet(f"""
-            background-color: {c['border']};
-            color: {c['foreground']};
+            background-color: {c["border"]};
+            color: {c["foreground"]};
             padding: 8px 12px;
             border-radius: 4px;
-            border-left: 3px solid {c['accent']};
+            border-left: 3px solid {c["accent"]};
             font-size: 11px;
         """)
         layout.addWidget(self.lbl_info)
@@ -219,38 +227,22 @@ class PackageManagerDialog(QDialog):
         # --- Tabela de pacotes ---
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(
-            ["Pacote", "Versao Instalada", "Ultima Versao", "Acoes"]
-        )
-        self.table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
-        )
-        self.table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
-        )
+        self.table.setHorizontalHeaderLabels(["Pacote", "Versao Instalada", "Ultima Versao", "Acoes"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self.table.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
-        )
-        self.table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setStyleSheet(f"""
             QTableWidget {{
-                gridline-color: {c['border']};
+                gridline-color: {c["border"]};
                 font-size: 11px;
-                border: 1px solid {c['border']};
-                background-color: {c['background']};
+                border: 1px solid {c["border"]};
+                background-color: {c["background"]};
             }}
             QTableWidget::item {{
                 padding: 6px 8px;
@@ -259,11 +251,11 @@ class PackageManagerDialog(QDialog):
                 background-color: #094771;
             }}
             QHeaderView::section {{
-                background-color: {c['border']};
-                color: {c['foreground']};
+                background-color: {c["border"]};
+                color: {c["foreground"]};
                 padding: 8px;
                 border: none;
-                border-right: 1px solid {c['background']};
+                border-right: 1px solid {c["background"]};
                 font-weight: bold;
                 font-size: 11px;
             }}
@@ -277,12 +269,12 @@ class PackageManagerDialog(QDialog):
         self.progress.setFixedHeight(3)
         self.progress.setStyleSheet(f"""
             QProgressBar {{
-                background-color: {c['border']};
+                background-color: {c["border"]};
                 border: none;
                 border-radius: 1px;
             }}
             QProgressBar::chunk {{
-                background-color: {c['accent']};
+                background-color: {c["accent"]};
                 border-radius: 1px;
             }}
         """)
@@ -294,9 +286,7 @@ class PackageManagerDialog(QDialog):
         footer.setSpacing(8)
 
         self.lbl_status = QLabel("Pronto")
-        self.lbl_status.setStyleSheet(
-            f"color: {dim_color}; font-size: 10px;"
-        )
+        self.lbl_status.setStyleSheet(f"color: {dim_color}; font-size: 10px;")
         footer.addWidget(self.lbl_status)
         footer.addStretch()
 
@@ -345,19 +335,13 @@ class PackageManagerDialog(QDialog):
         query = self._pending_query or self.txt_search.text().strip()
 
         if not results:
-            self.lbl_info.setText(
-                f"Pacote '{query}' nao encontrado no PyPI. "
-                "Deseja tentar instalar mesmo assim?"
-            )
+            self.lbl_info.setText(f"Pacote '{query}' nao encontrado no PyPI. Deseja tentar instalar mesmo assim?")
             self.table.setRowCount(0)
             # Mostrar opcao de instalar diretamente
             self._show_direct_install_option(query)
             return
 
-        self.lbl_info.setText(
-            f"Resultado para '{query}' "
-            "(use o nome exato do pacote no PyPI)"
-        )
+        self.lbl_info.setText(f"Resultado para '{query}' (use o nome exato do pacote no PyPI)")
         self._populate_table(results)
 
     def _show_direct_install_option(self, package_name: str):
@@ -385,7 +369,7 @@ class PackageManagerDialog(QDialog):
             btn_install.setIcon(qta.icon("fa5s.download", color="white"))
         btn_install.setStyleSheet(f"""
             QPushButton {{
-                background-color: {c['accent']};
+                background-color: {c["accent"]};
                 color: white;
                 border: none;
                 padding: 4px 14px;
@@ -395,9 +379,7 @@ class PackageManagerDialog(QDialog):
             }}
             QPushButton:hover {{ opacity: 0.85; }}
         """)
-        btn_install.clicked.connect(
-            lambda _, n=package_name: self._do_operation("install", n)
-        )
+        btn_install.clicked.connect(lambda _, n=package_name: self._do_operation("install", n))
         actions_layout.addWidget(btn_install)
         actions_layout.addStretch()
 
@@ -426,7 +408,7 @@ class PackageManagerDialog(QDialog):
     def _populate_table(self, packages: list):
         """Preenche a tabela com os pacotes"""
         c = self.theme_manager.get_app_colors()
-        dim_color = '#999999'
+        dim_color = "#999999"
         self.table.setRowCount(len(packages))
 
         for row, pkg in enumerate(packages):
@@ -444,17 +426,13 @@ class PackageManagerDialog(QDialog):
 
             # Versao instalada
             ver_item = QTableWidgetItem(pkg.version if pkg.version else "-")
-            ver_item.setTextAlignment(
-                Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
-            )
+            ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 1, ver_item)
 
             # Ultima versao
             latest = pkg.latest_version if pkg.latest_version else "-"
             latest_item = QTableWidgetItem(latest)
-            latest_item.setTextAlignment(
-                Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
-            )
+            latest_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             if pkg.has_update:
                 latest_item.setForeground(QColor("#4ec9b0"))
             self.table.setItem(row, 2, latest_item)
@@ -470,9 +448,7 @@ class PackageManagerDialog(QDialog):
                 if pkg.has_update:
                     btn_update = QPushButton("Atualizar")
                     if HAS_QTAWESOME:
-                        btn_update.setIcon(
-                            qta.icon("fa5s.arrow-up", color="white")
-                        )
+                        btn_update.setIcon(qta.icon("fa5s.arrow-up", color="white"))
                     btn_update.setStyleSheet(f"""
                         QPushButton {{
                             background-color: #2e7d32;
@@ -484,21 +460,17 @@ class PackageManagerDialog(QDialog):
                         }}
                         QPushButton:hover {{ background-color: #388e3c; }}
                         QPushButton:disabled {{
-                            background-color: {c['border']};
+                            background-color: {c["border"]};
                             color: {dim_color};
                         }}
                     """)
-                    btn_update.clicked.connect(
-                        lambda _, n=pkg.name: self._do_operation("update", n)
-                    )
+                    btn_update.clicked.connect(lambda _, n=pkg.name: self._do_operation("update", n))
                     actions_layout.addWidget(btn_update)
 
                 # Botao desinstalar
                 btn_uninstall = QPushButton("Remover")
                 if HAS_QTAWESOME:
-                    btn_uninstall.setIcon(
-                        qta.icon("fa5s.trash-alt", color="white")
-                    )
+                    btn_uninstall.setIcon(qta.icon("fa5s.trash-alt", color="white"))
                 btn_uninstall.setStyleSheet(f"""
                     QPushButton {{
                         background-color: #c5534d;
@@ -510,24 +482,20 @@ class PackageManagerDialog(QDialog):
                     }}
                     QPushButton:hover {{ background-color: #e06060; }}
                     QPushButton:disabled {{
-                        background-color: {c['border']};
+                        background-color: {c["border"]};
                         color: {dim_color};
                     }}
                 """)
-                btn_uninstall.clicked.connect(
-                    lambda _, n=pkg.name: self._confirm_uninstall(n)
-                )
+                btn_uninstall.clicked.connect(lambda _, n=pkg.name: self._confirm_uninstall(n))
                 actions_layout.addWidget(btn_uninstall)
             else:
                 # Botao instalar
                 btn_install = QPushButton("Instalar")
                 if HAS_QTAWESOME:
-                    btn_install.setIcon(
-                        qta.icon("fa5s.download", color="white")
-                    )
+                    btn_install.setIcon(qta.icon("fa5s.download", color="white"))
                 btn_install.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: {c['accent']};
+                        background-color: {c["accent"]};
                         color: white;
                         border: none;
                         padding: 4px 14px;
@@ -537,13 +505,11 @@ class PackageManagerDialog(QDialog):
                     }}
                     QPushButton:hover {{ opacity: 0.85; }}
                     QPushButton:disabled {{
-                        background-color: {c['border']};
+                        background-color: {c["border"]};
                         color: {dim_color};
                     }}
                 """)
-                btn_install.clicked.connect(
-                    lambda _, n=pkg.name: self._do_operation("install", n)
-                )
+                btn_install.clicked.connect(lambda _, n=pkg.name: self._do_operation("install", n))
                 actions_layout.addWidget(btn_install)
 
             actions_layout.addStretch()
@@ -558,13 +524,12 @@ class PackageManagerDialog(QDialog):
             f"Tem certeza que deseja remover o pacote '{package_name}'?\n\n"
             "Outros pacotes que dependem dele podem parar de funcionar.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
             self._do_operation("uninstall", package_name)
 
-    def _do_operation(self, operation: str, package_name: str,
-                      version: str = ""):
+    def _do_operation(self, operation: str, package_name: str, version: str = ""):
         """Executa operacao de pacote em background"""
         op_labels = {
             "install": "Instalando",
@@ -576,9 +541,7 @@ class PackageManagerDialog(QDialog):
         self._set_loading(True, f"{label} '{package_name}'...")
         self._set_buttons_enabled(False)
 
-        self._worker = _InstallWorker(
-            self.service, operation, package_name, version
-        )
+        self._worker = _InstallWorker(self.service, operation, package_name, version)
         self._worker.finished.connect(self._on_operation_done)
         self._worker.start()
 
@@ -588,9 +551,7 @@ class PackageManagerDialog(QDialog):
         self._set_buttons_enabled(True)
 
         if result.success:
-            QMessageBox.information(
-                self, "Sucesso", result.message
-            )
+            QMessageBox.information(self, "Sucesso", result.message)
             # Sempre recarregar lista de instalados apos operacao
             # Usar QTimer para evitar conflitos com thread ainda ativa
             QTimer.singleShot(100, self._load_installed)
@@ -599,11 +560,7 @@ class PackageManagerDialog(QDialog):
             # Limitar tamanho do erro mostrado
             if len(error_msg) > 500:
                 error_msg = error_msg[:500] + "\n..."
-            QMessageBox.critical(
-                self, "Erro",
-                f"Falha ao {result.operation} '{result.package_name}':\n\n"
-                f"{error_msg}"
-            )
+            QMessageBox.critical(self, "Erro", f"Falha ao {result.operation} '{result.package_name}':\n\n{error_msg}")
 
     # === Helpers ===
 

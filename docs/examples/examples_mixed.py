@@ -1,7 +1,7 @@
 # ============================================================
 # Exemplos de Sintaxe Mista (SQL + Python)
 # ============================================================
-# 
+#
 # A sintaxe mista permite escrever queries SQL diretamente
 # no código Python usando as funções query() e execute()
 #
@@ -21,7 +21,7 @@ vendas = query("SELECT * FROM vendas WHERE data >= '2024-01-01'")
 produtos = query("SELECT * FROM produtos")
 
 # Agora manipule com Pandas normalmente
-vendas_por_produto = vendas.groupby('produto_id')['valor'].sum()
+vendas_por_produto = vendas.groupby("produto_id")["valor"].sum()
 print(vendas_por_produto)
 
 
@@ -48,8 +48,8 @@ print(resultado)
 top_clientes = query("SELECT id FROM clientes ORDER BY total_compras DESC LIMIT 10")
 
 # Converte para lista de IDs
-ids = top_clientes['id'].tolist()
-ids_str = ','.join(map(str, ids))
+ids = top_clientes["id"].tolist()
+ids_str = ",".join(map(str, ids))
 
 # Usa na próxima query
 pedidos = query(f"SELECT * FROM pedidos WHERE cliente_id IN ({ids_str})")
@@ -79,7 +79,7 @@ vendas_mes = query("""
 """)
 
 # Calcular crescimento mês a mês
-vendas_mes['crescimento'] = vendas_mes['total'].pct_change() * 100
+vendas_mes["crescimento"] = vendas_mes["total"].pct_change() * 100
 print("\nCrescimento mensal:")
 print(vendas_mes)
 
@@ -89,12 +89,12 @@ print(vendas_mes)
 todos_produtos = query("SELECT * FROM produtos")
 
 # Filtrar produtos com estoque baixo
-estoque_baixo = todos_produtos[todos_produtos['estoque'] < 10]
+estoque_baixo = todos_produtos[todos_produtos["estoque"] < 10]
 
 # Criar alerta (poderia salvar em outra tabela)
 for _, produto in estoque_baixo.iterrows():
     print(f"⚠️ ALERTA: {produto['nome']} com estoque baixo: {produto['estoque']} unidades")
-    
+
     # Poderia fazer:
     # execute(f"INSERT INTO alertas (produto_id, tipo) VALUES ({produto['id']}, 'estoque_baixo')")
 
@@ -127,8 +127,8 @@ print(f"Maior venda: R$ {vendas['valor'].max():,.2f}")
 print(f"Menor venda: R$ {vendas['valor'].min():,.2f}")
 
 # Vendas por mês
-vendas['mes'] = vendas['data'].dt.month
-vendas_por_mes = vendas.groupby('mes')['valor'].sum()
+vendas["mes"] = vendas["data"].dt.month
+vendas_por_mes = vendas.groupby("mes")["valor"].sum()
 print("\nVendas por mês:")
 print(vendas_por_mes)
 
@@ -148,7 +148,7 @@ relatorio = query("""
 """)
 
 # Adicionar percentual
-relatorio['percentual'] = (relatorio['receita'] / relatorio['receita'].sum() * 100).round(2)
+relatorio["percentual"] = (relatorio["receita"] / relatorio["receita"].sum() * 100).round(2)
 
 print("\nRelatório por Categoria:")
 print(relatorio)
@@ -159,7 +159,7 @@ print(relatorio)
 # ============================================================
 # DICAS
 # ============================================================
-# 
+#
 # 1. Use query() para SELECT (retorna DataFrame)
 # 2. Use execute() para INSERT/UPDATE/DELETE (retorna nº de linhas)
 # 3. Resultados ficam em variáveis Python normais

@@ -8,12 +8,12 @@ from .interfaces import ICodeEditor
 from .editor_config import get_code_editor_class
 
 __all__ = [
-    'SQLEditor', 
-    'PythonEditor', 
-    'UnifiedEditor', 
-    'CodeEditor',
-    'CodeBlock', 
-    'BlockEditor',
-    'ICodeEditor',
-    'get_code_editor_class',
+    "SQLEditor",
+    "PythonEditor",
+    "UnifiedEditor",
+    "CodeEditor",
+    "CodeBlock",
+    "BlockEditor",
+    "ICodeEditor",
+    "get_code_editor_class",
 ]

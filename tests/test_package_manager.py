@@ -1,6 +1,7 @@
 """
 Testes para o Gerenciador de Pacotes (PackageManagerService e PackageManagerDialog)
 """
+
 import pytest
 import sys
 import io
@@ -13,14 +14,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from PyQt6.QtWidgets import QMessageBox
 
-from src.services.package_manager_service import (
-    PackageManagerService, PackageInfo, PackageOperationResult
-)
+from src.services.package_manager_service import PackageManagerService, PackageInfo, PackageOperationResult
 
 
 # ===========================================================================
 # PackageInfo Dataclass
 # ===========================================================================
+
 
 class TestPackageInfo:
     """Testes para o dataclass PackageInfo"""
@@ -74,10 +74,7 @@ class TestPackageOperationResult:
     """Testes para o dataclass PackageOperationResult"""
 
     def test_success_result(self):
-        r = PackageOperationResult(
-            success=True, package_name="flask", operation="install",
-            message="OK"
-        )
+        r = PackageOperationResult(success=True, package_name="flask", operation="install", message="OK")
         assert r.success is True
         assert r.package_name == "flask"
         assert r.operation == "install"
@@ -85,10 +82,7 @@ class TestPackageOperationResult:
         assert r.error == ""
 
     def test_failure_result(self):
-        r = PackageOperationResult(
-            success=False, package_name="flask", operation="install",
-            error="Falha na rede"
-        )
+        r = PackageOperationResult(success=False, package_name="flask", operation="install", error="Falha na rede")
         assert r.success is False
         assert r.error == "Falha na rede"
 
@@ -96,6 +90,7 @@ class TestPackageOperationResult:
 # ===========================================================================
 # PackageManagerService - list_installed
 # ===========================================================================
+
 
 class TestListInstalled:
     """Testes para PackageManagerService.list_installed"""
@@ -105,11 +100,13 @@ class TestListInstalled:
         """Lista pacotes instalados com sucesso"""
         mock_run.return_value = MagicMock(
             returncode=0,
-            stdout=json.dumps([
-                {"name": "requests", "version": "2.31.0"},
-                {"name": "flask", "version": "3.0.0"},
-            ]),
-            stderr=""
+            stdout=json.dumps(
+                [
+                    {"name": "requests", "version": "2.31.0"},
+                    {"name": "flask", "version": "3.0.0"},
+                ]
+            ),
+            stderr="",
         )
         svc = PackageManagerService()
         pkgs = svc.list_installed()
@@ -140,6 +137,7 @@ class TestListInstalled:
 # PackageManagerService - search_pypi
 # ===========================================================================
 
+
 class TestSearchPyPI:
     """Testes para PackageManagerService.search_pypi"""
 
@@ -163,7 +161,7 @@ class TestSearchPyPI:
                 "the requirement flask==randominvalidversion "
                 "(from versions: 2.0.0, 2.1.0, 3.0.0)\n"
             ),
-            stdout=""
+            stdout="",
         )
         svc = PackageManagerService()
         # Mock list_installed para evitar subprocess real
@@ -177,17 +175,9 @@ class TestSearchPyPI:
     @patch("src.services.package_manager_service.subprocess.run")
     def test_search_installed_package(self, mock_run):
         """Pesquisa marca pacote como instalado se encontrado localmente"""
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stderr=(
-                "ERROR: (from versions: 1.0.0, 2.0.0)\n"
-            ),
-            stdout=""
-        )
+        mock_run.return_value = MagicMock(returncode=1, stderr=("ERROR: (from versions: 1.0.0, 2.0.0)\n"), stdout="")
         svc = PackageManagerService()
-        svc.list_installed = MagicMock(return_value=[
-            PackageInfo(name="flask", version="1.0.0", installed=True)
-        ])
+        svc.list_installed = MagicMock(return_value=[PackageInfo(name="flask", version="1.0.0", installed=True)])
         results = svc.search_pypi("flask")
         assert len(results) == 1
         assert results[0].installed is True
@@ -196,10 +186,7 @@ class TestSearchPyPI:
     @patch("src.services.package_manager_service.subprocess.run")
     def test_search_not_found(self, mock_run):
         """Pesquisa retorna vazio se pacote nao existe"""
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stderr="No matching distribution found for pacoteinexistente"
-        )
+        mock_run.return_value = MagicMock(returncode=1, stderr="No matching distribution found for pacoteinexistente")
         svc = PackageManagerService()
         results = svc.search_pypi("pacoteinexistente")
         assert results == []
@@ -216,6 +203,7 @@ class TestSearchPyPI:
 # ===========================================================================
 # PackageManagerService - install_package
 # ===========================================================================
+
 
 class TestInstallPackage:
     """Testes para PackageManagerService.install_package"""
@@ -247,9 +235,7 @@ class TestInstallPackage:
     @patch("src.services.package_manager_service.subprocess.run")
     def test_install_failure(self, mock_run):
         """Falha na instalacao retorna resultado com erro"""
-        mock_run.return_value = MagicMock(
-            returncode=1, stderr="Failed to install"
-        )
+        mock_run.return_value = MagicMock(returncode=1, stderr="Failed to install")
         svc = PackageManagerService()
         result = svc.install_package("pacotequebrado")
         assert result.success is False
@@ -259,6 +245,7 @@ class TestInstallPackage:
     def test_install_timeout(self, mock_run):
         """Timeout na instalacao"""
         import subprocess
+
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="pip", timeout=120)
         svc = PackageManagerService()
         result = svc.install_package("pacotegrande")
@@ -278,6 +265,7 @@ class TestInstallPackage:
 # ===========================================================================
 # PackageManagerService - uninstall_package
 # ===========================================================================
+
 
 class TestUninstallPackage:
     """Testes para PackageManagerService.uninstall_package"""
@@ -331,9 +319,7 @@ class TestUninstallPackage:
     @patch("src.services.package_manager_service.subprocess.run")
     def test_uninstall_failure(self, mock_run):
         """Falha ao desinstalar retorna erro"""
-        mock_run.return_value = MagicMock(
-            returncode=1, stderr="Not installed"
-        )
+        mock_run.return_value = MagicMock(returncode=1, stderr="Not installed")
         svc = PackageManagerService()
         result = svc.uninstall_package("flask")
         assert result.success is False
@@ -350,6 +336,7 @@ class TestUninstallPackage:
 # ===========================================================================
 # PackageManagerService - update_package
 # ===========================================================================
+
 
 class TestUpdatePackage:
     """Testes para PackageManagerService.update_package"""
@@ -386,6 +373,7 @@ class TestUpdatePackage:
 # PackageManagerService - get_package_info
 # ===========================================================================
 
+
 class TestGetPackageInfo:
     """Testes para PackageManagerService.get_package_info"""
 
@@ -393,13 +381,7 @@ class TestGetPackageInfo:
     def test_get_info_success(self, mock_run):
         """Obtem informacoes de pacote instalado"""
         mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=(
-                "Name: flask\n"
-                "Version: 3.0.0\n"
-                "Summary: Web framework\n"
-                "Author: Armin Ronacher\n"
-            )
+            returncode=0, stdout=("Name: flask\nVersion: 3.0.0\nSummary: Web framework\nAuthor: Armin Ronacher\n")
         )
         svc = PackageManagerService()
         pkg = svc.get_package_info("flask")
@@ -431,6 +413,7 @@ class TestGetPackageInfo:
 # PackageManagerService - check_package_exists
 # ===========================================================================
 
+
 class TestCheckPackageExists:
     """Testes para PackageManagerService.check_package_exists"""
 
@@ -460,13 +443,19 @@ class TestCheckPackageExists:
 # PackageManagerService - protected packages
 # ===========================================================================
 
+
 class TestProtectedPackages:
     """Garante que todos os pacotes essenciais estao protegidos"""
 
     PROTECTED = [
-        'pip', 'setuptools', 'wheel',
-        'pyqt6', 'pyqt6-qt6', 'pyqt6-sip',
-        'qscintilla', 'pyqt6-qscintilla',
+        "pip",
+        "setuptools",
+        "wheel",
+        "pyqt6",
+        "pyqt6-qt6",
+        "pyqt6-sip",
+        "qscintilla",
+        "pyqt6-qscintilla",
     ]
 
     @patch("src.services.package_manager_service.subprocess.run")
@@ -484,6 +473,7 @@ class TestProtectedPackages:
 # PackageManagerDialog - UI
 # ===========================================================================
 
+
 class TestPackageManagerDialog:
     """Testes para PackageManagerDialog (UI)"""
 
@@ -492,10 +482,8 @@ class TestPackageManagerDialog:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             assert dialog.windowTitle() == "Gerenciador de Pacotes"
             assert dialog.minimumWidth() >= 780
@@ -506,10 +494,8 @@ class TestPackageManagerDialog:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             assert dialog.txt_search is not None
             assert dialog.txt_search.placeholderText() != ""
@@ -519,10 +505,8 @@ class TestPackageManagerDialog:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             assert dialog.table is not None
             assert dialog.table.columnCount() == 4
@@ -532,10 +516,8 @@ class TestPackageManagerDialog:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             assert dialog.btn_search is not None
             assert dialog.btn_show_installed is not None
@@ -545,10 +527,8 @@ class TestPackageManagerDialog:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             assert dialog.progress is not None
 
@@ -556,6 +536,7 @@ class TestPackageManagerDialog:
 # ===========================================================================
 # PackageManagerDialog - Workers
 # ===========================================================================
+
 
 class TestWorkers:
     """Testes para os workers QThread"""
@@ -565,9 +546,7 @@ class TestWorkers:
         from src.ui.dialogs.package_manager_dialog import _ListWorker
 
         service = MagicMock()
-        service.list_installed.return_value = [
-            PackageInfo(name="flask", version="3.0", installed=True)
-        ]
+        service.list_installed.return_value = [PackageInfo(name="flask", version="3.0", installed=True)]
         worker = _ListWorker(service)
         with qtbot.waitSignal(worker.finished, timeout=5000) as blocker:
             worker.start()
@@ -579,9 +558,7 @@ class TestWorkers:
         from src.ui.dialogs.package_manager_dialog import _SearchWorker
 
         service = MagicMock()
-        service.search_pypi.return_value = [
-            PackageInfo(name="requests", latest_version="2.32")
-        ]
+        service.search_pypi.return_value = [PackageInfo(name="requests", latest_version="2.32")]
         worker = _SearchWorker(service, "requests")
         with qtbot.waitSignal(worker.finished, timeout=5000) as blocker:
             worker.start()
@@ -594,8 +571,7 @@ class TestWorkers:
 
         service = MagicMock()
         service.install_package.return_value = PackageOperationResult(
-            success=True, package_name="flask", operation="install",
-            message="Instalado"
+            success=True, package_name="flask", operation="install", message="Instalado"
         )
         worker = _InstallWorker(service, "install", "flask")
         with qtbot.waitSignal(worker.finished, timeout=5000) as blocker:
@@ -608,8 +584,7 @@ class TestWorkers:
 
         service = MagicMock()
         service.uninstall_package.return_value = PackageOperationResult(
-            success=True, package_name="flask", operation="uninstall",
-            message="Removido"
+            success=True, package_name="flask", operation="uninstall", message="Removido"
         )
         worker = _InstallWorker(service, "uninstall", "flask")
         with qtbot.waitSignal(worker.finished, timeout=5000) as blocker:
@@ -623,8 +598,7 @@ class TestWorkers:
 
         service = MagicMock()
         service.update_package.return_value = PackageOperationResult(
-            success=True, package_name="flask", operation="update",
-            message="Atualizado"
+            success=True, package_name="flask", operation="update", message="Atualizado"
         )
         worker = _InstallWorker(service, "update", "flask")
         with qtbot.waitSignal(worker.finished, timeout=5000) as blocker:
@@ -648,18 +622,21 @@ class TestWorkers:
 # Integracao - Menu entry
 # ===========================================================================
 
+
 class TestMenuIntegration:
     """Testa que o Gerenciador de Pacotes esta no menu"""
 
     def test_main_window_has_package_manager_method(self):
         """MainWindow tem o metodo _show_package_manager"""
         from src.ui.main_window import MainWindow
-        assert hasattr(MainWindow, '_show_package_manager')
+
+        assert hasattr(MainWindow, "_show_package_manager")
 
     def test_imports(self):
         """Imports do servico e dialogo funcionam"""
         from src.services import PackageManagerService
         from src.ui.dialogs import PackageManagerDialog
+
         assert PackageManagerService is not None
         assert PackageManagerDialog is not None
 
@@ -667,6 +644,7 @@ class TestMenuIntegration:
 # ===========================================================================
 # PackageManagerDialog - cleanup e fluxo corrigido
 # ===========================================================================
+
 
 class TestDialogWorkerCleanup:
     """Testes para limpeza de workers e fluxo de sinais"""
@@ -676,10 +654,8 @@ class TestDialogWorkerCleanup:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
 
             # Simular worker ativo
@@ -696,10 +672,8 @@ class TestDialogWorkerCleanup:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             dialog._worker = None
             # Nao deve lancar excecao
@@ -710,10 +684,8 @@ class TestDialogWorkerCleanup:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
 
             mock_worker = MagicMock()
@@ -729,12 +701,10 @@ class TestDialogWorkerCleanup:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
-            assert hasattr(dialog, '_pending_query')
+            assert hasattr(dialog, "_pending_query")
             assert dialog._pending_query == ""
 
     def test_show_direct_install_option(self, qtbot):
@@ -742,10 +712,8 @@ class TestDialogWorkerCleanup:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
 
             dialog._show_direct_install_option("minhalibraria")
@@ -755,6 +723,7 @@ class TestDialogWorkerCleanup:
             widget = dialog.table.cellWidget(0, 3)
             assert widget is not None
             from PyQt6.QtWidgets import QPushButton
+
             buttons = widget.findChildren(QPushButton)
             assert len(buttons) == 1
             assert "Instalar" in buttons[0].text()
@@ -764,18 +733,13 @@ class TestDialogWorkerCleanup:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed') as mock_load:
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed") as mock_load:
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             mock_load.reset_mock()
 
-            result = PackageOperationResult(
-                success=True, package_name="flask",
-                operation="install", message="OK"
-            )
-            with patch.object(QMessageBox, 'information'):
+            result = PackageOperationResult(success=True, package_name="flask", operation="install", message="OK")
+            with patch.object(QMessageBox, "information"):
                 dialog._on_operation_done(result)
 
             # O reload e agendado via QTimer.singleShot
@@ -787,10 +751,8 @@ class TestDialogWorkerCleanup:
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
-        with patch.object(PackageManagerDialog, '_load_installed'):
-            dialog = PackageManagerDialog(
-                theme_manager=ThemeManager(), parent=None
-            )
+        with patch.object(PackageManagerDialog, "_load_installed"):
+            dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
             dialog._pending_query = "pacoteinexistente"
 
@@ -805,6 +767,7 @@ class TestDialogWorkerCleanup:
 # PythonWorker - deteccao automatica de DataFrames
 # ===========================================================================
 
+
 class TestPythonWorkerDataFrameDetection:
     """Testes para deteccao automatica de novos DataFrames quando resultado e None"""
 
@@ -814,7 +777,7 @@ class TestPythonWorkerDataFrameDetection:
         from src.ui.main_window import PythonWorker
 
         code = "df_new = pd.DataFrame({'A': [1, 2, 3]})"
-        namespace = {'pd': pd}
+        namespace = {"pd": pd}
         worker = PythonWorker(code, namespace, False)
 
         results = []
@@ -831,7 +794,7 @@ class TestPythonWorkerDataFrameDetection:
         from src.ui.main_window import PythonWorker
 
         code = "df1 = pd.DataFrame({'A': [1]})\ndf2 = pd.DataFrame({'B': [2, 3]})"
-        namespace = {'pd': pd}
+        namespace = {"pd": pd}
         worker = PythonWorker(code, namespace, False)
 
         results = []
@@ -840,7 +803,7 @@ class TestPythonWorkerDataFrameDetection:
 
         assert len(results) == 1
         assert isinstance(results[0], pd.DataFrame)
-        assert list(results[0].columns) == ['B']
+        assert list(results[0].columns) == ["B"]
 
     def test_no_new_dataframe_result_stays_none(self):
         """Sem novos DataFrames, resultado permanece None"""
@@ -863,7 +826,7 @@ class TestPythonWorkerDataFrameDetection:
         from src.ui.main_window import PythonWorker
 
         code = "df1 = pd.DataFrame({'A': [1, 2]})\n42"
-        namespace = {'pd': pd}
+        namespace = {"pd": pd}
         worker = PythonWorker(code, namespace, False)
 
         results = []
@@ -878,9 +841,9 @@ class TestPythonWorkerDataFrameDetection:
         import pandas as pd
         from src.ui.main_window import PythonWorker
 
-        original = pd.DataFrame({'A': [1]})
+        original = pd.DataFrame({"A": [1]})
         code = "df = pd.DataFrame({'A': [1, 2, 3]})"
-        namespace = {'pd': pd, 'df': original}
+        namespace = {"pd": pd, "df": original}
         worker = PythonWorker(code, namespace, False)
 
         results = []
@@ -897,7 +860,7 @@ class TestPythonWorkerDataFrameDetection:
         from src.ui.main_window import PythonWorker
 
         code = "_temp = pd.DataFrame({'A': [1]})"
-        namespace = {'pd': pd}
+        namespace = {"pd": pd}
         worker = PythonWorker(code, namespace, False)
 
         results = []
@@ -912,12 +875,14 @@ class TestPythonWorkerDataFrameDetection:
 # PythonWorker - matplotlib
 # ===========================================================================
 
+
 class TestPythonWorkerMatplotlib:
     """Testes para captura de figuras matplotlib no PythonWorker"""
 
     def test_python_worker_signal_has_5_params(self):
         """PythonWorker.finished emite 5 parametros (inclui figures)"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("1+1", {}, False)
         # Verificar que o signal aceita 5 parametros
         assert worker.finished is not None
@@ -925,38 +890,43 @@ class TestPythonWorkerMatplotlib:
     def test_python_worker_setup_matplotlib_no_matplotlib(self):
         """_setup_matplotlib_backend nao falha sem matplotlib"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("1+1", {}, False)
         # Se matplotlib nao estiver disponivel, nao deve lancar excecao
-        with patch.dict('sys.modules', {'matplotlib': None}):
+        with patch.dict("sys.modules", {"matplotlib": None}):
             worker._setup_matplotlib_backend()
 
     def test_python_worker_capture_no_matplotlib(self):
         """_capture_matplotlib_figures retorna lista vazia sem matplotlib"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("1+1", {}, False)
-        with patch.dict('sys.modules', {'matplotlib': None, 'matplotlib.pyplot': None}):
+        with patch.dict("sys.modules", {"matplotlib": None, "matplotlib.pyplot": None}):
             result = worker._capture_matplotlib_figures()
             assert result == []
 
     def test_python_worker_capture_no_figures(self):
         """_capture_matplotlib_figures retorna lista vazia sem figuras"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("1+1", {}, False)
         mock_plt = MagicMock()
         mock_plt.get_fignums.return_value = []
-        with patch.dict('sys.modules', {'matplotlib': MagicMock(), 'matplotlib.pyplot': mock_plt}):
+        with patch.dict("sys.modules", {"matplotlib": MagicMock(), "matplotlib.pyplot": mock_plt}):
             result = worker._capture_matplotlib_figures()
             assert result == []
 
     def test_main_window_has_display_figures_method(self):
         """MainWindow possui metodo _display_figures_in_results"""
         from src.ui.main_window import MainWindow
-        assert hasattr(MainWindow, '_display_figures_in_results')
+
+        assert hasattr(MainWindow, "_display_figures_in_results")
 
 
 # ===========================================================================
 # PythonWorker - execucao AST e captura stderr
 # ===========================================================================
+
 
 class TestPythonWorkerASTExecution:
     """Testes para execucao baseada em AST e captura de stderr"""
@@ -976,7 +946,7 @@ class TestPythonWorkerASTExecution:
 
         assert len(results) == 1
         assert results[0][0] is None  # for loop nao retorna valor
-        assert results[0][1]['total'] == 10
+        assert results[0][1]["total"] == 10
 
     def test_ast_if_else_block(self):
         """Blocos if/else executam corretamente"""
@@ -990,7 +960,7 @@ class TestPythonWorkerASTExecution:
         worker.finished.connect(lambda r, o, e, ns, f: results.append(r))
         worker.run()
 
-        assert results[0] == 'grande'
+        assert results[0] == "grande"
 
     def test_ast_function_definition_and_call(self):
         """Definicao e chamada de funcao funciona"""
@@ -1019,7 +989,7 @@ class TestPythonWorkerASTExecution:
         worker.run()
 
         assert results[0][0] is None
-        assert results[0][1]['x'] == -1
+        assert results[0][1]["x"] == -1
 
     def test_ast_preserves_comments_and_blank_lines(self):
         """Comentarios e linhas em branco nao quebram execucao"""
@@ -1047,8 +1017,8 @@ class TestPythonWorkerASTExecution:
         worker.finished.connect(lambda r, o, e, ns, f: outputs.append(o))
         worker.run()
 
-        assert 'stdout_msg' in outputs[0]
-        assert 'stderr_msg' in outputs[0]
+        assert "stdout_msg" in outputs[0]
+        assert "stderr_msg" in outputs[0]
 
     def test_logging_output_captured(self):
         """Mensagens de logging sao capturadas quando handler usa stderr"""
@@ -1056,14 +1026,16 @@ class TestPythonWorkerASTExecution:
 
         # Criar logger com handler explicito apontando para sys.stderr
         # (que no worker e nosso StringIO capturado)
-        code = ("import logging, sys\n"
-                "h = logging.StreamHandler(sys.stderr)\n"
-                "h.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))\n"
-                "lg = logging.getLogger('test_capture_abc')\n"
-                "lg.handlers.clear()\n"
-                "lg.addHandler(h)\n"
-                "lg.setLevel(logging.DEBUG)\n"
-                "lg.warning('test_warning_msg')")
+        code = (
+            "import logging, sys\n"
+            "h = logging.StreamHandler(sys.stderr)\n"
+            "h.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))\n"
+            "lg = logging.getLogger('test_capture_abc')\n"
+            "lg.handlers.clear()\n"
+            "lg.addHandler(h)\n"
+            "lg.setLevel(logging.DEBUG)\n"
+            "lg.warning('test_warning_msg')"
+        )
         namespace = {}
         worker = PythonWorker(code, namespace, False)
 
@@ -1071,12 +1043,13 @@ class TestPythonWorkerASTExecution:
         worker.finished.connect(lambda r, o, e, ns, f: outputs.append(o))
         worker.run()
 
-        assert 'test_warning_msg' in outputs[0]
+        assert "test_warning_msg" in outputs[0]
 
 
 # ===========================================================================
 # PythonWorker - processamento de resultado rico
 # ===========================================================================
+
 
 class TestPythonWorkerRichResult:
     """Testes para _process_rich_result"""
@@ -1084,6 +1057,7 @@ class TestPythonWorkerRichResult:
     def test_none_result_unchanged(self):
         """Resultado None nao e processado"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("", {}, False)
         result, figs = worker._process_rich_result(None)
         assert result is None
@@ -1092,6 +1066,7 @@ class TestPythonWorkerRichResult:
     def test_plain_value_unchanged(self):
         """Valores simples (int, str) nao sao processados"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("", {}, False)
         result, figs = worker._process_rich_result(42)
         assert result == 42
@@ -1101,8 +1076,9 @@ class TestPythonWorkerRichResult:
         """DataFrames nao sao convertidos para imagem"""
         import pandas as pd
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("", {}, False)
-        df = pd.DataFrame({'A': [1]})
+        df = pd.DataFrame({"A": [1]})
         result, figs = worker._process_rich_result(df)
         assert isinstance(result, pd.DataFrame)
         assert figs == []
@@ -1110,26 +1086,29 @@ class TestPythonWorkerRichResult:
     def test_repr_png_object(self):
         """Objetos com _repr_png_() sao convertidos"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("", {}, False)
 
         # Mock de objeto com _repr_png_
         obj = MagicMock()
-        obj._repr_png_ = MagicMock(return_value=b'fake_png_data')
+        obj._repr_png_ = MagicMock(return_value=b"fake_png_data")
         # Garantir que isinstance checks nao interceptem
-        obj.__class__ = type('CustomObj', (), {'_repr_png_': lambda self: b'fake_png_data'})
+        obj.__class__ = type("CustomObj", (), {"_repr_png_": lambda self: b"fake_png_data"})
 
         result, figs = worker._process_rich_result(obj)
         assert result is None
         assert len(figs) == 1
-        assert figs[0] == {'type': 'image', 'data': b'fake_png_data'}
+        assert figs[0] == {"type": "image", "data": b"fake_png_data"}
 
     def test_matplotlib_figure_with_captured_skips(self):
         """matplotlib Figure ja capturado nao e duplicado"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("", {}, False)
 
         try:
             import matplotlib.pyplot as plt
+
             fig = plt.figure()
             plt.close(fig)
 
@@ -1142,12 +1121,15 @@ class TestPythonWorkerRichResult:
     def test_matplotlib_figure_without_captured_converts(self):
         """matplotlib Figure nao capturado e convertido para PNG"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("", {}, False)
 
         try:
             import matplotlib
-            matplotlib.use('Agg')
+
+            matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+
             fig = plt.figure()
             plt.plot([1, 2, 3])
             plt.close(fig)
@@ -1155,22 +1137,24 @@ class TestPythonWorkerRichResult:
             result, figs = worker._process_rich_result(fig, has_captured_figures=False)
             assert result is None
             assert len(figs) == 1
-            assert figs[0]['type'] == 'image'
-            assert len(figs[0]['data']) > 0  # PNG bytes
+            assert figs[0]["type"] == "image"
+            assert len(figs[0]["data"]) > 0  # PNG bytes
         except ImportError:
             pytest.skip("matplotlib nao instalado")
 
     def test_matplotlib_dark_theme_applied(self):
         """_setup_matplotlib_backend aplica tema escuro"""
         from src.ui.main_window import PythonWorker
+
         worker = PythonWorker("", {}, False)
 
         try:
             worker._setup_matplotlib_backend()
             import matplotlib.pyplot as plt
-            assert plt.rcParams['figure.facecolor'] == '#1e1e1e'
-            assert plt.rcParams['axes.facecolor'] == '#2d2d30'
-            assert plt.rcParams['text.color'] == '#d4d4d4'
+
+            assert plt.rcParams["figure.facecolor"] == "#1e1e1e"
+            assert plt.rcParams["axes.facecolor"] == "#2d2d30"
+            assert plt.rcParams["text.color"] == "#d4d4d4"
         except ImportError:
             pytest.skip("matplotlib nao instalado")
 
@@ -1179,36 +1163,42 @@ class TestPythonWorkerRichResult:
 # ResultsViewer - exibicao de imagens
 # ===========================================================================
 
+
 class TestResultsViewerImage:
     """Testes para display_image/display_images no ResultsViewer"""
 
     def test_results_viewer_has_display_image(self):
         """ResultsViewer possui metodo display_image"""
         from src.ui.components.results_viewer import ResultsViewer
-        assert hasattr(ResultsViewer, 'display_image')
-        assert hasattr(ResultsViewer, 'display_images')
+
+        assert hasattr(ResultsViewer, "display_image")
+        assert hasattr(ResultsViewer, "display_images")
 
     def test_results_viewer_has_stack_widget(self, qapp):
         """ResultsViewer usa QStackedWidget com 2 paginas"""
         from src.ui.components.results_viewer import ResultsViewer
+
         viewer = ResultsViewer()
-        assert hasattr(viewer, 'stack')
+        assert hasattr(viewer, "stack")
         assert viewer.stack.count() == 4  # tabela, imagem, html, json
 
     def test_display_image_switches_to_image_page(self, qapp):
         """display_image mostra pagina de imagem (index 1)"""
         from src.ui.components.results_viewer import ResultsViewer
+
         viewer = ResultsViewer()
 
         # Criar PNG via matplotlib
         try:
             import matplotlib
-            matplotlib.use('Agg')
+
+            matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+
             fig, ax = plt.subplots(figsize=(2, 2))
             ax.plot([1, 2])
             buf = io.BytesIO()
-            fig.savefig(buf, format='png')
+            fig.savefig(buf, format="png")
             buf.seek(0)
             png = buf.getvalue()
             plt.close(fig)
@@ -1224,9 +1214,10 @@ class TestResultsViewerImage:
         """display_dataframe mostra pagina de tabela (index 0)"""
         import pandas as pd
         from src.ui.components.results_viewer import ResultsViewer
+
         viewer = ResultsViewer()
 
-        df = pd.DataFrame({'A': [1, 2, 3]})
+        df = pd.DataFrame({"A": [1, 2, 3]})
         viewer.display_dataframe(df, "teste")
         assert viewer.stack.currentIndex() == 0
         assert not viewer.btn_export_csv.isHidden()
@@ -1235,6 +1226,7 @@ class TestResultsViewerImage:
     def test_clear_resets_to_table_page(self, qapp):
         """clear() volta para pagina de tabela"""
         from src.ui.components.results_viewer import ResultsViewer
+
         viewer = ResultsViewer()
         viewer.stack.setCurrentIndex(1)
         viewer.clear()
@@ -1244,16 +1236,19 @@ class TestResultsViewerImage:
     def test_display_images_single_calls_display_image(self, qapp):
         """display_images com 1 item usa display_image"""
         from src.ui.components.results_viewer import ResultsViewer
+
         viewer = ResultsViewer()
 
         try:
             import matplotlib
-            matplotlib.use('Agg')
+
+            matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+
             fig, ax = plt.subplots(figsize=(2, 2))
             ax.plot([1, 2, 3])
             buf = io.BytesIO()
-            fig.savefig(buf, format='png')
+            fig.savefig(buf, format="png")
             buf.seek(0)
             png = buf.getvalue()
             plt.close(fig)
