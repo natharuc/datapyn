@@ -1,0 +1,57 @@
+name: Continuous Integration - Ruff
+on:
+    pull_request:
+        branches:
+            - main
+permissions:
+    contents: write
+
+jobs:
+    ruff:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  # Required for committing and pushing changes back to the repo
+                  token: ${{ secrets.GITHUB_TOKEN }}
+                  fetch-depth: 0
+                  ref: ${{ github.event.pull_request.head.ref }}
+            - name: Install Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+            - name: Install dependencies
+              run: |
+                  python -m pip install --upgrade pip
+                  pip install ruff
+
+            - name: Run ruff format
+              # This formats files in-place
+              run: ruff format .
+
+            - name: Commit and Push changes
+              # This step runs git commands to commit and push
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add .
+                  git commit -m "Auto format code with ruff" || echo "No changes to commit"
+                  git push
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            # Update output format to enable automatic inline annotations.
+            - name: Run Ruff
+              run: ruff check --fix --output-format=github .
+
+            - name: Commit and Push changes
+              # This step runs git commands to commit and push
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add .
+                  git commit -m "Auto fix ruff checks" || echo "No changes to commit"
+                  git push
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
