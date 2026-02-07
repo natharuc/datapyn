@@ -3,10 +3,10 @@ State Management - Gerenciamento de estado da aplicação
 """
 
 from .app_state import (
+    ApplicationConfig,
     ApplicationState,
     ConnectionState,
     SessionState,
-    ApplicationConfig,
 )
 
 __all__ = [

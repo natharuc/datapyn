@@ -5,22 +5,23 @@ Este arquivo mostra como integrar o novo sistema de docking
 com os painéis existentes: Results, Output, Variables
 """
 
-from PyQt6.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QTextEdit,
-    QListWidget,
-    QTableWidget,
-    QLabel,
-    QPushButton,
-    QSplitter,
-)
-from PyQt6.QtCore import Qt, pyqtSignal
 import sys
 
-from ..docking import DockingMainWindow, DockableWidget
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QSplitter,
+    QTableWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..docking import DockableWidget, DockingMainWindow
 
 
 class MockResultsViewer(QWidget):

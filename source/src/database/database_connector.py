@@ -2,13 +2,13 @@
 Conector de banco de dados com suporte para múltiplos SGBDs
 """
 
-from typing import Optional, Dict, Any, List, Union
+import logging
+from typing import Any, Dict, List, Optional, Union
+
 import pandas as pd
+import pyodbc
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-import logging
-import pyodbc
-
 
 logger = logging.getLogger(__name__)
 

@@ -4,14 +4,15 @@ Bottom Tabs - Container de abas inferiores
 Contém as abas de Resultados, Output e Variáveis.
 """
 
-from PyQt6.QtWidgets import QTabWidget, QWidget
-from PyQt6.QtCore import pyqtSignal
-import qtawesome as qta
 from typing import Optional
-import pandas as pd
 
-from .results_viewer import ResultsViewer
+import pandas as pd
+import qtawesome as qta
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QTabWidget, QWidget
+
 from .output_panel import OutputPanel
+from .results_viewer import ResultsViewer
 from .variables_panel import VariablesPanel
 
 

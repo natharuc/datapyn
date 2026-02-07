@@ -2,11 +2,12 @@
 Gerenciador de atalhos de teclado configuráveis
 """
 
-from typing import Dict, Callable
-from PyQt6.QtGui import QKeySequence, QShortcut
-from PyQt6.QtWidgets import QWidget
 import json
 from pathlib import Path
+from typing import Callable, Dict
+
+from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import QWidget
 
 
 class ShortcutManager:

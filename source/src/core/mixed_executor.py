@@ -5,6 +5,7 @@ Permite syntax tipo: clientes = {{SELECT * FROM clientes}}
 
 import re
 from typing import Any, Dict
+
 import pandas as pd
 
 

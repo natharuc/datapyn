@@ -4,11 +4,11 @@ Loading Component - Indicador de carregamento
 Estados visuais para operações assíncronas.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QMovie
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
 
-from ..design_system import get_colors, TYPOGRAPHY, SPACING
+from ..design_system import SPACING, TYPOGRAPHY, get_colors
 
 
 class LoadingSpinner(QWidget):

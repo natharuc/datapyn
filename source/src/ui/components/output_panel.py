@@ -4,12 +4,13 @@ Painel de Output/Logs
 Exibe mensagens de log, saída de comandos e erros.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QTextCursor
 from datetime import datetime
 
-from .buttons import IconButton, GhostButton
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QTextEdit, QVBoxLayout, QWidget
+
+from .buttons import GhostButton, IconButton
 
 try:
     import qtawesome as qta

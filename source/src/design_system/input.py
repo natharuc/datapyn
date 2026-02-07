@@ -11,11 +11,11 @@ Estados:
 - normal, focus, disabled, error
 """
 
-from PyQt6.QtWidgets import QLineEdit, QWidget, QVBoxLayout, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 
-from ..design_system import get_colors, TYPOGRAPHY, SPACING, RADIUS
+from ..design_system import RADIUS, SPACING, TYPOGRAPHY, get_colors
 
 
 class Input(QLineEdit):

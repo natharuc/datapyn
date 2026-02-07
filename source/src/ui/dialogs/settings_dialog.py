@@ -2,21 +2,22 @@
 Diálogo para configurar atalhos de teclado
 """
 
-from PyQt6.QtWidgets import (
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QTableWidget,
-    QTableWidgetItem,
-    QPushButton,
-    QLabel,
-    QHeaderView,
-    QKeySequenceEdit,
-    QMessageBox,
-    QGroupBox,
-)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QKeySequence
+from PyQt6.QtWidgets import (
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QKeySequenceEdit,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
+
 from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
 

@@ -2,30 +2,31 @@
 Visualizador de resultados em tabela
 """
 
+import os
+import subprocess
+from typing import Optional
+
+import pandas as pd
+import qtawesome as qta
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QSettings, Qt, QVariant
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QTableView,
-    QLabel,
-    QPushButton,
-    QLineEdit,
-    QToolBar,
-    QDialog,
-    QFormLayout,
-    QComboBox,
     QCheckBox,
+    QComboBox,
+    QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMessageBox,
+    QPushButton,
+    QTableView,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings
-from PyQt6.QtGui import QColor
-import pandas as pd
-from typing import Optional
-import subprocess
-import os
-import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 

@@ -4,19 +4,19 @@ Inputs estilizados reutilizaveis
 Componentes de entrada de dados com estilos consistentes.
 """
 
-from PyQt6.QtWidgets import (
-    QLineEdit,
-    QTextEdit,
-    QSpinBox,
-    QComboBox,
-    QCheckBox,
-    QLabel,
-    QWidget,
-    QHBoxLayout,
-    QVBoxLayout,
-)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.design_system.tokens import get_colors
 

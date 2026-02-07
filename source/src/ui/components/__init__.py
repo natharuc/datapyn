@@ -15,49 +15,48 @@ Estrutura:
 
 # Botões
 from .buttons import (
-    StyledButton,
+    DangerButton,
+    GhostButton,
+    IconButton,
     PrimaryButton,
     SecondaryButton,
-    DangerButton,
+    StyledButton,
     SuccessButton,
-    GhostButton,
     ToolbarButton,
-    IconButton,
 )
-
-# Inputs
-from .inputs import (
-    StyledLineEdit,
-    StyledTextEdit,
-    StyledSpinBox,
-    StyledComboBox,
-    StyledCheckBox,
-    StyledLabel,
-    FormField,
-    SearchInput,
-)
-
-# Toolbar
-from .toolbar import MainToolbar
-
-# StatusBar
-from .statusbar import MainStatusBar
 
 # Connection Panel
-from .connection_panel import ConnectionPanel, ConnectionItem, ActiveConnectionWidget, ConnectionsList
-
-# Session Tabs
-from .session_tabs import SessionTabs, SessionTabBar
+from .connection_panel import ActiveConnectionWidget, ConnectionItem, ConnectionPanel, ConnectionsList
 
 # Editor Header
 from .editor_header import EditorHeader
 
+# Inputs
+from .inputs import (
+    FormField,
+    SearchInput,
+    StyledCheckBox,
+    StyledComboBox,
+    StyledLabel,
+    StyledLineEdit,
+    StyledSpinBox,
+    StyledTextEdit,
+)
+
 # Results Viewer
-from .results_viewer import ResultsViewer, CSVExportDialog, PandasModel
+from .results_viewer import CSVExportDialog, PandasModel, ResultsViewer
+
+# Session Tabs
+from .session_tabs import SessionTabBar, SessionTabs
 
 # Session Widget
 from .session_widget import SessionWidget
 
+# StatusBar
+from .statusbar import MainStatusBar
+
+# Toolbar
+from .toolbar import MainToolbar
 
 __all__ = [
     # Buttons

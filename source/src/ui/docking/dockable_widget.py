@@ -5,22 +5,23 @@ Similar às dock windows do Visual Studio, permite arrastar abas para
 diferentes posições com indicadores visuais.
 """
 
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+import qtawesome as qta
+from PyQt6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QDrag, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QTabWidget,
-    QLabel,
+    QApplication,
     QFrame,
+    QHBoxLayout,
+    QLabel,
     QPushButton,
     QSizePolicy,
-    QApplication,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QMimeData, QSize
-from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QDrag, QPixmap, QFont
-import qtawesome as qta
-from typing import Optional, List, Dict, Any
-from enum import Enum
 
 
 class DockPosition(Enum):

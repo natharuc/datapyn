@@ -4,21 +4,22 @@ BlockEditor - Container que gerencia múltiplos blocos de código
 Similar a um notebook Jupyter, mas com foco em execução de SQL/Python
 """
 
+import os
+from typing import List, Optional
+
+import qtawesome as qta
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QKeyEvent
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QScrollArea,
-    QPushButton,
-    QHBoxLayout,
     QFrame,
+    QHBoxLayout,
+    QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpacerItem,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
-from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent
-from typing import List, Optional
-import os
-import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.editors.code_block import CodeBlock

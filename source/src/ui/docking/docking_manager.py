@@ -5,14 +5,15 @@ Coordena todo o sistema: indicadores, posicionamento,
 persistência das configurações, etc.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QApplication, QMainWindow
-from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, pyqtSignal, QObject, QSettings
-from PyQt6.QtGui import QCursor
-from typing import Dict, List, Optional, Any
 import json
+from typing import Any, Dict, List, Optional
 
-from .dockable_widget import DockableWidget, DockPosition
+from PyQt6.QtCore import QObject, QPoint, QRect, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QSplitter, QVBoxLayout, QWidget
+
 from .dock_indicators import DockIndicators, DockPreview
+from .dockable_widget import DockableWidget, DockPosition
 
 
 class DockingManager(QObject):

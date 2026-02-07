@@ -15,11 +15,12 @@ Gerencia:
 - Tema
 """
 
-from PyQt6.QtCore import QObject, pyqtSignal
-from typing import Any, Dict, Optional, List, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
+
 import pandas as pd
+from PyQt6.QtCore import QObject, pyqtSignal
 
 
 @dataclass

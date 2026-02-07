@@ -6,9 +6,10 @@ Usa editor configurável via editor_config (QScintilla ou Monaco).
 """
 
 import time
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel, QFrame, QSizePolicy
-from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint
-from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
+
+from PyQt6.QtCore import QMimeData, QPoint, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QDrag, QPainter, QPixmap
+from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from src.core.theme_manager import ThemeManager
 from src.editors.editor_config import get_code_editor_class

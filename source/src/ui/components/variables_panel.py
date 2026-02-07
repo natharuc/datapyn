@@ -4,11 +4,12 @@ Painel de Variáveis
 Exibe variáveis em memória da sessão com nome, tipo e valor.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableView, QHeaderView, QLabel, QAbstractItemView
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
+from typing import Any, Dict, Optional
+
 import pandas as pd
-from typing import Dict, Any, Optional
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant, pyqtSignal
+from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QTableView, QVBoxLayout, QWidget
 
 from .buttons import GhostButton
 

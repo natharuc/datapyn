@@ -7,9 +7,9 @@ Estrutura componentizada:
 - main_window.py: Janela principal
 """
 
-from .main_window import MainWindow
 from .components import ResultsViewer, SessionWidget
 from .dialogs import ConnectionEditDialog, ConnectionsManagerDialog, SettingsDialog
+from .main_window import MainWindow
 
 __all__ = [
     "MainWindow",

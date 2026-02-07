@@ -4,9 +4,9 @@ Gerenciador de temas da aplicação
 
 import json
 from pathlib import Path
-from typing import Dict, Any, List
-from PyQt6.QtGui import QColor
+from typing import Any, Dict, List
 
+from PyQt6.QtGui import QColor
 
 # Definição dos temas disponíveis
 THEMES = {

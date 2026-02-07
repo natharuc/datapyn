@@ -2,9 +2,9 @@
 StatusBar da aplicacao
 """
 
-from PyQt6.QtWidgets import QStatusBar, QLabel
-from PyQt6.QtCore import QTimer, QElapsedTimer
 import qtawesome as qta
+from PyQt6.QtCore import QElapsedTimer, QTimer
+from PyQt6.QtWidgets import QLabel, QStatusBar
 
 
 class MainStatusBar(QStatusBar):

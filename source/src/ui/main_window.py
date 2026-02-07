@@ -2,40 +2,41 @@
 Janela principal da IDE DataPyn
 """
 
+import logging
+import re
+import sys
+import traceback
+from datetime import datetime
+from io import StringIO
+
+import pandas as pd
+from PyQt6.QtCore import QElapsedTimer, QObject, QSettings, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QSplitter,
-    QTabWidget,
-    QMenuBar,
-    QMenu,
-    QToolBar,
-    QStatusBar,
-    QMessageBox,
-    QTextEdit,
+    QApplication,
     QDockWidget,
-    QLabel,
-    QPushButton,
     QFileDialog,
-    QLineEdit,
-    QTabBar,
+    QFrame,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QFrame,
-    QApplication,
+    QMainWindow,
+    QMenu,
+    QMenuBar,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QStatusBar,
+    QTabBar,
+    QTabWidget,
+    QTextEdit,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject, QSettings
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
-import sys
-import re
-import logging
-import traceback
-from io import StringIO
-from datetime import datetime
-import pandas as pd
 
 try:
     import qtawesome as qta
@@ -51,25 +52,25 @@ try:
 except ImportError:
     HAS_WINDOWS_TOASTS = False
 
-from src.editors import UnifiedEditor
-from src.database import ConnectionManager
-from src.core import ResultsManager, ShortcutManager, WorkspaceManager, ThemeManager, SessionManager
+from src.core import ResultsManager, SessionManager, ShortcutManager, ThemeManager, WorkspaceManager
 from src.core.mixed_executor import MixedLanguageExecutor
-from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
-from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
-from src.ui.dialogs.settings_dialog import SettingsDialog
+from src.database import ConnectionManager
+from src.design_system.tokens import DARK_COLORS, get_colors
+from src.editors import UnifiedEditor
+from src.ui.components.connection_panel import ConnectionPanel
+from src.ui.components.output_panel import OutputPanel
 
 # Componentes da UI
 from src.ui.components.results_viewer import ResultsViewer
-from src.ui.components.session_widget import SessionWidget
 from src.ui.components.session_tabs import SessionTabs
-from src.ui.components.connection_panel import ConnectionPanel
-from src.ui.components.toolbar import MainToolbar
+from src.ui.components.session_widget import SessionWidget
 from src.ui.components.statusbar import MainStatusBar
-from src.ui.components.output_panel import OutputPanel
+from src.ui.components.toolbar import MainToolbar
 from src.ui.components.variables_panel import VariablesPanel
+from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
+from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
+from src.ui.dialogs.settings_dialog import SettingsDialog
 from src.ui.docking import DockingMainWindow
-from src.design_system.tokens import get_colors, DARK_COLORS
 
 
 class SqlWorker(QObject):
@@ -1386,8 +1387,8 @@ class MainWindow(DockingMainWindow):
 
     def _setup_shortcuts(self):
         """Configura atalhos globais da aplicação"""
-        from PyQt6.QtGui import QShortcut, QKeySequence
         from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QKeySequence, QShortcut
 
         # Guardar shortcuts como atributos para evitar garbage collection
         self._shortcuts = []
@@ -1428,8 +1429,8 @@ class MainWindow(DockingMainWindow):
 
     def _reload_shortcuts(self):
         """Re-registra todos os atalhos (chamado quando usuário altera configurações)"""
-        from PyQt6.QtGui import QShortcut, QKeySequence
         from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QKeySequence, QShortcut
 
         # Limpar atalhos antigos
         for shortcut in self._shortcuts:
@@ -2833,8 +2834,8 @@ class MainWindow(DockingMainWindow):
             return  # Ja esta mostrando
 
         # Criar widget de estado vazio com suporte a drag-and-drop
-        from PyQt6.QtWidgets import QLabel, QPushButton
         from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+        from PyQt6.QtWidgets import QLabel, QPushButton
 
         main_window_ref = self
 

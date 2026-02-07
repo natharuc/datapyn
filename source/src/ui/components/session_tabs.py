@@ -4,13 +4,14 @@ Tabs de sessão
 Gerencia as abas de sessão da IDE.
 """
 
-from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QAction, QPainter, QPen
-import qtawesome as qta
-from typing import Dict
-import subprocess
 import os
+import subprocess
+from typing import Dict
+
+import qtawesome as qta
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QPainter, QPen
+from PyQt6.QtWidgets import QInputDialog, QLineEdit, QMenu, QTabBar, QTabWidget, QWidget
 
 
 class SessionTabBar(QTabBar):
@@ -264,8 +265,8 @@ class SessionTabs(QTabWidget):
 
     def _setup_close_button(self, index):
         """Configura ícone X no botão de fechar da aba - elegante e compacto"""
-        from PyQt6.QtWidgets import QToolButton
         from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QToolButton
 
         # Criar botão customizado compacto e elegante com ícone X
         close_btn = QToolButton()

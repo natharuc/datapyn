@@ -2,15 +2,15 @@
 DataPyn - IDE moderna para consultas SQL com Python integrado
 """
 
-import sys
-import os
 import logging
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon, QPalette, QColor
-from PyQt6.QtCore import Qt
-from src.ui import MainWindow
-from src.design_system.tokens import get_colors
+import os
+import sys
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QIcon, QPalette
+from PyQt6.QtWidgets import QApplication
+from src.design_system.tokens import get_colors
+from src.ui import MainWindow
 
 # Configurar logging
 logging.basicConfig(

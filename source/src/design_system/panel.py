@@ -5,11 +5,11 @@ Similar ao Card do shadcn/ui.
 Usado para agrupar conteúdo relacionado.
 """
 
-from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from ..design_system import get_colors, TYPOGRAPHY, SPACING, RADIUS, SHADOW
+from ..design_system import RADIUS, SHADOW, SPACING, TYPOGRAPHY, get_colors
 
 
 class Panel(QFrame):

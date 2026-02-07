@@ -5,13 +5,14 @@ Esta classe estende QMainWindow para fornecer capacidades de
 docking no estilo Visual Studio.
 """
 
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTabWidget, QApplication
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal, QTimer, QPoint
-from PyQt6.QtGui import QAction, QKeySequence
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
-from .docking_manager import DockingManager
+from PyQt6.QtCore import QPoint, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QSplitter, QTabWidget, QVBoxLayout, QWidget
+
 from .dockable_widget import DockableWidget
+from .docking_manager import DockingManager
 
 
 class DockingMainWindow(QMainWindow):
