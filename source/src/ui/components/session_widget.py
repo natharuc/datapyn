@@ -108,10 +108,10 @@ class SessionWidget(QWidget):
         self._connection_color: str = '#007ACC'  # Default: azul primário
         
         # Fila de execução para múltiplos blocos
-        self._execution_queue: list = []  # Lista de (language, code, block, block_index, connection_name)
+        self._execution_queue: list = []  # Lista de (language, code, block, block_name, connection_name)
         self._is_executing: bool = False
         self._cancel_requested: bool = False  # Flag de cancelamento
-        self._current_block_index: int = None  # Indice do bloco atualmente executando (para namespace isolado)
+        self._current_block_name: str = None  # Nome do bloco atualmente executando (para namespace isolado)
         
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
@@ -271,12 +271,12 @@ class SessionWidget(QWidget):
     
     # === EXECUÇÃO SQL ===
     
-    def _on_execute_sql(self, query: str, block_index: int = None, connection_name: str = None):
+    def _on_execute_sql(self, query: str, block_name: str = None, connection_name: str = None):
         """Executa SQL em background
         
         Args:
             query: SQL query
-            block_index: Indice do bloco (para namespace isolado b{N}_df)
+            block_name: Nome do bloco (para namespace isolado {nome}_df)
             connection_name: Nome da conexao customizada (None = usa padrao da sessao)
         """
         # Determinar qual conexao usar
@@ -330,7 +330,7 @@ class SessionWidget(QWidget):
             conn_label = "padrao"
         
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
-            self._execution_queue.append(('sql', query, None, block_index, connection_name))
+            self._execution_queue.append(('sql', query, None, block_name, connection_name))
             return
         
         self._is_executing = True
@@ -342,8 +342,8 @@ class SessionWidget(QWidget):
         self._sql_worker = SessionSqlWorker(connector, query)
         self._sql_worker.moveToThread(self._sql_thread)
         
-        # Guardar block_index para usar no callback
-        self._current_block_index = block_index
+        # Guardar block_name para usar no callback
+        self._current_block_name = block_name
         
         # Registrar thread na sessão
         self.session.register_thread(self._sql_thread)
@@ -375,8 +375,8 @@ class SessionWidget(QWidget):
             self._show_output()
         else:
             # Determinar prefixo do namespace (isolado por bloco ou global)
-            if self._current_block_index is not None:
-                var_prefix = f"b{self._current_block_index + 1}_"  # b1_, b2_, etc.
+            if self._current_block_name:
+                var_prefix = f"{self._current_block_name}_"  # {nome}_
             else:
                 var_prefix = ""  # df, df1, df2 (compatibilidade)
             
@@ -416,8 +416,8 @@ class SessionWidget(QWidget):
                 self.session.set_variable(var_name, df)
                 self.session.set_variable('_last_result', df)
             
-            # Limpar block_index após uso
-            self._current_block_index = None
+            # Limpar block_name apos uso
+            self._current_block_name = None
             
             # Verificar se banco mudou (comando USE)
             if self.session.connector:
@@ -604,26 +604,26 @@ class SessionWidget(QWidget):
         # Suporta formatos: 
         # Antigo: (language, code)
         # Medio: (language, code, block)
-        # Novo: (language, code, block, block_index, connection_name)
+        # Novo: (language, code, block, block_name, connection_name)
         if len(item) >= 5:
-            language, code, block, block_index, connection_name = item[:5]
+            language, code, block, block_name, connection_name = item[:5]
             if block:
                 self.editor.mark_block_started(block)
         elif len(item) == 3:
             language, code, block = item
-            block_index = None
+            block_name = None
             connection_name = None
             if block:
                 self.editor.mark_block_started(block)
         else:
             language, code = item
             block = None
-            block_index = None
+            block_name = None
             connection_name = None
         
         # Executa de acordo com a linguagem
         if language == 'sql':
-            self._on_execute_sql(code, block_index=block_index, connection_name=connection_name)
+            self._on_execute_sql(code, block_name=block_name, connection_name=connection_name)
         elif language == 'python':
             self._on_execute_python(code)
         elif language == 'cross':

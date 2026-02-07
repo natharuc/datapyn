@@ -34,7 +34,7 @@ class BlockEditor(QWidget):
     """
     
     # Sinais de execução
-    execute_sql = pyqtSignal(str, object, object)  # query, block_index, connection_name
+    execute_sql = pyqtSignal(str, object, object)  # query, block_name, connection_name
     execute_python = pyqtSignal(str)  # code  
     execute_cross_syntax = pyqtSignal(str)  # code
     
@@ -190,9 +190,9 @@ class BlockEditor(QWidget):
         block.set_running(True)
         
         if language == 'sql':
-            block_index = self._blocks.index(block) if block in self._blocks else None
+            block_name = block.get_block_name()
             connection_name = block.get_connection_name()
-            self.execute_sql.emit(code, block_index, connection_name)
+            self.execute_sql.emit(code, block_name, connection_name)
         elif language == 'python':
             self.execute_python.emit(code)
         elif language == 'cross':
@@ -212,12 +212,12 @@ class BlockEditor(QWidget):
         for index, block in enumerate(self._blocks):
             code = block.get_code().strip()
             if code:
-                # Tupla: (language, code, block, block_index, connection_name)
+                # Tupla: (language, code, block, block_name, connection_name)
                 queue.append((
                     block.get_language(),
                     code,
                     block,
-                    index,
+                    block.get_block_name(),
                     block.get_connection_name()
                 ))
                 self._execution_queue_blocks.append(block)
@@ -339,6 +339,10 @@ class BlockEditor(QWidget):
         
         # Focar no novo bloco após renderização
         QTimer.singleShot(50, block.focus_editor)
+        
+        # Definir nome padrao se nao tiver
+        if not block.get_block_name():
+            block.set_block_name(f"bloco{len(self._blocks)}")
         
         self.content_changed.emit()
         return block
@@ -517,6 +521,10 @@ class BlockEditor(QWidget):
                     language=data.get('language', 'python'),
                     code=data.get('code', '')
                 )
+            
+            # Restaurar nome do bloco
+            if 'block_name' in data and data['block_name']:
+                block.set_block_name(data['block_name'])
             
             # Restaurar conexao customizada se existir
             if 'connection_name' in data:

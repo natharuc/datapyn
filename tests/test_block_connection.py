@@ -7,7 +7,7 @@ Funcionalidades testadas:
 3. Logica: bloco sem conexao usa conexao da aba, bloco com conexao usa a propria
 4. Persistencia: to_dict/from_dict salvam/restauram conexao e db_type
 5. Sinais: click no panel -> dialogo, drop -> atribuicao
-6. execute_sql signal passa connection_name e block_index
+6. execute_sql signal passa connection_name e block_name
 """
 import pytest
 import pandas as pd
@@ -232,7 +232,7 @@ class TestBlockEditorConnection:
         assert requested[0] is block
 
     def test_execute_sql_signal_carries_connection_info(self, qapp):
-        """execute_sql signal deve passar block_index e connection_name"""
+        """execute_sql signal deve passar block_name e connection_name"""
         editor = BlockEditor()
 
         # Usar bloco padrao que ja existe
@@ -243,14 +243,14 @@ class TestBlockEditorConnection:
 
         # Capturar signal
         emitted = []
-        editor.execute_sql.connect(lambda q, bi, cn: emitted.append((q, bi, cn)))
+        editor.execute_sql.connect(lambda q, bn, cn: emitted.append((q, bn, cn)))
 
         editor._execute_block(block)
 
         assert len(emitted) == 1
-        query, block_index, connection_name = emitted[0]
+        query, block_name, connection_name = emitted[0]
         assert query == 'SELECT 1'
-        assert block_index == 0
+        assert block_name == block.get_block_name()
         assert connection_name == 'TestConn'
 
     def test_execute_sql_signal_none_connection(self, qapp):
@@ -292,12 +292,12 @@ class TestBlockEditorConnection:
 
         # Bloco 1: sem conexao customizada
         assert queue[0][0] == 'sql'
-        assert queue[0][3] == 0  # block_index
+        assert queue[0][3] == block1.get_block_name()  # block_name
         assert queue[0][4] is None  # connection_name
 
         # Bloco 2: com conexao customizada
         assert queue[1][0] == 'sql'
-        assert queue[1][3] == 1  # block_index
+        assert queue[1][3] == block2.get_block_name()  # block_name
         assert queue[1][4] == 'CustomConn'
 
 
@@ -334,7 +334,7 @@ class TestConnectionResolution:
         widget.append_output = lambda text, error=False: outputs.append(text)
         widget.status_changed = MagicMock()
 
-        widget._on_execute_sql('SELECT 1', block_index=0, connection_name=None)
+        widget._on_execute_sql('SELECT 1', block_name='bloco1', connection_name=None)
 
         # Deve ter emitido erro porque sessao nao esta conectada
         assert any('Nenhuma' in o or 'ERRO' in o for o in outputs)
@@ -371,7 +371,7 @@ class TestConnectionResolution:
             # Mock para nao criar thread real
             widget._is_executing = True  # Forca ir para a fila ao inves de executar
 
-            widget._on_execute_sql('SELECT 1', block_index=0, connection_name='BlockConn')
+            widget._on_execute_sql('SELECT 1', block_name='bloco1', connection_name='BlockConn')
 
             # Deve ter tentado auto-conectar
             MockConn.return_value.connect.assert_called_once_with(
@@ -566,12 +566,12 @@ class TestQueueProcessing:
         mock_block = MagicMock()
 
         widget._execution_queue = [
-            ('sql', 'SELECT 1', mock_block, 0, 'CustomConn')
+            ('sql', 'SELECT 1', mock_block, 'bloco1', 'CustomConn')
         ]
 
         with patch.object(widget, '_on_execute_sql') as mock_exec:
             widget._process_next_in_queue()
-            mock_exec.assert_called_once_with('SELECT 1', block_index=0, connection_name='CustomConn')
+            mock_exec.assert_called_once_with('SELECT 1', block_name='bloco1', connection_name='CustomConn')
 
     def test_process_queue_3_tuple(self, qapp):
         """_process_next_in_queue deve suportar tuplas de 3 elementos (legado)"""
@@ -588,7 +588,7 @@ class TestQueueProcessing:
 
         with patch.object(widget, '_on_execute_sql') as mock_exec:
             widget._process_next_in_queue()
-            mock_exec.assert_called_once_with('SELECT 1', block_index=None, connection_name=None)
+            mock_exec.assert_called_once_with('SELECT 1', block_name=None, connection_name=None)
 
     def test_process_queue_2_tuple(self, qapp):
         """_process_next_in_queue deve suportar tuplas de 2 elementos (legado)"""

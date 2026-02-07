@@ -7,7 +7,7 @@ Usa editor configurável via editor_config (QScintilla ou Monaco).
 import time
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, 
-    QPushButton, QLabel, QFrame, QSizePolicy
+    QPushButton, QLabel, QFrame, QSizePolicy, QLineEdit
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint
 from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
@@ -49,18 +49,23 @@ class BlockConnectionPanel(QFrame):
             }
         """)
         
+        self.setMinimumHeight(28)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 3, 6, 3)
+        layout.setSpacing(4)
         
         # Icone
         self.icon_label = QLabel()
-        self.icon_label.setFixedSize(20, 20)
+        self.icon_label.setFixedSize(16, 16)
+        self.icon_label.setScaledContents(True)
         layout.addWidget(self.icon_label)
         
         # Nome da conexao
         self.name_label = QLabel("Padrao da aba")
         self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.name_label.setMinimumWidth(40)
         layout.addWidget(self.name_label, 1)
     
     def set_connection(self, connection_name: str = None, db_type: str = None):
@@ -77,14 +82,14 @@ class BlockConnectionPanel(QFrame):
             if db_type:
                 from src.ui.components.connection_panel import get_db_icon
                 icon = get_db_icon(db_type)
-                self.icon_label.setPixmap(icon.pixmap(20, 20))
+                self.icon_label.setPixmap(icon.pixmap(16, 16))
             else:
-                self.icon_label.setPixmap(qta.icon('mdi.database', color='#64b5f6').pixmap(20, 20))
+                self.icon_label.setPixmap(qta.icon('mdi.database', color='#64b5f6').pixmap(16, 16))
         else:
             # Padrao da aba
             self.name_label.setText("Padrao da aba")
             self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
-            self.icon_label.setPixmap(qta.icon('mdi.link-variant', color='#888').pixmap(20, 20))
+            self.icon_label.setPixmap(qta.icon('mdi.link-variant', color='#888').pixmap(16, 16))
     
     def get_connection_name(self):
         """Retorna o nome da conexao atual (None = padrao da aba)"""
@@ -172,6 +177,7 @@ class CodeBlock(QFrame):
         self._last_execution_time = None
         self._default_language = default_language
         self._connection_name = None  # None = usa conexao da sessao
+        self._block_name = ''  # Nome do bloco (prefixo do namespace)
         
         self._setup_ui()
         self._connect_signals()
@@ -238,9 +244,31 @@ class CodeBlock(QFrame):
         self.lang_combo.setFixedWidth(120)
         control_layout.addWidget(self.lang_combo)
         
+        # Campo de nome do bloco
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Nome do bloco")
+        self.name_input.setFixedWidth(120)
+        self.name_input.setFixedHeight(22)
+        self.name_input.setStyleSheet("""
+            QLineEdit {
+                background: #2d2d2d;
+                color: #ccc;
+                border: 1px solid #444;
+                border-radius: 3px;
+                padding: 2px 6px;
+                font-size: 11px;
+            }
+            QLineEdit:focus {
+                border-color: #007ACC;
+                color: #fff;
+            }
+        """)
+        control_layout.addWidget(self.name_input)
+        
         # Panel de conexao (so visivel para SQL)
         self.conn_panel = BlockConnectionPanel()
-        self.conn_panel.setFixedWidth(200)
+        self.conn_panel.setMinimumWidth(120)
+        self.conn_panel.setMaximumWidth(250)
         self.conn_panel.connection_clicked.connect(self._on_connection_panel_clicked)
         self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
         control_layout.addWidget(self.conn_panel)
@@ -446,6 +474,15 @@ class CodeBlock(QFrame):
     def has_selection(self) -> bool:
         return self.editor.has_selection()
     
+    def get_block_name(self) -> str:
+        """Retorna nome do bloco (usado como prefixo do namespace)"""
+        return self.name_input.text().strip()
+    
+    def set_block_name(self, name: str):
+        """Define nome do bloco"""
+        self._block_name = name
+        self.name_input.setText(name)
+    
     def get_connection_name(self) -> str:
         """Retorna nome da conexao customizada ou None (usa padrao da aba)"""
         return self._connection_name
@@ -585,7 +622,8 @@ class CodeBlock(QFrame):
         data = {
             'language': self.get_language(), 
             'code': self.get_code(),
-            'height': self.editor_container.height()
+            'height': self.editor_container.height(),
+            'block_name': self.get_block_name()
         }
         if self._connection_name:
             data['connection_name'] = self._connection_name
@@ -602,6 +640,9 @@ class CodeBlock(QFrame):
         # Restaurar altura se salva
         if 'height' in data and data['height']:
             block._set_editor_height(data['height'])
+        # Restaurar nome do bloco
+        if 'block_name' in data and data['block_name']:
+            block.set_block_name(data['block_name'])
         # Restaurar conexao customizada (com panel visual)
         if 'connection_name' in data:
             db_type = data.get('db_type')
