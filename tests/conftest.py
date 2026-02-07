@@ -76,6 +76,54 @@ def auto_close_dialogs(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, 'critical', original_critical)
 
 
+@pytest.fixture
+def safe_qthread_cleanup(qtbot):
+    """
+    Fixture para garantir cleanup seguro de QThreads/Workers em testes
+    
+    Uso:
+        def test_worker(qtbot, safe_qthread_cleanup):
+            worker, thread = safe_qthread_cleanup.create_worker(MyWorker)
+            # ... seu teste ...
+            # cleanup automático no final
+    """
+    from PyQt6.QtCore import QThread
+    
+    class SafeQThreadManager:
+        def __init__(self):
+            self.threads = []
+            self.workers = []
+        
+        def create_worker(self, WorkerClass, *args, **kwargs):
+            """Cria worker e thread com registro automático para cleanup"""
+            thread = QThread()
+            worker = WorkerClass(*args, **kwargs)
+            worker.moveToThread(thread)
+            
+            self.threads.append(thread)
+            self.workers.append(worker)
+            
+            return worker, thread
+        
+        def cleanup(self):
+            """Cleanup seguro de todos os threads/workers registrados"""
+            for thread in self.threads:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(5000)  # Espera até 5s
+                    if thread.isRunning():
+                        thread.terminate()
+                        thread.wait(1000)
+            
+            # Limpar referências
+            self.workers.clear()
+            self.threads.clear()
+    
+    manager = SafeQThreadManager()
+    yield manager
+    manager.cleanup()
+
+
 # ==================== TESTES COM QSCINTILLA ====================
 # Removido sistema de parametrização - agora usa apenas QScintilla
 
