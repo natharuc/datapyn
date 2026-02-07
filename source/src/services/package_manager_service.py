@@ -16,6 +16,10 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# CREATE_NO_WINDOW existe apenas no Windows
+# No Linux usa 0 (sem flags especiais)
+CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 
 @dataclass
 class PackageInfo:
@@ -63,7 +67,7 @@ class PackageManagerService:
                 [self._python_executable, "-m", "pip", "list",
                  "--format=json", "--disable-pip-version-check"],
                 capture_output=True, text=True, timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             )
             if result.returncode != 0:
                 logger.error(f"Erro ao listar pacotes: {result.stderr}")
@@ -100,7 +104,7 @@ class PackageManagerService:
                  f"{query}==randominvalidversion",
                  "--disable-pip-version-check", "--dry-run"],
                 capture_output=True, text=True, timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             )
             # pip vai listar versoes disponiveis no erro
             stderr = result.stderr
@@ -142,7 +146,7 @@ class PackageManagerService:
                 [self._python_executable, "-m", "pip", "show",
                  package_name, "--disable-pip-version-check"],
                 capture_output=True, text=True, timeout=15,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             )
             if result.returncode != 0:
                 return None
@@ -173,7 +177,7 @@ class PackageManagerService:
                 [self._python_executable, "-m", "pip", "install",
                  target, "--disable-pip-version-check"],
                 capture_output=True, text=True, timeout=120,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             )
 
             if result.returncode == 0:
@@ -225,7 +229,7 @@ class PackageManagerService:
                 [self._python_executable, "-m", "pip", "uninstall",
                  package_name, "-y", "--disable-pip-version-check"],
                 capture_output=True, text=True, timeout=60,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             )
 
             if result.returncode == 0:
@@ -257,7 +261,7 @@ class PackageManagerService:
                 [self._python_executable, "-m", "pip", "install",
                  "--upgrade", package_name, "--disable-pip-version-check"],
                 capture_output=True, text=True, timeout=120,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             )
 
             if result.returncode == 0:
@@ -289,7 +293,7 @@ class PackageManagerService:
                 [self._python_executable, "-m", "pip", "show",
                  package_name, "--disable-pip-version-check"],
                 capture_output=True, text=True, timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             )
             return result.returncode == 0
         except Exception:

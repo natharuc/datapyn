@@ -303,10 +303,20 @@ class Session(QObject):
     # === CLEANUP ===
     
     def cleanup(self):
-        """Limpa recursos da sessão"""
-        self.stop_all_threads()
-        self._namespace.clear()
+        """Limpa recursos da sessão de forma segura"""
+        try:
+            self.stop_all_threads()
+        except Exception:
+            pass  # Ignora erros durante cleanup
+        
+        try:
+            self._namespace.clear()
+        except Exception:
+            pass  # Ignora erros durante cleanup
         # Não desconecta o banco aqui (pode ser compartilhado)
     
     def __del__(self):
-        self.cleanup()
+        try:
+            self.cleanup()
+        except Exception:
+            pass  # Previne crashes durante destruição do objeto
