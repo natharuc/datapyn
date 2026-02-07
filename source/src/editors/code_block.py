@@ -11,9 +11,129 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint
 from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
+import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.editors.editor_config import get_code_editor_class
+from src.ui.components.connection_panel import get_db_icon
+
+
+class BlockConnectionPanel(QFrame):
+    """
+    Panel clicavel para selecionar conexao de um bloco SQL.
+    Mostra icone + nome da conexao, aceita drag & drop.
+    """
+    connection_clicked = pyqtSignal()  # Usuario clicou no panel
+    connection_dropped = pyqtSignal(str, str)  # connection_name, db_type (drag & drop)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._connection_name = None
+        self._db_type = None
+        self._setup_ui()
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+    
+    def _setup_ui(self):
+        self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
+        self.setLineWidth(1)
+        self.setStyleSheet("""
+            BlockConnectionPanel {
+                background: #2d2d2d;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            BlockConnectionPanel:hover {
+                background: #353535;
+                border-color: #555;
+            }
+        """)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+        
+        # Icone
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(20, 20)
+        layout.addWidget(self.icon_label)
+        
+        # Nome da conexao
+        self.name_label = QLabel("Padrao da aba")
+        self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(self.name_label, 1)
+    
+    def set_connection(self, connection_name: str = None, db_type: str = None):
+        """Define a conexao a ser exibida"""
+        self._connection_name = connection_name
+        self._db_type = db_type
+        
+        if connection_name:
+            # Conexao customizada
+            self.name_label.setText(connection_name)
+            self.name_label.setStyleSheet("color: #fff; font-size: 11px; font-weight: 500;")
+            
+            # Icone colorido
+            if db_type:
+                icon = get_db_icon(db_type)
+                self.icon_label.setPixmap(icon.pixmap(20, 20))
+            else:
+                self.icon_label.setPixmap(qta.icon('mdi.database', color='#64b5f6').pixmap(20, 20))
+        else:
+            # Padrao da aba
+            self.name_label.setText("Padrao da aba")
+            self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
+            self.icon_label.setPixmap(qta.icon('mdi.link-variant', color='#888').pixmap(20, 20))
+    
+    def get_connection_name(self):
+        """Retorna o nome da conexao atual (None = padrao da aba)"""
+        return self._connection_name
+    
+    def mousePressEvent(self, event):
+        """Clique no panel"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.connection_clicked.emit()
+        super().mousePressEvent(event)
+    
+    def dragEnterEvent(self, event):
+        """Aceita drag de conexoes"""
+        if event.mimeData().hasFormat('application/x-connection-name'):
+            event.acceptProposedAction()
+            self.setStyleSheet("""
+                BlockConnectionPanel {
+                    background: #404040;
+                    border: 2px solid #64b5f6;
+                    border-radius: 4px;
+                }
+            """)
+    
+    def dragLeaveEvent(self, event):
+        """Remove highlight ao sair"""
+        self.setStyleSheet("""
+            BlockConnectionPanel {
+                background: #2d2d2d;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            BlockConnectionPanel:hover {
+                background: #353535;
+                border-color: #555;
+            }
+        """)
+    
+    def dropEvent(self, event):
+        """Recebe conexao arrastada"""
+        if event.mimeData().hasFormat('application/x-connection-name'):
+            connection_name = event.mimeData().data('application/x-connection-name').data().decode('utf-8')
+            db_type = event.mimeData().data('application/x-db-type').data().decode('utf-8') if event.mimeData().hasFormat('application/x-db-type') else None
+            
+            self.connection_dropped.emit(connection_name, db_type)
+            event.acceptProposedAction()
+            
+            # Restaura estilo
+            self.dragLeaveEvent(event)
 
 
 class CodeBlock(QFrame):
@@ -31,6 +151,7 @@ class CodeBlock(QFrame):
     language_changed = pyqtSignal(object, str)  # self, new_language
     focus_changed = pyqtSignal(object, bool)  # self, has_focus
     cancel_requested = pyqtSignal(object)  # self - para cancelar execução
+    select_connection_requested = pyqtSignal(object)  # self - para abrir dialogo de conexoes
     
     LANGUAGE_COLORS = {
         'python': '#3572A5',
@@ -50,12 +171,14 @@ class CodeBlock(QFrame):
         self._execution_start_time = 0
         self._last_execution_time = None
         self._default_language = default_language
+        self._connection_name = None  # None = usa conexao da sessao
         
         self._setup_ui()
         self._connect_signals()
         # Configurar linguagem inicial explicitamente (setCurrentIndex não dispara signal durante init)
         self.editor.set_language(self._default_language)
         self._update_style()
+        self._update_connection_panel_visibility()  # Atualizar visibilidade do panel de conexao (depois da linguagem)
     
     def _setup_ui(self):
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Plain)
@@ -114,6 +237,14 @@ class CodeBlock(QFrame):
             self.lang_combo.setCurrentIndex(0)
         self.lang_combo.setFixedWidth(120)
         control_layout.addWidget(self.lang_combo)
+        
+        # Panel de conexao (so visivel para SQL)
+        self.conn_panel = BlockConnectionPanel()
+        self.conn_panel.setFixedWidth(200)
+        self.conn_panel.connection_clicked.connect(self._on_connection_panel_clicked)
+        self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
+        control_layout.addWidget(self.conn_panel)
+        # Visibilidade sera definida por _update_connection_combo_visibility() abaixo
         
         # Status - estilo mais moderno
         self.status_label = QLabel("")
@@ -228,6 +359,8 @@ class CodeBlock(QFrame):
     
     def _connect_signals(self):
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        self.conn_panel.connection_clicked.connect(self._on_connection_panel_clicked)
+        self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
         self.run_btn.clicked.connect(lambda: self.execute_requested.emit(self))
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         self.cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self))
@@ -248,8 +381,24 @@ class CodeBlock(QFrame):
     def _on_language_changed(self):
         lang = self.lang_combo.currentData()
         self.editor.set_language(lang)
+        self._update_connection_panel_visibility()
         self._update_style()
         self.language_changed.emit(self, lang)
+    
+    def _on_connection_panel_clicked(self):
+        """Panel de conexao foi clicado - emite sinal para abrir dialogo"""
+        self.select_connection_requested.emit(self)
+    
+    def _on_connection_dropped(self, connection_name: str, db_type: str):
+        """Conexao foi arrastada para o panel"""
+        self._connection_name = connection_name
+        self.conn_panel.set_connection(connection_name, db_type)
+    
+    def _update_connection_panel_visibility(self):
+        """Atualiza visibilidade do panel de conexao (so SQL)"""
+        lang = self.lang_combo.currentData()
+        is_sql = (lang == 'sql')
+        self.conn_panel.setVisible(is_sql)
     
     def _update_style(self):
         lang = self.get_language()
@@ -296,6 +445,15 @@ class CodeBlock(QFrame):
     
     def has_selection(self) -> bool:
         return self.editor.has_selection()
+    
+    def get_connection_name(self) -> str:
+        """Retorna nome da conexao customizada ou None (usa padrao da aba)"""
+        return self._connection_name
+    
+    def set_connection_name(self, conn_name: str, db_type: str = None):
+        """Define conexao customizada para este bloco"""
+        self._connection_name = conn_name
+        self.conn_panel.set_connection(conn_name, db_type)
     
     def is_focused(self) -> bool:
         return self._is_focused
@@ -424,11 +582,14 @@ class CodeBlock(QFrame):
         self._update_style()
     
     def to_dict(self) -> dict:
-        return {
+        data = {
             'language': self.get_language(), 
             'code': self.get_code(),
             'height': self.editor_container.height()
         }
+        if self._connection_name:
+            data['connection_name'] = self._connection_name
+        return data
     
     @classmethod
     def from_dict(cls, data: dict, theme_manager=None) -> 'CodeBlock':
@@ -438,6 +599,9 @@ class CodeBlock(QFrame):
         # Restaurar altura se salva
         if 'height' in data and data['height']:
             block._set_editor_height(data['height'])
+        # Restaurar conexao customizada
+        if 'connection_name' in data:
+            block._connection_name = data['connection_name']
         return block
     
     # === Drag ===

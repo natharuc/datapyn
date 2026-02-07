@@ -204,10 +204,17 @@ class BlockEditor(QWidget):
         queue = []
         self._execution_queue_blocks = []
         
-        for block in self._blocks:
+        for index, block in enumerate(self._blocks):
             code = block.get_code().strip()
             if code:
-                queue.append((block.get_language(), code, block))
+                # Tupla: (language, code, block, block_index, connection_name)
+                queue.append((
+                    block.get_language(),
+                    code,
+                    block,
+                    index,
+                    block.get_connection_name()
+                ))
                 self._execution_queue_blocks.append(block)
                 block.set_waiting(True)  # Marca como aguardando
         
