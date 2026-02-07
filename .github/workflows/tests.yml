@@ -1,4 +1,4 @@
-name: ci-cd
+name: Continuous Integration - Tests
 
 on:
   push:
@@ -8,11 +8,8 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-
 jobs:
-  ci:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,30 +52,3 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: pytest
-
-  cd:
-    needs: ci
-    runs-on: ubuntu-latest
-
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    concurrency: release
-    permissions:
-      id-token: write
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Use Python Semantic Release to prepare release
-        id: release
-        uses: python-semantic-release/python-semantic-release@v9.18.0
-        with:
-          github_token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
