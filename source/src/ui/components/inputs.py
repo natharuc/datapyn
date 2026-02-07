@@ -3,9 +3,18 @@ Inputs estilizados reutilizaveis
 
 Componentes de entrada de dados com estilos consistentes.
 """
-from PyQt6.QtWidgets import (QLineEdit, QTextEdit, QSpinBox, QComboBox, 
-                             QCheckBox, QLabel, QWidget, QHBoxLayout,
-                             QVBoxLayout)
+
+from PyQt6.QtWidgets import (
+    QLineEdit,
+    QTextEdit,
+    QSpinBox,
+    QComboBox,
+    QCheckBox,
+    QLabel,
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
@@ -157,7 +166,7 @@ def _get_checkbox_style():
 
 class StyledLineEdit(QLineEdit):
     """Campo de texto estilizado"""
-    
+
     def __init__(self, placeholder: str = "", parent=None):
         super().__init__(parent)
         self.setStyleSheet(_get_line_edit_style())
@@ -167,7 +176,7 @@ class StyledLineEdit(QLineEdit):
 
 class StyledTextEdit(QTextEdit):
     """Area de texto estilizada"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_get_text_edit_style())
@@ -176,7 +185,7 @@ class StyledTextEdit(QTextEdit):
 
 class StyledSpinBox(QSpinBox):
     """SpinBox estilizado"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_get_spinbox_style())
@@ -184,7 +193,7 @@ class StyledSpinBox(QSpinBox):
 
 class StyledComboBox(QComboBox):
     """ComboBox estilizado"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_get_combobox_style())
@@ -192,7 +201,7 @@ class StyledComboBox(QComboBox):
 
 class StyledCheckBox(QCheckBox):
     """CheckBox estilizado"""
-    
+
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
         self.setStyleSheet(_get_checkbox_style())
@@ -200,56 +209,56 @@ class StyledCheckBox(QCheckBox):
 
 class StyledLabel(QLabel):
     """Label estilizado"""
-    
+
     @staticmethod
     def _get_label_styles():
         colors = get_colors()
         return {
-            'default': f"color: {colors.text_primary};",
-            'title': f"color: {colors.text_inverse}; font-size: 14px; font-weight: bold;",
-            'subtitle': f"color: {colors.info}; font-size: 12px;",
-            'hint': f"color: {colors.text_disabled}; font-size: 11px;",
-            'success': f"color: {colors.success};",
-            'warning': f"color: {colors.warning};",
-            'error': f"color: {colors.danger};",
-            'info': f"color: {colors.info};"
+            "default": f"color: {colors.text_primary};",
+            "title": f"color: {colors.text_inverse}; font-size: 14px; font-weight: bold;",
+            "subtitle": f"color: {colors.info}; font-size: 12px;",
+            "hint": f"color: {colors.text_disabled}; font-size: 11px;",
+            "success": f"color: {colors.success};",
+            "warning": f"color: {colors.warning};",
+            "error": f"color: {colors.danger};",
+            "info": f"color: {colors.info};",
         }
-    
-    def __init__(self, text: str = "", style: str = 'default', parent=None):
+
+    def __init__(self, text: str = "", style: str = "default", parent=None):
         super().__init__(text, parent)
         self.set_style(style)
-    
+
     def set_style(self, style: str):
         """Muda o estilo do label"""
         styles = self._get_label_styles()
-        self.setStyleSheet(styles.get(style, styles['default']))
+        self.setStyleSheet(styles.get(style, styles["default"]))
 
 
 class FormField(QWidget):
     """Campo de formulário com label"""
-    
+
     valueChanged = pyqtSignal()
-    
+
     def __init__(self, label: str, widget: QWidget, hint: str = "", parent=None):
         super().__init__(parent)
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 8)
         layout.setSpacing(4)
-        
+
         # Label
-        self.label = StyledLabel(label, 'default')
+        self.label = StyledLabel(label, "default")
         layout.addWidget(self.label)
-        
+
         # Widget de entrada
         self.input_widget = widget
         layout.addWidget(widget)
-        
+
         # Hint (opcional)
         if hint:
-            self.hint_label = StyledLabel(hint, 'hint')
+            self.hint_label = StyledLabel(hint, "hint")
             layout.addWidget(self.hint_label)
-    
+
     def get_value(self):
         """Retorna o valor do campo"""
         if isinstance(self.input_widget, QLineEdit):
@@ -263,7 +272,7 @@ class FormField(QWidget):
         elif isinstance(self.input_widget, QCheckBox):
             return self.input_widget.isChecked()
         return None
-    
+
     def set_value(self, value):
         """Define o valor do campo"""
         if isinstance(self.input_widget, QLineEdit):
@@ -282,23 +291,23 @@ class FormField(QWidget):
 
 class SearchInput(QWidget):
     """Campo de busca com ícone"""
-    
+
     textChanged = pyqtSignal(str)
-    
+
     def __init__(self, placeholder: str = "Buscar...", parent=None):
         super().__init__(parent)
-        
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
+
         self.input = StyledLineEdit(placeholder)
         self.input.textChanged.connect(self.textChanged.emit)
-        
+
         layout.addWidget(self.input)
-    
+
     def text(self) -> str:
         return self.input.text()
-    
+
     def clear(self):
         self.input.clear()

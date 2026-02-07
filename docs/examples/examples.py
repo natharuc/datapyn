@@ -32,17 +32,18 @@ print(df.describe())
 # ----------------------------------
 
 # Filtrar por valor
-vendas_altas = df[df['valor'] > 1000]
+vendas_altas = df[df["valor"] > 1000]
 print(f"\nVendas acima de R$ 1000: {len(vendas_altas)}")
 
 # Filtrar por texto
-vendas_sp = df[df['estado'] == 'SP']
+vendas_sp = df[df["estado"] == "SP"]
 print(f"Vendas em SP: {len(vendas_sp)}")
 
 # Filtrar por data
 import pandas as pd
-df['data'] = pd.to_datetime(df['data'])
-vendas_2025 = df[df['data'].dt.year == 2025]
+
+df["data"] = pd.to_datetime(df["data"])
+vendas_2025 = df[df["data"].dt.year == 2025]
 print(f"Vendas em 2025: {len(vendas_2025)}")
 
 # ----------------------------------
@@ -52,12 +53,12 @@ print(f"Vendas em 2025: {len(vendas_2025)}")
 print("\n=== AGRUPAMENTOS ===")
 
 # Agrupar por categoria
-por_categoria = df.groupby('categoria')['valor'].agg(['sum', 'mean', 'count'])
+por_categoria = df.groupby("categoria")["valor"].agg(["sum", "mean", "count"])
 print("\nPor categoria:")
 print(por_categoria)
 
 # Agrupar por múltiplas colunas
-por_estado_categoria = df.groupby(['estado', 'categoria'])['valor'].sum()
+por_estado_categoria = df.groupby(["estado", "categoria"])["valor"].sum()
 print("\nPor estado e categoria:")
 print(por_estado_categoria)
 
@@ -66,12 +67,12 @@ print(por_estado_categoria)
 # ----------------------------------
 
 # Adicionar coluna calculada
-df['valor_com_imposto'] = df['valor'] * 1.18
-df['mes'] = df['data'].dt.month
-df['ano'] = df['data'].dt.year
+df["valor_com_imposto"] = df["valor"] * 1.18
+df["mes"] = df["data"].dt.month
+df["ano"] = df["data"].dt.year
 
 print("\nNovas colunas adicionadas!")
-print(df[['valor', 'valor_com_imposto', 'mes', 'ano']].head())
+print(df[["valor", "valor_com_imposto", "mes", "ano"]].head())
 
 # ----------------------------------
 # 6. COMPARAR MÚLTIPLAS QUERIES
@@ -87,7 +88,7 @@ print(f"Total df1: R$ {df1['valor'].sum():,.2f}")
 print(f"Total df2: R$ {df2['valor'].sum():,.2f}")
 
 # Calcular crescimento
-crescimento = ((df2['valor'].sum() / df1['valor'].sum()) - 1) * 100
+crescimento = ((df2["valor"].sum() / df1["valor"].sum()) - 1) * 100
 print(f"Crescimento: {crescimento:.2f}%")
 
 # ----------------------------------
@@ -97,22 +98,22 @@ print(f"Crescimento: {crescimento:.2f}%")
 import matplotlib.pyplot as plt
 
 # Gráfico de barras
-df.groupby('categoria')['valor'].sum().plot(kind='bar', title='Vendas por Categoria')
-plt.ylabel('Valor Total')
+df.groupby("categoria")["valor"].sum().plot(kind="bar", title="Vendas por Categoria")
+plt.ylabel("Valor Total")
 plt.xticks(rotation=45)
 plt.tight_layout()
 plt.show()
 
 # Gráfico de pizza
-df.groupby('estado')['valor'].sum().plot(kind='pie', title='Vendas por Estado', autopct='%1.1f%%')
-plt.ylabel('')
+df.groupby("estado")["valor"].sum().plot(kind="pie", title="Vendas por Estado", autopct="%1.1f%%")
+plt.ylabel("")
 plt.show()
 
 # Gráfico de linha (temporal)
-vendas_por_mes = df.groupby(df['data'].dt.to_period('M'))['valor'].sum()
-vendas_por_mes.plot(kind='line', title='Evolução de Vendas')
-plt.ylabel('Valor')
-plt.xlabel('Mês')
+vendas_por_mes = df.groupby(df["data"].dt.to_period("M"))["valor"].sum()
+vendas_por_mes.plot(kind="line", title="Evolução de Vendas")
+plt.ylabel("Valor")
+plt.xlabel("Mês")
 plt.grid(True)
 plt.show()
 
@@ -121,11 +122,11 @@ plt.show()
 # ----------------------------------
 
 # Exportar DataFrame filtrado para CSV
-vendas_altas.to_csv('vendas_altas.csv', index=False, encoding='utf-8-sig')
+vendas_altas.to_csv("vendas_altas.csv", index=False, encoding="utf-8-sig")
 print("\nArquivo CSV exportado!")
 
 # Exportar para Excel
-vendas_altas.to_excel('vendas_altas.xlsx', index=False)
+vendas_altas.to_excel("vendas_altas.xlsx", index=False)
 print("Arquivo Excel exportado!")
 
 # ----------------------------------
@@ -133,13 +134,7 @@ print("Arquivo Excel exportado!")
 # ----------------------------------
 
 # Criar tabela dinâmica
-pivot = df.pivot_table(
-    values='valor',
-    index='categoria',
-    columns='estado',
-    aggfunc='sum',
-    fill_value=0
-)
+pivot = df.pivot_table(values="valor", index="categoria", columns="estado", aggfunc="sum", fill_value=0)
 print("\n=== TABELA DINÂMICA ===")
 print(pivot)
 
@@ -151,10 +146,7 @@ print("\n=== VALORES NULOS ===")
 print(df.isnull().sum())
 
 # Preencher nulos
-df_limpo = df.fillna({
-    'categoria': 'Sem Categoria',
-    'valor': 0
-})
+df_limpo = df.fillna({"categoria": "Sem Categoria", "valor": 0})
 
 # Remover linhas com nulos
 df_sem_nulos = df.dropna()
@@ -165,27 +157,27 @@ print(f"Registros após remover nulos: {len(df_sem_nulos)}")
 # ----------------------------------
 
 # Top 10 maiores vendas
-top_10 = df.nlargest(10, 'valor')
+top_10 = df.nlargest(10, "valor")
 print("\n=== TOP 10 VENDAS ===")
-print(top_10[['data', 'categoria', 'valor']])
+print(top_10[["data", "categoria", "valor"]])
 
 # Bottom 10 menores vendas
-bottom_10 = df.nsmallest(10, 'valor')
+bottom_10 = df.nsmallest(10, "valor")
 print("\n=== 10 MENORES VENDAS ===")
-print(bottom_10[['data', 'categoria', 'valor']])
+print(bottom_10[["data", "categoria", "valor"]])
 
 # ----------------------------------
 # 12. OPERAÇÕES DE STRING
 # ----------------------------------
 
 # Converter para maiúsculas
-df['categoria_upper'] = df['categoria'].str.upper()
+df["categoria_upper"] = df["categoria"].str.upper()
 
 # Extrair parte da string
-df['codigo_produto'] = df['descricao'].str[:5]
+df["codigo_produto"] = df["descricao"].str[:5]
 
 # Verificar se contém texto
-df['eh_especial'] = df['descricao'].str.contains('Premium', na=False)
+df["eh_especial"] = df["descricao"].str.contains("Premium", na=False)
 
 print("\nOperações de string aplicadas!")
 
@@ -195,12 +187,7 @@ print("\nOperações de string aplicadas!")
 
 # Se você tem df1 (vendas) e df2 (produtos)
 # Fazer join:
-df_completo = pd.merge(
-    df1, 
-    df2, 
-    on='produto_id', 
-    how='left'
-)
+df_completo = pd.merge(df1, df2, on="produto_id", how="left")
 print(f"\nDataFrame merged: {len(df_completo)} registros")
 
 # ----------------------------------
@@ -216,19 +203,21 @@ print(df.dtypes)
 # 15. CUSTOM FUNCTIONS
 # ----------------------------------
 
+
 def classificar_venda(valor):
     """Classifica venda por valor"""
     if valor > 5000:
-        return 'Alta'
+        return "Alta"
     elif valor > 1000:
-        return 'Média'
+        return "Média"
     else:
-        return 'Baixa'
+        return "Baixa"
+
 
 # Aplicar função
-df['classificacao'] = df['valor'].apply(classificar_venda)
+df["classificacao"] = df["valor"].apply(classificar_venda)
 
 print("\n=== CLASSIFICAÇÃO DE VENDAS ===")
-print(df.groupby('classificacao').size())
+print(df.groupby("classificacao").size())
 
 print("\n✅ Exemplos executados com sucesso!")

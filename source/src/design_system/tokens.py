@@ -9,6 +9,7 @@ Inspirado em shadcn/ui, define todos os tokens visuais da aplicação:
 - Bordas
 - Animações
 """
+
 from dataclasses import dataclass
 from typing import Dict
 
@@ -16,25 +17,26 @@ from typing import Dict
 @dataclass
 class ColorPalette:
     """Paleta de cores semântica"""
+
     # Backgrounds
     bg_primary: str
     bg_secondary: str
     bg_tertiary: str
     bg_elevated: str
     bg_overlay: str
-    
+
     # Borders
     border_default: str
     border_muted: str
     border_strong: str
-    
+
     # Text
     text_primary: str
     text_secondary: str
     text_tertiary: str
     text_disabled: str
     text_inverse: str
-    
+
     # Interactive
     interactive_primary: str
     interactive_primary_hover: str
@@ -42,7 +44,7 @@ class ColorPalette:
     interactive_secondary: str
     interactive_secondary_hover: str
     interactive_secondary_active: str
-    
+
     # Semantic
     success: str
     success_hover: str
@@ -56,7 +58,7 @@ class ColorPalette:
     info: str
     info_hover: str
     info_active: str
-    
+
     # Editor
     editor_bg: str
     editor_fg: str
@@ -69,25 +71,26 @@ class ColorPalette:
 @dataclass
 class Typography:
     """Sistema tipográfico"""
+
     # Families
     font_family_primary: str
     font_family_mono: str
-    
+
     # Sizes (rem equivalents)
-    text_xs: int      # 11px
-    text_sm: int      # 12px
-    text_base: int    # 14px
-    text_lg: int      # 16px
-    text_xl: int      # 18px
-    text_2xl: int     # 20px
-    text_3xl: int     # 24px
-    
+    text_xs: int  # 11px
+    text_sm: int  # 12px
+    text_base: int  # 14px
+    text_lg: int  # 16px
+    text_xl: int  # 18px
+    text_2xl: int  # 20px
+    text_3xl: int  # 24px
+
     # Weights
     font_regular: int
     font_medium: int
     font_semibold: int
     font_bold: int
-    
+
     # Line heights
     leading_tight: float
     leading_normal: float
@@ -97,22 +100,24 @@ class Typography:
 @dataclass
 class Spacing:
     """Sistema de espaçamento consistente"""
-    space_0: int     # 0px
-    space_1: int     # 4px
-    space_2: int     # 8px
-    space_3: int     # 12px
-    space_4: int     # 16px
-    space_5: int     # 20px
-    space_6: int     # 24px
-    space_8: int     # 32px
-    space_10: int    # 40px
-    space_12: int    # 48px
-    space_16: int    # 64px
+
+    space_0: int  # 0px
+    space_1: int  # 4px
+    space_2: int  # 8px
+    space_3: int  # 12px
+    space_4: int  # 16px
+    space_5: int  # 20px
+    space_6: int  # 24px
+    space_8: int  # 32px
+    space_10: int  # 40px
+    space_12: int  # 48px
+    space_16: int  # 64px
 
 
 @dataclass
 class Radius:
     """Border radius"""
+
     radius_none: int
     radius_sm: int
     radius_md: int
@@ -123,6 +128,7 @@ class Radius:
 @dataclass
 class Shadow:
     """Sombras"""
+
     shadow_none: str
     shadow_sm: str
     shadow_md: str
@@ -141,19 +147,16 @@ DARK_COLORS = ColorPalette(
     bg_tertiary="#2d2d30",
     bg_elevated="#323232",
     bg_overlay="rgba(0, 0, 0, 0.7)",
-    
     # Borders
     border_default="#3e3e42",
     border_muted="#2d2d30",
     border_strong="#555555",
-    
     # Text
     text_primary="#cccccc",
     text_secondary="#999999",
     text_tertiary="#6e6e6e",
     text_disabled="#5a5a5a",
     text_inverse="#ffffff",
-    
     # Interactive
     interactive_primary="#3369FF",
     interactive_primary_hover="#4d7fff",
@@ -161,7 +164,6 @@ DARK_COLORS = ColorPalette(
     interactive_secondary="#3c3c3c",
     interactive_secondary_hover="#4a4a4a",
     interactive_secondary_active="#333333",
-    
     # Semantic
     success="#2e7d32",
     success_hover="#388e3c",
@@ -175,7 +177,6 @@ DARK_COLORS = ColorPalette(
     info="#0288d1",
     info_hover="#03a9f4",
     info_active="#01579b",
-    
     # Editor
     editor_bg="#1e1e1e",
     editor_fg="#d4d4d4",
@@ -193,19 +194,16 @@ LIGHT_COLORS = ColorPalette(
     bg_tertiary="#eeeeee",
     bg_elevated="#fafafa",
     bg_overlay="rgba(0, 0, 0, 0.5)",
-    
     # Borders
     border_default="#e0e0e0",
     border_muted="#f0f0f0",
     border_strong="#bdbdbd",
-    
     # Text
     text_primary="#333333",
     text_secondary="#666666",
     text_tertiary="#999999",
     text_disabled="#bdbdbd",
     text_inverse="#ffffff",
-    
     # Interactive
     interactive_primary="#3369FF",
     interactive_primary_hover="#4d7fff",
@@ -213,7 +211,6 @@ LIGHT_COLORS = ColorPalette(
     interactive_secondary="#e0e0e0",
     interactive_secondary_hover="#d0d0d0",
     interactive_secondary_active="#c0c0c0",
-    
     # Semantic
     success="#2e7d32",
     success_hover="#388e3c",
@@ -227,7 +224,6 @@ LIGHT_COLORS = ColorPalette(
     info="#0288d1",
     info_hover="#03a9f4",
     info_active="#01579b",
-    
     # Editor
     editor_bg="#ffffff",
     editor_fg="#000000",
@@ -241,7 +237,6 @@ LIGHT_COLORS = ColorPalette(
 TYPOGRAPHY = Typography(
     font_family_primary="Segoe UI, -apple-system, BlinkMacSystemFont, sans-serif",
     font_family_mono="Consolas, 'Courier New', monospace",
-    
     text_xs=11,
     text_sm=12,
     text_base=14,
@@ -249,12 +244,10 @@ TYPOGRAPHY = Typography(
     text_xl=18,
     text_2xl=20,
     text_3xl=24,
-    
     font_regular=400,
     font_medium=500,
     font_semibold=600,
     font_bold=700,
-    
     leading_tight=1.2,
     leading_normal=1.5,
     leading_relaxed=1.75,
@@ -296,6 +289,7 @@ SHADOW = Shadow(
 
 # Tema ativo (pode ser trocado dinamicamente)
 _current_theme = "dark"
+
 
 def get_colors() -> ColorPalette:
     """Retorna paleta de cores do tema ativo"""
