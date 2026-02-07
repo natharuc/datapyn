@@ -142,7 +142,6 @@ def test_imports():
         print("\nTodos os módulos necessários estão instalados.")
         print("Você pode executar o DataPyn com:")
         print("  python main.py")
-        assert True
 
 
 def test_qt_display(qtbot):
