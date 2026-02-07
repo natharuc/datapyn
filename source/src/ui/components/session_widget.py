@@ -108,9 +108,10 @@ class SessionWidget(QWidget):
         self._connection_color: str = '#007ACC'  # Default: azul primário
         
         # Fila de execução para múltiplos blocos
-        self._execution_queue: list = []  # Lista de (language, code, block)
+        self._execution_queue: list = []  # Lista de (language, code, block, block_name, connection_name)
         self._is_executing: bool = False
         self._cancel_requested: bool = False  # Flag de cancelamento
+        self._current_block_name: str = None  # Nome do bloco atualmente executando (para namespace isolado)
         
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
@@ -124,6 +125,8 @@ class SessionWidget(QWidget):
         elif session.code:
             # Compatibilidade: código antigo sem blocos
             self.editor.setText(session.code)
+        
+        # Conexoes sao selecionadas por bloco via panel clicavel (nao precisa popular lista)
     
     def _setup_ui(self):
         """Configura a UI do widget"""
@@ -208,6 +211,13 @@ class SessionWidget(QWidget):
             main_window.global_results_viewer.display_dataframe(data, name)
             main_window.show_panel('results')
     
+    def _set_figures(self, figures: list, label: str = "Resultado"):
+        """Exibe rich outputs (imagens, HTML, JSON) no painel global de resultados"""
+        main_window = self._get_main_window()
+        if main_window and main_window.global_results_viewer:
+            main_window.global_results_viewer.display_rich_output(figures, label)
+            main_window.show_panel('results')
+    
     def _log_error(self, text):
         """Registra erro no output global"""
         main_window = self._get_main_window()
@@ -246,6 +256,9 @@ class SessionWidget(QWidget):
         # Cancelamento
         self.editor.cancel_execution.connect(self._on_cancel_execution)
         
+        # Seleção de conexão para bloco específico
+        self.editor.select_connection_for_block.connect(self._on_block_select_connection)
+        
         # Conectar sinais da sessão
         self.session.variables_changed.connect(self._update_variables_view)
     def _format_log(self, log_type: str, message: str = '') -> str:
@@ -258,27 +271,79 @@ class SessionWidget(QWidget):
     
     # === EXECUÇÃO SQL ===
     
-    def _on_execute_sql(self, query: str):
-        """Executa SQL em background"""
-        if not self.session.is_connected:
-            self.append_output("[ERRO] Nenhuma conexão ativa nesta sessão", error=True)
-            self.status_changed.emit("Erro: Sem conexão")
-            # Processar próximo da fila mesmo com erro
-            self._process_next_in_queue()
-            return
+    def _on_execute_sql(self, query: str, block_name: str = None, connection_name: str = None):
+        """Executa SQL em background
+        
+        Args:
+            query: SQL query
+            block_name: Nome do bloco (para namespace isolado {nome}_df)
+            connection_name: Nome da conexao customizada (None = usa padrao da sessao)
+        """
+        # Determinar qual conexao usar
+        if connection_name:
+            # Buscar conexao especifica - auto-conectar se necessario
+            from src.database.connection_manager import ConnectionManager
+            from src.database.database_connector import DatabaseConnector
+            manager = ConnectionManager()
+            connector = manager.get_connection(connection_name)
+            if not connector or not connector.is_connected():
+                # Tentar auto-conectar a partir da config salva
+                config = manager.get_connection_config(connection_name)
+                if config:
+                    try:
+                        connector = DatabaseConnector()
+                        connector.connect(
+                            db_type=config['db_type'],
+                            host=config['host'],
+                            port=config['port'],
+                            database=config['database'],
+                            username=config.get('username', ''),
+                            password=config.get('password', ''),
+                            use_windows_auth=config.get('use_windows_auth', False)
+                        )
+                        if connector.is_connected:
+                            manager.connections[connection_name] = connector
+                        else:
+                            self.append_output(f"[ERRO] Falha ao conectar a '{connection_name}'", error=True)
+                            self.status_changed.emit("Erro: Conexao falhou")
+                            self._process_next_in_queue()
+                            return
+                    except Exception as e:
+                        self.append_output(f"[ERRO] Erro ao conectar a '{connection_name}': {e}", error=True)
+                        self.status_changed.emit("Erro: Conexao falhou")
+                        self._process_next_in_queue()
+                        return
+                else:
+                    self.append_output(f"[ERRO] Conexao '{connection_name}' nao encontrada", error=True)
+                    self.status_changed.emit("Erro: Conexao indisponivel")
+                    self._process_next_in_queue()
+                    return
+            conn_label = connection_name
+        else:
+            # Usar conexao padrao da sessao
+            if not self.session.is_connected:
+                self.append_output("[ERRO] Nenhuma conexão ativa nesta sessão", error=True)
+                self.status_changed.emit("Erro: Sem conexão")
+                self._process_next_in_queue()
+                return
+            connector = self.session.connector
+            conn_label = "padrao"
         
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
-            self._execution_queue.append(('sql', query))
+            self._execution_queue.append(('sql', query, None, block_name, connection_name))
             return
         
         self._is_executing = True
         self.session.start_execution('sql')
-        self.status_changed.emit("Executando SQL...")
+        self.status_changed.emit(f"Executando SQL ({conn_label})...")
         
         # Criar worker e thread
         self._sql_thread = QThread()
-        self._sql_worker = SessionSqlWorker(self.session.connector, query)
+        self._sql_worker = SessionSqlWorker(connector, query)
         self._sql_worker.moveToThread(self._sql_thread)
+        
+        # Guardar block_name para usar no callback
+        self._current_block_name = block_name
         
         # Registrar thread na sessão
         self.session.register_thread(self._sql_thread)
@@ -309,21 +374,31 @@ class SessionWidget(QWidget):
             self.status_changed.emit("Erro SQL")
             self._show_output()
         else:
+            # Determinar prefixo do namespace (isolado por bloco ou global)
+            if self._current_block_name:
+                var_prefix = f"{self._current_block_name}_"  # {nome}_
+            else:
+                var_prefix = ""  # df, df1, df2 (compatibilidade)
+            
             # Verificar se retornou lista de DataFrames (múltiplos SELECTs)
             if isinstance(df, list):
-                # Múltiplos DataFrames - criar variáveis df, df1, df2, etc.
+                # Múltiplos DataFrames - criar variáveis
                 total_rows = sum(len(d) for d in df)
                 self.append_output(self._format_log('SQL', f"{len(df)} consultas, {total_rows:,} linhas totais"))
                 
-                # Criar variáveis df, df1, df2, ...
+                # Criar variáveis: df/b1_df, df1/b1_df1, df2/b1_df2, ...
                 for i, dataframe in enumerate(df):
-                    var_name = 'df' if i == 0 else f'df{i}'
+                    if var_prefix:
+                        var_name = f'{var_prefix}df' if i == 0 else f'{var_prefix}df{i}'
+                    else:
+                        var_name = 'df' if i == 0 else f'df{i}'
                     self.session.set_variable(var_name, dataframe)
                     self.append_output(self._format_log('SQL', f"{var_name}: {len(dataframe):,} linhas"))
                 
                 # Exibir apenas o último DataFrame no grid
                 last_df = df[-1]
-                self._set_results(last_df, f"df{len(df)-1}" if len(df) > 1 else "df")
+                last_var_name = f"{var_prefix}df{len(df)-1}" if len(df) > 1 else f"{var_prefix}df"
+                self._set_results(last_df, last_var_name)
                 self.session.set_variable('_last_result', last_df)
                 
                 self.session.finish_execution(True, f"SQL: {len(df)} consultas")
@@ -331,14 +406,18 @@ class SessionWidget(QWidget):
             else:
                 # DataFrame único
                 rows = len(df) if df is not None else 0
-                self.append_output(self._format_log('SQL', f"{rows:,} linhas"))
-                self._set_results(df, "df")
+                var_name = f'{var_prefix}df'
+                self.append_output(self._format_log('SQL', f"{rows:,} linhas -> {var_name}"))
+                self._set_results(df, var_name)
                 self.session.finish_execution(True, f"SQL: {rows:,} linhas")
                 self.status_changed.emit(f"✓ SQL: {rows:,} linhas")
                 
                 # Salvar no namespace da sessão
-                self.session.set_variable('df', df)
+                self.session.set_variable(var_name, df)
                 self.session.set_variable('_last_result', df)
+            
+            # Limpar block_name apos uso
+            self._current_block_name = None
             
             # Verificar se banco mudou (comando USE)
             if self.session.connector:
@@ -389,13 +468,15 @@ class SessionWidget(QWidget):
         
         self._python_thread.start()
     
-    def _on_python_finished_adapted(self, result, output: str, error: str, namespace: dict):
+    def _on_python_finished_adapted(self, result, output: str, error: str, namespace: dict, figures: list = None):
         '''Adapter para usar PythonWorker centralizado'''
         # Chama o callback original com namespace atualizado
-        self._on_python_finished(result, output, error, namespace)
+        self._on_python_finished(result, output, error, namespace, figures or [])
     
-    def _on_python_finished(self, result, output: str, error: str, updated_namespace: dict):
+    def _on_python_finished(self, result, output: str, error: str, updated_namespace: dict, figures: list = None):
         """Callback quando Python termina"""
+        figures = figures or []
+        
         if self._python_thread:
             self._python_thread.quit()
             self._python_thread.wait()
@@ -413,44 +494,52 @@ class SessionWidget(QWidget):
             self._show_output()
         else:
             has_dataframe_result = False
+            has_figures = bool(figures)
             has_output = bool(output)
             
+            # 1. Logs/print -> Output
             if output:
                 self.append_output(self._format_log('PYTHON', output))
             
+            # 2. Resultado -> Results (DataFrame) ou Output (outro)
             if result is not None:
                 if isinstance(result, pd.DataFrame):
                     has_dataframe_result = True
                     self._set_results(result, "result")
                     self.append_output(self._format_log('PYTHON', f"DataFrame: {len(result):,} linhas"))
-                    self.status_changed.emit(f"✓ Python: DataFrame {len(result):,} linhas")
                 else:
                     self.append_output(self._format_log('PYTHON', f"{repr(result)}"))
                     has_output = True
             
-            # Lógica dinâmica de exibição de abas:
-            # - Se gerou DataFrame -> mostra Resultados
-            # - Se tem output mas não DataFrame -> mostra Output
-            # - Se não tem nada -> não muda aba
-            if has_dataframe_result:
-                # DataFrame tem prioridade - já foi setado acima, mostra grid automaticamente
-                pass
+            # 3. Figuras matplotlib -> Results (imagem)
+            if has_figures:
+                self._set_figures(figures)
+            
+            # Logica de exibicao:
+            # - Figuras + DataFrame -> mostra figuras (prioridade visual)
+            # - Figuras -> mostra figuras
+            # - DataFrame -> mostra grid
+            # - Output -> mostra output
+            if has_figures:
+                if has_dataframe_result:
+                    self.status_changed.emit(f"Grafico + dados gerados!")
+                else:
+                    self.status_changed.emit(f"Grafico exibido!")
+            elif has_dataframe_result:
+                self.status_changed.emit(f"DataFrame {len(result):,} linhas")
             elif has_output:
-                # Tem output mas não é DataFrame -> mostra Output
                 self._show_output()
+                self.status_changed.emit("Python executado")
+            else:
+                self.status_changed.emit("Python executado")
             
-            if result is None and has_output:
-                self.status_changed.emit("✓ Python executado")
-            elif result is None and not has_output:
-                self.status_changed.emit("✓ Python executado")
-            
-            # Atualizar namespace da sessão
+            # Atualizar namespace da sessao
             if updated_namespace:
                 self.session.update_namespace(updated_namespace)
             
             self.session.finish_execution(True, "Python executado")
         
-        # Processar próximo da fila se houver
+        # Processar proximo da fila se houver
         self._is_executing = False
         self._process_next_in_queue()
     
@@ -512,18 +601,29 @@ class SessionWidget(QWidget):
         # Pega próximo da fila
         item = self._execution_queue.pop(0)
         
-        # Suporta formato antigo (language, code) e novo (language, code, block)
-        if len(item) == 3:
+        # Suporta formatos: 
+        # Antigo: (language, code)
+        # Medio: (language, code, block)
+        # Novo: (language, code, block, block_name, connection_name)
+        if len(item) >= 5:
+            language, code, block, block_name, connection_name = item[:5]
+            if block:
+                self.editor.mark_block_started(block)
+        elif len(item) == 3:
             language, code, block = item
-            # Marca o bloco como executando
-            self.editor.mark_block_started(block)
+            block_name = None
+            connection_name = None
+            if block:
+                self.editor.mark_block_started(block)
         else:
             language, code = item
             block = None
+            block_name = None
+            connection_name = None
         
         # Executa de acordo com a linguagem
         if language == 'sql':
-            self._on_execute_sql(code)
+            self._on_execute_sql(code, block_name=block_name, connection_name=connection_name)
         elif language == 'python':
             self._on_execute_python(code)
         elif language == 'cross':
@@ -586,6 +686,24 @@ class SessionWidget(QWidget):
             self.editor.from_list(self.session.blocks)
         elif self.session.code:
             self.set_code(self.session.code)
+    
+    def _on_block_select_connection(self, block):
+        """Abre dialogo para selecionar conexao de um bloco SQL"""
+        try:
+            from src.database.connection_manager import ConnectionManager
+            from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
+            
+            manager = ConnectionManager()
+            dialog = ConnectionsManagerDialog(manager, self.theme_manager, self)
+            
+            if dialog.exec():
+                conn_name = dialog.selected_connection
+                if conn_name:
+                    config = manager.get_connection_config(conn_name)
+                    db_type = config.get('db_type', 'mysql') if config else 'mysql'
+                    block.set_connection_name(conn_name, db_type)
+        except Exception as e:
+            print(f"Erro ao abrir dialogo de conexao: {e}")
     
     # === CONEXÃO ===
     

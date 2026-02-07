@@ -71,6 +71,13 @@ def _apply_dark_palette(app):
 
 def main():
     """Funcao principal"""
+    # Setar AppUserModelID para icone correto na barra de tarefas do Windows
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('datapyn.ide.datapyn.1')
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("DataPyn")
     app.setOrganizationName("DataPyn")

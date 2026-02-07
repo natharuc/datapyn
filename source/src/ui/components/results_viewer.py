@@ -4,10 +4,13 @@ Visualizador de resultados em tabela
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableView, 
                              QLabel, QPushButton, QLineEdit, QToolBar,
                              QDialog, QFormLayout, QComboBox, QCheckBox,
-                             QDialogButtonBox, QFileDialog, QMessageBox)
+                             QDialogButtonBox, QFileDialog, QMessageBox,
+                             QStackedWidget, QScrollArea, QTextEdit,
+                             QTreeWidget, QTreeWidgetItem)
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QImage, QPixmap, QFont
 import pandas as pd
+import json
 from typing import Optional
 import subprocess
 import os
@@ -210,6 +213,7 @@ class ResultsViewer(QWidget):
         self.theme_manager = theme_manager or ThemeManager()
         self._setup_ui()
         self.current_df: Optional[pd.DataFrame] = None
+        self._current_image_bytes: Optional[bytes] = None
     
     def _setup_ui(self):
         """Configura a interface"""
@@ -253,23 +257,82 @@ class ResultsViewer(QWidget):
         
         layout.addWidget(self.toolbar)
         
-        # Tabela
+        # Botao salvar imagem (oculto por padrao)
+        self.btn_save_image = QPushButton("Salvar Imagem")
+        self.btn_save_image.setVisible(False)
+        self.toolbar.addWidget(self.btn_save_image)
+
+        # QStackedWidget: pagina 0 = tabela, pagina 1 = imagem
+        self.stack = QStackedWidget()
+
+        # Pagina 0 - Tabela
         self.table_view = QTableView()
         self._apply_table_style()
         
         self.model = PandasModel(theme_manager=self.theme_manager)
         self.table_view.setModel(self.model)
         
-        # Ajustar colunas automaticamente pelo conteúdo do cabeçalho
+        # Ajustar colunas automaticamente pelo conteudo do cabecalho
         self.table_view.horizontalHeader().setSectionResizeMode(self.table_view.horizontalHeader().ResizeMode.ResizeToContents)
-        
-        layout.addWidget(self.table_view)
+        self.stack.addWidget(self.table_view)  # index 0
+
+        # Pagina 1 - Imagem
+        self.image_scroll = QScrollArea()
+        self.image_scroll.setWidgetResizable(True)
+        self.image_scroll.setStyleSheet(f"background-color: {colors['background']};")
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_scroll.setWidget(self.image_label)
+        self.stack.addWidget(self.image_scroll)  # index 1
+
+        # Pagina 2 - HTML
+        self.html_viewer = QTextEdit()
+        self.html_viewer.setReadOnly(True)
+        self.html_viewer.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {colors['background']};
+                color: {colors['foreground']};
+                border: none;
+                padding: 10px;
+            }}
+        """)
+        self.stack.addWidget(self.html_viewer)  # index 2
+
+        # Pagina 3 - JSON Tree
+        self.json_tree = QTreeWidget()
+        self.json_tree.setHeaderLabels(['Chave', 'Valor', 'Tipo'])
+        self.json_tree.setAlternatingRowColors(True)
+        self.json_tree.setColumnWidth(0, 250)
+        self.json_tree.setColumnWidth(1, 400)
+        self.json_tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background-color: {colors['background']};
+                color: {colors['foreground']};
+                border: none;
+                alternate-background-color: {colors['border']};
+            }}
+            QTreeWidget::item {{
+                padding: 3px;
+            }}
+            QHeaderView::section {{
+                background-color: {colors['border']};
+                color: {colors['foreground']};
+                border: none;
+                padding: 5px;
+                font-weight: bold;
+            }}
+        """)
+        self.json_tree.setFont(QFont('Consolas', 10))
+        self.stack.addWidget(self.json_tree)  # index 3
+
+        layout.addWidget(self.stack)
         
         # Conectar sinais
         self.btn_export_csv.clicked.connect(self._export_csv)
         self.btn_export_excel.clicked.connect(self._export_excel)
         self.btn_export_json.clicked.connect(self._export_json)
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
+        self.btn_save_image.clicked.connect(self._save_image)
     
     def _apply_toolbar_style(self):
         """Aplica estilo na toolbar baseado no tema"""
@@ -336,13 +399,373 @@ class ResultsViewer(QWidget):
         # Atualiza info
         rows = len(df)
         cols = len(df.columns)
-        self.info_label.setText(f"{var_name}: {rows:,} linhas × {cols} colunas")
+        self.info_label.setText(f"{var_name}: {rows:,} linhas x {cols} colunas")
+        
+        # Mostrar tabela e botoes de export
+        self.stack.setCurrentIndex(0)
+        self.btn_export_csv.setVisible(True)
+        self.btn_export_excel.setVisible(True)
+        self.btn_export_json.setVisible(True)
+        self.btn_copy.setVisible(True)
+        self.export_destination.setVisible(True)
+        self.btn_save_image.setVisible(False)
     
+    def display_image(self, image_bytes: bytes, label: str = "Grafico"):
+        """Exibe uma imagem (PNG bytes) no painel de resultados.
+        
+        Args:
+            image_bytes: Bytes da imagem PNG
+            label: Texto descritivo para a info label
+        """
+        self._current_image_bytes = image_bytes
+        
+        img = QImage()
+        if not img.loadFromData(image_bytes):
+            return
+        
+        pixmap = QPixmap.fromImage(img)
+        
+        # Escalar ao viewport mantendo aspecto
+        viewport_w = self.image_scroll.viewport().width()
+        viewport_h = self.image_scroll.viewport().height()
+        if viewport_w < 100:
+            viewport_w = 800
+        if viewport_h < 100:
+            viewport_h = 600
+        
+        scaled = pixmap.scaled(
+            viewport_w - 20, viewport_h - 20,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+        
+        # Guardar pixmap original para redimensionar
+        self._original_pixmap = pixmap
+        
+        self.info_label.setText(f"{label} ({img.width()} x {img.height()} px)")
+        
+        # Mostrar imagem e botao salvar, esconder export de dados
+        self.stack.setCurrentIndex(1)
+        self.btn_export_csv.setVisible(False)
+        self.btn_export_excel.setVisible(False)
+        self.btn_export_json.setVisible(False)
+        self.btn_copy.setVisible(False)
+        self.export_destination.setVisible(False)
+        self.btn_save_image.setVisible(True)
+    
+    def display_images(self, images_bytes_list: list, label: str = "Graficos"):
+        """Exibe multiplas imagens combinadas verticalmente.
+        
+        Args:
+            images_bytes_list: Lista de bytes PNG
+            label: Texto descritivo
+        """
+        if not images_bytes_list:
+            return
+        
+        if len(images_bytes_list) == 1:
+            self.display_image(images_bytes_list[0], label)
+            return
+        
+        # Combinar imagens verticalmente
+        images = []
+        total_h = 0
+        max_w = 0
+        for img_bytes in images_bytes_list:
+            img = QImage()
+            if img.loadFromData(img_bytes):
+                images.append(img)
+                total_h += img.height() + 10  # 10px spacing
+                max_w = max(max_w, img.width())
+        
+        if not images:
+            return
+        
+        # Criar imagem combinada
+        from PyQt6.QtGui import QPainter
+        combined = QImage(max_w, total_h, QImage.Format.Format_ARGB32)
+        combined.fill(QColor('#1e1e1e'))
+        
+        painter = QPainter(combined)
+        y_offset = 0
+        for img in images:
+            x_offset = (max_w - img.width()) // 2
+            painter.drawImage(x_offset, y_offset, img)
+            y_offset += img.height() + 10
+        painter.end()
+        
+        # Salvar como bytes para o botao salvar
+        from PyQt6.QtCore import QBuffer, QIODevice
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        combined.save(buffer, 'PNG')
+        self._current_image_bytes = bytes(buffer.data())
+        buffer.close()
+
+        pixmap = QPixmap.fromImage(combined)
+        self._original_pixmap = pixmap
+        
+        # Escalar ao viewport
+        viewport_w = self.image_scroll.viewport().width()
+        viewport_h = self.image_scroll.viewport().height()
+        if viewport_w < 100:
+            viewport_w = 800
+        if viewport_h < 100:
+            viewport_h = 600
+        
+        scaled = pixmap.scaled(
+            viewport_w - 20, viewport_h - 20,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+        
+        self.info_label.setText(f"{label} ({len(images)} imagens)")
+        
+        # Mostrar imagem e botao salvar
+        self.stack.setCurrentIndex(1)
+        self.btn_export_csv.setVisible(False)
+        self.btn_export_excel.setVisible(False)
+        self.btn_export_json.setVisible(False)
+        self.btn_copy.setVisible(False)
+        self.export_destination.setVisible(False)
+        self.btn_save_image.setVisible(True)
+    
+    def display_html(self, html_content: str, label: str = "HTML"):
+        """Exibe conteudo HTML no painel de resultados.
+        
+        Usado para pandas Styler, IPython.display.HTML, etc.
+        Injeta CSS para tema escuro automaticamente.
+        
+        Args:
+            html_content: String HTML a renderizar
+            label: Texto descritivo para a info label
+        """
+        colors = self.theme_manager.get_app_colors()
+
+        # Injetar CSS de tema escuro no HTML
+        dark_css = f"""
+        <style>
+            body, html {{
+                background-color: {colors['background']};
+                color: {colors['foreground']};
+                font-family: 'Segoe UI', Consolas, monospace;
+                font-size: 13px;
+                margin: 10px;
+            }}
+            table {{
+                border-collapse: collapse;
+                margin: 10px 0;
+            }}
+            th {{
+                background-color: {colors['border']};
+                color: {colors['foreground']};
+                padding: 8px 12px;
+                text-align: left;
+                border: 1px solid {colors['border']};
+                font-weight: bold;
+            }}
+            td {{
+                padding: 6px 12px;
+                border: 1px solid {colors['border']};
+            }}
+            tr:nth-child(even) {{
+                background-color: {colors['border']};
+            }}
+            a {{ color: {colors['accent']}; }}
+            pre, code {{
+                background-color: {colors['border']};
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-family: Consolas, monospace;
+            }}
+        </style>
+        """
+
+        # Envolver se nao tem <html> tag
+        if '<html' not in html_content.lower():
+            html_content = f"<html><head>{dark_css}</head><body>{html_content}</body></html>"
+        else:
+            # Injetar CSS no head existente
+            html_content = html_content.replace('</head>', f'{dark_css}</head>', 1)
+
+        self.html_viewer.setHtml(html_content)
+        self.info_label.setText(label)
+
+        self.stack.setCurrentIndex(2)
+        self._hide_all_toolbar_buttons()
+
+    def display_json(self, data, label: str = "JSON"):
+        """Exibe dict/list como arvore colapsavel no painel de resultados.
+        
+        Args:
+            data: dict, list, ou qualquer objeto serializavel
+            label: Texto descritivo para a info label
+        """
+        self.json_tree.clear()
+
+        colors = self.theme_manager.get_app_colors()
+        type_color = QColor(colors.get('accent', '#3369FF'))
+
+        if isinstance(data, dict):
+            self._populate_json_tree(self.json_tree.invisibleRootItem(), data, type_color)
+            count = len(data)
+            self.info_label.setText(f"{label} (dict: {count} chaves)")
+        elif isinstance(data, list):
+            self._populate_json_tree(self.json_tree.invisibleRootItem(), data, type_color)
+            count = len(data)
+            self.info_label.setText(f"{label} (list: {count} itens)")
+        else:
+            # Tentar converter para dict/list via json
+            try:
+                parsed = json.loads(json.dumps(data, default=str))
+                self._populate_json_tree(self.json_tree.invisibleRootItem(), parsed, type_color)
+                self.info_label.setText(f"{label} ({type(data).__name__})")
+            except (TypeError, ValueError):
+                item = QTreeWidgetItem(self.json_tree, [str(type(data).__name__), str(data), type(data).__name__])
+                self.info_label.setText(f"{label}")
+
+        # Expandir primeiro nivel
+        root = self.json_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            root.child(i).setExpanded(True)
+
+        self.stack.setCurrentIndex(3)
+        self._hide_all_toolbar_buttons()
+
+    def _populate_json_tree(self, parent, data, type_color: QColor):
+        """Popula arvore JSON recursivamente.
+        
+        Args:
+            parent: QTreeWidgetItem pai
+            data: dados a inserir (dict, list, ou valor primitivo)
+            type_color: cor para a coluna de tipo
+        """
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, (dict, list)):
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, str(key))
+                    type_name = 'dict' if isinstance(value, dict) else 'list'
+                    count = len(value)
+                    item.setText(1, f'{{{count} itens}}' if isinstance(value, dict) else f'[{count} itens]')
+                    item.setText(2, type_name)
+                    item.setForeground(2, type_color)
+                    self._populate_json_tree(item, value, type_color)
+                else:
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, str(key))
+                    item.setText(1, self._format_json_value(value))
+                    item.setText(2, type(value).__name__)
+                    item.setForeground(2, type_color)
+        elif isinstance(data, list):
+            for i, value in enumerate(data):
+                if isinstance(value, (dict, list)):
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, f'[{i}]')
+                    type_name = 'dict' if isinstance(value, dict) else 'list'
+                    count = len(value)
+                    item.setText(1, f'{{{count} itens}}' if isinstance(value, dict) else f'[{count} itens]')
+                    item.setText(2, type_name)
+                    item.setForeground(2, type_color)
+                    self._populate_json_tree(item, value, type_color)
+                else:
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, f'[{i}]')
+                    item.setText(1, self._format_json_value(value))
+                    item.setText(2, type(value).__name__)
+                    item.setForeground(2, type_color)
+
+    def _format_json_value(self, value) -> str:
+        """Formata valor para exibicao na arvore JSON."""
+        if value is None:
+            return 'null'
+        if isinstance(value, bool):
+            return 'true' if value else 'false'
+        if isinstance(value, str):
+            # Truncar strings muito longas
+            if len(value) > 200:
+                return f'"{value[:200]}..."'
+            return f'"{value}"'
+        return str(value)
+
+    def display_rich_output(self, outputs: list, label: str = "Resultado"):
+        """Exibe rich outputs baseado no tipo de cada item.
+        
+        Aceita lista de dicts com tipo:
+            {'type': 'image', 'data': bytes}     # PNG bytes
+            {'type': 'html', 'data': str}        # HTML string
+            {'type': 'json', 'data': object}     # dict/list
+        
+        Tambem aceita lista de bytes puros (backward compat com display_images).
+        
+        Prioridade quando ha tipos mistos: image > html > json
+        """
+        if not outputs:
+            return
+
+        # Backward compat: se todos sao bytes, tratar como imagens
+        if all(isinstance(o, bytes) for o in outputs):
+            self.display_images(outputs, label)
+            return
+
+        # Separar por tipo
+        images = []
+        html_items = []
+        json_items = []
+
+        for item in outputs:
+            if isinstance(item, bytes):
+                images.append(item)
+            elif isinstance(item, dict):
+                item_type = item.get('type', '')
+                if item_type == 'image' and 'data' in item:
+                    images.append(item['data'])
+                elif item_type == 'html' and 'data' in item:
+                    html_items.append(item['data'])
+                elif item_type == 'json' and 'data' in item:
+                    json_items.append(item['data'])
+
+        # Prioridade: image > html > json
+        if images:
+            self.display_images(images, label)
+        elif html_items:
+            # Combinar multiplos HTML
+            combined = '<hr>'.join(html_items)
+            self.display_html(combined, label)
+        elif json_items:
+            # Mostrar primeiro JSON (ou combinar em lista)
+            if len(json_items) == 1:
+                self.display_json(json_items[0], label)
+            else:
+                self.display_json(json_items, label)
+
+    def _hide_all_toolbar_buttons(self):
+        """Esconde todos os botoes da toolbar (usado para HTML e JSON pages)."""
+        self.btn_export_csv.setVisible(False)
+        self.btn_export_excel.setVisible(False)
+        self.btn_export_json.setVisible(False)
+        self.btn_copy.setVisible(False)
+        self.export_destination.setVisible(False)
+        self.btn_save_image.setVisible(False)
+
     def clear(self):
-        """Limpa a visualização"""
+        """Limpa a visualizacao"""
         self.current_df = None
+        self._current_image_bytes = None
         self.model.update_data(pd.DataFrame())
+        self.image_label.clear()
+        self.html_viewer.clear()
+        self.json_tree.clear()
         self.info_label.setText("Nenhum resultado")
+        self.stack.setCurrentIndex(0)
+        self.btn_save_image.setVisible(False)
+        self.btn_export_csv.setVisible(True)
+        self.btn_export_excel.setVisible(True)
+        self.btn_export_json.setVisible(True)
+        self.btn_copy.setVisible(True)
+        self.export_destination.setVisible(True)
     
     def _get_export_destination(self) -> str:
         """Retorna o destino selecionado: 'clipboard' ou 'file'"""
@@ -468,3 +891,36 @@ class ResultsViewer(QWidget):
             text = self.current_df.to_string(index=False)
             QApplication.instance().clipboard().setText(text)
             self._show_clipboard_success("Tabela")
+    
+    def _save_image(self):
+        """Salva a imagem exibida em arquivo"""
+        if not self._current_image_bytes:
+            return
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Salvar Imagem", "", "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
+        )
+        if filename:
+            if not any(filename.lower().endswith(ext) for ext in ('.png', '.jpg', '.jpeg')):
+                filename += '.png'
+            try:
+                with open(filename, 'wb') as f:
+                    f.write(self._current_image_bytes)
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Erro ao salvar imagem:\n{str(e)}")
+    
+    def resizeEvent(self, event):
+        """Reescala imagem quando o widget e redimensionado"""
+        super().resizeEvent(event)
+        if not hasattr(self, 'stack'):
+            return
+        if self.stack.currentIndex() == 1 and hasattr(self, '_original_pixmap'):
+            viewport_w = self.image_scroll.viewport().width()
+            viewport_h = self.image_scroll.viewport().height()
+            if viewport_w > 100 and viewport_h > 100:
+                scaled = self._original_pixmap.scaled(
+                    viewport_w - 20, viewport_h - 20,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.image_label.setPixmap(scaled)

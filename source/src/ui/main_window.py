@@ -11,6 +11,8 @@ from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
 import sys
 import re
+import io
+import ast
 import logging
 import traceback
 from io import StringIO
@@ -36,6 +38,7 @@ from src.core.mixed_executor import MixedLanguageExecutor
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.ui.dialogs.settings_dialog import SettingsDialog
+from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
 
 # Componentes da UI
 from src.ui.components.results_viewer import ResultsViewer
@@ -71,67 +74,263 @@ class SqlWorker(QObject):
 
 
 class PythonWorker(QObject):
-    """Worker centralizado para execução Python em background"""
-    finished = pyqtSignal(object, str, str, dict)  # (result, output, error, namespace)
-    
+    """Worker centralizado para execucao Python em background"""
+    finished = pyqtSignal(object, str, str, dict, list)  # (result, output, error, namespace, figures)
+
     def __init__(self, code, namespace, is_expression):
         super().__init__()
         self.code = code
         self.namespace = namespace
         self.is_expression = is_expression
-    
+
     def run(self):
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
         try:
-            # Captura stdout
-            old_stdout = sys.stdout
-            sys.stdout = captured_output = StringIO()
-            
+            # Configurar matplotlib para backend nao-interativo (Agg) com tema escuro
+            self._setup_matplotlib_backend()
+
+            # Snapshot de DataFrames antes da execucao para detectar novos
+            df_snapshot = {k: id(v) for k, v in self.namespace.items()
+                          if isinstance(v, pd.DataFrame)}
+
+            # Captura stdout E stderr no mesmo buffer
+            # Assim print(), logging.info(), warnings, sys.stderr.write()
+            # todos aparecem no output panel
+            captured = StringIO()
+            sys.stdout = captured
+            sys.stderr = captured
+
             result_value = self._execute_centralized()
-            
+
             sys.stdout = old_stdout
-            output = captured_output.getvalue()
-            
-            # Retornar namespace atualizado
-            self.finished.emit(result_value, output, '', self.namespace)
+            sys.stderr = old_stderr
+            output = captured.getvalue()
+
+            # Capturar figuras matplotlib pendentes
+            figures = self._capture_matplotlib_figures()
+
+            # Se resultado e None, verificar se novos DataFrames foram criados
+            if result_value is None:
+                new_dfs = [(k, v) for k, v in self.namespace.items()
+                           if isinstance(v, pd.DataFrame)
+                           and not k.startswith('_')
+                           and (k not in df_snapshot or id(v) != df_snapshot[k])]
+                if new_dfs:
+                    result_value = new_dfs[-1][1]
+
+            # Processar resultado rico (PIL Image, plotly, matplotlib Figure,
+            # _repr_html_(), dict/list, etc.)
+            result_value, extra_outputs = self._process_rich_result(
+                result_value, has_captured_figures=bool(figures))
+            figures.extend(extra_outputs)
+
+            self.finished.emit(result_value, output, '', self.namespace, figures)
         except Exception as e:
             sys.stdout = old_stdout
-            self.finished.emit(None, '', traceback.format_exc(), self.namespace)
-    
+            sys.stderr = old_stderr
+            self.finished.emit(None, '', traceback.format_exc(), self.namespace, [])
+
+    def _setup_matplotlib_backend(self):
+        """Configura matplotlib para usar backend Agg (nao-interativo) com tema escuro"""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            plt.close('all')
+            # Substituir plt.show() por no-op para nao travar
+            plt.show = lambda *args, **kwargs: None
+            # Tema escuro para combinar com a IDE
+            plt.rcParams.update({
+                'figure.facecolor': '#1e1e1e',
+                'axes.facecolor': '#2d2d30',
+                'axes.edgecolor': '#555555',
+                'axes.labelcolor': '#d4d4d4',
+                'text.color': '#d4d4d4',
+                'xtick.color': '#d4d4d4',
+                'ytick.color': '#d4d4d4',
+                'grid.color': '#3e3e42',
+                'legend.facecolor': '#2d2d30',
+                'legend.edgecolor': '#555555',
+                'figure.edgecolor': '#1e1e1e',
+                'savefig.facecolor': '#1e1e1e',
+                'savefig.edgecolor': '#1e1e1e',
+            })
+        except ImportError:
+            pass  # matplotlib nao instalado, ignorar
+
+    def _capture_matplotlib_figures(self) -> list:
+        """Captura todas as figuras matplotlib abertas como rich outputs.
+        
+        Returns:
+            Lista de dicts {'type': 'image', 'data': bytes_png}
+        """
+        figures_data = []
+        try:
+            import matplotlib.pyplot as plt
+            fig_nums = plt.get_fignums()
+            if not fig_nums:
+                return []
+
+            for num in fig_nums:
+                fig = plt.figure(num)
+                buf = io.BytesIO()
+                fig.savefig(buf, format='png', dpi=150,
+                           bbox_inches='tight',
+                           facecolor=fig.get_facecolor(),
+                           edgecolor='none')
+                buf.seek(0)
+                figures_data.append({'type': 'image', 'data': buf.getvalue()})
+                buf.close()
+
+            plt.close('all')
+        except ImportError:
+            pass  # matplotlib nao instalado
+        except Exception as e:
+            logging.warning(f"Erro ao capturar figuras matplotlib: {e}")
+
+        return figures_data
+
     def _execute_centralized(self):
-        """Execução centralizada - todas as execuções Python passam aqui"""
+        """Execucao centralizada usando AST - todas as execucoes Python passam aqui.
+
+        Usa o modulo ast para separar corretamente statements de expressoes,
+        sem quebrar blocos multi-linha (for, if, try, def, class etc).
+        """
         code = self.code.strip()
         if not code:
             return None
-        
-        # Limpar linhas vazias e comentários
-        lines = [line for line in code.split('\n') if line.strip() and not line.strip().startswith('#')]
-        
-        if not lines:
-            return None
-        
-        # CASO 1: Uma linha só
-        if len(lines) == 1:
-            try:
-                # Tenta avaliar como expressão primeiro
-                return eval(lines[0], self.namespace)
-            except:
-                # Se falhar, executa como statement
-                exec(lines[0], self.namespace)
-                return None
-        
-        # CASO 2: Múltiplas linhas
-        # Executa todas exceto a última
-        exec_code = '\n'.join(lines[:-1])
-        exec(exec_code, self.namespace)
-        
-        # Tenta a última linha como expressão
-        last_line = lines[-1]
+
         try:
-            return eval(last_line, self.namespace)
-        except:
-            # Se falhar, executa como statement
-            exec(last_line, self.namespace)
+            tree = ast.parse(code)
+        except SyntaxError:
+            # Deixar o exec levantar o erro com traceback correto
+            exec(code, self.namespace)
             return None
+
+        if not tree.body:
+            return None
+
+        last_node = tree.body[-1]
+
+        # Se o ultimo node e uma expressao (nao assignment, for, if, etc),
+        # executar tudo menos ele, depois avaliar a expressao e retornar o valor
+        if isinstance(last_node, ast.Expr):
+            if len(tree.body) > 1:
+                exec_module = ast.Module(body=tree.body[:-1], type_ignores=[])
+                ast.fix_missing_locations(exec_module)
+                exec(compile(exec_module, '<exec>', 'exec'), self.namespace)
+            expr = ast.Expression(body=last_node.value)
+            ast.fix_missing_locations(expr)
+            return eval(compile(expr, '<eval>', 'eval'), self.namespace)
+        else:
+            # Ultimo node e statement (assignment, for, if, etc) - executar tudo
+            exec(compile(tree, '<exec>', 'exec'), self.namespace)
+            return None
+
+    def _process_rich_result(self, result, has_captured_figures=False):
+        """Converte objetos ricos em rich outputs tipados.
+
+        Detecta: matplotlib Figure, PIL Image, Plotly Figure,
+        _repr_png_(), _repr_html_(), dict/list.
+
+        Returns:
+            (result, extra_outputs): resultado processado e lista de rich outputs.
+            Rich outputs sao dicts: {'type': 'image'|'html'|'json', 'data': ...}
+        """
+        extra_outputs = []
+        if result is None:
+            return result, extra_outputs
+
+        # matplotlib Figure retornado como valor de expressao
+        try:
+            from matplotlib.figure import Figure as MplFigure
+            if isinstance(result, MplFigure):
+                if has_captured_figures:
+                    # Ja capturado por _capture_matplotlib_figures, nao duplicar
+                    return None, extra_outputs
+                buf = io.BytesIO()
+                result.savefig(buf, format='png', dpi=150,
+                              bbox_inches='tight',
+                              facecolor=result.get_facecolor(),
+                              edgecolor='none')
+                buf.seek(0)
+                extra_outputs.append({'type': 'image', 'data': buf.getvalue()})
+                buf.close()
+                return None, extra_outputs
+        except ImportError:
+            pass
+
+        # PIL/Pillow Image
+        try:
+            from PIL import Image as PILImage
+            if isinstance(result, PILImage.Image):
+                buf = io.BytesIO()
+                # Converter RGBA para RGB se necessario (PNG suporta ambos)
+                result.save(buf, format='PNG')
+                buf.seek(0)
+                extra_outputs.append({'type': 'image', 'data': buf.getvalue()})
+                buf.close()
+                return None, extra_outputs
+        except ImportError:
+            pass
+
+        # Plotly Figure -> tenta PNG (kaleido), senao HTML interativo
+        try:
+            import plotly.graph_objects as go
+            if isinstance(result, go.Figure):
+                try:
+                    img_bytes = result.to_image(format='png', scale=2,
+                                               width=800, height=500)
+                    extra_outputs.append({'type': 'image', 'data': img_bytes})
+                    return None, extra_outputs
+                except Exception:
+                    # kaleido nao instalado - usar HTML interativo
+                    try:
+                        html_str = result.to_html(
+                            include_plotlyjs='cdn',
+                            full_html=True,
+                            config={'displayModeBar': True}
+                        )
+                        extra_outputs.append({'type': 'html', 'data': html_str})
+                        return None, extra_outputs
+                    except Exception:
+                        pass
+        except ImportError:
+            pass
+
+        # Objeto com _repr_png_() (convencao IPython)
+        if hasattr(result, '_repr_png_'):
+            try:
+                png_data = result._repr_png_()
+                if png_data:
+                    extra_outputs.append({'type': 'image', 'data': png_data})
+                    return None, extra_outputs
+            except Exception:
+                pass
+
+        # Objeto com _repr_html_() (pandas Styler, IPython.display.HTML etc.)
+        # NÃO aplicar para DataFrames puros (ja tem grid melhor)
+        if hasattr(result, '_repr_html_') and not isinstance(result, pd.DataFrame):
+            try:
+                html_data = result._repr_html_()
+                if html_data:
+                    extra_outputs.append({'type': 'html', 'data': html_data})
+                    return None, extra_outputs
+            except Exception:
+                pass
+
+        # dict ou list -> JSON tree view
+        if isinstance(result, (dict, list)) and not isinstance(result, pd.DataFrame):
+            # So mostrar como JSON se nao e muito simples (mais de 1 item)
+            if isinstance(result, dict) and len(result) >= 1:
+                extra_outputs.append({'type': 'json', 'data': result})
+                return None, extra_outputs
+            elif isinstance(result, list) and len(result) >= 1:
+                extra_outputs.append({'type': 'json', 'data': result})
+                return None, extra_outputs
+
+        return result, extra_outputs
 
 
 class CrossSyntaxWorker(QObject):
@@ -682,6 +881,12 @@ class MainWindow(DockingMainWindow):
         self.variables_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
         
+        # Configurar tamanhos minimos para garantir visibilidade
+        self.results_dock.setMinimumHeight(180)
+        self.output_dock.setMinimumHeight(180)
+        self.variables_dock.setMinimumWidth(200)
+        self.variables_dock.setMinimumHeight(180)
+        
         # Tabifica Results e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
         
@@ -721,13 +926,20 @@ class MainWindow(DockingMainWindow):
         info['variables'].deleteLater()
     
     def _switch_session_panels(self, session_id: str):
-        """Troca os stacks para exibir os paineis da sessao ativa."""
+        """Troca os stacks para exibir os paineis da sessao ativa.
+        
+        Usa setCurrentWidget() em vez de setCurrentIndex() para evitar
+        bugs com indices invalidos apos remocao de widgets do stack.
+        """
         info = self._session_panel_indices.get(session_id)
         if not info:
             return
-        self._results_stack.setCurrentIndex(info['results_idx'])
-        self._output_stack.setCurrentIndex(info['output_idx'])
-        self._variables_stack.setCurrentIndex(info['variables_idx'])
+        if info['results']:
+            self._results_stack.setCurrentWidget(info['results'])
+        if info['output']:
+            self._output_stack.setCurrentWidget(info['output'])
+        if info['variables']:
+            self._variables_stack.setCurrentWidget(info['variables'])
     
     @property
     def global_results_viewer(self):
@@ -1250,6 +1462,14 @@ class MainWindow(DockingMainWindow):
         # Menu Ferramentas
         tools_menu = menubar.addMenu("&Ferramentas")
         
+        packages_action = QAction("Gerenciador de &Pacotes...", self)
+        if HAS_QTAWESOME:
+            packages_action.setIcon(qta.icon('fa5s.cube', color='#cccccc'))
+        packages_action.triggered.connect(self._show_package_manager)
+        tools_menu.addAction(packages_action)
+        
+        tools_menu.addSeparator()
+        
         settings_action = QAction("&Configurações de Atalhos...", self)
         if HAS_QTAWESOME:
             settings_action.setIcon(self.icons['cog'])
@@ -1451,102 +1671,110 @@ class MainWindow(DockingMainWindow):
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
     
-    def _new_session(self):
-        """Cria nova sessão/aba"""
-        session = self.session_manager.create_session()
-        self._create_session_widget(session)
-        # Focar na nova aba
-        for i in range(self.session_tabs.count()):
-            if self.session_tabs.tabText(i).startswith("Session"):
-                widget = self.session_tabs.widget(i)
-                if isinstance(widget, SessionWidget) and widget.session.session_id == session.session_id:
-                    self.session_tabs.setCurrentIndex(i)
-                    break
-        
-        # Atualizar título da janela (contexto pode ter mudado)
-        self._update_window_title()
+    # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
     
     def _close_current_session(self):
-        """Fecha a sessão/aba atual"""
+        """Fecha a sessao/aba atual - delega para _close_session_tab"""
         current_index = self.session_tabs.currentIndex()
         if current_index >= 0:
             widget = self.session_tabs.widget(current_index)
             if isinstance(widget, SessionWidget):
-                # Confirmar fechamento se houver código não salvo
+                # Confirmar fechamento se houver codigo nao salvo
                 has_code = any(block.get_code().strip() for block in widget.editor.get_blocks())
                 if has_code:
                     reply = QMessageBox.question(
                         self,
-                        "Fechar Sessão",
-                        "Tem certeza que deseja fechar esta sessão?\n\nO código não salvo será perdido.",
+                        "Fechar Sessao",
+                        "Tem certeza que deseja fechar esta sessao?\n\nO codigo nao salvo sera perdido.",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No
                     )
                     if reply == QMessageBox.StandardButton.No:
                         return
                 
-                # Remover sessão
-                session_id = widget.session.session_id
-                self.session_manager.close_session(session_id)
-                if session_id in self._session_widgets:
-                    del self._session_widgets[session_id]
-                
-                # Remover aba
-                self.session_tabs.removeTab(current_index)
-                
-                # Se não há mais sessões, mostrar empty state
-                if not self._session_widgets:
-                    self._show_empty_state()
+                # Delegar para _close_session_tab que faz cleanup completo
+                self._close_session_tab(current_index)
     
     def _duplicate_session(self, index: int):
-        """Duplica uma sessão"""
+        """Duplica uma sessao - cria nova sessao com paineis e copia conteudo"""
         widget = self.session_tabs.widget(index)
         if not widget or not hasattr(widget, 'editor'):
             return
         
-        # Criar nova sessão
-        session = self.session_manager.create_session()
-        new_widget = SessionWidget(session, theme_manager=self.theme_manager)
-        
-        # Copiar todo o conteúdo do editor
-        source_blocks = widget.editor.get_blocks()
-        
-        # Remover blocos existentes na nova sessão (exceto o último)
-        new_blocks = new_widget.editor.get_blocks()
-        for b in new_blocks[:-1]:
-            new_widget.editor.remove_block(b)
-        
-        # Se fonte tem blocos, usa o primeiro bloco vazio da nova sessão
-        if source_blocks:
-            # Usar primeiro bloco existente
-            first_new_block = new_widget.editor.get_blocks()[0]
-            first_new_block.set_language(source_blocks[0].get_language())
-            first_new_block.set_code(source_blocks[0].get_code())
+        # Guard para evitar que _on_session_tab_changed dispare _new_session
+        self._creating_session = True
+        try:
+            # Criar nova sessao com paineis
+            session = self.session_manager.create_session()
+            new_widget = SessionWidget(session, theme_manager=self.theme_manager)
             
-            # Adicionar os demais blocos
-            for block in source_blocks[1:]:
-                new_block = new_widget.editor.add_block(language=block.get_language())
-                new_block.set_code(block.get_code())
-        
-        # Copiar file_path se existir
-        if hasattr(widget, 'file_path'):
-            new_widget.file_path = widget.file_path
-        
-        # Registrar widget
-        self._session_widgets[session.session_id] = new_widget
-        
-        # Nome da nova aba
-        original_name = self.session_tabs.tabText(index)
-        new_name = f"{original_name} (cópia)"
-        
-        # Inserir antes do último tab (botão nova aba)
-        insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
-        tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
-        
-        # Configurar botão de fechar customizado
-        self.session_tabs._setup_close_button(tab_index)
-        
-        self.session_tabs.setCurrentIndex(tab_index)
+            # Criar paineis para a nova sessao
+            self._create_session_panels(session.session_id)
+            
+            # Copiar todo o conteudo do editor
+            source_blocks = widget.editor.get_blocks()
+            
+            # Remover blocos existentes na nova sessao (exceto o ultimo)
+            new_blocks = new_widget.editor.get_blocks()
+            for b in new_blocks[:-1]:
+                new_widget.editor.remove_block(b)
+            
+            # Se fonte tem blocos, usa o primeiro bloco vazio da nova sessao
+            if source_blocks:
+                first_new_block = new_widget.editor.get_blocks()[0]
+                first_new_block.set_language(source_blocks[0].get_language())
+                first_new_block.set_code(source_blocks[0].get_code())
+                
+                # Adicionar os demais blocos
+                for block in source_blocks[1:]:
+                    new_block = new_widget.editor.add_block(language=block.get_language())
+                    new_block.set_code(block.get_code())
+            
+            # Copiar file_path se existir
+            if hasattr(widget, 'file_path'):
+                new_widget.file_path = widget.file_path
+            
+            # Herdar conexao da sessao original
+            if hasattr(widget, 'session') and widget.session.connection_name:
+                try:
+                    connected = session.connect(widget.session.connection_name)
+                    if not connected:
+                        pass  # Conexao falhou, sessao fica sem conexao
+                except Exception:
+                    pass
+            
+            # Conectar sinais do widget
+            new_widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
+            new_widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
+            new_widget.connection_changed.connect(lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db))
+            
+            # Registrar widget
+            self._session_widgets[session.session_id] = new_widget
+            
+            # Nome da nova aba
+            original_name = self.session_tabs.tabText(index)
+            new_name = f"{original_name} (copia)"
+            
+            # Inserir antes do ultimo tab (botao nova aba)
+            insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
+            tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
+            
+            # Configurar botao de fechar customizado
+            self.session_tabs._setup_close_button(tab_index)
+            
+            # Aplicar cor da aba se sessao original tinha conexao
+            if session.connection_name:
+                config = self.connection_manager.get_connection_config(session.connection_name)
+                if config:
+                    color = config.get('color', '#007ACC') or '#007ACC'
+                    self.session_tabs.set_tab_connection_color(tab_index, color)
+            
+            self.session_tabs.setCurrentIndex(tab_index)
+            
+            # Trocar paineis para a nova sessao
+            self._switch_session_panels(session.session_id)
+        finally:
+            self._creating_session = False
     
     def _show_find_dialog(self):
         """Mostra diálogo de busca no editor atual"""
@@ -1649,7 +1877,7 @@ class MainWindow(DockingMainWindow):
             
             # Se mudou o nome, deletar antiga
             if name != connection_name:
-                self.connection_manager.delete_connection(connection_name)
+                self.connection_manager.delete_connection_config(connection_name)
             
             # Salva a conexão
             self.connection_manager.save_connection_config(
@@ -1914,6 +2142,14 @@ class MainWindow(DockingMainWindow):
         # Iniciar
         thread.start()
     
+    def _display_figures_in_results(self, figures: list, label: str = "Resultado"):
+        """Exibe rich outputs (imagens/HTML/JSON) no painel de resultados."""
+        results_panel = self.global_results_viewer
+        if not results_panel or not figures:
+            return
+        results_panel.display_rich_output(figures, label)
+        self.show_panel('results')
+    
     def _handle_execution_result(self, result=None, error=None, execution_type="Unknown", additional_info=""):
         """
         Método centralizado para tratar resultados de execução
@@ -1939,7 +2175,7 @@ class MainWindow(DockingMainWindow):
         import pandas as pd
         
         results_panel = self.global_results_viewer
-        
+
         if isinstance(result, pd.DataFrame):
             # DATAFRAME -> GRID (results)
             if results_panel:
@@ -2049,7 +2285,7 @@ class MainWindow(DockingMainWindow):
         
         # Conectar sinais
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda result, output, err, namespace: self._on_python_finished(result, output, err, namespace, thread, running_tab_index))
+        worker.finished.connect(lambda result, output, err, namespace, figures: self._on_python_finished(result, output, err, namespace, figures, thread, running_tab_index))
         
         # Manter referência
         self._worker_threads.append((thread, worker))
@@ -2057,14 +2293,14 @@ class MainWindow(DockingMainWindow):
         # Iniciar
         thread.start()
     
-    def _on_python_finished(self, result_value, output, error, updated_namespace, thread, tab_index):
+    def _on_python_finished(self, result_value, output, error, updated_namespace, figures, thread, tab_index):
         """Callback quando Python termina"""
         self._stop_execution_timer()
         
         # Salvar namespace atualizado
         self.results_manager.update_namespace(updated_namespace)
         
-        # Remover marcação de rodando
+        # Remover marcacao de rodando
         self._mark_tab_running(False, tab_index)
         
         # Limpar thread da lista
@@ -2072,28 +2308,49 @@ class MainWindow(DockingMainWindow):
         thread.quit()
         thread.wait()
         
-        logging.info(f"[MAIN_WINDOW] RETORNO DA EXECUÇÃO: \"\"\"{repr(result_value)}\"\"\"")
-        logging.info(f"[MAIN_WINDOW] FOI PRO CONSOLE: \"\"\"{output}\"\"\"")
-        
-        # FORÇAR: Se há erro, SEMPRE mostrar output primeiro
+        # FORCAR: Se ha erro, SEMPRE mostrar output primeiro
         if error:
             self._show_error_output(f"[Python] Erro: {error}")
             self.action_label.setText("[Python] Erro ao executar")
             return
         
-        # Mostra output de print() primeiro (se houver)
+        # Mostra output de print()/stderr (se houver) -> painel output
         if output:
             self._log(output.strip())
         
-        # SÓ se não há erro, usar método centralizado
-        success = self._handle_execution_result(
-            result=result_value,
-            error=None,  # Garantir que error é None aqui
-            execution_type="Python"
-        )
+        # Decidir o que mostrar no painel Results:
+        # Prioridade: rich outputs (graficos/html/json) > DataFrame > nada
+        has_figures = bool(figures)
+        results_panel = self.global_results_viewer
         
-        if success:
-            # Atualiza variáveis
+        if has_figures and result_value is not None and isinstance(result_value, pd.DataFrame):
+            # Rich outputs + DataFrame: mostrar rich output no results
+            if results_panel:
+                results_panel.display_rich_output(figures, "Resultado")
+            self.show_panel('results')
+            self._update_variables_view()
+            self.action_label.setText("[Python] Grafico + dados gerados!")
+        elif has_figures:
+            # So rich outputs: mostrar no results
+            if results_panel:
+                results_panel.display_rich_output(figures, "Resultado")
+            self.show_panel('results')
+            self._update_variables_view()
+            self.action_label.setText("[Python] Resultado exibido!")
+        elif result_value is not None:
+            # Resultado sem graficos: usar handler centralizado
+            success = self._handle_execution_result(
+                result=result_value,
+                error=None,
+                execution_type="Python"
+            )
+            if success:
+                self._update_variables_view()
+                self.action_label.setText("[Python] Executado com sucesso!")
+        else:
+            # Sem resultado, sem graficos: so output
+            if output:
+                self.show_panel('output')
             self._update_variables_view()
             self.action_label.setText("[Python] Executado com sucesso!")
     
@@ -2379,9 +2636,9 @@ class MainWindow(DockingMainWindow):
                 self._open_code_file(filename)
     
     def _open_code_file(self, filename: str):
-        """Abre arquivo de código em nova aba"""
+        """Abre arquivo de codigo em nova aba com paineis completos"""
         try:
-            # 1. Ler conteúdo do arquivo
+            # 1. Ler conteudo do arquivo
             with open(filename, 'r', encoding='utf-8') as f:
                 content = f.read()
             
@@ -2390,7 +2647,7 @@ class MainWindow(DockingMainWindow):
                 language = 'python'
                 self._original_file_type = 'python'
             elif filename.endswith('.dpw'):
-                language = 'sql'  # Padrão para workspace
+                language = 'sql'
                 self._original_file_type = 'workspace'
             else:
                 language = 'sql'
@@ -2399,48 +2656,41 @@ class MainWindow(DockingMainWindow):
             # Armazenar caminho do arquivo original
             self._original_file_path = filename
             
-            # 3. Criar nova sessão
+            # 3. Se estava no estado vazio, remover placeholder e mostrar paineis
+            self._hide_empty_state()
+            
+            # 4. Criar nova sessao
             import os
             tab_title = os.path.basename(filename)
             session = self.session_manager.create_session(title=tab_title)
             
-            # 4. Criar widget da sessão
-            widget = SessionWidget(session, theme_manager=self.theme_manager)
+            # 5. Criar widget da sessao usando _create_session_widget (centralizado)
+            widget = self._create_session_widget(session)
             widget.file_path = filename
-            widget._original_content = content  # Salvar conteúdo original
-            widget._is_modified = False  # Inicialmente não modificado
+            widget._original_content = content
+            widget._is_modified = False
             
-            # 5. Configurar conteúdo
+            # 6. Configurar conteudo
             blocks = widget.editor.get_blocks()
             if blocks:
-                # Usar primeiro bloco existente
                 blocks[0].set_language(language)
                 blocks[0].set_code(content)
             
-            # 6. Conectar sinais
-            widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
-            widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
-            
-            # Conectar sinal de modificação do editor
+            # 7. Conectar sinal de modificacao do editor
             widget.editor.content_changed.connect(lambda: self._on_editor_modified(widget))
             
-            # 7. Registrar widget
-            self._session_widgets[session.session_id] = widget
+            # 8. Focar na aba criada
+            index = self.session_tabs.indexOf(widget)
+            if index >= 0:
+                self.session_tabs.setCurrentIndex(index)
             
-            # 8. Adicionar aba (antes do botão +)
-            tab_count = self.session_tabs.count()
-            if tab_count > 0 and self.session_tabs.tabText(tab_count - 1).strip() == "+":
-                index = self.session_tabs.insertTab(tab_count - 1, widget, tab_title)
-                self.session_tabs._setup_close_button(index)
-            else:
-                index = self.session_tabs.add_session(widget, tab_title)
-            
-            # 9. Focar na nova aba
-            self.session_tabs.setCurrentIndex(index)
             self.action_label.setText(f"Arquivo aberto: {tab_title}")
             
-            # 10. Atualizar título da janela com contexto
+            # 9. Atualizar titulo da janela com contexto
             self._update_window_title()
+            
+            # 10. Trocar paineis para a nova sessao
+            self._switch_session_panels(session.session_id)
             
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
@@ -2736,6 +2986,11 @@ class MainWindow(DockingMainWindow):
             """
         )
     
+    def _show_package_manager(self):
+        """Mostra dialogo de gerenciamento de pacotes"""
+        dialog = PackageManagerDialog(theme_manager=self.theme_manager, parent=self)
+        dialog.exec()
+
     def _show_settings(self):
         """Mostra diálogo de configurações"""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
@@ -2743,18 +2998,39 @@ class MainWindow(DockingMainWindow):
         dialog.exec()
     
     def _new_session(self):
-        """Cria nova sessão"""
+        """Cria nova sessão, herdando a conexão da aba atual (se houver)"""
         # Guard para evitar criação duplicada
         if hasattr(self, '_creating_session') and self._creating_session:
             return
         self._creating_session = True
         
         try:
+            # Capturar conexão da sessão ativa ANTES de criar a nova
+            previous_connection = None
+            current_widget = self._get_current_session_widget()
+            if current_widget and hasattr(current_widget, 'session'):
+                previous_connection = current_widget.session.connection_name
+            
             # Se está no estado vazio, remover o placeholder
             self._hide_empty_state()
             
             session = self.session_manager.create_session()
-            self._create_session_widget(session)
+            widget = self._create_session_widget(session)
+            
+            # Herdar conexão da aba anterior
+            if previous_connection:
+                try:
+                    connected = session.connect(previous_connection)
+                    if connected:
+                        # Aplicar cor da aba
+                        config = self.connection_manager.get_connection_config(previous_connection)
+                        if config:
+                            color = config.get('color', '#007ACC') or '#007ACC'
+                            idx = self.session_tabs.indexOf(widget)
+                            if idx >= 0:
+                                self.session_tabs.set_tab_connection_color(idx, color)
+                except Exception as e:
+                    print(f"[AVISO] Nao foi possivel herdar conexao: {e}")
             
             # Atualizar título da janela (contexto pode ter mudado)
             self._update_window_title()
@@ -2797,9 +3073,17 @@ class MainWindow(DockingMainWindow):
                         editor.content_changed.emit()
 
     def _show_empty_state(self):
-        """Mostra estado vazio quando nao ha sessoes"""
+        """Mostra estado vazio quando nao ha sessoes, escondendo paineis"""
         if hasattr(self, '_empty_state_widget') and self._empty_state_widget:
             return  # Ja esta mostrando
+        
+        # Esconder paineis inferiores (sem sessao, nao faz sentido mostralos)
+        if hasattr(self, 'results_dock'):
+            self.results_dock.hide()
+        if hasattr(self, 'output_dock'):
+            self.output_dock.hide()
+        if hasattr(self, 'variables_dock'):
+            self.variables_dock.hide()
         
         # Criar widget de estado vazio com suporte a drag-and-drop
         from PyQt6.QtWidgets import QLabel, QPushButton
@@ -2908,12 +3192,20 @@ class MainWindow(DockingMainWindow):
         self.session_tabs.setCurrentIndex(index)
     
     def _hide_empty_state(self):
-        """Remove estado vazio"""
+        """Remove estado vazio e restaura paineis"""
         if hasattr(self, '_empty_state_widget') and self._empty_state_widget:
             index = self.session_tabs.indexOf(self._empty_state_widget)
             if index >= 0:
                 self.session_tabs.removeTab(index)
             self._empty_state_widget = None
+        
+        # Restaurar paineis inferiores ao sair do estado vazio
+        if hasattr(self, 'results_dock'):
+            self.results_dock.show()
+        if hasattr(self, 'output_dock'):
+            self.output_dock.show()
+        if hasattr(self, 'variables_dock'):
+            self.variables_dock.show()
     
     def _create_session_widget(self, session):
         """Cria widget para uma sessao e adiciona a aba"""
@@ -2944,7 +3236,10 @@ class MainWindow(DockingMainWindow):
                 color = config.get('color', '#007ACC') or '#007ACC'
                 self.session_tabs.set_tab_connection_color(index, color)
         
-        # Focar automaticamente no primeiro bloco (com delay para garantir renderização)
+        # Trocar paineis para a nova sessao (garante que paineis vazios aparecam)
+        self._switch_session_panels(session.session_id)
+        
+        # Focar automaticamente no primeiro bloco (com delay para garantir renderizacao)
         if widget.editor and hasattr(widget.editor, 'focus_first_block'):
             QTimer.singleShot(50, widget.editor.focus_first_block)
         
@@ -3418,7 +3713,24 @@ class MainWindow(DockingMainWindow):
                 self._save_single_file_as(context)
         else:
             # Contexto workspace - usar workspace_manager diretamente
-            self.workspace_manager.save_workspace()
+            window_geometry = {
+                'x': self.geometry().x(),
+                'y': self.geometry().y(),
+                'width': self.geometry().width(),
+                'height': self.geometry().height(),
+                'maximized': self.isMaximized()
+            }
+            
+            dock_visible = self.connections_dock.isVisible() if hasattr(self, 'connections_dock') else True
+            
+            self.workspace_manager.save_workspace(
+                tabs=[],
+                active_tab=0,
+                active_connection=None,
+                window_geometry=window_geometry,
+                splitter_sizes=[],
+                dock_visible=dock_visible
+            )
     
     def _save_single_file(self, file_path: str, file_type: str):
         """Salva conteúdo em arquivo único (sql/py)"""

@@ -4,8 +4,12 @@ PyInstaller spec file para DataPyn
 Execute: pyinstaller datapyn.spec
 """
 
+import os
 import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+# Diretorio raiz do projeto (um nivel acima de scripts/)
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(SPEC), '..'))
 
 block_cipher = None
 
@@ -25,13 +29,14 @@ hiddenimports = [
 ]
 
 # Dados adicionais (assets)
+# Destino 'src/assets' para que _MEIPASS atue como equivalente do diretorio source/
 datas = [
-    ('source/src/assets/*', 'source/src/assets'),
+    (os.path.join(ROOT_DIR, 'source', 'src', 'assets', '*'), os.path.join('src', 'assets')),
 ]
 
 a = Analysis(
-    ['source/main.py'],
-    pathex=[],
+    [os.path.join(ROOT_DIR, 'source', 'main.py')],
+    pathex=[ROOT_DIR],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -50,10 +55,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='DataPyn',
     debug=False,
     bootloader_ignore_signals=False,
@@ -61,11 +64,22 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # False = sem console (aplicação GUI)
+    console=False,  # False = sem console (aplicacao GUI)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='source/src/assets/datapyn-logo.ico',  # Ícone do EXE
+    icon=os.path.join(ROOT_DIR, 'source', 'src', 'assets', 'datapyn-logo.ico'),  # Icone do EXE
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='DataPyn',
 )

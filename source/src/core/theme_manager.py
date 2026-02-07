@@ -40,7 +40,7 @@ THEMES = {
         'app': {
             'background': '#1e1e1e',
             'foreground': '#cccccc',
-            'accent': '#007acc',
+            'accent': '#3369FF',
             'border': '#3e3e42',
         }
     },
@@ -75,7 +75,7 @@ THEMES = {
         'app': {
             'background': '#f3f3f3',
             'foreground': '#333333',
-            'accent': '#007acc',
+            'accent': '#3369FF',
             'border': '#cccccc',
         }
     },
@@ -457,6 +457,14 @@ class ThemeManager:
             }}
             QTreeWidget::item:selected {{
                 background-color: {c['accent']};
+            }}
+            QTreeWidget QLineEdit {{
+                background-color: {c['border']};
+                color: {c['foreground']};
+                border: 1px solid {c['accent']};
+                padding: 2px 4px;
+                selection-background-color: {c['accent']};
+                selection-color: white;
             }}
             QToolBar {{
                 background-color: {c['border']};

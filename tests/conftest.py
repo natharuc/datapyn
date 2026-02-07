@@ -18,6 +18,27 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 
+# ==================== CONFIGURAÇÃO MATPLOTLIB PARA TESTES ====================
+
+@pytest.fixture(scope='session', autouse=True)
+def configure_matplotlib():
+    """
+    Configura matplotlib para testes headless evitando problemas com threads de fontes
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    plt.ioff()
+    
+    # Previne matplotlib de carregar fontes em threads paralelas
+    import matplotlib.font_manager
+    matplotlib.font_manager._load_fontmanager = lambda try_read_cache=True: matplotlib.font_manager.FontManager()
+    
+    yield
+    
+    plt.close('all')
+
+
 # ==================== AUTO-CLOSE DE DIÁLOGOS PARA CI ====================
 
 @pytest.fixture(autouse=True)
