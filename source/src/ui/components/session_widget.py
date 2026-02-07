@@ -208,6 +208,13 @@ class SessionWidget(QWidget):
             main_window.global_results_viewer.display_dataframe(data, name)
             main_window.show_panel('results')
     
+    def _set_figures(self, figures: list, label: str = "Grafico"):
+        """Exibe figuras (PNG bytes) no painel global de resultados"""
+        main_window = self._get_main_window()
+        if main_window and main_window.global_results_viewer:
+            main_window.global_results_viewer.display_images(figures, label)
+            main_window.show_panel('results')
+    
     def _log_error(self, text):
         """Registra erro no output global"""
         main_window = self._get_main_window()
@@ -389,13 +396,15 @@ class SessionWidget(QWidget):
         
         self._python_thread.start()
     
-    def _on_python_finished_adapted(self, result, output: str, error: str, namespace: dict):
+    def _on_python_finished_adapted(self, result, output: str, error: str, namespace: dict, figures: list = None):
         '''Adapter para usar PythonWorker centralizado'''
         # Chama o callback original com namespace atualizado
-        self._on_python_finished(result, output, error, namespace)
+        self._on_python_finished(result, output, error, namespace, figures or [])
     
-    def _on_python_finished(self, result, output: str, error: str, updated_namespace: dict):
+    def _on_python_finished(self, result, output: str, error: str, updated_namespace: dict, figures: list = None):
         """Callback quando Python termina"""
+        figures = figures or []
+        
         if self._python_thread:
             self._python_thread.quit()
             self._python_thread.wait()
@@ -413,44 +422,52 @@ class SessionWidget(QWidget):
             self._show_output()
         else:
             has_dataframe_result = False
+            has_figures = bool(figures)
             has_output = bool(output)
             
+            # 1. Logs/print -> Output
             if output:
                 self.append_output(self._format_log('PYTHON', output))
             
+            # 2. Resultado -> Results (DataFrame) ou Output (outro)
             if result is not None:
                 if isinstance(result, pd.DataFrame):
                     has_dataframe_result = True
                     self._set_results(result, "result")
                     self.append_output(self._format_log('PYTHON', f"DataFrame: {len(result):,} linhas"))
-                    self.status_changed.emit(f"✓ Python: DataFrame {len(result):,} linhas")
                 else:
                     self.append_output(self._format_log('PYTHON', f"{repr(result)}"))
                     has_output = True
             
-            # Lógica dinâmica de exibição de abas:
-            # - Se gerou DataFrame -> mostra Resultados
-            # - Se tem output mas não DataFrame -> mostra Output
-            # - Se não tem nada -> não muda aba
-            if has_dataframe_result:
-                # DataFrame tem prioridade - já foi setado acima, mostra grid automaticamente
-                pass
+            # 3. Figuras matplotlib -> Results (imagem)
+            if has_figures:
+                self._set_figures(figures)
+            
+            # Logica de exibicao:
+            # - Figuras + DataFrame -> mostra figuras (prioridade visual)
+            # - Figuras -> mostra figuras
+            # - DataFrame -> mostra grid
+            # - Output -> mostra output
+            if has_figures:
+                if has_dataframe_result:
+                    self.status_changed.emit(f"Grafico + dados gerados!")
+                else:
+                    self.status_changed.emit(f"Grafico exibido!")
+            elif has_dataframe_result:
+                self.status_changed.emit(f"DataFrame {len(result):,} linhas")
             elif has_output:
-                # Tem output mas não é DataFrame -> mostra Output
                 self._show_output()
+                self.status_changed.emit("Python executado")
+            else:
+                self.status_changed.emit("Python executado")
             
-            if result is None and has_output:
-                self.status_changed.emit("✓ Python executado")
-            elif result is None and not has_output:
-                self.status_changed.emit("✓ Python executado")
-            
-            # Atualizar namespace da sessão
+            # Atualizar namespace da sessao
             if updated_namespace:
                 self.session.update_namespace(updated_namespace)
             
             self.session.finish_execution(True, "Python executado")
         
-        # Processar próximo da fila se houver
+        # Processar proximo da fila se houver
         self._is_executing = False
         self._process_next_in_queue()
     
