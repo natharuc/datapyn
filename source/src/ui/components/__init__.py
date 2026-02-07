@@ -22,7 +22,7 @@ from .buttons import (
     SuccessButton,
     GhostButton,
     ToolbarButton,
-    IconButton,
+    IconButton
 )
 
 # Inputs
@@ -34,7 +34,7 @@ from .inputs import (
     StyledCheckBox,
     StyledLabel,
     FormField,
-    SearchInput,
+    SearchInput
 )
 
 # Toolbar
@@ -44,7 +44,12 @@ from .toolbar import MainToolbar
 from .statusbar import MainStatusBar
 
 # Connection Panel
-from .connection_panel import ConnectionPanel, ConnectionItem, ActiveConnectionWidget, ConnectionsList
+from .connection_panel import (
+    ConnectionPanel,
+    ConnectionItem,
+    ActiveConnectionWidget,
+    ConnectionsList
+)
 
 # Session Tabs
 from .session_tabs import SessionTabs, SessionTabBar
@@ -61,36 +66,39 @@ from .session_widget import SessionWidget
 
 __all__ = [
     # Buttons
-    "StyledButton",
-    "PrimaryButton",
-    "SecondaryButton",
-    "DangerButton",
-    "SuccessButton",
-    "GhostButton",
-    "ToolbarButton",
-    "IconButton",
+    'StyledButton',
+    'PrimaryButton',
+    'SecondaryButton',
+    'DangerButton',
+    'SuccessButton',
+    'GhostButton',
+    'ToolbarButton',
+    'IconButton',
+    
     # Inputs
-    "StyledLineEdit",
-    "StyledTextEdit",
-    "StyledSpinBox",
-    "StyledComboBox",
-    "StyledCheckBox",
-    "StyledLabel",
-    "FormField",
-    "SearchInput",
+    'StyledLineEdit',
+    'StyledTextEdit',
+    'StyledSpinBox',
+    'StyledComboBox',
+    'StyledCheckBox',
+    'StyledLabel',
+    'FormField',
+    'SearchInput',
+    
     # Layout Components
-    "MainToolbar",
-    "MainStatusBar",
-    "ConnectionPanel",
-    "ConnectionItem",
-    "ActiveConnectionWidget",
-    "ConnectionsList",
-    "SessionTabs",
-    "SessionTabBar",
-    "EditorHeader",
+    'MainToolbar',
+    'MainStatusBar',
+    'ConnectionPanel',
+    'ConnectionItem',
+    'ActiveConnectionWidget',
+    'ConnectionsList',
+    'SessionTabs',
+    'SessionTabBar',
+    'EditorHeader',
+    
     # Data Components
-    "ResultsViewer",
-    "CSVExportDialog",
-    "PandasModel",
-    "SessionWidget",
+    'ResultsViewer',
+    'CSVExportDialog',
+    'PandasModel',
+    'SessionWidget'
 ]

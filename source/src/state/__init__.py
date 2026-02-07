@@ -1,7 +1,6 @@
 """
 State Management - Gerenciamento de estado da aplicação
 """
-
 from .app_state import (
     ApplicationState,
     ConnectionState,
@@ -10,8 +9,8 @@ from .app_state import (
 )
 
 __all__ = [
-    "ApplicationState",
-    "ConnectionState",
-    "SessionState",
-    "ApplicationConfig",
+    'ApplicationState',
+    'ConnectionState',
+    'SessionState',
+    'ApplicationConfig',
 ]
