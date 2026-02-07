@@ -1121,7 +1121,7 @@ class TestPythonWorkerRichResult:
         result, figs = worker._process_rich_result(obj)
         assert result is None
         assert len(figs) == 1
-        assert figs[0] == b'fake_png_data'
+        assert figs[0] == {'type': 'image', 'data': b'fake_png_data'}
 
     def test_matplotlib_figure_with_captured_skips(self):
         """matplotlib Figure ja capturado nao e duplicado"""
@@ -1155,7 +1155,8 @@ class TestPythonWorkerRichResult:
             result, figs = worker._process_rich_result(fig, has_captured_figures=False)
             assert result is None
             assert len(figs) == 1
-            assert len(figs[0]) > 0  # PNG bytes
+            assert figs[0]['type'] == 'image'
+            assert len(figs[0]['data']) > 0  # PNG bytes
         except ImportError:
             pytest.skip("matplotlib nao instalado")
 
@@ -1192,7 +1193,7 @@ class TestResultsViewerImage:
         from src.ui.components.results_viewer import ResultsViewer
         viewer = ResultsViewer()
         assert hasattr(viewer, 'stack')
-        assert viewer.stack.count() == 2
+        assert viewer.stack.count() == 4  # tabela, imagem, html, json
 
     def test_display_image_switches_to_image_page(self, qapp):
         """display_image mostra pagina de imagem (index 1)"""

@@ -5,10 +5,12 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableView,
                              QLabel, QPushButton, QLineEdit, QToolBar,
                              QDialog, QFormLayout, QComboBox, QCheckBox,
                              QDialogButtonBox, QFileDialog, QMessageBox,
-                             QStackedWidget, QScrollArea)
+                             QStackedWidget, QScrollArea, QTextEdit,
+                             QTreeWidget, QTreeWidgetItem)
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings
-from PyQt6.QtGui import QColor, QImage, QPixmap
+from PyQt6.QtGui import QColor, QImage, QPixmap, QFont
 import pandas as pd
+import json
 from typing import Optional
 import subprocess
 import os
@@ -283,6 +285,46 @@ class ResultsViewer(QWidget):
         self.image_scroll.setWidget(self.image_label)
         self.stack.addWidget(self.image_scroll)  # index 1
 
+        # Pagina 2 - HTML
+        self.html_viewer = QTextEdit()
+        self.html_viewer.setReadOnly(True)
+        self.html_viewer.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {colors['background']};
+                color: {colors['foreground']};
+                border: none;
+                padding: 10px;
+            }}
+        """)
+        self.stack.addWidget(self.html_viewer)  # index 2
+
+        # Pagina 3 - JSON Tree
+        self.json_tree = QTreeWidget()
+        self.json_tree.setHeaderLabels(['Chave', 'Valor', 'Tipo'])
+        self.json_tree.setAlternatingRowColors(True)
+        self.json_tree.setColumnWidth(0, 250)
+        self.json_tree.setColumnWidth(1, 400)
+        self.json_tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background-color: {colors['background']};
+                color: {colors['foreground']};
+                border: none;
+                alternate-background-color: {colors['border']};
+            }}
+            QTreeWidget::item {{
+                padding: 3px;
+            }}
+            QHeaderView::section {{
+                background-color: {colors['border']};
+                color: {colors['foreground']};
+                border: none;
+                padding: 5px;
+                font-weight: bold;
+            }}
+        """)
+        self.json_tree.setFont(QFont('Consolas', 10))
+        self.stack.addWidget(self.json_tree)  # index 3
+
         layout.addWidget(self.stack)
         
         # Conectar sinais
@@ -490,12 +532,232 @@ class ResultsViewer(QWidget):
         self.export_destination.setVisible(False)
         self.btn_save_image.setVisible(True)
     
+    def display_html(self, html_content: str, label: str = "HTML"):
+        """Exibe conteudo HTML no painel de resultados.
+        
+        Usado para pandas Styler, IPython.display.HTML, etc.
+        Injeta CSS para tema escuro automaticamente.
+        
+        Args:
+            html_content: String HTML a renderizar
+            label: Texto descritivo para a info label
+        """
+        colors = self.theme_manager.get_app_colors()
+
+        # Injetar CSS de tema escuro no HTML
+        dark_css = f"""
+        <style>
+            body, html {{
+                background-color: {colors['background']};
+                color: {colors['foreground']};
+                font-family: 'Segoe UI', Consolas, monospace;
+                font-size: 13px;
+                margin: 10px;
+            }}
+            table {{
+                border-collapse: collapse;
+                margin: 10px 0;
+            }}
+            th {{
+                background-color: {colors['border']};
+                color: {colors['foreground']};
+                padding: 8px 12px;
+                text-align: left;
+                border: 1px solid {colors['border']};
+                font-weight: bold;
+            }}
+            td {{
+                padding: 6px 12px;
+                border: 1px solid {colors['border']};
+            }}
+            tr:nth-child(even) {{
+                background-color: {colors['border']};
+            }}
+            a {{ color: {colors['accent']}; }}
+            pre, code {{
+                background-color: {colors['border']};
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-family: Consolas, monospace;
+            }}
+        </style>
+        """
+
+        # Envolver se nao tem <html> tag
+        if '<html' not in html_content.lower():
+            html_content = f"<html><head>{dark_css}</head><body>{html_content}</body></html>"
+        else:
+            # Injetar CSS no head existente
+            html_content = html_content.replace('</head>', f'{dark_css}</head>', 1)
+
+        self.html_viewer.setHtml(html_content)
+        self.info_label.setText(label)
+
+        self.stack.setCurrentIndex(2)
+        self._hide_all_toolbar_buttons()
+
+    def display_json(self, data, label: str = "JSON"):
+        """Exibe dict/list como arvore colapsavel no painel de resultados.
+        
+        Args:
+            data: dict, list, ou qualquer objeto serializavel
+            label: Texto descritivo para a info label
+        """
+        self.json_tree.clear()
+
+        colors = self.theme_manager.get_app_colors()
+        type_color = QColor(colors.get('accent', '#3369FF'))
+
+        if isinstance(data, dict):
+            self._populate_json_tree(self.json_tree.invisibleRootItem(), data, type_color)
+            count = len(data)
+            self.info_label.setText(f"{label} (dict: {count} chaves)")
+        elif isinstance(data, list):
+            self._populate_json_tree(self.json_tree.invisibleRootItem(), data, type_color)
+            count = len(data)
+            self.info_label.setText(f"{label} (list: {count} itens)")
+        else:
+            # Tentar converter para dict/list via json
+            try:
+                parsed = json.loads(json.dumps(data, default=str))
+                self._populate_json_tree(self.json_tree.invisibleRootItem(), parsed, type_color)
+                self.info_label.setText(f"{label} ({type(data).__name__})")
+            except (TypeError, ValueError):
+                item = QTreeWidgetItem(self.json_tree, [str(type(data).__name__), str(data), type(data).__name__])
+                self.info_label.setText(f"{label}")
+
+        # Expandir primeiro nivel
+        root = self.json_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            root.child(i).setExpanded(True)
+
+        self.stack.setCurrentIndex(3)
+        self._hide_all_toolbar_buttons()
+
+    def _populate_json_tree(self, parent, data, type_color: QColor):
+        """Popula arvore JSON recursivamente.
+        
+        Args:
+            parent: QTreeWidgetItem pai
+            data: dados a inserir (dict, list, ou valor primitivo)
+            type_color: cor para a coluna de tipo
+        """
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, (dict, list)):
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, str(key))
+                    type_name = 'dict' if isinstance(value, dict) else 'list'
+                    count = len(value)
+                    item.setText(1, f'{{{count} itens}}' if isinstance(value, dict) else f'[{count} itens]')
+                    item.setText(2, type_name)
+                    item.setForeground(2, type_color)
+                    self._populate_json_tree(item, value, type_color)
+                else:
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, str(key))
+                    item.setText(1, self._format_json_value(value))
+                    item.setText(2, type(value).__name__)
+                    item.setForeground(2, type_color)
+        elif isinstance(data, list):
+            for i, value in enumerate(data):
+                if isinstance(value, (dict, list)):
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, f'[{i}]')
+                    type_name = 'dict' if isinstance(value, dict) else 'list'
+                    count = len(value)
+                    item.setText(1, f'{{{count} itens}}' if isinstance(value, dict) else f'[{count} itens]')
+                    item.setText(2, type_name)
+                    item.setForeground(2, type_color)
+                    self._populate_json_tree(item, value, type_color)
+                else:
+                    item = QTreeWidgetItem(parent)
+                    item.setText(0, f'[{i}]')
+                    item.setText(1, self._format_json_value(value))
+                    item.setText(2, type(value).__name__)
+                    item.setForeground(2, type_color)
+
+    def _format_json_value(self, value) -> str:
+        """Formata valor para exibicao na arvore JSON."""
+        if value is None:
+            return 'null'
+        if isinstance(value, bool):
+            return 'true' if value else 'false'
+        if isinstance(value, str):
+            # Truncar strings muito longas
+            if len(value) > 200:
+                return f'"{value[:200]}..."'
+            return f'"{value}"'
+        return str(value)
+
+    def display_rich_output(self, outputs: list, label: str = "Resultado"):
+        """Exibe rich outputs baseado no tipo de cada item.
+        
+        Aceita lista de dicts com tipo:
+            {'type': 'image', 'data': bytes}     # PNG bytes
+            {'type': 'html', 'data': str}        # HTML string
+            {'type': 'json', 'data': object}     # dict/list
+        
+        Tambem aceita lista de bytes puros (backward compat com display_images).
+        
+        Prioridade quando ha tipos mistos: image > html > json
+        """
+        if not outputs:
+            return
+
+        # Backward compat: se todos sao bytes, tratar como imagens
+        if all(isinstance(o, bytes) for o in outputs):
+            self.display_images(outputs, label)
+            return
+
+        # Separar por tipo
+        images = []
+        html_items = []
+        json_items = []
+
+        for item in outputs:
+            if isinstance(item, bytes):
+                images.append(item)
+            elif isinstance(item, dict):
+                item_type = item.get('type', '')
+                if item_type == 'image' and 'data' in item:
+                    images.append(item['data'])
+                elif item_type == 'html' and 'data' in item:
+                    html_items.append(item['data'])
+                elif item_type == 'json' and 'data' in item:
+                    json_items.append(item['data'])
+
+        # Prioridade: image > html > json
+        if images:
+            self.display_images(images, label)
+        elif html_items:
+            # Combinar multiplos HTML
+            combined = '<hr>'.join(html_items)
+            self.display_html(combined, label)
+        elif json_items:
+            # Mostrar primeiro JSON (ou combinar em lista)
+            if len(json_items) == 1:
+                self.display_json(json_items[0], label)
+            else:
+                self.display_json(json_items, label)
+
+    def _hide_all_toolbar_buttons(self):
+        """Esconde todos os botoes da toolbar (usado para HTML e JSON pages)."""
+        self.btn_export_csv.setVisible(False)
+        self.btn_export_excel.setVisible(False)
+        self.btn_export_json.setVisible(False)
+        self.btn_copy.setVisible(False)
+        self.export_destination.setVisible(False)
+        self.btn_save_image.setVisible(False)
+
     def clear(self):
         """Limpa a visualizacao"""
         self.current_df = None
         self._current_image_bytes = None
         self.model.update_data(pd.DataFrame())
         self.image_label.clear()
+        self.html_viewer.clear()
+        self.json_tree.clear()
         self.info_label.setText("Nenhum resultado")
         self.stack.setCurrentIndex(0)
         self.btn_save_image.setVisible(False)

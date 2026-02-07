@@ -208,11 +208,11 @@ class SessionWidget(QWidget):
             main_window.global_results_viewer.display_dataframe(data, name)
             main_window.show_panel('results')
     
-    def _set_figures(self, figures: list, label: str = "Grafico"):
-        """Exibe figuras (PNG bytes) no painel global de resultados"""
+    def _set_figures(self, figures: list, label: str = "Resultado"):
+        """Exibe rich outputs (imagens, HTML, JSON) no painel global de resultados"""
         main_window = self._get_main_window()
         if main_window and main_window.global_results_viewer:
-            main_window.global_results_viewer.display_images(figures, label)
+            main_window.global_results_viewer.display_rich_output(figures, label)
             main_window.show_panel('results')
     
     def _log_error(self, text):

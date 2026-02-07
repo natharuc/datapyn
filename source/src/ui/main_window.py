@@ -119,10 +119,11 @@ class PythonWorker(QObject):
                 if new_dfs:
                     result_value = new_dfs[-1][1]
 
-            # Processar resultado rico (PIL Image, plotly, matplotlib Figure como valor)
-            result_value, extra_figs = self._process_rich_result(
+            # Processar resultado rico (PIL Image, plotly, matplotlib Figure,
+            # _repr_html_(), dict/list, etc.)
+            result_value, extra_outputs = self._process_rich_result(
                 result_value, has_captured_figures=bool(figures))
-            figures.extend(extra_figs)
+            figures.extend(extra_outputs)
 
             self.finished.emit(result_value, output, '', self.namespace, figures)
         except Exception as e:
@@ -159,7 +160,11 @@ class PythonWorker(QObject):
             pass  # matplotlib nao instalado, ignorar
 
     def _capture_matplotlib_figures(self) -> list:
-        """Captura todas as figuras matplotlib abertas como bytes PNG"""
+        """Captura todas as figuras matplotlib abertas como rich outputs.
+        
+        Returns:
+            Lista de dicts {'type': 'image', 'data': bytes_png}
+        """
         figures_data = []
         try:
             import matplotlib.pyplot as plt
@@ -175,7 +180,7 @@ class PythonWorker(QObject):
                            facecolor=fig.get_facecolor(),
                            edgecolor='none')
                 buf.seek(0)
-                figures_data.append(buf.getvalue())
+                figures_data.append({'type': 'image', 'data': buf.getvalue()})
                 buf.close()
 
             plt.close('all')
@@ -224,14 +229,18 @@ class PythonWorker(QObject):
             return None
 
     def _process_rich_result(self, result, has_captured_figures=False):
-        """Converte objetos ricos (PIL Image, plotly, matplotlib Figure) em PNG.
+        """Converte objetos ricos em rich outputs tipados.
+
+        Detecta: matplotlib Figure, PIL Image, Plotly Figure,
+        _repr_png_(), _repr_html_(), dict/list.
 
         Returns:
-            (result, extra_figures): resultado processado e lista de bytes PNG adicionais
+            (result, extra_outputs): resultado processado e lista de rich outputs.
+            Rich outputs sao dicts: {'type': 'image'|'html'|'json', 'data': ...}
         """
-        extra_figures = []
+        extra_outputs = []
         if result is None:
-            return result, extra_figures
+            return result, extra_outputs
 
         # matplotlib Figure retornado como valor de expressao
         try:
@@ -239,16 +248,16 @@ class PythonWorker(QObject):
             if isinstance(result, MplFigure):
                 if has_captured_figures:
                     # Ja capturado por _capture_matplotlib_figures, nao duplicar
-                    return None, extra_figures
+                    return None, extra_outputs
                 buf = io.BytesIO()
                 result.savefig(buf, format='png', dpi=150,
                               bbox_inches='tight',
                               facecolor=result.get_facecolor(),
                               edgecolor='none')
                 buf.seek(0)
-                extra_figures.append(buf.getvalue())
+                extra_outputs.append({'type': 'image', 'data': buf.getvalue()})
                 buf.close()
-                return None, extra_figures
+                return None, extra_outputs
         except ImportError:
             pass
 
@@ -260,24 +269,33 @@ class PythonWorker(QObject):
                 # Converter RGBA para RGB se necessario (PNG suporta ambos)
                 result.save(buf, format='PNG')
                 buf.seek(0)
-                extra_figures.append(buf.getvalue())
+                extra_outputs.append({'type': 'image', 'data': buf.getvalue()})
                 buf.close()
-                return None, extra_figures
+                return None, extra_outputs
         except ImportError:
             pass
 
-        # Plotly Figure -> tenta converter para PNG (requer kaleido)
+        # Plotly Figure -> tenta PNG (kaleido), senao HTML interativo
         try:
             import plotly.graph_objects as go
             if isinstance(result, go.Figure):
                 try:
                     img_bytes = result.to_image(format='png', scale=2,
                                                width=800, height=500)
-                    extra_figures.append(img_bytes)
-                    return None, extra_figures
+                    extra_outputs.append({'type': 'image', 'data': img_bytes})
+                    return None, extra_outputs
                 except Exception:
-                    # kaleido nao instalado ou erro - mostra como texto
-                    pass
+                    # kaleido nao instalado - usar HTML interativo
+                    try:
+                        html_str = result.to_html(
+                            include_plotlyjs='cdn',
+                            full_html=True,
+                            config={'displayModeBar': True}
+                        )
+                        extra_outputs.append({'type': 'html', 'data': html_str})
+                        return None, extra_outputs
+                    except Exception:
+                        pass
         except ImportError:
             pass
 
@@ -286,12 +304,33 @@ class PythonWorker(QObject):
             try:
                 png_data = result._repr_png_()
                 if png_data:
-                    extra_figures.append(png_data)
-                    return None, extra_figures
+                    extra_outputs.append({'type': 'image', 'data': png_data})
+                    return None, extra_outputs
             except Exception:
                 pass
 
-        return result, extra_figures
+        # Objeto com _repr_html_() (pandas Styler, IPython.display.HTML etc.)
+        # NÃO aplicar para DataFrames puros (ja tem grid melhor)
+        if hasattr(result, '_repr_html_') and not isinstance(result, pd.DataFrame):
+            try:
+                html_data = result._repr_html_()
+                if html_data:
+                    extra_outputs.append({'type': 'html', 'data': html_data})
+                    return None, extra_outputs
+            except Exception:
+                pass
+
+        # dict ou list -> JSON tree view
+        if isinstance(result, (dict, list)) and not isinstance(result, pd.DataFrame):
+            # So mostrar como JSON se nao e muito simples (mais de 1 item)
+            if isinstance(result, dict) and len(result) >= 1:
+                extra_outputs.append({'type': 'json', 'data': result})
+                return None, extra_outputs
+            elif isinstance(result, list) and len(result) >= 1:
+                extra_outputs.append({'type': 'json', 'data': result})
+                return None, extra_outputs
+
+        return result, extra_outputs
 
 
 class CrossSyntaxWorker(QObject):
@@ -2103,12 +2142,12 @@ class MainWindow(DockingMainWindow):
         # Iniciar
         thread.start()
     
-    def _display_figures_in_results(self, figures: list, label: str = "Grafico"):
-        """Exibe figuras/imagens no painel de resultados."""
+    def _display_figures_in_results(self, figures: list, label: str = "Resultado"):
+        """Exibe rich outputs (imagens/HTML/JSON) no painel de resultados."""
         results_panel = self.global_results_viewer
         if not results_panel or not figures:
             return
-        results_panel.display_images(figures, label)
+        results_panel.display_rich_output(figures, label)
         self.show_panel('results')
     
     def _handle_execution_result(self, result=None, error=None, execution_type="Unknown", additional_info=""):
@@ -2280,24 +2319,24 @@ class MainWindow(DockingMainWindow):
             self._log(output.strip())
         
         # Decidir o que mostrar no painel Results:
-        # Prioridade: figuras (graficos/imagens) > DataFrame > nada
+        # Prioridade: rich outputs (graficos/html/json) > DataFrame > nada
         has_figures = bool(figures)
         results_panel = self.global_results_viewer
         
         if has_figures and result_value is not None and isinstance(result_value, pd.DataFrame):
-            # Graficos + DataFrame: mostrar graficos no results, dados ficam no namespace
+            # Rich outputs + DataFrame: mostrar rich output no results
             if results_panel:
-                results_panel.display_images(figures, "Grafico")
+                results_panel.display_rich_output(figures, "Resultado")
             self.show_panel('results')
             self._update_variables_view()
             self.action_label.setText("[Python] Grafico + dados gerados!")
         elif has_figures:
-            # So graficos: mostrar no results
+            # So rich outputs: mostrar no results
             if results_panel:
-                results_panel.display_images(figures, "Grafico")
+                results_panel.display_rich_output(figures, "Resultado")
             self.show_panel('results')
             self._update_variables_view()
-            self.action_label.setText("[Python] Grafico exibido!")
+            self.action_label.setText("[Python] Resultado exibido!")
         elif result_value is not None:
             # Resultado sem graficos: usar handler centralizado
             success = self._handle_execution_result(
