@@ -2,27 +2,27 @@
 Diálogo unificado para criar e editar conexões
 """
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QCheckBox,
-    QColorDialog,
-    QComboBox,
     QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QLineEdit,
+    QSpinBox,
+    QComboBox,
+    QCheckBox,
     QFormLayout,
     QFrame,
-    QHBoxLayout,
     QLabel,
-    QLineEdit,
+    QColorDialog,
     QMessageBox,
     QProgressDialog,
-    QPushButton,
-    QSpinBox,
-    QVBoxLayout,
 )
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor
 
-from src.core.theme_manager import ThemeManager
 from src.database import DatabaseConnector
+from src.core.theme_manager import ThemeManager
 
 try:
     import qtawesome as qta

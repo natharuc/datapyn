@@ -5,13 +5,12 @@ Separa completamente a lógica de processamento da UI.
 Cada worker emite sinais com resultados, nunca manipula UI diretamente.
 """
 
+from PyQt6.QtCore import QObject, pyqtSignal, QThread
 import sys
 import traceback
 from io import StringIO
 from typing import Any, Dict
-
 import pandas as pd
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 
 class BaseWorker(QObject):

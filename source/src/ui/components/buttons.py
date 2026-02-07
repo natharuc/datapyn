@@ -7,21 +7,11 @@ Mantido para compatibilidade com código legado.
 
 from src.design_system import (
     Button as NewButton,
-)
-from src.design_system import (
-    DangerButton as NewDangerButton,
-)
-from src.design_system import (
-    GhostButton as NewGhostButton,
-)
-from src.design_system import (
     PrimaryButton as NewPrimaryButton,
-)
-from src.design_system import (
     SecondaryButton as NewSecondaryButton,
-)
-from src.design_system import (
+    DangerButton as NewDangerButton,
     SuccessButton as NewSuccessButton,
+    GhostButton as NewGhostButton,
 )
 
 # Aliases para compatibilidade
@@ -32,9 +22,9 @@ DangerButton = NewDangerButton
 SuccessButton = NewSuccessButton
 GhostButton = NewGhostButton
 
-from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QPushButton, QToolButton
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QIcon
 
 from src.design_system.tokens import get_colors
 

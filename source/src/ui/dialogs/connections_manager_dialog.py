@@ -2,31 +2,30 @@
 Diálogo de gerenciamento de conexões salvas
 """
 
-from typing import Optional
-
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QBrush, QColor
 from PyQt6.QtWidgets import (
-    QCheckBox,
-    QColorDialog,
-    QComboBox,
     QDialog,
-    QFormLayout,
-    QFrame,
+    QVBoxLayout,
     QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QLineEdit,
-    QMenu,
-    QMessageBox,
     QPushButton,
-    QSpinBox,
-    QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
-    QVBoxLayout,
+    QMenu,
+    QInputDialog,
+    QMessageBox,
+    QSplitter,
     QWidget,
+    QLabel,
+    QFormLayout,
+    QLineEdit,
+    QSpinBox,
+    QComboBox,
+    QCheckBox,
+    QColorDialog,
+    QFrame,
 )
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QBrush, QAction
+from typing import Optional
 
 from src.core.theme_manager import ThemeManager
 

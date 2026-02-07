@@ -2,20 +2,20 @@
 Painel de conexoes - Material Design Flat
 """
 
-import qtawesome as qta
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
-    QFrame,
+    QWidget,
+    QVBoxLayout,
     QHBoxLayout,
+    QFrame,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMenu,
     QPushButton,
-    QVBoxLayout,
-    QWidget,
+    QMenu,
 )
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction
+import qtawesome as qta
 
 
 class ConnectionItem(QListWidgetItem):

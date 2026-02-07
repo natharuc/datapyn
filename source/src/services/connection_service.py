@@ -7,12 +7,12 @@ Responsabilidades:
 - Sincronizar com ApplicationState
 """
 
+from typing import Optional, Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
-from ..database import ConnectionManager
-from ..state import ApplicationState
 from ..workers import DatabaseConnectionWorker, execute_worker
+from ..state import ApplicationState
+from ..database import ConnectionManager
 
 
 @dataclass

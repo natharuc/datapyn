@@ -2,9 +2,9 @@
 Editor de código unificado que suporta SQL e Python
 """
 
-from PyQt6.Qsci import QsciLexerPython, QsciLexerSQL, QsciScintilla
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeyEvent
+from PyQt6.Qsci import QsciScintilla, QsciLexerSQL, QsciLexerPython
+from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QFont, QColor, QKeyEvent
 
 from src.core.theme_manager import ThemeManager
 

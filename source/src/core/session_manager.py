@@ -8,12 +8,11 @@ Responsável por:
 - Notificar mudanças de foco
 """
 
+from PyQt6.QtCore import QObject, pyqtSignal
+from typing import Optional, Dict, List, Any
+from pathlib import Path
 import json
 import uuid
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-from PyQt6.QtCore import QObject, pyqtSignal
 
 from .session import Session
 

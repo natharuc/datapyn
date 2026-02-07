@@ -8,7 +8,6 @@ Usa Protocol (PEP 544) para duck typing estrutural - não requer herança explí
 """
 
 from typing import Protocol, runtime_checkable
-
 from PyQt6.QtWidgets import QWidget
 
 

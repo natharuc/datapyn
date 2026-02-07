@@ -4,10 +4,10 @@ CodeEditor - Implementação do editor de código usando QScintilla.
 Implementa a interface ICodeEditor seguindo o princípio de Inversão de Dependência.
 """
 
-from PyQt6.Qsci import QsciLexerPython, QsciLexerSQL, QsciScintilla
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QFont, QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QWidget
+from PyQt6.Qsci import QsciScintilla, QsciLexerPython, QsciLexerSQL
 
 
 class CodeEditor(QsciScintilla):

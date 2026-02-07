@@ -6,21 +6,19 @@ Contém todos os componentes de uma sessão:
 - BottomTabs (Resultados, Output, Variáveis)
 """
 
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QLabel
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
+from PyQt6.QtGui import QFont
+import pandas as pd
 import sys
 import traceback
-from datetime import datetime
 from io import StringIO
-from typing import Any, Dict, Optional
-
-import pandas as pd
-from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QLabel, QSplitter, QVBoxLayout, QWidget
+from typing import Optional, Dict, Any
+from datetime import datetime
 
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
 from src.editors import BlockEditor
-
 # from src.ui.components.bottom_tabs import BottomTabs  # Removido - usando painéis globais
 
 

@@ -2,13 +2,12 @@
 Gerenciador de múltiplas conexões de banco de dados
 """
 
+from typing import Dict, Optional, List
+from .database_connector import DatabaseConnector
 import json
 import os
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-
-from .database_connector import DatabaseConnector
+from datetime import datetime
 
 
 class ConnectionManager:

@@ -8,14 +8,13 @@ Responsabilidades:
 - Tratar erros de forma consistente
 """
 
-from dataclasses import dataclass
+from typing import Optional, Callable, List
 from datetime import datetime
-from typing import Callable, List, Optional
-
+from dataclasses import dataclass
 import pandas as pd
 
-from ..state import ApplicationState
 from ..workers import SqlExecutionWorker, execute_worker
+from ..state import ApplicationState
 
 
 @dataclass

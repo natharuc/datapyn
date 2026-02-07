@@ -8,13 +8,12 @@ Cada aba do editor é uma sessão que contém:
 - Threads próprias
 """
 
-import sys
-import traceback
+from PyQt6.QtCore import QObject, pyqtSignal, QThread
+from typing import Optional, Dict, Any
 from datetime import datetime
+import traceback
+import sys
 from io import StringIO
-from typing import Any, Dict, Optional
-
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 
 class Session(QObject):

@@ -2,9 +2,9 @@
 Toolbar principal da aplicacao
 """
 
+from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy
+from PyQt6.QtCore import pyqtSignal, QSize
 import qtawesome as qta
-from PyQt6.QtCore import QSize, pyqtSignal
-from PyQt6.QtWidgets import QPushButton, QSizePolicy, QToolBar, QWidget
 
 
 class MainToolbar(QToolBar):

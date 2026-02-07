@@ -2,9 +2,9 @@
 Editor Python para manipular resultados das queries
 """
 
-from PyQt6.Qsci import QsciLexerPython, QsciScintilla
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QFont, QColor, QKeySequence, QShortcut
+from PyQt6.Qsci import QsciScintilla, QsciLexerPython
 
 
 class PythonEditor(QsciScintilla):

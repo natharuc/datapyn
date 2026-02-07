@@ -2,10 +2,9 @@
 Gerenciador de resultados de queries em memória
 """
 
-from datetime import datetime
-from typing import Any, Dict, Optional
-
+from typing import Dict, Optional, Any
 import pandas as pd
+from datetime import datetime
 
 
 class ResultsManager:

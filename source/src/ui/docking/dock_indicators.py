@@ -5,12 +5,10 @@ Mostra onde a aba será posicionada durante o drag,
 igual aos indicadores do Visual Studio.
 """
 
+from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtCore import Qt, QRect, QPoint, QTimer
+from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPixmap
 from typing import Optional
-
-from PyQt6.QtCore import QPoint, QRect, Qt, QTimer
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QApplication, QWidget
-
 from .dockable_widget import DockPosition
 
 

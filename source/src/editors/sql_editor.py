@@ -2,10 +2,10 @@
 Editor SQL com syntax highlighting estilo Monaco
 """
 
-from PyQt6.Qsci import QsciLexerSQL, QsciScintilla
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QFont, QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QWidget
+from PyQt6.Qsci import QsciScintilla, QsciLexerSQL
 
 
 class SQLEditor(QsciScintilla):
