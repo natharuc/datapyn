@@ -392,7 +392,7 @@ class TestSessionWidgetDialog:
     """Testes para dialogo de selecao de conexao"""
 
     def test_block_select_connection_opens_dialog(self, qapp):
-        """Click no panel deve abrir ConnectionsManagerDialog"""
+        """Click no panel deve abrir ConnectionPickerDialog"""
         from src.core.session import Session
 
         session = Session("test")
@@ -401,16 +401,15 @@ class TestSessionWidgetDialog:
         block = MagicMock()
         block.set_connection_name = MagicMock()
 
-        with (
-            patch("src.database.connection_manager.ConnectionManager") as MockMgr,
-            patch("src.ui.dialogs.connections_manager_dialog.ConnectionsManagerDialog") as MockDialog,
-        ):
-            mock_manager = MockMgr.return_value
-            mock_manager.get_connection_config.return_value = {"db_type": "postgresql"}
-
+        with patch(
+            "src.ui.dialogs.connection_picker_dialog.ConnectionPickerDialog"
+        ) as MockDialog:
             mock_dialog = MockDialog.return_value
             mock_dialog.exec.return_value = True
-            mock_dialog.selected_connection = "SelectedConn"
+            mock_dialog.get_result.return_value = (
+                "SelectedConn",
+                {"db_type": "postgresql", "color": ""},
+            )
 
             widget._on_block_select_connection(block)
 
@@ -426,10 +425,9 @@ class TestSessionWidgetDialog:
 
         block = MagicMock()
 
-        with (
-            patch("src.database.connection_manager.ConnectionManager") as MockMgr,
-            patch("src.ui.dialogs.connections_manager_dialog.ConnectionsManagerDialog") as MockDialog,
-        ):
+        with patch(
+            "src.ui.dialogs.connection_picker_dialog.ConnectionPickerDialog"
+        ) as MockDialog:
             mock_dialog = MockDialog.return_value
             mock_dialog.exec.return_value = False
 

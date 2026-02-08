@@ -282,7 +282,7 @@ class SessionWidget(QWidget):
 
         Args:
             query: SQL query
-            block_name: Nome do bloco (para namespace isolado {nome}_df)
+            block_name: Nome do bloco (nome da variavel do DataFrame)
             connection_name: Nome da conexao customizada (None = usa padrao da sessao)
         """
         # Determinar qual conexao usar
@@ -383,41 +383,38 @@ class SessionWidget(QWidget):
         else:
             # Determinar prefixo do namespace (isolado por bloco ou global)
             if self._current_block_name:
-                var_prefix = f"{self._current_block_name}_"  # {nome}_
+                var_base = self._current_block_name  # nome do bloco
             else:
-                var_prefix = ""  # df, df1, df2 (compatibilidade)
+                var_base = "df"  # fallback (compatibilidade)
 
-            # Verificar se retornou lista de DataFrames (múltiplos SELECTs)
+            # Verificar se retornou lista de DataFrames (multiplos SELECTs)
             if isinstance(df, list):
-                # Múltiplos DataFrames - criar variáveis
+                # Multiplos DataFrames - criar variaveis
                 total_rows = sum(len(d) for d in df)
                 self.append_output(self._format_log("SQL", f"{len(df)} consultas, {total_rows:,} linhas totais"))
 
-                # Criar variáveis: df/b1_df, df1/b1_df1, df2/b1_df2, ...
+                # Criar variaveis: teste, teste1, teste2, ...
                 for i, dataframe in enumerate(df):
-                    if var_prefix:
-                        var_name = f"{var_prefix}df" if i == 0 else f"{var_prefix}df{i}"
-                    else:
-                        var_name = "df" if i == 0 else f"df{i}"
+                    var_name = var_base if i == 0 else f"{var_base}{i}"
                     self.session.set_variable(var_name, dataframe)
                     self.append_output(self._format_log("SQL", f"{var_name}: {len(dataframe):,} linhas"))
 
-                # Exibir apenas o último DataFrame no grid
+                # Exibir apenas o ultimo DataFrame no grid
                 last_df = df[-1]
-                last_var_name = f"{var_prefix}df{len(df) - 1}" if len(df) > 1 else f"{var_prefix}df"
+                last_var_name = f"{var_base}{len(df) - 1}" if len(df) > 1 else var_base
                 self._set_results(last_df, last_var_name)
                 self.session.set_variable("_last_result", last_df)
 
                 self.session.finish_execution(True, f"SQL: {len(df)} consultas")
-                self.status_changed.emit(f"✓ SQL: {len(df)} consultas")
+                self.status_changed.emit(f"SQL: {len(df)} consultas")
             else:
-                # DataFrame único
+                # DataFrame unico
                 rows = len(df) if df is not None else 0
-                var_name = f"{var_prefix}df"
+                var_name = var_base
                 self.append_output(self._format_log("SQL", f"{rows:,} linhas -> {var_name}"))
                 self._set_results(df, var_name)
                 self.session.finish_execution(True, f"SQL: {rows:,} linhas")
-                self.status_changed.emit(f"✓ SQL: {rows:,} linhas")
+                self.status_changed.emit(f"SQL: {rows:,} linhas")
 
                 # Salvar no namespace da sessão
                 self.session.set_variable(var_name, df)
@@ -697,18 +694,23 @@ class SessionWidget(QWidget):
             self.set_code(self.session.code)
 
     def _on_block_select_connection(self, block):
-        """Abre dialogo para selecionar conexao de um bloco SQL"""
+        """Abre dialogo simples para selecionar conexao de um bloco SQL"""
         try:
-            from src.database.connection_manager import ConnectionManager
-            from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
+            from src.ui.dialogs.connection_picker_dialog import ConnectionPickerDialog
 
-            manager = ConnectionManager()
-            dialog = ConnectionsManagerDialog(manager, self.theme_manager, self)
+            # Obter connection_manager da MainWindow (instancia unica)
+            main_window = self._get_main_window()
+            if main_window and hasattr(main_window, "connection_manager"):
+                manager = main_window.connection_manager
+            else:
+                from src.database.connection_manager import ConnectionManager
+                manager = ConnectionManager()
+
+            dialog = ConnectionPickerDialog(manager, self.theme_manager, self)
 
             if dialog.exec():
-                conn_name = dialog.selected_connection
+                conn_name, config = dialog.get_result()
                 if conn_name:
-                    config = manager.get_connection_config(conn_name)
                     db_type = config.get("db_type", "mysql") if config else "mysql"
                     color = config.get("color", "") if config else ""
                     block.set_connection_name(conn_name, db_type, color or None)

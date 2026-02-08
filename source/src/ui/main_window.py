@@ -2272,7 +2272,7 @@ class MainWindow(DockingMainWindow):
         if error:
             self._show_error_output(f"[SQL] Erro: {error}")
             self.action_label.setText("[SQL] Erro ao executar")
-            self._send_notification("Query SQL", f"Erro: {str(error)[:50]}...", success=False)
+            self._send_notification("Query SQL", f"Erro: {str(error)[:50]}...", success=False, tab_index=tab_index)
             return
 
         # SÓ se não há erro, usar método centralizado
@@ -2286,7 +2286,7 @@ class MainWindow(DockingMainWindow):
         if success:
             rows = len(df) if df is not None else 0
             self.action_label.setText(f"[SQL] {rows:,} linhas retornadas")
-            self._send_notification("Query SQL", f"Concluída! {rows:,} linhas retornadas", success=True)
+            self._send_notification("Query SQL", f"Concluida! {rows:,} linhas retornadas", success=True, tab_index=tab_index)
 
     def _execute_python(self, code: str):
         """Executa código Python em background"""
@@ -2349,6 +2349,7 @@ class MainWindow(DockingMainWindow):
         if error:
             self._show_error_output(f"[Python] Erro: {error}")
             self.action_label.setText("[Python] Erro ao executar")
+            self._send_notification("Python", f"Erro: {str(error)[:50]}...", success=False, tab_index=tab_index)
             return
 
         # Mostra output de print()/stderr (se houver) -> painel output
@@ -2367,6 +2368,7 @@ class MainWindow(DockingMainWindow):
             self.show_panel("results")
             self._update_variables_view()
             self.action_label.setText("[Python] Grafico + dados gerados!")
+            self._send_notification("Python", "Grafico + dados gerados!", success=True, tab_index=tab_index)
         elif has_figures:
             # So rich outputs: mostrar no results
             if results_panel:
@@ -2374,18 +2376,21 @@ class MainWindow(DockingMainWindow):
             self.show_panel("results")
             self._update_variables_view()
             self.action_label.setText("[Python] Resultado exibido!")
+            self._send_notification("Python", "Resultado exibido!", success=True, tab_index=tab_index)
         elif result_value is not None:
             # Resultado sem graficos: usar handler centralizado
             success = self._handle_execution_result(result=result_value, error=None, execution_type="Python")
             if success:
                 self._update_variables_view()
                 self.action_label.setText("[Python] Executado com sucesso!")
+                self._send_notification("Python", "Executado com sucesso!", success=True, tab_index=tab_index)
         else:
             # Sem resultado, sem graficos: so output
             if output:
                 self.show_panel("output")
             self._update_variables_view()
             self.action_label.setText("[Python] Executado com sucesso!")
+            self._send_notification("Python", "Executado com sucesso!", success=True, tab_index=tab_index)
 
     def _execute_cross_syntax(self, code: str):
         """Executa código com sintaxe cross {{ SQL }} em background"""
@@ -2476,7 +2481,7 @@ class MainWindow(DockingMainWindow):
         if error:
             self._show_error_output(f"[Cross-Syntax] Erro: {error}")
             self.action_label.setText("[Cross-Syntax] Erro ao executar")
-            self._send_notification("Cross-Syntax", f"Erro: {str(error)[:50]}...", success=False)
+            self._send_notification("Cross-Syntax", f"Erro: {str(error)[:50]}...", success=False, tab_index=tab_index)
             return
 
         # Mostra output primeiro (se houver)
@@ -2513,7 +2518,7 @@ class MainWindow(DockingMainWindow):
 
             # Notificação de sucesso
             queries_count = result.get("queries_executed", 0) if result else 0
-            self._send_notification("Cross-Syntax", f"Concluído! {queries_count} queries executadas", success=True)
+            self._send_notification("Cross-Syntax", f"Concluido! {queries_count} queries executadas", success=True, tab_index=tab_index)
 
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
         """
@@ -2545,50 +2550,53 @@ class MainWindow(DockingMainWindow):
 
         return tab_index
 
-    def _send_notification(self, title: str, message: str, success: bool = True):
+    def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
         """
-        Envia notificação do Windows com callback para focar a janela ao clicar
+        Envia notificacao do Windows com callback para focar janela e aba ao clicar.
 
         Args:
-            title: Título da notificação
+            title: Titulo da notificacao
             message: Mensagem
-            success: Se True, é uma notificação de sucesso
+            success: Se True, notificacao de sucesso
+            tab_index: Indice da aba que originou (foca nela ao clicar)
         """
         if not HAS_WINDOWS_TOASTS:
             return
 
-        # Não envia notificação se a janela estiver em foco
+        # Nao envia notificacao se a janela estiver em foco
         if self.isActiveWindow():
             return
 
         try:
-            # Criar toaster com nome do app
             toaster = WindowsToaster("DataPyn")
 
-            # Criar toast com título e mensagem
             toast = Toast()
             toast.text_fields = [f"DataPyn - {title}", message]
 
-            # Callback para focar a janela quando clicar na notificação
+            # Capturar tab_index para o closure
+            target_tab = tab_index
+
             def on_activated(event_args):
-                # Usar QTimer para garantir execução na thread principal
-                QTimer.singleShot(0, self._focus_window)
+                QTimer.singleShot(0, lambda: self._focus_window_and_tab(target_tab))
 
             toast.on_activated = on_activated
-
-            # Mostrar notificação
             toaster.show_toast(toast)
 
-        except Exception as e:
-            # Falha silenciosa
+        except Exception:
             pass
 
-    def _focus_window(self):
-        """Traz a janela para frente e foca"""
+    def _focus_window_and_tab(self, tab_index: int = None):
+        """Traz a janela para frente, foca, e seleciona a aba que notificou"""
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.raise_()
         self.activateWindow()
         self.show()
+        if tab_index is not None and 0 <= tab_index < self.session_tabs.count():
+            self.session_tabs.setCurrentIndex(tab_index)
+
+    def _focus_window(self):
+        """Traz a janela para frente e foca"""
+        self._focus_window_and_tab(None)
 
     def _log_info(self, message: str):
         """Adiciona mensagem ao log com timestamp (sem mostrar painel)"""
@@ -2691,9 +2699,6 @@ class MainWindow(DockingMainWindow):
                 language = "sql"
                 self._original_file_type = "sql"
 
-            # Armazenar caminho do arquivo original
-            self._original_file_path = filename
-
             # 3. Se estava no estado vazio, remover placeholder e mostrar paineis
             self._hide_empty_state()
 
@@ -2705,9 +2710,16 @@ class MainWindow(DockingMainWindow):
 
             # 5. Criar widget da sessao usando _create_session_widget (centralizado)
             widget = self._create_session_widget(session)
+
+            # Definir file_path e tipo ANTES de qualquer setCurrentIndex
+            # para que _on_session_tab_changed restaure corretamente
             widget.file_path = filename
+            widget._original_file_type = self._original_file_type
             widget._original_content = content
             widget._is_modified = False
+
+            # Armazenar caminho do arquivo original (apos widget estar configurado)
+            self._original_file_path = filename
 
             # 6. Configurar conteudo
             blocks = widget.editor.get_blocks()
@@ -2722,6 +2734,10 @@ class MainWindow(DockingMainWindow):
             index = self.session_tabs.indexOf(widget)
             if index >= 0:
                 self.session_tabs.setCurrentIndex(index)
+
+            # Garantir que contexto de arquivo sobreviva a eventos de tab change
+            self._original_file_path = filename
+            self._original_file_type = widget._original_file_type
 
             self.action_label.setText(f"Arquivo aberto: {tab_title}")
 

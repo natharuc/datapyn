@@ -325,8 +325,6 @@ class CodeBlock(QFrame):
         self.conn_panel.setFixedHeight(CTRL_H)
         self.conn_panel.setMinimumWidth(100)
         self.conn_panel.setMaximumWidth(220)
-        self.conn_panel.connection_clicked.connect(self._on_connection_panel_clicked)
-        self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
         control_layout.addWidget(self.conn_panel)
 
         # Status
