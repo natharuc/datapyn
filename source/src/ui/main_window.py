@@ -1778,6 +1778,9 @@ class MainWindow(DockingMainWindow):
             new_widget.connection_changed.connect(
                 lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db)
             )
+            new_widget.block_connection_changed.connect(
+                lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+            )
 
             # Registrar widget
             self._session_widgets[session.session_id] = new_widget
@@ -3290,6 +3293,9 @@ class MainWindow(DockingMainWindow):
         widget.connection_changed.connect(
             lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db)
         )
+        widget.block_connection_changed.connect(
+            lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+        )
 
         # Guardar referência
         self._session_widgets[session.session_id] = widget
@@ -3502,23 +3508,85 @@ class MainWindow(DockingMainWindow):
         if session.connector:
             self._schema_service.load_schema(session.connector, connection_name)
 
-    def _on_schema_loaded(self, schema: dict):
+    def _on_schema_loaded(self, schema: dict, connection_name: str):
         """Callback quando schema do banco e carregado pelo SchemaService.
 
-        Distribui o schema para TODOS os editores Monaco (blocos SQL)
-        para alimentar o autocomplete.
+        Distribui o schema para os editores Monaco (blocos SQL) que usam
+        a conexao correspondente.
+        Se connection_name e a conexao da sessao, aplica aos blocos sem conexao customizada.
+        Se connection_name e uma conexao de bloco especifico, aplica so a esse bloco.
         """
         self._log_info(
-            f"Schema carregado: {len(schema.get('tables', []))} tabelas, "
+            f"Schema carregado ({connection_name}): {len(schema.get('tables', []))} tabelas, "
             f"{sum(len(v) for v in schema.get('columns', {}).values())} colunas"
         )
 
-        # Enviar schema para todos os blocos de todas as sessoes
+        # Enviar schema para blocos que usam esta conexao
         for widget in self._session_widgets.values():
-            if hasattr(widget, "editor") and widget.editor:
-                for block in widget.editor.get_blocks():
-                    if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
+            if not (hasattr(widget, "editor") and widget.editor):
+                continue
+
+            # Verificar se esta conexao e a conexao da sessao
+            session_conn = ""
+            if hasattr(widget, "session") and widget.session:
+                session_conn = getattr(widget.session, "connection_name", "") or ""
+
+            for block in widget.editor.get_blocks():
+                if not (hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema")):
+                    continue
+
+                block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+
+                if block_conn:
+                    # Bloco com conexao customizada: so aplica se eh a mesma conexao
+                    if block_conn == connection_name:
                         block.editor.set_sql_schema(schema)
+                elif session_conn == connection_name:
+                    # Bloco sem conexao customizada: aplica se eh a conexao da sessao
+                    block.editor.set_sql_schema(schema)
+
+    def _on_block_connection_changed(self, block, connection_name: str):
+        """Callback quando conexao de um bloco individual muda.
+
+        Carrega schema da nova conexao e aplica ao bloco.
+        """
+        if not connection_name:
+            return
+
+        # Verificar cache primeiro
+        cached = self._schema_service.get_cached_schema(connection_name)
+        if cached:
+            if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
+                block.editor.set_sql_schema(cached)
+            return
+
+        # Precisa carregar schema - criar connector temporario
+        try:
+            from src.database.connection_manager import ConnectionManager
+            from src.database.database_connector import DatabaseConnector
+
+            manager = ConnectionManager()
+            config = manager.get_connection_config(connection_name)
+            if not config:
+                return
+
+            connector = DatabaseConnector()
+            connector.connect(
+                db_type=config["db_type"],
+                host=config["host"],
+                port=config["port"],
+                database=config["database"],
+                username=config.get("username", ""),
+                password=config.get("password", ""),
+                use_windows_auth=config.get("use_windows_auth", False),
+            )
+
+            if connector.is_connected():
+                # load_schema carrega em background e emite schema_loaded
+                # que vai distribuir para blocos com essa conexao
+                self._schema_service.load_schema(connector, connection_name)
+        except Exception as e:
+            self._log_info(f"Erro ao carregar schema para bloco ({connection_name}): {e}")
 
     def _push_python_namespace(self, namespace: dict):
         """Envia namespace Python atualizado para os editores Monaco.

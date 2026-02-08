@@ -95,6 +95,7 @@ class SessionWidget(QWidget):
     execute_cross_syntax = pyqtSignal(str)  # code
     status_changed = pyqtSignal(str)  # status message
     connection_changed = pyqtSignal(str, str)  # (connection_name, database)
+    block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -264,6 +265,9 @@ class SessionWidget(QWidget):
 
         # Seleção de conexão para bloco específico
         self.editor.select_connection_for_block.connect(self._on_block_select_connection)
+
+        # Mudança de conexão de um bloco (para recarregar autocomplete)
+        self.editor.block_connection_changed.connect(self.block_connection_changed.emit)
 
         # Conectar sinais da sessão
         self.session.variables_changed.connect(self._update_variables_view)

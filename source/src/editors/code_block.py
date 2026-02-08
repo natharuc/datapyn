@@ -173,6 +173,7 @@ class CodeBlock(QFrame):
     focus_changed = pyqtSignal(object, bool)  # self, has_focus
     cancel_requested = pyqtSignal(object)  # self - para cancelar execução
     select_connection_requested = pyqtSignal(object)  # self - para abrir dialogo de conexoes
+    connection_name_changed = pyqtSignal(object, str)  # self, connection_name - quando conexao do bloco muda
 
     LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00", "cross": "#6B4C9A"}
 
@@ -461,6 +462,7 @@ class CodeBlock(QFrame):
         """Conexao foi arrastada para o panel"""
         self._connection_name = connection_name
         self.conn_panel.set_connection(connection_name, db_type or None, color or None)
+        self.connection_name_changed.emit(self, connection_name)
 
     def _update_connection_panel_visibility(self):
         """Atualiza visibilidade do panel de conexao (so SQL)"""
@@ -533,6 +535,7 @@ class CodeBlock(QFrame):
         """Define conexao customizada para este bloco"""
         self._connection_name = conn_name
         self.conn_panel.set_connection(conn_name, db_type, color)
+        self.connection_name_changed.emit(self, conn_name)
 
     def is_focused(self) -> bool:
         return self._is_focused

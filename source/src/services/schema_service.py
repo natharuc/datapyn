@@ -153,7 +153,7 @@ class SchemaService(QObject):
     Emite sinal com o schema carregado para atualizar o autocomplete.
     """
 
-    schema_loaded = pyqtSignal(dict)  # Emite schema completo
+    schema_loaded = pyqtSignal(dict, str)  # Emite schema completo + connection_name
     schema_error = pyqtSignal(str)
     loading_progress = pyqtSignal(str)
 
@@ -202,7 +202,7 @@ class SchemaService(QObject):
         """Schema carregado com sucesso"""
         if connection_name:
             self._cache[connection_name] = schema
-        self.schema_loaded.emit(schema)
+        self.schema_loaded.emit(schema, connection_name)
 
     def _on_error(self, error: str):
         """Erro ao carregar schema"""

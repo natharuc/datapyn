@@ -58,6 +58,9 @@ class BlockEditor(QWidget):
     # Sinal quando bloco pede seleção de conexão
     select_connection_for_block = pyqtSignal(object)  # CodeBlock
 
+    # Sinal quando conexão de um bloco muda
+    block_connection_changed = pyqtSignal(object, str)  # CodeBlock, connection_name
+
     def __init__(self, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
@@ -318,6 +321,7 @@ class BlockEditor(QWidget):
         block.focus_changed.connect(self._on_block_focus_changed)
         block.move_requested.connect(self._on_block_move_requested)
         block.select_connection_requested.connect(self.select_connection_for_block.emit)
+        block.connection_name_changed.connect(self.block_connection_changed.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
 
         # Determinar posição
