@@ -170,7 +170,7 @@ class TestBlockExecutionGUI:
 
         # Rastreia sinais
         sql_emitted = []
-        editor.execute_sql.connect(lambda code: sql_emitted.append(code))
+        editor.execute_sql.connect(lambda code, _block_name, _connection_name: sql_emitted.append(code))
 
         # Executa
         editor.execute_focused_block()
