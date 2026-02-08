@@ -21,6 +21,11 @@ jobs:
     permissions:
       contents: write
 
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+
     steps:
       - name: Install SSH Client and add private key to ssh-agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -57,3 +62,43 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ steps.release.outputs.tag }}
+
+  build-windows-exe:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Setup | Checkout Repository at Release Tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Setup | Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Setup | Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build | Generate Windows EXE
+        run: pyinstaller scripts/datapyn.spec --clean
+
+      - name: Build | Create ZIP Archive
+        run: Compress-Archive -Path dist/DataPyn/* -DestinationPath dist/DataPyn-${{ needs.release.outputs.version }}-windows.zip
+
+      - name: Publish | Upload EXE to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release.outputs.tag }}
+          files: dist/DataPyn-${{ needs.release.outputs.version }}-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
