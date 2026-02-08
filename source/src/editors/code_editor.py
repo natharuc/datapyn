@@ -12,8 +12,8 @@ from PyQt6.Qsci import QsciScintilla, QsciLexerPython, QsciLexerSQL
 
 class CodeEditor(QsciScintilla):
     """
-    
-    
+
+
     Editor de código baseado em QScintilla.
 
     Simples e direto:

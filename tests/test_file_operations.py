@@ -28,14 +28,14 @@ def main_window(qapp):
     max_wait_time = 10000  # 10 segundos
     wait_interval = 100  # 100ms por iteracao
     max_iterations = max_wait_time // wait_interval
-    
+
     for _ in range(max_iterations):
         QApplication.processEvents()
         QTest.qWait(50)
         if not hasattr(window, "_sessions_to_load") or not window._sessions_to_load:
             break
         QTest.qWait(wait_interval)
-    
+
     # Processamento final
     QApplication.processEvents()
     QTest.qWait(100)
