@@ -176,7 +176,7 @@ class SchemaService(QObject):
 
         # Verificar cache
         if connection_name and connection_name in self._cache:
-            self.schema_loaded.emit(self._cache[connection_name])
+            self.schema_loaded.emit(self._cache[connection_name], connection_name)
             return
 
         # Criar worker e thread
