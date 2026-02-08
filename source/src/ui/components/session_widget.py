@@ -708,6 +708,7 @@ class SessionWidget(QWidget):
                 manager = main_window.connection_manager
             else:
                 from src.database.connection_manager import ConnectionManager
+
                 manager = ConnectionManager()
 
             dialog = ConnectionPickerDialog(manager, self.theme_manager, self)

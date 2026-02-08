@@ -401,9 +401,7 @@ class TestSessionWidgetDialog:
         block = MagicMock()
         block.set_connection_name = MagicMock()
 
-        with patch(
-            "src.ui.dialogs.connection_picker_dialog.ConnectionPickerDialog"
-        ) as MockDialog:
+        with patch("src.ui.dialogs.connection_picker_dialog.ConnectionPickerDialog") as MockDialog:
             mock_dialog = MockDialog.return_value
             mock_dialog.exec.return_value = True
             mock_dialog.get_result.return_value = (
@@ -425,9 +423,7 @@ class TestSessionWidgetDialog:
 
         block = MagicMock()
 
-        with patch(
-            "src.ui.dialogs.connection_picker_dialog.ConnectionPickerDialog"
-        ) as MockDialog:
+        with patch("src.ui.dialogs.connection_picker_dialog.ConnectionPickerDialog") as MockDialog:
             mock_dialog = MockDialog.return_value
             mock_dialog.exec.return_value = False
 

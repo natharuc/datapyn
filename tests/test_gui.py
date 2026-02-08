@@ -55,10 +55,10 @@ def main_window(qapp, tmp_path, monkeypatch):
     window = MainWindow()
     window.show()
     QTest.qWaitForWindowExposed(window)
-    
+
     # Aguarda um pouco para a sessão ser criada (tempo aumentado para Linux)
     QTest.qWait(500)
-    
+
     yield window
 
     window.close()
@@ -198,7 +198,7 @@ class TestBlockExecutionGUI:
         # Executa
         editor.execute_focused_block()
         QTest.qWait(300)
-        
+
         # Cross-syntax deve emitir cross, NÃO sql
         assert len(cross_emitted) == 1
         assert len(sql_emitted) == 0

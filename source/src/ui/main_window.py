@@ -2295,7 +2295,9 @@ class MainWindow(DockingMainWindow):
         if success:
             rows = len(df) if df is not None else 0
             self.action_label.setText(f"[SQL] {rows:,} linhas retornadas")
-            self._send_notification("Query SQL", f"Concluida! {rows:,} linhas retornadas", success=True, tab_index=tab_index)
+            self._send_notification(
+                "Query SQL", f"Concluida! {rows:,} linhas retornadas", success=True, tab_index=tab_index
+            )
 
     def _execute_python(self, code: str):
         """Executa código Python em background"""
@@ -2533,7 +2535,9 @@ class MainWindow(DockingMainWindow):
 
             # Notificação de sucesso
             queries_count = result.get("queries_executed", 0) if result else 0
-            self._send_notification("Cross-Syntax", f"Concluido! {queries_count} queries executadas", success=True, tab_index=tab_index)
+            self._send_notification(
+                "Cross-Syntax", f"Concluido! {queries_count} queries executadas", success=True, tab_index=tab_index
+            )
 
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
         """
