@@ -30,8 +30,8 @@ class _MonacoBridge(QObject):
     """
 
     # Signals forwarded from JS
-    text_changed_signal = pyqtSignal()        # lightweight: content changed
-    text_synced_signal = pyqtSignal(str)      # debounced: full text payload
+    text_changed_signal = pyqtSignal()  # lightweight: content changed
+    text_synced_signal = pyqtSignal(str)  # debounced: full text payload
     execute_requested_signal = pyqtSignal()
     focus_in_signal = pyqtSignal()
     focus_out_signal = pyqtSignal()
@@ -93,6 +93,7 @@ class _MonacoPage(QWebEnginePage):
             if "bridge" in message.lower() and "not a function" in message.lower():
                 return
             import logging
+
             logging.getLogger("MonacoEditor").debug(f"JS Error: {message}")
 
 
@@ -367,7 +368,7 @@ class MonacoEditor(QWidget):
 
     def get_line_count(self) -> int:
         """Retorna o numero de linhas."""
-        return self._text.count('\n') + 1 if self._text else 1
+        return self._text.count("\n") + 1 if self._text else 1
 
     def get_current_line(self) -> int:
         """Retorna a linha atual do cursor (0-indexed)."""

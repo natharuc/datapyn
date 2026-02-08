@@ -19,7 +19,9 @@ def get_code_editor_class():
     """
     if EDITOR_TYPE == "monaco":
         from .monaco_editor import MonacoEditor
+
         return MonacoEditor
     else:
         from .code_editor import CodeEditor
+
         return CodeEditor
