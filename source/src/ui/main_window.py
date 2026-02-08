@@ -406,6 +406,12 @@ class MainWindow(DockingMainWindow):
         # Threads para execução em background
         self._worker_threads = []  # Mantém referência para não ser coletado pelo GC
 
+        # Servico de autocomplete SQL (carrega schema do banco em background)
+        from src.services.schema_service import SchemaService
+
+        self._schema_service = SchemaService()
+        self._schema_service.schema_loaded.connect(self._on_schema_loaded)
+
         # Sistema de gerenciamento inteligente de arquivos
         self._original_file_path = None  # Caminho do arquivo original aberto (sql/py/dpw)
         self._original_file_type = None  # Tipo: 'sql', 'python', 'workspace'
@@ -2337,6 +2343,10 @@ class MainWindow(DockingMainWindow):
         # Salvar namespace atualizado
         self.results_manager.update_namespace(updated_namespace)
 
+        # Atualizar autocomplete Python com namespace atualizado
+        if updated_namespace:
+            self._push_python_namespace(updated_namespace)
+
         # Remover marcacao de rodando
         self._mark_tab_running(False, tab_index)
 
@@ -2513,6 +2523,8 @@ class MainWindow(DockingMainWindow):
             # Atualiza variáveis - da sessão que executou, se ainda for a focada
             if session == self.session_manager.focused_session:
                 self._update_variables_view()
+                # Atualizar autocomplete Python com namespace atualizado
+                self._push_python_namespace(session.namespace)
 
             self.action_label.setText("[Cross-Syntax] Executado com sucesso!")
 
@@ -3486,6 +3498,56 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.set_tab_connection_color(i, color)
                 break
 
+        # === CARREGAR SCHEMA PARA AUTOCOMPLETE SQL ===
+        if session.connector:
+            self._schema_service.load_schema(session.connector, connection_name)
+
+    def _on_schema_loaded(self, schema: dict):
+        """Callback quando schema do banco e carregado pelo SchemaService.
+
+        Distribui o schema para TODOS os editores Monaco (blocos SQL)
+        para alimentar o autocomplete.
+        """
+        self._log_info(
+            f"Schema carregado: {len(schema.get('tables', []))} tabelas, "
+            f"{sum(len(v) for v in schema.get('columns', {}).values())} colunas"
+        )
+
+        # Enviar schema para todos os blocos de todas as sessoes
+        for widget in self._session_widgets.values():
+            if hasattr(widget, "editor") and widget.editor:
+                for block in widget.editor.get_blocks():
+                    if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
+                        block.editor.set_sql_schema(schema)
+
+    def _push_python_namespace(self, namespace: dict):
+        """Envia namespace Python atualizado para os editores Monaco.
+
+        Chamado apos execucao Python para alimentar autocomplete.
+        """
+        # Construir mapa varName -> typeName
+        ns_types = {}
+        for key, value in namespace.items():
+            if key.startswith("_"):
+                continue
+            # Pular modulos internos e funcoes builtin
+            type_name = type(value).__name__
+            if type_name in ("module",):
+                ns_types[key] = "module"
+            elif type_name in ("function", "builtin_function_or_method"):
+                ns_types[key] = "function"
+            elif type_name == "type":
+                ns_types[key] = "class"
+            else:
+                ns_types[key] = type_name
+
+        # Enviar para todos os blocos Python da sessao ativa
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "editor") and current_widget.editor:
+            for block in current_widget.editor.get_blocks():
+                if hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
+                    block.editor.set_python_namespace(ns_types)
+
     def _on_editor_modified(self, widget):
         """Callback quando o conteudo do editor e modificado"""
         if not hasattr(widget, "_is_modified"):
@@ -3899,4 +3961,9 @@ class MainWindow(DockingMainWindow):
 
         # Fechar conexões
         self.connection_manager.close_all()
+
+        # Limpar schema service
+        if hasattr(self, "_schema_service"):
+            self._schema_service.cleanup()
+
         event.accept()

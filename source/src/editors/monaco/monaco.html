@@ -249,6 +249,10 @@ function createEditor() {
             }, 100);
         }
     }
+
+    // Register completion providers after editor is ready
+    _registerSqlCompletionProvider();
+    _registerPythonCompletionProvider();
 }
 
 // --- Flush pending text sync immediately ---
@@ -389,6 +393,492 @@ function api_layout() {
     if (editor) {
         editor.layout();
     }
+}
+
+// ============================================================
+// Autocomplete & Code Suggestions
+// ============================================================
+
+// --- Schema data for SQL autocomplete ---
+var _sqlSchema = {
+    tables: [],    // [{name, schema, type}, ...]
+    columns: {},   // {tableName: [{name, type, nullable}, ...]}
+    database: ''
+};
+
+// --- Python namespace data for Python autocomplete ---
+var _pythonNamespace = {};  // {varName: typeName, ...}
+
+// --- SQL Keywords ---
+var _sqlKeywords = [
+    'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'BETWEEN', 'LIKE',
+    'IS', 'NULL', 'AS', 'ON', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER',
+    'FULL', 'CROSS', 'UNION', 'ALL', 'DISTINCT', 'TOP', 'LIMIT', 'OFFSET',
+    'ORDER', 'BY', 'ASC', 'DESC', 'GROUP', 'HAVING', 'INSERT', 'INTO',
+    'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP',
+    'INDEX', 'VIEW', 'DATABASE', 'SCHEMA', 'IF', 'EXISTS', 'PRIMARY', 'KEY',
+    'FOREIGN', 'REFERENCES', 'CONSTRAINT', 'UNIQUE', 'CHECK', 'DEFAULT',
+    'CASCADE', 'RESTRICT', 'TRUNCATE', 'EXEC', 'EXECUTE', 'PROCEDURE',
+    'FUNCTION', 'BEGIN', 'END', 'DECLARE', 'CURSOR', 'FETCH', 'CASE', 'WHEN',
+    'THEN', 'ELSE', 'CAST', 'CONVERT', 'COALESCE', 'NULLIF', 'WITH', 'CTE',
+    'RECURSIVE', 'TEMPORARY', 'TEMP', 'EXPLAIN', 'ANALYZE', 'GRANT', 'REVOKE',
+    'COMMIT', 'ROLLBACK', 'TRANSACTION', 'SAVEPOINT', 'USE', 'GO'
+];
+
+var _sqlFunctions = [
+    'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'ROUND', 'CEIL', 'FLOOR', 'ABS',
+    'UPPER', 'LOWER', 'TRIM', 'LTRIM', 'RTRIM', 'LEN', 'LENGTH', 'SUBSTRING',
+    'REPLACE', 'CHARINDEX', 'CONCAT', 'LEFT', 'RIGHT', 'REVERSE', 'STUFF',
+    'GETDATE', 'GETUTCDATE', 'DATEADD', 'DATEDIFF', 'DATEPART', 'DATENAME',
+    'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'NOW', 'CURRENT_DATE',
+    'CURRENT_TIMESTAMP', 'ISNULL', 'IFNULL', 'NVL', 'IIF', 'CHOOSE',
+    'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'NTILE', 'LAG', 'LEAD',
+    'FIRST_VALUE', 'LAST_VALUE', 'STRING_AGG', 'GROUP_CONCAT',
+    'OVER', 'PARTITION', 'ROWS', 'RANGE', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING'
+];
+
+var _sqlDataTypes = [
+    'INT', 'INTEGER', 'BIGINT', 'SMALLINT', 'TINYINT', 'BIT',
+    'DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'DOUBLE', 'MONEY',
+    'CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'TEXT', 'NTEXT',
+    'DATE', 'TIME', 'DATETIME', 'DATETIME2', 'TIMESTAMP', 'DATETIMEOFFSET',
+    'BINARY', 'VARBINARY', 'IMAGE', 'BLOB', 'BOOLEAN', 'BOOL',
+    'UUID', 'UNIQUEIDENTIFIER', 'XML', 'JSON', 'SERIAL', 'IDENTITY'
+];
+
+// --- Python builtins and common modules ---
+var _pythonBuiltins = [
+    'print', 'len', 'range', 'type', 'int', 'float', 'str', 'bool', 'list',
+    'dict', 'set', 'tuple', 'bytes', 'bytearray', 'memoryview', 'enumerate',
+    'zip', 'map', 'filter', 'sorted', 'reversed', 'min', 'max', 'sum', 'abs',
+    'round', 'pow', 'divmod', 'hash', 'id', 'isinstance', 'issubclass',
+    'hasattr', 'getattr', 'setattr', 'delattr', 'callable', 'repr', 'format',
+    'input', 'open', 'super', 'property', 'classmethod', 'staticmethod',
+    'any', 'all', 'dir', 'vars', 'globals', 'locals', 'help', 'hex', 'oct',
+    'bin', 'ord', 'chr', 'ascii', 'iter', 'next', 'slice', 'complex',
+    'frozenset', 'object', 'breakpoint', 'compile', 'eval', 'exec',
+    'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError',
+    'AttributeError', 'ImportError', 'FileNotFoundError', 'RuntimeError',
+    'StopIteration', 'OSError', 'IOError', 'ZeroDivisionError', 'NameError',
+    'True', 'False', 'None', 'NotImplemented', 'Ellipsis'
+];
+
+var _pythonKeywords = [
+    'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue',
+    'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
+    'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not',
+    'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'
+];
+
+// Pandas common API
+var _pandasMethods = [
+    // DataFrame creation & I/O
+    'DataFrame', 'Series', 'read_csv', 'read_excel', 'read_sql', 'read_json',
+    'read_parquet', 'read_clipboard', 'to_csv', 'to_excel', 'to_json',
+    'to_parquet', 'to_sql', 'to_clipboard', 'to_dict', 'to_numpy',
+    // Selection & Indexing
+    'loc', 'iloc', 'at', 'iat', 'head', 'tail', 'sample', 'nlargest',
+    'nsmallest', 'query', 'where', 'mask', 'filter', 'xs',
+    // Info & Stats
+    'info', 'describe', 'shape', 'columns', 'index', 'dtypes', 'values',
+    'size', 'ndim', 'empty', 'count', 'sum', 'mean', 'median', 'std',
+    'var', 'min', 'max', 'abs', 'corr', 'cov', 'nunique', 'unique',
+    'value_counts', 'idxmin', 'idxmax', 'mode', 'quantile', 'cumsum',
+    // Manipulation
+    'apply', 'applymap', 'map', 'transform', 'agg', 'aggregate',
+    'groupby', 'pivot', 'pivot_table', 'melt', 'stack', 'unstack',
+    'merge', 'join', 'concat', 'append', 'drop', 'drop_duplicates',
+    'dropna', 'fillna', 'replace', 'rename', 'reset_index', 'set_index',
+    'sort_values', 'sort_index', 'assign', 'insert', 'pop', 'explode',
+    // String methods
+    'str', 'contains', 'startswith', 'endswith', 'lower', 'upper',
+    'strip', 'lstrip', 'rstrip', 'split', 'replace', 'extract',
+    // Type conversion
+    'astype', 'to_datetime', 'to_numeric', 'to_timedelta',
+    // Plotting
+    'plot', 'hist', 'boxplot', 'bar', 'barh', 'scatter', 'pie',
+    // Copy
+    'copy', 'bool', 'item', 'iterrows', 'itertuples', 'items'
+];
+
+// --- Register SQL completion provider ---
+function _registerSqlCompletionProvider() {
+    monaco.languages.registerCompletionItemProvider('sql', {
+        triggerCharacters: ['.', ' ', '(', ','],
+
+        provideCompletionItems: function(model, position) {
+            var textUntilPosition = model.getValueInRange({
+                startLineNumber: 1,
+                startColumn: 1,
+                endLineNumber: position.lineNumber,
+                endColumn: position.column
+            });
+            var currentLine = model.getLineContent(position.lineNumber);
+            var textBeforeCursor = currentLine.substring(0, position.column - 1);
+
+            var word = model.getWordUntilPosition(position);
+            var range = {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endColumn: word.endColumn
+            };
+
+            var suggestions = [];
+
+            // Check if we're after a dot (table.column completion)
+            var dotMatch = textBeforeCursor.match(/(\w+)\.\s*$/);
+            if (dotMatch) {
+                var tableName = dotMatch[1];
+                // Search table columns (case insensitive)
+                var tableKey = null;
+                for (var key in _sqlSchema.columns) {
+                    if (key.toLowerCase() === tableName.toLowerCase()) {
+                        tableKey = key;
+                        break;
+                    }
+                }
+                if (tableKey && _sqlSchema.columns[tableKey]) {
+                    _sqlSchema.columns[tableKey].forEach(function(col) {
+                        suggestions.push({
+                            label: col.name,
+                            kind: monaco.languages.CompletionItemKind.Field,
+                            detail: col.type + (col.nullable === 'NO' ? ' NOT NULL' : ''),
+                            insertText: col.name,
+                            range: range,
+                            sortText: '0' + col.name  // columns first
+                        });
+                    });
+                }
+                return { suggestions: suggestions };
+            }
+
+            // Context detection: after FROM/JOIN -> prioritize tables
+            var upperText = textUntilPosition.toUpperCase();
+            var afterFrom = /(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+(?:\w+\s*,\s*)*$/i.test(textBeforeCursor);
+
+            // Add table suggestions
+            _sqlSchema.tables.forEach(function(table) {
+                var detail = table.type || 'TABLE';
+                if (table.schema && table.schema !== 'dbo') {
+                    detail += ' (' + table.schema + ')';
+                }
+                suggestions.push({
+                    label: table.name,
+                    kind: monaco.languages.CompletionItemKind.Struct,
+                    detail: detail,
+                    insertText: table.name,
+                    range: range,
+                    sortText: afterFrom ? '0' + table.name : '3' + table.name
+                });
+            });
+
+            // Add column suggestions (all columns, lower priority when not after dot)
+            for (var tbl in _sqlSchema.columns) {
+                _sqlSchema.columns[tbl].forEach(function(col) {
+                    suggestions.push({
+                        label: col.name,
+                        kind: monaco.languages.CompletionItemKind.Field,
+                        detail: col.type + ' (' + tbl + ')',
+                        insertText: col.name,
+                        range: range,
+                        sortText: '2' + col.name
+                    });
+                });
+            }
+
+            // Add SQL keywords
+            _sqlKeywords.forEach(function(kw) {
+                suggestions.push({
+                    label: kw,
+                    kind: monaco.languages.CompletionItemKind.Keyword,
+                    insertText: kw,
+                    range: range,
+                    sortText: '5' + kw
+                });
+            });
+
+            // Add SQL functions
+            _sqlFunctions.forEach(function(fn) {
+                suggestions.push({
+                    label: fn,
+                    kind: monaco.languages.CompletionItemKind.Function,
+                    insertText: fn + '($0)',
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                    detail: 'function',
+                    range: range,
+                    sortText: '4' + fn
+                });
+            });
+
+            // Add data types
+            _sqlDataTypes.forEach(function(dt) {
+                suggestions.push({
+                    label: dt,
+                    kind: monaco.languages.CompletionItemKind.TypeParameter,
+                    insertText: dt,
+                    detail: 'data type',
+                    range: range,
+                    sortText: '6' + dt
+                });
+            });
+
+            return { suggestions: suggestions };
+        }
+    });
+}
+
+// --- Register Python completion provider ---
+function _registerPythonCompletionProvider() {
+    monaco.languages.registerCompletionItemProvider('python', {
+        triggerCharacters: ['.', ' '],
+
+        provideCompletionItems: function(model, position) {
+            var currentLine = model.getLineContent(position.lineNumber);
+            var textBeforeCursor = currentLine.substring(0, position.column - 1);
+
+            var word = model.getWordUntilPosition(position);
+            var range = {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endColumn: word.endColumn
+            };
+
+            var suggestions = [];
+
+            // Check if after dot (attribute completion)
+            var dotMatch = textBeforeCursor.match(/(\w+)\.\s*$/);
+            if (dotMatch) {
+                var varName = dotMatch[1];
+                var varType = _pythonNamespace[varName] || '';
+
+                // If it's a DataFrame or pandas object
+                if (varType === 'DataFrame' || varType === 'Series' || varName === 'pd') {
+                    _pandasMethods.forEach(function(method) {
+                        suggestions.push({
+                            label: method,
+                            kind: monaco.languages.CompletionItemKind.Method,
+                            insertText: method,
+                            detail: 'pandas',
+                            range: range,
+                            sortText: '0' + method
+                        });
+                    });
+                }
+
+                // If it's a string
+                if (varType === 'str') {
+                    ['upper', 'lower', 'strip', 'lstrip', 'rstrip', 'split',
+                     'replace', 'find', 'index', 'count', 'startswith',
+                     'endswith', 'join', 'format', 'encode', 'decode',
+                     'title', 'capitalize', 'swapcase', 'center', 'ljust',
+                     'rjust', 'zfill', 'isdigit', 'isalpha', 'isalnum',
+                     'isupper', 'islower'].forEach(function(m) {
+                        suggestions.push({
+                            label: m,
+                            kind: monaco.languages.CompletionItemKind.Method,
+                            insertText: m,
+                            detail: 'str method',
+                            range: range
+                        });
+                    });
+                }
+
+                // If it's a list
+                if (varType === 'list') {
+                    ['append', 'extend', 'insert', 'remove', 'pop', 'clear',
+                     'index', 'count', 'sort', 'reverse', 'copy'].forEach(function(m) {
+                        suggestions.push({
+                            label: m,
+                            kind: monaco.languages.CompletionItemKind.Method,
+                            insertText: m,
+                            detail: 'list method',
+                            range: range
+                        });
+                    });
+                }
+
+                // If it's a dict
+                if (varType === 'dict') {
+                    ['keys', 'values', 'items', 'get', 'pop', 'popitem',
+                     'update', 'setdefault', 'clear', 'copy',
+                     'fromkeys'].forEach(function(m) {
+                        suggestions.push({
+                            label: m,
+                            kind: monaco.languages.CompletionItemKind.Method,
+                            insertText: m,
+                            detail: 'dict method',
+                            range: range
+                        });
+                    });
+                }
+
+                // If it's a set
+                if (varType === 'set') {
+                    ['add', 'remove', 'discard', 'pop', 'clear', 'copy',
+                     'union', 'intersection', 'difference', 'symmetric_difference',
+                     'update', 'issubset', 'issuperset'].forEach(function(m) {
+                        suggestions.push({
+                            label: m,
+                            kind: monaco.languages.CompletionItemKind.Method,
+                            insertText: m,
+                            detail: 'set method',
+                            range: range
+                        });
+                    });
+                }
+
+                // Generic - always offer common dunder/methods
+                if (suggestions.length === 0) {
+                    ['__init__', '__str__', '__repr__', '__len__',
+                     '__getitem__', '__setitem__', '__contains__'].forEach(function(m) {
+                        suggestions.push({
+                            label: m,
+                            kind: monaco.languages.CompletionItemKind.Method,
+                            insertText: m,
+                            detail: 'magic method',
+                            range: range,
+                            sortText: '9' + m
+                        });
+                    });
+                }
+
+                return { suggestions: suggestions };
+            }
+
+            // Check if after 'import ' or 'from '
+            var importMatch = textBeforeCursor.match(/(?:import|from)\s+$/);
+            if (importMatch) {
+                ['os', 'sys', 'json', 'csv', 'math', 'random', 'datetime',
+                 'collections', 'itertools', 'functools', 're', 'pathlib',
+                 'typing', 'dataclasses', 'abc', 'io', 'copy', 'time',
+                 'pandas', 'numpy', 'matplotlib', 'openpyxl',
+                 'sqlalchemy'].forEach(function(mod) {
+                    suggestions.push({
+                        label: mod,
+                        kind: monaco.languages.CompletionItemKind.Module,
+                        insertText: mod,
+                        detail: 'module',
+                        range: range,
+                        sortText: '0' + mod
+                    });
+                });
+                return { suggestions: suggestions };
+            }
+
+            // Add namespace variables (from executed code)
+            for (var name in _pythonNamespace) {
+                var vType = _pythonNamespace[name];
+                var kind = monaco.languages.CompletionItemKind.Variable;
+                if (vType === 'function') kind = monaco.languages.CompletionItemKind.Function;
+                else if (vType === 'module') kind = monaco.languages.CompletionItemKind.Module;
+                else if (vType === 'type' || vType === 'class') kind = monaco.languages.CompletionItemKind.Class;
+                else if (vType === 'DataFrame') kind = monaco.languages.CompletionItemKind.Struct;
+
+                suggestions.push({
+                    label: name,
+                    kind: kind,
+                    detail: vType || 'variable',
+                    insertText: name,
+                    range: range,
+                    sortText: '1' + name
+                });
+            }
+
+            // Add Python keywords
+            _pythonKeywords.forEach(function(kw) {
+                suggestions.push({
+                    label: kw,
+                    kind: monaco.languages.CompletionItemKind.Keyword,
+                    insertText: kw,
+                    range: range,
+                    sortText: '5' + kw
+                });
+            });
+
+            // Add Python builtins
+            _pythonBuiltins.forEach(function(b) {
+                suggestions.push({
+                    label: b,
+                    kind: monaco.languages.CompletionItemKind.Function,
+                    insertText: b,
+                    detail: 'builtin',
+                    range: range,
+                    sortText: '4' + b
+                });
+            });
+
+            // Common snippet templates
+            var snippets = [
+                { label: 'def', detail: 'function definition', text: 'def ${1:name}(${2:params}):\n    ${3:pass}' },
+                { label: 'class', detail: 'class definition', text: 'class ${1:Name}:\n    def __init__(self${2:}):\n        ${3:pass}' },
+                { label: 'for', detail: 'for loop', text: 'for ${1:item} in ${2:iterable}:\n    ${3:pass}' },
+                { label: 'if', detail: 'if statement', text: 'if ${1:condition}:\n    ${2:pass}' },
+                { label: 'ifelse', detail: 'if-else', text: 'if ${1:condition}:\n    ${2:pass}\nelse:\n    ${3:pass}' },
+                { label: 'try', detail: 'try-except', text: 'try:\n    ${1:pass}\nexcept ${2:Exception} as ${3:e}:\n    ${4:pass}' },
+                { label: 'with', detail: 'with statement', text: 'with ${1:expression} as ${2:var}:\n    ${3:pass}' },
+                { label: 'while', detail: 'while loop', text: 'while ${1:condition}:\n    ${2:pass}' },
+                { label: 'lambda', detail: 'lambda expression', text: 'lambda ${1:x}: ${2:x}' },
+                { label: 'list_comp', detail: 'list comprehension', text: '[${1:x} for ${2:x} in ${3:iterable}]' },
+                { label: 'dict_comp', detail: 'dict comprehension', text: '{${1:k}: ${2:v} for ${3:k}, ${4:v} in ${5:iterable}}' },
+            ];
+            snippets.forEach(function(s) {
+                suggestions.push({
+                    label: s.label,
+                    kind: monaco.languages.CompletionItemKind.Snippet,
+                    insertText: s.text,
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                    detail: s.detail,
+                    range: range,
+                    sortText: '7' + s.label
+                });
+            });
+
+            return { suggestions: suggestions };
+        }
+    });
+}
+
+// ============================================================
+// API for Python to update autocomplete data
+// ============================================================
+
+function api_setSqlSchema(schemaJson) {
+    /**
+     * Recebe schema do banco para autocomplete SQL.
+     * schemaJson: JSON string com {tables: [...], columns: {...}, database: ''}
+     */
+    try {
+        _sqlSchema = JSON.parse(schemaJson);
+    } catch(e) {
+        // fallback: try as object
+        if (typeof schemaJson === 'object') {
+            _sqlSchema = schemaJson;
+        }
+    }
+}
+
+function api_setPythonNamespace(nsJson) {
+    /**
+     * Recebe namespace Python para autocomplete.
+     * nsJson: JSON string com {varName: typeName, ...}
+     */
+    try {
+        _pythonNamespace = JSON.parse(nsJson);
+    } catch(e) {
+        if (typeof nsJson === 'object') {
+            _pythonNamespace = nsJson;
+        }
+    }
+}
+
+function api_clearSqlSchema() {
+    _sqlSchema = { tables: [], columns: {}, database: '' };
+}
+
+function api_clearPythonNamespace() {
+    _pythonNamespace = {};
 }
 
 // Initialize on load

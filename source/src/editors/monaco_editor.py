@@ -474,3 +474,34 @@ class MonacoEditor(QWidget):
     def resizeEvent(self, event):
         """Handle resize - automaticLayout handles Monaco sizing."""
         super().resizeEvent(event)
+
+    # === Autocomplete & Code Suggestions ===
+
+    def set_sql_schema(self, schema: dict) -> None:
+        """
+        Envia schema do banco para o Monaco para autocomplete SQL.
+
+        Args:
+            schema: dict com {tables: [...], columns: {...}, database: ''}
+        """
+        escaped = json.dumps(schema)
+        self._run_js(f"api_setSqlSchema({json.dumps(escaped)})")
+
+    def clear_sql_schema(self) -> None:
+        """Limpa schema SQL do autocomplete"""
+        self._run_js("api_clearSqlSchema()")
+
+    def set_python_namespace(self, namespace: dict) -> None:
+        """
+        Envia namespace Python para o Monaco para autocomplete.
+
+        Args:
+            namespace: dict com {varName: typeName, ...}
+                       ex: {'df': 'DataFrame', 'x': 'int', 'os': 'module'}
+        """
+        escaped = json.dumps(namespace)
+        self._run_js(f"api_setPythonNamespace({json.dumps(escaped)})")
+
+    def clear_python_namespace(self) -> None:
+        """Limpa namespace Python do autocomplete"""
+        self._run_js("api_clearPythonNamespace()")
