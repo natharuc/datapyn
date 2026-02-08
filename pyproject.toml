@@ -1,6 +1,6 @@
 [project]
 name = "DataPyn"
-version = "0.0.1"
+version = "1.0.0"
 
 
 [tool.semantic_release]
