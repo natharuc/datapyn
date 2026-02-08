@@ -3459,15 +3459,15 @@ class MainWindow(DockingMainWindow):
                 break
 
     def _on_editor_modified(self, widget):
-        """Callback quando o conteúdo do editor é modificado"""
+        """Callback quando o conteudo do editor e modificado"""
         if not hasattr(widget, "_is_modified"):
             widget._is_modified = False
 
-        # Marcar widget como modificado
+        # Marcar widget como modificado (so na primeira vez)
         if not widget._is_modified:
             widget._is_modified = True
 
-            # Atualizar título da aba para indicar modificação
+            # Atualizar titulo da aba para indicar modificacao
             for i in range(self.session_tabs.count()):
                 if self.session_tabs.widget(i) == widget:
                     current_text = self.session_tabs.tabText(i)
@@ -3475,8 +3475,8 @@ class MainWindow(DockingMainWindow):
                         self.session_tabs.setTabText(i, current_text + " *")
                     break
 
-        # Atualizar título da janela (contexto pode ter mudado)
-        self._update_window_title()
+            # Atualizar titulo da janela apenas quando muda de estado
+            self._update_window_title()
 
     def _get_current_session_widget(self) -> SessionWidget:
         """Retorna SessionWidget da aba ativa"""

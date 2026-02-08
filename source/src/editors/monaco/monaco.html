@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+        width: 100%; height: 100%; overflow: hidden;
+        background: #1e1e1e;
+    }
+    #editor-container {
+        width: 100%; height: 100%;
+        contain: strict;
+    }
+</style>
+</head>
+<body>
+<div id="editor-container"></div>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+// ============================================================
+// Monaco Editor Bridge for PyQt6 - v2 (performance optimized)
+// ============================================================
+
+var editor = null;
+var bridge = null;
+var pendingText = null;
+var pendingLanguage = null;
+var isReady = false;
+
+// --- Debounce state for text sync ---
+var _textSyncTimer = null;
+var _suppressTextEvent = false;
+var TEXT_SYNC_DELAY = 150; // ms - debounce interval for text sync
+
+// --- QWebChannel setup ---
+function initBridge() {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        bridge = channel.objects.bridge;
+        loadMonaco();
+    });
+}
+
+// --- Load Monaco from local files ---
+function loadMonaco() {
+    var loaderScript = document.createElement('script');
+    loaderScript.src = 'vs/loader.js';
+    loaderScript.onload = function() {
+        require.config({
+            paths: { 'vs': 'vs' }
+        });
+        require(['vs/editor/editor.main'], function() {
+            createEditor();
+        });
+    };
+    loaderScript.onerror = function() {
+        loadMonacoFromCDN();
+    };
+    document.head.appendChild(loaderScript);
+}
+
+function loadMonacoFromCDN() {
+    var loaderScript = document.createElement('script');
+    loaderScript.src = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js';
+    loaderScript.onload = function() {
+        require.config({
+            paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' }
+        });
+        require(['vs/editor/editor.main'], function() {
+            createEditor();
+        });
+    };
+    loaderScript.onerror = function() {
+        if (bridge) bridge.onError('Failed to load Monaco Editor');
+    };
+    document.head.appendChild(loaderScript);
+}
+
+// --- Create Monaco Editor instance ---
+function createEditor() {
+
+    // Define dark theme matching VS Code Dark+
+    monaco.editor.defineTheme('datapyn-dark', {
+        base: 'vs-dark',
+        inherit: true,
+        rules: [
+            { token: 'comment', foreground: '6a9955' },
+            { token: 'keyword', foreground: '569cd6' },
+            { token: 'string', foreground: 'ce9178' },
+            { token: 'number', foreground: 'b5cea8' },
+            { token: 'type', foreground: '4ec9b0' },
+            { token: 'function', foreground: 'dcdcaa' },
+            { token: 'variable', foreground: '9cdcfe' },
+            { token: 'operator', foreground: 'd4d4d4' },
+            { token: 'delimiter', foreground: 'd4d4d4' },
+            { token: 'identifier', foreground: '9cdcfe' },
+            { token: 'decorator', foreground: 'c586c0' }
+        ],
+        colors: {
+            'editor.background': '#1e1e1e',
+            'editor.foreground': '#d4d4d4',
+            'editorLineNumber.foreground': '#858585',
+            'editorLineNumber.activeForeground': '#c6c6c6',
+            'editor.selectionBackground': '#264f78',
+            'editor.lineHighlightBackground': '#2a2a2a',
+            'editorCursor.foreground': '#c5c5c5',
+            'editorBracketMatch.background': '#3e445180',
+            'editorBracketMatch.border': '#61afef',
+            'editor.wordHighlightBackground': '#575757b8'
+        }
+    });
+
+    editor = monaco.editor.create(document.getElementById('editor-container'), {
+        value: pendingText || '',
+        language: mapLanguage(pendingLanguage || 'python'),
+        theme: 'datapyn-dark',
+        fontFamily: 'Consolas, "Courier New", monospace',
+        fontSize: 13,
+        fontLigatures: false,
+        lineNumbers: 'on',
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        automaticLayout: true,
+        tabSize: 4,
+        insertSpaces: true,
+        wordWrap: 'off',
+        renderWhitespace: 'none',
+        cursorBlinking: 'smooth',
+        cursorSmoothCaretAnimation: 'on',
+        smoothScrolling: false,
+        bracketPairColorization: { enabled: true },
+        autoClosingBrackets: 'always',
+        autoClosingQuotes: 'always',
+        autoSurround: 'languageDefined',
+        formatOnPaste: false,
+        formatOnType: false,
+        suggestOnTriggerCharacters: true,
+        quickSuggestions: true,
+        parameterHints: { enabled: true },
+        folding: true,
+        foldingStrategy: 'indentation',
+        links: true,
+        mouseWheelZoom: false,
+        contextmenu: true,
+        find: {
+            addExtraSpaceOnTop: false,
+            autoFindInSelection: 'never',
+            seedSearchStringFromSelection: 'always'
+        },
+        padding: { top: 4, bottom: 4 },
+        overviewRulerLanes: 0,
+        hideCursorInOverviewRuler: true,
+        overviewRulerBorder: false,
+        scrollbar: {
+            verticalScrollbarSize: 10,
+            horizontalScrollbarSize: 10,
+            verticalSliderSize: 10,
+            horizontalSliderSize: 10,
+            useShadows: false
+        },
+        fixedOverflowWidgets: true
+    });
+
+    pendingText = null;
+    pendingLanguage = null;
+
+    // -------------------------------------------------------
+    // TEXT CHANGE: fully debounced to avoid IPC on every key
+    // -------------------------------------------------------
+    var _notifyTimer = null;
+    var NOTIFY_DELAY = 80; // ms - debounce for textChanged signal
+
+    editor.onDidChangeModelContent(function(e) {
+        if (_suppressTextEvent) return;
+        if (!bridge) return;
+
+        // 1) Debounced lightweight notification (triggers textChanged signal)
+        if (_notifyTimer) clearTimeout(_notifyTimer);
+        _notifyTimer = setTimeout(function() {
+            _notifyTimer = null;
+            if (bridge) bridge.onTextChanged('');
+        }, NOTIFY_DELAY);
+
+        // 2) Debounced full-text sync (longer delay)
+        if (_textSyncTimer) clearTimeout(_textSyncTimer);
+        _textSyncTimer = setTimeout(function() {
+            _textSyncTimer = null;
+            if (bridge && editor) {
+                bridge.onTextSynced(editor.getValue());
+            }
+        }, TEXT_SYNC_DELAY);
+    });
+
+    // --- Event: focus ---
+    editor.onDidFocusEditorText(function() {
+        if (bridge) bridge.onFocusIn();
+    });
+
+    editor.onDidBlurEditorText(function() {
+        if (bridge) bridge.onFocusOut();
+    });
+
+    // --- Event: cursor position ---
+    editor.onDidChangeCursorPosition(function(e) {
+        if (bridge) {
+            bridge.onCursorChanged(e.position.lineNumber - 1, e.position.column - 1);
+        }
+    });
+
+    // --- Keybindings ---
+    editor.addAction({
+        id: 'execute-ctrl-enter',
+        label: 'Execute Code',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+        run: function() {
+            // Flush pending text sync before execute
+            _flushTextSync();
+            if (bridge) bridge.onExecuteRequested();
+        }
+    });
+
+    editor.addAction({
+        id: 'execute-shift-enter',
+        label: 'Execute Code (Shift)',
+        keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+        run: function() {
+            _flushTextSync();
+            if (bridge) bridge.onExecuteRequested();
+        }
+    });
+
+    editor.addAction({
+        id: 'execute-f5',
+        label: 'Execute Code (F5)',
+        keybindings: [monaco.KeyCode.F5],
+        run: function() {
+            _flushTextSync();
+            if (bridge) bridge.onExecuteRequested();
+        }
+    });
+
+    isReady = true;
+    if (bridge) {
+        try { bridge.onEditorReady(); } catch(e) {
+            setTimeout(function() {
+                try { bridge.onEditorReady(); } catch(e2) {}
+            }, 100);
+        }
+    }
+}
+
+// --- Flush pending text sync immediately ---
+function _flushTextSync() {
+    if (_notifyTimer) {
+        clearTimeout(_notifyTimer);
+        _notifyTimer = null;
+    }
+    if (_textSyncTimer) {
+        clearTimeout(_textSyncTimer);
+        _textSyncTimer = null;
+    }
+    if (bridge && editor) {
+        bridge.onTextSynced(editor.getValue());
+    }
+}
+
+// --- Language mapping ---
+function mapLanguage(lang) {
+    switch (lang) {
+        case 'python': return 'python';
+        case 'sql': return 'sql';
+        case 'cross': return 'sql';
+        default: return 'python';
+    }
+}
+
+// ============================================================
+// API called from Python via runJavaScript
+// ============================================================
+
+function api_setText(text) {
+    if (editor) {
+        _suppressTextEvent = true;
+        var fullRange = editor.getModel().getFullModelRange();
+        editor.executeEdits('api', [{
+            range: fullRange,
+            text: text,
+            forceMoveMarkers: true
+        }]);
+        editor.setPosition({ lineNumber: 1, column: 1 });
+        _suppressTextEvent = false;
+    } else {
+        pendingText = text;
+    }
+}
+
+function api_getText() {
+    return editor ? editor.getValue() : (pendingText || '');
+}
+
+function api_getSelectedText() {
+    if (!editor) return '';
+    var selection = editor.getSelection();
+    if (!selection || selection.isEmpty()) return '';
+    return editor.getModel().getValueInRange(selection);
+}
+
+function api_hasSelection() {
+    if (!editor) return false;
+    var selection = editor.getSelection();
+    return selection && !selection.isEmpty();
+}
+
+function api_setLanguage(lang) {
+    if (editor) {
+        var model = editor.getModel();
+        if (model) {
+            monaco.editor.setModelLanguage(model, mapLanguage(lang));
+        }
+    } else {
+        pendingLanguage = lang;
+    }
+}
+
+function api_getLanguage() {
+    if (editor) {
+        var model = editor.getModel();
+        return model ? model.getLanguageId() : 'python';
+    }
+    return pendingLanguage || 'python';
+}
+
+function api_setReadOnly(readOnly) {
+    if (editor) {
+        editor.updateOptions({ readOnly: readOnly });
+    }
+}
+
+function api_setLineNumbers(visible) {
+    if (editor) {
+        editor.updateOptions({ lineNumbers: visible ? 'on' : 'off' });
+    }
+}
+
+function api_getLineCount() {
+    return editor ? editor.getModel().getLineCount() : 0;
+}
+
+function api_getCurrentLine() {
+    if (!editor) return 0;
+    return editor.getPosition().lineNumber - 1;
+}
+
+function api_goToLine(line) {
+    if (editor) {
+        var lineNumber = line + 1;
+        editor.setPosition({ lineNumber: lineNumber, column: 1 });
+        editor.revealLineInCenter(lineNumber);
+    }
+}
+
+function api_setFont(family, size) {
+    if (editor) {
+        editor.updateOptions({ fontFamily: family, fontSize: size });
+    }
+}
+
+function api_setTheme(themeName) {
+    if (editor) {
+        if (themeName === 'dark' || themeName === 'datapyn-dark') {
+            monaco.editor.setTheme('datapyn-dark');
+        } else if (themeName === 'light') {
+            monaco.editor.setTheme('vs');
+        } else {
+            monaco.editor.setTheme(themeName);
+        }
+    }
+}
+
+function api_focus() {
+    if (editor) {
+        editor.focus();
+    }
+}
+
+function api_layout() {
+    if (editor) {
+        editor.layout();
+    }
+}
+
+// Initialize on load
+if (typeof qt !== 'undefined') {
+    initBridge();
+} else {
+    document.addEventListener('DOMContentLoaded', function() {
+        if (typeof qt !== 'undefined') {
+            initBridge();
+        }
+    });
+}
+</script>
+</body>
+</html>
