@@ -53,9 +53,9 @@ def auto_close_dialogs(qtbot, monkeypatch):
     original_exec = QDialog.exec
     
     def non_blocking_exec(self):
-        """exec() não-bloqueante - fecha automaticamente após 50ms"""
-        QTimer.singleShot(50, lambda: self.accept() if not self.isHidden() else None)
-        qtbot.wait(100)
+        """exec() não-bloqueante - fecha automaticamente após 200ms"""
+        QTimer.singleShot(200, lambda: self.accept() if not self.isHidden() else None)
+        qtbot.wait(300)
         return 1  # QDialog.Accepted
     
     monkeypatch.setattr(QDialog, 'exec', non_blocking_exec)
