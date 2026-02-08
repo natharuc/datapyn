@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject, QSettings
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
+from PyQt6.QtWidgets import QSystemTrayIcon
 import sys
 import re
 import io
@@ -46,12 +47,7 @@ try:
 except ImportError:
     HAS_QTAWESOME = False
 
-try:
-    from windows_toasts import Toast, WindowsToaster
 
-    HAS_WINDOWS_TOASTS = True
-except ImportError:
-    HAS_WINDOWS_TOASTS = False
 
 from src.editors import UnifiedEditor
 from src.database import ConnectionManager
@@ -2571,7 +2567,7 @@ class MainWindow(DockingMainWindow):
 
     def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
         """
-        Envia notificacao do Windows com callback para focar janela e aba ao clicar.
+        Envia notificacao nativa (Windows/Linux/macOS) via QSystemTrayIcon.
 
         Args:
             title: Titulo da notificacao
@@ -2579,7 +2575,7 @@ class MainWindow(DockingMainWindow):
             success: Se True, notificacao de sucesso
             tab_index: Indice da aba que originou (foca nela ao clicar)
         """
-        if not HAS_WINDOWS_TOASTS:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
             return
 
         # Nao envia notificacao se a janela estiver em foco
@@ -2587,22 +2583,42 @@ class MainWindow(DockingMainWindow):
             return
 
         try:
-            toaster = WindowsToaster("DataPyn")
-
-            toast = Toast()
-            toast.text_fields = [f"DataPyn - {title}", message]
+            # Criar tray icon sob demanda (reutiliza se ja existe)
+            if not hasattr(self, "_tray_icon") or self._tray_icon is None:
+                self._tray_icon = QSystemTrayIcon(self)
+                icon = self.windowIcon()
+                if icon.isNull():
+                    icon = QIcon.fromTheme("application-x-executable")
+                self._tray_icon.setIcon(icon)
+                self._tray_icon.show()
 
             # Capturar tab_index para o closure
-            target_tab = tab_index
+            self._notification_tab = tab_index
 
-            def on_activated(event_args):
-                QTimer.singleShot(0, lambda: self._focus_window_and_tab(target_tab))
+            # Conectar click apenas uma vez
+            try:
+                self._tray_icon.activated.disconnect()
+            except TypeError:
+                pass
+            self._tray_icon.activated.connect(self._on_tray_activated)
 
-            toast.on_activated = on_activated
-            toaster.show_toast(toast)
+            # Tipo do icone na notificacao
+            icon_type = (
+                QSystemTrayIcon.MessageIcon.Information
+                if success
+                else QSystemTrayIcon.MessageIcon.Warning
+            )
+
+            self._tray_icon.showMessage(f"DataPyn - {title}", message, icon_type, 5000)
 
         except Exception:
             pass
+
+    def _on_tray_activated(self, reason):
+        """Callback quando usuario clica na notificacao do tray"""
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            tab = getattr(self, "_notification_tab", None)
+            self._focus_window_and_tab(tab)
 
     def _focus_window_and_tab(self, tab_index: int = None):
         """Traz a janela para frente, foca, e seleciona a aba que notificou"""
