@@ -54,8 +54,8 @@ def main_window(qapp, tmp_path, monkeypatch):
     window.show()
     QTest.qWaitForWindowExposed(window)
     
-    # Aguarda um pouco para a sessão ser criada
-    QTest.qWait(200)
+    # Aguarda um pouco para a sessão ser criada (tempo aumentado para Linux)
+    QTest.qWait(500)
     
     yield window
     
@@ -68,7 +68,7 @@ def get_editor_safely(window):
     if widget is None:
         # Cria nova sessão se não existir
         window._new_session()
-        QTest.qWait(100)
+        QTest.qWait(300)  # Tempo aumentado para Linux
         widget = window._get_current_session_widget()
     
     if widget is None:
