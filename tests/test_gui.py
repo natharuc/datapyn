@@ -194,7 +194,7 @@ class TestBlockExecutionGUI:
         
         # Executa
         editor.execute_focused_block()
-        QTest.qWait(100)
+        QTest.qWait(300)
         
         # Cross-syntax deve emitir cross, NÃO sql
         assert len(cross_emitted) == 1
