@@ -200,10 +200,17 @@ class DraggableConnectionList(QListWidget):
         if not conn_name:
             return
 
-        # Criar MimeData com informações da conexão
+        # Criar MimeData com informacoes da conexao
         mime_data = QMimeData()
         mime_data.setData("application/x-connection-name", conn_name.encode("utf-8"))
         mime_data.setData("application/x-db-type", db_type.encode("utf-8"))
+
+        # Incluir cor da conexao se disponivel
+        conn_color = ""
+        if isinstance(item, ConnectionItem):
+            conn_color = item.config.get("color", "") or ""
+        if conn_color:
+            mime_data.setData("application/x-connection-color", conn_color.encode("utf-8"))
 
         # Criar drag
         drag = QDrag(self)

@@ -134,6 +134,7 @@ class MonacoEditor(QWidget):
         self._current_column = 0
         self._selected_text = ""
         self._has_selection = False
+        self._focus_pending = False
 
         self._setup_ui()
         self._setup_bridge()
@@ -160,6 +161,9 @@ class MonacoEditor(QWidget):
         self._view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
         layout.addWidget(self._view)
+
+        # Route keyboard focus directly to QWebEngineView
+        self.setFocusProxy(self._view)
 
     def _setup_bridge(self):
         """Setup QWebChannel bridge for Python <-> JS communication."""
@@ -203,6 +207,11 @@ class MonacoEditor(QWidget):
         for js_code in self._pending_calls:
             self._run_js(js_code)
         self._pending_calls.clear()
+
+        # Auto-focus if requested while loading
+        if self._focus_pending:
+            self._focus_pending = False
+            QTimer.singleShot(30, self._do_focus)
 
     def _run_js(self, code, callback=None):
         """
@@ -395,7 +404,15 @@ class MonacoEditor(QWidget):
 
     def setFocus(self):
         """Override setFocus to also focus the Monaco editor inside."""
-        super().setFocus()
+        if not self._is_ready:
+            self._focus_pending = True
+            return
+        # Small delay to let Qt settle the widget focus before JS focus
+        QTimer.singleShot(30, self._do_focus)
+
+    def _do_focus(self):
+        """Perform actual focus: Qt widget + Monaco JS."""
+        self._view.setFocus()
         self._run_js("api_focus()")
 
     def text(self):

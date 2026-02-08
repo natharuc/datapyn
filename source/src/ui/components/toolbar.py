@@ -6,6 +6,10 @@ from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy
 from PyQt6.QtCore import pyqtSignal, QSize
 import qtawesome as qta
 
+# Cor padrao para todos os icones da toolbar (consistente)
+_ICON_COLOR = "#b0b0b0"
+_ICON_HOVER = "#ffffff"
+
 
 class MainToolbar(QToolBar):
     """Toolbar principal"""
@@ -18,54 +22,47 @@ class MainToolbar(QToolBar):
         super().__init__("Principal", parent)
         self.theme_manager = theme_manager
         self.setMovable(False)
-        self.setIconSize(QSize(18, 18))
+        self.setIconSize(QSize(16, 16))
         self._setup_style()
         self._setup_buttons()
 
     def _setup_style(self):
         """Configura estilo da toolbar"""
-        self.setStyleSheet("""
-            QToolBar {
+        self.setStyleSheet(f"""
+            QToolBar {{
                 background-color: #252526;
                 border: none;
                 border-bottom: 1px solid #3e3e42;
-                padding: 2px 4px;
+                padding: 2px 6px;
                 spacing: 2px;
-            }
-            QToolBar::separator {
+            }}
+            QToolBar::separator {{
                 background-color: #3e3e42;
                 width: 1px;
-                margin: 4px 2px;
-            }
-            QPushButton {
+                margin: 6px 4px;
+            }}
+            QPushButton {{
                 background-color: transparent;
-                color: #cccccc;
+                color: {_ICON_COLOR};
                 border: none;
-                padding: 4px 10px;
+                padding: 5px 10px;
                 font-size: 12px;
                 border-radius: 3px;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background-color: #37373d;
-                color: #ffffff;
-            }
-            QPushButton:pressed {
+                color: {_ICON_HOVER};
+            }}
+            QPushButton:pressed {{
                 background-color: #2d2d30;
-            }
-            QPushButton#success {
-                color: #4caf50;
-            }
-            QPushButton#success:hover {
-                background-color: rgba(76, 175, 80, 0.15);
-                color: #66bb6a;
-            }
+            }}
         """)
 
     def _setup_buttons(self):
-        """Botoes com icones"""
+        """Botoes com icones uniformes"""
         # Nova Aba
         self.btn_new_tab = QPushButton(" Nova Aba")
-        self.btn_new_tab.setIcon(qta.icon("mdi.tab-plus", color="#cccccc"))
+        self.btn_new_tab.setIcon(qta.icon("mdi.tab-plus", color=_ICON_COLOR))
         self.btn_new_tab.clicked.connect(self.new_tab_clicked.emit)
         self.addWidget(self.btn_new_tab)
 
@@ -73,16 +70,15 @@ class MainToolbar(QToolBar):
 
         # Nova Conexao
         self.btn_new_conn = QPushButton(" Conexao")
-        self.btn_new_conn.setIcon(qta.icon("mdi.database-plus", color="#cccccc"))
+        self.btn_new_conn.setIcon(qta.icon("mdi.database-plus", color=_ICON_COLOR))
         self.btn_new_conn.clicked.connect(self.new_connection_clicked.emit)
         self.addWidget(self.btn_new_conn)
 
         self.addSeparator()
 
-        # Executar (destaque verde)
+        # Executar
         self.btn_run = QPushButton(" Executar (F5)")
-        self.btn_run.setIcon(qta.icon("mdi.play-circle", color="#4caf50"))
-        self.btn_run.setObjectName("success")
+        self.btn_run.setIcon(qta.icon("mdi.play", color=_ICON_COLOR))
         self.btn_run.clicked.connect(self.run_clicked.emit)
         self.addWidget(self.btn_run)
 

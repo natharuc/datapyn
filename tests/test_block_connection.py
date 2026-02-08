@@ -152,7 +152,7 @@ class TestCodeBlockConnection:
     def test_block_connection_dropped_updates_state(self, qapp):
         """Drop de conexao no panel deve atualizar _connection_name"""
         block = CodeBlock(default_language="sql")
-        block._on_connection_dropped("DroppedConn", "sqlserver")
+        block._on_connection_dropped("DroppedConn", "sqlserver", "")
 
         assert block.get_connection_name() == "DroppedConn"
         assert block.conn_panel.get_connection_name() == "DroppedConn"
@@ -414,8 +414,8 @@ class TestSessionWidgetDialog:
 
             widget._on_block_select_connection(block)
 
-            # Deve ter chamado set_connection_name no bloco
-            block.set_connection_name.assert_called_once_with("SelectedConn", "postgresql")
+            # Deve ter chamado set_connection_name no bloco (com color=None)
+            block.set_connection_name.assert_called_once_with("SelectedConn", "postgresql", None)
 
     def test_block_select_connection_cancelled(self, qapp):
         """Cancelar dialogo nao deve alterar conexao do bloco"""

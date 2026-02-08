@@ -680,9 +680,14 @@ class SessionWidget(QWidget):
         self.editor.setText(code)
 
     def sync_to_session(self):
-        """Sincroniza estado do widget para a sessão"""
+        """Sincroniza estado do widget para a sessao"""
         self.session.code = self.get_code()  # Compatibilidade
         self.session.blocks = self.editor.to_list()  # Novo: blocos
+        # Sincronizar file_path e tipo do arquivo
+        if hasattr(self, "file_path") and self.file_path:
+            self.session.file_path = self.file_path
+        if hasattr(self, "_original_file_type") and self._original_file_type:
+            self.session.original_file_type = self._original_file_type
 
     def sync_from_session(self):
         """Sincroniza estado da sessão para o widget"""
@@ -705,7 +710,8 @@ class SessionWidget(QWidget):
                 if conn_name:
                     config = manager.get_connection_config(conn_name)
                     db_type = config.get("db_type", "mysql") if config else "mysql"
-                    block.set_connection_name(conn_name, db_type)
+                    color = config.get("color", "") if config else ""
+                    block.set_connection_name(conn_name, db_type, color or None)
         except Exception as e:
             print(f"Erro ao abrir dialogo de conexao: {e}")
 

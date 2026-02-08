@@ -1,5 +1,5 @@
 """
-Configuração do pytest e fixtures compartilhadas
+Configuracao do pytest e fixtures compartilhadas
 """
 
 import pytest
@@ -9,6 +9,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import tempfile
 import json
+
+# Configurar WebEngine para testes (desabilitar GPU para evitar erros)
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-software-rasterizer --no-sandbox")
+os.environ.setdefault("QT_OPENGL", "software")
 
 # Adicionar source/src ao path
 source_path = str(Path(__file__).parent.parent / "source")

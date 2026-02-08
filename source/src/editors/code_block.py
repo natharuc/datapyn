@@ -32,7 +32,7 @@ class BlockConnectionPanel(QFrame):
     """
 
     connection_clicked = pyqtSignal()  # Usuario clicou no panel
-    connection_dropped = pyqtSignal(str, str)  # connection_name, db_type (drag & drop)
+    connection_dropped = pyqtSignal(str, str, str)  # connection_name, db_type, color (drag & drop)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,26 +43,23 @@ class BlockConnectionPanel(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def _setup_ui(self):
-        self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-        self.setLineWidth(1)
+        self.setFrameStyle(QFrame.Shape.NoFrame)
+        self.setLineWidth(0)
         self.setStyleSheet("""
             BlockConnectionPanel {
                 background: #2d2d2d;
-                border: 1px solid #444;
-                border-radius: 4px;
-                padding: 4px;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
             }
             BlockConnectionPanel:hover {
-                background: #353535;
                 border-color: #555;
             }
         """)
 
-        self.setMinimumHeight(28)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 3, 6, 3)
+        layout.setContentsMargins(6, 2, 6, 2)
         layout.setSpacing(4)
 
         # Icone
@@ -77,10 +74,11 @@ class BlockConnectionPanel(QFrame):
         self.name_label.setMinimumWidth(40)
         layout.addWidget(self.name_label, 1)
 
-    def set_connection(self, connection_name: str = None, db_type: str = None):
+    def set_connection(self, connection_name: str = None, db_type: str = None, color: str = None):
         """Define a conexao a ser exibida"""
         self._connection_name = connection_name
         self._db_type = db_type
+        self._color = color
 
         if connection_name:
             # Conexao customizada
@@ -91,10 +89,11 @@ class BlockConnectionPanel(QFrame):
             if db_type:
                 from src.ui.components.connection_panel import get_db_icon
 
-                icon = get_db_icon(db_type)
+                icon = get_db_icon(db_type, custom_color=color)
                 self.icon_label.setPixmap(icon.pixmap(16, 16))
             else:
-                self.icon_label.setPixmap(qta.icon("mdi.database", color="#64b5f6").pixmap(16, 16))
+                icon_color = color or "#64b5f6"
+                self.icon_label.setPixmap(qta.icon("mdi.database", color=icon_color).pixmap(16, 16))
         else:
             # Padrao da aba
             self.name_label.setText("Padrao da aba")
@@ -117,9 +116,9 @@ class BlockConnectionPanel(QFrame):
             event.acceptProposedAction()
             self.setStyleSheet("""
                 BlockConnectionPanel {
-                    background: #404040;
-                    border: 2px solid #64b5f6;
-                    border-radius: 4px;
+                    background: #353535;
+                    border: 1px solid #64b5f6;
+                    border-radius: 3px;
                 }
             """)
 
@@ -128,12 +127,10 @@ class BlockConnectionPanel(QFrame):
         self.setStyleSheet("""
             BlockConnectionPanel {
                 background: #2d2d2d;
-                border: 1px solid #444;
-                border-radius: 4px;
-                padding: 4px;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
             }
             BlockConnectionPanel:hover {
-                background: #353535;
                 border-color: #555;
             }
         """)
@@ -147,8 +144,13 @@ class BlockConnectionPanel(QFrame):
                 if event.mimeData().hasFormat("application/x-db-type")
                 else None
             )
+            color = (
+                event.mimeData().data("application/x-connection-color").data().decode("utf-8")
+                if event.mimeData().hasFormat("application/x-connection-color")
+                else ""
+            )
 
-            self.connection_dropped.emit(connection_name, db_type)
+            self.connection_dropped.emit(connection_name, db_type or "", color)
             event.acceptProposedAction()
 
             # Restaura estilo
@@ -204,39 +206,59 @@ class CodeBlock(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Altura padrao para todos os controles do cabecalho
+        CTRL_H = 24
+
+        # Estilo base compartilhado para inputs/combos do cabecalho
+        _input_base_style = f"""
+            background: #2d2d2d;
+            color: #ccc;
+            border: 1px solid #3e3e42;
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-size: 11px;
+            min-height: {CTRL_H - 4}px;
+            max-height: {CTRL_H - 4}px;
+        """
+
         # === Barra de controle ===
         self.control_bar = QWidget()
-        self.control_bar.setFixedHeight(32)
+        self.control_bar.setFixedHeight(34)
+        self.control_bar.setStyleSheet("""
+            QWidget#controlBar {
+                background: #252526;
+                border-bottom: 1px solid #3e3e42;
+            }
+        """)
+        self.control_bar.setObjectName("controlBar")
         control_layout = QHBoxLayout(self.control_bar)
-        control_layout.setContentsMargins(8, 4, 8, 4)
-        control_layout.setSpacing(8)
+        control_layout.setContentsMargins(6, 4, 6, 4)
+        control_layout.setSpacing(6)
 
         # Drag handle
-        self.drag_handle = QPushButton("≡")
-        self.drag_handle.setFixedSize(24, 24)
+        self.drag_handle = QPushButton()
+        self.drag_handle.setFixedSize(CTRL_H, CTRL_H)
         self.drag_handle.setToolTip("Arraste para reposicionar")
         self.drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.drag_handle.setIcon(qta.icon("mdi.drag-horizontal-variant", color="#666"))
         self.drag_handle.setStyleSheet("""
             QPushButton {
                 background: transparent;
-                color: #888;
                 border: none;
-                font-size: 16px;
-                font-weight: bold;
+                border-radius: 3px;
             }
             QPushButton:hover {
-                color: #fff;
-                background: #444;
-                border-radius: 4px;
+                background: #37373d;
             }
         """)
         self.drag_handle.pressed.connect(self._start_drag)
         control_layout.addWidget(self.drag_handle)
 
-        # Indicador de linguagem
+        # Indicador de linguagem (barra vertical colorida)
         self.lang_indicator = QFrame()
-        self.lang_indicator.setFixedWidth(4)
-        self.lang_indicator.setMinimumHeight(20)
+        self.lang_indicator.setFixedWidth(3)
+        self.lang_indicator.setFixedHeight(CTRL_H - 4)
+        self.lang_indicator.setStyleSheet("border-radius: 1px;")
         control_layout.addWidget(self.lang_indicator)
 
         # Seletor de linguagem
@@ -244,71 +266,87 @@ class CodeBlock(QFrame):
         self.lang_combo.addItem("Python", "python")
         self.lang_combo.addItem("SQL", "sql")
         self.lang_combo.addItem("Cross-Syntax", "cross")
-        # Definir SQL como padrão
         if self._default_language == "sql":
             self.lang_combo.setCurrentIndex(1)
         elif self._default_language == "cross":
             self.lang_combo.setCurrentIndex(2)
         else:
             self.lang_combo.setCurrentIndex(0)
-        self.lang_combo.setFixedWidth(120)
+        self.lang_combo.setFixedWidth(110)
+        self.lang_combo.setFixedHeight(CTRL_H)
+        self.lang_combo.setStyleSheet(f"""
+            QComboBox {{
+                {_input_base_style}
+            }}
+            QComboBox:hover {{
+                border-color: #555;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 18px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #888;
+                margin-right: 4px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: #2d2d2d;
+                color: #ccc;
+                border: 1px solid #555;
+                selection-background-color: #094771;
+            }}
+        """)
         control_layout.addWidget(self.lang_combo)
 
         # Campo de nome do bloco
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Nome do bloco")
         self.name_input.setFixedWidth(120)
-        self.name_input.setFixedHeight(22)
-        self.name_input.setStyleSheet("""
-            QLineEdit {
-                background: #2d2d2d;
-                color: #ccc;
-                border: 1px solid #444;
-                border-radius: 3px;
-                padding: 2px 6px;
-                font-size: 11px;
-            }
-            QLineEdit:focus {
+        self.name_input.setFixedHeight(CTRL_H)
+        self.name_input.setStyleSheet(f"""
+            QLineEdit {{
+                {_input_base_style}
+            }}
+            QLineEdit:focus {{
                 border-color: #007ACC;
                 color: #fff;
-            }
+            }}
+            QLineEdit::placeholder {{
+                color: #666;
+            }}
         """)
         control_layout.addWidget(self.name_input)
 
         # Panel de conexao (so visivel para SQL)
         self.conn_panel = BlockConnectionPanel()
-        self.conn_panel.setMinimumWidth(120)
-        self.conn_panel.setMaximumWidth(250)
+        self.conn_panel.setFixedHeight(CTRL_H)
+        self.conn_panel.setMinimumWidth(100)
+        self.conn_panel.setMaximumWidth(220)
         self.conn_panel.connection_clicked.connect(self._on_connection_panel_clicked)
         self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
         control_layout.addWidget(self.conn_panel)
-        # Visibilidade sera definida por _update_connection_combo_visibility() abaixo
 
-        # Status - estilo mais moderno
+        # Status
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("""
             QLabel {
                 color: #888;
                 font-size: 11px;
-                padding: 3px 8px;
+                padding: 2px 6px;
                 background: transparent;
-                border-radius: 3px;
             }
         """)
         control_layout.addWidget(self.status_label)
 
-        # Botão cancelar (visível apenas durante execução) - estilo moderno flat
-        try:
-            import qtawesome as qta
-
-            self.cancel_btn = QPushButton()
-            self.cancel_btn.setIcon(qta.icon("mdi.stop-circle-outline", color="#e74c3c"))
-            self.cancel_btn.setText("Cancelar")
-        except:
-            self.cancel_btn = QPushButton("Cancelar")
-
-        self.cancel_btn.setFixedHeight(24)
-        self.cancel_btn.setToolTip("Cancelar execução (Esc)")
+        # Botao cancelar (visivel apenas durante execucao)
+        self.cancel_btn = QPushButton()
+        self.cancel_btn.setIcon(qta.icon("mdi.stop-circle-outline", color="#e74c3c"))
+        self.cancel_btn.setText(" Cancelar")
+        self.cancel_btn.setFixedHeight(CTRL_H)
+        self.cancel_btn.setToolTip("Cancelar execucao (Esc)")
         self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cancel_btn.setStyleSheet("""
             QPushButton {
@@ -317,54 +355,46 @@ class CodeBlock(QFrame):
                 border: 1px solid #e74c3c;
                 border-radius: 3px;
                 padding: 2px 8px;
-                font-size: 10px;
+                font-size: 11px;
             }
             QPushButton:hover {
-                background: #e74c3c;
-                color: white;
+                background: rgba(231, 76, 60, 0.15);
             }
         """)
-        self.cancel_btn.hide()  # Escondido por padrão
+        self.cancel_btn.hide()
         control_layout.addWidget(self.cancel_btn)
 
         control_layout.addStretch()
 
-        # Botão executar
-        self.run_btn = QPushButton("▶")
-        self.run_btn.setFixedSize(28, 24)
+        # Botao executar (com icone)
+        self.run_btn = QPushButton()
+        self.run_btn.setFixedSize(CTRL_H, CTRL_H)
         self.run_btn.setToolTip("Executar (F5)")
         self.run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._run_icon_play = True  # Rastrear estado do icone
         control_layout.addWidget(self.run_btn)
 
-        # Botão remover - ícone melhor
-        try:
-            import qtawesome as qta
-
-            self.remove_btn = QPushButton()
-            self.remove_btn.setIcon(qta.icon("mdi.close-circle", color="#999", scale_factor=1.1))
-        except:
-            self.remove_btn = QPushButton("✖")
-
-        self.remove_btn.setFixedSize(28, 28)
+        # Botao remover (icone X discreto)
+        self.remove_btn = QPushButton()
+        self.remove_btn.setIcon(qta.icon("mdi.close", color="#666"))
+        self.remove_btn.setFixedSize(CTRL_H, CTRL_H)
         self.remove_btn.setToolTip("Remover bloco")
         self.remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.remove_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
-                color: #999;
                 border: none;
-                border-radius: 14px;
+                border-radius: 3px;
             }
             QPushButton:hover {
-                background: #e74c3c;
-                color: white;
+                background: rgba(231, 76, 60, 0.2);
             }
         """)
         control_layout.addWidget(self.remove_btn)
 
         layout.addWidget(self.control_bar)
 
-        # === Container do Editor (redimensionável) ===
+        # === Container do Editor (redimensionavel) ===
         self.editor_container = QWidget()
         self.editor_container.setMinimumHeight(80)
         self.editor_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -372,7 +402,7 @@ class CodeBlock(QFrame):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(0)
 
-        # Code Editor (configurável via editor_config - implementa ICodeEditor)
+        # Code Editor (configuravel via editor_config - implementa ICodeEditor)
         EditorClass = get_code_editor_class()
         self.editor = EditorClass(theme_manager=self.theme_manager)
 
@@ -429,10 +459,10 @@ class CodeBlock(QFrame):
         """Panel de conexao foi clicado - emite sinal para abrir dialogo"""
         self.select_connection_requested.emit(self)
 
-    def _on_connection_dropped(self, connection_name: str, db_type: str):
+    def _on_connection_dropped(self, connection_name: str, db_type: str, color: str):
         """Conexao foi arrastada para o panel"""
         self._connection_name = connection_name
-        self.conn_panel.set_connection(connection_name, db_type)
+        self.conn_panel.set_connection(connection_name, db_type or None, color or None)
 
     def _update_connection_panel_visibility(self):
         """Atualiza visibilidade do panel de conexao (so SQL)"""
@@ -444,23 +474,25 @@ class CodeBlock(QFrame):
         lang = self.get_language()
         color = self.LANGUAGE_COLORS.get(lang, "#888")
 
-        self.lang_indicator.setStyleSheet(f"background-color: {color};")
+        self.lang_indicator.setStyleSheet(f"background-color: {color}; border-radius: 1px;")
 
+        # Botao executar com icone (sem texto unicode)
+        self.run_btn.setIcon(qta.icon("mdi.play", color=color))
         self.run_btn.setStyleSheet(f"""
             QPushButton {{
-                background: {color};
-                color: white;
-                border: none;
+                background: transparent;
+                border: 1px solid {color};
                 border-radius: 3px;
-                font-weight: bold;
             }}
-            QPushButton:hover {{ background: {color}dd; }}
+            QPushButton:hover {{
+                background: {color};
+            }}
         """)
 
         if self._is_focused:
             self.setStyleSheet(f"CodeBlock {{ border: 2px solid {color}; border-radius: 4px; }}")
         else:
-            self.setStyleSheet("CodeBlock { border: 1px solid #444; border-radius: 4px; }")
+            self.setStyleSheet("CodeBlock { border: 1px solid #3e3e42; border-radius: 4px; }")
 
     # === API Pública ===
 
@@ -499,10 +531,10 @@ class CodeBlock(QFrame):
         """Retorna nome da conexao customizada ou None (usa padrao da aba)"""
         return self._connection_name
 
-    def set_connection_name(self, conn_name: str, db_type: str = None):
+    def set_connection_name(self, conn_name: str, db_type: str = None, color: str = None):
         """Define conexao customizada para este bloco"""
         self._connection_name = conn_name
-        self.conn_panel.set_connection(conn_name, db_type)
+        self.conn_panel.set_connection(conn_name, db_type, color)
 
     def is_focused(self) -> bool:
         return self._is_focused
@@ -511,13 +543,13 @@ class CodeBlock(QFrame):
         """Define estado de aguardando na fila"""
         self._is_waiting = waiting
         if waiting:
-            self.run_btn.setText("Pausar")
-            self.status_label.setText("⏱ Aguardando")
+            self.run_btn.setIcon(qta.icon("mdi.pause", color="#95a5a6"))
+            self.status_label.setText("Aguardando")
             self.status_label.setStyleSheet("""
                 QLabel {
                     color: #95a5a6;
                     font-size: 11px;
-                    padding: 3px 8px;
+                    padding: 2px 6px;
                     background: rgba(149, 165, 166, 0.1);
                     border-radius: 3px;
                 }
@@ -525,38 +557,38 @@ class CodeBlock(QFrame):
             self.cancel_btn.hide()
         else:
             if not self._is_running:
-                self.run_btn.setText("▶")
+                self._update_style()
 
     def set_running(self, running: bool):
         self._is_running = running
-        self._is_waiting = False  # Não está mais aguardando
+        self._is_waiting = False
         if running:
             self._execution_start_time = time.time()
-            self.run_btn.setText("◼")
-            self.status_label.setText("▶ Executando")
+            self.run_btn.setIcon(qta.icon("mdi.stop", color="#f39c12"))
+            self.status_label.setText("Executando")
             self.status_label.setStyleSheet("""
                 QLabel {
                     color: #f39c12;
                     font-size: 11px;
-                    padding: 3px 8px;
+                    padding: 2px 6px;
                     background: rgba(243, 156, 18, 0.1);
                     border-radius: 3px;
                 }
             """)
-            self.cancel_btn.show()  # Mostra botão de cancelar
+            self.cancel_btn.show()
         else:
-            self.run_btn.setText("▶")
-            self.cancel_btn.hide()  # Esconde botão de cancelar
+            self._update_style()  # Restaura icone play com cor da linguagem
+            self.cancel_btn.hide()
             if self._execution_start_time > 0:
                 elapsed = time.time() - self._execution_start_time
                 self._last_execution_time = elapsed
                 self._execution_start_time = 0
-                self.status_label.setText(f"✓ {self._format_execution_time(elapsed)}")
+                self.status_label.setText(f"{self._format_execution_time(elapsed)}")
                 self.status_label.setStyleSheet("""
                     QLabel {
                         color: #2ecc71;
                         font-size: 11px;
-                        padding: 3px 8px;
+                        padding: 2px 6px;
                         background: rgba(46, 204, 113, 0.1);
                         border-radius: 3px;
                     }
@@ -567,9 +599,8 @@ class CodeBlock(QFrame):
                     QLabel {
                         color: #888;
                         font-size: 11px;
-                        padding: 3px 8px;
+                        padding: 2px 6px;
                         background: transparent;
-                        border-radius: 3px;
                     }
                 """)
 
@@ -577,14 +608,14 @@ class CodeBlock(QFrame):
         """Define estado de cancelado"""
         self._is_running = False
         self._is_waiting = False
-        self.run_btn.setText("▶")
+        self._update_style()
         self.cancel_btn.hide()
-        self.status_label.setText("✕ Cancelado")
+        self.status_label.setText("Cancelado")
         self.status_label.setStyleSheet("""
             QLabel {
                 color: #e74c3c;
                 font-size: 11px;
-                padding: 3px 8px;
+                padding: 2px 6px;
                 background: rgba(231, 76, 60, 0.1);
                 border-radius: 3px;
             }
@@ -595,17 +626,16 @@ class CodeBlock(QFrame):
         """Define estado de erro"""
         self._is_running = False
         self._is_waiting = False
-        self.run_btn.setText("▶")
+        self._update_style()
         self.cancel_btn.hide()
-        self.status_label.setText("⚠ Erro")
+        self.status_label.setText("Erro")
         self.status_label.setStyleSheet("""
             QLabel {
                 color: #e74c3c;
                 font-size: 11px;
-                padding: 3px 8px;
+                padding: 2px 6px;
                 background: rgba(231, 76, 60, 0.15);
                 border-radius: 3px;
-                font-weight: bold;
             }
         """)
         self._execution_start_time = 0
@@ -642,6 +672,8 @@ class CodeBlock(QFrame):
             # Salvar db_type para restaurar icone correto
             if hasattr(self, "conn_panel") and self.conn_panel._db_type:
                 data["db_type"] = self.conn_panel._db_type
+            if hasattr(self, "conn_panel") and getattr(self.conn_panel, "_color", None):
+                data["connection_color"] = self.conn_panel._color
         return data
 
     @classmethod
@@ -658,7 +690,8 @@ class CodeBlock(QFrame):
         # Restaurar conexao customizada (com panel visual)
         if "connection_name" in data:
             db_type = data.get("db_type")
-            block.set_connection_name(data["connection_name"], db_type)
+            color = data.get("connection_color")
+            block.set_connection_name(data["connection_name"], db_type, color)
         return block
 
     # === Drag ===

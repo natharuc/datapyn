@@ -662,24 +662,25 @@ class MainWindow(DockingMainWindow):
         self._restore_window_state()
 
     def _setup_icons(self):
-        """Configura ícones do QtAwesome"""
+        """Configura icones do QtAwesome com cor uniforme"""
         if not HAS_QTAWESOME:
             return {}
 
+        c = "#b0b0b0"  # Cor padrao uniforme para todos os icones
         return {
-            "database": qta.icon("fa5s.database", color="#569cd6"),
-            "play": qta.icon("fa5s.play", color="#4ec9b0"),
-            "python": qta.icon("fa5b.python", color="#4ec9b0"),
-            "table": qta.icon("fa5s.table", color="#9cdcfe"),
-            "save": qta.icon("fa5s.save", color="#d4d4d4"),
-            "folder-open": qta.icon("fa5s.folder-open", color="#d4d4d4"),
-            "trash": qta.icon("fa5s.trash", color="#f48771"),
-            "cog": qta.icon("fa5s.cog", color="#d4d4d4"),
-            "plug": qta.icon("fa5s.plug", color="#569cd6"),
-            "code": qta.icon("fa5s.code", color="#9cdcfe"),
-            "chart-bar": qta.icon("fa5s.chart-bar", color="#4ec9b0"),
-            "memory": qta.icon("fa5s.microchip", color="#c586c0"),
-            "terminal": qta.icon("fa5s.terminal", color="#d4d4d4"),
+            "database": qta.icon("mdi.database", color=c),
+            "play": qta.icon("mdi.play", color=c),
+            "python": qta.icon("mdi.language-python", color=c),
+            "table": qta.icon("mdi.table", color=c),
+            "save": qta.icon("mdi.content-save", color=c),
+            "folder-open": qta.icon("mdi.folder-open", color=c),
+            "trash": qta.icon("mdi.delete-outline", color=c),
+            "cog": qta.icon("mdi.cog-outline", color=c),
+            "plug": qta.icon("mdi.connection", color=c),
+            "code": qta.icon("mdi.code-tags", color=c),
+            "chart-bar": qta.icon("mdi.chart-bar", color=c),
+            "memory": qta.icon("mdi.memory", color=c),
+            "terminal": qta.icon("mdi.console", color=c),
         }
 
     def _setup_ui(self):
@@ -717,7 +718,9 @@ class MainWindow(DockingMainWindow):
                 background-color: {colors.interactive_primary_active};
             }}
             QMenu::icon {{
-                padding-left: 10px;
+                padding-left: 8px;
+                width: 16px;
+                height: 16px;
             }}
             QToolBar {{
                 background-color: {colors.bg_tertiary};
@@ -1422,7 +1425,7 @@ class MainWindow(DockingMainWindow):
 
         run_all_action = QAction("Executar &Todos os Blocos", self)
         if HAS_QTAWESOME:
-            run_all_action.setIcon(qta.icon("fa5s.forward"))
+            run_all_action.setIcon(qta.icon("mdi.fast-forward", color="#b0b0b0"))
         # Atalho gerenciado por ShortcutManager (Ctrl+F5)
         run_all_action.triggered.connect(self._execute_all_blocks)
         run_menu.addAction(run_all_action)
@@ -1493,7 +1496,7 @@ class MainWindow(DockingMainWindow):
 
         packages_action = QAction("Gerenciador de &Pacotes...", self)
         if HAS_QTAWESOME:
-            packages_action.setIcon(qta.icon("fa5s.cube", color="#cccccc"))
+            packages_action.setIcon(qta.icon("mdi.package-variant", color="#b0b0b0"))
         packages_action.triggered.connect(self._show_package_manager)
         tools_menu.addAction(packages_action)
 
@@ -3251,6 +3254,7 @@ class MainWindow(DockingMainWindow):
         # Definir file_path no widget se disponivel na sessao
         if hasattr(session, "file_path") and session.file_path:
             widget.file_path = session.file_path
+            widget._original_file_type = getattr(session, "original_file_type", None)
 
         # Conectar sinais do widget
         widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
@@ -3345,7 +3349,15 @@ class MainWindow(DockingMainWindow):
             # Trocar paineis para a sessao ativa
             self._switch_session_panels(widget.session.session_id)
 
-        # Atualizar título da janela quando muda de aba
+            # Restaurar contexto de arquivo da aba selecionada
+            if hasattr(widget, "file_path") and widget.file_path:
+                self._original_file_path = widget.file_path
+                self._original_file_type = getattr(widget, "_original_file_type", None)
+            else:
+                self._original_file_path = None
+                self._original_file_type = None
+
+        # Atualizar titulo da janela quando muda de aba
         self._update_window_title()
 
     def _on_session_focused(self, session):
@@ -3768,7 +3780,7 @@ class MainWindow(DockingMainWindow):
             )
 
     def _save_single_file(self, file_path: str, file_type: str):
-        """Salva conteúdo em arquivo único (sql/py)"""
+        """Salva conteudo em arquivo unico (sql/py)"""
         try:
             current_widget = self._get_current_session_widget()
             if not current_widget:
@@ -3778,21 +3790,32 @@ class MainWindow(DockingMainWindow):
             if not blocks:
                 return
 
-            # Pegar conteúdo do primeiro bloco
+            # Pegar conteudo do primeiro bloco
             content = blocks[0].get_code()
 
             # Salvar arquivo
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
-            # Limpar marcador de modificação
+            # Atualizar file_path no widget e sessao
+            current_widget.file_path = file_path
+            current_widget._original_file_type = file_type
+            current_widget.session.file_path = file_path
+            current_widget.session.original_file_type = file_type
+
+            # Limpar marcador de modificacao
             current_widget._is_modified = False
             self._clear_modification_markers()
 
-            # Atualizar status
+            # Atualizar nome da aba com o nome do arquivo
             import os
 
             filename = os.path.basename(file_path)
+            index = self.session_tabs.indexOf(current_widget)
+            if index >= 0:
+                self.session_tabs.setTabText(index, filename)
+                current_widget.session.title = filename
+
             self.action_label.setText(f"Arquivo salvo: {filename}")
 
             self._update_window_title()

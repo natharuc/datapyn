@@ -101,17 +101,16 @@ class TestCodeBlock:
         assert block.get_code() == "x = 1"
 
     def test_running_state(self, block):
-        """Deve mudar estado de execução e mostrar tempo"""
-        assert block.run_btn.text() == "▶"
+        """Deve mudar estado de execucao e mostrar tempo"""
+        # Botao usa icone (sem texto) ao inves de caracteres unicode
+        assert block.run_btn.text() == ""
 
         block.set_running(True)
-        assert block.run_btn.text() == "◼"
         assert "Executando" in block.status_label.text()
 
         block.set_running(False)
-        assert block.run_btn.text() == "▶"
-        # Após execução, mostra tempo de execução (µs, ms ou s)
-        assert any(unit in block.status_label.text() for unit in ["µs", "ms", "s"]) or block.status_label.text() == ""
+        # Apos execucao, mostra tempo de execucao
+        assert any(unit in block.status_label.text() for unit in ["us", "ms", "s"]) or block.status_label.text() == ""
 
 
 class TestBlockEditor:
