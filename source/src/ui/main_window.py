@@ -4185,7 +4185,7 @@ class MainWindow(DockingMainWindow):
         
         if has_sql or has_cross:
             imports_needed.add('from sqlalchemy import create_engine')
-            imports_needed.add('import pyodbc')
+            # Note: pyodbc is only added for SQL Server connections below
         
         lines.extend(sorted(imports_needed))
         lines.append('')
@@ -4220,6 +4220,7 @@ class MainWindow(DockingMainWindow):
                         lines.append("connection_string = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'")
                     elif db_type == 'sqlserver':
                         lines.append("# String de conexão SQL Server")
+                        lines.append("# Requer: pip install pyodbc")
                         lines.append("connection_string = f'mssql+pyodbc://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server'")
                     else:
                         lines.append(f"# String de conexão {db_type}")
@@ -4278,6 +4279,8 @@ class MainWindow(DockingMainWindow):
         """Converte sintaxe cross (var = {{ SQL }}) para Python puro"""
         import re
         
+        # Match pattern: variable_name = {{ SQL query }}
+        # Captures: group(1) = variable_name, group(2) = SQL query
         pattern = r"(\w+)\s*=\s*\{\{\s*(.+?)\s*\}\}"
         
         lines = []
