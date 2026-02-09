@@ -1,7 +1,7 @@
 """
 Sistema de Docking - Painéis repositionaveis como Visual Studio
 
-Permite arrastar e reposicionar abas (Resultados, Output, Variáveis) 
+Permite arrastar e reposicionar abas (Resultados, Output, Variáveis)
 em qualquer área da tela com indicadores visuais.
 """
 
@@ -11,11 +11,11 @@ from .docking_manager import DockingManager
 from .docking_main_window import DockingMainWindow
 
 __all__ = [
-    'DockableWidget',
-    'DragDropTabWidget',
-    'DockPosition',
-    'DockIndicators',
-    'DockPreview', 
-    'DockingManager',
-    'DockingMainWindow'
+    "DockableWidget",
+    "DragDropTabWidget",
+    "DockPosition",
+    "DockIndicators",
+    "DockPreview",
+    "DockingManager",
+    "DockingMainWindow",
 ]

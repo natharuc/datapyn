@@ -5,4 +5,4 @@ from .theme_manager import ThemeManager
 from .session import Session
 from .session_manager import SessionManager
 
-__all__ = ['ResultsManager', 'ShortcutManager', 'WorkspaceManager', 'ThemeManager', 'Session', 'SessionManager']
+__all__ = ["ResultsManager", "ShortcutManager", "WorkspaceManager", "ThemeManager", "Session", "SessionManager"]

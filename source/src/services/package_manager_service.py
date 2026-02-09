@@ -7,8 +7,10 @@ Responsabilidades:
 - Instalar/desinstalar pacotes
 - Verificar versoes
 """
+
 import subprocess
 import sys
+import shutil
 import json
 import logging
 from typing import List, Optional, Dict, Any
@@ -18,12 +20,28 @@ logger = logging.getLogger(__name__)
 
 # CREATE_NO_WINDOW existe apenas no Windows
 # No Linux usa 0 (sem flags especiais)
-CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _find_python_executable() -> str:
+    """
+    Retorna o caminho do interpretador Python.
+
+    Em modo frozen (PyInstaller), sys.executable aponta para o EXE empacotado,
+    nao para o Python. Neste caso, procura o python no PATH do sistema.
+    """
+    if getattr(sys, "frozen", False):
+        python = shutil.which("python") or shutil.which("python3")
+        if python:
+            return python
+        return "python"
+    return sys.executable
 
 
 @dataclass
 class PackageInfo:
     """Informacoes de um pacote"""
+
     name: str
     version: str = ""
     summary: str = ""
@@ -42,6 +60,7 @@ class PackageInfo:
 @dataclass
 class PackageOperationResult:
     """Resultado de uma operacao de pacote"""
+
     success: bool
     package_name: str
     operation: str  # 'install', 'uninstall', 'update'
@@ -58,30 +77,24 @@ class PackageManagerService:
     """
 
     def __init__(self):
-        self._python_executable = sys.executable
+        self._python_executable = _find_python_executable()
 
     def list_installed(self) -> List[PackageInfo]:
         """Lista todos os pacotes instalados"""
         try:
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "list",
-                 "--format=json", "--disable-pip-version-check"],
-                capture_output=True, text=True, timeout=30,
-                creationflags=CREATE_NO_WINDOW
+                [self._python_executable, "-m", "pip", "list", "--format=json", "--disable-pip-version-check"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=CREATE_NO_WINDOW,
             )
             if result.returncode != 0:
                 logger.error(f"Erro ao listar pacotes: {result.stderr}")
                 return []
 
             packages = json.loads(result.stdout)
-            return [
-                PackageInfo(
-                    name=pkg["name"],
-                    version=pkg.get("version", ""),
-                    installed=True
-                )
-                for pkg in packages
-            ]
+            return [PackageInfo(name=pkg["name"], version=pkg.get("version", ""), installed=True) for pkg in packages]
         except Exception as e:
             logger.error(f"Erro ao listar pacotes: {e}")
             return []
@@ -100,11 +113,19 @@ class PackageManagerService:
         try:
             # Tentar obter info do pacote diretamente
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "install",
-                 f"{query}==randominvalidversion",
-                 "--disable-pip-version-check", "--dry-run"],
-                capture_output=True, text=True, timeout=30,
-                creationflags=CREATE_NO_WINDOW
+                [
+                    self._python_executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    f"{query}==randominvalidversion",
+                    "--disable-pip-version-check",
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=CREATE_NO_WINDOW,
             )
             # pip vai listar versoes disponiveis no erro
             stderr = result.stderr
@@ -116,6 +137,7 @@ class PackageManagerService:
             # Extrair versoes do output de erro
             versions = []
             import re
+
             # Padrao: "from versions: 1.0.0, 1.1.0, ..."
             match = re.search(r"from versions?:\s*(.+?)(?:\)|$)", stderr)
             if match:
@@ -127,13 +149,15 @@ class PackageManagerService:
             installed_packages = {p.name.lower(): p for p in self.list_installed()}
             installed = installed_packages.get(query.lower())
 
-            return [PackageInfo(
-                name=query,
-                version=installed.version if installed else "",
-                latest_version=latest,
-                installed=bool(installed),
-                summary=f"Versoes disponiveis: {', '.join(versions[-5:])}" if versions else ""
-            )]
+            return [
+                PackageInfo(
+                    name=query,
+                    version=installed.version if installed else "",
+                    latest_version=latest,
+                    installed=bool(installed),
+                    summary=f"Versoes disponiveis: {', '.join(versions[-5:])}" if versions else "",
+                )
+            ]
 
         except Exception as e:
             logger.error(f"Erro na pesquisa PyPI: {e}")
@@ -143,10 +167,11 @@ class PackageManagerService:
         """Obtem informacoes detalhadas de um pacote instalado"""
         try:
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "show",
-                 package_name, "--disable-pip-version-check"],
-                capture_output=True, text=True, timeout=15,
-                creationflags=CREATE_NO_WINDOW
+                [self._python_executable, "-m", "pip", "show", package_name, "--disable-pip-version-check"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                creationflags=CREATE_NO_WINDOW,
             )
             if result.returncode != 0:
                 return None
@@ -162,22 +187,22 @@ class PackageManagerService:
                 version=info.get("Version", ""),
                 summary=info.get("Summary", ""),
                 author=info.get("Author", ""),
-                installed=True
+                installed=True,
             )
         except Exception as e:
             logger.error(f"Erro ao obter info do pacote: {e}")
             return None
 
-    def install_package(self, package_name: str,
-                        version: str = "") -> PackageOperationResult:
+    def install_package(self, package_name: str, version: str = "") -> PackageOperationResult:
         """Instala um pacote via pip"""
         target = f"{package_name}=={version}" if version else package_name
         try:
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "install",
-                 target, "--disable-pip-version-check"],
-                capture_output=True, text=True, timeout=120,
-                creationflags=CREATE_NO_WINDOW
+                [self._python_executable, "-m", "pip", "install", target, "--disable-pip-version-check"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                creationflags=CREATE_NO_WINDOW,
             )
 
             if result.returncode == 0:
@@ -185,51 +210,53 @@ class PackageManagerService:
                     success=True,
                     package_name=package_name,
                     operation="install",
-                    message=f"Pacote '{package_name}' instalado com sucesso."
+                    message=f"Pacote '{package_name}' instalado com sucesso.",
                 )
             else:
                 return PackageOperationResult(
                     success=False,
                     package_name=package_name,
                     operation="install",
-                    error=result.stderr or "Erro desconhecido na instalacao."
+                    error=result.stderr or "Erro desconhecido na instalacao.",
                 )
         except subprocess.TimeoutExpired:
             return PackageOperationResult(
                 success=False,
                 package_name=package_name,
                 operation="install",
-                error="Timeout: a instalacao demorou mais de 2 minutos."
+                error="Timeout: a instalacao demorou mais de 2 minutos.",
             )
         except Exception as e:
-            return PackageOperationResult(
-                success=False,
-                package_name=package_name,
-                operation="install",
-                error=str(e)
-            )
+            return PackageOperationResult(success=False, package_name=package_name, operation="install", error=str(e))
 
     def uninstall_package(self, package_name: str) -> PackageOperationResult:
         """Desinstala um pacote via pip"""
         # Proteger pacotes essenciais
         protected = {
-            'pip', 'setuptools', 'wheel', 'pyqt6', 'pyqt6-qt6',
-            'pyqt6-sip', 'qscintilla', 'pyqt6-qscintilla',
+            "pip",
+            "setuptools",
+            "wheel",
+            "pyqt6",
+            "pyqt6-qt6",
+            "pyqt6-sip",
+            "qscintilla",
+            "pyqt6-qscintilla",
         }
         if package_name.lower() in protected:
             return PackageOperationResult(
                 success=False,
                 package_name=package_name,
                 operation="uninstall",
-                error=f"O pacote '{package_name}' e protegido e nao pode ser removido."
+                error=f"O pacote '{package_name}' e protegido e nao pode ser removido.",
             )
 
         try:
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "uninstall",
-                 package_name, "-y", "--disable-pip-version-check"],
-                capture_output=True, text=True, timeout=60,
-                creationflags=CREATE_NO_WINDOW
+                [self._python_executable, "-m", "pip", "uninstall", package_name, "-y", "--disable-pip-version-check"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=CREATE_NO_WINDOW,
             )
 
             if result.returncode == 0:
@@ -237,31 +264,35 @@ class PackageManagerService:
                     success=True,
                     package_name=package_name,
                     operation="uninstall",
-                    message=f"Pacote '{package_name}' removido com sucesso."
+                    message=f"Pacote '{package_name}' removido com sucesso.",
                 )
             else:
                 return PackageOperationResult(
                     success=False,
                     package_name=package_name,
                     operation="uninstall",
-                    error=result.stderr or "Erro desconhecido ao desinstalar."
+                    error=result.stderr or "Erro desconhecido ao desinstalar.",
                 )
         except Exception as e:
-            return PackageOperationResult(
-                success=False,
-                package_name=package_name,
-                operation="uninstall",
-                error=str(e)
-            )
+            return PackageOperationResult(success=False, package_name=package_name, operation="uninstall", error=str(e))
 
     def update_package(self, package_name: str) -> PackageOperationResult:
         """Atualiza um pacote para a versao mais recente"""
         try:
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "install",
-                 "--upgrade", package_name, "--disable-pip-version-check"],
-                capture_output=True, text=True, timeout=120,
-                creationflags=CREATE_NO_WINDOW
+                [
+                    self._python_executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    package_name,
+                    "--disable-pip-version-check",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                creationflags=CREATE_NO_WINDOW,
             )
 
             if result.returncode == 0:
@@ -269,31 +300,27 @@ class PackageManagerService:
                     success=True,
                     package_name=package_name,
                     operation="update",
-                    message=f"Pacote '{package_name}' atualizado com sucesso."
+                    message=f"Pacote '{package_name}' atualizado com sucesso.",
                 )
             else:
                 return PackageOperationResult(
                     success=False,
                     package_name=package_name,
                     operation="update",
-                    error=result.stderr or "Erro desconhecido ao atualizar."
+                    error=result.stderr or "Erro desconhecido ao atualizar.",
                 )
         except Exception as e:
-            return PackageOperationResult(
-                success=False,
-                package_name=package_name,
-                operation="update",
-                error=str(e)
-            )
+            return PackageOperationResult(success=False, package_name=package_name, operation="update", error=str(e))
 
     def check_package_exists(self, package_name: str) -> bool:
         """Verifica rapidamente se um pacote esta instalado"""
         try:
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "show",
-                 package_name, "--disable-pip-version-check"],
-                capture_output=True, text=True, timeout=10,
-                creationflags=CREATE_NO_WINDOW
+                [self._python_executable, "-m", "pip", "show", package_name, "--disable-pip-version-check"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=CREATE_NO_WINDOW,
             )
             return result.returncode == 0
         except Exception:

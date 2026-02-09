@@ -21,8 +21,11 @@ echo.
 echo Gerando executavel...
 echo.
 
+REM Limpar build anterior para detectar falha corretamente
+if exist "dist\DataPyn\DataPyn.exe" del "dist\DataPyn\DataPyn.exe"
+
 REM Executar PyInstaller com o spec file
-pyinstaller scripts\datapyn.spec --clean
+pyinstaller scripts\datapyn.spec --clean -y
 
 echo.
 if exist "dist\DataPyn\DataPyn.exe" (
