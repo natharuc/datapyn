@@ -930,11 +930,19 @@ class MainWindow(DockingMainWindow):
         # Results fica como aba ativa
         self.results_dock.raise_()
 
+        # Esconder Results e Variables ate a primeira execucao
+        self.results_dock.hide()
+        self.variables_dock.hide()
+
     def _create_session_panels(self, session_id: str):
         """Cria paineis (Results, Output, Variables) para uma sessao e adiciona aos stacks."""
         results = ResultsViewer(theme_manager=self.theme_manager)
         output = OutputPanel(theme_manager=self.theme_manager)
         variables = VariablesPanel(theme_manager=self.theme_manager)
+
+        # Conectar sinais do painel de variaveis
+        variables.insert_variable_name.connect(self._on_insert_variable_in_editor)
+        variables.delete_variable.connect(self._on_delete_variable)
 
         r_idx = self._results_stack.addWidget(results)
         o_idx = self._output_stack.addWidget(output)
@@ -1038,6 +1046,10 @@ class MainWindow(DockingMainWindow):
 
         dock.show()
         dock.raise_()
+
+        # Se mostrando results pela primeira vez, mostrar variables tambem
+        if name == "results" and not self.variables_dock.isVisible():
+            self.variables_dock.show()
 
         # Para docks tabificados, raise_() nao troca a aba visivel.
         # Precisamos encontrar o QTabBar que controla o grupo e selecionar
@@ -1642,6 +1654,8 @@ class MainWindow(DockingMainWindow):
             # Conexões
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
+            # Schema
+            "reload_schema": self._reload_schema,
             # Ferramentas
             "settings": self._show_settings,
         }
@@ -1683,6 +1697,8 @@ class MainWindow(DockingMainWindow):
             # Conexões
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
+            # Schema
+            "reload_schema": self._reload_schema,
             # Ferramentas
             "settings": self._show_settings,
         }
@@ -3145,19 +3161,16 @@ class MainWindow(DockingMainWindow):
             else:
                 self._open_code_file(file_path)
 
-        # Abrir arquivos de dados (csv, json, xlsx) com bloco de importacao
+        # Abrir arquivos de dados com dialogo de importacao
         if data_files:
             self._new_session()
             current_index = self.session_tabs.currentIndex()
             widget = self.session_tabs.widget(current_index)
 
             if widget and hasattr(widget, "editor"):
-                editor = widget.editor
                 for file_path in data_files:
-                    import_code = editor._generate_import_code(file_path)
-                    if import_code:
-                        editor.add_block(language="python", code=import_code)
-                        editor.content_changed.emit()
+                    # Usar o handler do SessionWidget (que abre o dialogo)
+                    widget._on_file_dropped(file_path)
 
     def _show_empty_state(self):
         """Mostra estado vazio quando nao ha sessoes, escondendo paineis"""
@@ -3315,6 +3328,11 @@ class MainWindow(DockingMainWindow):
         )
         widget.block_connection_changed.connect(
             lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+        )
+
+        # Atualizar autocomplete quando namespace muda (apos SQL ou Python via SessionWidget)
+        session.variables_changed.connect(
+            lambda ns: self._push_python_namespace(ns)
         )
 
         # Guardar referência
@@ -3528,6 +3546,53 @@ class MainWindow(DockingMainWindow):
         if session.connector:
             self._schema_service.load_schema(session.connector, connection_name)
 
+    def _reload_schema(self):
+        """Recarrega o schema SQL da conexao do bloco focado (ou da sessao).
+
+        Usa a conexao do bloco focado se ele tiver conexao customizada,
+        caso contrario usa a conexao da sessao ativa.
+        """
+        widget = self._get_current_session_widget()
+        if not widget:
+            self.statusBar().showMessage("Nenhuma sessao ativa", 3000)
+            return
+
+        # Determinar conexao: bloco focado ou sessao
+        connection_name = None
+        connector = None
+
+        focused_block = widget.editor.get_focused_block()
+        if focused_block:
+            block_conn = focused_block.get_connection_name()
+            if block_conn:
+                connection_name = block_conn
+
+        if not connection_name:
+            # Usar conexao da sessao
+            if widget.session.is_connected and widget.session.connection_name:
+                connection_name = widget.session.connection_name
+                connector = widget.session.connector
+
+        if not connection_name:
+            self.statusBar().showMessage("Nenhuma conexao ativa para recarregar schema", 3000)
+            return
+
+        # Invalidar cache e recarregar
+        self._schema_service.invalidate_cache(connection_name)
+        self.statusBar().showMessage(f"Recarregando schema de '{connection_name}'...", 5000)
+
+        if connector and connector.is_connected():
+            self._schema_service.load_schema(connector, connection_name)
+        else:
+            # Precisa obter connector do ConnectionManager
+            from src.database.connection_manager import ConnectionManager
+            manager = ConnectionManager()
+            conn = manager.connections.get(connection_name)
+            if conn and conn.is_connected():
+                self._schema_service.load_schema(conn, connection_name)
+            else:
+                self.statusBar().showMessage(f"Conexao '{connection_name}' nao esta ativa", 3000)
+
     def _on_schema_loaded(self, schema: dict, connection_name: str):
         """Callback quando schema do banco e carregado pelo SchemaService.
 
@@ -3539,6 +3604,13 @@ class MainWindow(DockingMainWindow):
         self._log_info(
             f"Schema carregado ({connection_name}): {len(schema.get('tables', []))} tabelas, "
             f"{sum(len(v) for v in schema.get('columns', {}).values())} colunas"
+        )
+
+        # Feedback na statusbar
+        tables_count = len(schema.get("tables", []))
+        cols_count = sum(len(v) for v in schema.get("columns", {}).values())
+        self.statusBar().showMessage(
+            f"Schema '{connection_name}' carregado: {tables_count} tabelas, {cols_count} colunas", 5000
         )
 
         # Enviar schema para blocos que usam esta conexao
@@ -3607,6 +3679,23 @@ class MainWindow(DockingMainWindow):
                 self._schema_service.load_schema(connector, connection_name)
         except Exception as e:
             self._log_info(f"Erro ao carregar schema para bloco ({connection_name}): {e}")
+
+    def _on_insert_variable_in_editor(self, var_name: str):
+        """Insere nome da variavel no editor focado da sessao ativa"""
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "editor"):
+            block = current_widget.editor.get_focused_block()
+            if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
+                block.editor.insert_text_at_cursor(var_name)
+
+    def _on_delete_variable(self, var_name: str):
+        """Remove variavel do namespace da sessao ativa"""
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "session"):
+            ns = current_widget.session.namespace
+            if var_name in ns:
+                del ns[var_name]
+                current_widget.session.variables_changed.emit(ns)
 
     def _push_python_namespace(self, namespace: dict):
         """Envia namespace Python atualizado para os editores Monaco.

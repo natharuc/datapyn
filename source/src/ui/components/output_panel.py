@@ -4,10 +4,11 @@ Painel de Output/Logs
 Exibe mensagens de log, saída de comandos e erros.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QDialog, QDialogButtonBox
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCursor
 from datetime import datetime
+import html as html_module
 
 from .buttons import IconButton, GhostButton
 
@@ -68,10 +69,11 @@ class OutputPanel(QWidget):
         """)
         layout.addWidget(toolbar)
 
-        # Área de texto
+        # Area de texto
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setFont(QFont("Consolas", 10))
+        self.text_edit.mouseDoubleClickEvent = self._on_double_click
         layout.addWidget(self.text_edit)
 
     def _apply_theme(self):
@@ -100,21 +102,24 @@ class OutputPanel(QWidget):
 
         Args:
             text: Texto a adicionar
-            level: Nível ('info', 'success', 'warning', 'error')
+            level: Nivel ('info', 'success', 'warning', 'error')
         """
         timestamp = datetime.now().strftime("%H:%M:%S")
 
         colors = {"info": "#9cdcfe", "success": "#4ec9b0", "warning": "#dcdcaa", "error": "#f48771", "debug": "#808080"}
         color = colors.get(level, colors["info"])
 
-        # Ícones por nível
+        # Icones por nivel
         icons = {"info": "", "success": "[OK]", "warning": "[AVISO]", "error": "[ERRO]", "debug": "[DEBUG]"}
         icon = icons.get(level, "")
 
+        # Escapar HTML e converter \n em <br> para preservar formatacao
+        safe_text = html_module.escape(text).replace("\n", "<br>")
+
         if icon:
-            html = f'<span style="color: #808080;">[{timestamp}]</span> <span style="color: {color};">{icon} {text}</span><br>'
+            html = f'<span style="color: #808080;">[{timestamp}]</span> <span style="color: {color};">{icon} {safe_text}</span><br>'
         else:
-            html = f'<span style="color: #808080;">[{timestamp}]</span> <span style="color: {color};">{text}</span><br>'
+            html = f'<span style="color: #808080;">[{timestamp}]</span> <span style="color: {color};">{safe_text}</span><br>'
 
         self.text_edit.append(html)
 
@@ -147,6 +152,49 @@ class OutputPanel(QWidget):
     def debug(self, text: str):
         """Adiciona log de debug"""
         self.append(text, "debug")
+
+    def _on_double_click(self, event):
+        """Abre dialogo com log formatado ao dar duplo-clique"""
+        cursor = self.text_edit.cursorForPosition(event.pos())
+        block = cursor.block()
+        if not block.isValid() or not block.text().strip():
+            QTextEdit.mouseDoubleClickEvent(self.text_edit, event)
+            return
+
+        plain_text = block.text()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Detalhe do Log")
+        dlg.resize(720, 400)
+        dlg.setMinimumSize(400, 200)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        detail_edit = QTextEdit(dlg)
+        detail_edit.setReadOnly(True)
+        detail_edit.setFont(QFont("Consolas", 10))
+        detail_edit.setPlainText(plain_text)
+        detail_edit.setStyleSheet(
+            "QTextEdit { background: #1e1e1e; color: #d4d4d4; border: none; }"
+        )
+        layout.addWidget(detail_edit)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        copy_btn = QPushButton("Copiar")
+        copy_btn.clicked.connect(lambda: (
+            __import__("PyQt6.QtWidgets", fromlist=["QApplication"]).QApplication.clipboard().setText(plain_text)
+        ))
+        btn_layout.addWidget(copy_btn)
+
+        close_btn = QPushButton("Fechar")
+        close_btn.clicked.connect(dlg.accept)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+        dlg.exec()
 
     def clear(self):
         """Limpa o output"""

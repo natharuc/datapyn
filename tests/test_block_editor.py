@@ -887,12 +887,10 @@ class TestFileDragAndDrop:
         editor.dragEnterEvent(event)
         assert not event.isAccepted()
 
-    def test_drop_csv_creates_python_block(self, editor, qtbot):
-        """Deve criar bloco Python ao soltar arquivo CSV"""
+    def test_drop_csv_emits_file_dropped(self, editor, qtbot):
+        """Deve emitir file_dropped ao soltar arquivo CSV"""
         from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
-
-        initial_block_count = editor.get_block_count()
 
         mime_data = QMimeData()
         mime_data.setUrls([QUrl.fromLocalFile("/path/to/data.csv")])
@@ -905,29 +903,16 @@ class TestFileDragAndDrop:
             Qt.KeyboardModifier.NoModifier,
         )
 
-        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+        with qtbot.waitSignal(editor.file_dropped, timeout=1000) as blocker:
             editor.dropEvent(event)
 
-        # Deve ter criado um novo bloco
-        assert editor.get_block_count() == initial_block_count + 1
+        # Deve emitir o sinal com o path do arquivo
+        assert "data.csv" in blocker.args[0]
 
-        # O novo bloco deve ser Python
-        blocks = editor.get_blocks()
-        new_block = blocks[-1]
-        assert new_block.get_language() == "python"
-
-        # Deve conter codigo de importacao
-        code = new_block.get_code()
-        assert "import pandas" not in code
-        assert "pd.read_csv" in code
-        assert "/path/to/data.csv" in code
-
-    def test_drop_json_creates_python_block(self, editor, qtbot):
-        """Deve criar bloco Python ao soltar arquivo JSON"""
+    def test_drop_json_emits_file_dropped(self, editor, qtbot):
+        """Deve emitir file_dropped ao soltar arquivo JSON"""
         from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
-
-        initial_block_count = editor.get_block_count()
 
         mime_data = QMimeData()
         mime_data.setUrls([QUrl.fromLocalFile("/path/to/data.json")])
@@ -940,29 +925,16 @@ class TestFileDragAndDrop:
             Qt.KeyboardModifier.NoModifier,
         )
 
-        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+        with qtbot.waitSignal(editor.file_dropped, timeout=1000) as blocker:
             editor.dropEvent(event)
 
-        # Deve ter criado um novo bloco
-        assert editor.get_block_count() == initial_block_count + 1
+        # Deve emitir o sinal com o path do arquivo
+        assert "data.json" in blocker.args[0]
 
-        # O novo bloco deve ser Python
-        blocks = editor.get_blocks()
-        new_block = blocks[-1]
-        assert new_block.get_language() == "python"
-
-        # Deve conter codigo de importacao
-        code = new_block.get_code()
-        assert "import pandas" not in code
-        assert "pd.read_json" in code
-        assert "/path/to/data.json" in code
-
-    def test_drop_xlsx_creates_python_block(self, editor, qtbot):
-        """Deve criar bloco Python ao soltar arquivo XLSX"""
+    def test_drop_xlsx_emits_file_dropped(self, editor, qtbot):
+        """Deve emitir file_dropped ao soltar arquivo XLSX"""
         from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
-
-        initial_block_count = editor.get_block_count()
 
         mime_data = QMimeData()
         mime_data.setUrls([QUrl.fromLocalFile("/path/to/data.xlsx")])
@@ -975,29 +947,16 @@ class TestFileDragAndDrop:
             Qt.KeyboardModifier.NoModifier,
         )
 
-        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+        with qtbot.waitSignal(editor.file_dropped, timeout=1000) as blocker:
             editor.dropEvent(event)
 
-        # Deve ter criado um novo bloco
-        assert editor.get_block_count() == initial_block_count + 1
+        # Deve emitir o sinal com o path do arquivo
+        assert "data.xlsx" in blocker.args[0]
 
-        # O novo bloco deve ser Python
-        blocks = editor.get_blocks()
-        new_block = blocks[-1]
-        assert new_block.get_language() == "python"
-
-        # Deve conter codigo de importacao
-        code = new_block.get_code()
-        assert "import pandas" not in code
-        assert "pd.read_excel" in code
-        assert "/path/to/data.xlsx" in code
-
-    def test_drop_multiple_files_creates_multiple_blocks(self, editor, qtbot):
-        """Deve criar múltiplos blocos ao soltar múltiplos arquivos"""
+    def test_drop_multiple_files_emits_for_first(self, editor, qtbot):
+        """Deve emitir file_dropped para o primeiro arquivo de dados"""
         from PyQt6.QtCore import QMimeData, QUrl, QPointF
         from PyQt6.QtGui import QDropEvent
-
-        initial_block_count = editor.get_block_count()
 
         mime_data = QMimeData()
         mime_data.setUrls(
@@ -1016,27 +975,11 @@ class TestFileDragAndDrop:
             Qt.KeyboardModifier.NoModifier,
         )
 
-        with qtbot.waitSignal(editor.content_changed, timeout=1000):
+        # file_dropped emitido pelo menos para o primeiro data file
+        with qtbot.waitSignal(editor.file_dropped, timeout=1000) as blocker:
             editor.dropEvent(event)
 
-        # Deve ter criado 3 novos blocos
-        assert editor.get_block_count() == initial_block_count + 3
-
-        # Todos devem ser Python
-        blocks = editor.get_blocks()
-        assert blocks[-3].get_language() == "python"
-        assert blocks[-2].get_language() == "python"
-        assert blocks[-1].get_language() == "python"
-
-        # Verificar que cada um tem o código correto
-        assert "data1.csv" in blocks[-3].get_code()
-        assert "pd.read_csv" in blocks[-3].get_code()
-
-        assert "data2.json" in blocks[-2].get_code()
-        assert "pd.read_json" in blocks[-2].get_code()
-
-        assert "data3.xlsx" in blocks[-1].get_code()
-        assert "pd.read_excel" in blocks[-1].get_code()
+        assert "data1.csv" in blocker.args[0] or "data2.json" in blocker.args[0] or "data3.xlsx" in blocker.args[0]
 
     def test_drop_preserves_existing_blocks(self, editor, qtbot):
         """Soltar arquivo não deve afetar blocos existentes"""

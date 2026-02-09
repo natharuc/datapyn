@@ -3,7 +3,7 @@ Testes do DatabaseConnector
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 import pandas as pd
 
 
@@ -278,5 +278,5 @@ class TestUseDatabasePersistence:
             with patch("database.database_connector.event") as mock_event:
                 connector.connect("sqlserver", "localhost", 1433, "testdb", use_windows_auth=True)
 
-                # Deve ter registrado evento "checkout"
+                # Deve ter registrado evento "checkout" no pool
                 mock_event.listens_for.assert_called_once_with(mock_engine, "checkout")

@@ -128,6 +128,54 @@ class TestReadFileContent:
             FileImportService.read_file_content("nonexistent.sql")
 
 
+class TestNormalizeVarName:
+    """Testes de normalizacao de nomes de variaveis"""
+
+    def test_simple_name(self):
+        name = FileImportService._normalize_var_name("sales.csv")
+        assert name == "sales"
+
+    def test_uppercase_to_lowercase(self):
+        name = FileImportService._normalize_var_name("PRODUTOS.csv")
+        assert name == "produtos"
+
+    def test_spaces_to_underscores(self):
+        name = FileImportService._normalize_var_name("lista de clientes do mes.csv")
+        assert name == "lista_de_clientes_do_mes"
+
+    def test_hyphens_to_underscores(self):
+        name = FileImportService._normalize_var_name("my-data-file.xlsx")
+        assert name == "my_data_file"
+
+    def test_special_chars_replaced(self):
+        name = FileImportService._normalize_var_name("data (2).csv")
+        assert name == "data_2"
+
+    def test_numeric_prefix_gets_df(self):
+        name = FileImportService._normalize_var_name("123data.csv")
+        assert name == "df_123data"
+
+    def test_multiple_underscores_collapsed(self):
+        name = FileImportService._normalize_var_name("a---b___c.csv")
+        assert name == "a_b_c"
+
+    def test_leading_trailing_underscores_stripped(self):
+        name = FileImportService._normalize_var_name("__test__.csv")
+        assert name == "test"
+
+    def test_empty_name_fallback(self):
+        name = FileImportService._normalize_var_name("---.csv")
+        assert name == "df"
+
+    def test_full_path_uses_basename(self):
+        name = FileImportService._normalize_var_name("C:/Users/joao/Documents/Relatorio Final.xlsx")
+        assert name == "relatorio_final"
+
+    def test_mixed_case_and_spaces(self):
+        name = FileImportService._normalize_var_name("Meu Relatorio Mensal.json")
+        assert name == "meu_relatorio_mensal"
+
+
 class TestGenerateImportCode:
     """Testes de geracao de codigo de importacao"""
 
@@ -136,6 +184,7 @@ class TestGenerateImportCode:
         assert "pd.read_csv" in code
         assert "sales" in code
         assert "import pandas" in code
+        assert 'sep=";"' in code
 
     def test_generate_json_import(self):
         code = FileImportService.generate_import_code("C:/data/config.json")
@@ -144,12 +193,14 @@ class TestGenerateImportCode:
 
     def test_generate_xlsx_import(self):
         code = FileImportService.generate_import_code("C:/data/report.xlsx")
-        assert "pd.read_excel" in code
+        assert "fastexcel" in code
+        assert ".load_sheet(0)" in code
         assert "report" in code
 
     def test_generate_xls_import(self):
         code = FileImportService.generate_import_code("C:/data/legacy.xls")
-        assert "pd.read_excel" in code
+        assert "fastexcel" in code
+        assert ".load_sheet(0)" in code
 
     def test_generate_unsupported_returns_none(self):
         assert FileImportService.generate_import_code("file.txt") is None
@@ -169,4 +220,23 @@ class TestGenerateImportCode:
         code = FileImportService.generate_import_code("my-data (2).csv")
         assert code is not None
         # Caracteres especiais devem ser substituidos por _
-        assert "my_data" in code
+        assert "my_data_2" in code
+
+    def test_generate_csv_var_name_lowercase(self):
+        code = FileImportService.generate_import_code("C:/data/PRODUTOS.csv")
+        assert "produtos" in code
+        assert 'sep=";"' in code
+
+    def test_generate_csv_spaces_normalized(self):
+        code = FileImportService.generate_import_code("lista de clientes do mes.csv")
+        assert "lista_de_clientes_do_mes" in code
+
+    def test_generate_json_var_name_normalized(self):
+        code = FileImportService.generate_import_code("C:/data/Meu Relatorio.json")
+        assert "meu_relatorio" in code
+        assert "pd.read_json" in code
+
+    def test_generate_xlsx_var_name_normalized(self):
+        code = FileImportService.generate_import_code("C:/data/DADOS FINANCEIROS (2024).xlsx")
+        assert "dados_financeiros_2024" in code
+        assert "fastexcel" in code

@@ -16,8 +16,11 @@ mariadb>=1.1.0
 
 # Data Processing
 pandas>=2.0.0
+polars>=1.0.0
+pyarrow>=14.0.0
 numpy>=1.24.0
 openpyxl>=3.1.0
+fastexcel>=0.12.0
 jinja2>=3.1.0  # Required for pandas styling functionality
 
 # Utilities

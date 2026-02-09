@@ -199,6 +199,8 @@ class SettingsDialog(QDialog):
             # Conexões
             "manage_connections": "Gerenciar Conexões",
             "new_connection": "Nova Conexão",
+            # Schema
+            "reload_schema": "Recarregar Schema SQL",
             # Ferramentas
             "settings": "Configurações",
         }

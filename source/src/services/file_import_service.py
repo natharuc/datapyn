@@ -96,22 +96,46 @@ class FileImportService(QObject):
         return code_files, data_files, workspace_files
 
     @staticmethod
+    def _normalize_var_name(file_path: str) -> str:
+        """Normaliza o nome do arquivo para um nome de variavel Python valido.
+
+        Regras:
+        - Converte para minusculo
+        - Substitui espacos e caracteres invalidos por _
+        - Remove underscores duplicados e nas bordas
+        - Prefixo df_ se comecar com digito
+        """
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        # Minusculo
+        name = base_name.lower()
+        # Substituir caracteres invalidos por _
+        name = "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+        # Remover underscores duplicados
+        while "__" in name:
+            name = name.replace("__", "_")
+        # Remover underscores nas bordas
+        name = name.strip("_")
+        # Se vazio, fallback
+        if not name:
+            name = "df"
+        # Prefixo se comecar com digito
+        if name[0].isdigit():
+            name = f"df_{name}"
+        return name
+
+    @staticmethod
     def generate_import_code(file_path: str) -> Optional[str]:
         """Gera codigo Python para importar um arquivo de dados."""
         ext = os.path.splitext(file_path.lower())[1]
         # Usar raw string ou forward slashes para caminhos Windows
         safe_path = file_path.replace("\\", "/")
-        var_name = os.path.splitext(os.path.basename(file_path))[0]
-        # Limpar nome da variavel (remover caracteres invalidos)
-        var_name = "".join(c if c.isalnum() or c == "_" else "_" for c in var_name)
-        if var_name[0].isdigit():
-            var_name = f"df_{var_name}"
+        var_name = FileImportService._normalize_var_name(file_path)
 
         if ext == ".csv":
-            return f'import pandas as pd\n{var_name} = pd.read_csv("{safe_path}")\n{var_name}'
+            return f'import pandas as pd\n{var_name} = pd.read_csv("{safe_path}", sep=";")\n{var_name}'
         elif ext == ".json":
             return f'import pandas as pd\n{var_name} = pd.read_json("{safe_path}")\n{var_name}'
         elif ext in (".xlsx", ".xls"):
-            return f'import pandas as pd\n{var_name} = pd.read_excel("{safe_path}")\n{var_name}'
+            return f'import fastexcel\n{var_name} = fastexcel.read_excel("{safe_path}").load_sheet(0).to_pandas()\n{var_name}'
 
         return None

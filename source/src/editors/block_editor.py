@@ -58,8 +58,11 @@ class BlockEditor(QWidget):
     # Sinal quando bloco pede seleção de conexão
     select_connection_for_block = pyqtSignal(object)  # CodeBlock
 
-    # Sinal quando conexão de um bloco muda
+    # Sinal quando conexao de um bloco muda
     block_connection_changed = pyqtSignal(object, str)  # CodeBlock, connection_name
+
+    # Sinal quando arquivo de dados e solto (para mostrar dialogo de importacao)
+    file_dropped = pyqtSignal(str)  # file_path
 
     def __init__(self, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -629,7 +632,7 @@ class BlockEditor(QWidget):
         event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent):
-        """Quando um bloco ou arquivo é solto"""
+        """Quando um bloco ou arquivo e solto"""
         mime_data = event.mimeData()
 
         # Processar drop de arquivos
@@ -639,10 +642,9 @@ class BlockEditor(QWidget):
                 file_path = url.toLocalFile()
                 lower_path = file_path.lower()
                 if lower_path.endswith((".csv", ".json", ".xlsx", ".xls")):
-                    import_code = self._generate_import_code(file_path)
-                    if import_code:
-                        self.add_block(language="python", code=import_code)
-                        self.content_changed.emit()
+                    # Emitir sinal para abrir dialogo de importacao
+                    self.file_dropped.emit(file_path)
+                    self.content_changed.emit()
                 elif lower_path.endswith(".sql"):
                     try:
                         with open(file_path, "r", encoding="utf-8") as f:

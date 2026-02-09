@@ -1,12 +1,16 @@
 """
-Painel de Variáveis
+Painel de Variaveis
 
-Exibe variáveis em memória da sessão com nome, tipo e valor.
+Exibe variaveis em memoria da sessao com nome, tipo e valor.
+Inclui context menu e double-click para inserir no editor.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableView, QHeaderView, QLabel, QAbstractItemView
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTableView, QHeaderView,
+    QLabel, QAbstractItemView, QMenu, QApplication, QMessageBox,
+)
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor, QFont, QAction
 import pandas as pd
 from typing import Dict, Any, Optional
 
@@ -159,11 +163,13 @@ class VariablesTableModel(QAbstractTableModel):
 
 
 class VariablesPanel(QWidget):
-    """Painel de visualização de variáveis"""
+    """Painel de visualizacao de variaveis"""
 
     # Sinais
     variable_selected = pyqtSignal(str, object)  # name, value
     variable_double_clicked = pyqtSignal(str, object)  # name, value (para abrir em viewer)
+    insert_variable_name = pyqtSignal(str)  # name (para inserir no editor focado)
+    delete_variable = pyqtSignal(str)  # name (para remover do namespace)
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -213,6 +219,10 @@ class VariablesPanel(QWidget):
         self.table_view.setShowGrid(False)
         self.table_view.doubleClicked.connect(self._on_double_click)
         self.table_view.clicked.connect(self._on_click)
+
+        # Context menu
+        self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_view.customContextMenuRequested.connect(self._on_context_menu)
 
         # Model
         self.model = VariablesTableModel(theme_manager=self.theme_manager)
@@ -300,15 +310,130 @@ class VariablesPanel(QWidget):
         self.info_label.setText("Nenhuma variável")
 
     def _on_click(self, index: QModelIndex):
-        """Quando variável é selecionada"""
+        """Quando variavel e selecionada"""
         name = self.model.get_variable_name(index.row())
         value = self.model.get_variable(index.row())
         if name:
             self.variable_selected.emit(name, value)
 
     def _on_double_click(self, index: QModelIndex):
-        """Quando variável é clicada duas vezes"""
+        """Quando variavel e clicada duas vezes - insere nome no editor focado"""
         name = self.model.get_variable_name(index.row())
         value = self.model.get_variable(index.row())
         if name:
+            self.insert_variable_name.emit(name)
             self.variable_double_clicked.emit(name, value)
+
+    def _on_context_menu(self, pos):
+        """Context menu com opcoes uteis para a variavel"""
+        index = self.table_view.indexAt(pos)
+        if not index.isValid():
+            return
+
+        row = index.row()
+        name = self.model.get_variable_name(row)
+        value = self.model.get_variable(row)
+        if not name:
+            return
+
+        menu = QMenu(self)
+
+        # Aplicar estilo ao menu
+        if self.theme_manager:
+            colors = self.theme_manager.get_app_colors()
+            menu.setStyleSheet(f"""
+                QMenu {{
+                    background-color: {colors["background"]};
+                    color: {colors["foreground"]};
+                    border: 1px solid {colors["border"]};
+                    padding: 4px;
+                }}
+                QMenu::item {{
+                    padding: 6px 24px 6px 12px;
+                }}
+                QMenu::item:selected {{
+                    background-color: {colors["accent"]};
+                    color: white;
+                }}
+                QMenu::separator {{
+                    height: 1px;
+                    background-color: {colors["border"]};
+                    margin: 4px 8px;
+                }}
+            """)
+
+        type_name = type(value).__name__
+
+        # Inserir nome no editor
+        act_insert = menu.addAction("Inserir no editor")
+        act_insert.triggered.connect(lambda: self.insert_variable_name.emit(name))
+
+        menu.addSeparator()
+
+        # Copiar nome
+        act_copy_name = menu.addAction("Copiar nome")
+        act_copy_name.triggered.connect(lambda: QApplication.clipboard().setText(name))
+
+        # Copiar valor
+        act_copy_value = menu.addAction("Copiar valor")
+        act_copy_value.triggered.connect(
+            lambda: QApplication.clipboard().setText(self._get_copyable_value(value))
+        )
+
+        # Copiar tipo
+        act_copy_type = menu.addAction("Copiar tipo")
+        act_copy_type.triggered.connect(
+            lambda: QApplication.clipboard().setText(type_name)
+        )
+
+        menu.addSeparator()
+
+        # Opcoes especificas por tipo
+        if isinstance(value, pd.DataFrame):
+            act_shape = menu.addAction(f"Shape: {value.shape[0]} x {value.shape[1]}")
+            act_shape.setEnabled(False)
+
+            act_cols = menu.addAction("Copiar colunas")
+            act_cols.triggered.connect(
+                lambda: QApplication.clipboard().setText(", ".join(value.columns.tolist()))
+            )
+
+            act_dtypes = menu.addAction("Copiar dtypes")
+            act_dtypes.triggered.connect(
+                lambda: QApplication.clipboard().setText(str(value.dtypes))
+            )
+
+            act_head = menu.addAction("Copiar head(5)")
+            act_head.triggered.connect(
+                lambda: QApplication.clipboard().setText(value.head(5).to_string())
+            )
+
+            act_csv = menu.addAction("Copiar como CSV")
+            act_csv.triggered.connect(
+                lambda: QApplication.clipboard().setText(value.to_csv(index=False))
+            )
+
+        elif isinstance(value, (list, dict, tuple)):
+            act_len = menu.addAction(f"Tamanho: {len(value)}")
+            act_len.setEnabled(False)
+
+        elif isinstance(value, str):
+            act_len = menu.addAction(f"Tamanho: {len(value)} chars")
+            act_len.setEnabled(False)
+
+        menu.addSeparator()
+
+        # Deletar variavel
+        act_delete = menu.addAction("Remover variavel")
+        act_delete.triggered.connect(lambda: self.delete_variable.emit(name))
+
+        menu.exec(self.table_view.viewport().mapToGlobal(pos))
+
+    @staticmethod
+    def _get_copyable_value(value) -> str:
+        """Retorna representacao copiavel do valor"""
+        if isinstance(value, pd.DataFrame):
+            return value.to_string()
+        elif isinstance(value, pd.Series):
+            return value.to_string()
+        return repr(value)

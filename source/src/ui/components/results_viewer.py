@@ -261,6 +261,13 @@ class ResultsViewer(QWidget):
         self.toolbar.addWidget(self.btn_export_json)
         self.toolbar.addWidget(self.btn_copy)
 
+        # Botao Exportar para Tabela (banco de dados)
+        self.toolbar.addSeparator()
+        self.btn_export_table = QPushButton("  Tabela")
+        self.btn_export_table.setIcon(qta.icon("mdi.database-export", color="#4fc3f7"))
+        self.btn_export_table.setToolTip("Exportar dados para uma tabela no banco de dados (to_sql)")
+        self.toolbar.addWidget(self.btn_export_table)
+
         # Info label
         self.info_label = QLabel("Nenhum resultado")
         self.toolbar.addSeparator()
@@ -346,6 +353,7 @@ class ResultsViewer(QWidget):
         self.btn_export_json.clicked.connect(self._export_json)
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
         self.btn_save_image.clicked.connect(self._save_image)
+        self.btn_export_table.clicked.connect(self._export_to_table)
 
     def _apply_toolbar_style(self):
         """Aplica estilo na toolbar baseado no tema"""
@@ -420,6 +428,7 @@ class ResultsViewer(QWidget):
         self.btn_export_excel.setVisible(True)
         self.btn_export_json.setVisible(True)
         self.btn_copy.setVisible(True)
+        self.btn_export_table.setVisible(True)
         self.export_destination.setVisible(True)
         self.btn_save_image.setVisible(False)
 
@@ -764,6 +773,7 @@ class ResultsViewer(QWidget):
         self.btn_export_excel.setVisible(False)
         self.btn_export_json.setVisible(False)
         self.btn_copy.setVisible(False)
+        self.btn_export_table.setVisible(False)
         self.export_destination.setVisible(False)
         self.btn_save_image.setVisible(False)
 
@@ -782,6 +792,7 @@ class ResultsViewer(QWidget):
         self.btn_export_excel.setVisible(True)
         self.btn_export_json.setVisible(True)
         self.btn_copy.setVisible(True)
+        self.btn_export_table.setVisible(True)
         self.export_destination.setVisible(True)
 
     def _get_export_destination(self) -> str:
@@ -912,6 +923,71 @@ class ResultsViewer(QWidget):
                     f.write(self._current_image_bytes)
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Erro ao salvar imagem:\n{str(e)}")
+
+    def _export_to_table(self):
+        """Exporta o DataFrame atual para uma tabela no banco de dados"""
+        if self.current_df is None or len(self.current_df) == 0:
+            QMessageBox.warning(self, "Exportar para Tabela", "Nenhum dado para exportar")
+            return
+
+        # Obter conexoes ativas da MainWindow
+        main_window = self._get_main_window()
+        if not main_window:
+            QMessageBox.warning(self, "Exportar para Tabela", "Janela principal nao encontrada")
+            return
+
+        # Coletar conexoes ativas de todas as sessoes
+        connections = {}
+        if hasattr(main_window, "_session_widgets"):
+            for widget in main_window._session_widgets.values():
+                session = getattr(widget, "session", None)
+                if session:
+                    conn_name = getattr(session, "connection_name", None)
+                    connector = getattr(session, "connector", None)
+                    if conn_name and connector and getattr(connector, "is_connected", False):
+                        connections[conn_name] = connector
+
+        if not connections:
+            QMessageBox.warning(
+                self,
+                "Exportar para Tabela",
+                "Nenhuma conexao ativa disponivel.\n\nConecte-se a um banco de dados primeiro.",
+            )
+            return
+
+        # Determinar conexao atual (do bloco focado ou da sessao)
+        current_connection = ""
+        current_widget = main_window._get_current_session_widget()
+        if current_widget:
+            focused_block = current_widget.editor.get_focused_block()
+            if focused_block:
+                block_conn = focused_block.get_connection_name()
+                if block_conn and block_conn in connections:
+                    current_connection = block_conn
+            if not current_connection:
+                session_conn = getattr(current_widget.session, "connection_name", "")
+                if session_conn and session_conn in connections:
+                    current_connection = session_conn
+            if not current_connection and connections:
+                current_connection = next(iter(connections))
+
+        from src.ui.dialogs.export_to_table_dialog import ExportToTableDialog
+
+        dialog = ExportToTableDialog(
+            df=self.current_df,
+            connections=connections,
+            current_connection=current_connection,
+            theme_manager=self.theme_manager,
+            parent=self,
+        )
+        dialog.exec()
+
+    def _get_main_window(self):
+        """Obtem referencia a MainWindow"""
+        parent = self.parent()
+        while parent and not hasattr(parent, "connection_manager"):
+            parent = parent.parent()
+        return parent
 
     def resizeEvent(self, event):
         """Reescala imagem quando o widget e redimensionado"""

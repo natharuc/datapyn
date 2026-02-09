@@ -27,6 +27,9 @@ class DatabaseConnector:
         self.engine: Optional[Engine] = None
         self.connection_params: Dict[str, Any] = {}
         self.db_type: str = ""
+        self._active_raw_conn = None  # Referencia para cancelamento
+        self._active_cursor = None  # Referencia ao cursor para cancelamento
+        self._cancelled = False  # Flag de cancelamento
 
     def connect(
         self, db_type: str, host: str, port: int, database: str, username: str = "", password: str = "", **kwargs
@@ -153,10 +156,41 @@ class DatabaseConnector:
             logger.error(f"Erro ao executar query: {str(e)}")
             raise
 
+    def cancel_query(self):
+        """Cancela a query em execucao.
+
+        Funciona para SQL Server (pyodbc) e PostgreSQL (psycopg2).
+        Para MySQL/MariaDB, interrompe via flag.
+        """
+        self._cancelled = True
+
+        try:
+            if self.db_type == "sqlserver":
+                # pyodbc: cancel() e metodo do Cursor, nao da Connection
+                cursor = self._active_cursor
+                if cursor is not None:
+                    cursor.cancel()
+                    logger.info("Query SQL Server cancelada via cursor.cancel()")
+                else:
+                    logger.warning("Cancel solicitado mas cursor nao disponivel")
+            elif self.db_type == "postgresql":
+                # psycopg2: cancel() envia cancel request ao servidor
+                raw_conn = self._active_raw_conn
+                if raw_conn is not None and hasattr(raw_conn, "cancel"):
+                    raw_conn.cancel()
+                    logger.info("Query PostgreSQL cancelada via connection.cancel()")
+            else:
+                # MySQL/MariaDB: nao tem cancel nativo no driver,
+                # mas a flag _cancelled ira interromper o processamento
+                logger.info(f"Cancel solicitado para {self.db_type} (via flag)")
+        except Exception as e:
+            logger.warning(f"Erro ao cancelar query: {e}")
+
     def _execute_mssql_batch(self, query: str) -> pd.DataFrame:
         """Executa batch de comandos SQL Server e retorna último resultado"""
         import pyodbc
 
+        self._cancelled = False
         last_error = None  # Declarar ANTES do try para ser acessível no finally
         cursor = None
         raw_conn = None
@@ -164,7 +198,9 @@ class DatabaseConnector:
         try:
             # Usar raw connection do pyodbc para acessar nextset()
             raw_conn = self.engine.raw_connection()
+            self._active_raw_conn = raw_conn  # Expor para cancelamento
             cursor = raw_conn.cursor()
+            self._active_cursor = cursor  # Expor cursor para cancelamento
 
             # CRITICO: Garantir que esta conexao do pool esta no banco correto.
             # O pool do SQLAlchemy pode devolver qualquer conexao, e um comando
@@ -284,7 +320,9 @@ class DatabaseConnector:
             raise  # Re-lançar erro para o usuário ver
 
         finally:
-            # Fechar cursor e conexão
+            self._active_raw_conn = None  # Limpar referencia
+            self._active_cursor = None  # Limpar referencia cursor
+            # Fechar cursor e conexao
             if cursor:
                 try:
                     cursor.close()

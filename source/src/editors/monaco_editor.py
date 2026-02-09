@@ -510,3 +510,28 @@ class MonacoEditor(QWidget):
     def clear_python_namespace(self) -> None:
         """Limpa namespace Python do autocomplete"""
         self._run_js("api_clearPythonNamespace()")
+
+    def insert_text_at_cursor(self, text: str) -> None:
+        """Insere texto na posicao atual do cursor no editor Monaco.
+
+        Usa a API executeEdits do Monaco para inserir texto respeitando undo/redo.
+        """
+        escaped = json.dumps(text)
+        js = f"""
+        (function() {{
+            if (typeof _editor !== 'undefined' && _editor) {{
+                var position = _editor.getPosition();
+                var range = new monaco.Range(
+                    position.lineNumber, position.column,
+                    position.lineNumber, position.column
+                );
+                _editor.executeEdits('insert-text', [{{
+                    range: range,
+                    text: {escaped},
+                    forceMoveMarkers: true
+                }}]);
+                _editor.focus();
+            }}
+        }})();
+        """
+        self._run_js(js)
