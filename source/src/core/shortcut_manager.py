@@ -21,6 +21,7 @@ class ShortcutManager:
         "open_file": "Ctrl+O",
         "save_file": "Ctrl+S",
         "save_as": "Ctrl+Shift+S",
+        "export_script": "Ctrl+Shift+E",
         # Sessões
         "new_tab": "Ctrl+T",
         "close_tab": "Ctrl+W",
