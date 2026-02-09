@@ -5,6 +5,7 @@ Embeds Monaco Editor (VS Code editor) via QWebEngineView + QWebChannel.
 Implementa a interface ICodeEditor seguindo o principio de Inversao de Dependencia.
 """
 
+import sys
 import os
 import json
 from pathlib import Path
@@ -19,8 +20,12 @@ from PyQt6.QtWebChannel import QWebChannel
 
 MONACO_AVAILABLE = True
 
-# Path to the HTML file
-_MONACO_HTML = str(Path(__file__).parent / "monaco" / "monaco.html")
+# Path to the HTML file - supports both dev and PyInstaller frozen mode
+if getattr(sys, 'frozen', False):
+    _BASE_DIR = Path(sys._MEIPASS)
+else:
+    _BASE_DIR = Path(__file__).parent
+_MONACO_HTML = str(_BASE_DIR / "monaco" / "monaco.html")
 
 
 class _MonacoBridge(QObject):

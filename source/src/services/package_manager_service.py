@@ -10,6 +10,7 @@ Responsabilidades:
 
 import subprocess
 import sys
+import shutil
 import json
 import logging
 from typing import List, Optional, Dict, Any
@@ -20,6 +21,21 @@ logger = logging.getLogger(__name__)
 # CREATE_NO_WINDOW existe apenas no Windows
 # No Linux usa 0 (sem flags especiais)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _find_python_executable() -> str:
+    """
+    Retorna o caminho do interpretador Python.
+
+    Em modo frozen (PyInstaller), sys.executable aponta para o EXE empacotado,
+    nao para o Python. Neste caso, procura o python no PATH do sistema.
+    """
+    if getattr(sys, "frozen", False):
+        python = shutil.which("python") or shutil.which("python3")
+        if python:
+            return python
+        return "python"
+    return sys.executable
 
 
 @dataclass
@@ -61,7 +77,7 @@ class PackageManagerService:
     """
 
     def __init__(self):
-        self._python_executable = sys.executable
+        self._python_executable = _find_python_executable()
 
     def list_installed(self) -> List[PackageInfo]:
         """Lista todos os pacotes instalados"""

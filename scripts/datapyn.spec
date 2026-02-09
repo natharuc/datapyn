@@ -6,12 +6,15 @@ Execute: pyinstaller datapyn.spec
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
 # Diretorio raiz do projeto (um nivel acima de scripts/)
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(SPEC), '..'))
 
 block_cipher = None
+
+# Coletar pacote mariadb completo (inclui .pyd nativo + constants)
+_mariadb_datas, _mariadb_binaries, _mariadb_hiddenimports = collect_all('mariadb')
 
 # Coletar todos os submódulos necessários
 hiddenimports = [
@@ -26,18 +29,23 @@ hiddenimports = [
     'sqlalchemy',
     'json',
     'yaml',
-]
+    # Database drivers
+    'psycopg2',
+    'pymysql',
+] + _mariadb_hiddenimports
 
 # Dados adicionais (assets)
 # Destino 'src/assets' para que _MEIPASS atue como equivalente do diretorio source/
 datas = [
     (os.path.join(ROOT_DIR, 'source', 'src', 'assets', '*'), os.path.join('src', 'assets')),
-]
+    # Monaco Editor - HTML + VS loader/workers
+    (os.path.join(ROOT_DIR, 'source', 'src', 'editors', 'monaco'), os.path.join('monaco')),
+] + _mariadb_datas
 
 a = Analysis(
     [os.path.join(ROOT_DIR, 'source', 'main.py')],
     pathex=[ROOT_DIR],
-    binaries=[],
+    binaries=[] + _mariadb_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
