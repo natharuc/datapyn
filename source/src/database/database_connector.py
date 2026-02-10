@@ -87,30 +87,111 @@ class DatabaseConnector:
             logger.error(f"Erro ao conectar ao banco: {str(e)}")
             raise
 
+    def _get_available_odbc_driver(self) -> str:
+        """
+        Detecta o driver ODBC do SQL Server instalado no sistema.
+        Retorna o driver mais recente disponivel por ordem de prioridade.
+
+        Returns:
+            str: Nome do driver ODBC encontrado
+
+        Raises:
+            RuntimeError: Se nenhum driver compativel for encontrado
+        """
+        # Ordem de prioridade: drivers mais recentes primeiro
+        preferred_drivers = [
+            "ODBC Driver 18 for SQL Server",
+            "ODBC Driver 17 for SQL Server",
+            "ODBC Driver 13.1 for SQL Server",
+            "ODBC Driver 13 for SQL Server",
+            "ODBC Driver 11 for SQL Server",
+            "SQL Server Native Client 11.0",
+            "SQL Server Native Client 10.0",
+            "SQL Server",  # Driver antigo, ultima opcao
+        ]
+
+        try:
+            available_drivers = pyodbc.drivers()
+            logger.info(f"Drivers ODBC disponiveis: {available_drivers}")
+
+            for driver in preferred_drivers:
+                if driver in available_drivers:
+                    logger.info(f"Driver ODBC selecionado: {driver}")
+                    return driver
+
+            # Se nenhum driver preferido encontrado, tenta usar qualquer um com "SQL Server"
+            for driver in available_drivers:
+                if "SQL Server" in driver:
+                    logger.warning(f"Usando driver alternativo: {driver}")
+                    return driver
+
+        except Exception as e:
+            logger.error(f"Erro ao listar drivers ODBC: {e}")
+
+        raise RuntimeError(
+            "Nenhum driver ODBC do SQL Server encontrado.\n"
+            "Instale o 'ODBC Driver 18 for SQL Server' em:\n"
+            "https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server"
+        )
+
     def _build_connection_string(
         self, db_type: str, host: str, port: int, database: str, username: str, password: str, **kwargs
     ) -> str:
         """Constrói a string de conexão baseada no tipo de banco"""
+        from urllib.parse import quote_plus
 
         if db_type == "sqlserver":
-            driver = kwargs.get("driver", "ODBC Driver 17 for SQL Server")
-            use_windows_auth = kwargs.get("use_windows_auth", False)
+            # Detectar driver automaticamente ou usar o especificado
+            driver = kwargs.get("driver")
+            if not driver:
+                driver = self._get_available_odbc_driver()
 
+            use_windows_auth = kwargs.get("use_windows_auth", False)
+            trust_cert = kwargs.get("trust_server_certificate", False)
+
+            # Usar connection string ODBC direta
             if use_windows_auth:
                 # Windows Authentication
-                return f"mssql+pyodbc://{host}:{port}/{database}?driver={driver}&Trusted_Connection=yes"
+                odbc_string = (
+                    f"DRIVER={{{driver}}};"
+                    f"SERVER={host},{port};"
+                    f"DATABASE={database};"
+                    f"Trusted_Connection=yes"
+                )
             else:
                 # SQL Server Authentication
-                return f"mssql+pyodbc://{username}:{password}@{host}:{port}/{database}?driver={driver}"
+                odbc_string = (
+                    f"DRIVER={{{driver}}};"
+                    f"SERVER={host},{port};"
+                    f"DATABASE={database};"
+                    f"UID={username};"
+                    f"PWD={password}"
+                )
+
+            # Adicionar TrustServerCertificate se solicitado
+            if trust_cert:
+                odbc_string += ";TrustServerCertificate=yes"
+
+            return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_string)}"
 
         elif db_type == "mysql":
-            return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset=utf8mb4"
+            # URL encode username e password para caracteres especiais
+            user_encoded = quote_plus(username)
+            pass_encoded = quote_plus(password)
+            return f"mysql+pymysql://{user_encoded}:{pass_encoded}@{host}:{port}/{database}?charset=utf8mb4"
 
         elif db_type == "mariadb":
-            return f"mariadb+mariadbconnector://{username}:{password}@{host}:{port}/{database}"
+            # URL encode username e password para caracteres especiais
+            user_encoded = quote_plus(username)
+            pass_encoded = quote_plus(password)
+            return f"mariadb+mariadbconnector://{user_encoded}:{pass_encoded}@{host}:{port}/{database}"
 
         elif db_type == "postgresql":
-            return f"postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}"
+            # URL encode username e password para caracteres especiais
+            # Importante para Azure PostgreSQL onde o usuario e "user@server"
+            user_encoded = quote_plus(username)
+            pass_encoded = quote_plus(password)
+            return f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{host}:{port}/{database}"
 
         else:
             raise ValueError(f"Tipo de banco não suportado: {db_type}")

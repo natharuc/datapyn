@@ -54,6 +54,7 @@ class ConnectionManager:
         group: str = "",
         use_windows_auth: bool = False,
         color: str = "",
+        trust_server_certificate: bool = False,
     ):
         """Salva uma configuração de conexão"""
         config = {
@@ -64,6 +65,7 @@ class ConnectionManager:
             "username": username,
             "group": group,
             "use_windows_auth": use_windows_auth,
+            "trust_server_certificate": trust_server_certificate,
             "color": color,
             "created_at": datetime.now().isoformat(),
             "last_used": None,
@@ -98,6 +100,7 @@ class ConnectionManager:
         group: str = "",
         use_windows_auth: bool = False,
         color: str = "",
+        trust_server_certificate: bool = False,
     ):
         """Atualiza uma configuração de conexão existente"""
         if old_name in self.saved_configs.get("connections", {}):
@@ -122,6 +125,7 @@ class ConnectionManager:
                 group,
                 use_windows_auth,
                 color,
+                trust_server_certificate,
             )
 
             # Restaurar data de criação
