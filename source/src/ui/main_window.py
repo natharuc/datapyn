@@ -1397,6 +1397,15 @@ class MainWindow(DockingMainWindow):
 
         file_menu.addSeparator()
 
+        export_script_action = QAction("&Exportar como Script...", self)
+        if HAS_QTAWESOME:
+            export_script_action.setIcon(qta.icon("mdi.file-export", color="#b0b0b0"))
+        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+E)
+        export_script_action.triggered.connect(self._export_as_script)
+        file_menu.addAction(export_script_action)
+
+        file_menu.addSeparator()
+
         exit_action = QAction("Sai&r", self)
         exit_action.setShortcut(QKeySequence.StandardKey.Quit)  # Manter Quit padrão do sistema
         exit_action.triggered.connect(self.close)
@@ -1643,6 +1652,7 @@ class MainWindow(DockingMainWindow):
             "open_file": self._open_file,
             "save_file": self._save_file,
             "save_as": self._save_file_as,
+            "export_script": self._export_as_script,
             # Sessões
             "new_tab": self._new_session,
             "close_tab": self._close_current_session,
@@ -1690,6 +1700,7 @@ class MainWindow(DockingMainWindow):
             "open_file": self._open_file,
             "save_file": self._save_file,
             "save_as": self._save_file_as,
+            "export_script": self._export_as_script,
             # Sessões
             "new_tab": self._new_session,
             "close_tab": self._close_current_session,
@@ -4101,6 +4112,200 @@ class MainWindow(DockingMainWindow):
             self._original_file_path = filename
             self._original_file_type = file_type
             self._save_single_file(filename, file_type)
+
+    def _export_as_script(self):
+        """Exporta a análise atual como um script Python completo"""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        current_widget = self._get_current_session_widget()
+        if not current_widget:
+            QMessageBox.warning(self, "Aviso", "Nenhuma sessão ativa para exportar.")
+            return
+        
+        blocks = current_widget.editor.get_blocks()
+        if not blocks:
+            QMessageBox.warning(self, "Aviso", "Não há blocos de código para exportar.")
+            return
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exportar como Script Python",
+            "",
+            "Arquivos Python (*.py);;Todos os arquivos (*.*)"
+        )
+        
+        if not filename:
+            return
+        
+        if not filename.endswith('.py'):
+            filename += '.py'
+        
+        try:
+            script_content = self._generate_script_from_blocks(blocks, current_widget)
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(script_content)
+            
+            self.action_label.setText(f"Script exportado: {filename}")
+            QMessageBox.information(
+                self,
+                "Exportação Concluída",
+                f"Script Python exportado com sucesso para:\n{filename}"
+            )
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao exportar script: {e}")
+    
+    def _generate_script_from_blocks(self, blocks, session_widget) -> str:
+        """Gera o código Python completo a partir dos blocos"""
+        lines = []
+        
+        lines.append('"""')
+        lines.append('Script Python Exportado do DataPyn')
+        lines.append('')
+        lines.append(f'Gerado em: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        if session_widget.session.connection_name:
+            lines.append(f'Conexão: {session_widget.session.connection_name}')
+        lines.append('"""')
+        lines.append('')
+        
+        imports_needed = set()
+        has_sql = False
+        has_cross = False
+        
+        for block in blocks:
+            lang = block.get_language()
+            if lang == 'sql':
+                has_sql = True
+            elif lang == 'cross':
+                has_cross = True
+                has_sql = True
+        
+        imports_needed.add('import pandas as pd')
+        
+        if has_sql or has_cross:
+            imports_needed.add('from sqlalchemy import create_engine')
+            # Note: pyodbc is only added for SQL Server connections below
+        
+        lines.extend(sorted(imports_needed))
+        lines.append('')
+        
+        if has_sql or has_cross:
+            lines.append('# Configuração da Conexão de Banco de Dados')
+            lines.append('# IMPORTANTE: Ajuste as credenciais abaixo conforme sua configuração')
+            
+            if session_widget.session.connection_name:
+                conn_name = session_widget.session.connection_name
+                config = self.connection_manager.get_connection_config(conn_name)
+                if config:
+                    db_type = config.get('db_type', 'mysql')
+                    host = config.get('host', 'localhost')
+                    port = config.get('port', 3306)
+                    database = config.get('database', 'database')
+                    username = config.get('username', 'user')
+                    
+                    lines.append(f"# Tipo de banco: {db_type}")
+                    lines.append(f"DB_HOST = '{host}'")
+                    lines.append(f"DB_PORT = {port}")
+                    lines.append(f"DB_NAME = '{database}'")
+                    lines.append(f"DB_USER = '{username}'")
+                    lines.append("DB_PASSWORD = ''  # Preencha a senha aqui")
+                    lines.append('')
+                    
+                    if db_type == 'mysql':
+                        lines.append("# String de conexão MySQL")
+                        lines.append("connection_string = f'mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'")
+                    elif db_type == 'postgresql':
+                        lines.append("# String de conexão PostgreSQL")
+                        lines.append("connection_string = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'")
+                    elif db_type == 'sqlserver':
+                        lines.append("# String de conexão SQL Server")
+                        lines.append("# Requer: pip install pyodbc")
+                        lines.append("connection_string = f'mssql+pyodbc://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server'")
+                    else:
+                        lines.append(f"# String de conexão {db_type}")
+                        lines.append("connection_string = ''  # Configure a string de conexão apropriada")
+                    
+                    lines.append('')
+                    lines.append('# Criar engine de conexão')
+                    lines.append('engine = create_engine(connection_string)')
+                    lines.append('')
+            else:
+                lines.append("connection_string = ''  # Configure sua string de conexão")
+                lines.append('engine = create_engine(connection_string)')
+                lines.append('')
+        
+        lines.append('# ========================================')
+        lines.append('# Blocos de Código')
+        lines.append('# ========================================')
+        lines.append('')
+        
+        for i, block in enumerate(blocks, 1):
+            lang = block.get_language()
+            code = block.get_code().strip()
+            block_name = block.get_block_name()
+            
+            if not code:
+                continue
+            
+            lines.append(f'# --- Bloco {i}: {lang.upper()}' + (f' ({block_name})' if block_name else '') + ' ---')
+            
+            if lang == 'sql':
+                lines.append('# SQL Query executada via pandas')
+                var_name = block_name if block_name else f'df_bloco_{i}'
+                lines.append(f'{var_name} = pd.read_sql("""')
+                lines.append(code)
+                lines.append('""", engine)')
+                lines.append(f'print(f"Query executada: {{len({var_name})}} linhas retornadas")')
+            
+            elif lang == 'cross':
+                lines.append('# Cross-syntax: SQL + Python')
+                processed_code = self._convert_cross_syntax_to_python(code, i)
+                lines.append(processed_code)
+            
+            elif lang == 'python':
+                lines.append('# Código Python')
+                lines.append(code)
+            
+            lines.append('')
+        
+        lines.append('# ========================================')
+        lines.append('# Fim do Script')
+        lines.append('# ========================================')
+        
+        return '\n'.join(lines)
+    
+    def _convert_cross_syntax_to_python(self, code: str, block_index: int) -> str:
+        """Converte sintaxe cross (var = {{ SQL }}) para Python puro"""
+        import re
+        
+        # Match pattern: variable_name = {{ SQL query }}
+        # Captures: group(1) = variable_name, group(2) = SQL query
+        pattern = r"(\w+)\s*=\s*\{\{\s*(.+?)\s*\}\}"
+        
+        lines = []
+        last_end = 0
+        
+        for match in re.finditer(pattern, code, re.DOTALL):
+            before_match = code[last_end:match.start()]
+            if before_match.strip():
+                lines.append(before_match.rstrip())
+            
+            var_name = match.group(1)
+            sql = match.group(2).strip()
+            
+            lines.append(f'# Query SQL atribuída a variável {var_name}')
+            lines.append(f'{var_name} = pd.read_sql("""')
+            lines.append(sql)
+            lines.append('""", engine)')
+            
+            last_end = match.end()
+        
+        after_match = code[last_end:]
+        if after_match.strip():
+            lines.append(after_match.rstrip())
+        
+        return '\n'.join(lines)
 
     def closeEvent(self, event):
         """Ao fechar a janela"""
