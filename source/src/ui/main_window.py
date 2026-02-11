@@ -1908,6 +1908,7 @@ class MainWindow(DockingMainWindow):
                 config.get("group", ""),
                 config.get("use_windows_auth", False),
                 config.get("color", ""),
+                config.get("trust_server_certificate", True),
             )
 
             self._update_connection_status()
@@ -1951,6 +1952,7 @@ class MainWindow(DockingMainWindow):
                 new_config.get("group", ""),
                 new_config.get("use_windows_auth", False),
                 new_config.get("color", ""),
+                new_config.get("trust_server_certificate", True),
             )
 
             self._update_connection_status()
@@ -3682,6 +3684,7 @@ class MainWindow(DockingMainWindow):
                 username=config.get("username", ""),
                 password=config.get("password", ""),
                 use_windows_auth=config.get("use_windows_auth", False),
+                trust_server_certificate=config.get("trust_server_certificate", False),
             )
 
             if connector.is_connected():
@@ -3911,6 +3914,7 @@ class MainWindow(DockingMainWindow):
                 config.get("username", ""),
                 password,
                 use_windows_auth=config.get("use_windows_auth", False),
+                trust_server_certificate=config.get("trust_server_certificate", False),
             )
 
             self.connection_manager.mark_connection_used(connection_name)

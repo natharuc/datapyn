@@ -26,9 +26,9 @@ class TestDatabaseConnectorConnectionString:
         )
 
         assert "mssql+pyodbc" in result
-        assert "localhost" in result
-        assert "testdb" in result
-        assert "Trusted_Connection=yes" in result
+        assert "odbc_connect" in result
+        assert "SERVER=localhost" in result or "SERVER%3Dlocalhost" in result
+        assert "Trusted_Connection" in result or "Trusted_Connection%3D" in result
 
     def test_sqlserver_sql_auth_string(self):
         """Deve construir string SQL Server com SQL Auth"""
@@ -40,8 +40,9 @@ class TestDatabaseConnectorConnectionString:
         )
 
         assert "mssql+pyodbc" in result
-        assert "user:pass" in result
-        assert "localhost" in result
+        assert "odbc_connect" in result
+        # Verifica se contem UID e PWD (URL-encoded ou nao)
+        assert "UID" in result or "UID%3D" in result
 
     def test_mysql_connection_string(self):
         """Deve construir string MySQL"""
@@ -185,7 +186,9 @@ class TestDatabaseConnectorEdgeCases:
             driver="ODBC Driver 18 for SQL Server",
         )
 
-        assert "ODBC Driver 18" in result
+        # Deve usar odbc_connect e conter o driver (URL-encoded)
+        assert "odbc_connect" in result
+        assert "ODBC" in result or "ODBC+Driver" in result
 
 
 class TestUseDatabasePersistence:

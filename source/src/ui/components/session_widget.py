@@ -324,6 +324,7 @@ class SessionWidget(QWidget):
                             username=config.get("username", ""),
                             password=config.get("password", ""),
                             use_windows_auth=config.get("use_windows_auth", False),
+                            trust_server_certificate=config.get("trust_server_certificate", False),
                         )
                         if connector.is_connected:
                             manager.connections[connection_name] = connector

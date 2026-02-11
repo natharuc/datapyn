@@ -37,7 +37,7 @@ class ConnectionTestWorker(QThread):
 
     finished = pyqtSignal(bool, str)  # success, message
 
-    def __init__(self, db_type, host, port, database, username, password, use_windows_auth=False):
+    def __init__(self, db_type, host, port, database, username, password, use_windows_auth=False, trust_server_certificate=True):
         super().__init__()
         self.db_type = db_type
         self.host = host
@@ -46,6 +46,7 @@ class ConnectionTestWorker(QThread):
         self.username = username
         self.password = password
         self.use_windows_auth = use_windows_auth
+        self.trust_server_certificate = trust_server_certificate
 
     def run(self):
         try:
@@ -54,6 +55,7 @@ class ConnectionTestWorker(QThread):
             kwargs = {}
             if self.use_windows_auth:
                 kwargs["use_windows_auth"] = True
+            kwargs["trust_server_certificate"] = self.trust_server_certificate
 
             connector.connect(
                 db_type=self.db_type,
@@ -189,6 +191,15 @@ class ConnectionEditDialog(QDialog):
         self.chk_save_password = QCheckBox("Salvar senha (não recomendado)")
         auth_layout.addRow(self.chk_save_password)
 
+        # Opcao de SSL (apenas para SQL Server)
+        self.chk_trust_cert = QCheckBox("Confiar no certificado do servidor (TrustServerCertificate)")
+        self.chk_trust_cert.setChecked(False)  # Padrao: nao confiar (mais seguro)
+        self.chk_trust_cert.setToolTip(
+            "Marque está opção se o servidor não possui certificado SSL válido.\n"
+            "Comum em ambientes de desenvolvimento ou servidores internos."
+        )
+        auth_layout.addRow(self.chk_trust_cert)
+
         layout.addWidget(auth_group)
 
         # Grupo de organização
@@ -277,6 +288,10 @@ class ConnectionEditDialog(QDialog):
         use_windows_auth = self.config.get("use_windows_auth", False)
         self.chk_windows_auth.setChecked(use_windows_auth)
 
+        # Trust Server Certificate (padrao: False para seguranca)
+        trust_cert = self.config.get("trust_server_certificate", False)
+        self.chk_trust_cert.setChecked(trust_cert)
+
         self.txt_username.setText(self.config.get("username", ""))
 
         if "password" in self.config:
@@ -314,9 +329,10 @@ class ConnectionEditDialog(QDialog):
         self.chk_save_password.setEnabled(not is_windows_auth)
 
     def _toggle_windows_auth_visibility(self):
-        """Mostra/esconde Windows Auth baseado no tipo de banco"""
+        """Mostra/esconde Windows Auth e Trust Cert baseado no tipo de banco"""
         is_sqlserver = self.cmb_type.currentText() == "sqlserver"
         self.chk_windows_auth.setVisible(is_sqlserver)
+        self.chk_trust_cert.setVisible(is_sqlserver)
         if not is_sqlserver:
             self.chk_windows_auth.setChecked(False)
 
@@ -368,6 +384,7 @@ class ConnectionEditDialog(QDialog):
             username=self.txt_username.text(),
             password=self.txt_password.text(),
             use_windows_auth=self.chk_windows_auth.isChecked(),
+            trust_server_certificate=self.chk_trust_cert.isChecked(),
         )
         self.test_worker.finished.connect(self._on_test_finished)
         self.test_worker.start()
@@ -406,6 +423,7 @@ class ConnectionEditDialog(QDialog):
             "database": self.txt_database.text().strip(),
             "username": self.txt_username.text().strip(),
             "use_windows_auth": self.chk_windows_auth.isChecked(),
+            "trust_server_certificate": self.chk_trust_cert.isChecked(),
             "group": self.cmb_group.currentData(),
             "color": self.selected_color,
             "save_password": self.chk_save_password.isChecked(),
