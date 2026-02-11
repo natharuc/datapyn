@@ -81,23 +81,31 @@ python source/main.py
 
 ---
 
+## Documentacao
+
+- [Guia de Geracao do Instalador MSI](docs/BUILD_MSI.md)
+- [Guia de Otimizacao de Testes](docs/TEST_OPTIMIZATION.md)
+
+---
+
 ## Estrutura do Projeto
 
 ```
 datapyn/
-├── source/              # Código-fonte
-│   ├── main.py          # Ponto de entrada
-│   └── src/             # Módulos da aplicação
-│       ├── core/        # Lógica central
-│       ├── database/    # Conectores de banco
-│       ├── editors/     # Editores de código
-│       ├── services/    # Serviços
-│       ├── ui/          # Interface gráfica
-│       └── assets/      # Ícones e recursos
-├── tests/               # Testes automatizados
-├── scripts/             # Scripts de build/install
-├── docs/                # Documentação
-└── requirements.txt     # Dependências
+├── source/                  # Codigo-fonte
+│   ├── main.py              # Ponto de entrada
+│   └── src/                 # Modulos da aplicacao
+│       ├── core/            # Logica central
+│       ├── database/        # Conectores de banco
+│       ├── editors/         # Editores de codigo
+│       ├── services/        # Servicos
+│       ├── ui/              # Interface grafica
+│       └── assets/          # Icones e recursos
+├── tests/                   # Testes automatizados
+├── scripts/                 # Scripts de build/install
+├── docs/                    # Documentacao
+├── requirements.txt         # Dependencias de producao
+└── requirements-build.txt   # Dependencias de build
 ```
 
 ---
