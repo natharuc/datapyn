@@ -1,43 +1,45 @@
 @echo off
 echo ========================================
-echo    DataPyn - Build EXE
+echo    DataPyn - Build
 echo ========================================
 echo.
-
-REM Navegar para a raiz do projeto
-cd /d "%~dp0.."
-
-REM Ativar ambiente virtual
-call .venv\Scripts\activate
-
-REM Verificar se PyInstaller está instalado
-pip show pyinstaller >nul 2>&1
-if errorlevel 1 (
-    echo Instalando PyInstaller...
-    pip install pyinstaller
-)
-
+echo Escolha o tipo de build:
+echo 1. EXE (PyInstaller - rapido)
+echo 2. MSI Installer (cx_Freeze - completo)
+echo 3. Ambos (EXE + MSI)
 echo.
-echo Gerando executavel...
+choice /c 123 /n /m "Opcao (1-3): "
+
+if errorlevel 3 goto BUILD_BOTH
+if errorlevel 2 goto BUILD_MSI
+if errorlevel 1 goto BUILD_EXE
+
+:BUILD_EXE
 echo.
+echo ========================================
+echo    Gerando EXE com PyInstaller...
+echo ========================================
+call scripts\build_exe.bat
+goto END
 
-REM Limpar build anterior para detectar falha corretamente
-if exist "dist\DataPyn\DataPyn.exe" del "dist\DataPyn\DataPyn.exe"
-
-REM Executar PyInstaller com o spec file
-pyinstaller scripts\datapyn.spec --clean -y
-
+:BUILD_MSI
 echo.
-if exist "dist\DataPyn\DataPyn.exe" (
-    echo ========================================
-    echo    Build concluido com sucesso!
-    echo    Pasta: dist\DataPyn\
-    echo    Executavel: dist\DataPyn\DataPyn.exe
-    echo ========================================
-) else (
-    echo ========================================
-    echo    ERRO: Build falhou!
-    echo ========================================
-)
+echo ========================================
+echo    Gerando MSI Installer...
+echo ========================================
+call scripts\build_msi.bat
+goto END
 
+:BUILD_BOTH
+echo.
+echo ========================================
+echo    Gerando EXE e MSI Installer...
+echo ========================================
+call scripts\build_exe.bat
+echo.
+call scripts\build_msi.bat
+goto END
+
+:END
 pause
+

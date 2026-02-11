@@ -105,26 +105,52 @@ datapyn/
 ## Testes
 
 ```bash
-# Executar todos os testes
+# Executar todos os testes (execucao paralela automatica)
 pytest
+
+# Executar testes sequencialmente (sem paralelizacao)
+pytest -n 0
 
 # Com cobertura
 pytest --cov=source/src --cov-report=html
 
-# Testes específicos
+# Testes especificos
 pytest tests/test_mixed_executor.py -v
+
+# Executar apenas testes unitarios rapidos
+pytest -m unit
+
+# Executar testes de integracao
+pytest -m integration
+
+# Pular testes lentos
+pytest -m "not slow"
 ```
+
+**Nota**: Os testes estao configurados para execucao paralela automatica usando `pytest-xdist`, o que reduz significativamente o tempo de execucao.
+
 
 ---
 
-## Build (Executável)
+## Build (Executavel)
+
+### Opcoes de Build
 
 ```bash
-# Gerar executável standalone
+# Build interativo - escolha entre EXE, MSI ou ambos
 scripts\build.bat
 
-# O executável será gerado em dist/DataPyn.exe
+# Gerar apenas executavel (PyInstaller - rapido)
+scripts\build_exe.bat
+
+# Gerar apenas instalador MSI (cx_Freeze - completo)
+scripts\build_msi.bat
 ```
+
+### Resultado do Build
+
+- **EXE**: Executavel standalone em `dist/DataPyn/DataPyn.exe`
+- **MSI**: Instalador Windows em `dist/DataPyn-1.0.0-win64.msi`
 
 ---
 
