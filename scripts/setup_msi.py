@@ -47,7 +47,7 @@ build_exe_options = {
 
 # Opcoes do instalador MSI
 bdist_msi_options = {
-    "upgrade_code": "{12345678-1234-1234-1234-123456789012}",
+    "upgrade_code": "{550CD338-127B-4152-A131-C0E375667D77}",  # GUID unico do DataPyn
     "add_to_path": False,
     "initial_target_dir": r"[ProgramFilesFolder]\DataPyn",
     "install_icon": str(ROOT_DIR / "source" / "src" / "assets" / "datapyn-logo.ico"),

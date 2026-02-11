@@ -151,7 +151,9 @@ bdist_msi_options = {
 ```
 
 ### Alterar GUID do Produto
-Para uma nova versao major, altere o `upgrade_code`:
+O GUID atual do DataPyn e `{550CD338-127B-4152-A131-C0E375667D77}`.
+
+Para uma nova versao major, voce pode alterar o `upgrade_code`:
 ```python
 bdist_msi_options = {
     ...
@@ -160,7 +162,10 @@ bdist_msi_options = {
 }
 ```
 
-**IMPORTANTE**: Use o mesmo GUID para permitir atualizacoes automaticas.
+**IMPORTANTE**: 
+- Use o mesmo GUID para permitir atualizacoes automaticas entre versoes
+- Gere um novo GUID apenas para releases incompativeis que nao devem atualizar versoes antigas
+- Para gerar um novo GUID: `python -c "import uuid; print('{' + str(uuid.uuid4()).upper() + '}')"`
 
 ### Adicionar/Remover Pacotes
 Edite `scripts/setup_msi.py`:
