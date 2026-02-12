@@ -613,7 +613,7 @@ class CodeEditor(QWidget):
 
             # Se tem Ctrl pressionado, verificar se e atalho do app
             if mods & Qt.KeyboardModifier.ControlModifier:
-                seq = QKeySequence(int(mods) | key)
+                seq = QKeySequence(mods.value | key)
                 seq_str = seq.toString()
                 if seq_str in self._app_shortcut_sequences:
                     # Atalho do app - nao consumir, propagar
