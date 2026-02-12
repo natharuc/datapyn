@@ -502,30 +502,29 @@ class TestVariablesTableModel:
 # ==================== 5. AUTOCOMPLETE ====================
 
 
-class TestMonacoInsertText:
-    """Testes para insert_text_at_cursor no MonacoEditor"""
+class TestEditorInsertText:
+    """Testes para insert_text_at_cursor no CodeEditor"""
 
-    def test_monaco_has_insert_text_method(self, qapp):
-        """MonacoEditor deve ter metodo insert_text_at_cursor"""
-        from src.editors.monaco_editor import MonacoEditor
+    def test_editor_has_insert_text_method(self, qapp):
+        """CodeEditor deve ter metodo insert_text_at_cursor"""
+        from src.editors.code_editor import CodeEditor
 
-        editor = MonacoEditor()
+        editor = CodeEditor()
         assert hasattr(editor, "insert_text_at_cursor")
         assert callable(editor.insert_text_at_cursor)
 
-    def test_monaco_insert_text_calls_js(self, qapp):
-        """insert_text_at_cursor deve chamar _run_js"""
-        from src.editors.monaco_editor import MonacoEditor
+    def test_editor_insert_text_at_cursor(self, qapp):
+        """insert_text_at_cursor deve inserir texto na posicao do cursor"""
+        from src.editors.code_editor import CodeEditor
 
-        editor = MonacoEditor()
-        editor._run_js = Mock()
+        editor = CodeEditor()
+        editor.set_text("hello ")
+        # Cursor vai para o final do texto por padrao
+        editor._sci.setCursorPosition(0, 6)
 
-        editor.insert_text_at_cursor("my_var")
+        editor.insert_text_at_cursor("world")
 
-        editor._run_js.assert_called_once()
-        js_code = editor._run_js.call_args[0][0]
-        assert "my_var" in js_code
-        assert "executeEdits" in js_code
+        assert editor.get_text().strip() == "hello world"
 
 
 # ==================== 6. BLOCKEDITOR FILE_DROPPED SIGNAL ====================

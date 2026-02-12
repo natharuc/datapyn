@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DataPyn
+Comment=Data Analysis Tool
+Exec=/opt/datapyn/DataPyn
+Icon=/opt/datapyn/datapyn_logo.svg
+Terminal=false
+Categories=Development;Database;DataVisualization;
+StartupNotify=true

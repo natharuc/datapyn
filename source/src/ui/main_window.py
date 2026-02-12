@@ -1583,11 +1583,22 @@ class MainWindow(DockingMainWindow):
         self._execution_update_timer.timeout.connect(self._update_execution_time)
 
     def _start_execution_timer(self, mode: str = ""):
-        """Inicia o timer de execução"""
+        """Inicia o timer de execucao"""
         self._is_executing = True
         self._execution_mode = mode
         self._execution_timer.start()
         self._execution_update_timer.start(100)
+        # Estilizar label UMA vez (nao a cada tick)
+        self.execution_label.setStyleSheet("""
+            QLabel {
+                color: #FFD700;
+                font-weight: bold;
+                padding: 4px 12px;
+                background: rgba(255, 215, 0, 0.15);
+                border-left: 3px solid #FFD700;
+                border-radius: 2px;
+            }
+        """)
         self._update_execution_time()
         self.main_statusbar.start_timer()
 
@@ -1614,20 +1625,7 @@ class MainWindow(DockingMainWindow):
         if self._is_executing:
             elapsed = self._execution_timer.elapsed() / 1000.0
             mode = f"{self._execution_mode}" if self._execution_mode else "Código"
-            # Ícone animado + texto mais visível
-            icon = qta.icon("fa5s.spinner", color="#FFD700", animation=qta.Spin(self.execution_label))
-            self.execution_label.setPixmap(icon.pixmap(16, 16))
             self.execution_label.setText(f"  Executando {mode} {elapsed:.1f}s")
-            self.execution_label.setStyleSheet("""
-                QLabel {
-                    color: #FFD700;
-                    font-weight: bold;
-                    padding: 4px 12px;
-                    background: rgba(255, 215, 0, 0.15);
-                    border-left: 3px solid #FFD700;
-                    border-radius: 2px;
-                }
-            """)
 
     def _clear_execution_label(self):
         """Limpa o label de execução"""
@@ -1655,13 +1653,14 @@ class MainWindow(DockingMainWindow):
             "export_script": self._export_as_script,
             # Sessões
             "new_tab": self._new_session,
+            "new_session": self._new_session,
             "close_tab": self._close_current_session,
             "add_block": self._add_block_to_current_session,
-            # Edição - REMOVIDOS find/replace para não conflitar com editores
-            # Monaco e QScintilla têm seus próprios Ctrl+F e Ctrl+H nativos
-            # 'find': self._show_find_dialog,
-            # 'replace': self._show_replace_dialog,
-            # Conexões
+            # Edicao
+            "find": self._find_in_editor,
+            "replace": self._replace_in_editor,
+            "format_code": self._format_current_block,
+            # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
             # Schema
@@ -1671,6 +1670,7 @@ class MainWindow(DockingMainWindow):
         }
 
         # Criar atalhos a partir do ShortcutManager
+        app_keys = set()
         for action, callback in shortcuts_map.items():
             key_sequence = self.shortcut_manager.get_shortcut(action)
             if key_sequence:
@@ -1678,6 +1678,11 @@ class MainWindow(DockingMainWindow):
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
+                app_keys.add(key_sequence)
+
+        # Informar editores quais atalhos o app usa
+        from src.editors.code_editor import CodeEditor
+        CodeEditor.set_app_shortcuts(app_keys)
 
     def _reload_shortcuts(self):
         """Re-registra todos os atalhos (chamado quando usuário altera configurações)"""
@@ -1703,9 +1708,14 @@ class MainWindow(DockingMainWindow):
             "export_script": self._export_as_script,
             # Sessões
             "new_tab": self._new_session,
+            "new_session": self._new_session,
             "close_tab": self._close_current_session,
             "add_block": self._add_block_to_current_session,
-            # Conexões
+            # Edicao
+            "find": self._find_in_editor,
+            "replace": self._replace_in_editor,
+            "format_code": self._format_current_block,
+            # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
             # Schema
@@ -1715,6 +1725,7 @@ class MainWindow(DockingMainWindow):
         }
 
         # Criar novos atalhos
+        app_keys = set()
         for action, callback in shortcuts_map.items():
             key_sequence = self.shortcut_manager.get_shortcut(action)
             if key_sequence:
@@ -1722,6 +1733,11 @@ class MainWindow(DockingMainWindow):
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
+                app_keys.add(key_sequence)
+
+        # Atualizar editores
+        from src.editors.code_editor import CodeEditor
+        CodeEditor.set_app_shortcuts(app_keys)
 
     # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
 
@@ -1833,36 +1849,57 @@ class MainWindow(DockingMainWindow):
         finally:
             self._creating_session = False
 
-    def _show_find_dialog(self):
-        """Mostra diálogo de busca no editor atual"""
+    def _find_in_editor(self):
+        """Abre busca no bloco focado do editor atual."""
         widget = self._get_current_session_widget()
         if widget and widget.editor:
-            # Implementação simples de busca com QInputDialog
-            from PyQt6.QtWidgets import QInputDialog
+            block = widget.editor.get_focused_block()
+            if block and hasattr(block, "editor"):
+                block.editor._open_find()
 
-            text, ok = QInputDialog.getText(self, "Buscar", "Texto a buscar:")
-            if ok and text:
-                # Buscar no editor
-                editor = widget.editor
-                if hasattr(editor, "findFirst"):
-                    editor.findFirst(text, False, False, False, True)
-
-    def _show_replace_dialog(self):
-        """Mostra diálogo de substituir no editor atual"""
+    def _replace_in_editor(self):
+        """Abre busca+substituicao no bloco focado do editor atual."""
         widget = self._get_current_session_widget()
         if widget and widget.editor:
-            # Implementação simples de substituição
-            from PyQt6.QtWidgets import QInputDialog
+            block = widget.editor.get_focused_block()
+            if block and hasattr(block, "editor"):
+                block.editor._open_replace()
 
-            find_text, ok1 = QInputDialog.getText(self, "Substituir", "Buscar:")
-            if ok1 and find_text:
-                replace_text, ok2 = QInputDialog.getText(self, "Substituir", "Substituir por:")
-                if ok2:
-                    # Substituir no editor
-                    editor = widget.editor
-                    if hasattr(editor, "findFirst") and hasattr(editor, "replace"):
-                        while editor.findFirst(find_text, False, False, False, True):
-                            editor.replace(replace_text)
+    def _format_current_block(self):
+        """Formata o codigo do bloco focado usando ruff (Python) ou sqlparse (SQL)."""
+        widget = self._get_current_session_widget()
+        if not widget or not widget.editor:
+            return
+
+        block = widget.editor.get_focused_block()
+        if not block or not hasattr(block, "editor"):
+            return
+
+        code = block.editor.get_text()
+        if not code.strip():
+            return
+
+        lang = block.editor.get_language()
+
+        from src.services.code_formatter_service import format_code
+        formatted, error = format_code(code, lang)
+
+        if error:
+            self.action_label.setText(f"Formatacao: {error}")
+            self.statusBar().showMessage(f"Erro ao formatar: {error}", 5000)
+            return
+
+        if formatted != code:
+            # Preservar posicao do cursor
+            sci = block.editor._sci
+            line, col = sci.getCursorPosition()
+            block.editor.set_text(formatted)
+            # Restaurar cursor (limitar a linhas existentes)
+            max_line = sci.lines() - 1
+            sci.setCursorPosition(min(line, max_line), col)
+            self.action_label.setText(f"[{lang.upper()}] Codigo formatado")
+        else:
+            self.action_label.setText(f"[{lang.upper()}] Codigo ja esta formatado")
 
     def _add_block_to_current_session(self):
         """Adiciona novo bloco de código na sessão atual"""
@@ -2199,7 +2236,12 @@ class MainWindow(DockingMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index))
 
-        # Manter referência
+        # Limpeza segura: so deletar quando thread realmente parar
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        # Manter referencia
         self._worker_threads.append((thread, worker))
 
         # Iniciar
@@ -2286,9 +2328,13 @@ class MainWindow(DockingMainWindow):
             return True
 
         else:
-            # OUTROS TIPOS → OUTPUT (console)
+            # OUTROS TIPOS -> OUTPUT (console)
             self._log(f"[{execution_type}] {repr(result)}")
             return True
+
+    def _remove_worker_thread(self, thread):
+        """Remove thread da lista de workers ativos (chamado via thread.finished)."""
+        self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
 
     def _on_sql_finished(self, df, error, thread, tab_index):
         """Callback quando SQL termina"""
@@ -2297,12 +2343,10 @@ class MainWindow(DockingMainWindow):
         # Remover marcação de rodando
         self._mark_tab_running(False, tab_index)
 
-        # Limpar thread da lista
-        self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
+        # Parar thread (finished signal cuida da limpeza)
         thread.quit()
-        thread.wait()
 
-        # FORÇAR: Se há erro, SEMPRE mostrar output - não importa o que vier no df
+        # FORCAR: Se ha erro, SEMPRE mostrar output
         if error:
             self._show_error_output(f"[SQL] Erro: {error}")
             self.action_label.setText("[SQL] Erro ao executar")
@@ -2360,7 +2404,12 @@ class MainWindow(DockingMainWindow):
             )
         )
 
-        # Manter referência
+        # Limpeza segura: so deletar quando thread realmente parar
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        # Manter referencia
         self._worker_threads.append((thread, worker))
 
         # Iniciar
@@ -2380,10 +2429,8 @@ class MainWindow(DockingMainWindow):
         # Remover marcacao de rodando
         self._mark_tab_running(False, tab_index)
 
-        # Limpar thread da lista
-        self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
+        # Parar thread (finished signal cuida da limpeza)
         thread.quit()
-        thread.wait()
 
         # FORCAR: Se ha erro, SEMPRE mostrar output primeiro
         if error:
@@ -2566,14 +2613,14 @@ class MainWindow(DockingMainWindow):
 
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
         """
-        Marca/desmarca aba como rodando
+        Marca/desmarca aba como rodando (com spinner animado).
 
         Args:
-            is_running: Se True, adiciona "(run)" ao título. Se False, remove.
-            tab_index: Índice da aba. Se None, usa a aba atual.
+            is_running: Se True, mostra spinner. Se False, para.
+            tab_index: Indice da aba. Se None, usa a aba atual.
 
         Returns:
-            Índice da aba modificada
+            Indice da aba modificada
         """
         if tab_index is None:
             tab_index = self.session_tabs.currentIndex()
@@ -2581,17 +2628,7 @@ class MainWindow(DockingMainWindow):
         if tab_index < 0 or tab_index >= self.session_tabs.count():
             return tab_index
 
-        current_title = self.session_tabs.tabText(tab_index)
-
-        if is_running:
-            # Adicionar "(run)" se não existir
-            if "(run)" not in current_title:
-                self.session_tabs.setTabText(tab_index, f"{current_title} (run)")
-        else:
-            # Remover "(run)"
-            new_title = current_title.replace(" (run)", "")
-            self.session_tabs.setTabText(tab_index, new_title)
-
+        self.session_tabs.set_tab_running(tab_index, is_running)
         return tab_index
 
     def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
@@ -2906,8 +2943,8 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.setTabText(i, current_text[:-2])
 
     def _update_status(self):
-        """Atualiza status periodicamente"""
-        # Verifica se conexão da sessão atual ainda está ativa
+        """Atualiza status periodicamente (sem I/O na thread principal)."""
+        # Check rapido sem I/O - apenas verifica estado do pool
         session = self.session_manager.focused_session
         if session and session.connector and not session.connector.is_connected():
             session.clear_connection()

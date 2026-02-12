@@ -360,22 +360,24 @@ class ConnectionEditDialog(QDialog):
             )
 
     def _test_connection(self):
-        """Testa a conexão com as configurações atuais em background"""
-        # Criar loading dialog
+        """Testa a conexao com as configuracoes atuais em background"""
+        # Criar loading dialog com botao cancelar
         db_name = self.txt_database.text() or self.txt_host.text()
         self.loading_dialog = QProgressDialog(self)
-        self.loading_dialog.setWindowTitle("Testando Conexão")
-        self.loading_dialog.setLabelText(f"Testando conexão com {db_name}...")
-        self.loading_dialog.setCancelButton(None)
+        self.loading_dialog.setWindowTitle("Testando Conexao")
+        self.loading_dialog.setLabelText(f"Testando conexao com {db_name}...")
+        self.loading_dialog.setCancelButtonText("Cancelar")
         self.loading_dialog.setRange(0, 0)  # Indeterminate progress
         self.loading_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.loading_dialog.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint
         )
         self.loading_dialog.setMinimumWidth(300)
+        self.loading_dialog.canceled.connect(self._cancel_test_connection)
         self.loading_dialog.show()
 
         # Criar e iniciar worker
+        self._test_cancelled = False
         self.test_worker = ConnectionTestWorker(
             db_type=self.cmb_type.currentText(),
             host=self.txt_host.text(),
@@ -389,8 +391,18 @@ class ConnectionEditDialog(QDialog):
         self.test_worker.finished.connect(self._on_test_finished)
         self.test_worker.start()
 
+    def _cancel_test_connection(self):
+        """Cancela o teste de conexao em andamento"""
+        self._test_cancelled = True
+        if hasattr(self, 'test_worker') and self.test_worker.isRunning():
+            self.test_worker.terminate()
+            self.test_worker.wait(2000)
+
     def _on_test_finished(self, success: bool, message: str):
-        """Callback quando teste de conexão termina"""
+        """Callback quando teste de conexao termina"""
+        if self._test_cancelled:
+            return  # Ignorar resultado se foi cancelado
+
         self.loading_dialog.close()
 
         if success:

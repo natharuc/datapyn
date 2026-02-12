@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX 3 source para o instalador MSI do DataPyn.
+  O componente AppFiles eh gerado automaticamente pelo heat.exe
+  no workflow de release (CI).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product Id="*"
+           Name="DataPyn"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="DataPyn"
+           UpgradeCode="{E8A3B02D-7F14-4C6A-9D5E-1B8F0A2C3D4E}">
+
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="DataPyn - Data Analysis Tool"
+             Comments="Instalador MSI gerado automaticamente pelo CI." />
+
+    <MajorUpgrade DowngradeErrorMessage="Uma versao mais recente do [ProductName] ja esta instalada." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ============================================================ -->
+    <!-- Estrutura de diretorios                                      -->
+    <!-- ============================================================ -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="DataPyn" />
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="DataPyn" />
+      </Directory>
+    </Directory>
+
+    <!-- ============================================================ -->
+    <!-- Atalho na Area de Trabalho                                   -->
+    <!-- ============================================================ -->
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="*">
+        <Shortcut Id="DesktopShortcutLink"
+                  Name="DataPyn"
+                  Target="[INSTALLFOLDER]DataPyn.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="DataPynIcon" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\DataPyn"
+                       Name="DesktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ============================================================ -->
+    <!-- Atalho no Menu Iniciar                                       -->
+    <!-- ============================================================ -->
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="StartMenuShortcutLink"
+                  Name="DataPyn"
+                  Target="[INSTALLFOLDER]DataPyn.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="DataPynIcon" />
+        <RemoveFolder Id="CleanUpShortcut"
+                      Directory="ApplicationProgramsFolder"
+                      On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\DataPyn"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ============================================================ -->
+    <!-- Feature principal                                            -->
+    <!-- ============================================================ -->
+    <Feature Id="Complete" Title="DataPyn" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!-- ============================================================ -->
+    <!-- Icone e propriedades de exibicao                             -->
+    <!-- ============================================================ -->
+    <Icon Id="DataPynIcon" SourceFile="$(var.SourceDir)\DataPyn.exe" />
+    <Property Id="ARPPRODUCTICON" Value="DataPynIcon" />
+
+    <!-- UI minima com dialogo de licenca removido -->
+    <UIRef Id="WixUI_Minimal" />
+
+  </Product>
+</Wix>

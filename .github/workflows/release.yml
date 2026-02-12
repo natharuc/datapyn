@@ -7,6 +7,13 @@ on:
       - main
     types:
       - completed
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build sem publicar (para testes)"
+        required: true
+        default: true
+        type: boolean
 
 # default: least privileged permissions across all jobs
 permissions:
@@ -15,12 +22,15 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Only run if tests passed and commit was not made by GitHub Actions (prevent release loop)
+    # On workflow_dispatch the condition is always true (manual trigger).
+    # On workflow_run we check that tests passed and commit is not from Actions.
     if: |
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_commit &&
-      !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
-      github.event.workflow_run.head_commit.author.email != 'actions@users.noreply.github.com'
+      github.event_name == 'workflow_dispatch' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_commit &&
+        !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
+        github.event.workflow_run.head_commit.author.email != 'actions@users.noreply.github.com'
+      )
     concurrency:
       group: ${{ github.workflow }}-release-${{ github.ref_name }}
       cancel-in-progress: false
@@ -29,46 +39,49 @@ jobs:
       contents: write
 
     outputs:
-      released: ${{ steps.release.outputs.released }}
-      tag: ${{ steps.release.outputs.tag }}
-      version: ${{ steps.release.outputs.version }}
+      released: ${{ steps.release.outputs.released || steps.dry_run_version.outputs.released }}
+      tag: ${{ steps.release.outputs.tag || steps.dry_run_version.outputs.tag }}
+      version: ${{ steps.release.outputs.version || steps.dry_run_version.outputs.version }}
 
     steps:
       - name: Install SSH Client and add private key to ssh-agent
+        if: github.event_name != 'workflow_dispatch'
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-      # Note: We checkout the repository at the SHA that triggered the test workflow.
-      # Python Semantic Release will automatically convert shallow clones to full clones
-      # if needed to ensure proper history evaluation. We use the workflow_run head_sha
-      # to ensure we're releasing the exact code that was tested.
+
+      # On workflow_dispatch: checkout current branch.
+      # On workflow_run: checkout the branch that triggered the tests.
       - name: Setup | Checkout Repository on Release Branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
-          ssh-key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.workflow_run.head_branch }}
+          ssh-key: ${{ github.event_name != 'workflow_dispatch' && secrets.ACTIONS_DEPLOY_KEY || '' }}
 
       - name: Setup | Force release branch to be at workflow sha
+        if: github.event_name != 'workflow_dispatch'
         run: |
           git reset --hard ${{ github.event.workflow_run.head_sha }}
 
       - name: Action | Semantic Version Release
         id: release
-        # Adjust tag with desired version if applicable.
+        if: github.event_name != 'workflow_dispatch'
         uses: python-semantic-release/python-semantic-release@v10.5.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           git_committer_name: "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
 
-      - name: Publish | Upload to GitHub Release Assets
-        uses: python-semantic-release/publish-action@v10.5.3
-        if: steps.release.outputs.released == 'true'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.release.outputs.tag }}
+      # On dry run, set fake outputs so the build jobs can execute
+      - name: Dry Run | Set fake version outputs
+        id: dry_run_version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "version=0.0.0-dryrun" >> "$GITHUB_OUTPUT"
 
-  build-windows-exe:
+  build-windows-msi:
     needs: release
     if: needs.release.outputs.released == 'true'
     runs-on: windows-latest
@@ -99,13 +112,45 @@ jobs:
       - name: Build | Generate Windows EXE
         run: pyinstaller scripts/datapyn.spec --clean
 
-      - name: Build | Create ZIP Archive
-        run: Compress-Archive -Path dist/DataPyn/* -DestinationPath dist/DataPyn-${{ needs.release.outputs.version }}-windows.zip
+      - name: Build | Create MSI Installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.release.outputs.version }}"
+          $sourceDir = "dist\DataPyn"
+          $wixBin = "${env:WIX}bin\"
 
-      - name: Publish | Upload EXE to GitHub Release
+          # Harvest all files from PyInstaller output
+          & "${wixBin}heat.exe" dir "$sourceDir" `
+            -cg AppFiles -dr INSTALLFOLDER `
+            -gg -sfrag -srd `
+            -var var.SourceDir `
+            -out heat.wxs
+
+          # Compile WXS sources
+          & "${wixBin}candle.exe" `
+            -dSourceDir="$sourceDir" `
+            -dProductVersion="$version" `
+            scripts\installer.wxs heat.wxs
+
+          # Link into MSI
+          & "${wixBin}light.exe" `
+            -ext WixUIExtension `
+            -spdb `
+            installer.wixobj heat.wixobj `
+            -o "DataPyn-${version}-windows.msi"
+
+      - name: Publish | Upload MSI to GitHub Release
+        if: "!(github.event.inputs.dry_run == 'true')"
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release.outputs.tag }}
-          files: dist/DataPyn-${{ needs.release.outputs.version }}-windows.zip
+          files: DataPyn-${{ needs.release.outputs.version }}-windows.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dry Run | List generated artifacts
+        if: github.event.inputs.dry_run == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "=== DRY RUN - MSI gerado com sucesso ==="
+          Get-ChildItem -Path . -Filter *.msi | Format-Table Name, Length
