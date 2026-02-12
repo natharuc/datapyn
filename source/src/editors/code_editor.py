@@ -290,6 +290,10 @@ class CodeEditor(QWidget):
     - Autocomplete SQL (schema) e Python (namespace)
     """
 
+    # Atalhos da aplicacao que o editor NAO deve consumir.
+    # Preenchido pelo MainWindow via set_app_shortcuts().
+    _app_shortcut_sequences: set = set()
+
     # Signals da interface
     text_changed = pyqtSignal()
     execute_requested = pyqtSignal()
@@ -593,51 +597,61 @@ class CodeEditor(QWidget):
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self._sci)
         shortcut_comment.activated.connect(self.toggle_comment)
 
-        # Teclas que o QScintilla deve tratar internamente (edicao padrao)
-        # Todas as outras Ctrl+ combos sao propagadas para o MainWindow
-        self._editor_ctrl_keys = {
-            Qt.Key.Key_Z,      # Undo
-            Qt.Key.Key_Y,      # Redo
-            Qt.Key.Key_X,      # Cut
-            Qt.Key.Key_C,      # Copy
-            Qt.Key.Key_V,      # Paste
-            Qt.Key.Key_A,      # Select All
-            Qt.Key.Key_D,      # Duplicate line
-            Qt.Key.Key_L,      # Delete line
-            Qt.Key.Key_U,      # Lowercase
-            Qt.Key.Key_Slash,  # Comment toggle
-        }
-
-        # Override do keyPressEvent para:
-        # 1) Interceptar Ctrl+F / Ctrl+H antes do QScintilla
-        # 2) Propagar Ctrl+combos (new tab, save, etc.) para o MainWindow
+        # Override do keyPressEvent:
+        # 1) Ctrl+F / Ctrl+H -> nosso Find/Replace
+        # 2) Se o combo esta nos atalhos do app -> propagate (event.ignore)
+        # 3) Senao -> QScintilla trata normalmente (Ctrl+Home, Ctrl+End, etc.)
         _original_key_press = self._sci.keyPressEvent
 
         def _custom_key_press(event: QKeyEvent):
             mods = event.modifiers()
             key = event.key()
 
-            # Ctrl+Key (sem Shift/Alt)
-            if mods == Qt.KeyboardModifier.ControlModifier:
-                if key == Qt.Key.Key_F:
-                    self._open_find()
-                    return
-                if key == Qt.Key.Key_H:
-                    self._open_replace()
-                    return
-                # Se NAO e uma tecla de edicao do editor, propagar para o app
-                if key not in self._editor_ctrl_keys:
+            # Ignorar teclas modificadoras sozinhas
+            if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+                _original_key_press(event)
+                return
+
+            # Ctrl+F -> Find
+            if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_F:
+                self._open_find()
+                return
+
+            # Ctrl+H -> Replace
+            if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_H:
+                self._open_replace()
+                return
+
+            # Se tem Ctrl pressionado, verificar se e atalho do app
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                seq = QKeySequence(int(mods) | key)
+                seq_str = seq.toString()
+                if seq_str in self._app_shortcut_sequences:
+                    # Atalho do app - nao consumir, propagar
                     event.ignore()
                     return
 
-            # Ctrl+Shift+Key - sempre propagar para MainWindow
-            if mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
-                event.ignore()
-                return
-
+            # Tudo que sobra: QScintilla trata normalmente
             _original_key_press(event)
 
         self._sci.keyPressEvent = _custom_key_press
+
+    @classmethod
+    def set_app_shortcuts(cls, shortcut_keys: set):
+        """Define quais key sequences sao atalhos do app.
+
+        Chamado pelo MainWindow apos registrar seus atalhos.
+        O editor NAO consumira essas combinacoes, permitindo que
+        o sistema de QShortcut do app as trate.
+
+        Args:
+            shortcut_keys: Set de strings como {'Ctrl+T', 'Ctrl+S', ...}
+        """
+        # Normalizar para o formato do QKeySequence.toString()
+        normalized = set()
+        for k in shortcut_keys:
+            normalized.add(QKeySequence(k).toString())
+        cls._app_shortcut_sequences = normalized
 
     # === Find / Replace ===
 

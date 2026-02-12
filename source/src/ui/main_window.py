@@ -1669,6 +1669,7 @@ class MainWindow(DockingMainWindow):
         }
 
         # Criar atalhos a partir do ShortcutManager
+        app_keys = set()
         for action, callback in shortcuts_map.items():
             key_sequence = self.shortcut_manager.get_shortcut(action)
             if key_sequence:
@@ -1676,12 +1677,18 @@ class MainWindow(DockingMainWindow):
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
+                app_keys.add(key_sequence)
 
         # Ctrl+N como atalho extra para nova aba (alem de Ctrl+T)
         shortcut_ctrl_n = QShortcut(QKeySequence("Ctrl+N"), self)
         shortcut_ctrl_n.setContext(Qt.ShortcutContext.ApplicationShortcut)
         shortcut_ctrl_n.activated.connect(self._new_session)
         self._shortcuts.append(shortcut_ctrl_n)
+        app_keys.add("Ctrl+N")
+
+        # Informar editores quais atalhos o app usa
+        from src.editors.code_editor import CodeEditor
+        CodeEditor.set_app_shortcuts(app_keys)
 
     def _reload_shortcuts(self):
         """Re-registra todos os atalhos (chamado quando usuário altera configurações)"""
@@ -1719,6 +1726,7 @@ class MainWindow(DockingMainWindow):
         }
 
         # Criar novos atalhos
+        app_keys = set()
         for action, callback in shortcuts_map.items():
             key_sequence = self.shortcut_manager.get_shortcut(action)
             if key_sequence:
@@ -1726,12 +1734,18 @@ class MainWindow(DockingMainWindow):
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
+                app_keys.add(key_sequence)
 
         # Ctrl+N como atalho extra para nova aba
         shortcut_ctrl_n = QShortcut(QKeySequence("Ctrl+N"), self)
         shortcut_ctrl_n.setContext(Qt.ShortcutContext.ApplicationShortcut)
         shortcut_ctrl_n.activated.connect(self._new_session)
         self._shortcuts.append(shortcut_ctrl_n)
+        app_keys.add("Ctrl+N")
+
+        # Atualizar editores
+        from src.editors.code_editor import CodeEditor
+        CodeEditor.set_app_shortcuts(app_keys)
 
     # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
 

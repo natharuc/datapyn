@@ -617,17 +617,22 @@ class TestHelperMethods:
     """Testa métodos auxiliares"""
 
     def test_mark_tab_running(self, main_window, qtbot):
-        """_mark_tab_running deve marcar/desmarcar aba"""
+        """_mark_tab_running deve marcar/desmarcar aba com spinner"""
         initial_text = main_window.session_tabs.tabText(0)
 
         main_window._mark_tab_running(True, 0)
-        running_text = main_window.session_tabs.tabText(0)
+
+        # Spinner ativo: aba deve ter icone (nao nulo)
+        icon = main_window.session_tabs.tabIcon(0)
+        has_spinner = not icon.isNull() or 0 in main_window.session_tabs._running_tabs
 
         main_window._mark_tab_running(False, 0)
         final_text = main_window.session_tabs.tabText(0)
 
-        # Running deve ter indicador
-        assert "(run)" in running_text or "🔄" in running_text or running_text != initial_text
+        # Spinner deve ter sido ativado
+        assert has_spinner
+        # Titulo preservado (nao muda com spinner)
+        assert final_text == initial_text
 
     def test_send_notification_no_crash(self, main_window, qtbot):
         """_send_notification não deve crashar"""
