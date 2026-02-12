@@ -2198,7 +2198,12 @@ class MainWindow(DockingMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index))
 
-        # Manter referência
+        # Limpeza segura: so deletar quando thread realmente parar
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        # Manter referencia
         self._worker_threads.append((thread, worker))
 
         # Iniciar
@@ -2285,9 +2290,13 @@ class MainWindow(DockingMainWindow):
             return True
 
         else:
-            # OUTROS TIPOS → OUTPUT (console)
+            # OUTROS TIPOS -> OUTPUT (console)
             self._log(f"[{execution_type}] {repr(result)}")
             return True
+
+    def _remove_worker_thread(self, thread):
+        """Remove thread da lista de workers ativos (chamado via thread.finished)."""
+        self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
 
     def _on_sql_finished(self, df, error, thread, tab_index):
         """Callback quando SQL termina"""
@@ -2296,12 +2305,10 @@ class MainWindow(DockingMainWindow):
         # Remover marcação de rodando
         self._mark_tab_running(False, tab_index)
 
-        # Limpar thread da lista
-        self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
+        # Parar thread (finished signal cuida da limpeza)
         thread.quit()
-        thread.wait()
 
-        # FORÇAR: Se há erro, SEMPRE mostrar output - não importa o que vier no df
+        # FORCAR: Se ha erro, SEMPRE mostrar output
         if error:
             self._show_error_output(f"[SQL] Erro: {error}")
             self.action_label.setText("[SQL] Erro ao executar")
@@ -2359,7 +2366,12 @@ class MainWindow(DockingMainWindow):
             )
         )
 
-        # Manter referência
+        # Limpeza segura: so deletar quando thread realmente parar
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        # Manter referencia
         self._worker_threads.append((thread, worker))
 
         # Iniciar
@@ -2379,10 +2391,8 @@ class MainWindow(DockingMainWindow):
         # Remover marcacao de rodando
         self._mark_tab_running(False, tab_index)
 
-        # Limpar thread da lista
-        self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
+        # Parar thread (finished signal cuida da limpeza)
         thread.quit()
-        thread.wait()
 
         # FORCAR: Se ha erro, SEMPRE mostrar output primeiro
         if error:
