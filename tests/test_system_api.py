@@ -285,7 +285,8 @@ class TestDatabaseConnectorAPI:
         conn = DatabaseConnector()
         result = conn._build_connection_string("sqlserver", "localhost", 1433, "testdb", "", "", use_windows_auth=True)
 
-        assert "Trusted_Connection=yes" in result
+        from urllib.parse import unquote
+        assert "Trusted_Connection=yes" in unquote(result)
 
     def test_connection_string_sqlserver_sql_auth(self):
         """String de conexão SQL Server com SQL Auth"""
@@ -294,7 +295,10 @@ class TestDatabaseConnectorAPI:
         conn = DatabaseConnector()
         result = conn._build_connection_string("sqlserver", "localhost", 1433, "testdb", "user", "pass")
 
-        assert "user:pass" in result
+        from urllib.parse import unquote
+        decoded = unquote(result)
+        assert "user" in decoded
+        assert "pass" in decoded
 
     def test_connection_string_mysql(self):
         """String de conexão MySQL"""

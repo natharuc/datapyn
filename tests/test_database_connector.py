@@ -168,8 +168,9 @@ class TestDatabaseConnectorEdgeCases:
             db_type="mysql", host="localhost", port=3306, database="testdb", username="user", password="p@ss!w0rd#$%"
         )
 
-        # Deve incluir a senha (pode precisar de encoding em casos reais)
-        assert "p@ss!w0rd#$%" in result
+        # Deve incluir a senha (URL-encoded)
+        from urllib.parse import unquote
+        assert "p@ss!w0rd#$%" in unquote(result)
 
     def test_custom_driver_sqlserver(self):
         """Driver customizado SQL Server"""

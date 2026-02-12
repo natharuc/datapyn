@@ -14,6 +14,14 @@ import json
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-software-rasterizer --no-sandbox")
 os.environ.setdefault("QT_OPENGL", "software")
 
+# Importar QtWebEngineWidgets ANTES de criar QApplication
+# (obrigatorio para evitar ImportError: QtWebEngineWidgets must be imported
+# or Qt.AA_ShareOpenGLContexts must be set before QCoreApplication)
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+except ImportError:
+    pass
+
 # Adicionar source/src ao path
 source_path = str(Path(__file__).parent.parent / "source")
 src_path = str(Path(__file__).parent.parent / "source" / "src")
@@ -54,23 +62,34 @@ def configure_matplotlib():
 @pytest.fixture(autouse=True)
 def auto_close_dialogs(qtbot, monkeypatch):
     """
-    Auto-fecha TODOS os diálogos (QDialog e QMessageBox) para evitar travamento no CI
+    Auto-fecha TODOS os dialogos (QDialog, QMessageBox, QFileDialog, QInputDialog)
+    para evitar travamento no CI
     """
-    from PyQt6.QtWidgets import QDialog, QMessageBox
+    from PyQt6.QtWidgets import QDialog, QMessageBox, QFileDialog, QInputDialog
     from PyQt6.QtCore import QTimer
 
     # === PATCH QDIALOG.EXEC() ===
     original_exec = QDialog.exec
 
     def non_blocking_exec(self):
-        """exec() não-bloqueante - fecha automaticamente após 200ms"""
-        QTimer.singleShot(200, lambda: self.accept() if not self.isHidden() else None)
-        qtbot.wait(300)
+        """exec() nao-bloqueante - fecha automaticamente"""
+        QTimer.singleShot(50, lambda: self.accept() if not self.isHidden() else None)
+        qtbot.wait(100)
         return 1  # QDialog.Accepted
 
     monkeypatch.setattr(QDialog, "exec", non_blocking_exec)
 
-    # === PATCH QMESSAGEBOX ESTÁTICOS ===
+    # === PATCH QFILEDIALOG ESTATICOS ===
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **kw: ("", ""))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **kw: ("", ""))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **kw: "")
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *a, **kw: ([], ""))
+
+    # === PATCH QINPUTDIALOG ESTATICOS ===
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **kw: ("", False))
+    monkeypatch.setattr(QInputDialog, "getInt", lambda *a, **kw: (0, False))
+
+    # === PATCH QMESSAGEBOX ESTATICOS ===
     original_warning = QMessageBox.warning
     original_information = QMessageBox.information
     original_question = QMessageBox.question
@@ -99,16 +118,11 @@ def auto_close_dialogs(qtbot, monkeypatch):
 
     yield
 
-    # Restaurar comportamento original
-    monkeypatch.setattr(QDialog, "exec", original_exec)
-    monkeypatch.setattr(QMessageBox, "warning", original_warning)
-    monkeypatch.setattr(QMessageBox, "information", original_information)
-    monkeypatch.setattr(QMessageBox, "question", original_question)
-    monkeypatch.setattr(QMessageBox, "critical", original_critical)
+    # monkeypatch restaura tudo automaticamente no teardown
 
 
 # ==================== TESTES COM QSCINTILLA ====================
-# Removido sistema de parametrização - agora usa apenas QScintilla
+# Removido sistema de parametrizacao - agora usa apenas QScintilla
 
 
 # ==================== FIXTURES DE CONFIGURAÇÃO ====================

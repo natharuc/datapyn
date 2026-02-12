@@ -41,6 +41,7 @@ dev-dependencies = [
     "pytest-qt>=4.5.0",
     "pytest-subtests>=0.13.0",
     "pytest-env>=1.1.0",
+    "pytest-timeout>=2.3.0",
     # Build
     "pyinstaller",
 ]

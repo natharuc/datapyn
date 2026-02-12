@@ -9,8 +9,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/PyQt6-6.6+-green.svg" alt="PyQt6">
+  <img src="https://img.shields.io/badge/uv-package%20manager-blueviolet.svg" alt="uv">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
 
@@ -18,27 +19,35 @@
 
 ## Features
 
-- **Multi-database** — SQL Server, MySQL, PostgreSQL, MariaDB, SQLite
-- **Python integrado** — Manipule resultados SQL com Pandas diretamente
-- **Importação rápida** — Arraste arquivos CSV/JSON/XLSX para importar automaticamente
-- **Visualização** — Tabelas interativas com exportação para Excel/CSV
-- **Temas** — Interface moderna com Material Design (dark/light)
-- **Atalhos** — Produtividade máxima com atalhos de teclado
-- **Workspaces** — Salve e restaure suas sessões de trabalho
-- **Seguro** — Credenciais armazenadas com criptografia
+- **Multi-database** -- SQL Server, MySQL, PostgreSQL, MariaDB, SQLite
+- **Python integrado** -- Manipule resultados SQL com Pandas diretamente
+- **Cross-syntax** -- Misture SQL e Python no mesmo bloco com `{{ SELECT ... }}`
+- **Block Editor** -- Blocos de codigo independentes com linguagem por bloco
+- **Conexao per-block** -- Cada bloco pode usar uma conexao de banco diferente
+- **Importacao rapida** -- Arraste arquivos CSV/JSON/XLSX para importar automaticamente
+- **Exportar script** -- Exporte sua analise como script Python standalone
+- **Exportar para tabela** -- Exporte DataFrames diretamente para tabelas no banco
+- **Gerenciador de pacotes** -- Instale/atualize pacotes Python sem sair da IDE
+- **Visualizacao** -- Tabelas interativas com exportacao para Excel/CSV
+- **Temas** -- Interface moderna com Material Design (dark/light)
+- **Atalhos** -- Produtividade maxima com atalhos de teclado configuraveis
+- **Workspaces** -- Salve e restaure suas sessoes de trabalho
+- **Seguro** -- Credenciais armazenadas com criptografia
 
 ---
 
-## Instalação
+## Instalacao
 
-### Windows
+O DataPyn usa [uv](https://docs.astral.sh/uv/) como gerenciador de pacotes e ambientes virtuais.
+
+### Windows (automatico)
 
 ```bash
-# 1. Clone o repositório
+# 1. Clone o repositorio
 git clone https://github.com/seu-usuario/datapyn.git
 cd datapyn
 
-# 2. Execute o instalador
+# 2. Execute o instalador (instala uv se necessario)
 scripts\install.bat
 
 # 3. Inicie o DataPyn
@@ -48,27 +57,38 @@ scripts\run.bat
 ### Manual (Linux/Mac/Windows)
 
 ```bash
-# 1. Crie um ambiente virtual
-python -m venv .venv
-
-# 2. Ative o ambiente
+# 1. Instale o uv (caso nao tenha)
 # Windows:
-.venv\Scripts\activate
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 # Linux/Mac:
-source .venv/bin/activate
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 3. Instale as dependências
-pip install -r requirements.txt
+# 2. Clone e entre no projeto
+git clone https://github.com/seu-usuario/datapyn.git
+cd datapyn
+
+# 3. Crie o ambiente e instale dependencias
+uv sync
 
 # 4. Execute
-python source/main.py
+uv run python source/main.py
+```
+
+### Dependencias de desenvolvimento
+
+```bash
+# Instalar com dependencias de dev (testes, build)
+uv sync --dev
+
+# Executar testes
+uv run pytest
 ```
 
 ---
 
 ## Atalhos de Teclado
 
-| Atalho | Ação |
+| Atalho | Acao |
 |--------|------|
 | `F5` | Executar SQL |
 | `Shift+F5` | Executar Python |
@@ -77,7 +97,7 @@ python source/main.py
 | `Ctrl+W` | Fechar aba |
 | `Ctrl+S` | Salvar workspace |
 | `Ctrl+O` | Abrir workspace |
-| `Ctrl+,` | Configurações |
+| `Ctrl+,` | Configuracoes |
 
 ---
 
@@ -85,19 +105,20 @@ python source/main.py
 
 ```
 datapyn/
-├── source/              # Código-fonte
-│   ├── main.py          # Ponto de entrada
-│   └── src/             # Módulos da aplicação
-│       ├── core/        # Lógica central
-│       ├── database/    # Conectores de banco
-│       ├── editors/     # Editores de código
-│       ├── services/    # Serviços
-│       ├── ui/          # Interface gráfica
-│       └── assets/      # Ícones e recursos
-├── tests/               # Testes automatizados
-├── scripts/             # Scripts de build/install
-├── docs/                # Documentação
-└── requirements.txt     # Dependências
+├── source/                  # Codigo-fonte
+│   ├── main.py              # Ponto de entrada
+│   └── src/
+│       ├── core/            # Logica central (executor, sessoes, results)
+│       ├── database/        # Conectores e gerenciador de conexoes
+│       ├── editors/         # Block editor, code editor, Monaco
+│       ├── services/        # Servicos (import, export, packages, panels)
+│       ├── ui/              # Interface grafica (main_window, dialogs, components)
+│       └── assets/          # Icones e recursos
+├── tests/                   # Testes automatizados (850+)
+├── scripts/                 # Scripts de build/install
+├── docs/                    # Documentacao
+├── pyproject.toml           # Dependencias e config do projeto
+└── uv.lock                  # Lock file de dependencias
 ```
 
 ---
@@ -106,36 +127,41 @@ datapyn/
 
 ```bash
 # Executar todos os testes
-pytest
+uv run pytest
 
 # Com cobertura
-pytest --cov=source/src --cov-report=html
+uv run pytest --cov=source/src --cov-report=html
 
-# Testes específicos
-pytest tests/test_mixed_executor.py -v
+# Testes especificos
+uv run pytest tests/test_mixed_executor.py -v
+
+# Testes rapidos (sem testes visuais)
+uv run pytest tests/ --ignore=tests/test_visual_manual.py --ignore=tests/test_gui.py -q
 ```
+
+Os testes usam `pytest-qt` para testar a interface PyQt6 em modo headless (`QT_QPA_PLATFORM=offscreen`), com timeout de 30s por teste para evitar travamentos.
 
 ---
 
-## Build (Executável)
+## Build (Executavel)
 
 ```bash
-# Gerar executável standalone
+# Gerar executavel standalone
 scripts\build.bat
 
-# O executável será gerado em dist/DataPyn.exe
+# O executavel sera gerado em dist/DataPyn.exe
 ```
 
 ---
 
-## Licença
+## Licenca
 
-Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+Este projeto esta sob a licenca MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
 
 ---
 
 <p align="center">
-  Feito com amor, café e IA
+  Feito com amor, cafe e IA
   <br>
-  <sub>Com carinho por um humano incrível e seu copiloto</sub>
+  <sub>Com carinho por um humano incrivel e seu copiloto</sub>
 </p>

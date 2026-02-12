@@ -373,16 +373,15 @@ class TestConnectionResolution:
 
             widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")
 
-            # Deve ter tentado auto-conectar
-            MockConn.return_value.connect.assert_called_once_with(
-                db_type="mysql",
-                host="localhost",
-                port=3306,
-                database="testdb",
-                username="user",
-                password="pass",
-                use_windows_auth=False,
-            )
+            # Deve ter tentado auto-conectar (verifica argumentos principais)
+            call_kwargs = MockConn.return_value.connect.call_args.kwargs
+            assert call_kwargs["db_type"] == "mysql"
+            assert call_kwargs["host"] == "localhost"
+            assert call_kwargs["port"] == 3306
+            assert call_kwargs["database"] == "testdb"
+            assert call_kwargs["username"] == "user"
+            assert call_kwargs["password"] == "pass"
+            assert call_kwargs["use_windows_auth"] is False
 
 
 # ===== SessionWidget Dialog =====

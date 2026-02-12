@@ -13,15 +13,6 @@ from PyQt6.QtGui import QColor
 from src.ui.components.session_tabs import SessionTabs, SessionTabBar
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    """Fixture para instância única do QApplication"""
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
 class TestSessionTabBarColors:
     """Testes para o sistema de cores do SessionTabBar"""
 

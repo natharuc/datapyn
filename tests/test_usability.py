@@ -28,15 +28,6 @@ import os
 # === FIXTURES ===
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    """Cria QApplication uma vez para toda a sessão de testes"""
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
-
-
 @pytest.fixture(autouse=True)
 def mock_all_dialogs():
     """Mock automático de TODOS os diálogos do QMessageBox para evitar interação manual"""
