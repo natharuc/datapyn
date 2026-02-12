@@ -542,15 +542,22 @@ class DatabaseConnector:
             logger.info("Desconectado do banco de dados")
 
     def is_connected(self) -> bool:
-        """Verifica se há uma conexão ativa"""
+        """Verifica se ha uma conexao ativa (check rapido, sem I/O).
+
+        Apenas verifica se o engine existe. disconnect() seta engine=None.
+        NAO faz SELECT 1 na thread principal para evitar bloquear a UI.
+        """
+        return self.engine is not None
+
+    def ping(self) -> bool:
+        """Testa conexao real com SELECT 1. Usar apenas em background thread."""
         if not self.engine:
             return False
-
         try:
             with self.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             return True
-        except:
+        except Exception:
             return False
 
     def get_tables(self) -> pd.DataFrame:

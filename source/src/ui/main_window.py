@@ -1583,11 +1583,22 @@ class MainWindow(DockingMainWindow):
         self._execution_update_timer.timeout.connect(self._update_execution_time)
 
     def _start_execution_timer(self, mode: str = ""):
-        """Inicia o timer de execução"""
+        """Inicia o timer de execucao"""
         self._is_executing = True
         self._execution_mode = mode
         self._execution_timer.start()
         self._execution_update_timer.start(100)
+        # Estilizar label UMA vez (nao a cada tick)
+        self.execution_label.setStyleSheet("""
+            QLabel {
+                color: #FFD700;
+                font-weight: bold;
+                padding: 4px 12px;
+                background: rgba(255, 215, 0, 0.15);
+                border-left: 3px solid #FFD700;
+                border-radius: 2px;
+            }
+        """)
         self._update_execution_time()
         self.main_statusbar.start_timer()
 
@@ -1614,20 +1625,7 @@ class MainWindow(DockingMainWindow):
         if self._is_executing:
             elapsed = self._execution_timer.elapsed() / 1000.0
             mode = f"{self._execution_mode}" if self._execution_mode else "Código"
-            # Ícone animado + texto mais visível
-            icon = qta.icon("fa5s.spinner", color="#FFD700", animation=qta.Spin(self.execution_label))
-            self.execution_label.setPixmap(icon.pixmap(16, 16))
             self.execution_label.setText(f"  Executando {mode} {elapsed:.1f}s")
-            self.execution_label.setStyleSheet("""
-                QLabel {
-                    color: #FFD700;
-                    font-weight: bold;
-                    padding: 4px 12px;
-                    background: rgba(255, 215, 0, 0.15);
-                    border-left: 3px solid #FFD700;
-                    border-radius: 2px;
-                }
-            """)
 
     def _clear_execution_label(self):
         """Limpa o label de execução"""
@@ -2906,8 +2904,8 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.setTabText(i, current_text[:-2])
 
     def _update_status(self):
-        """Atualiza status periodicamente"""
-        # Verifica se conexão da sessão atual ainda está ativa
+        """Atualiza status periodicamente (sem I/O na thread principal)."""
+        # Check rapido sem I/O - apenas verifica estado do pool
         session = self.session_manager.focused_session
         if session and session.connector and not session.connector.is_connected():
             session.clear_connection()
