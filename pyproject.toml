@@ -1,11 +1,53 @@
 [project]
 name = "DataPyn"
 version = "1.0.0"
+dependencies = [
+    # GUI Framework
+    "PyQt6>=6.6.0",
+    "PyQt6-QScintilla>=2.14.0",
+    "PyQt6-WebEngine>=6.6.0",
+    "QtAwesome>=1.3.0",
+    "qt-material>=2.14",
+    # Database Drivers
+    "sqlalchemy>=2.0.0",
+    "pymssql>=2.2.0",
+    "pyodbc>=5.0.0",
+    "mysql-connector-python>=8.0.0",
+    "PyMySQL>=1.1.0",
+    "psycopg2-binary>=2.9.0",
+    "mariadb>=1.1.0",
+    # Data Processing
+    "pandas>=2.0.0",
+    "polars>=1.0.0",
+    "pyarrow>=14.0.0",
+    "numpy>=1.24.0",
+    "openpyxl>=3.1.0",
+    "fastexcel>=0.12.0",
+    "jinja2>=3.1.0",
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "cryptography>=41.0.0",
+    "keyring>=24.0.0",
+    # Charts
+    "matplotlib>=3.7.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-cov>=4.5.0",
+    "pytest-qt>=4.5.0",
+    "pytest-subtests>=0.13.0",
+    "pytest-env>=1.1.0",
+    # Build
+    "pyinstaller",
+]
 
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-build_command = "python -m pip install build && python -m build"
+build_command = "uv build"
 commit_message = "chore(release): {version} [skip ci]"
 
 [tool.semantic_release.remote]

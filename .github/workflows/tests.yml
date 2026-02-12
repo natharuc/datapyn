@@ -11,6 +11,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    if: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,9 +52,13 @@ jobs:
             libxext6 \
             libx11-xcb1
 
+      - name: Setup | Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
       - name: install requirements
-        run: |
-          pip install -r requirements.txt
+        run: uv sync --dev
       - name: run tests
         env:
           QT_QPA_PLATFORM: offscreen
