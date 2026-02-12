@@ -5,7 +5,7 @@ Implementa a interface ICodeEditor seguindo o principio de Inversao de Dependenc
 Inclui barra de Find/Replace integrada (Ctrl+F / Ctrl+H).
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt6.QtGui import QFont, QColor, QKeySequence, QShortcut, QKeyEvent
 from PyQt6.QtWidgets import (
     QWidget,
@@ -597,33 +597,30 @@ class CodeEditor(QWidget):
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self._sci)
         shortcut_comment.activated.connect(self.toggle_comment)
 
-        # Override do keyPressEvent:
-        # Se o combo esta nos atalhos do app -> propaga (event.ignore)
-        # Senao -> QScintilla trata normalmente (Ctrl+Home, Ctrl+End, etc.)
-        _original_key_press = self._sci.keyPressEvent
+        # Override do event() no QScintilla para controlar prioridade de atalhos.
+        #
+        # Qt processa atalhos via ShortcutOverride ANTES do keyPressEvent.
+        # Se QScintilla aceita o ShortcutOverride, o QShortcut do app nunca dispara.
+        #
+        # Logica: se a tecla esta configurada no app -> rejeita ShortcutOverride
+        #         -> Qt encontra o QShortcut (ApplicationShortcut) e executa a acao.
+        #         Se NAO esta configurada -> QScintilla trata normalmente.
+        _original_event = self._sci.event
 
-        def _custom_key_press(event: QKeyEvent):
-            mods = event.modifiers()
-            key = event.key()
+        def _custom_event(evt):
+            if evt.type() == QEvent.Type.ShortcutOverride:
+                key = evt.key()
+                if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
+                               Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+                    mods = evt.modifiers()
+                    seq = QKeySequence(mods.value | key)
+                    if seq.toString() in self._app_shortcut_sequences:
+                        # Atalho do app - NAO aceitar, deixar QShortcut tratar
+                        evt.ignore()
+                        return False
+            return _original_event(evt)
 
-            # Ignorar teclas modificadoras sozinhas
-            if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
-                _original_key_press(event)
-                return
-
-            # Se tem Ctrl pressionado, verificar se e atalho do app
-            if mods & Qt.KeyboardModifier.ControlModifier:
-                seq = QKeySequence(mods.value | key)
-                seq_str = seq.toString()
-                if seq_str in self._app_shortcut_sequences:
-                    # Atalho do app - nao consumir, propagar
-                    event.ignore()
-                    return
-
-            # Tudo que sobra: QScintilla trata normalmente
-            _original_key_press(event)
-
-        self._sci.keyPressEvent = _custom_key_press
+        self._sci.event = _custom_event
 
     @classmethod
     def set_app_shortcuts(cls, shortcut_keys: set):
