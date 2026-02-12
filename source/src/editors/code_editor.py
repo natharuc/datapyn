@@ -313,6 +313,7 @@ class CodeEditor(QWidget):
         self._python_namespace = {}
 
         self._apis_timer = None  # Timer para rebuild_apis debounced
+        self._current_lexer_lang = None  # Cache para evitar rebuild redundante
 
         self._setup_container()
         self._setup_editor()
@@ -320,9 +321,9 @@ class CodeEditor(QWidget):
         self._setup_shortcuts()
         self._connect_signals()
 
-        # Aplicar tema se disponivel
+        # Aplicar apenas cores do tema (lexer ja foi configurado acima)
         if self.theme_manager:
-            self.apply_theme()
+            self._apply_theme_colors()
 
     def _setup_container(self):
         """Monta layout: FindReplaceBar + QsciScintilla."""
@@ -411,27 +412,34 @@ class CodeEditor(QWidget):
         sci.setAutoCompletionCaseSensitivity(False)
         sci.setAutoCompletionReplaceWord(True)
 
-        # Folding
-        sci.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)
-        sci.setFoldMarginColors(QColor("#1e1e1e"), QColor("#1e1e1e"))
+        # Folding - DESABILITADO para performance
+        # BoxedTreeFoldStyle recalcula fold levels no documento inteiro a cada mudanca
+        sci.setFolding(QsciScintilla.FoldStyle.NoFoldStyle)
 
         # Whitespace e EOL
         sci.setWhitespaceVisibility(QsciScintilla.WhitespaceVisibility.WsInvisible)
         sci.setEolMode(QsciScintilla.EolMode.EolWindows)
         sci.setEolVisibility(False)
 
-        # Scroll
-        sci.SendScintilla(QsciScintilla.SCI_SETSCROLLWIDTH, 1)
-        sci.SendScintilla(QsciScintilla.SCI_SETSCROLLWIDTHTRACKING, True)
+        # Scroll - largura fixa, sem tracking (evita scan de todas as linhas a cada mudanca)
+        sci.SendScintilla(QsciScintilla.SCI_SETSCROLLWIDTH, 2000)
+        sci.SendScintilla(QsciScintilla.SCI_SETSCROLLWIDTHTRACKING, False)
 
     def _setup_lexer(self):
         """Configura o lexer baseado na linguagem atual."""
+        # Guard: evita rebuild se o lexer ja esta configurado para esta linguagem
+        if self._current_lexer_lang == self._language:
+            return
+        self._current_lexer_lang = self._language
+
         if self._language == "sql" or self._language == "cross":
             self._setup_sql_lexer()
         else:
             self._setup_python_lexer()
-        # Reconstruir APIs de autocomplete apos trocar lexer
-        self._rebuild_apis()
+
+        # Agendar rebuild de APIs apenas se houver dados reais
+        if self._sql_schema or self._python_namespace:
+            self._schedule_rebuild_apis()
 
     def _setup_python_lexer(self):
         """Configura lexer Python com tema dark."""
@@ -511,6 +519,7 @@ class CodeEditor(QWidget):
             return
 
         apis = QsciAPIs(lexer)
+        has_entries = False
 
         if self._language == "python":
             # Palavras-chave basicas do Python
@@ -526,6 +535,7 @@ class CodeEditor(QWidget):
                 "open", "input",
             ):
                 apis.add(kw)
+            has_entries = True
 
             # Namespace Python customizado
             for name, type_name in self._python_namespace.items():
@@ -549,6 +559,7 @@ class CodeEditor(QWidget):
             ):
                 apis.add(kw)
                 apis.add(kw.lower())
+            has_entries = True
 
             # Schema SQL customizado
             tables = self._sql_schema.get("tables", [])
@@ -564,8 +575,9 @@ class CodeEditor(QWidget):
                     apis.add(f"{tname}.{cname}")
                     apis.add(cname)
 
-        apis.prepare()
-        sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
+        if has_entries:
+            apis.prepare()
+            sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
 
     def _setup_shortcuts(self):
         """Configura atalhos de teclado."""
@@ -697,7 +709,7 @@ class CodeEditor(QWidget):
     def set_language(self, language: str) -> None:
         """Define a linguagem e atualiza o lexer."""
         language = language.lower()
-        if language in ("python", "sql", "cross"):
+        if language in ("python", "sql", "cross") and language != self._language:
             self._language = language
             self._setup_lexer()
 
@@ -714,11 +726,11 @@ class CodeEditor(QWidget):
         """Aplica/atualiza o tema atual do ThemeManager."""
         if not self.theme_manager:
             return
+        # Apenas atualiza cores - NAO recria lexer/APIs
+        self._apply_theme_colors()
 
-        # Reconfigura o lexer com as cores do tema
-        self._setup_lexer()
-
-        # Atualiza cores do editor
+    def _apply_theme_colors(self) -> None:
+        """Atualiza apenas as cores do editor sem recriar lexer/APIs."""
         colors = self.theme_manager.get_editor_colors()
         sci = self._sci
 
