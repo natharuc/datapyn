@@ -1,8 +1,0 @@
-# Build Tools
-# Ferramentas necessarias para gerar executaveis e instaladores
-
-# PyInstaller - Gera executavel standalone
-pyinstaller>=6.0.0
-
-# cx_Freeze - Gera instalador MSI para Windows
-cx_Freeze>=7.0.0

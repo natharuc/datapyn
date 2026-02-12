@@ -1,11 +1,69 @@
-[project]
-name = "DataPyn"
+[tool.poetry]
+name = "datapyn"
 version = "1.0.0"
+description = "IDE moderna para consultas SQL com Python integrado"
+authors = ["DataPyn Team"]
+readme = "README.md"
+packages = [{include = "src", from = "source"}]
 
+[tool.poetry.scripts]
+datapyn = "main:main"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14"
+
+# GUI Framework
+PyQt6 = ">=6.6.0"
+PyQt6-QScintilla = ">=2.14.0"
+PyQt6-WebEngine = ">=6.6.0"
+QtAwesome = ">=1.3.0"
+qt-material = ">=2.14"
+
+# Database Drivers
+sqlalchemy = ">=2.0.0"
+pymssql = ">=2.2.0"
+pyodbc = ">=5.0.0"
+mysql-connector-python = ">=8.0.0"
+PyMySQL = ">=1.1.0"
+psycopg2-binary = ">=2.9.0"
+mariadb = ">=1.1.0"
+
+# Data Processing
+pandas = ">=2.0.0"
+polars = ">=1.0.0"
+pyarrow = ">=14.0.0"
+numpy = ">=1.24.0"
+openpyxl = ">=3.1.0"
+fastexcel = ">=0.12.0"
+jinja2 = ">=3.1.0"
+
+# Utilities
+python-dotenv = ">=1.0.0"
+cryptography = ">=41.0.0"
+keyring = ">=24.0.0"
+
+# Charts
+matplotlib = ">=3.7.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = ">=8.0.0"
+pytest-cov = ">=4.0.0"
+pytest-qt = ">=4.5.0"
+pytest-subtests = ">=0.13.0"
+pytest-env = ">=1.1.0"
+pytest-xdist = ">=3.0.0"
+
+[tool.poetry.group.build.dependencies]
+pyinstaller = ">=6.0.0"
+cx-Freeze = ">=7.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
 [tool.semantic_release]
-version_toml = ["pyproject.toml:project.version"]
-build_command = "python -m pip install build && python -m build"
+version_toml = ["pyproject.toml:tool.poetry.version"]
+build_command = "poetry build"
 commit_message = "chore(release): {version} [skip ci]"
 
 [tool.semantic_release.remote]
@@ -18,3 +76,22 @@ line-length = 120
 select = []
 preview = true
 exclude = ["tests/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["source", "source/src"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short -n auto --strict-markers --maxfail=5"
+env = ["QT_QPA_PLATFORM=offscreen"]
+markers = [
+    "slow: marca testes lentos",
+    "integration: marca testes de integracao",
+    "unit: marca testes unitarios",
+    "gui: marca testes que usam interface grafica",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]

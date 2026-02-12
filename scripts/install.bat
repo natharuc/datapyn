@@ -11,7 +11,7 @@ REM Verificar se Python está instalado
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERRO] Python nao encontrado!
-    echo Por favor, instale Python 3.8 ou superior em: https://www.python.org/
+    echo Por favor, instale Python 3.12 ou superior em: https://www.python.org/
     pause
     exit /b 1
 )
@@ -46,14 +46,15 @@ if errorlevel 1 (
 echo [OK] Ambiente virtual ativado!
 echo.
 
-REM Atualizar pip
-echo [3/4] Atualizando pip...
-python -m pip install --upgrade pip
+REM Instalar Poetry
+echo [3/4] Instalando Poetry...
+python -m pip install --upgrade pip poetry
 echo.
 
-REM Instalar dependências
+REM Instalar dependencias via Poetry
 echo [4/4] Instalando dependencias (isso pode demorar alguns minutos)...
-pip install -r requirements.txt
+cd /d "%~dp0.."
+poetry install
 if errorlevel 1 (
     echo [ERRO] Falha ao instalar dependencias
     pause
@@ -70,6 +71,8 @@ echo   1. Execute: scripts\run.bat
 echo   OU
 echo   2. Ative o ambiente: .venv\Scripts\activate
 echo      Depois execute: python source\main.py
+echo   OU
+echo   3. Use Poetry: poetry run python source\main.py
 echo.
 echo Consulte o README.md para mais informacoes.
 echo.

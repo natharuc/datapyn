@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/PyQt6-6.6+-green.svg" alt="PyQt6">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
@@ -48,19 +48,17 @@ scripts\run.bat
 ### Manual (Linux/Mac/Windows)
 
 ```bash
-# 1. Crie um ambiente virtual
-python -m venv .venv
+# 1. Instale o Poetry (se ainda nao tiver)
+pip install poetry
 
-# 2. Ative o ambiente
-# Windows:
-.venv\Scripts\activate
-# Linux/Mac:
-source .venv/bin/activate
+# 2. Instale as dependencias (cria o .venv automaticamente)
+poetry install
 
-# 3. Instale as dependências
-pip install -r requirements.txt
+# 3. Execute
+poetry run python source/main.py
 
-# 4. Execute
+# Ou ative o shell do Poetry e execute diretamente
+poetry shell
 python source/main.py
 ```
 
@@ -104,8 +102,8 @@ datapyn/
 ├── tests/                   # Testes automatizados
 ├── scripts/                 # Scripts de build/install
 ├── docs/                    # Documentacao
-├── requirements.txt         # Dependencias de producao
-└── requirements-build.txt   # Dependencias de build
+├── pyproject.toml           # Configuracao do projeto e dependencias (Poetry)
+└── poetry.lock              # Lock file de dependencias
 ```
 
 ---
@@ -113,26 +111,29 @@ datapyn/
 ## Testes
 
 ```bash
+# Instalar dependencias de teste
+poetry install --with test
+
 # Executar todos os testes (execucao paralela automatica)
-pytest
+poetry run pytest
 
 # Executar testes sequencialmente (sem paralelizacao)
-pytest -n 0
+poetry run pytest -n 0
 
 # Com cobertura
-pytest --cov=source/src --cov-report=html
+poetry run pytest --cov=source/src --cov-report=html
 
 # Testes especificos
-pytest tests/test_mixed_executor.py -v
+poetry run pytest tests/test_mixed_executor.py -v
 
 # Executar apenas testes unitarios rapidos
-pytest -m unit
+poetry run pytest -m unit
 
 # Executar testes de integracao
-pytest -m integration
+poetry run pytest -m integration
 
 # Pular testes lentos
-pytest -m "not slow"
+poetry run pytest -m "not slow"
 ```
 
 **Nota**: Os testes estao configurados para execucao paralela automatica usando `pytest-xdist`, o que reduz significativamente o tempo de execucao.

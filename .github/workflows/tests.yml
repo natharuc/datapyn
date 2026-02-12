@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: poetry.lock
       - name: Disable ESM apt sources
         # Disable Ubuntu Pro ESM sources to prevent firewall blocks during apt-get operations
         run: |
@@ -51,10 +53,13 @@ jobs:
             libxext6 \
             libx11-xcb1
 
-      - name: install requirements
-        run: |
-          pip install -r requirements.txt
-      - name: run tests
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --with test
+
+      - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest
+        run: poetry run pytest

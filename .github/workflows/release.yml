@@ -87,12 +87,13 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: poetry.lock
+
+      - name: Setup | Install Poetry
+        run: pip install poetry
 
       - name: Setup | Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+        run: poetry install --with build
 
       - name: Build | Generate Windows EXE
         run: pyinstaller scripts/datapyn.spec --clean
