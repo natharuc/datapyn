@@ -5,8 +5,8 @@ Implementa a interface ICodeEditor seguindo o principio de Inversao de Dependenc
 Inclui barra de Find/Replace integrada (Ctrl+F / Ctrl+H).
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QStringListModel
-from PyQt6.QtGui import QFont, QColor, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QColor, QKeySequence, QShortcut, QKeyEvent
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QCheckBox,
     QLabel,
-    QCompleter,
 )
 from PyQt6.Qsci import QsciScintilla, QsciLexerPython, QsciLexerSQL, QsciAPIs
 
@@ -313,6 +312,8 @@ class CodeEditor(QWidget):
         self._sql_schema = {}
         self._python_namespace = {}
 
+        self._apis_timer = None  # Timer para rebuild_apis debounced
+
         self._setup_container()
         self._setup_editor()
         self._setup_lexer()
@@ -344,10 +345,14 @@ class CodeEditor(QWidget):
 
     def _connect_signals(self):
         """Conecta sinais internos aos sinais da interface."""
-        self._sci.textChanged.connect(self.text_changed.emit)
-        self._sci.textChanged.connect(self.textChanged.emit)
+        self._sci.textChanged.connect(self._on_text_changed)
         self._sci.SCN_FOCUSIN.connect(self._on_focus_in)
         self._sci.SCN_FOCUSOUT.connect(self._on_focus_out)
+
+    def _on_text_changed(self):
+        """Emite ambos os sinais de texto alterado."""
+        self.text_changed.emit()
+        self.textChanged.emit()
 
     def _on_focus_in(self):
         self.SCN_FOCUSIN.emit()
@@ -400,8 +405,8 @@ class CodeEditor(QWidget):
         sci.setCaretLineVisible(True)
         sci.setCaretLineBackgroundColor(QColor("#2a2a2a"))
 
-        # Autocompletar
-        sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
+        # Autocompletar (desabilitado ate ter APIs reais)
+        sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsNone)
         sci.setAutoCompletionThreshold(2)
         sci.setAutoCompletionCaseSensitivity(False)
         sci.setAutoCompletionReplaceWord(True)
@@ -490,6 +495,14 @@ class CodeEditor(QWidget):
         sci.setMarginsForegroundColor(QColor("#858585"))
         sci.setMarginsBackgroundColor(QColor("#1e1e1e"))
 
+    def _schedule_rebuild_apis(self):
+        """Agenda rebuild de APIs com debounce para evitar multiplas chamadas."""
+        if self._apis_timer is None:
+            self._apis_timer = QTimer(self)
+            self._apis_timer.setSingleShot(True)
+            self._apis_timer.timeout.connect(self._rebuild_apis)
+        self._apis_timer.start(100)  # 100ms debounce
+
     def _rebuild_apis(self):
         """Reconstroi a lista de APIs de autocomplete do lexer atual."""
         sci = self._sci
@@ -552,6 +565,7 @@ class CodeEditor(QWidget):
                     apis.add(cname)
 
         apis.prepare()
+        sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
 
     def _setup_shortcuts(self):
         """Configura atalhos de teclado."""
@@ -567,13 +581,24 @@ class CodeEditor(QWidget):
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self._sci)
         shortcut_comment.activated.connect(self.toggle_comment)
 
-        # Ctrl+F - Find
-        shortcut_find = QShortcut(QKeySequence("Ctrl+F"), self._sci)
-        shortcut_find.activated.connect(self._open_find)
+        # Ctrl+F e Ctrl+H sao interceptados via keyPressEvent do _sci
+        # porque QScintilla consome esses atalhos internamente
+        self._sci._editor_parent = self
+        _original_key_press = self._sci.keyPressEvent
 
-        # Ctrl+H - Find & Replace
-        shortcut_replace = QShortcut(QKeySequence("Ctrl+H"), self._sci)
-        shortcut_replace.activated.connect(self._open_replace)
+        def _custom_key_press(event: QKeyEvent):
+            mods = event.modifiers()
+            key = event.key()
+            if mods == Qt.KeyboardModifier.ControlModifier:
+                if key == Qt.Key.Key_F:
+                    self._open_find()
+                    return
+                if key == Qt.Key.Key_H:
+                    self._open_replace()
+                    return
+            _original_key_press(event)
+
+        self._sci.keyPressEvent = _custom_key_press
 
     # === Find / Replace ===
 
@@ -755,13 +780,13 @@ class CodeEditor(QWidget):
         """
         self._sql_schema = schema if schema else {}
         if self._language in ("sql", "cross"):
-            self._rebuild_apis()
+            self._schedule_rebuild_apis()
 
     def clear_sql_schema(self) -> None:
         """Limpa schema SQL do autocomplete."""
         self._sql_schema = {}
         if self._language in ("sql", "cross"):
-            self._rebuild_apis()
+            self._schedule_rebuild_apis()
 
     def set_python_namespace(self, namespace: dict) -> None:
         """
@@ -772,13 +797,13 @@ class CodeEditor(QWidget):
         """
         self._python_namespace = namespace if namespace else {}
         if self._language == "python":
-            self._rebuild_apis()
+            self._schedule_rebuild_apis()
 
     def clear_python_namespace(self) -> None:
         """Limpa namespace Python do autocomplete."""
         self._python_namespace = {}
         if self._language == "python":
-            self._rebuild_apis()
+            self._schedule_rebuild_apis()
 
     def insert_text_at_cursor(self, text: str) -> None:
         """Insere texto na posicao atual do cursor."""
