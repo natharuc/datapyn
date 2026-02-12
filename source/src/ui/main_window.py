@@ -1653,13 +1653,13 @@ class MainWindow(DockingMainWindow):
             "export_script": self._export_as_script,
             # Sessões
             "new_tab": self._new_session,
+            "new_session": self._new_session,
             "close_tab": self._close_current_session,
             "add_block": self._add_block_to_current_session,
-            # Edição - REMOVIDOS find/replace para não conflitar com editores
-            # Monaco e QScintilla têm seus próprios Ctrl+F e Ctrl+H nativos
-            # 'find': self._show_find_dialog,
-            # 'replace': self._show_replace_dialog,
-            # Conexões
+            # Edicao
+            "find": self._find_in_editor,
+            "replace": self._replace_in_editor,
+            # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
             # Schema
@@ -1678,13 +1678,6 @@ class MainWindow(DockingMainWindow):
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
                 app_keys.add(key_sequence)
-
-        # Ctrl+N como atalho extra para nova aba (alem de Ctrl+T)
-        shortcut_ctrl_n = QShortcut(QKeySequence("Ctrl+N"), self)
-        shortcut_ctrl_n.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        shortcut_ctrl_n.activated.connect(self._new_session)
-        self._shortcuts.append(shortcut_ctrl_n)
-        app_keys.add("Ctrl+N")
 
         # Informar editores quais atalhos o app usa
         from src.editors.code_editor import CodeEditor
@@ -1714,9 +1707,13 @@ class MainWindow(DockingMainWindow):
             "export_script": self._export_as_script,
             # Sessões
             "new_tab": self._new_session,
+            "new_session": self._new_session,
             "close_tab": self._close_current_session,
             "add_block": self._add_block_to_current_session,
-            # Conexões
+            # Edicao
+            "find": self._find_in_editor,
+            "replace": self._replace_in_editor,
+            # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
             # Schema
@@ -1735,13 +1732,6 @@ class MainWindow(DockingMainWindow):
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
                 app_keys.add(key_sequence)
-
-        # Ctrl+N como atalho extra para nova aba
-        shortcut_ctrl_n = QShortcut(QKeySequence("Ctrl+N"), self)
-        shortcut_ctrl_n.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        shortcut_ctrl_n.activated.connect(self._new_session)
-        self._shortcuts.append(shortcut_ctrl_n)
-        app_keys.add("Ctrl+N")
 
         # Atualizar editores
         from src.editors.code_editor import CodeEditor
@@ -1857,36 +1847,21 @@ class MainWindow(DockingMainWindow):
         finally:
             self._creating_session = False
 
-    def _show_find_dialog(self):
-        """Mostra diálogo de busca no editor atual"""
+    def _find_in_editor(self):
+        """Abre busca no bloco focado do editor atual."""
         widget = self._get_current_session_widget()
         if widget and widget.editor:
-            # Implementação simples de busca com QInputDialog
-            from PyQt6.QtWidgets import QInputDialog
+            block = widget.editor.get_focused_block()
+            if block and hasattr(block, "editor"):
+                block.editor._open_find()
 
-            text, ok = QInputDialog.getText(self, "Buscar", "Texto a buscar:")
-            if ok and text:
-                # Buscar no editor
-                editor = widget.editor
-                if hasattr(editor, "findFirst"):
-                    editor.findFirst(text, False, False, False, True)
-
-    def _show_replace_dialog(self):
-        """Mostra diálogo de substituir no editor atual"""
+    def _replace_in_editor(self):
+        """Abre busca+substituicao no bloco focado do editor atual."""
         widget = self._get_current_session_widget()
         if widget and widget.editor:
-            # Implementação simples de substituição
-            from PyQt6.QtWidgets import QInputDialog
-
-            find_text, ok1 = QInputDialog.getText(self, "Substituir", "Buscar:")
-            if ok1 and find_text:
-                replace_text, ok2 = QInputDialog.getText(self, "Substituir", "Substituir por:")
-                if ok2:
-                    # Substituir no editor
-                    editor = widget.editor
-                    if hasattr(editor, "findFirst") and hasattr(editor, "replace"):
-                        while editor.findFirst(find_text, False, False, False, True):
-                            editor.replace(replace_text)
+            block = widget.editor.get_focused_block()
+            if block and hasattr(block, "editor"):
+                block.editor._open_replace()
 
     def _add_block_to_current_session(self):
         """Adiciona novo bloco de código na sessão atual"""

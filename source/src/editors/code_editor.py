@@ -598,9 +598,8 @@ class CodeEditor(QWidget):
         shortcut_comment.activated.connect(self.toggle_comment)
 
         # Override do keyPressEvent:
-        # 1) Ctrl+F / Ctrl+H -> nosso Find/Replace
-        # 2) Se o combo esta nos atalhos do app -> propagate (event.ignore)
-        # 3) Senao -> QScintilla trata normalmente (Ctrl+Home, Ctrl+End, etc.)
+        # Se o combo esta nos atalhos do app -> propaga (event.ignore)
+        # Senao -> QScintilla trata normalmente (Ctrl+Home, Ctrl+End, etc.)
         _original_key_press = self._sci.keyPressEvent
 
         def _custom_key_press(event: QKeyEvent):
@@ -610,16 +609,6 @@ class CodeEditor(QWidget):
             # Ignorar teclas modificadoras sozinhas
             if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
                 _original_key_press(event)
-                return
-
-            # Ctrl+F -> Find
-            if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_F:
-                self._open_find()
-                return
-
-            # Ctrl+H -> Replace
-            if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_H:
-                self._open_replace()
                 return
 
             # Se tem Ctrl pressionado, verificar se e atalho do app

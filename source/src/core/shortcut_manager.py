@@ -24,11 +24,13 @@ class ShortcutManager:
         "export_script": "Ctrl+Shift+E",
         # Sessões
         "new_tab": "Ctrl+T",
+        "new_session": "Ctrl+N",
         "close_tab": "Ctrl+W",
         "add_block": "Ctrl+Shift+B",
-        # Edição - find/replace são gerenciados pelos editores (QScintilla/Monaco)
-        # Cada editor tem seus próprios Ctrl+F e Ctrl+H nativos
-        # Conexões
+        # Edicao
+        "find": "Ctrl+F",
+        "replace": "Ctrl+H",
+        # Conexoes
         "manage_connections": "Ctrl+Shift+M",
         "new_connection": "Ctrl+Shift+D",
         # Schema
