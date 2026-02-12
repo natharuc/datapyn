@@ -1,13 +1,13 @@
 """
 Configuracao global do editor de codigo.
 
-Usa Monaco Editor (VS Code) como editor padrao.
-Alternativa: QScintilla (descomente para usar).
+Usa QScintilla como editor padrao (nativo, rapido, com Find/Replace integrado).
+Alternativa: Monaco Editor (QWebEngine - mais pesado).
 """
 
 from typing import Literal
 
-EDITOR_TYPE: Literal["monaco", "qscintilla"] = "monaco"
+EDITOR_TYPE: Literal["monaco", "qscintilla"] = "qscintilla"
 
 
 def get_code_editor_class():
@@ -15,7 +15,7 @@ def get_code_editor_class():
     Retorna a classe do editor configurado.
 
     Returns:
-        MonacoEditor (padrao) ou CodeEditor (QScintilla)
+        CodeEditor (QScintilla, padrao) ou MonacoEditor
     """
     if EDITOR_TYPE == "monaco":
         from .monaco_editor import MonacoEditor
