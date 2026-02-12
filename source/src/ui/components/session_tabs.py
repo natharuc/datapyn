@@ -5,12 +5,13 @@ Gerencia as abas de sessão da IDE.
 """
 
 from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QAction, QPainter, QPen
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor, QAction, QPainter, QPen, QMovie, QIcon, QPixmap
 import qtawesome as qta
 from typing import Dict
 import subprocess
 import os
+import math
 
 
 class SessionTabBar(QTabBar):
@@ -235,17 +236,27 @@ class SessionTabBar(QTabBar):
 
 
 class SessionTabs(QTabWidget):
-    """Widget de abas de sessão"""
+    """Widget de abas de sessao"""
 
     # Sinais
     session_changed = pyqtSignal(int)  # index
     session_closed = pyqtSignal(int)  # index
     session_renamed = pyqtSignal(int, str)  # index, new_name
     new_session_requested = pyqtSignal()
-    duplicate_session = pyqtSignal(int)  # index - duplicar sessão
+    duplicate_session = pyqtSignal(int)  # index - duplicar sessao
+
+    # Cores do spinner
+    _SPINNER_COLOR = QColor("#FFD700")
+    _SPINNER_BG = QColor(80, 80, 80, 60)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        # Estado de execucao por indice de aba
+        self._running_tabs: Dict[int, bool] = {}
+        self._spinner_angle = 0
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.timeout.connect(self._tick_spinner)
 
         self._setup_ui()
         self._setup_style()
@@ -371,21 +382,62 @@ class SessionTabs(QTabWidget):
         self.tab_bar.set_tab_connection_color(index, color)
 
     def set_tab_running(self, index: int, is_running: bool):
-        """Indica se sessão está executando"""
-        current_text = self.tabText(index)
+        """Indica se sessao esta executando com spinner animado."""
+        if is_running:
+            self._running_tabs[index] = True
+            # Iniciar timer de animacao se necessario
+            if not self._spinner_timer.isActive():
+                self._spinner_angle = 0
+                self._spinner_timer.start(80)  # ~12 FPS
+        else:
+            self._running_tabs.pop(index, None)
+            # Parar timer se nenhuma aba esta rodando
+            if not self._running_tabs:
+                self._spinner_timer.stop()
+            # Limpar icone
+            self.setTabIcon(index, QIcon())
 
-        if is_running and not current_text.startswith("⏳ "):
-            self.setTabText(index, f"⏳ {current_text}")
-        elif not is_running and current_text.startswith("⏳ "):
-            self.setTabText(index, current_text[3:])
+    def _tick_spinner(self):
+        """Avanca a animacao do spinner e atualiza icones."""
+        self._spinner_angle = (self._spinner_angle + 30) % 360
+        icon = self._make_spinner_icon()
+        for idx in list(self._running_tabs):
+            if idx < self.count():
+                self.setTabIcon(idx, icon)
+
+    def _make_spinner_icon(self) -> QIcon:
+        """Cria icone de spinner circular com o angulo atual."""
+        size = 16
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        center = size / 2
+        radius = size / 2 - 2
+
+        # Arco de fundo
+        pen_bg = QPen(self._SPINNER_BG, 2)
+        painter.setPen(pen_bg)
+        painter.drawEllipse(int(center - radius), int(center - radius),
+                           int(radius * 2), int(radius * 2))
+
+        # Arco animado (90 graus)
+        pen_fg = QPen(self._SPINNER_COLOR, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen_fg)
+        from PyQt6.QtCore import QRectF
+        rect = QRectF(center - radius, center - radius, radius * 2, radius * 2)
+        start = int(self._spinner_angle * 16)
+        span = 90 * 16  # 90 graus
+        painter.drawArc(rect, start, span)
+
+        painter.end()
+        return QIcon(pixmap)
 
     def get_session_name(self, index: int) -> str:
-        """Retorna nome da sessão"""
-        name = self.tabText(index)
-        # Remove indicador de execução se presente
-        if name.startswith("⏳ "):
-            return name[3:]
-        return name
+        """Retorna nome da sessao"""
+        return self.tabText(index)
 
     def refresh_close_buttons(self):
         """Reaplica o botão de fechar customizado em todas as abas (exceto a última 'nova aba').

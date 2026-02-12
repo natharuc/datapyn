@@ -593,14 +593,31 @@ class CodeEditor(QWidget):
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self._sci)
         shortcut_comment.activated.connect(self.toggle_comment)
 
-        # Ctrl+F e Ctrl+H sao interceptados via keyPressEvent do _sci
-        # porque QScintilla consome esses atalhos internamente
-        self._sci._editor_parent = self
+        # Teclas que o QScintilla deve tratar internamente (edicao padrao)
+        # Todas as outras Ctrl+ combos sao propagadas para o MainWindow
+        self._editor_ctrl_keys = {
+            Qt.Key.Key_Z,      # Undo
+            Qt.Key.Key_Y,      # Redo
+            Qt.Key.Key_X,      # Cut
+            Qt.Key.Key_C,      # Copy
+            Qt.Key.Key_V,      # Paste
+            Qt.Key.Key_A,      # Select All
+            Qt.Key.Key_D,      # Duplicate line
+            Qt.Key.Key_L,      # Delete line
+            Qt.Key.Key_U,      # Lowercase
+            Qt.Key.Key_Slash,  # Comment toggle
+        }
+
+        # Override do keyPressEvent para:
+        # 1) Interceptar Ctrl+F / Ctrl+H antes do QScintilla
+        # 2) Propagar Ctrl+combos (new tab, save, etc.) para o MainWindow
         _original_key_press = self._sci.keyPressEvent
 
         def _custom_key_press(event: QKeyEvent):
             mods = event.modifiers()
             key = event.key()
+
+            # Ctrl+Key (sem Shift/Alt)
             if mods == Qt.KeyboardModifier.ControlModifier:
                 if key == Qt.Key.Key_F:
                     self._open_find()
@@ -608,6 +625,16 @@ class CodeEditor(QWidget):
                 if key == Qt.Key.Key_H:
                     self._open_replace()
                     return
+                # Se NAO e uma tecla de edicao do editor, propagar para o app
+                if key not in self._editor_ctrl_keys:
+                    event.ignore()
+                    return
+
+            # Ctrl+Shift+Key - sempre propagar para MainWindow
+            if mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+                event.ignore()
+                return
+
             _original_key_press(event)
 
         self._sci.keyPressEvent = _custom_key_press

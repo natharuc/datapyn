@@ -1677,6 +1677,12 @@ class MainWindow(DockingMainWindow):
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
 
+        # Ctrl+N como atalho extra para nova aba (alem de Ctrl+T)
+        shortcut_ctrl_n = QShortcut(QKeySequence("Ctrl+N"), self)
+        shortcut_ctrl_n.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        shortcut_ctrl_n.activated.connect(self._new_session)
+        self._shortcuts.append(shortcut_ctrl_n)
+
     def _reload_shortcuts(self):
         """Re-registra todos os atalhos (chamado quando usuário altera configurações)"""
         from PyQt6.QtGui import QShortcut, QKeySequence
@@ -1720,6 +1726,12 @@ class MainWindow(DockingMainWindow):
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
+
+        # Ctrl+N como atalho extra para nova aba
+        shortcut_ctrl_n = QShortcut(QKeySequence("Ctrl+N"), self)
+        shortcut_ctrl_n.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        shortcut_ctrl_n.activated.connect(self._new_session)
+        self._shortcuts.append(shortcut_ctrl_n)
 
     # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
 
@@ -2564,14 +2576,14 @@ class MainWindow(DockingMainWindow):
 
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
         """
-        Marca/desmarca aba como rodando
+        Marca/desmarca aba como rodando (com spinner animado).
 
         Args:
-            is_running: Se True, adiciona "(run)" ao título. Se False, remove.
-            tab_index: Índice da aba. Se None, usa a aba atual.
+            is_running: Se True, mostra spinner. Se False, para.
+            tab_index: Indice da aba. Se None, usa a aba atual.
 
         Returns:
-            Índice da aba modificada
+            Indice da aba modificada
         """
         if tab_index is None:
             tab_index = self.session_tabs.currentIndex()
@@ -2579,17 +2591,7 @@ class MainWindow(DockingMainWindow):
         if tab_index < 0 or tab_index >= self.session_tabs.count():
             return tab_index
 
-        current_title = self.session_tabs.tabText(tab_index)
-
-        if is_running:
-            # Adicionar "(run)" se não existir
-            if "(run)" not in current_title:
-                self.session_tabs.setTabText(tab_index, f"{current_title} (run)")
-        else:
-            # Remover "(run)"
-            new_title = current_title.replace(" (run)", "")
-            self.session_tabs.setTabText(tab_index, new_title)
-
+        self.session_tabs.set_tab_running(tab_index, is_running)
         return tab_index
 
     def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
