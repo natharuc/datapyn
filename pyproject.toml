@@ -47,12 +47,12 @@ dev-dependencies = [
     "pytest-timeout>=2.3.0",
     # Build
     "pyinstaller",
+    "ruff>=0.15.0",
 ]
 
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-build_command = "uv build"
 commit_message = "chore(release): {version} [skip ci]"
 
 [tool.semantic_release.remote]
