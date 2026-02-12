@@ -10,13 +10,6 @@ cd /d "%~dp0.."
 REM Ativar ambiente virtual
 call .venv\Scripts\activate
 
-REM Verificar se PyInstaller está instalado
-uv run pip show pyinstaller >nul 2>&1
-if errorlevel 1 (
-    echo Instalando PyInstaller...
-    uv add --dev pyinstaller
-)
-
 echo.
 echo Gerando executavel...
 echo.
@@ -25,7 +18,7 @@ REM Limpar build anterior para detectar falha corretamente
 if exist "dist\DataPyn\DataPyn.exe" del "dist\DataPyn\DataPyn.exe"
 
 REM Executar PyInstaller com o spec file
-pyinstaller scripts\datapyn.spec --clean -y
+uv run pyinstaller scripts\datapyn.spec --clean -y
 
 echo.
 if exist "dist\DataPyn\DataPyn.exe" (
