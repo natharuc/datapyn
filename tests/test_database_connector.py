@@ -7,10 +7,15 @@ from unittest.mock import MagicMock, call, patch
 import pandas as pd
 
 
+# Mock para pyodbc.drivers() - no CI Linux nao ha ODBC driver instalado
+_MOCK_ODBC_DRIVERS = ["ODBC Driver 18 for SQL Server"]
+
+
 class TestDatabaseConnectorConnectionString:
     """Testes de construção de string de conexão"""
 
-    def test_sqlserver_windows_auth_string(self):
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_sqlserver_windows_auth_string(self, _mock_drivers):
         """Deve construir string SQL Server com Windows Auth"""
         from database.database_connector import DatabaseConnector
 
@@ -30,7 +35,8 @@ class TestDatabaseConnectorConnectionString:
         assert "SERVER=localhost" in result or "SERVER%3Dlocalhost" in result
         assert "Trusted_Connection" in result or "Trusted_Connection%3D" in result
 
-    def test_sqlserver_sql_auth_string(self):
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_sqlserver_sql_auth_string(self, _mock_drivers):
         """Deve construir string SQL Server com SQL Auth"""
         from database.database_connector import DatabaseConnector
 
@@ -264,7 +270,8 @@ class TestUseDatabasePersistence:
         assert "USE [esim]" in calls[0][0][0]
         assert "SELECT 1" in calls[1][0][0]
 
-    def test_checkout_event_registered_for_sqlserver(self):
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_checkout_event_registered_for_sqlserver(self, _mock_drivers):
         """Engine SQL Server deve registrar evento checkout no pool"""
         from database.database_connector import DatabaseConnector
         from sqlalchemy import event

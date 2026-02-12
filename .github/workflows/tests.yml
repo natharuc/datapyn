@@ -62,6 +62,7 @@ jobs:
       - name: run tests
         env:
           QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
         run: |
           uv run pytest tests/ \
             --ignore=tests/test_visual_manual.py \
