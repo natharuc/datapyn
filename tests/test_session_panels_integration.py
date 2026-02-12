@@ -23,6 +23,23 @@ from src.ui.main_window import MainWindow
 from src.ui.components.session_widget import SessionWidget
 
 
+def _close_all_sessions(main_window, max_iterations=50):
+    """Fecha todas as sessoes com limite de iteracoes para evitar loop infinito."""
+    for _ in range(max_iterations):
+        session_count = sum(
+            1
+            for i in range(main_window.session_tabs.count())
+            if isinstance(main_window.session_tabs.widget(i), SessionWidget)
+        )
+        if session_count == 0:
+            return
+        for i in range(main_window.session_tabs.count()):
+            if isinstance(main_window.session_tabs.widget(i), SessionWidget):
+                main_window._close_session_tab(i)
+                break
+    raise RuntimeError("Nao foi possivel fechar todas as sessoes")
+
+
 @pytest.fixture
 def main_window(qtbot):
     """MainWindow configurada para testes"""
@@ -91,19 +108,7 @@ class TestCloseAllTabsHidesPanels:
         main_window._new_session()
 
         # Fechar todas
-        while True:
-            session_count = sum(
-                1
-                for i in range(main_window.session_tabs.count())
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
-            )
-            if session_count == 0:
-                break
-            # Fechar a primeira SessionWidget encontrada
-            for i in range(main_window.session_tabs.count()):
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget):
-                    main_window._close_session_tab(i)
-                    break
+        _close_all_sessions(main_window)
 
         # Paineis devem estar escondidos
         assert not main_window.results_dock.isVisible()
@@ -113,18 +118,7 @@ class TestCloseAllTabsHidesPanels:
     def test_new_session_from_empty_shows_panels(self, main_window):
         """Criar sessao a partir do estado vazio deve mostrar paineis"""
         # Fechar todas as sessoes primeiro
-        while True:
-            session_count = sum(
-                1
-                for i in range(main_window.session_tabs.count())
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
-            )
-            if session_count == 0:
-                break
-            for i in range(main_window.session_tabs.count()):
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget):
-                    main_window._close_session_tab(i)
-                    break
+        _close_all_sessions(main_window)
 
         # Verificar que paineis estao escondidos
         assert not main_window.results_dock.isVisible()
@@ -341,18 +335,7 @@ class TestFileOpenCreatesPanels:
     def test_open_file_from_empty_state_shows_panels(self, main_window):
         """Abrir arquivo do estado vazio deve mostrar paineis"""
         # Fechar todas as sessoes
-        while True:
-            session_count = sum(
-                1
-                for i in range(main_window.session_tabs.count())
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
-            )
-            if session_count == 0:
-                break
-            for i in range(main_window.session_tabs.count()):
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget):
-                    main_window._close_session_tab(i)
-                    break
+        _close_all_sessions(main_window)
 
         # Verificar que paineis estao escondidos
         assert not main_window.results_dock.isVisible()
@@ -403,18 +386,7 @@ class TestEmptyStateTransitions:
     def test_panels_hidden_in_empty_state(self, main_window):
         """No estado vazio, paineis devem estar escondidos"""
         # Forcar estado vazio
-        while True:
-            session_count = sum(
-                1
-                for i in range(main_window.session_tabs.count())
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
-            )
-            if session_count == 0:
-                break
-            for i in range(main_window.session_tabs.count()):
-                if isinstance(main_window.session_tabs.widget(i), SessionWidget):
-                    main_window._close_session_tab(i)
-                    break
+        _close_all_sessions(main_window)
 
         assert not main_window.results_dock.isVisible()
         assert not main_window.output_dock.isVisible()

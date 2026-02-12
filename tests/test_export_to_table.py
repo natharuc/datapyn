@@ -704,7 +704,7 @@ class TestExportIntegration:
 
         with patch("src.ui.dialogs.export_to_table_dialog.QMessageBox"):
             dialog._on_export()
-            qtbot.waitUntil(lambda: not dialog._is_exporting, timeout=15000)
+            qtbot.waitUntil(lambda: not dialog._is_exporting, timeout=5000)
 
     def _read(self, engine, table_name):
         """Le tabela do banco e retorna pandas DataFrame"""

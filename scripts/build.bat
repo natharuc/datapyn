@@ -11,10 +11,10 @@ REM Ativar ambiente virtual
 call .venv\Scripts\activate
 
 REM Verificar se PyInstaller está instalado
-pip show pyinstaller >nul 2>&1
+uv run pip show pyinstaller >nul 2>&1
 if errorlevel 1 (
     echo Instalando PyInstaller...
-    pip install pyinstaller
+    uv add --dev pyinstaller
 )
 
 echo.
