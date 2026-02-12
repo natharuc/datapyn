@@ -110,7 +110,7 @@ jobs:
         run: uv sync --dev
 
       - name: Build | Generate Windows EXE
-        run: pyinstaller scripts/datapyn.spec --clean
+        run: uv run pyinstaller scripts/datapyn.spec --clean
 
       - name: Build | Create MSI Installer
         shell: pwsh
