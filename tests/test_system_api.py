@@ -6,6 +6,7 @@ import pytest
 import pandas as pd
 import sqlite3
 from io import StringIO
+from unittest.mock import patch
 import sys
 import json
 from pathlib import Path
@@ -278,7 +279,8 @@ class TestResultsManagerAPI:
 class TestDatabaseConnectorAPI:
     """Testes da API do DatabaseConnector"""
 
-    def test_connection_string_sqlserver_windows_auth(self):
+    @patch("database.database_connector.pyodbc.drivers", return_value=["ODBC Driver 18 for SQL Server"])
+    def test_connection_string_sqlserver_windows_auth(self, _mock_drivers):
         """String de conexão SQL Server com Windows Auth"""
         from database.database_connector import DatabaseConnector
 
@@ -288,7 +290,8 @@ class TestDatabaseConnectorAPI:
         from urllib.parse import unquote
         assert "Trusted_Connection=yes" in unquote(result)
 
-    def test_connection_string_sqlserver_sql_auth(self):
+    @patch("database.database_connector.pyodbc.drivers", return_value=["ODBC Driver 18 for SQL Server"])
+    def test_connection_string_sqlserver_sql_auth(self, _mock_drivers):
         """String de conexão SQL Server com SQL Auth"""
         from database.database_connector import DatabaseConnector
 
