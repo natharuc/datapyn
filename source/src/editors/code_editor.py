@@ -542,11 +542,14 @@ class CodeEditor(QWidget):
             columns = self._sql_schema.get("columns", {})
 
             for table in tables:
-                apis.add(table)
+                # table pode ser dict {"name": ..., "schema": ...} ou string
+                tname = table["name"] if isinstance(table, dict) else str(table)
+                apis.add(tname)
                 # Colunas de cada tabela
-                for col in columns.get(table, []):
-                    apis.add(f"{table}.{col}")
-                    apis.add(col)
+                for col in columns.get(tname, []):
+                    cname = col["name"] if isinstance(col, dict) else str(col)
+                    apis.add(f"{tname}.{cname}")
+                    apis.add(cname)
 
         apis.prepare()
 
