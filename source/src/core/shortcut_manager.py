@@ -30,6 +30,7 @@ class ShortcutManager:
         # Edicao
         "find": "Ctrl+F",
         "replace": "Ctrl+H",
+        "format_code": "Ctrl+Shift+F",
         # Conexoes
         "manage_connections": "Ctrl+Shift+M",
         "new_connection": "Ctrl+Shift+D",

@@ -1659,6 +1659,7 @@ class MainWindow(DockingMainWindow):
             # Edicao
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
+            "format_code": self._format_current_block,
             # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
@@ -1713,6 +1714,7 @@ class MainWindow(DockingMainWindow):
             # Edicao
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
+            "format_code": self._format_current_block,
             # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
@@ -1862,6 +1864,42 @@ class MainWindow(DockingMainWindow):
             block = widget.editor.get_focused_block()
             if block and hasattr(block, "editor"):
                 block.editor._open_replace()
+
+    def _format_current_block(self):
+        """Formata o codigo do bloco focado usando ruff (Python) ou sqlparse (SQL)."""
+        widget = self._get_current_session_widget()
+        if not widget or not widget.editor:
+            return
+
+        block = widget.editor.get_focused_block()
+        if not block or not hasattr(block, "editor"):
+            return
+
+        code = block.editor.get_text()
+        if not code.strip():
+            return
+
+        lang = block.editor.get_language()
+
+        from src.services.code_formatter_service import format_code
+        formatted, error = format_code(code, lang)
+
+        if error:
+            self.action_label.setText(f"Formatacao: {error}")
+            self.statusBar().showMessage(f"Erro ao formatar: {error}", 5000)
+            return
+
+        if formatted != code:
+            # Preservar posicao do cursor
+            sci = block.editor._sci
+            line, col = sci.getCursorPosition()
+            block.editor.set_text(formatted)
+            # Restaurar cursor (limitar a linhas existentes)
+            max_line = sci.lines() - 1
+            sci.setCursorPosition(min(line, max_line), col)
+            self.action_label.setText(f"[{lang.upper()}] Codigo formatado")
+        else:
+            self.action_label.setText(f"[{lang.upper()}] Codigo ja esta formatado")
 
     def _add_block_to_current_session(self):
         """Adiciona novo bloco de código na sessão atual"""
