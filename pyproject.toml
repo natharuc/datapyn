@@ -33,6 +33,7 @@ dependencies = [
 ]
 
 [tool.uv]
+native-tls=true
 dev-dependencies = [
     # Testing
     "pytest>=8.0.0",
