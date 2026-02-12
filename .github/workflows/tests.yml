@@ -63,7 +63,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          pytest tests/ \
+          uv run pytest tests/ \
             --ignore=tests/test_visual_manual.py \
             --ignore=tests/test_gui.py \
             -p no:faulthandler \
