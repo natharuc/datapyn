@@ -161,9 +161,10 @@ jobs:
           $wixBin = "${env:WIX}bin\"
 
           # Harvest all files from PyInstaller output
+          # -sreg: suppress SelfReg warnings (not applicable to PyInstaller output)
           & "${wixBin}heat.exe" dir "$sourceDir" `
             -cg AppFiles -dr INSTALLFOLDER `
-            -gg -sfrag -srd `
+            -gg -sfrag -srd -sreg `
             -var var.SourceDir `
             -out heat.wxs
 
