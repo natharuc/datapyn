@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.2 (2026-02-13)
+
+### Bug Fixes
+
+- **installer**: Corrigir MSI - textos, assinatura e permissoes
+  ([`634bf60`](https://github.com/natharuc/datapyn/commit/634bf60175e8aa4c03a55602204c8033cdfcc855))
+
+
 ## v1.1.1 (2026-02-13)
 
 ### Bug Fixes
