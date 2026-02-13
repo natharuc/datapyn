@@ -2414,7 +2414,10 @@ class MainWindow(DockingMainWindow):
         running_tab_index = self._mark_tab_running(True)
 
         # Salvar banco atual para detectar mudanca via USE dentro do batch
-        current_db_before = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+        try:
+            current_db_before = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+        except Exception:
+            current_db_before = ""
 
         # Criar thread e worker
         thread = QThread()

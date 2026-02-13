@@ -415,7 +415,13 @@ class BlockEditor(QWidget):
         Util para inserir texto a partir de paineis externos (Object Explorer,
         Variables) onde clicar no painel tira o foco do editor.
         """
-        return self._last_focused_block or self._focused_block
+        # Validar que o bloco ainda existe na lista de blocos
+        if self._last_focused_block and self._last_focused_block in self._blocks:
+            return self._last_focused_block
+        if self._focused_block and self._focused_block in self._blocks:
+            return self._focused_block
+        # Fallback: primeiro bloco
+        return self._blocks[0] if self._blocks else None
 
     def focus_first_block(self):
         """Foca no primeiro bloco de código"""
