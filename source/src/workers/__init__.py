@@ -203,6 +203,91 @@ class DataFrameOperationWorker(BaseWorker):
             self.finished.emit()
 
 
+class DatabaseSwitchWorker(BaseWorker):
+    """
+    Worker para trocar banco de dados em background
+
+    Signals:
+        - switch_success(str): Banco trocado com sucesso (nome do banco)
+        - error(str): Erro na troca
+    """
+
+    switch_success = pyqtSignal(str)
+
+    def __init__(self, connector, database_name: str):
+        super().__init__()
+        self.connector = connector
+        self.database_name = database_name
+
+    def run(self):
+        """Troca banco de dados"""
+        self.started.emit()
+
+        try:
+            self.connector.change_database(self.database_name)
+            self.switch_success.emit(self.database_name)
+        except Exception as e:
+            error_msg = f"Erro ao trocar banco: {str(e)}"
+            self.error.emit(error_msg)
+        finally:
+            self.finished.emit()
+
+
+class BlockConnectionWorker(BaseWorker):
+    """
+    Worker para conectar bloco individual a banco de dados em background
+
+    Signals:
+        - connection_ready(object): Connector conectado
+        - error(str): Erro na conexao
+    """
+
+    connection_ready = pyqtSignal(object)
+
+    def __init__(self, db_type: str, host: str, port: int, database: str,
+                 username: str = "", password: str = "",
+                 use_windows_auth: bool = False,
+                 trust_server_certificate: bool = False):
+        super().__init__()
+        self.db_type = db_type
+        self.host = host
+        self.port = port
+        self.database = database
+        self.username = username
+        self.password = password
+        self.use_windows_auth = use_windows_auth
+        self.trust_server_certificate = trust_server_certificate
+
+    def run(self):
+        """Conecta ao banco"""
+        self.started.emit()
+
+        try:
+            from ..database.database_connector import DatabaseConnector
+
+            connector = DatabaseConnector()
+            connector.connect(
+                db_type=self.db_type,
+                host=self.host,
+                port=self.port,
+                database=self.database,
+                username=self.username,
+                password=self.password,
+                use_windows_auth=self.use_windows_auth,
+                trust_server_certificate=self.trust_server_certificate,
+            )
+
+            if connector.is_connected():
+                self.connection_ready.emit(connector)
+            else:
+                self.error.emit("Falha ao conectar ao banco")
+        except Exception as e:
+            error_msg = f"Erro de conexao: {str(e)}"
+            self.error.emit(error_msg)
+        finally:
+            self.finished.emit()
+
+
 # Utility function para executar workers facilmente
 def execute_worker(worker: BaseWorker, parent_thread: QThread = None) -> QThread:
     """
