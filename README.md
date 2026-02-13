@@ -28,6 +28,7 @@
 - **Exportar script** -- Exporte sua analise como script Python standalone
 - **Exportar para tabela** -- Exporte DataFrames diretamente para tabelas no banco
 - **Gerenciador de pacotes** -- Instale/atualize pacotes Python sem sair da IDE
+- **Auto-update** -- Atualizacoes automaticas do GitHub para manter o DataPyn sempre atualizado
 - **Visualizacao** -- Tabelas interativas com exportacao para Excel/CSV
 - **Temas** -- Interface moderna com Material Design (dark/light)
 - **Atalhos** -- Produtividade maxima com atalhos de teclado configuraveis
