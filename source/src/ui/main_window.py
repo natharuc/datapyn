@@ -57,6 +57,7 @@ from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.ui.dialogs.settings_dialog import SettingsDialog
 from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
+from src.ui.dialogs.update_dialog import UpdateDialog, UpdateDownloadDialog
 
 # Componentes da UI
 from src.ui.components.results_viewer import ResultsViewer
@@ -70,6 +71,9 @@ from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.object_explorer_panel import ObjectExplorerPanel
 from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS
+
+# Services
+from src.services import AutoUpdateService
 
 
 class SqlWorker(QObject):
@@ -394,6 +398,10 @@ class MainWindow(DockingMainWindow):
         self.session_manager = SessionManager()  # Novo: Gerenciador de sessões
         self.mixed_executor = MixedLanguageExecutor(None, self.results_manager)
 
+        # Auto-update service
+        self._current_version = self._get_current_version()
+        self.auto_update_service = AutoUpdateService(self._current_version)
+
         # Mapeia session_id -> SessionWidget
         self._session_widgets: dict = {}
 
@@ -450,6 +458,10 @@ class MainWindow(DockingMainWindow):
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self._update_status)
         self.status_timer.start(1000)
+
+        # Verificar atualizacoes ao iniciar (apos 5 segundos)
+        if self.auto_update_service.is_auto_update_enabled():
+            QTimer.singleShot(5000, self._check_for_updates_silent)
 
         # Atualizar título inicial da janela
         self._update_window_title()
@@ -1709,6 +1721,14 @@ class MainWindow(DockingMainWindow):
 
         # Menu Ajuda
         help_menu = menubar.addMenu("A&juda")
+
+        check_updates_action = QAction("Verificar &Atualizacoes...", self)
+        if HAS_QTAWESOME:
+            check_updates_action.setIcon(qta.icon("mdi.update", color="#b0b0b0"))
+        check_updates_action.triggered.connect(self._check_for_updates)
+        help_menu.addAction(check_updates_action)
+
+        help_menu.addSeparator()
 
         about_action = QAction("&Sobre", self)
         about_action.triggered.connect(self._show_about)
@@ -3344,7 +3364,7 @@ class MainWindow(DockingMainWindow):
         QMessageBox.about(
             self,
             "Sobre DataPyn",
-            """<h2>DataPyn IDE</h2>
+            f"""<h2>DataPyn IDE</h2>
             <p>IDE moderna para consultas SQL com manipulação Python integrada</p>
             <p><b>Recursos:</b></p>
             <ul>
@@ -3362,7 +3382,7 @@ class MainWindow(DockingMainWindow):
                 <li>Ctrl+/ - Comentar linha</li>
                 <li>Ctrl+, - Configurações de Atalhos</li>
             </ul>
-            <p>Versão 1.0.0</p>
+            <p>Versão {self._current_version}</p>
             """,
         )
 
@@ -3376,6 +3396,125 @@ class MainWindow(DockingMainWindow):
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
         dialog.exec()
+
+    def _get_current_version(self) -> str:
+        """Obtem a versao atual do pyproject.toml"""
+        try:
+            import tomllib
+            import os
+
+            # Caminho para o pyproject.toml
+            if getattr(sys, "frozen", False):
+                # Se executando como executavel, usar versao embutida
+                base_path = sys._MEIPASS
+            else:
+                # Em desenvolvimento, ir ate a raiz do projeto
+                base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+            pyproject_path = os.path.join(base_path, "pyproject.toml")
+
+            if os.path.exists(pyproject_path):
+                with open(pyproject_path, "rb") as f:
+                    data = tomllib.load(f)
+                    return data.get("project", {}).get("version", "1.1.4")
+            else:
+                return "1.1.4"  # Versao padrao se arquivo nao encontrado
+        except Exception as e:
+            logger.warning(f"Erro ao ler versao do pyproject.toml: {e}")
+            return "1.1.4"
+
+    def _check_for_updates(self):
+        """Verifica manualmente por atualizacoes"""
+        if not self.auto_update_service.is_auto_update_enabled():
+            reply = QMessageBox.question(
+                self,
+                "Auto-Update Desabilitado",
+                "A verificacao automatica de atualizacoes esta desabilitada.\n\n"
+                "Deseja habilitar e verificar por atualizacoes?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.auto_update_service.set_auto_update_enabled(True)
+            else:
+                return
+
+        self.statusbar.showMessage("Verificando atualizacoes...", 3000)
+
+        self.auto_update_service.check_for_updates(
+            on_available=self._on_update_available,
+            on_no_update=self._on_no_update_available,
+            on_error=self._on_update_check_error,
+        )
+
+    def _check_for_updates_silent(self):
+        """Verifica por atualizacoes silenciosamente ao iniciar"""
+        if not self.auto_update_service.is_auto_update_enabled():
+            return
+
+        self.auto_update_service.check_for_updates(
+            on_available=self._on_update_available,
+            on_no_update=lambda: None,  # Silencioso se nao houver atualizacao
+            on_error=lambda msg: logger.info(f"Verificacao de atualizacao falhou: {msg}"),
+        )
+
+    def _on_update_available(self, version: str, download_url: str, release_notes: str):
+        """Callback quando uma atualizacao esta disponivel"""
+        self.statusbar.showMessage(f"Nova versao disponivel: {version}", 5000)
+
+        dialog = UpdateDialog(self._current_version, version, release_notes, self)
+        if dialog.exec() == UpdateDialog.DialogCode.Accepted and dialog.should_download:
+            self._download_update(version, download_url)
+
+    def _on_no_update_available(self):
+        """Callback quando nao ha atualizacoes"""
+        self.statusbar.showMessage("Voce ja esta usando a versao mais recente!", 5000)
+        QMessageBox.information(
+            self,
+            "Nenhuma Atualizacao",
+            f"Voce ja esta usando a versao mais recente do DataPyn ({self._current_version}).",
+        )
+
+    def _on_update_check_error(self, error_message: str):
+        """Callback quando ocorre erro ao verificar atualizacoes"""
+        self.statusbar.showMessage("Erro ao verificar atualizacoes", 5000)
+        QMessageBox.warning(
+            self, "Erro na Verificacao", f"Nao foi possivel verificar atualizacoes:\n\n{error_message}"
+        )
+
+    def _download_update(self, version: str, download_url: str):
+        """Inicia o download da atualizacao"""
+        download_dialog = UpdateDownloadDialog(version, self)
+
+        self.auto_update_service.download_update(
+            download_url,
+            version,
+            on_progress=download_dialog.update_progress,
+            on_complete=lambda path: self._on_download_complete(path, download_dialog),
+            on_error=download_dialog.download_failed,
+        )
+
+        download_dialog.exec()
+
+    def _on_download_complete(self, installer_path: str, download_dialog):
+        """Callback quando o download e concluido"""
+        download_dialog.download_complete(installer_path)
+
+        reply = QMessageBox.question(
+            self,
+            "Download Concluido",
+            "O instalador foi baixado com sucesso!\n\n"
+            "Deseja instalar a atualizacao agora?\n\n"
+            "Nota: O DataPyn sera fechado e o instalador sera executado.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.auto_update_service.install_update(installer_path):
+                QApplication.quit()
+            else:
+                QMessageBox.critical(
+                    self, "Erro na Instalacao", "Nao foi possivel iniciar a instalacao da atualizacao."
+                )
 
     def _new_session(self):
         """Cria nova sessão, herdando a conexão da aba atual (se houver)"""

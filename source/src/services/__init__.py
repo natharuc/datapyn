@@ -12,6 +12,7 @@ from .session_lifecycle_service import SessionLifecycleService
 from .panel_manager import PanelManager, PanelSet
 from .file_import_service import FileImportService
 from .package_manager_service import PackageManagerService, PackageInfo, PackageOperationResult
+from .auto_update_service import AutoUpdateService
 
 __all__ = [
     "QueryService",
@@ -27,4 +28,5 @@ __all__ = [
     "PackageManagerService",
     "PackageInfo",
     "PackageOperationResult",
+    "AutoUpdateService",
 ]
