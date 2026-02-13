@@ -2384,6 +2384,17 @@ class MainWindow(DockingMainWindow):
                 # Atualiza statusbar
                 self._update_connection_status()
 
+                # Recarregar Object Explorer para o novo banco
+                connection_name = getattr(session, "connection_name", "") or ""
+                if connection_name:
+                    self._schema_service.invalidate_cache(connection_name)
+                    self._schema_service.load_schema(connector, connection_name)
+
+                    # Emitir sinal de mudanca de conexao para atualizar UI
+                    current_widget = self._get_current_session_widget()
+                    if current_widget and hasattr(current_widget, "connection_changed"):
+                        current_widget.connection_changed.emit(connection_name, database_name)
+
                 self._log_info(f"[SQL] Banco alterado para: {database_name}")
                 self.action_label.setText(f"[SQL] Banco: {database_name}")
                 self._stop_execution_timer()

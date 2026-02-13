@@ -210,22 +210,46 @@ class ObjectExplorerPanel(QWidget):
         if all_databases:
             for db in sorted(all_databases):
                 is_current = (db.lower() == db_name.lower()) if db_name else False
-                display = f"{db}  (conectado)" if is_current else db
-                db_item = QTreeWidgetItem(self.tree, [display])
-                db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
-
-                if HAS_QTAWESOME:
-                    color = "#569cd6" if is_current else "#888888"
-                    db_item.setIcon(0, qta.icon("mdi.database", color=color))
-
-                font = db_item.font(0)
-                font.setBold(is_current)
-                db_item.setFont(0, font)
 
                 # So o banco atual tem tabelas/colunas carregados
                 if is_current:
+                    # Quando filtro ativo, verificar se banco tem conteudo relevante
+                    if filter_text:
+                        has_match = any(
+                            filter_text in t.get("name", "").lower()
+                            or any(filter_text in c.get("name", "").lower() for c in columns.get(t.get("name", ""), []))
+                            for t in tables
+                        )
+                        # Verificar tambem se o nome do banco corresponde
+                        if not has_match and filter_text not in db.lower():
+                            continue
+
+                    display = f"{db}  (conectado)" if not filter_text else db
+                    db_item = QTreeWidgetItem(self.tree, [display])
+                    db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
+
+                    if HAS_QTAWESOME:
+                        db_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
+
+                    font = db_item.font(0)
+                    font.setBold(True)
+                    db_item.setFont(0, font)
+
                     self._add_tables_to_node(db_item, tables, columns, filter_text)
                     db_item.setExpanded(True)
+                else:
+                    # Bancos nao-atuais: esconder quando filtro ativo (nao tem tabelas carregadas)
+                    if filter_text:
+                        # Mostrar apenas se nome do banco corresponde ao filtro
+                        if filter_text not in db.lower():
+                            continue
+
+                    display = db
+                    db_item = QTreeWidgetItem(self.tree, [display])
+                    db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
+
+                    if HAS_QTAWESOME:
+                        db_item.setIcon(0, qta.icon("mdi.database", color="#888888"))
         else:
             # Fallback: apenas o banco conectado (sem lista de bancos)
             db_display = db_name or self._current_connection or "Banco"
@@ -329,8 +353,8 @@ class ObjectExplorerPanel(QWidget):
                     col_type = col.get("type", "")
                     nullable = col.get("nullable", "YES")
 
-                    # Se tabela nao corresponde ao filtro, filtrar colunas individualmente
-                    if filter_text and not table_matches_filter and filter_text not in col_name.lower():
+                    # Quando filtro ativo, sempre filtrar colunas individualmente
+                    if filter_text and filter_text not in col_name.lower() and filter_text not in col_type.lower():
                         continue
 
                     display = f"{col_name}  ({col_type})"
@@ -364,7 +388,15 @@ class ObjectExplorerPanel(QWidget):
                 parent_item.removeChild(schema_item)
 
     def _on_search_changed(self, text: str):
-        """Chamado quando texto de busca muda - reconstroi arvore com filtro"""
+        """Chamado quando texto de busca muda - debounce para reconstruir arvore"""
+        if self._filter_timer is None:
+            self._filter_timer = QTimer(self)
+            self._filter_timer.setSingleShot(True)
+            self._filter_timer.timeout.connect(self._apply_filter)
+        self._filter_timer.start(200)  # 200ms debounce
+
+    def _apply_filter(self):
+        """Aplica filtro de busca reconstruindo a arvore"""
         if self._current_schema:
             self._build_tree(self._current_schema)
 

@@ -293,6 +293,7 @@ class TestObjectExplorerSearch:
         """Buscar filtra tabelas pelo nome"""
         explorer.set_schema(sample_schema, "conn1")
         explorer.search_input.setText("users")
+        explorer._apply_filter()  # Aplicar filtro imediatamente (sem debounce)
 
         db_item = explorer.tree.topLevelItem(0)
         visible_tables = []
@@ -309,6 +310,7 @@ class TestObjectExplorerSearch:
         """Buscar por nome de coluna mostra tabela pai"""
         explorer.set_schema(sample_schema, "conn1")
         explorer.search_input.setText("email")
+        explorer._apply_filter()
 
         db_item = explorer.tree.topLevelItem(0)
         visible_tables = []
@@ -321,11 +323,38 @@ class TestObjectExplorerSearch:
         assert "users" in visible_tables  # tem coluna "email"
         assert "orders" not in visible_tables
 
+    def test_search_filters_columns_individually(self, explorer, sample_schema):
+        """Buscar filtra colunas individualmente dentro de cada tabela"""
+        explorer.set_schema(sample_schema, "conn1")
+        explorer.search_input.setText("email")
+        explorer._apply_filter()
+
+        db_item = explorer.tree.topLevelItem(0)
+        # Encontrar tabela users
+        users_item = None
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table" and data.get("name") == "users":
+                users_item = child
+                break
+
+        assert users_item is not None
+        # So coluna "email" deve aparecer, nao "id" ou "name"
+        col_names = []
+        for i in range(users_item.childCount()):
+            col_data = users_item.child(i).data(0, Qt.ItemDataRole.UserRole)
+            col_names.append(col_data["name"])
+        assert "email" in col_names
+        assert "id" not in col_names
+
     def test_search_empty_shows_all(self, explorer, sample_schema):
         """Busca vazia mostra todas as tabelas"""
         explorer.set_schema(sample_schema, "conn1")
         explorer.search_input.setText("users")
+        explorer._apply_filter()
         explorer.search_input.setText("")  # limpar busca
+        explorer._apply_filter()
 
         db_item = explorer.tree.topLevelItem(0)
         visible_tables = []
@@ -336,6 +365,24 @@ class TestObjectExplorerSearch:
                 visible_tables.append(data["name"])
 
         assert len(visible_tables) == 3  # todas as tabelas
+
+    def test_search_hides_empty_databases(self, explorer, multi_db_schema):
+        """Filtro ativo esconde bancos sem conteudo correspondente"""
+        explorer.set_schema(multi_db_schema, "conn1")
+        explorer.search_input.setText("users")
+        explorer._apply_filter()
+
+        # Bancos sem match devem ser escondidos
+        visible_dbs = []
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            visible_dbs.append(data["name"])
+
+        # Apenas testdb deve aparecer (tem tabela users)
+        assert "testdb" in visible_dbs
+        assert "master" not in visible_dbs
+        assert "production" not in visible_dbs
 
 
 class TestObjectExplorerSignals:
