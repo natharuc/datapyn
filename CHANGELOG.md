@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.6 (2026-02-13)
+
+### Bug Fixes
+
+- **ci**: Retry automatico em crash SIGABRT do QWebEngine durante testes
+  ([`e028939`](https://github.com/natharuc/datapyn/commit/e02893993c5011b8ddf39b05e667395df652219b))
+
+
 ## v1.1.5 (2026-02-13)
 
 ### Bug Fixes
