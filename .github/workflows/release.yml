@@ -173,10 +173,11 @@ jobs:
             -dProductVersion="$version" `
             scripts\installer.wxs heat.wxs
 
-          # Link into MSI
+          # Link into MSI (suppress ICE91 - expected for per-user install)
           & "${wixBin}light.exe" `
             -ext WixUIExtension `
             -spdb `
+            -sice:ICE91 `
             installer.wixobj heat.wixobj `
             -o "DataPyn-${version}-windows.msi"
 
