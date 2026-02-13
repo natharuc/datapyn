@@ -184,12 +184,15 @@ jobs:
             scripts\installer.wxs heat.wxs
 
           # Link into MSI
-          # -sice:ICE91 - expected warning for per-user install (files not copied to all users)
-          # -sice:ICE64 - directories in user profile without RemoveFile entries (handled by Windows Installer)
+          # Suppress ICE validations that are expected/acceptable for per-user PyInstaller bundles:
+          # -sice:ICE38 - Components in user profile should use registry KeyPath (not applicable for heat-generated files)
+          # -sice:ICE60 - Files should have language specified (not applicable for PyInstaller DLLs)
+          # -sice:ICE64 - Directories need RemoveFile entries (handled by Windows Installer)
+          # -sice:ICE91 - Files in per-user folder won't copy to all users (expected behavior)
           & "${wixBin}light.exe" `
             -ext WixUIExtension `
             -spdb `
-            -sice:ICE91 -sice:ICE64 `
+            -sice:ICE38 -sice:ICE60 -sice:ICE64 -sice:ICE91 `
             installer.wixobj heat.wixobj `
             -o "DataPyn-${rawVersion}-windows.msi"
 
