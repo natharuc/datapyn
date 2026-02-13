@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.1.5 (2026-02-13)
+
+### Bug Fixes
+
+- Loading infinito na verificacao de atualizacao
+  ([`a9b8c0c`](https://github.com/natharuc/datapyn/commit/a9b8c0c4cea220faf84c718769bc0a61dfc48208))
+
+- **test**: Usar tempdir real no teste de install_update (cross-platform)
+  ([`e0139af`](https://github.com/natharuc/datapyn/commit/e0139afc2ff0ae9463f36d19dc40874a46eafc58))
+
+
 ## v1.1.4 (2026-02-13)
 
 ### Bug Fixes
