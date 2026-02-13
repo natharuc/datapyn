@@ -869,19 +869,21 @@ class MainWindow(DockingMainWindow):
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect
 
     def _create_object_explorer_dock(self):
-        """Cria painel do Object Explorer (lateral direita, abaixo de Variables)"""
-        self.object_explorer_panel = ObjectExplorerPanel(theme_manager=self.theme_manager)
+        """Cria painel do Object Explorer (lateral direita, abaixo de Variables).
 
-        # Conectar sinais
-        self.object_explorer_panel.insert_text_requested.connect(self._on_insert_variable_in_editor)
-        self.object_explorer_panel.query_requested.connect(self._on_object_explorer_query)
-        self.object_explorer_panel.btn_refresh.clicked.connect(self._on_object_explorer_refresh)
+        Usa QStackedWidget para que cada sessao tenha seu proprio Object Explorer.
+        """
+        from PyQt6.QtWidgets import QStackedWidget
+
+        self._object_explorer_stack = QStackedWidget()
+        # Mapeamento session_id -> ObjectExplorerPanel
+        self._session_explorers: dict = {}
 
         # Criar dock widget
         self.object_explorer_dock = QDockWidget("Object Explorer", self)
         self.object_explorer_dock.setObjectName("ObjectExplorerDock")
         self.object_explorer_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.object_explorer_dock.setWidget(self.object_explorer_panel)
+        self.object_explorer_dock.setWidget(self._object_explorer_stack)
         self.object_explorer_dock.setStyleSheet("""
             QDockWidget {
                 background-color: #252526;
@@ -909,13 +911,89 @@ class MainWindow(DockingMainWindow):
         # Esconder ate ter conexao ativa
         self.object_explorer_dock.hide()
 
+    def _get_session_explorer(self, session_id: str) -> ObjectExplorerPanel:
+        """Retorna o ObjectExplorerPanel da sessao, criando se necessario."""
+        if session_id in self._session_explorers:
+            return self._session_explorers[session_id]
+
+        panel = ObjectExplorerPanel(theme_manager=self.theme_manager)
+        panel.insert_text_requested.connect(self._on_object_explorer_insert_text)
+        panel.query_requested.connect(self._on_object_explorer_query)
+        panel.database_switch_requested.connect(self._on_object_explorer_database_switch)
+        panel.btn_refresh.clicked.connect(self._on_object_explorer_refresh)
+
+        self._object_explorer_stack.addWidget(panel)
+        self._session_explorers[session_id] = panel
+        return panel
+
+    def _remove_session_explorer(self, session_id: str):
+        """Remove Object Explorer de uma sessao."""
+        panel = self._session_explorers.pop(session_id, None)
+        if panel:
+            self._object_explorer_stack.removeWidget(panel)
+            panel.deleteLater()
+
+    def _switch_session_explorer(self, session_id: str):
+        """Troca para o Object Explorer da sessao ativa."""
+        panel = self._session_explorers.get(session_id)
+        if panel:
+            self._object_explorer_stack.setCurrentWidget(panel)
+
+    @property
+    def _active_object_explorer(self):
+        """Retorna o ObjectExplorerPanel da sessao ativa."""
+        sid = self._get_active_session_id()
+        return self._session_explorers.get(sid) if sid else None
+
+    def _on_object_explorer_insert_text(self, text: str):
+        """Insere texto no editor focado e refoca o editor"""
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "editor"):
+            block = current_widget.editor.get_focused_block()
+            if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
+                block.editor.insert_text_at_cursor(text)
+                # Refoca o editor apos inserir
+                if hasattr(block.editor, "setFocus"):
+                    block.editor.setFocus()
+
     def _on_object_explorer_query(self, query: str):
-        """Executa query solicitada pelo Object Explorer"""
+        """Insere query no editor focado e refoca"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
             block = current_widget.editor.get_focused_block()
             if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
                 block.editor.insert_text_at_cursor(query)
+                if hasattr(block.editor, "setFocus"):
+                    block.editor.setFocus()
+
+    def _on_object_explorer_database_switch(self, database_name: str):
+        """Troca o banco de dados da conexao da aba ativa"""
+        current_widget = self._get_current_session_widget()
+        if not current_widget or not hasattr(current_widget, "session"):
+            return
+
+        session = current_widget.session
+        connector = getattr(session, "connector", None)
+        connection_name = getattr(session, "connection_name", "") or ""
+
+        if not connector or not connector.is_connected():
+            self.statusBar().showMessage("Nenhuma conexao ativa", 3000)
+            return
+
+        try:
+            connector.change_database(database_name)
+            self.statusBar().showMessage(f"Banco alterado para: {database_name}", 5000)
+
+            # Recarregar schema para o novo banco
+            self._schema_service.invalidate_cache(connection_name)
+            self._schema_service.load_schema(connector, connection_name)
+
+            # Emitir sinal de mudanca de conexao para atualizar UI
+            if hasattr(current_widget, "connection_changed"):
+                current_widget.connection_changed.emit(connection_name, database_name)
+
+        except Exception as e:
+            self.statusBar().showMessage(f"Erro ao trocar banco: {e}", 5000)
 
     def _on_object_explorer_refresh(self):
         """Refresh do Object Explorer - recarrega schema da conexao ativa"""
@@ -1037,6 +1115,10 @@ class MainWindow(DockingMainWindow):
         info["output"].deleteLater()
         info["variables"].deleteLater()
 
+        # Remover Object Explorer da sessao
+        if hasattr(self, "_session_explorers"):
+            self._remove_session_explorer(session_id)
+
     def _switch_session_panels(self, session_id: str):
         """Troca os stacks para exibir os paineis da sessao ativa.
 
@@ -1052,6 +1134,10 @@ class MainWindow(DockingMainWindow):
             self._output_stack.setCurrentWidget(info["output"])
         if info["variables"]:
             self._variables_stack.setCurrentWidget(info["variables"])
+
+        # Trocar Object Explorer para a sessao ativa
+        if hasattr(self, "_session_explorers"):
+            self._switch_session_explorer(session_id)
 
     @property
     def global_results_viewer(self):
@@ -3776,14 +3862,21 @@ class MainWindow(DockingMainWindow):
                     # Bloco sem conexao customizada: aplica se eh a conexao da sessao
                     block.editor.set_sql_schema(schema)
 
-        # Atualizar Object Explorer com schema da conexao ativa
-        if hasattr(self, "object_explorer_panel"):
-            current_widget = self._get_current_session_widget()
-            if current_widget and hasattr(current_widget, "session"):
-                session_conn = getattr(current_widget.session, "connection_name", "") or ""
+        # Atualizar Object Explorer da sessao correspondente
+        if hasattr(self, "_session_explorers"):
+            for sid, widget in self._session_widgets.items():
+                if not (hasattr(widget, "session") and widget.session):
+                    continue
+                session_conn = getattr(widget.session, "connection_name", "") or ""
                 if session_conn == connection_name:
-                    self.object_explorer_panel.set_schema(schema, connection_name)
-                    self.object_explorer_dock.show()
+                    explorer = self._get_session_explorer(sid)
+                    explorer.set_schema(schema, connection_name)
+                    # Mostrar dock se e a sessao ativa
+                    current_widget = self._get_current_session_widget()
+                    if current_widget and hasattr(current_widget, "session"):
+                        if current_widget.session.session_id == sid:
+                            self._switch_session_explorer(sid)
+                            self.object_explorer_dock.show()
 
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback quando conexao de um bloco individual muda.

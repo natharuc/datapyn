@@ -27,7 +27,7 @@ class SchemaWorker(QObject):
         """Carrega schema completo do banco via information_schema"""
         try:
             self.progress.emit("Carregando estrutura do banco...")
-            schema = {"tables": [], "columns": {}, "database": ""}
+            schema = {"tables": [], "columns": {}, "database": "", "databases": []}
 
             # Obter banco atual
             try:
@@ -35,6 +35,17 @@ class SchemaWorker(QObject):
                 schema["database"] = db_name or ""
             except Exception:
                 schema["database"] = ""
+
+            # Obter lista de todos os bancos do servidor
+            try:
+                databases_query = self._get_databases_query()
+                df = self.connector.execute_query(databases_query)
+                if df is not None and len(df) > 0:
+                    for _, row in df.iterrows():
+                        db = str(row.iloc[0])
+                        schema["databases"].append(db)
+            except Exception as e:
+                logger.debug(f"Erro ao carregar lista de bancos: {e}")
 
             # Obter tabelas e views
             try:
@@ -78,6 +89,18 @@ class SchemaWorker(QObject):
 
         except Exception as e:
             self.error.emit(str(e))
+
+    def _get_databases_query(self) -> str:
+        """Query para obter lista de todos os bancos do servidor"""
+        db_type = getattr(self.connector, "db_type", "").lower()
+
+        if db_type in ("mssql", "sqlserver"):
+            return "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name"
+        elif db_type == "postgresql":
+            return "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+        else:
+            # MySQL, MariaDB
+            return "SHOW DATABASES"
 
     def _get_tables_query(self) -> str:
         """Query para obter tabelas - compativel com todos os SGBDs"""

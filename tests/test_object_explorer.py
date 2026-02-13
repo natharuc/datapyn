@@ -2,7 +2,8 @@
 Testes para ObjectExplorerPanel
 
 Cobre: construcao de arvore, set_schema, clear,
-context menu, duplo clique, sinais emitidos.
+context menu, duplo clique, sinais emitidos,
+busca/filtro, multiplos bancos, troca de banco.
 """
 
 import pytest
@@ -62,6 +63,24 @@ def multi_schema():
 
 
 @pytest.fixture
+def multi_db_schema():
+    """Schema com lista de multiplos bancos do servidor"""
+    return {
+        "database": "testdb",
+        "databases": ["master", "testdb", "production"],
+        "tables": [
+            {"name": "users", "schema": "dbo", "type": "BASE TABLE"},
+        ],
+        "columns": {
+            "users": [
+                {"name": "id", "type": "int", "nullable": "NO"},
+                {"name": "name", "type": "varchar", "nullable": "YES"},
+            ],
+        },
+    }
+
+
+@pytest.fixture
 def explorer(qtbot):
     """ObjectExplorerPanel para testes"""
     main = QMainWindow()
@@ -90,6 +109,11 @@ class TestObjectExplorerCreation:
     def test_has_refresh_button(self, explorer):
         """Botao refresh existe"""
         assert explorer.btn_refresh is not None
+
+    def test_has_search_input(self, explorer):
+        """Campo de busca existe"""
+        assert explorer.search_input is not None
+        assert explorer.search_input.placeholderText() != ""
 
 
 class TestObjectExplorerSetSchema:
@@ -167,7 +191,6 @@ class TestObjectExplorerSetSchema:
         """Info label atualizado apos set_schema"""
         explorer.set_schema(sample_schema, "conn1")
         assert "3 tabelas" in explorer.info_label.text()
-        assert "8 colunas" in explorer.info_label.text()
 
     def test_set_schema_multiple_schemas(self, explorer, multi_schema):
         """Multiplos schemas criam nos intermediarios"""
@@ -193,6 +216,48 @@ class TestObjectExplorerSetSchema:
         assert db_item.isExpanded()
 
 
+class TestObjectExplorerMultipleDatabases:
+    """Testes de exibicao de multiplos bancos"""
+
+    def test_multi_db_shows_all_databases(self, explorer, multi_db_schema):
+        """Todos os bancos do servidor aparecem como nos raiz"""
+        explorer.set_schema(multi_db_schema, "conn1")
+
+        # Deve ter 3 nos raiz (3 bancos)
+        assert explorer.tree.topLevelItemCount() == 3
+
+    def test_multi_db_current_marked(self, explorer, multi_db_schema):
+        """Banco conectado esta marcado com (conectado)"""
+        explorer.set_schema(multi_db_schema, "conn1")
+
+        found_connected = False
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "testdb":
+                assert "(conectado)" in item.text(0)
+                found_connected = True
+                break
+        assert found_connected
+
+    def test_multi_db_current_has_tables(self, explorer, multi_db_schema):
+        """Apenas banco conectado tem tabelas carregadas"""
+        explorer.set_schema(multi_db_schema, "conn1")
+
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "testdb":
+                assert item.childCount() > 0  # tem tabelas
+            else:
+                assert item.childCount() == 0  # sem tabelas
+
+    def test_multi_db_info_shows_db_count(self, explorer, multi_db_schema):
+        """Info label mostra contagem de bancos"""
+        explorer.set_schema(multi_db_schema, "conn1")
+        assert "3 bancos" in explorer.info_label.text()
+
+
 class TestObjectExplorerClear:
     """Testes de clear"""
 
@@ -211,6 +276,65 @@ class TestObjectExplorerClear:
         explorer.clear()
         assert explorer._current_schema is None
         assert explorer._current_connection == ""
+
+    def test_clear_resets_search(self, explorer, sample_schema):
+        """Clear limpa campo de busca"""
+        explorer.set_schema(sample_schema, "conn1")
+        explorer.search_input.setText("users")
+        explorer.clear()
+        assert explorer.search_input.text() == ""
+
+
+class TestObjectExplorerSearch:
+    """Testes do campo de busca"""
+
+    def test_search_filters_tables(self, explorer, sample_schema):
+        """Buscar filtra tabelas pelo nome"""
+        explorer.set_schema(sample_schema, "conn1")
+        explorer.search_input.setText("users")
+
+        db_item = explorer.tree.topLevelItem(0)
+        visible_tables = []
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table":
+                visible_tables.append(data["name"])
+
+        assert "users" in visible_tables
+        assert "orders" not in visible_tables
+
+    def test_search_filters_by_column(self, explorer, sample_schema):
+        """Buscar por nome de coluna mostra tabela pai"""
+        explorer.set_schema(sample_schema, "conn1")
+        explorer.search_input.setText("email")
+
+        db_item = explorer.tree.topLevelItem(0)
+        visible_tables = []
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table":
+                visible_tables.append(data["name"])
+
+        assert "users" in visible_tables  # tem coluna "email"
+        assert "orders" not in visible_tables
+
+    def test_search_empty_shows_all(self, explorer, sample_schema):
+        """Busca vazia mostra todas as tabelas"""
+        explorer.set_schema(sample_schema, "conn1")
+        explorer.search_input.setText("users")
+        explorer.search_input.setText("")  # limpar busca
+
+        db_item = explorer.tree.topLevelItem(0)
+        visible_tables = []
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table":
+                visible_tables.append(data["name"])
+
+        assert len(visible_tables) == 3  # todas as tabelas
 
 
 class TestObjectExplorerSignals:
@@ -258,14 +382,38 @@ class TestObjectExplorerSignals:
 
         assert blocker.args == ["id"]
 
-    def test_double_click_database_no_signal(self, explorer, sample_schema, qtbot):
-        """Duplo clique em banco nao emite sinal"""
-        explorer.set_schema(sample_schema, "conn1")
+    def test_double_click_database_emits_switch_signal(self, explorer, multi_db_schema, qtbot):
+        """Duplo clique em banco emite database_switch_requested"""
+        explorer.set_schema(multi_db_schema, "conn1")
+
+        db_item = explorer.tree.topLevelItem(0)  # primeiro banco
+        data = db_item.data(0, Qt.ItemDataRole.UserRole)
+
+        with qtbot.waitSignal(explorer.database_switch_requested, timeout=1000) as blocker:
+            explorer._on_double_click(db_item, 0)
+
+        assert blocker.args == [data["name"]]
+
+    def test_double_click_schema_emits_insert_signal(self, explorer, multi_schema, qtbot):
+        """Duplo clique em schema emite insert_text_requested"""
+        explorer.set_schema(multi_schema, "conn1")
 
         db_item = explorer.tree.topLevelItem(0)
-        # Nao deve emitir sinal para database
-        with qtbot.assertNotEmitted(explorer.insert_text_requested):
-            explorer._on_double_click(db_item, 0)
+        schema_item = None
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "schema":
+                schema_item = child
+                break
+
+        assert schema_item is not None
+        schema_data = schema_item.data(0, Qt.ItemDataRole.UserRole)
+
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_double_click(schema_item, 0)
+
+        assert blocker.args == [schema_data["name"]]
 
 
 class TestObjectExplorerEmptySchema:

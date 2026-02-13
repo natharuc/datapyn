@@ -2,13 +2,15 @@
 Object Explorer Panel
 
 Exibe a estrutura do banco de dados em arvore hierarquica:
-banco > tabelas > colunas (com tipos).
+bancos > tabelas > colunas (com tipos).
 
 Suporta:
+- Exibir todos os bancos do servidor da conexao ativa
+- Campo de busca para filtrar tabelas/colunas
 - Context menu com "Selecionar 1000 linhas" em tabelas
-- Duplo clique para inserir nome no editor focado
+- Duplo clique em qualquer item faz append no editor e refoca
+- Duplo clique em banco troca o banco da conexao ativa
 - Refresh manual do schema
-- Indicacao de carregamento
 """
 
 from PyQt6.QtWidgets import (
@@ -18,10 +20,11 @@ from PyQt6.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QLabel,
+    QLineEdit,
     QMenu,
     QApplication,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QAction
 
 from .buttons import GhostButton
@@ -42,15 +45,18 @@ class ObjectExplorerPanel(QWidget):
     """Painel de Object Explorer - exibe estrutura do banco em arvore"""
 
     # Sinais
-    insert_text_requested = pyqtSignal(str)  # texto para inserir no editor focado
+    insert_text_requested = pyqtSignal(str)  # texto para inserir (append) no editor focado
     select_top_requested = pyqtSignal(str, str)  # schema, table_name -> SELECT TOP 1000
     query_requested = pyqtSignal(str)  # query SQL para executar
+    database_switch_requested = pyqtSignal(str)  # nome do banco para trocar
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager
         self._current_schema = None  # schema dict do SchemaService
         self._current_connection = ""
+        self._all_databases = []  # lista de todos os bancos do servidor
+        self._filter_timer = None
         self._setup_ui()
         self._apply_theme()
 
@@ -86,6 +92,30 @@ class ObjectExplorerPanel(QWidget):
             }
         """)
         layout.addWidget(toolbar)
+
+        # Campo de busca
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Buscar tabelas e colunas...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                padding: 5px 8px;
+                margin: 4px 8px;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #007acc;
+            }
+            QLineEdit::placeholder {
+                color: #666666;
+            }
+        """)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        layout.addWidget(self.search_input)
 
         # Tree widget
         self.tree = QTreeWidget()
@@ -141,12 +171,15 @@ class ObjectExplorerPanel(QWidget):
         """Define o schema a ser exibido na arvore.
 
         Args:
-            schema: dict com keys 'database', 'tables', 'columns'
+            schema: dict com keys 'database', 'tables', 'columns',
+                    opcionalmente 'databases' (lista de todos os bancos)
                     (formato do SchemaService)
             connection_name: nome da conexao
         """
         self._current_schema = schema
         self._current_connection = connection_name
+        if schema:
+            self._all_databases = schema.get("databases", [])
         self._build_tree(schema)
 
     def clear(self):
@@ -154,7 +187,9 @@ class ObjectExplorerPanel(QWidget):
         self.tree.clear()
         self._current_schema = None
         self._current_connection = ""
+        self._all_databases = []
         self.info_label.setText("Nenhuma conexao")
+        self.search_input.clear()
 
     def _build_tree(self, schema: dict):
         """Constroi a arvore a partir do schema"""
@@ -167,19 +202,64 @@ class ObjectExplorerPanel(QWidget):
         tables = schema.get("tables", [])
         columns = schema.get("columns", {})
         db_name = schema.get("database", "")
+        all_databases = schema.get("databases", [])
 
-        # No raiz: banco de dados
-        db_display = db_name or self._current_connection or "Banco"
-        db_item = QTreeWidgetItem(self.tree, [db_display])
-        db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
+        filter_text = self.search_input.text().strip().lower()
 
-        if HAS_QTAWESOME:
-            db_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
+        # Criar nos raiz para cada banco do servidor
+        if all_databases:
+            for db in sorted(all_databases):
+                is_current = (db.lower() == db_name.lower()) if db_name else False
+                display = f"{db}  (conectado)" if is_current else db
+                db_item = QTreeWidgetItem(self.tree, [display])
+                db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
 
-        font = db_item.font(0)
-        font.setBold(True)
-        db_item.setFont(0, font)
+                if HAS_QTAWESOME:
+                    color = "#569cd6" if is_current else "#888888"
+                    db_item.setIcon(0, qta.icon("mdi.database", color=color))
 
+                font = db_item.font(0)
+                font.setBold(is_current)
+                db_item.setFont(0, font)
+
+                # So o banco atual tem tabelas/colunas carregados
+                if is_current:
+                    self._add_tables_to_node(db_item, tables, columns, filter_text)
+                    db_item.setExpanded(True)
+        else:
+            # Fallback: apenas o banco conectado (sem lista de bancos)
+            db_display = db_name or self._current_connection or "Banco"
+            db_item = QTreeWidgetItem(self.tree, [db_display])
+            db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
+
+            if HAS_QTAWESOME:
+                db_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
+
+            font = db_item.font(0)
+            font.setBold(True)
+            db_item.setFont(0, font)
+
+            self._add_tables_to_node(db_item, tables, columns, filter_text)
+            db_item.setExpanded(True)
+
+        # Atualizar info
+        table_count = len(tables)
+        col_count = sum(len(v) for v in columns.values())
+        db_count = len(all_databases)
+        if db_count > 0:
+            self.info_label.setText(f"{db_count} bancos, {table_count} tabelas")
+        else:
+            self.info_label.setText(f"{table_count} tabelas, {col_count} colunas")
+
+    def _add_tables_to_node(self, parent_item, tables, columns, filter_text=""):
+        """Adiciona tabelas e colunas a um no da arvore.
+
+        Args:
+            parent_item: QTreeWidgetItem pai (banco)
+            tables: lista de tabelas
+            columns: dict de colunas por tabela
+            filter_text: filtro de busca (lowercase)
+        """
         # Agrupar tabelas por schema
         schema_groups = {}
         for table in tables:
@@ -188,27 +268,36 @@ class ObjectExplorerPanel(QWidget):
                 schema_groups[table_schema] = []
             schema_groups[table_schema].append(table)
 
-        # Se ha apenas um schema (ou nenhum), nao criar no intermediario
         use_schema_nodes = len(schema_groups) > 1
 
         for schema_name, schema_tables in sorted(schema_groups.items()):
             if use_schema_nodes and schema_name:
-                parent = QTreeWidgetItem(db_item, [schema_name])
-                parent.setData(
+                schema_item = QTreeWidgetItem(parent_item, [schema_name])
+                schema_item.setData(
                     0, Qt.ItemDataRole.UserRole,
                     {"type": "schema", "name": schema_name},
                 )
                 if HAS_QTAWESOME:
-                    parent.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
+                    schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
+                parent = schema_item
             else:
-                parent = db_item
+                parent = parent_item
 
             for table in sorted(schema_tables, key=lambda t: t.get("name", "")):
                 table_name = table.get("name", "")
                 table_type = table.get("type", "TABLE")
                 table_schema = table.get("schema", "")
 
-                # Icone diferente para view
+                # Colunas da tabela
+                table_columns = columns.get(table_name, [])
+
+                # Filtro de busca: verificar se tabela ou alguma coluna corresponde
+                if filter_text:
+                    table_match = filter_text in table_name.lower()
+                    col_match = any(filter_text in c.get("name", "").lower() for c in table_columns)
+                    if not table_match and not col_match:
+                        continue
+
                 is_view = "VIEW" in table_type.upper()
                 label = table_name
                 if is_view:
@@ -231,12 +320,14 @@ class ObjectExplorerPanel(QWidget):
                     else:
                         table_item.setIcon(0, qta.icon("mdi.table", color="#4ec9b0"))
 
-                # Colunas da tabela
-                table_columns = columns.get(table_name, [])
                 for col in table_columns:
                     col_name = col.get("name", "")
                     col_type = col.get("type", "")
                     nullable = col.get("nullable", "YES")
+
+                    # Filtro de busca por coluna
+                    if filter_text and filter_text not in table_name.lower() and filter_text not in col_name.lower():
+                        continue
 
                     display = f"{col_name}  ({col_type})"
                     if nullable.upper() == "NO":
@@ -258,19 +349,24 @@ class ObjectExplorerPanel(QWidget):
                     if HAS_QTAWESOME:
                         col_item.setIcon(0, qta.icon("mdi.table-column", color="#888888"))
 
-                    # Cor sutil para tipo
                     col_item.setForeground(0, QColor("#b0b0b0"))
 
-        # Atualizar info
-        table_count = len(tables)
-        col_count = sum(len(v) for v in columns.values())
-        self.info_label.setText(f"{table_count} tabelas, {col_count} colunas")
+                # Expandir tabela se filtro ativo e ha match
+                if filter_text:
+                    table_item.setExpanded(True)
 
-        # Expandir banco por padrao
-        db_item.setExpanded(True)
+            # Remover schema node vazio apos filtro
+            if use_schema_nodes and schema_name and parent != parent_item:
+                if schema_item.childCount() == 0:
+                    parent_item.removeChild(schema_item)
+
+    def _on_search_changed(self, text: str):
+        """Chamado quando texto de busca muda - reconstroi arvore com filtro"""
+        if self._current_schema:
+            self._build_tree(self._current_schema)
 
     def _on_double_click(self, item: QTreeWidgetItem, column: int):
-        """Duplo clique insere nome no editor focado"""
+        """Duplo clique: append no editor para qualquer objeto, troca banco para database"""
         if item is None:
             return
 
@@ -281,7 +377,10 @@ class ObjectExplorerPanel(QWidget):
         item_type = data.get("type", "")
         name = data.get("name", "")
 
-        if item_type in ("table", "column") and name:
+        if item_type == "database" and name:
+            # Trocar banco ativo da conexao da aba
+            self.database_switch_requested.emit(name)
+        elif item_type in ("table", "column", "schema") and name:
             self.insert_text_requested.emit(name)
 
     def _on_context_menu(self, pos):
@@ -375,6 +474,12 @@ class ObjectExplorerPanel(QWidget):
             act_type_info.setEnabled(False)
 
         elif item_type == "database":
+            # Trocar para este banco
+            act_switch = menu.addAction(f"Usar banco '{name}'")
+            act_switch.triggered.connect(lambda: self.database_switch_requested.emit(name))
+
+            menu.addSeparator()
+
             # Copiar nome do banco
             act_copy = menu.addAction("Copiar nome")
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
