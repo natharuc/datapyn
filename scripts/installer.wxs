@@ -10,23 +10,32 @@
            Name="DataPyn"
            Language="1033"
            Version="$(var.ProductVersion)"
-           Manufacturer="DataPyn"
+           Manufacturer="DataPyn Team"
            UpgradeCode="{E8A3B02D-7F14-4C6A-9D5E-1B8F0A2C3D4E}">
 
     <Package InstallerVersion="200"
              Compressed="yes"
-             InstallScope="perMachine"
-             Description="DataPyn - Data Analysis Tool"
-             Comments="Instalador MSI gerado automaticamente pelo CI." />
+             InstallScope="perUser"
+             Description="DataPyn - Ferramenta de analise de dados com Python e SQL"
+             Comments="DataPyn - Data Analysis Tool" />
 
     <MajorUpgrade DowngradeErrorMessage="Uma versao mais recente do [ProductName] ja esta instalada." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- ============================================================ -->
-    <!-- Estrutura de diretorios                                      -->
+    <!-- Textos customizados para a UI do instalador                  -->
+    <!-- ============================================================ -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="DataPyn foi instalado com sucesso. Clique em Finish para fechar o instalador." />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Abrir DataPyn apos a instalacao" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\..\scripts\license.rtf" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.SourceDir)\..\scripts\installer_dialog.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.SourceDir)\..\scripts\installer_banner.bmp" />
+
+    <!-- ============================================================ -->
+    <!-- Estrutura de diretorios (per-user: LocalAppData)             -->
     <!-- ============================================================ -->
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFilesFolder">
+      <Directory Id="LocalAppDataFolder">
         <Directory Id="INSTALLFOLDER" Name="DataPyn" />
       </Directory>
       <Directory Id="DesktopFolder" Name="Desktop" />
@@ -90,9 +99,12 @@
     <!-- ============================================================ -->
     <Icon Id="DataPynIcon" SourceFile="$(var.SourceDir)\DataPyn.exe" />
     <Property Id="ARPPRODUCTICON" Value="DataPynIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/datapyn/datapyn" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/datapyn/datapyn" />
 
-    <!-- UI minima com dialogo de licenca removido -->
-    <UIRef Id="WixUI_Minimal" />
+    <!-- UI com dialogo de diretorio de instalacao -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_InstallDir" />
 
   </Product>
 </Wix>
