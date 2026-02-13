@@ -3156,7 +3156,8 @@ class MainWindow(DockingMainWindow):
             self._original_file_path = filename
             self._original_file_type = widget._original_file_type
 
-            self.action_label.setText(f"Arquivo aberto: {tab_title}")
+            self.main_statusbar.show_save_feedback(f"Arquivo aberto: {filename}")
+            self.main_statusbar.set_file_info(filename)
 
             # 9. Atualizar titulo da janela com contexto
             self._update_window_title()
@@ -3174,20 +3175,51 @@ class MainWindow(DockingMainWindow):
         self._save_intelligently()
 
     def _save_file_as(self):
-        """Salva workspace em novo arquivo"""
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Salvar Workspace Como", "", "DataPyn Workspace (*.dpw);;All Files (*.*)"
+        """Salvar Como - detecta contexto para oferecer filtro adequado"""
+        context = self._detect_file_context()
+
+        if context == "sql":
+            filter_text = "Arquivos SQL (*.sql);;DataPyn Workspace (*.dpw);;Todos os arquivos (*.*)"
+        elif context == "python":
+            filter_text = "Arquivos Python (*.py);;DataPyn Workspace (*.dpw);;Todos os arquivos (*.*)"
+        else:
+            filter_text = "DataPyn Workspace (*.dpw);;Arquivos SQL (*.sql);;Arquivos Python (*.py);;Todos os arquivos (*.*)"
+
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self, "Salvar Como", "", filter_text
         )
         if filename:
-            # Garantir extensão .dpw
-            if not filename.endswith(".dpw"):
-                filename += ".dpw"
+            if filename.endswith(".dpw"):
+                self._save_workspace_to_file(filename)
+                self.main_statusbar.show_save_feedback(f"Workspace salvo: {filename}")
+                self.main_statusbar.set_file_info(filename)
+            elif filename.endswith(".sql"):
+                self._original_file_path = filename
+                self._original_file_type = "sql"
+                self._save_single_file(filename, "sql")
+            elif filename.endswith(".py"):
+                self._original_file_path = filename
+                self._original_file_type = "python"
+                self._save_single_file(filename, "python")
+            else:
+                # Inferir pelo contexto ou adicionar extensao padrao
+                if context == "sql":
+                    filename += ".sql"
+                    self._original_file_path = filename
+                    self._original_file_type = "sql"
+                    self._save_single_file(filename, "sql")
+                elif context == "python":
+                    filename += ".py"
+                    self._original_file_path = filename
+                    self._original_file_type = "python"
+                    self._save_single_file(filename, "python")
+                else:
+                    filename += ".dpw"
+                    self._save_workspace_to_file(filename)
+                    self.main_statusbar.show_save_feedback(f"Workspace salvo: {filename}")
+                    self.main_statusbar.set_file_info(filename)
 
-            self._save_workspace_to_file(filename)
-
-            import os
-
-            self.action_label.setText(f"Workspace salvo: {os.path.basename(filename)}")
+            self._update_window_title()
 
     def _open_workspace(self, filename: str):
         """Abre um workspace de um arquivo específico"""
@@ -3201,9 +3233,9 @@ class MainWindow(DockingMainWindow):
             # Recarregar sessões do workspace
             self._restore_sessions()
 
-            import os
-
-            self.action_label.setText(f"Workspace aberto: {os.path.basename(filename)}")
+            self.main_statusbar.show_save_feedback(f"Workspace aberto: {filename}")
+            self.main_statusbar.set_file_info(filename)
+            self._update_window_title()
 
         except Exception as e:
             import traceback
@@ -4523,8 +4555,8 @@ class MainWindow(DockingMainWindow):
         return "workspace"
 
     def _update_window_title(self):
-        """Atualiza título da janela com indicador de contexto"""
-        base_title = "DataPyn - IDE SQL + Python"
+        """Atualiza titulo da janela com indicador de contexto e caminho do arquivo"""
+        base_title = "DataPyn"
 
         # Detectar contexto atual
         context = self._detect_file_context()
@@ -4532,37 +4564,42 @@ class MainWindow(DockingMainWindow):
 
         # Adicionar indicador
         if context == "sql":
-            indicator = "[S]"
+            indicator = "[SQL]"
         elif context == "python":
-            indicator = "[P]"
+            indicator = "[Python]"
         else:
-            indicator = "[W]"
+            indicator = "[Workspace]"
 
-        # Adicionar nome do arquivo se disponível
+        # Adicionar caminho do arquivo se disponivel
         file_info = ""
+        file_path_for_statusbar = ""
         if self._original_file_path:
             import os
 
-            filename = os.path.basename(self._original_file_path)
-            file_info = f" - {filename}"
+            file_info = f" - {self._original_file_path}"
+            file_path_for_statusbar = self._original_file_path
         elif self.workspace_manager.current_file_path:
             import os
 
-            filename = os.path.basename(self.workspace_manager.current_file_path)
-            file_info = f" - {filename}"
+            file_info = f" - {self.workspace_manager.current_file_path}"
+            file_path_for_statusbar = str(self.workspace_manager.current_file_path)
 
         self.setWindowTitle(f"{indicator} {base_title}{file_info}")
+
+        # Atualizar informacao do arquivo na statusbar
+        if hasattr(self, "main_statusbar"):
+            self.main_statusbar.set_file_info(file_path_for_statusbar)
 
     def _save_intelligently(self):
         """Sistema inteligente de salvamento baseado no contexto"""
         context = self._detect_file_context()
 
         if context in ["sql", "python"]:
-            # Contexto de arquivo único - salvar no arquivo original
+            # Contexto de arquivo unico - salvar no arquivo original
             if self._original_file_path:
                 self._save_single_file(self._original_file_path, context)
             else:
-                # Pedir caminho para arquivo único
+                # Pedir caminho para arquivo unico
                 self._save_single_file_as(context)
         else:
             # Contexto workspace - usar workspace_manager diretamente
@@ -4584,6 +4621,13 @@ class MainWindow(DockingMainWindow):
                 splitter_sizes=[],
                 dock_visible=dock_visible,
             )
+
+            # Feedback visual para o usuario
+            save_path = str(self.workspace_manager.current_file_path or self.workspace_manager.config_path)
+            self.main_statusbar.show_save_feedback(f"Workspace salvo: {save_path}")
+            self.main_statusbar.set_file_info(save_path)
+
+            self._clear_modification_markers()
 
     def _save_single_file(self, file_path: str, file_type: str):
         """Salva conteudo em arquivo unico (sql/py)"""
@@ -4622,7 +4666,8 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.setTabText(index, filename)
                 current_widget.session.title = filename
 
-            self.action_label.setText(f"Arquivo salvo: {filename}")
+            self.main_statusbar.show_save_feedback(f"Arquivo salvo: {file_path}")
+            self.main_statusbar.set_file_info(file_path)
 
             self._update_window_title()
 
