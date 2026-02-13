@@ -3051,7 +3051,7 @@ class MainWindow(DockingMainWindow):
             self,
             "Abrir Arquivo",
             "",
-            "Arquivos Suportados (*.sql *.py *.dpw);;DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)",
+            "Arquivos Suportados (*.sql *.py *.ipynb *.dpw);;DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;Jupyter Notebook (*.ipynb);;All Files (*.*)",
         )
         if filename:
             # Verifica se é workspace
@@ -3064,14 +3064,36 @@ class MainWindow(DockingMainWindow):
     def _open_code_file(self, filename: str):
         """Abre arquivo de codigo em nova aba com paineis completos"""
         try:
-            # 1. Ler conteudo do arquivo
-            with open(filename, "r", encoding="utf-8") as f:
-                content = f.read()
+            # 1. Ler conteudo do arquivo (ou celulas se for notebook)
+            is_notebook = filename.endswith(".ipynb")
+            cells = None
+            content = ""
+
+            if is_notebook:
+                # Importar servico para parsear notebook
+                from src.services.file_import_service import FileImportService
+
+                try:
+                    cells = FileImportService.parse_ipynb_file(filename)
+                    # Guardar conteudo original como JSON
+                    with open(filename, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except ValueError as e:
+                    from PyQt6.QtWidgets import QMessageBox
+
+                    QMessageBox.critical(self, "Erro", f"Erro ao abrir notebook: {e}")
+                    return
+            else:
+                with open(filename, "r", encoding="utf-8") as f:
+                    content = f.read()
 
             # 2. Detectar linguagem e configurar contexto
             if filename.endswith(".py"):
                 language = "python"
                 self._original_file_type = "python"
+            elif filename.endswith(".ipynb"):
+                language = "python"
+                self._original_file_type = "notebook"
             elif filename.endswith(".dpw"):
                 language = "sql"
                 self._original_file_type = "workspace"
@@ -3102,10 +3124,25 @@ class MainWindow(DockingMainWindow):
             self._original_file_path = filename
 
             # 6. Configurar conteudo
-            blocks = widget.editor.get_blocks()
-            if blocks:
-                blocks[0].set_language(language)
-                blocks[0].set_code(content)
+            if is_notebook and cells:
+                # Notebook: criar um bloco por celula
+                blocks = widget.editor.get_blocks()
+                for i, cell in enumerate(cells):
+                    if i == 0 and blocks:
+                        # Usar primeiro bloco existente
+                        blocks[0].set_language(cell["language"])
+                        blocks[0].set_code(cell["code"])
+                    else:
+                        # Criar novos blocos para celulas subsequentes
+                        new_block = widget.editor.add_block(language=cell["language"])
+                        if new_block:
+                            new_block.set_code(cell["code"])
+            else:
+                # Arquivo tradicional: um bloco unico
+                blocks = widget.editor.get_blocks()
+                if blocks:
+                    blocks[0].set_language(language)
+                    blocks[0].set_code(content)
 
             # 7. Conectar sinal de modificacao do editor
             widget.editor.content_changed.connect(lambda: self._on_editor_modified(widget))
@@ -3688,7 +3725,7 @@ class MainWindow(DockingMainWindow):
                 if mime_data.hasUrls():
                     for url in mime_data.urls():
                         file_path = url.toLocalFile()
-                        if file_path.lower().endswith((".csv", ".json", ".xlsx", ".xls", ".sql", ".py", ".dpw")):
+                        if file_path.lower().endswith((".csv", ".json", ".xlsx", ".xls", ".sql", ".py", ".ipynb", ".dpw")):
                             event.acceptProposedAction()
                             return
 
@@ -3701,7 +3738,7 @@ class MainWindow(DockingMainWindow):
                     file_paths = []
                     for url in mime_data.urls():
                         file_path = url.toLocalFile()
-                        if file_path.lower().endswith((".csv", ".json", ".xlsx", ".xls", ".sql", ".py", ".dpw")):
+                        if file_path.lower().endswith((".csv", ".json", ".xlsx", ".xls", ".sql", ".py", ".ipynb", ".dpw")):
                             file_paths.append(file_path)
                     if file_paths:
                         main_window_ref._handle_empty_state_drop(file_paths)
