@@ -24,7 +24,7 @@ class FileImportService(QObject):
     """
 
     # Extensoes suportadas
-    CODE_EXTENSIONS = (".sql", ".py")
+    CODE_EXTENSIONS = (".sql", ".py", ".ipynb")
     DATA_EXTENSIONS = (".csv", ".json", ".xlsx", ".xls")
     WORKSPACE_EXTENSIONS = (".dpw",)
     ALL_EXTENSIONS = CODE_EXTENSIONS + DATA_EXTENSIONS + WORKSPACE_EXTENSIONS
@@ -56,7 +56,8 @@ class FileImportService(QObject):
     @staticmethod
     def detect_language(file_path: str) -> str:
         """Detecta a linguagem do arquivo."""
-        if file_path.lower().endswith(".py"):
+        lower_path = file_path.lower()
+        if lower_path.endswith(".py") or lower_path.endswith(".ipynb"):
             return "python"
         return "sql"
 
@@ -139,3 +140,61 @@ class FileImportService(QObject):
             return f'import fastexcel\n{var_name} = fastexcel.read_excel("{safe_path}").load_sheet(0).to_pandas()\n{var_name}'
 
         return None
+
+    @staticmethod
+    def parse_ipynb_file(file_path: str) -> list:
+        """
+        Parse um arquivo Jupyter Notebook e retorna lista de celulas de codigo.
+
+        Returns:
+            Lista de dicionarios com:
+            - 'language': Linguagem da celula (sempre 'python' para Jupyter)
+            - 'code': Codigo da celula
+            - 'cell_type': Tipo da celula ('code', 'markdown', 'raw')
+
+        Raises:
+            ValueError: Se o arquivo nao for um notebook valido
+        """
+        import json
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                notebook = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Arquivo .ipynb invalido: {e}")
+        except Exception as e:
+            raise ValueError(f"Erro ao ler arquivo .ipynb: {e}")
+
+        # Validar estrutura basica do notebook
+        if not isinstance(notebook, dict):
+            raise ValueError("Notebook deve ser um objeto JSON")
+
+        cells = notebook.get("cells", [])
+        if not isinstance(cells, list):
+            raise ValueError("Campo 'cells' deve ser uma lista")
+
+        # Extrair celulas de codigo
+        result = []
+        for cell in cells:
+            cell_type = cell.get("cell_type", "code")
+            source = cell.get("source", [])
+
+            # Converter source para string
+            if isinstance(source, list):
+                code = "".join(source)
+            elif isinstance(source, str):
+                code = source
+            else:
+                code = ""
+
+            # So adicionar celulas nao vazias
+            if code.strip():
+                result.append(
+                    {
+                        "language": "python",
+                        "code": code,
+                        "cell_type": cell_type,
+                    }
+                )
+
+        return result

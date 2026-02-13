@@ -22,6 +22,12 @@ jobs:
         run: |
           sudo rm -f /etc/apt/sources.list.d/ubuntu-esm-*.list
           sudo sed -i '/esm\.ubuntu\.com/d' /etc/apt/sources.list
+      - name: Disable Microsoft apt sources
+        # Disable Microsoft repos (azure-cli, prod) that return 403 Forbidden
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list
+          sudo rm -f /etc/apt/sources.list.d/packages.microsoft.com.list
       - name: Install MariaDB Connector/C dependencies (Ubuntu)
         run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
 
