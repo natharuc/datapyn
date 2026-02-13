@@ -946,10 +946,10 @@ class MainWindow(DockingMainWindow):
         return self._session_explorers.get(sid) if sid else None
 
     def _on_object_explorer_insert_text(self, text: str):
-        """Insere texto no editor focado e refoca o editor"""
+        """Insere texto no bloco que estava focado antes de clicar no OE"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
-            block = current_widget.editor.get_focused_block()
+            block = current_widget.editor.get_last_focused_block()
             if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
                 block.editor.insert_text_at_cursor(text)
                 # Refoca o editor apos inserir
@@ -957,10 +957,10 @@ class MainWindow(DockingMainWindow):
                     block.editor.setFocus()
 
     def _on_object_explorer_query(self, query: str):
-        """Insere query no editor focado e refoca"""
+        """Insere query no bloco que estava focado antes de clicar no OE"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
-            block = current_widget.editor.get_focused_block()
+            block = current_widget.editor.get_last_focused_block()
             if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
                 block.editor.insert_text_at_cursor(query)
                 if hasattr(block.editor, "setFocus"):
@@ -2413,6 +2413,9 @@ class MainWindow(DockingMainWindow):
         # Marcar aba como rodando
         running_tab_index = self._mark_tab_running(True)
 
+        # Salvar banco atual para detectar mudanca via USE dentro do batch
+        current_db_before = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+
         # Criar thread e worker
         thread = QThread()
         worker = SqlWorker(connector, query)
@@ -2420,7 +2423,9 @@ class MainWindow(DockingMainWindow):
 
         # Conectar sinais
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index))
+        worker.finished.connect(
+            lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index, current_db_before)
+        )
 
         # Limpeza segura: so deletar quando thread realmente parar
         thread.finished.connect(worker.deleteLater)
@@ -2522,7 +2527,7 @@ class MainWindow(DockingMainWindow):
         """Remove thread da lista de workers ativos (chamado via thread.finished)."""
         self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
 
-    def _on_sql_finished(self, df, error, thread, tab_index):
+    def _on_sql_finished(self, df, error, thread, tab_index, db_before=""):
         """Callback quando SQL termina"""
         self._stop_execution_timer()
 
@@ -2531,6 +2536,9 @@ class MainWindow(DockingMainWindow):
 
         # Parar thread (finished signal cuida da limpeza)
         thread.quit()
+
+        # Detectar mudanca de banco via USE dentro do batch SQL
+        self._check_database_changed_after_sql(db_before)
 
         # FORCAR: Se ha erro, SEMPRE mostrar output
         if error:
@@ -2553,6 +2561,36 @@ class MainWindow(DockingMainWindow):
             self._send_notification(
                 "Query SQL", f"Concluida! {rows:,} linhas retornadas", success=True, tab_index=tab_index
             )
+
+    def _check_database_changed_after_sql(self, db_before: str):
+        """Verifica se o banco mudou apos execucao SQL (ex: USE dentro de batch).
+
+        Se mudou, recarrega o Object Explorer com o novo banco.
+        """
+        if not db_before:
+            return
+
+        session = self.session_manager.focused_session
+        if not session or not session.connector:
+            return
+
+        connector = session.connector
+        try:
+            db_after = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+        except Exception:
+            return
+
+        if db_after and db_after.lower() != db_before.lower():
+            connection_name = getattr(session, "connection_name", "") or ""
+            if connection_name:
+                self._schema_service.invalidate_cache(connection_name)
+                self._schema_service.load_schema(connector, connection_name)
+
+                self._update_connection_status()
+
+                current_widget = self._get_current_session_widget()
+                if current_widget and hasattr(current_widget, "connection_changed"):
+                    current_widget.connection_changed.emit(connection_name, db_after)
 
     def _execute_python(self, code: str):
         """Executa código Python em background"""

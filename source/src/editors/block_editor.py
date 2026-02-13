@@ -69,6 +69,7 @@ class BlockEditor(QWidget):
         self.theme_manager = theme_manager or ThemeManager()
         self._blocks: List[CodeBlock] = []
         self._focused_block: Optional[CodeBlock] = None
+        self._last_focused_block: Optional[CodeBlock] = None
         self._executing_index: int = -1  # Índice do bloco sendo executado em batch
         self._execution_queue_blocks: List[CodeBlock] = []  # Blocos na fila de execução
         self._current_executing_block: Optional[CodeBlock] = None  # Bloco atualmente executando
@@ -379,6 +380,8 @@ class BlockEditor(QWidget):
                 new_index = min(index, len(self._blocks) - 1)
                 self._blocks[new_index].focus_editor()
             self._focused_block = None
+        if self._last_focused_block == block:
+            self._last_focused_block = None
 
         self.content_changed.emit()
 
@@ -389,12 +392,14 @@ class BlockEditor(QWidget):
             block.deleteLater()
         self._blocks.clear()
         self._focused_block = None
+        self._last_focused_block = None
         self.add_block()
 
     def _on_block_focus_changed(self, block: CodeBlock, has_focus: bool):
         """Quando um bloco ganha/perde foco"""
         if has_focus:
             self._focused_block = block
+            self._last_focused_block = block
         elif self._focused_block == block:
             self._focused_block = None
 
@@ -403,6 +408,14 @@ class BlockEditor(QWidget):
     def get_focused_block(self) -> Optional[CodeBlock]:
         """Retorna o bloco focado atual"""
         return self._focused_block
+
+    def get_last_focused_block(self) -> Optional[CodeBlock]:
+        """Retorna o ultimo bloco que teve foco (mesmo que nao esteja focado agora).
+
+        Util para inserir texto a partir de paineis externos (Object Explorer,
+        Variables) onde clicar no painel tira o foco do editor.
+        """
+        return self._last_focused_block or self._focused_block
 
     def focus_first_block(self):
         """Foca no primeiro bloco de código"""
