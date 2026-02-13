@@ -982,7 +982,7 @@ class MainWindow(DockingMainWindow):
                     block.editor.setFocus()
 
     def _on_object_explorer_database_switch(self, database_name: str):
-        """Troca o banco de dados da conexao da aba ativa"""
+        """Troca o banco de dados da conexao da aba ativa (em background)"""
         current_widget = self._get_current_session_widget()
         if not current_widget or not hasattr(current_widget, "session"):
             return
@@ -995,20 +995,36 @@ class MainWindow(DockingMainWindow):
             self.statusBar().showMessage("Nenhuma conexao ativa", 3000)
             return
 
-        try:
-            connector.change_database(database_name)
-            self.statusBar().showMessage(f"Banco alterado para: {database_name}", 5000)
+        self.statusBar().showMessage(f"Trocando banco para: {database_name}...", 10000)
 
-            # Recarregar schema para o novo banco
-            self._schema_service.invalidate_cache(connection_name)
-            self._schema_service.load_schema(connector, connection_name)
+        from src.workers import DatabaseSwitchWorker
 
-            # Emitir sinal de mudanca de conexao para atualizar UI
-            if hasattr(current_widget, "connection_changed"):
-                current_widget.connection_changed.emit(connection_name, database_name)
+        thread = QThread()
+        worker = DatabaseSwitchWorker(connector, database_name)
+        worker.moveToThread(thread)
 
-        except Exception as e:
-            self.statusBar().showMessage(f"Erro ao trocar banco: {e}", 5000)
+        thread.started.connect(worker.run)
+        worker.switch_success.connect(
+            lambda db: self._on_database_switch_success(db, connection_name, connector, current_widget)
+        )
+        worker.error.connect(lambda msg: self.statusBar().showMessage(msg, 5000))
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        self._worker_threads.append((thread, worker))
+        thread.start()
+
+    def _on_database_switch_success(self, database_name, connection_name, connector, widget):
+        """Callback quando troca de banco termina com sucesso"""
+        self.statusBar().showMessage(f"Banco alterado para: {database_name}", 5000)
+
+        self._schema_service.invalidate_cache(connection_name)
+        self._schema_service.load_schema(connector, connection_name)
+
+        if hasattr(widget, "connection_changed"):
+            widget.connection_changed.emit(connection_name, database_name)
 
     def _on_object_explorer_refresh(self):
         """Refresh do Object Explorer - recarrega schema da conexao ativa"""
@@ -2792,6 +2808,11 @@ class MainWindow(DockingMainWindow):
             lambda result, err: self._on_cross_finished(result, err, code, thread, running_tab_index, executing_session)
         )
 
+        # Limpeza segura: so deletar quando thread realmente parar
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
         # Manter referência
         self._worker_threads.append((thread, worker))
 
@@ -2814,10 +2835,8 @@ class MainWindow(DockingMainWindow):
         # Remover marcação de rodando
         self._mark_tab_running(False, tab_index)
 
-        # Limpar thread da lista
-        self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
+        # Parar thread (finished signal cuida da limpeza)
         thread.quit()
-        thread.wait()
 
         # Marcar blocos como não executando
         widget = self._get_current_session_widget()
@@ -4122,7 +4141,7 @@ class MainWindow(DockingMainWindow):
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback quando conexao de um bloco individual muda.
 
-        Carrega schema da nova conexao e aplica ao bloco.
+        Carrega schema da nova conexao e aplica ao bloco (em background).
         """
         if not connection_name:
             return
@@ -4134,18 +4153,18 @@ class MainWindow(DockingMainWindow):
                 block.editor.set_sql_schema(cached)
             return
 
-        # Precisa carregar schema - criar connector temporario
+        # Precisa carregar schema - criar connector em background
         try:
             from src.database.connection_manager import ConnectionManager
-            from src.database.database_connector import DatabaseConnector
+            from src.workers import BlockConnectionWorker
 
             manager = ConnectionManager()
             config = manager.get_connection_config(connection_name)
             if not config:
                 return
 
-            connector = DatabaseConnector()
-            connector.connect(
+            thread = QThread()
+            worker = BlockConnectionWorker(
                 db_type=config["db_type"],
                 host=config["host"],
                 port=config["port"],
@@ -4155,11 +4174,22 @@ class MainWindow(DockingMainWindow):
                 use_windows_auth=config.get("use_windows_auth", False),
                 trust_server_certificate=config.get("trust_server_certificate", False),
             )
+            worker.moveToThread(thread)
 
-            if connector.is_connected():
-                # load_schema carrega em background e emite schema_loaded
-                # que vai distribuir para blocos com essa conexao
-                self._schema_service.load_schema(connector, connection_name)
+            thread.started.connect(worker.run)
+            worker.connection_ready.connect(
+                lambda connector: self._schema_service.load_schema(connector, connection_name)
+            )
+            worker.error.connect(
+                lambda msg: self._log_info(f"Erro ao carregar schema para bloco ({connection_name}): {msg}")
+            )
+            worker.finished.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+            self._worker_threads.append((thread, worker))
+            thread.start()
         except Exception as e:
             self._log_info(f"Erro ao carregar schema para bloco ({connection_name}): {e}")
 
