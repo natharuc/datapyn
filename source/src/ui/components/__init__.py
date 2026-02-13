@@ -58,6 +58,9 @@ from .results_viewer import ResultsViewer, CSVExportDialog, PandasModel
 # Session Widget
 from .session_widget import SessionWidget
 
+# Object Explorer
+from .object_explorer_panel import ObjectExplorerPanel
+
 
 __all__ = [
     # Buttons
@@ -93,4 +96,5 @@ __all__ = [
     "CSVExportDialog",
     "PandasModel",
     "SessionWidget",
+    "ObjectExplorerPanel",
 ]
