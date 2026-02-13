@@ -37,7 +37,10 @@ class UpdateChecker(QObject):
             response.raise_for_status()
 
             release_data = response.json()
-            latest_version = release_data["tag_name"].lstrip("v")
+            latest_version = release_data["tag_name"]
+            # Remove 'v' prefix se presente (ex: v1.0.0 -> 1.0.0)
+            if latest_version.startswith("v"):
+                latest_version = latest_version[1:]
             release_notes = release_data.get("body", "")
 
             # Encontrar o asset MSI para Windows
@@ -230,6 +233,17 @@ class AutoUpdateService:
         try:
             if not os.path.exists(installer_path):
                 logger.error(f"Instalador nao encontrado: {installer_path}")
+                return False
+
+            # Validar que o arquivo e um MSI e esta em diretorio temporario
+            if not installer_path.lower().endswith(".msi"):
+                logger.error(f"Arquivo nao e um instalador MSI: {installer_path}")
+                return False
+
+            # Validar que esta em diretorio temporario (seguranca)
+            temp_dir = tempfile.gettempdir()
+            if not os.path.commonpath([installer_path, temp_dir]) == temp_dir:
+                logger.error(f"Instalador nao esta em diretorio temporario: {installer_path}")
                 return False
 
             # Executar o instalador MSI

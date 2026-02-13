@@ -75,6 +75,9 @@ from src.design_system.tokens import get_colors, DARK_COLORS
 # Services
 from src.services import AutoUpdateService
 
+# Constantes
+DEFAULT_VERSION = "1.1.4"  # Versao padrao caso nao consiga ler do pyproject.toml
+
 
 class SqlWorker(QObject):
     """Worker para executar SQL em background"""
@@ -3434,12 +3437,12 @@ class MainWindow(DockingMainWindow):
             if os.path.exists(pyproject_path):
                 with open(pyproject_path, "rb") as f:
                     data = tomllib.load(f)
-                    return data.get("project", {}).get("version", "1.1.4")
+                    return data.get("project", {}).get("version", DEFAULT_VERSION)
             else:
-                return "1.1.4"  # Versao padrao se arquivo nao encontrado
+                return DEFAULT_VERSION
         except Exception as e:
             logger.warning(f"Erro ao ler versao do pyproject.toml: {e}")
-            return "1.1.4"
+            return DEFAULT_VERSION
 
     def _check_for_updates(self):
         """Verifica manualmente por atualizacoes"""

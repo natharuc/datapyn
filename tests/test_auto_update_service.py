@@ -34,10 +34,14 @@ class TestUpdateChecker:
         assert checker._is_newer_version("1.0.0", "1.1.0") is False
 
     def test_is_newer_version_handles_prereleases(self):
-        """Testa se lida com pre-releases corretamente"""
+        """Testa se lida com pre-releases corretamente removendo sufixos"""
         checker = UpdateChecker("1.0.0", "owner", "repo")
+        # Pre-release suffixes sao removidos, entao 1.1.0-alpha e tratado como 1.1.0
         assert checker._is_newer_version("1.1.0-alpha", "1.0.0") is True
+        # Ambos 1.0.0-alpha e 1.0.0-beta sao tratados como 1.0.0, logo nao ha diferenca
         assert checker._is_newer_version("1.0.0-beta", "1.0.0-alpha") is False
+        # 1.0.0 nao e mais novo que 1.0.0
+        assert checker._is_newer_version("1.0.0", "1.0.0") is False
 
     @patch("src.services.auto_update_service.requests.get")
     def test_check_for_updates_emits_update_available(self, mock_get, qtbot):
