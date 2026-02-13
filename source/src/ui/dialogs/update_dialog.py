@@ -163,3 +163,45 @@ class UpdateDownloadDialog(QDialog):
         QMessageBox.critical(
             self, "Erro no Download", f"Falha ao baixar atualizacao:\n\n{error_message}"
         )
+
+
+class UpdateCheckingDialog(QDialog):
+    """Dialog para mostrar loading durante verificacao de atualizacoes"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Verificando Atualizacoes")
+        self.setMinimumSize(QSize(350, 120))
+        self.setModal(True)
+
+        # Impedir fechamento durante verificacao
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
+
+        self._init_ui()
+
+    def _init_ui(self):
+        """Inicializa a interface"""
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+
+        # Titulo
+        title_label = QLabel("Verificando novas versoes...")
+        title_font = QFont()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title_label)
+
+        # Barra de progresso indeterminada
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(0)  # Modo indeterminado
+        layout.addWidget(self.progress_bar)
+
+        # Label de status
+        self.status_label = QLabel("Conectando ao GitHub...")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.status_label)
+
+        self.setLayout(layout)

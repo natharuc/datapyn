@@ -57,7 +57,7 @@ from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.ui.dialogs.settings_dialog import SettingsDialog
 from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
-from src.ui.dialogs.update_dialog import UpdateDialog, UpdateDownloadDialog
+from src.ui.dialogs.update_dialog import UpdateDialog, UpdateDownloadDialog, UpdateCheckingDialog
 
 # Componentes da UI
 from src.ui.components.results_viewer import ResultsViewer
@@ -3378,24 +3378,31 @@ class MainWindow(DockingMainWindow):
             self,
             "Sobre DataPyn",
             f"""<h2>DataPyn IDE</h2>
+            <p><b>Versão {self._current_version}</b></p>
             <p>IDE moderna para consultas SQL com manipulação Python integrada</p>
-            <p><b>Recursos:</b></p>
+            
+            <p><b>Tecnologias:</b></p>
             <ul>
-                <li>Suporte para SQL Server, MySQL, MariaDB, PostgreSQL</li>
-                <li>Editor SQL com syntax highlighting</li>
-                <li>Editor Python para manipular resultados</li>
-                <li>Resultados persistem em memória</li>
-                <li>Exportação para CSV/Excel</li>
-                <li>Sintaxe mista: use query("SELECT...") no editor Python</li>
+                <li>Python 3.12+</li>
+                <li>PyQt6 - Interface gráfica</li>
+                <li>Pandas & Polars - Análise de dados</li>
+                <li>SQLAlchemy - Abstração de banco de dados</li>
+                <li>QScintilla - Editor de código</li>
+                <li>Matplotlib - Visualização de dados</li>
             </ul>
-            <p><b>Atalhos:</b></p>
+            
+            <p><b>Bancos de Dados Suportados:</b></p>
             <ul>
-                <li>F5 - Executar SQL</li>
-                <li>Shift+F5 - Executar Python</li>
-                <li>Ctrl+/ - Comentar linha</li>
-                <li>Ctrl+, - Configurações de Atalhos</li>
+                <li>Microsoft SQL Server</li>
+                <li>MySQL / MariaDB</li>
+                <li>PostgreSQL</li>
+                <li>SQLite</li>
             </ul>
-            <p>Versão {self._current_version}</p>
+            
+            <p><b>Licença:</b> MIT License</p>
+            <p><b>Repositório:</b> <a href="https://github.com/natharuc/datapyn">github.com/natharuc/datapyn</a></p>
+            
+            <p style="margin-top: 15px; color: #888;">Desenvolvido com Python e PyQt6</p>
             """,
         )
 
@@ -3459,13 +3466,31 @@ class MainWindow(DockingMainWindow):
             else:
                 return
 
-        self.statusbar.showMessage("Verificando atualizacoes...", 3000)
-
+        # Mostrar dialog de loading
+        self._update_checking_dialog = UpdateCheckingDialog(self)
+        
+        # Iniciar verificacao
         self.auto_update_service.check_for_updates(
-            on_available=self._on_update_available,
-            on_no_update=self._on_no_update_available,
-            on_error=self._on_update_check_error,
+            on_available=lambda v, url, notes: self._on_update_check_complete(v, url, notes),
+            on_no_update=lambda: self._on_update_check_complete(None, None, None),
+            on_error=lambda msg: self._on_update_check_error(msg),
         )
+        
+        # Mostrar dialog (modal)
+        self._update_checking_dialog.exec()
+
+    def _on_update_check_complete(self, version: str, download_url: str, release_notes: str):
+        """Callback quando verificacao de atualizacao e concluida"""
+        # Fechar dialog de loading
+        if hasattr(self, "_update_checking_dialog") and self._update_checking_dialog:
+            self._update_checking_dialog.close()
+        
+        if version:
+            # Ha atualizacao disponivel
+            self._on_update_available(version, download_url, release_notes)
+        else:
+            # Nao ha atualizacao
+            self._on_no_update_available()
 
     def _check_for_updates_silent(self):
         """Verifica por atualizacoes silenciosamente ao iniciar"""
@@ -3497,6 +3522,10 @@ class MainWindow(DockingMainWindow):
 
     def _on_update_check_error(self, error_message: str):
         """Callback quando ocorre erro ao verificar atualizacoes"""
+        # Fechar dialog de loading
+        if hasattr(self, "_update_checking_dialog") and self._update_checking_dialog:
+            self._update_checking_dialog.close()
+        
         self.statusbar.showMessage("Erro ao verificar atualizacoes", 5000)
         QMessageBox.warning(
             self, "Erro na Verificacao", f"Nao foi possivel verificar atualizacoes:\n\n{error_message}"
