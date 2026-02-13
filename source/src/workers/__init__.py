@@ -239,7 +239,7 @@ class BlockConnectionWorker(BaseWorker):
 
     Signals:
         - connection_ready(object): Connector conectado
-        - error(str): Erro na conexao
+        - error(str): Erro na conexão
     """
 
     connection_ready = pyqtSignal(object)
@@ -282,7 +282,7 @@ class BlockConnectionWorker(BaseWorker):
             else:
                 self.error.emit("Falha ao conectar ao banco")
         except Exception as e:
-            error_msg = f"Erro de conexao: {str(e)}"
+            error_msg = f"Erro de conexão: {str(e)}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()

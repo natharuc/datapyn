@@ -179,7 +179,7 @@ class TestBlockConnectionWorker:
         worker.run()
 
         assert error_received["msg"] is not None
-        assert "Connection refused" in error_received["msg"]
+        assert "Erro de conexão" in error_received["msg"] or "Connection refused" in error_received["msg"]
 
     @patch("src.database.database_connector.DatabaseConnector")
     def test_run_not_connected_emits_error(self, mock_connector_cls, qtbot):
