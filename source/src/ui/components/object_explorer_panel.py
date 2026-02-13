@@ -271,6 +271,7 @@ class ObjectExplorerPanel(QWidget):
         use_schema_nodes = len(schema_groups) > 1
 
         for schema_name, schema_tables in sorted(schema_groups.items()):
+            schema_item = None
             if use_schema_nodes and schema_name:
                 schema_item = QTreeWidgetItem(parent_item, [schema_name])
                 schema_item.setData(
@@ -320,13 +321,16 @@ class ObjectExplorerPanel(QWidget):
                     else:
                         table_item.setIcon(0, qta.icon("mdi.table", color="#4ec9b0"))
 
+                # Determinar se a tabela em si corresponde ao filtro
+                table_matches_filter = filter_text in table_name.lower() if filter_text else True
+
                 for col in table_columns:
                     col_name = col.get("name", "")
                     col_type = col.get("type", "")
                     nullable = col.get("nullable", "YES")
 
-                    # Filtro de busca por coluna
-                    if filter_text and filter_text not in table_name.lower() and filter_text not in col_name.lower():
+                    # Se tabela nao corresponde ao filtro, filtrar colunas individualmente
+                    if filter_text and not table_matches_filter and filter_text not in col_name.lower():
                         continue
 
                     display = f"{col_name}  ({col_type})"
@@ -356,9 +360,8 @@ class ObjectExplorerPanel(QWidget):
                     table_item.setExpanded(True)
 
             # Remover schema node vazio apos filtro
-            if use_schema_nodes and schema_name and parent != parent_item:
-                if schema_item.childCount() == 0:
-                    parent_item.removeChild(schema_item)
+            if schema_item is not None and schema_item.childCount() == 0:
+                parent_item.removeChild(schema_item)
 
     def _on_search_changed(self, text: str):
         """Chamado quando texto de busca muda - reconstroi arvore com filtro"""

@@ -191,6 +191,7 @@ class TestObjectExplorerSetSchema:
         """Info label atualizado apos set_schema"""
         explorer.set_schema(sample_schema, "conn1")
         assert "3 tabelas" in explorer.info_label.text()
+        assert "8 colunas" in explorer.info_label.text()
 
     def test_set_schema_multiple_schemas(self, explorer, multi_schema):
         """Multiplos schemas criam nos intermediarios"""
