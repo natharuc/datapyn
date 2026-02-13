@@ -183,11 +183,13 @@ jobs:
             -dProductVersion="$version" `
             scripts\installer.wxs heat.wxs
 
-          # Link into MSI (suppress ICE91 - expected for per-user install)
+          # Link into MSI
+          # -sice:ICE91 - expected warning for per-user install (files not copied to all users)
+          # -sice:ICE64 - directories in user profile without RemoveFile entries (handled by Windows Installer)
           & "${wixBin}light.exe" `
             -ext WixUIExtension `
             -spdb `
-            -sice:ICE91 `
+            -sice:ICE91 -sice:ICE64 `
             installer.wixobj heat.wixobj `
             -o "DataPyn-${rawVersion}-windows.msi"
 
