@@ -67,6 +67,7 @@ from src.ui.components.toolbar import MainToolbar
 from src.ui.components.statusbar import MainStatusBar
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
+from src.ui.components.object_explorer_panel import ObjectExplorerPanel
 from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS
 
@@ -797,6 +798,9 @@ class MainWindow(DockingMainWindow):
         # Configurar painéis dockable (Results, Output, Variables)
         self._setup_dockable_panels()
 
+        # Object Explorer (lateral direita, abaixo de Variables)
+        self._create_object_explorer_dock()
+
         # Restaurar layout de dock widgets após criar todos os docks
         # DESABILITADO: self._restore_dock_layout()
         # SEMPRE USA LAYOUT PADRÃO por enquanto
@@ -863,6 +867,147 @@ class MainWindow(DockingMainWindow):
         self.active_conn_name_label = self.connection_panel.active_widget.name_label
         self.active_conn_info_label = self.connection_panel.active_widget.info_label
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect
+
+    def _create_object_explorer_dock(self):
+        """Cria painel do Object Explorer (lateral direita, abaixo de Variables).
+
+        Usa QStackedWidget para que cada sessao tenha seu proprio Object Explorer.
+        """
+        from PyQt6.QtWidgets import QStackedWidget
+
+        self._object_explorer_stack = QStackedWidget()
+        # Mapeamento session_id -> ObjectExplorerPanel
+        self._session_explorers: dict = {}
+
+        # Criar dock widget
+        self.object_explorer_dock = QDockWidget("Object Explorer", self)
+        self.object_explorer_dock.setObjectName("ObjectExplorerDock")
+        self.object_explorer_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.object_explorer_dock.setWidget(self._object_explorer_stack)
+        self.object_explorer_dock.setStyleSheet("""
+            QDockWidget {
+                background-color: #252526;
+                color: #cccccc;
+            }
+            QDockWidget::title {
+                background-color: #2d2d30;
+                padding: 8px;
+                font-weight: bold;
+            }
+        """)
+
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
+
+        self.object_explorer_dock.setMinimumWidth(200)
+        self.object_explorer_dock.setMinimumHeight(150)
+
+        features = (
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        self.object_explorer_dock.setFeatures(features)
+
+        # Esconder ate ter conexao ativa
+        self.object_explorer_dock.hide()
+
+    def _get_session_explorer(self, session_id: str) -> ObjectExplorerPanel:
+        """Retorna o ObjectExplorerPanel da sessao, criando se necessario."""
+        if session_id in self._session_explorers:
+            return self._session_explorers[session_id]
+
+        panel = ObjectExplorerPanel(theme_manager=self.theme_manager)
+        panel.insert_text_requested.connect(self._on_object_explorer_insert_text)
+        panel.query_requested.connect(self._on_object_explorer_query)
+        panel.database_switch_requested.connect(self._on_object_explorer_database_switch)
+        panel.btn_refresh.clicked.connect(self._on_object_explorer_refresh)
+
+        self._object_explorer_stack.addWidget(panel)
+        self._session_explorers[session_id] = panel
+        return panel
+
+    def _remove_session_explorer(self, session_id: str):
+        """Remove Object Explorer de uma sessao."""
+        panel = self._session_explorers.pop(session_id, None)
+        if panel:
+            self._object_explorer_stack.removeWidget(panel)
+            panel.deleteLater()
+
+    def _switch_session_explorer(self, session_id: str):
+        """Troca para o Object Explorer da sessao ativa."""
+        panel = self._session_explorers.get(session_id)
+        if panel:
+            self._object_explorer_stack.setCurrentWidget(panel)
+
+    @property
+    def _active_object_explorer(self):
+        """Retorna o ObjectExplorerPanel da sessao ativa."""
+        sid = self._get_active_session_id()
+        return self._session_explorers.get(sid) if sid else None
+
+    def _on_object_explorer_insert_text(self, text: str):
+        """Insere texto no bloco que estava focado antes de clicar no OE"""
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "editor"):
+            block = current_widget.editor.get_last_focused_block()
+            if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
+                block.editor.insert_text_at_cursor(text)
+                # Refoca o editor apos inserir
+                if hasattr(block.editor, "setFocus"):
+                    block.editor.setFocus()
+
+    def _on_object_explorer_query(self, query: str):
+        """Insere query no bloco que estava focado antes de clicar no OE"""
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "editor"):
+            block = current_widget.editor.get_last_focused_block()
+            if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
+                block.editor.insert_text_at_cursor(query)
+                if hasattr(block.editor, "setFocus"):
+                    block.editor.setFocus()
+
+    def _on_object_explorer_database_switch(self, database_name: str):
+        """Troca o banco de dados da conexao da aba ativa"""
+        current_widget = self._get_current_session_widget()
+        if not current_widget or not hasattr(current_widget, "session"):
+            return
+
+        session = current_widget.session
+        connector = getattr(session, "connector", None)
+        connection_name = getattr(session, "connection_name", "") or ""
+
+        if not connector or not connector.is_connected():
+            self.statusBar().showMessage("Nenhuma conexao ativa", 3000)
+            return
+
+        try:
+            connector.change_database(database_name)
+            self.statusBar().showMessage(f"Banco alterado para: {database_name}", 5000)
+
+            # Recarregar schema para o novo banco
+            self._schema_service.invalidate_cache(connection_name)
+            self._schema_service.load_schema(connector, connection_name)
+
+            # Emitir sinal de mudanca de conexao para atualizar UI
+            if hasattr(current_widget, "connection_changed"):
+                current_widget.connection_changed.emit(connection_name, database_name)
+
+        except Exception as e:
+            self.statusBar().showMessage(f"Erro ao trocar banco: {e}", 5000)
+
+    def _on_object_explorer_refresh(self):
+        """Refresh do Object Explorer - recarrega schema da conexao ativa"""
+        current_widget = self._get_current_session_widget()
+        if not current_widget or not hasattr(current_widget, "session"):
+            return
+
+        session = current_widget.session
+        connector = getattr(session, "connector", None)
+        connection_name = getattr(session, "connection_name", "") or ""
+
+        if connector and connector.is_connected():
+            self._schema_service.invalidate_cache(connection_name)
+            self._schema_service.load_schema(connector, connection_name)
 
     def _setup_dockable_panels(self):
         """Configura paineis dockable (Results, Output, Variables) usando QDockWidget.
@@ -970,6 +1115,10 @@ class MainWindow(DockingMainWindow):
         info["output"].deleteLater()
         info["variables"].deleteLater()
 
+        # Remover Object Explorer da sessao
+        if hasattr(self, "_session_explorers"):
+            self._remove_session_explorer(session_id)
+
     def _switch_session_panels(self, session_id: str):
         """Troca os stacks para exibir os paineis da sessao ativa.
 
@@ -985,6 +1134,10 @@ class MainWindow(DockingMainWindow):
             self._output_stack.setCurrentWidget(info["output"])
         if info["variables"]:
             self._variables_stack.setCurrentWidget(info["variables"])
+
+        # Trocar Object Explorer para a sessao ativa
+        if hasattr(self, "_session_explorers"):
+            self._switch_session_explorer(session_id)
 
     @property
     def global_results_viewer(self):
@@ -1039,6 +1192,7 @@ class MainWindow(DockingMainWindow):
             "results": self.results_dock,
             "output": self.output_dock,
             "variables": self.variables_dock,
+            "object_explorer": getattr(self, "object_explorer_dock", None),
         }
         dock = dock_map.get(name)
         if dock is None:
@@ -1081,6 +1235,8 @@ class MainWindow(DockingMainWindow):
             self.output_dock.hide()
         elif name == "variables":
             self.variables_dock.hide()
+        elif name == "object_explorer" and hasattr(self, "object_explorer_dock"):
+            self.object_explorer_dock.hide()
 
     def _refresh_connections_list(self):
         """Atualiza lista de conexões salvas"""
@@ -1107,24 +1263,29 @@ class MainWindow(DockingMainWindow):
             self.hide_panel("output")
 
     def _restore_default_layout(self):
-        """Restaura o layout padrão dos painéis"""
-        # Mostra todos os docks na posição padrão
+        """Restaura o layout padrao dos paineis"""
+        # Mostra todos os docks na posicao padrao
         self.results_dock.show()
         self.output_dock.show()
         self.variables_dock.show()
         self.connections_dock.show()
 
-        # Redefine posições
+        # Redefine posicoes
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
 
+        # Object Explorer abaixo de Variables na direita
+        if hasattr(self, "object_explorer_dock"):
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
+            self.object_explorer_dock.hide()
+
         # Tabifica Results e Output
         self.tabifyDockWidget(self.results_dock, self.output_dock)
         self.results_dock.raise_()
 
-        # Atualiza ações do menu
+        # Atualiza acoes do menu
         if hasattr(self, "results_action"):
             self.results_action.setChecked(True)
         if hasattr(self, "output_action"):
@@ -1133,6 +1294,8 @@ class MainWindow(DockingMainWindow):
             self.variables_action.setChecked(True)
         if hasattr(self, "connections_action"):
             self.connections_action.setChecked(True)
+        if hasattr(self, "object_explorer_action"):
+            self.object_explorer_action.setChecked(False)
 
     def _save_dock_layout(self):
         """DESABILITADO - Não salva layout automaticamente por segurança"""
@@ -1219,6 +1382,8 @@ class MainWindow(DockingMainWindow):
         try:
             # Força todos visíveis e não-flutuantes
             all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
+            if hasattr(self, "object_explorer_dock"):
+                all_docks.append(self.object_explorer_dock)
             for dock in all_docks:
                 if dock:
                     dock.setVisible(True)
@@ -1499,6 +1664,16 @@ class MainWindow(DockingMainWindow):
         connections_action.triggered.connect(lambda checked: self.connections_dock.setVisible(checked))
         panels_menu.addAction(connections_action)
         self.connections_action = connections_action
+
+        # Toggle do Object Explorer
+        object_explorer_action = QAction("&Object Explorer", self)
+        object_explorer_action.setCheckable(True)
+        object_explorer_action.setChecked(False)
+        object_explorer_action.triggered.connect(
+            lambda checked: self._toggle_panel_visibility("object_explorer", checked)
+        )
+        panels_menu.addAction(object_explorer_action)
+        self.object_explorer_action = object_explorer_action
 
         view_menu.addSeparator()
 
@@ -2209,6 +2384,17 @@ class MainWindow(DockingMainWindow):
                 # Atualiza statusbar
                 self._update_connection_status()
 
+                # Recarregar Object Explorer para o novo banco
+                connection_name = getattr(session, "connection_name", "") or ""
+                if connection_name:
+                    self._schema_service.invalidate_cache(connection_name)
+                    self._schema_service.load_schema(connector, connection_name)
+
+                    # Emitir sinal de mudanca de conexao para atualizar UI
+                    current_widget = self._get_current_session_widget()
+                    if current_widget and hasattr(current_widget, "connection_changed"):
+                        current_widget.connection_changed.emit(connection_name, database_name)
+
                 self._log_info(f"[SQL] Banco alterado para: {database_name}")
                 self.action_label.setText(f"[SQL] Banco: {database_name}")
                 self._stop_execution_timer()
@@ -2227,6 +2413,12 @@ class MainWindow(DockingMainWindow):
         # Marcar aba como rodando
         running_tab_index = self._mark_tab_running(True)
 
+        # Salvar banco atual para detectar mudanca via USE dentro do batch
+        try:
+            current_db_before = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+        except Exception:
+            current_db_before = ""
+
         # Criar thread e worker
         thread = QThread()
         worker = SqlWorker(connector, query)
@@ -2234,7 +2426,9 @@ class MainWindow(DockingMainWindow):
 
         # Conectar sinais
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index))
+        worker.finished.connect(
+            lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index, current_db_before)
+        )
 
         # Limpeza segura: so deletar quando thread realmente parar
         thread.finished.connect(worker.deleteLater)
@@ -2336,7 +2530,7 @@ class MainWindow(DockingMainWindow):
         """Remove thread da lista de workers ativos (chamado via thread.finished)."""
         self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
 
-    def _on_sql_finished(self, df, error, thread, tab_index):
+    def _on_sql_finished(self, df, error, thread, tab_index, db_before=""):
         """Callback quando SQL termina"""
         self._stop_execution_timer()
 
@@ -2345,6 +2539,9 @@ class MainWindow(DockingMainWindow):
 
         # Parar thread (finished signal cuida da limpeza)
         thread.quit()
+
+        # Detectar mudanca de banco via USE dentro do batch SQL
+        self._check_database_changed_after_sql(db_before)
 
         # FORCAR: Se ha erro, SEMPRE mostrar output
         if error:
@@ -2367,6 +2564,36 @@ class MainWindow(DockingMainWindow):
             self._send_notification(
                 "Query SQL", f"Concluida! {rows:,} linhas retornadas", success=True, tab_index=tab_index
             )
+
+    def _check_database_changed_after_sql(self, db_before: str):
+        """Verifica se o banco mudou apos execucao SQL (ex: USE dentro de batch).
+
+        Se mudou, recarrega o Object Explorer com o novo banco.
+        """
+        if not db_before:
+            return
+
+        session = self.session_manager.focused_session
+        if not session or not session.connector:
+            return
+
+        connector = session.connector
+        try:
+            db_after = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+        except Exception:
+            return
+
+        if db_after and db_after.lower() != db_before.lower():
+            connection_name = getattr(session, "connection_name", "") or ""
+            if connection_name:
+                self._schema_service.invalidate_cache(connection_name)
+                self._schema_service.load_schema(connector, connection_name)
+
+                self._update_connection_status()
+
+                current_widget = self._get_current_session_widget()
+                if current_widget and hasattr(current_widget, "connection_changed"):
+                    current_widget.connection_changed.emit(connection_name, db_after)
 
     def _execute_python(self, code: str):
         """Executa código Python em background"""
@@ -3686,6 +3913,22 @@ class MainWindow(DockingMainWindow):
                 elif session_conn == connection_name:
                     # Bloco sem conexao customizada: aplica se eh a conexao da sessao
                     block.editor.set_sql_schema(schema)
+
+        # Atualizar Object Explorer da sessao correspondente
+        if hasattr(self, "_session_explorers"):
+            for sid, widget in self._session_widgets.items():
+                if not (hasattr(widget, "session") and widget.session):
+                    continue
+                session_conn = getattr(widget.session, "connection_name", "") or ""
+                if session_conn == connection_name:
+                    explorer = self._get_session_explorer(sid)
+                    explorer.set_schema(schema, connection_name)
+                    # Mostrar dock se e a sessao ativa
+                    current_widget = self._get_current_session_widget()
+                    if current_widget and hasattr(current_widget, "session"):
+                        if current_widget.session.session_id == sid:
+                            self._switch_session_explorer(sid)
+                            self.object_explorer_dock.show()
 
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback quando conexao de um bloco individual muda.
