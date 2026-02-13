@@ -1719,6 +1719,16 @@ class MainWindow(DockingMainWindow):
         settings_action.triggered.connect(self._show_settings)
         tools_menu.addAction(settings_action)
 
+        tools_menu.addSeparator()
+
+        # Auto-update toggle
+        auto_update_action = QAction("Ativar &Auto-Update", self)
+        auto_update_action.setCheckable(True)
+        auto_update_action.setChecked(self.auto_update_service.is_auto_update_enabled())
+        auto_update_action.triggered.connect(self._toggle_auto_update)
+        tools_menu.addAction(auto_update_action)
+        self._auto_update_action = auto_update_action  # Salvar referencia para atualizar estado
+
         # Menu Ajuda
         help_menu = menubar.addMenu("A&juda")
 
@@ -3396,6 +3406,14 @@ class MainWindow(DockingMainWindow):
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
         dialog.exec()
+
+    def _toggle_auto_update(self, checked: bool):
+        """Ativa ou desativa auto-update"""
+        self.auto_update_service.set_auto_update_enabled(checked)
+        if checked:
+            self.statusbar.showMessage("Auto-update ativado", 3000)
+        else:
+            self.statusbar.showMessage("Auto-update desativado", 3000)
 
     def _get_current_version(self) -> str:
         """Obtem a versao atual do pyproject.toml"""
