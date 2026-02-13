@@ -136,7 +136,8 @@ class TestAutoUpdateService:
 
     @patch("src.services.auto_update_service.subprocess.Popen")
     @patch("src.services.auto_update_service.os.path.exists", return_value=True)
-    def test_install_update_starts_installer(self, mock_exists, mock_popen, auto_update_service):
+    @patch("src.services.auto_update_service.tempfile.gettempdir", return_value="C:\\temp")
+    def test_install_update_starts_installer(self, mock_tempdir, mock_exists, mock_popen, auto_update_service):
         """Testa se inicia o instalador MSI"""
         result = auto_update_service.install_update("C:\\temp\\installer.msi")
 

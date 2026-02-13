@@ -143,9 +143,11 @@ class AutoUpdateService:
         self.repo_name = repo_name
         self.settings = QSettings("DataPyn", "DataPyn")
 
-        # Threads
+        # Threads e workers (manter referencia para evitar GC)
         self._check_thread: Optional[QThread] = None
+        self._checker: Optional[UpdateChecker] = None
         self._download_thread: Optional[QThread] = None
+        self._downloader: Optional[UpdateDownloader] = None
 
     def is_auto_update_enabled(self) -> bool:
         """Verifica se auto-update esta habilitado"""
@@ -169,19 +171,19 @@ class AutoUpdateService:
             return
 
         self._check_thread = QThread()
-        checker = UpdateChecker(self.current_version, self.repo_owner, self.repo_name)
-        checker.moveToThread(self._check_thread)
+        self._checker = UpdateChecker(self.current_version, self.repo_owner, self.repo_name)
+        self._checker.moveToThread(self._check_thread)
 
         # Conectar sinais
-        self._check_thread.started.connect(checker.run)
-        checker.update_available.connect(on_available)
-        checker.no_update_available.connect(on_no_update)
-        checker.check_failed.connect(on_error)
+        self._check_thread.started.connect(self._checker.run)
+        self._checker.update_available.connect(on_available)
+        self._checker.no_update_available.connect(on_no_update)
+        self._checker.check_failed.connect(on_error)
 
         # Cleanup
-        checker.update_available.connect(self._check_thread.quit)
-        checker.no_update_available.connect(self._check_thread.quit)
-        checker.check_failed.connect(self._check_thread.quit)
+        self._checker.update_available.connect(self._check_thread.quit)
+        self._checker.no_update_available.connect(self._check_thread.quit)
+        self._checker.check_failed.connect(self._check_thread.quit)
         self._check_thread.finished.connect(self._check_thread.deleteLater)
 
         self._check_thread.start()
@@ -204,18 +206,18 @@ class AutoUpdateService:
         filename = f"DataPyn-{version}-windows.msi"
 
         self._download_thread = QThread()
-        downloader = UpdateDownloader(download_url, filename)
-        downloader.moveToThread(self._download_thread)
+        self._downloader = UpdateDownloader(download_url, filename)
+        self._downloader.moveToThread(self._download_thread)
 
         # Conectar sinais
-        self._download_thread.started.connect(downloader.run)
-        downloader.download_progress.connect(on_progress)
-        downloader.download_complete.connect(on_complete)
-        downloader.download_failed.connect(on_error)
+        self._download_thread.started.connect(self._downloader.run)
+        self._downloader.download_progress.connect(on_progress)
+        self._downloader.download_complete.connect(on_complete)
+        self._downloader.download_failed.connect(on_error)
 
         # Cleanup
-        downloader.download_complete.connect(self._download_thread.quit)
-        downloader.download_failed.connect(self._download_thread.quit)
+        self._downloader.download_complete.connect(self._download_thread.quit)
+        self._downloader.download_failed.connect(self._download_thread.quit)
         self._download_thread.finished.connect(self._download_thread.deleteLater)
 
         self._download_thread.start()

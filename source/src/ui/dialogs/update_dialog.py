@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QMessageBox,
 )
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QTimer
 from PyQt6.QtGui import QFont
 import logging
 
@@ -168,16 +168,21 @@ class UpdateDownloadDialog(QDialog):
 class UpdateCheckingDialog(QDialog):
     """Dialog para mostrar loading durante verificacao de atualizacoes"""
 
+    TIMEOUT_MS = 30000  # 30 segundos
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Verificando Atualizacoes")
-        self.setMinimumSize(QSize(350, 120))
+        self.setMinimumSize(QSize(350, 150))
         self.setModal(True)
 
-        # Impedir fechamento durante verificacao
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
-
         self._init_ui()
+
+        # Timeout para evitar loading infinito
+        self._timeout_timer = QTimer(self)
+        self._timeout_timer.setSingleShot(True)
+        self._timeout_timer.timeout.connect(self._on_timeout)
+        self._timeout_timer.start(self.TIMEOUT_MS)
 
     def _init_ui(self):
         """Inicializa a interface"""
@@ -204,4 +209,23 @@ class UpdateCheckingDialog(QDialog):
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.status_label)
 
+        # Botao cancelar
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        self.cancel_button = QPushButton("Cancelar")
+        self.cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(self.cancel_button)
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
         self.setLayout(layout)
+
+    def _on_timeout(self):
+        """Timeout: fecha dialog caso a verificacao demore demais"""
+        self.status_label.setText("Tempo esgotado.")
+        self.reject()
+
+    def close(self):
+        """Para o timer ao fechar"""
+        self._timeout_timer.stop()
+        super().close()
