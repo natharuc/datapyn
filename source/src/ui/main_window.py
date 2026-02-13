@@ -76,7 +76,7 @@ from src.design_system.tokens import get_colors, DARK_COLORS
 from src.services import AutoUpdateService
 
 # Constantes
-DEFAULT_VERSION = "1.1.4"  # Versao padrao caso nao consiga ler do pyproject.toml
+DEFAULT_VERSION = "1.1.6"  # Versao padrao caso nao consiga ler do pyproject.toml
 
 
 class SqlWorker(QObject):

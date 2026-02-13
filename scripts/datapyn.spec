@@ -35,11 +35,13 @@ hiddenimports = [
 ] + _mariadb_hiddenimports
 
 # Dados adicionais (assets)
-# Destino 'src/assets' para que _MEIPASS atue como equivalente do diretorio source/
+# Destino 'src/assets' para que _MEIPASS atua como equivalente do diretorio source/
 datas = [
     (os.path.join(ROOT_DIR, 'source', 'src', 'assets', '*'), os.path.join('src', 'assets')),
     # Monaco Editor - HTML + VS loader/workers
     (os.path.join(ROOT_DIR, 'source', 'src', 'editors', 'monaco'), os.path.join('monaco')),
+    # pyproject.toml para leitura de versao
+    (os.path.join(ROOT_DIR, 'pyproject.toml'), '.'),
 ] + _mariadb_datas
 
 a = Analysis(
