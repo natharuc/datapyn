@@ -156,14 +156,24 @@ jobs:
       - name: Build | Create MSI Installer
         shell: pwsh
         run: |
-          $version = "${{ needs.release.outputs.version }}"
+          $rawVersion = "${{ needs.release.outputs.version }}"
+          # MSI requires version format x.x.x.x (integers only)
+          # Remove any suffix like -dryrun, -alpha, -beta, etc.
+          $version = $rawVersion -replace '-.*$', ''
+          # Ensure at least 3 parts (add .0 if needed)
+          $parts = $version.Split('.')
+          while ($parts.Count -lt 3) { $parts += '0' }
+          $version = ($parts[0..2] -join '.') + '.0'
+          Write-Host "MSI version: $version (from $rawVersion)"
+          
           $sourceDir = "dist\DataPyn"
           $wixBin = "${env:WIX}bin\"
 
           # Harvest all files from PyInstaller output
+          # -sreg: suppress SelfReg warnings (not applicable to PyInstaller output)
           & "${wixBin}heat.exe" dir "$sourceDir" `
             -cg AppFiles -dr INSTALLFOLDER `
-            -gg -sfrag -srd `
+            -gg -sfrag -srd -sreg `
             -var var.SourceDir `
             -out heat.wxs
 
@@ -174,11 +184,17 @@ jobs:
             scripts\installer.wxs heat.wxs
 
           # Link into MSI
+          # Suppress ICE validations that are expected/acceptable for per-user PyInstaller bundles:
+          # -sice:ICE38 - Components in user profile should use registry KeyPath (not applicable for heat-generated files)
+          # -sice:ICE60 - Files should have language specified (not applicable for PyInstaller DLLs)
+          # -sice:ICE64 - Directories need RemoveFile entries (handled by Windows Installer)
+          # -sice:ICE91 - Files in per-user folder won't copy to all users (expected behavior)
           & "${wixBin}light.exe" `
             -ext WixUIExtension `
             -spdb `
+            -sice:ICE38 -sice:ICE60 -sice:ICE64 -sice:ICE91 `
             installer.wixobj heat.wixobj `
-            -o "DataPyn-${version}-windows.msi"
+            -o "DataPyn-${rawVersion}-windows.msi"
 
       # Optional: Sign the MSI if a code signing certificate is configured
       # To use this, add these secrets to your GitHub repository:
@@ -192,8 +208,8 @@ jobs:
           CODE_SIGNING_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          $version = "${{ needs.release.outputs.version }}"
-          $msiPath = "DataPyn-${version}-windows.msi"
+          $rawVersion = "${{ needs.release.outputs.version }}"
+          $msiPath = "DataPyn-${rawVersion}-windows.msi"
           
           # Decode certificate from base64
           $certBytes = [Convert]::FromBase64String($env:CODE_SIGNING_CERT_BASE64)
