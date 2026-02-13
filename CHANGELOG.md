@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.3 (2026-02-13)
+
+### Bug Fixes
+
+- **installer**: Copiar assets para dist/scripts onde WiX espera
+  ([`b54ba6d`](https://github.com/natharuc/datapyn/commit/b54ba6d2d61e37db9621337cc09a9105c87738e8))
+
+
 ## v1.1.2 (2026-02-13)
 
 ### Bug Fixes
