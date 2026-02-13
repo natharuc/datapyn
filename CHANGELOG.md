@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v1.1.4 (2026-02-13)
+
+### Bug Fixes
+
+- **installer**: Sanitizar versao para formato MSI valido (x.x.x.x)
+  ([`71c58f3`](https://github.com/natharuc/datapyn/commit/71c58f3192cb51b3d0fbf64dc68e812fdd2b64ab))
+
+- **installer**: Suprimir ICE38 e ICE60 para bundles PyInstaller per-user
+  ([`13885c1`](https://github.com/natharuc/datapyn/commit/13885c1e9b0220cf7d94c4c9f272efdf30f669e2))
+
+- **installer**: Suprimir ICE64 para diretórios em user profile
+  ([`d3200d5`](https://github.com/natharuc/datapyn/commit/d3200d566b8b6285bf8e36b53391de75c7b114cd))
+
+- **installer**: Suprimir ICE91 (esperado para per-user)
+  ([`0bc11cf`](https://github.com/natharuc/datapyn/commit/0bc11cf94638a50375022ef47658e59640e4c9f5))
+
+- **installer**: Suprimir warnings HEAT5150 de SelfReg
+  ([`0c15b20`](https://github.com/natharuc/datapyn/commit/0c15b20054f76a9a8a68838519d374e532f22f29))
+
+
 ## v1.1.3 (2026-02-13)
 
 ### Bug Fixes
