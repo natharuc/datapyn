@@ -34,6 +34,7 @@ import sys
 import re
 import io
 import ast
+import hashlib
 import logging
 import traceback
 from io import StringIO
@@ -3117,7 +3118,6 @@ class MainWindow(DockingMainWindow):
             # para que _on_session_tab_changed restaure corretamente
             widget.file_path = filename
             widget._original_file_type = self._original_file_type
-            widget._is_modified = False
 
             # Armazenar caminho do arquivo original (apos widget estar configurado)
             self._original_file_path = filename
@@ -4339,8 +4339,6 @@ class MainWindow(DockingMainWindow):
 
     def _compute_widget_content_hash(self, widget):
         """Calcula hash do conteudo atual do editor do widget"""
-        import hashlib
-
         if not hasattr(widget, "editor") or not widget.editor:
             return ""
 
@@ -4351,7 +4349,7 @@ class MainWindow(DockingMainWindow):
             parts.append(block.get_code())
 
         content = "\n".join(parts)
-        return hashlib.md5(content.encode("utf-8")).hexdigest()
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def _on_editor_modified(self, widget):
         """Callback quando o conteudo do editor e modificado - usa hash para comparacao"""
