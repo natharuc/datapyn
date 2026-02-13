@@ -220,5 +220,164 @@ class TestWorkspaceManager:
         assert wm.current_file_path == Path(target_path)
 
 
+class TestTabCloseCleanup:
+    """Testes para limpeza de estado ao fechar aba"""
+
+    def test_close_tab_clears_file_path(self, main_window, temp_sql_file):
+        """Verifica que fechar aba com arquivo limpa _original_file_path"""
+        main_window._open_code_file(temp_sql_file)
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        assert main_window._original_file_path == temp_sql_file
+
+        # Fechar a aba
+        current_index = main_window.session_tabs.currentIndex()
+        main_window._close_session_tab(current_index)
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        assert main_window._original_file_path is None
+        assert main_window._original_file_type is None
+
+    def test_new_session_has_no_file_path(self, main_window):
+        """Verifica que nova sessao inicia sem vinculo de arquivo"""
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        assert widget is not None
+        assert widget.file_path is None
+        assert widget._original_file_type is None
+
+    def test_new_session_after_file_open_has_no_file(self, main_window, temp_sql_file):
+        """Verifica que nova sessao apos abrir arquivo nao herda o arquivo"""
+        main_window._open_code_file(temp_sql_file)
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        assert widget is not None
+        assert widget.file_path is None
+
+
+class TestHashModificationTracking:
+    """Testes para rastreamento de modificacoes por hash"""
+
+    def test_widget_has_content_hash(self, main_window):
+        """Verifica que widget criado tem _content_hash"""
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        assert hasattr(widget, "_content_hash")
+        assert widget._content_hash != ""
+
+    def test_opened_file_starts_unmodified(self, main_window, temp_sql_file):
+        """Verifica que arquivo aberto inicia sem marcador de modificacao"""
+        main_window._open_code_file(temp_sql_file)
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        assert widget._is_modified is False
+
+        index = main_window.session_tabs.indexOf(widget)
+        tab_text = main_window.session_tabs.tabText(index)
+        assert not tab_text.endswith(" *"), f"Tab '{tab_text}' nao deveria ter asterisco"
+
+    def test_modification_adds_asterisk(self, main_window, temp_sql_file):
+        """Verifica que editar conteudo adiciona asterisco na aba"""
+        main_window._open_code_file(temp_sql_file)
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        blocks = widget.editor.get_blocks()
+        assert len(blocks) > 0
+
+        # Modificar conteudo
+        blocks[0].set_code("SELECT 999 FROM modified_table;")
+        QApplication.processEvents()
+        QTest.qWait(100)
+
+        # Disparar _on_editor_modified manualmente (signal pode nao ter sido emitido no test)
+        main_window._on_editor_modified(widget)
+        QApplication.processEvents()
+
+        assert widget._is_modified is True
+        index = main_window.session_tabs.indexOf(widget)
+        tab_text = main_window.session_tabs.tabText(index)
+        assert tab_text.endswith(" *"), f"Tab '{tab_text}' deveria ter asterisco"
+
+    def test_reverting_content_removes_asterisk(self, main_window, temp_sql_file):
+        """Verifica que reverter conteudo para original remove asterisco"""
+        main_window._open_code_file(temp_sql_file)
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        blocks = widget.editor.get_blocks()
+        original_code = blocks[0].get_code()
+
+        # Modificar conteudo
+        blocks[0].set_code("SELECT 999 FROM modified;")
+        main_window._on_editor_modified(widget)
+        QApplication.processEvents()
+        assert widget._is_modified is True
+
+        # Reverter para conteudo original
+        blocks[0].set_code(original_code)
+        main_window._on_editor_modified(widget)
+        QApplication.processEvents()
+
+        assert widget._is_modified is False
+        index = main_window.session_tabs.indexOf(widget)
+        tab_text = main_window.session_tabs.tabText(index)
+        assert not tab_text.endswith(" *"), f"Tab '{tab_text}' nao deveria ter asterisco apos reverter"
+
+    def test_save_updates_hash(self, main_window, temp_sql_file):
+        """Verifica que salvar atualiza o hash e remove asterisco"""
+        main_window._open_code_file(temp_sql_file)
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        blocks = widget.editor.get_blocks()
+
+        # Modificar conteudo
+        blocks[0].set_code("SELECT 999 FROM modified;")
+        main_window._on_editor_modified(widget)
+        QApplication.processEvents()
+        assert widget._is_modified is True
+
+        # Salvar
+        main_window._save_single_file(temp_sql_file, "sql")
+        QApplication.processEvents()
+
+        # Hash deve ter sido atualizado, nao esta mais modificado
+        assert widget._is_modified is False
+        index = main_window.session_tabs.indexOf(widget)
+        tab_text = main_window.session_tabs.tabText(index)
+        assert not tab_text.endswith(" *"), f"Tab '{tab_text}' nao deveria ter asterisco apos salvar"
+
+    def test_compute_widget_content_hash_deterministic(self, main_window):
+        """Verifica que o hash e determinisico para o mesmo conteudo"""
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(200)
+
+        widget = main_window._get_current_session_widget()
+        hash1 = main_window._compute_widget_content_hash(widget)
+        hash2 = main_window._compute_widget_content_hash(widget)
+        assert hash1 == hash2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
