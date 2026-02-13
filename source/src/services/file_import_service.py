@@ -56,9 +56,8 @@ class FileImportService(QObject):
     @staticmethod
     def detect_language(file_path: str) -> str:
         """Detecta a linguagem do arquivo."""
-        if file_path.lower().endswith(".py"):
-            return "python"
-        elif file_path.lower().endswith(".ipynb"):
+        lower_path = file_path.lower()
+        if lower_path.endswith(".py") or lower_path.endswith(".ipynb"):
             return "python"
         return "sql"
 
