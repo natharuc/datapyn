@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-02-13)
+
+### Bug Fixes
+
+- Use uv run for pyinstaller and add missing system dependencies to Linux release workflow
+  ([`1c71260`](https://github.com/natharuc/datapyn/commit/1c71260ba0ee6a8892672a22de85105e4c2cab5a))
+
+
 ## v1.1.0 (2026-02-12)
 
 ### Bug Fixes
