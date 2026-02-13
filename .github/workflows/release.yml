@@ -112,6 +112,41 @@ jobs:
       - name: Build | Generate Windows EXE
         run: uv run pyinstaller scripts/datapyn.spec --clean
 
+      - name: Build | Generate Installer Assets
+        shell: pwsh
+        run: |
+          # Dialog bitmap (493x312, 24-bit BMP)
+          # Banner bitmap (493x58, 24-bit BMP)
+          # Using PowerShell to create simple placeholder bitmaps
+          Add-Type -AssemblyName System.Drawing
+          
+          # Dialog background (493x312)
+          $dialogBmp = New-Object System.Drawing.Bitmap(493, 312)
+          $graphics = [System.Drawing.Graphics]::FromImage($dialogBmp)
+          $graphics.Clear([System.Drawing.Color]::White)
+          $font = New-Object System.Drawing.Font("Arial", 24, [System.Drawing.FontStyle]::Bold)
+          $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 120, 212))
+          $graphics.DrawString("DataPyn", $font, $brush, 150, 130)
+          $font2 = New-Object System.Drawing.Font("Arial", 12)
+          $brush2 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Gray)
+          $graphics.DrawString("Data Analysis Tool", $font2, $brush2, 165, 170)
+          $graphics.Dispose()
+          $dialogBmp.Save("scripts\installer_dialog.bmp", [System.Drawing.Imaging.ImageFormat]::Bmp)
+          $dialogBmp.Dispose()
+          
+          # Banner (493x58)
+          $bannerBmp = New-Object System.Drawing.Bitmap(493, 58)
+          $graphics = [System.Drawing.Graphics]::FromImage($bannerBmp)
+          $graphics.Clear([System.Drawing.Color]::White)
+          $font = New-Object System.Drawing.Font("Arial", 16, [System.Drawing.FontStyle]::Bold)
+          $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 120, 212))
+          $graphics.DrawString("DataPyn", $font, $brush, 10, 18)
+          $graphics.Dispose()
+          $bannerBmp.Save("scripts\installer_banner.bmp", [System.Drawing.Imaging.ImageFormat]::Bmp)
+          $bannerBmp.Dispose()
+          
+          Write-Host "Installer assets generated successfully"
+
       - name: Build | Create MSI Installer
         shell: pwsh
         run: |
@@ -138,6 +173,50 @@ jobs:
             -spdb `
             installer.wixobj heat.wixobj `
             -o "DataPyn-${version}-windows.msi"
+
+      # Optional: Sign the MSI if a code signing certificate is configured
+      # To use this, add these secrets to your GitHub repository:
+      # - CODE_SIGNING_CERT_BASE64: Base64-encoded PFX certificate
+      # - CODE_SIGNING_CERT_PASSWORD: Password for the PFX file
+      - name: Build | Sign MSI (if certificate available)
+        if: ${{ env.HAS_CODE_SIGNING_CERT == 'true' }}
+        env:
+          HAS_CODE_SIGNING_CERT: ${{ secrets.CODE_SIGNING_CERT_BASE64 != '' }}
+          CODE_SIGNING_CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
+          CODE_SIGNING_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          $version = "${{ needs.release.outputs.version }}"
+          $msiPath = "DataPyn-${version}-windows.msi"
+          
+          # Decode certificate from base64
+          $certBytes = [Convert]::FromBase64String($env:CODE_SIGNING_CERT_BASE64)
+          $certPath = "codesigning.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          
+          # Find signtool.exe
+          $signtool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter signtool.exe | 
+                      Where-Object { $_.FullName -like "*x64*" } | 
+                      Select-Object -First 1 -ExpandProperty FullName
+          
+          if ($signtool) {
+            Write-Host "Signing MSI with signtool..."
+            & $signtool sign /f $certPath /p $env:CODE_SIGNING_CERT_PASSWORD `
+              /tr http://timestamp.digicert.com /td SHA256 /fd SHA256 `
+              /d "DataPyn" /du "https://github.com/datapyn/datapyn" `
+              $msiPath
+            
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "MSI signed successfully!"
+            } else {
+              Write-Warning "Failed to sign MSI, continuing with unsigned installer"
+            }
+          } else {
+            Write-Warning "signtool.exe not found, skipping signing"
+          }
+          
+          # Clean up certificate file
+          Remove-Item -Path $certPath -Force -ErrorAction SilentlyContinue
 
       - name: Publish | Upload MSI to GitHub Release
         if: "!(github.event.inputs.dry_run == 'true')"
