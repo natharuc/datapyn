@@ -171,11 +171,13 @@ jobs:
 
           # Harvest all files from PyInstaller output
           # -sreg: suppress SelfReg warnings (not applicable to PyInstaller output)
+          # Exclude documentation, test files, and other unnecessary content
           & "${wixBin}heat.exe" dir "$sourceDir" `
             -cg AppFiles -dr INSTALLFOLDER `
             -gg -sfrag -srd -sreg `
             -var var.SourceDir `
-            -out heat.wxs
+            -out heat.wxs `
+            -t:scripts\exclude_docs.xslt
 
           # Compile WXS sources
           & "${wixBin}candle.exe" `

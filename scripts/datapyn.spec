@@ -36,8 +36,16 @@ hiddenimports = [
 
 # Dados adicionais (assets)
 # Destino 'src/assets' para que _MEIPASS atua como equivalente do diretorio source/
-datas = [
-    (os.path.join(ROOT_DIR, 'source', 'src', 'assets', '*'), os.path.join('src', 'assets')),
+# Filtramos apenas arquivos necessarios (excluindo .md, .txt, .rst, etc)
+import glob
+assets_files = []
+for ext in ['*.ico', '*.svg', '*.png', '*.jpg']:
+    assets_files.extend(glob.glob(os.path.join(ROOT_DIR, 'source', 'src', 'assets', '**', ext), recursive=True))
+
+assets_datas = [(f, os.path.join('src', 'assets', os.path.relpath(os.path.dirname(f), os.path.join(ROOT_DIR, 'source', 'src', 'assets')))) 
+                for f in assets_files]
+
+datas = assets_datas + [
     # Monaco Editor - HTML + VS loader/workers
     (os.path.join(ROOT_DIR, 'source', 'src', 'editors', 'monaco'), os.path.join('monaco')),
     # pyproject.toml para leitura de versao
@@ -53,7 +61,45 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Test frameworks and dev tools
+        'pytest',
+        'pytest_cov',
+        'pytest_qt',
+        'pytest_subtests',
+        'pytest_env',
+        'pytest_timeout',
+        '_pytest',
+        'py.test',
+        'unittest',
+        'unittest.mock',
+        'doctest',
+        # Build tools
+        'setuptools',
+        'pip',
+        'wheel',
+        'distutils',
+        # Documentation
+        'sphinx',
+        'pydoc',
+        # Development
+        'IPython',
+        'jupyter',
+        'notebook',
+        # Unused standard library modules
+        'tkinter',
+        'turtle',
+        'curses',
+        'pydoc_data',
+        'test',
+        'lib2to3',
+        'xmlrpc',
+        # Unused data science tools (not used in the app)
+        'scipy',
+        'sklearn',
+        'statsmodels',
+        'seaborn',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -70,9 +116,16 @@ exe = EXE(
     name='DataPyn',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,  # Strip binaries to reduce size
     upx=True,
-    upx_exclude=[],
+    upx_exclude=[
+        # Exclude files that don't compress well or may cause issues
+        'vcruntime*.dll',
+        'python*.dll',
+        'Qt6Core.dll',
+        'Qt6Gui.dll',
+        'Qt6Widgets.dll',
+    ],
     runtime_tmpdir=None,
     console=False,  # False = sem console (aplicacao GUI)
     disable_windowed_traceback=False,
@@ -88,8 +141,15 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
+    strip=True,  # Strip binaries in collection as well
     upx=True,
-    upx_exclude=[],
+    upx_exclude=[
+        # Exclude files that don't compress well or may cause issues
+        'vcruntime*.dll',
+        'python*.dll',
+        'Qt6Core.dll',
+        'Qt6Gui.dll',
+        'Qt6Widgets.dll',
+    ],
     name='DataPyn',
 )
