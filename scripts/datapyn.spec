@@ -104,7 +104,7 @@ a = Analysis(
         'statsmodels',
         'seaborn',
         # Additional unused modules
-        'email',  # Se nao usado
+        'email',  # Se não usado
         'ftplib',
         'telnetlib',
         'poplib',
