@@ -50,3 +50,9 @@ htmlcov/
 
 # DataPyn workspace files
 *.dpw
+
+# WiX Toolset intermediate files
+*.wixobj
+*.wixpdb
+heat.wxs
+*.msi

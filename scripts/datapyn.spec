@@ -14,7 +14,11 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(SPEC), '..'))
 block_cipher = None
 
 # Coletar pacote mariadb completo (inclui .pyd nativo + constants)
+# Filtramos apenas binarios e dados essenciais, excluindo docs e testes
 _mariadb_datas, _mariadb_binaries, _mariadb_hiddenimports = collect_all('mariadb')
+# Filtrar dados do mariadb para excluir documentacao e arquivos desnecessarios
+_mariadb_datas = [(src, dst) for src, dst in _mariadb_datas 
+                  if not any(x in src.lower() for x in ['.md', '.txt', '.rst', 'test', 'doc', 'license', 'readme'])]
 
 # Coletar todos os submódulos necessários
 hiddenimports = [
@@ -99,6 +103,62 @@ a = Analysis(
         'sklearn',
         'statsmodels',
         'seaborn',
+        # Additional unused modules
+        'email',  # Se nao usado
+        'ftplib',
+        'telnetlib',
+        'poplib',
+        'imaplib',
+        'smtplib',
+        'asynchat',
+        'asyncore',
+        # Compiler and internals
+        'compiler',
+        'pdb',
+        'bdb',
+        'cProfile',
+        'profile',
+        'pstats',
+        'timeit',
+        # Unused encodings (keep utf-8, latin1, ascii)
+        'encodings.cp037',
+        'encodings.cp424',
+        'encodings.cp437',
+        'encodings.cp500',
+        'encodings.cp720',
+        'encodings.cp737',
+        'encodings.cp775',
+        'encodings.cp850',
+        'encodings.cp852',
+        'encodings.cp855',
+        'encodings.cp856',
+        'encodings.cp857',
+        'encodings.cp858',
+        'encodings.cp860',
+        'encodings.cp861',
+        'encodings.cp862',
+        'encodings.cp863',
+        'encodings.cp864',
+        'encodings.cp865',
+        'encodings.cp866',
+        'encodings.cp869',
+        'encodings.cp874',
+        'encodings.cp875',
+        'encodings.cp932',
+        'encodings.cp949',
+        'encodings.cp950',
+        'encodings.cp1006',
+        'encodings.cp1026',
+        'encodings.cp1140',
+        'encodings.cp1250',
+        'encodings.cp1251',
+        'encodings.cp1252',
+        'encodings.cp1253',
+        'encodings.cp1254',
+        'encodings.cp1255',
+        'encodings.cp1256',
+        'encodings.cp1257',
+        'encodings.cp1258',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
