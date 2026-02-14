@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.8 (2026-02-14)
+
+### Bug Fixes
+
+- Ajuste em falha ao abrir tela de versao
+  ([`69af77e`](https://github.com/natharuc/datapyn/commit/69af77e0e19f51acce513bd007e58ebaa9388a0f))
+
+
 ## v1.1.7 (2026-02-13)
 
 ### Bug Fixes
