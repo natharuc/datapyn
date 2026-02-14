@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-02-14)
+
+### Bug Fixes
+
+- Address code review feedback
+  ([`9e819bf`](https://github.com/natharuc/datapyn/commit/9e819bfa3fd96cf376a51f3bd2c13b90d75346b9))
+
+### Documentation
+
+- Improve clarity of XSLT transform comment in workflow
+  ([`2bba750`](https://github.com/natharuc/datapyn/commit/2bba750ed22fe45c17bd7d51ffa1f588c09a8c60))
+
+### Features
+
+- Add additional MSI optimizations and comprehensive documentation
+  ([`1fbce6e`](https://github.com/natharuc/datapyn/commit/1fbce6ec8e681b3279ba4a112004319bc01e5547))
+
+- Optimize MSI size by excluding unnecessary files and improving compression
+  ([`b66748b`](https://github.com/natharuc/datapyn/commit/b66748b68a46d100196656961cd123eac8338c34))
+
+
 ## v1.1.8 (2026-02-14)
 
 ### Bug Fixes
