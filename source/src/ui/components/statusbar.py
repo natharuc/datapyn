@@ -46,11 +46,15 @@ class MainStatusBar(QStatusBar):
         self.connection_label.setText(label)
 
     def _setup_widgets(self):
-        # Ação
+        # Acao
         self.action_label = QLabel("Pronto")
         self.addWidget(self.action_label, 1)
 
-        # Conexão com ícone
+        # Arquivo ativo (exibe caminho do arquivo aberto)
+        self.file_label = QLabel("")
+        self.addPermanentWidget(self.file_label)
+
+        # Conexao com icone
         self.connection_label = QLabel()
         self._update_connection_icon(False)
         self.addPermanentWidget(self.connection_label)
@@ -62,6 +66,11 @@ class MainStatusBar(QStatusBar):
         # Cursor
         self.cursor_label = QLabel("Ln 1, Col 1")
         self.addPermanentWidget(self.cursor_label)
+
+        # Timer para restaurar estilo apos feedback
+        self._feedback_timer = QTimer()
+        self._feedback_timer.setSingleShot(True)
+        self._feedback_timer.timeout.connect(self._restore_action_style)
 
     def _setup_timer(self):
         self.elapsed_timer = QElapsedTimer()
@@ -83,6 +92,36 @@ class MainStatusBar(QStatusBar):
 
     def set_action(self, text: str):
         self.action_label.setText(text)
+
+    def set_file_info(self, file_path: str = ""):
+        """Exibe caminho do arquivo ativo na statusbar"""
+        if file_path:
+            self.file_label.setText(f"  {file_path}")
+            self.file_label.setToolTip(file_path)
+        else:
+            self.file_label.setText("")
+            self.file_label.setToolTip("")
+
+    def show_save_feedback(self, message: str):
+        """Exibe feedback visual de salvamento com destaque temporario"""
+        self.action_label.setText(message)
+        self.action_label.setStyleSheet("""
+            QLabel {
+                color: #4caf50;
+                font-weight: bold;
+                padding: 0px 6px;
+            }
+        """)
+        self._feedback_timer.start(3000)
+
+    def _restore_action_style(self):
+        """Restaura estilo padrao da action_label apos feedback"""
+        self.action_label.setStyleSheet("""
+            QLabel {
+                color: #999999;
+                padding: 0px 6px;
+            }
+        """)
 
     def set_connection(self, connection_name: str = None, db_type: str = None):
         """Define conexão"""
