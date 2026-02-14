@@ -166,9 +166,14 @@ class AutoUpdateService:
             on_no_update: callback()
             on_error: callback(error_message)
         """
-        if self._check_thread and self._check_thread.isRunning():
-            logger.warning("Verificacao de atualizacao ja em andamento")
-            return
+        # Verificar se ja existe thread em execucao (com try/except para objeto deletado)
+        try:
+            if self._check_thread and self._check_thread.isRunning():
+                logger.warning("Verificacao de atualizacao ja em andamento")
+                return
+        except RuntimeError:
+            # Objeto C++ foi deletado, limpar referencia
+            self._check_thread = None
 
         self._check_thread = QThread()
         self._checker = UpdateChecker(self.current_version, self.repo_owner, self.repo_name)
@@ -180,10 +185,15 @@ class AutoUpdateService:
         self._checker.no_update_available.connect(on_no_update)
         self._checker.check_failed.connect(on_error)
 
-        # Cleanup
+        # Cleanup - limpar referencia quando thread terminar
+        def cleanup_check_thread():
+            self._check_thread = None
+            self._checker = None
+
         self._checker.update_available.connect(self._check_thread.quit)
         self._checker.no_update_available.connect(self._check_thread.quit)
         self._checker.check_failed.connect(self._check_thread.quit)
+        self._check_thread.finished.connect(cleanup_check_thread)
         self._check_thread.finished.connect(self._check_thread.deleteLater)
 
         self._check_thread.start()
@@ -199,9 +209,14 @@ class AutoUpdateService:
             on_complete: callback(file_path)
             on_error: callback(error_message)
         """
-        if self._download_thread and self._download_thread.isRunning():
-            logger.warning("Download de atualizacao ja em andamento")
-            return
+        # Verificar se ja existe download em execucao (com try/except para objeto deletado)
+        try:
+            if self._download_thread and self._download_thread.isRunning():
+                logger.warning("Download de atualizacao ja em andamento")
+                return
+        except RuntimeError:
+            # Objeto C++ foi deletado, limpar referencia
+            self._download_thread = None
 
         filename = f"DataPyn-{version}-windows.msi"
 
@@ -215,9 +230,14 @@ class AutoUpdateService:
         self._downloader.download_complete.connect(on_complete)
         self._downloader.download_failed.connect(on_error)
 
-        # Cleanup
+        # Cleanup - limpar referencia quando thread terminar
+        def cleanup_download_thread():
+            self._download_thread = None
+            self._downloader = None
+
         self._downloader.download_complete.connect(self._download_thread.quit)
         self._downloader.download_failed.connect(self._download_thread.quit)
+        self._download_thread.finished.connect(cleanup_download_thread)
         self._download_thread.finished.connect(self._download_thread.deleteLater)
 
         self._download_thread.start()
