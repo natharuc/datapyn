@@ -34,6 +34,7 @@ import sys
 import re
 import io
 import ast
+import hashlib
 import logging
 import traceback
 from io import StringIO
@@ -3117,8 +3118,6 @@ class MainWindow(DockingMainWindow):
             # para que _on_session_tab_changed restaure corretamente
             widget.file_path = filename
             widget._original_file_type = self._original_file_type
-            widget._original_content = content
-            widget._is_modified = False
 
             # Armazenar caminho do arquivo original (apos widget estar configurado)
             self._original_file_path = filename
@@ -3144,8 +3143,16 @@ class MainWindow(DockingMainWindow):
                     blocks[0].set_language(language)
                     blocks[0].set_code(content)
 
-            # 7. Conectar sinal de modificacao do editor
-            widget.editor.content_changed.connect(lambda: self._on_editor_modified(widget))
+            # 7. Calcular hash apos carregar conteudo (content_changed ja esta conectado)
+            widget._content_hash = self._compute_widget_content_hash(widget)
+            widget._is_modified = False
+
+            # Remover asterisco que pode ter sido adicionado durante set_code
+            index = self.session_tabs.indexOf(widget)
+            if index >= 0:
+                tab_text = self.session_tabs.tabText(index)
+                if tab_text.endswith(" *"):
+                    self.session_tabs.setTabText(index, tab_text[:-2])
 
             # 8. Focar na aba criada
             index = self.session_tabs.indexOf(widget)
@@ -3279,13 +3286,15 @@ class MainWindow(DockingMainWindow):
         self._clear_modification_markers()
 
     def _clear_modification_markers(self):
-        """Remove asteriscos das abas e reseta flags de modificação"""
+        """Remove asteriscos das abas, reseta flags e atualiza hashes"""
         for i in range(self.session_tabs.count()):
             widget = self.session_tabs.widget(i)
             if hasattr(widget, "_is_modified"):
                 widget._is_modified = False
+            if hasattr(widget, "editor"):
+                widget._content_hash = self._compute_widget_content_hash(widget)
 
-            # Remover asterisco do título da aba se existir
+            # Remover asterisco do titulo da aba se existir
             current_text = self.session_tabs.tabText(i)
             if current_text.endswith(" *"):
                 self.session_tabs.setTabText(i, current_text[:-2])
@@ -3873,6 +3882,13 @@ class MainWindow(DockingMainWindow):
         if hasattr(session, "file_path") and session.file_path:
             widget.file_path = session.file_path
             widget._original_file_type = getattr(session, "original_file_type", None)
+        else:
+            widget.file_path = None
+            widget._original_file_type = None
+
+        # Inicializar hash de conteudo para rastreamento de modificacoes
+        widget._content_hash = self._compute_widget_content_hash(widget)
+        widget._is_modified = False
 
         # Conectar sinais do widget
         widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
@@ -3884,18 +3900,21 @@ class MainWindow(DockingMainWindow):
             lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
         )
 
+        # Conectar sinal de modificacao do editor para rastreamento por hash
+        widget.editor.content_changed.connect(lambda w=widget: self._on_editor_modified(w))
+
         # Atualizar autocomplete quando namespace muda (apos SQL ou Python via SessionWidget)
         session.variables_changed.connect(
             lambda ns: self._push_python_namespace(ns)
         )
 
-        # Guardar referência
+        # Guardar referencia
         self._session_widgets[session.session_id] = widget
 
-        # Adicionar aba usando método do SessionTabs (já lida com botão +)
+        # Adicionar aba usando metodo do SessionTabs (ja lida com botao +)
         index = self.session_tabs.add_session(widget, session.title)
 
-        # Durante restauração, aplicar cor da aba baseada na conexão da sessão
+        # Durante restauracao, aplicar cor da aba baseada na conexao da sessao
         if hasattr(session, "_connection_name") and session._connection_name:
             config = self.connection_manager.get_connection_config(session._connection_name)
             if config:
@@ -3921,15 +3940,21 @@ class MainWindow(DockingMainWindow):
         self._save_sessions()
 
     def _close_session_tab(self, index: int):
-        """Fecha aba de sessão"""
+        """Fecha aba de sessao"""
         widget = self.session_tabs.widget(index)
         if not isinstance(widget, SessionWidget):
-            return  # Ignorar se não é uma SessionWidget (ex: aba do botão +)
+            return
 
-        # Guard para evitar criar sessão ao fechar
+        # Guard para evitar criar sessao ao fechar
         self._closing_session = True
 
         try:
+            # Se a aba fechada era a que fornecia o _original_file_path, limpar
+            closed_file_path = getattr(widget, "file_path", None)
+            if closed_file_path and closed_file_path == self._original_file_path:
+                self._original_file_path = None
+                self._original_file_type = None
+
             # Cleanup e remover
             session_id = widget.session.session_id
             widget.cleanup()
@@ -3945,12 +3970,17 @@ class MainWindow(DockingMainWindow):
             self.session_tabs.removeTab(index)
             self._save_sessions()
 
-            # Verificar se não há mais sessões REAIS (ignorar aba do botão +)
+            # Verificar se nao ha mais sessoes REAIS (ignorar aba do botao +)
             session_count = sum(
                 1 for i in range(self.session_tabs.count()) if isinstance(self.session_tabs.widget(i), SessionWidget)
             )
             if session_count == 0:
+                self._original_file_path = None
+                self._original_file_type = None
                 self._show_empty_state()
+
+            # Atualizar titulo e statusbar para refletir a aba ativa apos fechar
+            self._update_window_title()
         finally:
             self._closing_session = False
 
@@ -4307,24 +4337,40 @@ class MainWindow(DockingMainWindow):
                 if hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
                     block.editor.set_python_namespace(ns_types)
 
+    def _compute_widget_content_hash(self, widget):
+        """Calcula hash do conteudo atual do editor do widget"""
+        if not hasattr(widget, "editor") or not widget.editor:
+            return ""
+
+        blocks = widget.editor.get_blocks()
+        parts = []
+        for block in blocks:
+            parts.append(block.get_language())
+            parts.append(block.get_code())
+
+        content = "\n".join(parts)
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
     def _on_editor_modified(self, widget):
-        """Callback quando o conteudo do editor e modificado"""
-        if not hasattr(widget, "_is_modified"):
-            widget._is_modified = False
+        """Callback quando o conteudo do editor e modificado - usa hash para comparacao"""
+        current_hash = self._compute_widget_content_hash(widget)
+        original_hash = getattr(widget, "_content_hash", "")
 
-        # Marcar widget como modificado (so na primeira vez)
-        if not widget._is_modified:
-            widget._is_modified = True
+        is_modified = current_hash != original_hash
+        was_modified = getattr(widget, "_is_modified", False)
+        widget._is_modified = is_modified
 
-            # Atualizar titulo da aba para indicar modificacao
+        # Atualizar titulo da aba conforme estado de modificacao
+        if is_modified != was_modified:
             for i in range(self.session_tabs.count()):
                 if self.session_tabs.widget(i) == widget:
                     current_text = self.session_tabs.tabText(i)
-                    if not current_text.endswith(" *"):
+                    if is_modified and not current_text.endswith(" *"):
                         self.session_tabs.setTabText(i, current_text + " *")
+                    elif not is_modified and current_text.endswith(" *"):
+                        self.session_tabs.setTabText(i, current_text[:-2])
                     break
 
-            # Atualizar titulo da janela apenas quando muda de estado
             self._update_window_title()
 
     def _get_current_session_widget(self) -> SessionWidget:
@@ -4653,11 +4699,11 @@ class MainWindow(DockingMainWindow):
             current_widget.session.file_path = file_path
             current_widget.session.original_file_type = file_type
 
-            # Limpar marcador de modificacao
+            # Atualizar hash do conteudo apos salvar (agora e o novo "original")
+            current_widget._content_hash = self._compute_widget_content_hash(current_widget)
             current_widget._is_modified = False
-            self._clear_modification_markers()
 
-            # Atualizar nome da aba com o nome do arquivo
+            # Atualizar nome da aba com o nome do arquivo (sem asterisco)
             import os
 
             filename = os.path.basename(file_path)
