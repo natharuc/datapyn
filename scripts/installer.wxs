@@ -17,10 +17,11 @@
              Compressed="yes"
              InstallScope="perUser"
              Description="DataPyn - Ferramenta de analise de dados com Python e SQL"
-             Comments="DataPyn - Data Analysis Tool" />
+             Comments="DataPyn - Data Analysis Tool"
+             CompressionLevel="high" />
 
     <MajorUpgrade DowngradeErrorMessage="Uma versao mais recente do [ProductName] ja esta instalada." />
-    <MediaTemplate EmbedCab="yes" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- ============================================================ -->
     <!-- Textos customizados para a UI do instalador                  -->
