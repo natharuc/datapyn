@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.7 (2026-02-13)
+
+### Bug Fixes
+
+- **ci**: Disable Microsoft apt repos returning 403
+  ([`a273e16`](https://github.com/natharuc/datapyn/commit/a273e16ffb326ac6abebf6df960fbc411ff35e91))
+
+
 ## v1.1.6 (2026-02-13)
 
 ### Bug Fixes
