@@ -171,7 +171,8 @@ jobs:
 
           # Harvest all files from PyInstaller output
           # -sreg: suppress SelfReg warnings (not applicable to PyInstaller output)
-          # Exclude documentation, test files, and other unnecessary content
+          # Exclude documentation, test files, and other unnecessary content via XSLT transform
+          # Filtered patterns: .md, .txt, .rst, .log, .pyc, .pyo, __pycache__, README, LICENSE, CHANGELOG
           & "${wixBin}heat.exe" dir "$sourceDir" `
             -cg AppFiles -dr INSTALLFOLDER `
             -gg -sfrag -srd -sreg `
