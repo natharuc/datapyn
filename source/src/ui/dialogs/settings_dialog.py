@@ -1,5 +1,5 @@
 """
-Diálogo para configurar atalhos de teclado
+Dialog for configuring keyboard shortcuts
 """
 
 from PyQt6.QtWidgets import (
@@ -22,9 +22,9 @@ from src.core.theme_manager import ThemeManager
 
 
 class SettingsDialog(QDialog):
-    """Diálogo de configurações"""
+    """Settings dialog"""
 
-    shortcuts_changed = pyqtSignal()  # Sinal emitido quando atalhos são salvos
+    shortcuts_changed = pyqtSignal()  # Signal emitted when shortcuts are saved
 
     def __init__(self, shortcut_manager: ShortcutManager, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -34,41 +34,41 @@ class SettingsDialog(QDialog):
         self._load_shortcuts()
 
     def _setup_ui(self):
-        """Configura a interface"""
-        self.setWindowTitle("Configurações - Atalhos")
+        """Sets up the UI"""
+        self.setWindowTitle("Settings - Shortcuts")
         self.setModal(True)
         self.setMinimumSize(700, 500)
         self.resize(750, 550)
 
-        # Remover botões de maximizar/minimizar
+        # Remove maximize/minimize buttons
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
 
-        # Aplicar tema
+        # Apply theme
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Cabeçalho
+        # Header
         header_layout = QVBoxLayout()
         header_layout.setSpacing(5)
 
-        title = QLabel("Atalhos de Teclado")
+        title = QLabel("Keyboard Shortcuts")
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
         title.setFont(title_font)
         header_layout.addWidget(title)
 
-        subtitle = QLabel("Personalize os atalhos do DataPyn")
+        subtitle = QLabel("Customize DataPyn shortcuts")
         subtitle.setStyleSheet("color: #999999; font-size: 11px;")
         header_layout.addWidget(subtitle)
 
         layout.addLayout(header_layout)
 
-        # Instruções
-        instructions = QLabel("💡 Dica: Clique duas vezes no atalho para editar")
+        # Instructions
+        instructions = QLabel("Tip: Double-click a shortcut to edit")
         instructions.setStyleSheet("""
             background-color: #2d2d30;
             color: #cccccc;
@@ -79,10 +79,10 @@ class SettingsDialog(QDialog):
         """)
         layout.addWidget(instructions)
 
-        # Tabela de atalhos
+        # Shortcuts table
         self.table = QTableWidget()
         self.table.setColumnCount(2)
-        self.table.setHorizontalHeaderLabels(["Ação", "Atalho"])
+        self.table.setHorizontalHeaderLabels(["Action", "Shortcut"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -92,7 +92,7 @@ class SettingsDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.cellDoubleClicked.connect(self._edit_shortcut)
 
-        # Estilo da tabela
+        # Table style
         self.table.setStyleSheet("""
             QTableWidget {
                 gridline-color: #3e3e42;
@@ -115,11 +115,11 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(self.table)
 
-        # Botões
+        # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
 
-        btn_reset = QPushButton("Restaurar Padrões")
+        btn_reset = QPushButton("Restore Defaults")
         btn_reset.setFixedHeight(32)
         btn_reset.setStyleSheet("""
             QPushButton {
@@ -138,7 +138,7 @@ class SettingsDialog(QDialog):
 
         btn_layout.addStretch()
 
-        btn_cancel = QPushButton("Cancelar")
+        btn_cancel = QPushButton("Cancel")
         btn_cancel.setFixedHeight(32)
         btn_cancel.setStyleSheet("""
             QPushButton {
@@ -155,7 +155,7 @@ class SettingsDialog(QDialog):
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
 
-        btn_save = QPushButton("Salvar")
+        btn_save = QPushButton("Save")
         btn_save.setFixedHeight(32)
         btn_save.setStyleSheet("""
             QPushButton {
@@ -176,72 +176,72 @@ class SettingsDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _load_shortcuts(self):
-        """Carrega atalhos na tabela"""
+        """Loads shortcuts into the table"""
         shortcuts = self.shortcut_manager.get_all_shortcuts()
 
-        # Descrições amigáveis para TODOS os atalhos
+        # Friendly descriptions for ALL shortcuts
         descriptions = {
-            # Execução
-            "execute_sql": "Executar Bloco Atual",
-            "execute_all": "Executar Todos os Blocos",
-            "clear_results": "Limpar Resultados",
-            # Arquivo
-            "open_file": "Abrir Arquivo",
-            "save_file": "Salvar Arquivo",
-            "save_as": "Salvar Como...",
-            # Sessões
-            "new_tab": "Nova Aba",
-            "close_tab": "Fechar Aba",
-            "add_block": "Adicionar Bloco",
-            # Edição
-            "find": "Localizar",
-            "replace": "Substituir",
-            # Conexões
-            "manage_connections": "Gerenciar Conexões",
-            "new_connection": "Nova Conexão",
+            # Execution
+            "execute_sql": "Run Current Block",
+            "execute_all": "Run All Blocks",
+            "clear_results": "Clear Results",
+            # File
+            "open_file": "Open File",
+            "save_file": "Save File",
+            "save_as": "Save As...",
+            # Sessions
+            "new_tab": "New Tab",
+            "close_tab": "Close Tab",
+            "add_block": "Add Block",
+            # Editing
+            "find": "Find",
+            "replace": "Replace",
+            # Connections
+            "manage_connections": "Manage Connections",
+            "new_connection": "New Connection",
             # Schema
-            "reload_schema": "Recarregar Schema SQL",
-            # Ferramentas
-            "settings": "Configurações",
+            "reload_schema": "Reload SQL Schema",
+            # Tools
+            "settings": "Settings",
         }
 
-        # Mostrar TODOS os atalhos
+        # Show ALL shortcuts
         filtered_shortcuts = shortcuts
 
         self.table.setRowCount(len(filtered_shortcuts))
         row = 0
 
         for action, key_sequence in sorted(filtered_shortcuts.items()):
-            # Ação (nome amigável)
+            # Action (friendly name)
             item_desc = QTableWidgetItem(descriptions.get(action, action))
             item_desc.setFlags(item_desc.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 0, item_desc)
 
-            # Atalho (editável)
+            # Shortcut (editable)
             item_shortcut = QTableWidgetItem(key_sequence)
-            item_shortcut.setData(Qt.ItemDataRole.UserRole, action)  # Guardar nome da ação
+            item_shortcut.setData(Qt.ItemDataRole.UserRole, action)  # Store action name
             self.table.setItem(row, 1, item_shortcut)
 
             row += 1
 
-        # Ajustar altura das linhas
+        # Adjust row heights
         for i in range(self.table.rowCount()):
             self.table.setRowHeight(i, 36)
 
     def _edit_shortcut(self, row, column):
-        """Edita um atalho"""
-        if column != 1:  # Apenas coluna de atalho é editável (mudou de 2 para 1)
+        """Edits a shortcut"""
+        if column != 1:  # Only shortcut column is editable (changed from 2 to 1)
             return
 
-        # Pegar ação do UserRole
+        # Get action from UserRole
         shortcut_item = self.table.item(row, 1)
         action = shortcut_item.data(Qt.ItemDataRole.UserRole)
         action_name = self.table.item(row, 0).text()
         current_shortcut = shortcut_item.text()
 
-        # Criar mini dialog para capturar tecla
+        # Create mini dialog to capture key
         key_dialog = QDialog(self)
-        key_dialog.setWindowTitle(f"Editar Atalho")
+        key_dialog.setWindowTitle("Edit Shortcut")
         key_dialog.setModal(True)
         key_dialog.setFixedSize(400, 150)
 
@@ -249,7 +249,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        label = QLabel(f"Pressione a nova combinação de teclas para '{action_name}':")
+        label = QLabel(f"Press the new key combination for '{action_name}':")
         layout.addWidget(label)
 
         key_edit = QKeySequenceEdit(QKeySequence(current_shortcut))
@@ -259,7 +259,7 @@ class SettingsDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
 
-        btn_cancel = QPushButton("Cancelar")
+        btn_cancel = QPushButton("Cancel")
         btn_cancel.setFixedHeight(28)
         btn_cancel.setStyleSheet("""
             QPushButton {
@@ -299,41 +299,41 @@ class SettingsDialog(QDialog):
         if key_dialog.exec():
             new_sequence = key_edit.keySequence().toString()
             if new_sequence:
-                # Verificar conflitos
+                # Check for conflicts
                 for r in range(self.table.rowCount()):
                     if r != row and self.table.item(r, 1).text() == new_sequence:
                         other_action_name = self.table.item(r, 0).text()
                         QMessageBox.warning(
                             self,
-                            "Conflito de Atalho",
-                            f"O atalho '{new_sequence}' já está em uso pela ação '{other_action_name}'.\n\n"
-                            f"Por favor, escolha outro atalho.",
+                            "Shortcut Conflict",
+                            f"The shortcut '{new_sequence}' is already in use by action '{other_action_name}'.\n\n"
+                            f"Please choose another shortcut.",
                         )
                         return
 
                 self.table.item(row, 1).setText(new_sequence)
 
     def _save_shortcuts(self):
-        """Salva os atalhos"""
-        # Salvar atalhos
+        """Saves shortcuts"""
+        # Save shortcuts
         for row in range(self.table.rowCount()):
             shortcut_item = self.table.item(row, 1)
             action = shortcut_item.data(Qt.ItemDataRole.UserRole)
             shortcut = shortcut_item.text()
             self.shortcut_manager.set_shortcut(action, shortcut)
 
-        # Emitir sinal para MainWindow re-registrar atalhos
+        # Emit signal for MainWindow to re-register shortcuts
         self.shortcuts_changed.emit()
 
-        QMessageBox.information(self, "Sucesso", "Configurações salvas com sucesso!")
+        QMessageBox.information(self, "Success", "Settings saved successfully!")
         self.accept()
 
     def _reset_defaults(self):
-        """Restaura atalhos padrão"""
+        """Restores default shortcuts"""
         reply = QMessageBox.question(
             self,
-            "Confirmar",
-            "Deseja restaurar todos os atalhos para os valores padrão?",
+            "Confirm",
+            "Do you want to restore all shortcuts to default values?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 
