@@ -41,6 +41,8 @@ from io import StringIO
 from datetime import datetime
 import pandas as pd
 
+logger = logging.getLogger(__name__)
+
 try:
     import qtawesome as qta
 
