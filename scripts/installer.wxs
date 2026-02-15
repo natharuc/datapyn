@@ -16,9 +16,8 @@
     <Package InstallerVersion="200"
              Compressed="yes"
              InstallScope="perUser"
-             Description="DataPyn - Ferramenta de analise de dados com Python e SQL"
-             Comments="DataPyn - Data Analysis Tool"
-             CompressionLevel="high" />
+             Description="DataPyn - Data analysis tool with Python and SQL"
+             Comments="DataPyn - Data Analysis Tool" />
 
     <MajorUpgrade DowngradeErrorMessage="Uma versao mais recente do [ProductName] ja esta instalada." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
