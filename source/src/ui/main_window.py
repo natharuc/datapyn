@@ -1,5 +1,5 @@
 """
-Janela principal da IDE DataPyn
+DataPyn IDE main window
 """
 
 from PyQt6.QtWidgets import (
@@ -79,11 +79,11 @@ from src.design_system.tokens import get_colors, DARK_COLORS
 from src.services import AutoUpdateService
 
 # Constantes
-DEFAULT_VERSION = "1.1.6"  # Versao padrao caso nao consiga ler do pyproject.toml
+DEFAULT_VERSION = "1.1.6"  # Default version if unable to read from pyproject.toml
 
 
 class SqlWorker(QObject):
-    """Worker para executar SQL em background"""
+    """Worker for executing SQL in background"""
 
     finished = pyqtSignal(object, str)  # (result_df ou None, error_msg ou '')
 
@@ -100,11 +100,11 @@ class SqlWorker(QObject):
             self.finished.emit(None, str(e))
 
 
-# ConnectionWorker REMOVIDO - cada aba gerencia sua própria conexão via SessionWidget
+# ConnectionWorker REMOVED - each tab manages its own connection via SessionWidget
 
 
 class PythonWorker(QObject):
-    """Worker centralizado para execucao Python em background"""
+    """Centralized worker for Python execution in background"""
 
     finished = pyqtSignal(object, str, str, dict, list)  # (result, output, error, namespace, figures)
 
@@ -164,7 +164,7 @@ class PythonWorker(QObject):
             self.finished.emit(None, "", traceback.format_exc(), self.namespace, [])
 
     def _setup_matplotlib_backend(self):
-        """Configura matplotlib para usar backend Agg (nao-interativo) com tema escuro"""
+        """Configures matplotlib to use Agg backend (non-interactive) with dark theme"""
         try:
             import matplotlib
 
@@ -196,10 +196,10 @@ class PythonWorker(QObject):
             pass  # matplotlib nao instalado, ignorar
 
     def _capture_matplotlib_figures(self) -> list:
-        """Captura todas as figuras matplotlib abertas como rich outputs.
+        """Captures all open matplotlib figures as rich outputs.
 
         Returns:
-            Lista de dicts {'type': 'image', 'data': bytes_png}
+            List of dicts {'type': 'image', 'data': bytes_png}
         """
         figures_data = []
         try:
@@ -223,12 +223,12 @@ class PythonWorker(QObject):
         except ImportError:
             pass  # matplotlib nao instalado
         except Exception as e:
-            logging.warning(f"Erro ao capturar figuras matplotlib: {e}")
+            logging.warning(f"Error capturing matplotlib figures: {e}")
 
         return figures_data
 
     def _execute_centralized(self):
-        """Execucao centralizada usando AST - todas as execucoes Python passam aqui.
+        """Centralized execution using AST - all Python executions go through here.
 
         Usa o modulo ast para separar corretamente statements de expressoes,
         sem quebrar blocos multi-linha (for, if, try, def, class etc).
@@ -265,7 +265,7 @@ class PythonWorker(QObject):
             return None
 
     def _process_rich_result(self, result, has_captured_figures=False):
-        """Converte objetos ricos em rich outputs tipados.
+        """Converts rich objects into typed rich outputs.
 
         Detecta: matplotlib Figure, PIL Image, Plotly Figure,
         _repr_png_(), _repr_html_(), dict/list.
@@ -345,7 +345,7 @@ class PythonWorker(QObject):
                 pass
 
         # Objeto com _repr_html_() (pandas Styler, IPython.display.HTML etc.)
-        # NÃO aplicar para DataFrames puros (ja tem grid melhor)
+        # DO NOT apply for pure DataFrames (already has better grid)
         if hasattr(result, "_repr_html_") and not isinstance(result, pd.DataFrame):
             try:
                 html_data = result._repr_html_()
@@ -369,7 +369,7 @@ class PythonWorker(QObject):
 
 
 class CrossSyntaxWorker(QObject):
-    """Worker para executar Cross-Syntax em background"""
+    """Worker for executing Cross-Syntax in background"""
 
     finished = pyqtSignal(dict, str)  # (result_dict, error)
 
@@ -392,16 +392,16 @@ class MainWindow(DockingMainWindow):
 
     def __init__(self):
         # Inicializar atributos ANTES de chamar super().__init__()
-        # para evitar que DockingMainWindow._setup_ui() acesse atributos não inicializados
+        # to prevent DockingMainWindow._setup_ui() from accessing uninitialized attributes
 
-        # Managers (ConnectionManager agora é APENAS para configurações, não conexões ativas)
-        self.connection_manager = ConnectionManager()  # Só para gerenciar configs salvas
+        # Managers (ConnectionManager is now ONLY for configurations, not active connections)
+        self.connection_manager = ConnectionManager()  # Only for managing saved configs
         self.results_manager = ResultsManager()
         self.shortcut_manager = ShortcutManager()
         self.workspace_manager = WorkspaceManager()
         self.theme_manager = ThemeManager()
-        self.theme_manager.set_editor_theme("monokai")  # Tema específico para editores de código
-        self.session_manager = SessionManager()  # Novo: Gerenciador de sessões
+        self.theme_manager.set_editor_theme("monokai")  # Specific theme for code editors
+        self.session_manager = SessionManager()  # New: Session manager
         self.mixed_executor = MixedLanguageExecutor(None, self.results_manager)
 
         # Auto-update service
@@ -411,11 +411,11 @@ class MainWindow(DockingMainWindow):
         # Mapeia session_id -> SessionWidget
         self._session_widgets: dict = {}
 
-        # Widget de estado vazio (quando não há sessões)
+        # Empty state widget (when there are no sessions)
         self._empty_state_widget = None
 
-        # Threads para execução em background
-        self._worker_threads = []  # Mantém referência para não ser coletado pelo GC
+        # Threads for background execution
+        self._worker_threads = []  # Keeps reference to prevent garbage collection
 
         # Servico de autocomplete SQL (carrega schema do banco em background)
         from src.services.schema_service import SchemaService
@@ -423,86 +423,86 @@ class MainWindow(DockingMainWindow):
         self._schema_service = SchemaService()
         self._schema_service.schema_loaded.connect(self._on_schema_loaded)
 
-        # Sistema de gerenciamento inteligente de arquivos
-        self._original_file_path = None  # Caminho do arquivo original aberto (sql/py/dpw)
+        # Intelligent file management system
+        self._original_file_path = None  # Original opened file path (sql/py/dpw)
         self._original_file_type = None  # Tipo: 'sql', 'python', 'workspace'
         self._current_context = "workspace"  # Contexto atual: 'sql', 'python', 'workspace'
 
-        # Ícones
+        # Icons
         self.icons = self._setup_icons()
 
         # Agora chama super().__init__() que vai inicializar o docking system
         super().__init__()
 
-        # Habilita aninhamento avançado e configurações especiais de dock
+        # Enables advanced nesting and special dock configurations
         self.setDockNestingEnabled(True)
         self.setCorner(Qt.Corner.TopLeftCorner, Qt.DockWidgetArea.LeftDockWidgetArea)
         self.setCorner(Qt.Corner.BottomLeftCorner, Qt.DockWidgetArea.LeftDockWidgetArea)
         self.setCorner(Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
         self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
 
-        # Finalizar configuração do docking system
+        # Finalize docking system configuration
         self.finish_docking_setup()
 
-        # Aplicar tema após configurar tema dos editores
+        # Apply theme after configuring editor themes
         self._apply_app_theme()
 
-        # Configurar UI específica da MainWindow
+        # Configure MainWindow-specific UI
         self._setup_ui()
         self._create_menus()
         self._create_toolbar()
         self._create_statusbar()
         self._setup_shortcuts()
 
-        # Conectar sinais do SessionManager
+        # Connect signals do SessionManager
         self.session_manager.session_focused.connect(self._on_session_focused)
 
         # Aplicar tema inicial
         self._apply_app_theme()
 
-        # Timer para atualizar status
+        # Timer to update status
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self._update_status)
         self.status_timer.start(1000)
 
-        # Verificar atualizacoes ao iniciar (apos 5 segundos)
+        # Check for updates on startup (after 5 seconds)
         if self.auto_update_service.is_auto_update_enabled():
             QTimer.singleShot(5000, self._check_for_updates_silent)
 
-        # Atualizar título inicial da janela
+        # Update initial window title
         self._update_window_title()
 
-    # === PROPRIEDADES DE DELEGAÇÃO PARA SESSÃO ATUAL ===
+    # === DELEGATION PROPERTIES FOR CURRENT SESSION ===
 
     @property
     def results_viewer(self):
-        """Retorna o results_viewer da sessão atual"""
+        """Returns the results_viewer of the current session"""
         widget = self._get_current_session_widget()
         return widget.results_viewer if widget else None
 
     @property
     def variables_viewer(self):
-        """Retorna o variables_viewer da sessão atual"""
+        """Returns the variables_viewer of the current session"""
         widget = self._get_current_session_widget()
         return widget.variables_viewer if widget else None
 
     @property
     def python_output(self):
-        """Retorna o output_text da sessão atual"""
+        """Returns the output_text of the current session"""
         widget = self._get_current_session_widget()
         return widget.output_text if widget else None
 
     @property
     def bottom_tabs(self):
-        """Retorna um objeto compatível com BottomTabs usando os painéis globais"""
+        """Returns a BottomTabs-compatible object using global panels"""
 
-        # Retorna um mock object que redireciona para os painéis dockable
+        # Returns a mock object that redirects to dockable panels
         class DockableBottomTabsCompat:
             def __init__(self, main_window):
                 self.main_window = main_window
 
             def setCurrentIndex(self, index):
-                """Simula mudança de aba ativa"""
+                """Simulates active tab change"""
                 if index == 0:  # Results
                     self.main_window.show_panel("results")
                     results_panel = self.main_window.get_panel("results")
@@ -549,22 +549,22 @@ class MainWindow(DockingMainWindow):
                 if self.main_window.global_output_panel:
                     self.main_window.global_output_panel.warning(message)
 
-            def set_results(self, df, title="Resultado", query_info=None):
-                """Compatibilidade: define resultados no painel global"""
+            def set_results(self, df, title="Result", query_info=None):
+                """Compatibility: sets results in the global panel"""
                 if self.main_window.global_results_viewer:
                     self.main_window.global_results_viewer.display_dataframe(df, title)
 
             def set_variables(self, variables_dict):
-                """Compatibilidade: define variáveis no painel global"""
+                """Compatibility: sets variables in the global panel"""
                 if self.main_window.global_variables_panel:
                     self.main_window.global_variables_panel.set_variables(variables_dict)
 
             def show_output(self):
-                """Compatibilidade: mostra painel de output"""
+                """Compatibility: shows output panel"""
                 self.main_window.show_panel("output")
 
             def clear_output(self):
-                """Compatibilidade: limpa output global"""
+                """Compatibility: clears global output"""
                 if self.main_window.global_output_panel:
                     self.main_window.global_output_panel.clear()
 
@@ -578,15 +578,15 @@ class MainWindow(DockingMainWindow):
         return DockableBottomTabsCompat(self)
 
     def _get_bottom_tabs_instance(self):
-        """Retorna uma instancia unica do BottomTabs para compatibilidade"""
+        """Returns a single BottomTabs instance for compatibility"""
         if not hasattr(self, "_bottom_tabs_cache"):
-            # Criar instância única da classe de compatibilidade
+            # Create single instance of compatibility class
             class DockableBottomTabsCompat:
                 def __init__(self, main_window):
                     self.main_window = main_window
 
                 def setCurrentIndex(self, index):
-                    """Simula mudança de aba ativa"""
+                    """Simulates active tab change"""
                     if index == 0:  # Results
                         self.main_window.show_panel("results")
                         results_panel = self.main_window.get_panel("results")
@@ -633,22 +633,22 @@ class MainWindow(DockingMainWindow):
                     if self.main_window.global_output_panel:
                         self.main_window.global_output_panel.warning(message)
 
-                def set_results(self, df, title="Resultado", query_info=None):
-                    """Compatibilidade: define resultados no painel global"""
+                def set_results(self, df, title="Result", query_info=None):
+                    """Compatibility: sets results in the global panel"""
                     if self.main_window.global_results_viewer:
                         self.main_window.global_results_viewer.display_dataframe(df, title)
 
                 def set_variables(self, variables_dict):
-                    """Compatibilidade: define variaveis no painel global"""
+                    """Compatibility: sets variables in the global panel"""
                     if self.main_window.global_variables_panel:
                         self.main_window.global_variables_panel.set_variables(variables_dict)
 
                 def show_output(self):
-                    """Compatibilidade: mostra painel de output"""
+                    """Compatibility: shows output panel"""
                     self.main_window.show_panel("output")
 
                 def clear_output(self):
-                    """Compatibilidade: limpa output global"""
+                    """Compatibility: clears global output"""
                     if self.main_window.global_output_panel:
                         self.main_window.global_output_panel.clear()
 
@@ -664,26 +664,26 @@ class MainWindow(DockingMainWindow):
 
     @property
     def bottom_tabs(self):
-        """Retorna instancia compartilhada do BottomTabs"""
+        """Returns shared BottomTabs instance"""
         return self._get_bottom_tabs_instance()
 
     def _create_bottom_tabs_compat(self):
-        """Cria o objeto de compatibilidade com BottomTabs"""
+        """Creates the BottomTabs compatibility object"""
 
-        # Retorna um mock object que redireciona para os painéis dockable
+        # Returns a mock object that redirects to dockable panels
         class DockableBottomTabsCompat:
             pass
 
         return DockableBottomTabsCompat()
 
     def show(self):
-        """Sobrescreve show para restaurar geometria da janela"""
+        """Overrides show to restore window geometry"""
         super().show()
-        # Restaurar geometria após a janela ser mostrada
+        # Restore geometry after window is shown
         self._restore_window_state()
 
     def _setup_icons(self):
-        """Configura icones do QtAwesome com cor uniforme"""
+        """Configures QtAwesome icons with uniform color"""
         if not HAS_QTAWESOME:
             return {}
 
@@ -705,7 +705,7 @@ class MainWindow(DockingMainWindow):
         }
 
     def _setup_ui(self):
-        """Configura a interface principal"""
+        """Configures the main interface"""
         self.setWindowTitle("DataPyn - IDE SQL + Python")
         self.setGeometry(100, 100, 1400, 900)
 
@@ -790,12 +790,12 @@ class MainWindow(DockingMainWindow):
             }}
         """)
 
-        # Container para as abas de sessões (será a área central)
+        # Container for session tabs (will be the central area)
         session_container = QWidget()
         session_layout = QVBoxLayout(session_container)
         session_layout.setContentsMargins(5, 5, 5, 5)
 
-        # TabWidget para sessões (cada aba é um SessionWidget completo)
+        # TabWidget for sessions (each tab is a complete SessionWidget)
         self.session_tabs = SessionTabs()
         self.session_tabs.session_closed.connect(self._close_session_tab)
         self.session_tabs.session_renamed.connect(self._on_session_renamed)
@@ -804,39 +804,39 @@ class MainWindow(DockingMainWindow):
 
         session_layout.addWidget(self.session_tabs)
 
-        # Configurar área central com sessões no sistema de docking
+        # Configure central area with sessions in the docking system
         self.set_central_content(session_container)
 
-        # Restaurar sessões
+        # Restore sessions
         self._restore_sessions()
 
-        # Dock para conexões (lateral esquerda)
+        # Dock for connections (left side)
         self._create_connections_dock()
 
-        # Configurar painéis dockable (Results, Output, Variables)
+        # Configure dockable panels (Results, Output, Variables)
         self._setup_dockable_panels()
 
         # Object Explorer (lateral direita, abaixo de Variables)
         self._create_object_explorer_dock()
 
-        # Restaurar layout de dock widgets após criar todos os docks
+        # Restore dock widget layout after creating all docks
         # DESABILITADO: self._restore_dock_layout()
-        # SEMPRE USA LAYOUT PADRÃO por enquanto
-        print("DEBUG: [MODO SUPER SEGURO] Sempre aplicando layout padrão - save/restore completamente desabilitado")
+        # ALWAYS USE DEFAULT LAYOUT for now
+        print("DEBUG: [SUPER SAFE MODE] Always applying default layout - save/restore completely disabled")
         self._setup_default_layout()
 
-        # Configurar auto-save de layout quando dock widgets mudarem
+        # Configure layout auto-save when dock widgets change
         # DESABILITADO: self._setup_auto_save_layout()
-        print("DEBUG: Auto-save desabilitado por segurança")
+        print("DEBUG: Auto-save disabled for safety")
 
     def _create_connections_dock(self):
-        """Cria painel lateral de conexões usando ConnectionPanel"""
+        """Creates the connections side panel using ConnectionPanel"""
         # Usar o componente ConnectionPanel
         self.connection_panel = ConnectionPanel(
             connection_manager=self.connection_manager, theme_manager=self.theme_manager
         )
 
-        # Conectar sinais
+        # Connect signals
         self.connection_panel.connection_requested.connect(self._quick_connect)
         self.connection_panel.new_tab_connection_requested.connect(self._connect_new_tab)
         self.connection_panel.new_connection_clicked.connect(self._new_connection)
@@ -845,7 +845,7 @@ class MainWindow(DockingMainWindow):
         self.connection_panel.disconnect_clicked.connect(self._disconnect)
 
         # Criar dock widget
-        self.connections_dock = QDockWidget("Conexões", self)
+        self.connections_dock = QDockWidget("Connections", self)
         self.connections_dock.setObjectName("ConnectionsDock")  # Para saveState/restoreState
         self.connections_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.connections_dock.setWidget(self.connection_panel)
@@ -863,11 +863,11 @@ class MainWindow(DockingMainWindow):
 
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
 
-        # Configurar política de tamanho para ocupar lateral completa
+        # Configure size policy to occupy full side
         self.connections_dock.setMinimumWidth(200)
         self.connections_dock.setMaximumWidth(400)
 
-        # Configurar features para permitir reposicionamento total
+        # Configure features to allow full repositioning
         features = (
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
@@ -879,7 +879,7 @@ class MainWindow(DockingMainWindow):
         self._setup_connection_panel_compat()
 
     def _setup_connection_panel_compat(self):
-        """Cria propriedades de compatibilidade para código legado"""
+        """Creates compatibility properties for legacy code"""
         # Mapeia atributos antigos para o novo componente
         self.connections_list = self.connection_panel.connections_list.list_widget
         self.active_conn_name_label = self.connection_panel.active_widget.name_label
@@ -887,7 +887,7 @@ class MainWindow(DockingMainWindow):
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect
 
     def _create_object_explorer_dock(self):
-        """Cria painel do Object Explorer (lateral direita, abaixo de Variables).
+        """Creates Object Explorer panel (right side, below Variables).
 
         Usa QStackedWidget para que cada sessao tenha seu proprio Object Explorer.
         """
@@ -926,11 +926,11 @@ class MainWindow(DockingMainWindow):
         )
         self.object_explorer_dock.setFeatures(features)
 
-        # Esconder ate ter conexao ativa
+        # Hide until there is an active connection
         self.object_explorer_dock.hide()
 
     def _get_session_explorer(self, session_id: str) -> ObjectExplorerPanel:
-        """Retorna o ObjectExplorerPanel da sessao, criando se necessario."""
+        """Returns the ObjectExplorerPanel for the session, creating if necessary."""
         if session_id in self._session_explorers:
             return self._session_explorers[session_id]
 
@@ -945,26 +945,26 @@ class MainWindow(DockingMainWindow):
         return panel
 
     def _remove_session_explorer(self, session_id: str):
-        """Remove Object Explorer de uma sessao."""
+        """Removes Object Explorer from a session."""
         panel = self._session_explorers.pop(session_id, None)
         if panel:
             self._object_explorer_stack.removeWidget(panel)
             panel.deleteLater()
 
     def _switch_session_explorer(self, session_id: str):
-        """Troca para o Object Explorer da sessao ativa."""
+        """Switches to the Object Explorer of the active session."""
         panel = self._session_explorers.get(session_id)
         if panel:
             self._object_explorer_stack.setCurrentWidget(panel)
 
     @property
     def _active_object_explorer(self):
-        """Retorna o ObjectExplorerPanel da sessao ativa."""
+        """Returns the ObjectExplorerPanel of the active session."""
         sid = self._get_active_session_id()
         return self._session_explorers.get(sid) if sid else None
 
     def _on_object_explorer_insert_text(self, text: str):
-        """Insere texto no bloco que estava focado antes de clicar no OE"""
+        """Inserts text in the block that was focused before clicking on OE"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
             block = current_widget.editor.get_last_focused_block()
@@ -975,7 +975,7 @@ class MainWindow(DockingMainWindow):
                     block.editor.setFocus()
 
     def _on_object_explorer_query(self, query: str):
-        """Insere query no bloco que estava focado antes de clicar no OE"""
+        """Inserts query in the block that was focused before clicking on OE"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
             block = current_widget.editor.get_last_focused_block()
@@ -985,7 +985,7 @@ class MainWindow(DockingMainWindow):
                     block.editor.setFocus()
 
     def _on_object_explorer_database_switch(self, database_name: str):
-        """Troca o banco de dados da conexao da aba ativa (em background)"""
+        """Switches the database of the active tab connection (in background)"""
         current_widget = self._get_current_session_widget()
         if not current_widget or not hasattr(current_widget, "session"):
             return
@@ -995,10 +995,10 @@ class MainWindow(DockingMainWindow):
         connection_name = getattr(session, "connection_name", "") or ""
 
         if not connector or not connector.is_connected():
-            self.statusBar().showMessage("Nenhuma conexao ativa", 3000)
+            self.statusBar().showMessage("No active connection", 3000)
             return
 
-        self.statusBar().showMessage(f"Trocando banco para: {database_name}...", 10000)
+        self.statusBar().showMessage(f"Switching database to: {database_name}...", 10000)
 
         from src.workers import DatabaseSwitchWorker
 
@@ -1020,8 +1020,8 @@ class MainWindow(DockingMainWindow):
         thread.start()
 
     def _on_database_switch_success(self, database_name, connection_name, connector, widget):
-        """Callback quando troca de banco termina com sucesso"""
-        self.statusBar().showMessage(f"Banco alterado para: {database_name}", 5000)
+        """Callback when database switch completes successfully"""
+        self.statusBar().showMessage(f"Database changed to: {database_name}", 5000)
 
         self._schema_service.invalidate_cache(connection_name)
         self._schema_service.load_schema(connector, connection_name)
@@ -1030,7 +1030,7 @@ class MainWindow(DockingMainWindow):
             widget.connection_changed.emit(connection_name, database_name)
 
     def _on_object_explorer_refresh(self):
-        """Refresh do Object Explorer - recarrega schema da conexao ativa"""
+        """Object Explorer refresh - reloads schema from active connection"""
         current_widget = self._get_current_session_widget()
         if not current_widget or not hasattr(current_widget, "session"):
             return
@@ -1044,7 +1044,7 @@ class MainWindow(DockingMainWindow):
             self._schema_service.load_schema(connector, connection_name)
 
     def _setup_dockable_panels(self):
-        """Configura paineis dockable (Results, Output, Variables) usando QDockWidget.
+        """Configures dockable panels (Results, Output, Variables) using QDockWidget.
 
         Cada dock contem um QStackedWidget. Cada sessao adiciona seus proprios
         paineis (ResultsViewer, OutputPanel, VariablesPanel) ao stack.
@@ -1052,7 +1052,7 @@ class MainWindow(DockingMainWindow):
         """
         from PyQt6.QtWidgets import QStackedWidget
 
-        # Stacks - cada sessao terá sua pagina
+        # Stacks - each session will have its page
         self._results_stack = QStackedWidget()
         self._output_stack = QStackedWidget()
         self._variables_stack = QStackedWidget()
@@ -1114,12 +1114,12 @@ class MainWindow(DockingMainWindow):
         self.variables_dock.hide()
 
     def _create_session_panels(self, session_id: str):
-        """Cria paineis (Results, Output, Variables) para uma sessao e adiciona aos stacks."""
+        """Creates panels (Results, Output, Variables) for a session and adds to stacks."""
         results = ResultsViewer(theme_manager=self.theme_manager)
         output = OutputPanel(theme_manager=self.theme_manager)
         variables = VariablesPanel(theme_manager=self.theme_manager)
 
-        # Conectar sinais do painel de variaveis
+        # Connect signals do painel de variaveis
         variables.insert_variable_name.connect(self._on_insert_variable_in_editor)
         variables.delete_variable.connect(self._on_delete_variable)
 
@@ -1138,7 +1138,7 @@ class MainWindow(DockingMainWindow):
         return results, output, variables
 
     def _remove_session_panels(self, session_id: str):
-        """Remove paineis de uma sessao dos stacks."""
+        """Removes panels of a session from stacks."""
         info = self._session_panel_indices.pop(session_id, None)
         if not info:
             return
@@ -1154,7 +1154,7 @@ class MainWindow(DockingMainWindow):
             self._remove_session_explorer(session_id)
 
     def _switch_session_panels(self, session_id: str):
-        """Troca os stacks para exibir os paineis da sessao ativa.
+        """Switches stacks to display panels of the active session.
 
         Usa setCurrentWidget() em vez de setCurrentIndex() para evitar
         bugs com indices invalidos apos remocao de widgets do stack.
@@ -1175,40 +1175,40 @@ class MainWindow(DockingMainWindow):
 
     @property
     def global_results_viewer(self):
-        """Retorna o ResultsViewer da sessao ativa."""
+        """Returns the ResultsViewer of the active session."""
         sid = self._get_active_session_id()
         info = self._session_panel_indices.get(sid) if sid else None
         return info["results"] if info else None
 
     @property
     def global_output_panel(self):
-        """Retorna o OutputPanel da sessao ativa."""
+        """Returns the OutputPanel of the active session."""
         sid = self._get_active_session_id()
         info = self._session_panel_indices.get(sid) if sid else None
         return info["output"] if info else None
 
     @property
     def global_variables_panel(self):
-        """Retorna o VariablesPanel da sessao ativa."""
+        """Returns the VariablesPanel of the active session."""
         sid = self._get_active_session_id()
         info = self._session_panel_indices.get(sid) if sid else None
         return info["variables"] if info else None
 
     def _get_active_session_id(self) -> str:
-        """Retorna o session_id da aba ativa."""
+        """Returns the session_id of the active tab."""
         widget = self._get_current_session_widget()
         if widget and hasattr(widget, "session"):
             return widget.session.session_id
         return None
 
     def _on_namespace_updated(self, namespace: dict):
-        """Callback quando o namespace e atualizado"""
+        """Callback when namespace is updated"""
         panel = self.global_variables_panel
         if panel:
             panel.refresh_variables(namespace)
 
     def show_output(self, text: str):
-        """Mostra output no painel da sessao ativa"""
+        """Shows output in the active session panel"""
         panel = self.global_output_panel
         if panel:
             panel.append_output(text)
@@ -1217,7 +1217,7 @@ class MainWindow(DockingMainWindow):
         self.show_panel("output")
 
     def show_panel(self, name: str):
-        """Mostra painel especifico usando QDockWidget.
+        """Shows specific panel using QDockWidget.
 
         Para docks tabificados (results/output), raise_() sozinho nao
         funciona. Precisamos buscar o QTabBar do grupo e trocar a aba ativa.
@@ -1246,11 +1246,11 @@ class MainWindow(DockingMainWindow):
             self._activate_tabified_dock(dock)
 
     def _activate_tabified_dock(self, dock: QDockWidget):
-        """Ativa a aba correta em um grupo de docks tabificados.
+        """Activates the correct tab in a group of tabified docks.
 
-        Quando docks sao tabificados via tabifyDockWidget(), eles compartilham
-        um QTabBar interno do QMainWindow. raise_() sozinho nao troca a aba.
-        Este metodo encontra o QTabBar correto e seleciona a aba do dock.
+        When docks are tabified via tabifyDockWidget(), they share
+        an internal QTabBar of QMainWindow. raise_() alone does not switch the tab.
+        This method finds the correct QTabBar and selects the dock tab.
         """
         from PyQt6.QtWidgets import QTabBar
 
@@ -1262,7 +1262,7 @@ class MainWindow(DockingMainWindow):
                     return
 
     def hide_panel(self, name: str):
-        """Esconde painel específico usando QDockWidget"""
+        """Hides specific panel using QDockWidget"""
         if name == "results":
             self.results_dock.hide()
         elif name == "output":
@@ -1273,31 +1273,31 @@ class MainWindow(DockingMainWindow):
             self.object_explorer_dock.hide()
 
     def _refresh_connections_list(self):
-        """Atualiza lista de conexões salvas"""
+        """Updates the saved connections list"""
         self.connection_panel.refresh_connections()
 
     def _on_connection_double_click(self, item: QListWidgetItem):
-        """Conecta ao dar duplo clique na conexão"""
+        """Connects on double click on connection"""
         conn_name = item.data(Qt.ItemDataRole.UserRole)
         if conn_name:
             self._quick_connect(conn_name)
 
     def _toggle_panel_visibility(self, panel_name: str, visible: bool):
-        """Controla visibilidade de um painel"""
+        """Controls visibility of a panel"""
         if visible:
             self.show_panel(panel_name)
         else:
             self.hide_panel(panel_name)
 
     def _toggle_output_tab(self, visible: bool):
-        """Controla visibilidade do painel Output"""
+        """Controls Output panel visibility"""
         if visible:
             self.show_panel("output")
         else:
             self.hide_panel("output")
 
     def _restore_default_layout(self):
-        """Restaura o layout padrao dos paineis"""
+        """Restores the default panel layout"""
         # Mostra todos os docks na posicao padrao
         self.results_dock.show()
         self.output_dock.show()
@@ -1319,7 +1319,7 @@ class MainWindow(DockingMainWindow):
         self.tabifyDockWidget(self.results_dock, self.output_dock)
         self.results_dock.raise_()
 
-        # Atualiza acoes do menu
+        # Updates menu actions
         if hasattr(self, "results_action"):
             self.results_action.setChecked(True)
         if hasattr(self, "output_action"):
@@ -1332,19 +1332,19 @@ class MainWindow(DockingMainWindow):
             self.object_explorer_action.setChecked(False)
 
     def _save_dock_layout(self):
-        """DESABILITADO - Não salva layout automaticamente por segurança"""
-        print("DEBUG: [SUPER SEGURO] Save automático desabilitado por segurança")
+        """DISABLED - Does not save layout automatically for safety"""
+        print("DEBUG: [SUPER SAFE] Automatic save disabled for safety")
         return
 
     def _restore_dock_layout(self):
-        """Restaura layout dos dock widgets com validação robusta"""
+        """Restores dock widget layout with robust validation"""
         try:
             settings = QSettings("DataPyn", "MainWindow")
 
-            # Verifica se deve resetar (se segurar Shift ao abrir)
+            # Checks if should reset (if holding Shift on open)
             modifiers = QApplication.keyboardModifiers()
             if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                print("DEBUG: Shift pressionado - resetando layout para padrão")
+                print("DEBUG: Shift pressed - resetting layout to default")
                 self._clear_saved_layout()
                 self._setup_default_layout()
                 return
@@ -1355,66 +1355,66 @@ class MainWindow(DockingMainWindow):
             if geometry and len(geometry) > 20:
                 success = self.restoreGeometry(geometry)
                 geometry_restored = success
-                print(f"DEBUG: Geometria restaurada - Sucesso: {success}, Dados: {len(geometry)} bytes")
+                print(f"DEBUG: Geometry restored - Success: {success}, Data: {len(geometry)} bytes")
                 if not success:
-                    print("DEBUG: Falha ao restaurar geometria")
+                    print("DEBUG: Failed to restore geometry")
             else:
-                print("DEBUG: Geometria inválida ou inexistente - usando padrão")
+                print("DEBUG: Invalid or missing geometry - using default")
 
-            # Restaura estado dos docks
+            # Restores dock state
             window_state = settings.value("windowState")
             state_restored = False
             if window_state and len(window_state) > 50:
                 success = self.restoreState(window_state)
                 state_restored = success
-                print(f"DEBUG: Estado dos docks restaurado - Sucesso: {success}, Dados: {len(window_state)} bytes")
+                print(f"DEBUG: Dock state restored - Success: {success}, Data: {len(window_state)} bytes")
 
                 if success:
-                    # Força atualização da interface após restaurar
+                    # Forces UI update after restore
                     QApplication.processEvents()
-                    # Verifica se o layout ficou válido após restaurar
+                    # Checks if layout is valid after restore
                     QTimer.singleShot(500, self._validate_restored_layout)
                 else:
-                    print("DEBUG: Falha ao restaurar estado dos docks")
+                    print("DEBUG: Failed to restore dock state")
                     state_restored = False
             else:
-                print("DEBUG: Estado dos docks inválido ou inexistente - usando padrão")
+                print("DEBUG: Invalid or missing dock state - using default")
 
-            # Se não conseguiu restaurar nada OU falhou, usa padrão
+            # If nothing was restored OR failed, use default
             if not geometry_restored and not state_restored:
-                print("DEBUG: Nada foi restaurado ou houve falhas - aplicando layout padrão")
+                print("DEBUG: Nothing was restored or there were failures - applying default layout")
                 self._setup_default_layout()
 
         except Exception as e:
-            print(f"DEBUG: Erro ao restaurar layout: {e} - usando layout padrão")
+            print(f"DEBUG: Error restoring layout: {e} - using default layout")
             self._setup_default_layout()
 
     def _setup_auto_save_layout(self):
-        """DESABILITADO - Auto-save desabilitado por segurança"""
-        print("DEBUG: [SUPER SEGURO] Auto-save permanentemente desabilitado")
+        """DISABLED - Auto-save disabled for safety"""
+        print("DEBUG: [SUPER SAFE] Auto-save permanently disabled")
         return
 
     def _on_dock_changed(self):
-        """DESABILITADO - Não reage a mudanças de dock por segurança"""
-        print("DEBUG: [SUPER SEGURO] Mudança de dock ignorada - save desabilitado")
+        """DISABLED - Does not react to dock changes for safety"""
+        print("DEBUG: [SUPER SAFE] Dock change ignored - save disabled")
 
     def _clear_saved_layout(self):
-        """Limpa layout salvo (para reset)"""
+        """Clears saved layout (for reset)"""
         try:
             settings = QSettings("DataPyn", "MainWindow")
             settings.remove("geometry")
             settings.remove("windowState")
             settings.sync()
-            print("DEBUG: Layout salvo removido com sucesso")
+            print("DEBUG: Saved layout removed successfully")
         except Exception as e:
-            print(f"DEBUG: Erro ao limpar layout salvo: {e}")
+            print(f"DEBUG: Error clearing saved layout: {e}")
 
     def _setup_default_layout(self):
-        """Configura layout padrão simples e confiável"""
-        print("DEBUG: [SUPER SEGURO] Configurando layout padrão SIMPLIFICADO")
+        """Configures simple and reliable default layout"""
+        print("DEBUG: [SUPER SAFE] Configuring SIMPLIFIED default layout")
 
         try:
-            # Força todos visíveis e não-flutuantes
+            # Forces all visible and non-floating
             all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
             if hasattr(self, "object_explorer_dock"):
                 all_docks.append(self.object_explorer_dock)
@@ -1423,19 +1423,19 @@ class MainWindow(DockingMainWindow):
                     dock.setVisible(True)
                     dock.setFloating(False)
 
-            # Posições simples - sem remoção/readição complexa
+            # Simple positions - without complex removal/re-addition
             print("DEBUG: Aplicando layout super simples...")
 
-            # Janela no tamanho padrão
+            # Window at default size
             self.setGeometry(100, 100, 1400, 900)
 
-            # Força show de todos
+            # Force show all
             self.connections_dock.show()
             self.results_dock.show()
             self.output_dock.show()
             self.variables_dock.show()
 
-            print("DEBUG: Layout padrão SIMPLIFICADO aplicado")
+            print("DEBUG: SIMPLIFIED default layout applied")
 
         except Exception as e:
             print(f"DEBUG: ERRO no layout simplificado: {e}")
@@ -1449,9 +1449,9 @@ class MainWindow(DockingMainWindow):
                 pass
 
     def _is_layout_valid(self):
-        """Verifica se o layout atual está sano"""
+        """Checks if the current layout is sane"""
         try:
-            # Verifica se todos os docks existem e estão visíveis
+            # Checks if all docks exist and are visible
             required_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
 
             for dock in required_docks:
@@ -1462,220 +1462,220 @@ class MainWindow(DockingMainWindow):
             # Verifica geometria da janela
             geom = self.geometry()
             if geom.width() < 400 or geom.height() < 300:
-                print(f"DEBUG: Janela muito pequena: {geom.width()}x{geom.height()}")
+                print(f"DEBUG: Window too small: {geom.width()}x{geom.height()}")
                 return False
 
             return True
 
         except Exception as e:
-            print(f"DEBUG: Erro ao validar layout: {e}")
+            print(f"DEBUG: Error validating layout: {e}")
             return False
 
     def _validate_restored_layout(self):
-        """Valida layout após restaurar e corrige se necessário"""
+        """Validates layout after restore and fixes if necessary"""
         if not self._is_layout_valid():
-            print("DEBUG: Layout restaurado está inválido - aplicando padrão")
+            print("DEBUG: Restored layout is invalid - applying default")
             self._clear_saved_layout()  # Remove o layout corrompido
             self._setup_default_layout()
 
     def _reset_layout_completely(self):
-        """Reseta layout completamente (limpa configurações e aplica padrão)"""
+        """Resets layout completely (clears settings and applies default)"""
         reply = QMessageBox.question(
             self,
-            "Confirmar Reset",
-            "Isso irá resetar completamente o layout dos painéis.\nTodas as configurações de layout serão perdidas.\n\nContinuar?",
+            "Confirm Reset",
+            "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            print("DEBUG: Resetando layout completamente por solicitação do usuário")
+            print("DEBUG: Resetting layout completely by user request")
             self._clear_saved_layout()
             self._setup_default_layout()
-            QMessageBox.information(self, "Layout Resetado", "Layout dos painéis foi resetado para o padrão.")
+            QMessageBox.information(self, "Layout Reset", "Panel layout has been reset to default.")
 
     def closeEvent(self, event):
-        """DESABILITADO - Não salva layout ao fechar por segurança"""
-        print("DEBUG: [SUPER SEGURO] Fechando sem salvar layout (modo seguro ativo)")
+        """DISABLED - Does not save layout on close for safety"""
+        print("DEBUG: [SUPER SAFE] Closing without saving layout (safe mode active)")
         super().closeEvent(event)
 
     def _quick_connect(self, connection_name: str):
         """
         Conecta a um banco de dados.
-        - Se não há aba: cria nova aba
-        - Se há aba atual conectando: cria nova aba
-        - Se há aba atual disponível: troca a conexão dessa aba
-        A conexão acontece em background (não trava a aplicação).
+        - If there is no tab: creates a new tab
+        - If current tab is connecting: creates a new tab
+        - If current tab is available: switches the connection of that tab
+        Connection happens in background (does not block the application).
         """
-        # Obter aba atual
+        # Get current tab
         current_widget = self._get_current_session_widget()
 
-        # Se não há aba ou a aba atual está conectando, criar uma nova
+        # If there is no tab or current tab is connecting, create a new one
         if not current_widget or current_widget.is_connecting():
             self._new_session()
             current_widget = self._get_current_session_widget()
 
         if not current_widget:
-            self._show_warning("Erro", "Não foi possível criar nova aba")
+            self._show_warning("Error", "Could not create new tab")
             return
 
-        # Obter config (apenas metadados, não conexão)
+        # Get config (metadata only, not connection)
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
-            self._show_warning("Erro", f"Conexão '{connection_name}' não encontrada")
+            self._show_warning("Error", f"Connection '{connection_name}' not found")
             return
 
-        # Pegar senha se necessário
+        # Get password if necessary
         password = ""
         if not config.get("use_windows_auth", False):
             password = config.get("password", "")
 
-        # DELEGAR para a aba - ela gerencia conexão em background
-        # Retorna True imediatamente (assíncrono)
+        # DELEGATE to tab - it manages connection in background
+        # Returns True immediately (asynchronous)
         current_widget.connect_to_database(connection_name, password)
 
-        # Atualizar status (a aba mostrará o loading internamente)
-        self.action_label.setText(f"Conectando a {connection_name}...")
+        # Update status (tab will show loading internally)
+        self.action_label.setText(f"Connecting to {connection_name}...")
 
     def _connect_new_tab(self, connection_name: str):
         """
         Conecta a um banco de dados SEMPRE criando uma nova aba.
         Usado quando CTRL+duplo-click ou 'Conectar em Nova Aba' no menu.
         """
-        # Sempre criar nova aba
+        # Always create new tab
         self._new_session()
         current_widget = self._get_current_session_widget()
 
         if not current_widget:
-            self._show_warning("Erro", "Não foi possível criar nova aba")
+            self._show_warning("Error", "Could not create new tab")
             return
 
-        # Obter config (apenas metadados, não conexão)
+        # Get config (metadata only, not connection)
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
-            self._show_warning("Erro", f"Conexão '{connection_name}' não encontrada")
+            self._show_warning("Error", f"Connection '{connection_name}' not found")
             return
 
-        # Pegar senha se necessário
+        # Get password if necessary
         password = ""
         if not config.get("use_windows_auth", False):
             password = config.get("password", "")
 
-        # DELEGAR para a aba - ela gerencia conexão em background
+        # DELEGATE to tab - it manages connection in background
         current_widget.connect_to_database(connection_name, password)
 
-        # Atualizar status
-        self.action_label.setText(f"Conectando a {connection_name} (nova aba)...")
+        # Update status
+        self.action_label.setText(f"Connecting to {connection_name} (new tab)...")
 
     def _create_menus(self):
-        """Cria os menus"""
+        """Creates the menus"""
         menubar = self.menuBar()
 
-        # Menu Arquivo
-        file_menu = menubar.addMenu("&Arquivo")
+        # File Menu
+        file_menu = menubar.addMenu("&File")
 
-        new_action = QAction("&Nova Aba", self)
-        # Atalho gerenciado por ShortcutManager (Ctrl+T)
+        new_action = QAction("&New Tab", self)
+        # Shortcut managed by ShortcutManager (Ctrl+T)
         new_action.triggered.connect(self._new_session)
         file_menu.addAction(new_action)
 
-        open_action = QAction("&Abrir...", self)
-        # Atalho gerenciado por ShortcutManager (Ctrl+O)
+        open_action = QAction("&Open...", self)
+        # Shortcut managed by ShortcutManager (Ctrl+O)
         open_action.triggered.connect(self._open_file)
         file_menu.addAction(open_action)
 
-        save_action = QAction("&Salvar", self)
-        # Atalho gerenciado por ShortcutManager (Ctrl+S)
+        save_action = QAction("&Save", self)
+        # Shortcut managed by ShortcutManager (Ctrl+S)
         save_action.triggered.connect(self._save_file)
         file_menu.addAction(save_action)
 
-        save_as_action = QAction("Salvar &Como...", self)
-        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+S)
+        save_as_action = QAction("Save &As...", self)
+        # Shortcut managed by ShortcutManager (Ctrl+Shift+S)
         save_as_action.triggered.connect(self._save_file_as)
         file_menu.addAction(save_as_action)
 
         file_menu.addSeparator()
 
-        export_script_action = QAction("&Exportar como Script...", self)
+        export_script_action = QAction("&Export as Script...", self)
         if HAS_QTAWESOME:
             export_script_action.setIcon(qta.icon("mdi.file-export", color="#b0b0b0"))
-        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+E)
+        # Shortcut managed by ShortcutManager (Ctrl+Shift+E)
         export_script_action.triggered.connect(self._export_as_script)
         file_menu.addAction(export_script_action)
 
         file_menu.addSeparator()
 
-        exit_action = QAction("Sai&r", self)
-        exit_action.setShortcut(QKeySequence.StandardKey.Quit)  # Manter Quit padrão do sistema
+        exit_action = QAction("E&xit", self)
+        exit_action.setShortcut(QKeySequence.StandardKey.Quit)  # Keep system default Quit
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        # Menu Conexão
-        conn_menu = menubar.addMenu("&Conexão")
+        # Connection Menu
+        conn_menu = menubar.addMenu("&Connection")
 
-        manage_conn_action = QAction("&Gerenciar Conexões...", self)
+        manage_conn_action = QAction("&Manage Connections...", self)
         if HAS_QTAWESOME:
             manage_conn_action.setIcon(self.icons["database"])
-        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+M)
+        # Shortcut managed by ShortcutManager (Ctrl+Shift+M)
         manage_conn_action.triggered.connect(self._manage_connections)
         conn_menu.addAction(manage_conn_action)
 
         conn_menu.addSeparator()
 
-        new_conn_action = QAction("&Nova Conexão...", self)
+        new_conn_action = QAction("&New Connection...", self)
         if HAS_QTAWESOME:
             new_conn_action.setIcon(self.icons["plug"])
-        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+D)
+        # Shortcut managed by ShortcutManager (Ctrl+Shift+D)
         new_conn_action.triggered.connect(self._new_connection)
         conn_menu.addAction(new_conn_action)
 
-        disconnect_action = QAction("&Desconectar", self)
+        disconnect_action = QAction("&Disconnect", self)
         if HAS_QTAWESOME:
             disconnect_action.setIcon(self.icons["trash"])
         disconnect_action.triggered.connect(self._disconnect)
         conn_menu.addAction(disconnect_action)
 
-        # Menu Executar
-        run_menu = menubar.addMenu("&Executar")
+        # Run Menu
+        run_menu = menubar.addMenu("&Run")
 
-        run_current_action = QAction("Executar &Bloco Atual", self)
+        run_current_action = QAction("Run &Current Block", self)
         if HAS_QTAWESOME:
             run_current_action.setIcon(self.icons["play"])
-        # Atalho gerenciado por ShortcutManager (F5)
+        # Shortcut managed by ShortcutManager (F5)
         run_current_action.triggered.connect(self._execute_current_block)
         run_menu.addAction(run_current_action)
 
-        run_all_action = QAction("Executar &Todos os Blocos", self)
+        run_all_action = QAction("Run &All Blocks", self)
         if HAS_QTAWESOME:
             run_all_action.setIcon(qta.icon("mdi.fast-forward", color="#b0b0b0"))
-        # Atalho gerenciado por ShortcutManager (Ctrl+F5)
+        # Shortcut managed by ShortcutManager (Ctrl+F5)
         run_all_action.triggered.connect(self._execute_all_blocks)
         run_menu.addAction(run_all_action)
 
         run_menu.addSeparator()
 
-        clear_results_action = QAction("&Limpar Resultados", self)
+        clear_results_action = QAction("&Clear Results", self)
         if HAS_QTAWESOME:
             clear_results_action.setIcon(self.icons["trash"])
-        # Atalho gerenciado por ShortcutManager (Ctrl+Shift+C)
+        # Shortcut managed by ShortcutManager (Ctrl+Shift+C)
         clear_results_action.triggered.connect(self._clear_results)
         run_menu.addAction(clear_results_action)
 
-        # Menu Exibir
-        view_menu = menubar.addMenu("E&xibir")
+        # View Menu
+        view_menu = menubar.addMenu("&View")
 
-        # Submenu Painéis
-        panels_menu = view_menu.addMenu("&Painéis")
+        # Panels Submenu
+        panels_menu = view_menu.addMenu("&Panels")
 
-        # Toggle do painel de resultados
-        results_action = QAction("&Resultados", self)
+        # Results panel toggle
+        results_action = QAction("&Results", self)
         results_action.setCheckable(True)
         results_action.setChecked(True)
         results_action.triggered.connect(lambda checked: self._toggle_panel_visibility("results", checked))
         panels_menu.addAction(results_action)
         self.results_action = results_action
 
-        # Toggle do painel de output
+        # Output panel toggle
         output_action = QAction("&Output", self)
         output_action.setCheckable(True)
         output_action.setChecked(True)
@@ -1683,23 +1683,23 @@ class MainWindow(DockingMainWindow):
         panels_menu.addAction(output_action)
         self.output_action = output_action
 
-        # Toggle do painel de variáveis
-        variables_action = QAction("&Variáveis", self)
+        # Variables panel toggle
+        variables_action = QAction("&Variables", self)
         variables_action.setCheckable(True)
         variables_action.setChecked(True)
         variables_action.triggered.connect(lambda checked: self._toggle_panel_visibility("variables", checked))
         panels_menu.addAction(variables_action)
         self.variables_action = variables_action
 
-        # Toggle do painel de conexões
-        connections_action = QAction("&Conexões", self)
+        # Connections panel toggle
+        connections_action = QAction("&Connections", self)
         connections_action.setCheckable(True)
         connections_action.setChecked(True)
         connections_action.triggered.connect(lambda checked: self.connections_dock.setVisible(checked))
         panels_menu.addAction(connections_action)
         self.connections_action = connections_action
 
-        # Toggle do Object Explorer
+        # Object Explorer toggle
         object_explorer_action = QAction("&Object Explorer", self)
         object_explorer_action.setCheckable(True)
         object_explorer_action.setChecked(False)
@@ -1711,22 +1711,22 @@ class MainWindow(DockingMainWindow):
 
         view_menu.addSeparator()
 
-        # Restaurar visão padrão
-        restore_action = QAction("&Restaurar Visão Padrão", self)
+        # Restore default view
+        restore_action = QAction("&Restore Default View", self)
         restore_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
         restore_action.triggered.connect(self._restore_default_layout)
         view_menu.addAction(restore_action)
 
-        # Resetar layout completamente (limpa configurações salvas)
-        reset_layout_action = QAction("Reset &Completo de Layout", self)
+        # Reset layout completely (clears saved settings)
+        reset_layout_action = QAction("&Complete Layout Reset", self)
         reset_layout_action.setShortcut(QKeySequence("Ctrl+Shift+Alt+R"))
         reset_layout_action.triggered.connect(self._reset_layout_completely)
         view_menu.addAction(reset_layout_action)
 
-        # Menu Ferramentas
-        tools_menu = menubar.addMenu("&Ferramentas")
+        # Tools Menu
+        tools_menu = menubar.addMenu("&Tools")
 
-        packages_action = QAction("Gerenciador de &Pacotes...", self)
+        packages_action = QAction("&Package Manager...", self)
         if HAS_QTAWESOME:
             packages_action.setIcon(qta.icon("mdi.package-variant", color="#b0b0b0"))
         packages_action.triggered.connect(self._show_package_manager)
@@ -1734,27 +1734,27 @@ class MainWindow(DockingMainWindow):
 
         tools_menu.addSeparator()
 
-        settings_action = QAction("&Configurações de Atalhos...", self)
+        settings_action = QAction("&Shortcut Settings...", self)
         if HAS_QTAWESOME:
             settings_action.setIcon(self.icons["cog"])
-        # Atalho gerenciado por ShortcutManager (Ctrl+,)
+        # Shortcut managed by ShortcutManager (Ctrl+,)
         settings_action.triggered.connect(self._show_settings)
         tools_menu.addAction(settings_action)
 
         tools_menu.addSeparator()
 
         # Auto-update toggle
-        auto_update_action = QAction("Ativar &Auto-Update", self)
+        auto_update_action = QAction("Enable &Auto-Update", self)
         auto_update_action.setCheckable(True)
         auto_update_action.setChecked(self.auto_update_service.is_auto_update_enabled())
         auto_update_action.triggered.connect(self._toggle_auto_update)
         tools_menu.addAction(auto_update_action)
-        self._auto_update_action = auto_update_action  # Salvar referencia para atualizar estado
+        self._auto_update_action = auto_update_action  # Save reference to update state
 
-        # Menu Ajuda
-        help_menu = menubar.addMenu("A&juda")
+        # Help Menu
+        help_menu = menubar.addMenu("&Help")
 
-        check_updates_action = QAction("Verificar &Atualizacoes...", self)
+        check_updates_action = QAction("Check for &Updates...", self)
         if HAS_QTAWESOME:
             check_updates_action.setIcon(qta.icon("mdi.update", color="#b0b0b0"))
         check_updates_action.triggered.connect(self._check_for_updates)
@@ -1762,28 +1762,28 @@ class MainWindow(DockingMainWindow):
 
         help_menu.addSeparator()
 
-        about_action = QAction("&Sobre", self)
+        about_action = QAction("&About", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
     def _create_toolbar(self):
-        """Cria a toolbar usando MainToolbar"""
+        """Creates the toolbar using MainToolbar"""
         self.main_toolbar = MainToolbar(theme_manager=self.theme_manager)
         self.main_toolbar.setObjectName("MainToolbar")  # Para saveState/restoreState
         self.addToolBar(self.main_toolbar)
 
-        # Conectar sinais
+        # Connect signals
         self.main_toolbar.new_connection_clicked.connect(self._new_connection)
         self.main_toolbar.new_tab_clicked.connect(self._new_session)
         self.main_toolbar.run_clicked.connect(self._execute_from_toolbar)
 
     def _execute_from_toolbar(self):
-        """Executa código do editor atual via botão da toolbar"""
+        """Executes code from the current editor via toolbar button"""
         editor = self._get_current_editor()
         if not editor:
             return
 
-        # Usa a mesma lógica do BlockEditor: F5 executa seleção ou todos os blocos
+        # Uses same logic as BlockEditor: F5 executes selection or all blocks
         if hasattr(editor, "_execute_smart"):
             editor._execute_smart()
         elif hasattr(editor, "get_selected_or_all_text"):
@@ -1793,7 +1793,7 @@ class MainWindow(DockingMainWindow):
                 self._execute_cross_syntax(code)
 
     def _create_statusbar(self):
-        """Cria a barra de status usando MainStatusBar"""
+        """Creates the status bar using MainStatusBar"""
         self.main_statusbar = MainStatusBar(theme_manager=self.theme_manager)
         self.setStatusBar(self.main_statusbar)
 
@@ -1810,7 +1810,7 @@ class MainWindow(DockingMainWindow):
         self._execution_update_timer.timeout.connect(self._update_execution_time)
 
     def _start_execution_timer(self, mode: str = ""):
-        """Inicia o timer de execucao"""
+        """Starts the execution timer"""
         self._is_executing = True
         self._execution_mode = mode
         self._execution_timer.start()
@@ -1830,7 +1830,7 @@ class MainWindow(DockingMainWindow):
         self.main_statusbar.start_timer()
 
     def _stop_execution_timer(self):
-        """Para o timer de execução e mostra tempo final"""
+        """Stops the execution timer and shows final time"""
         self._execution_update_timer.stop()
         if self._is_executing:
             elapsed = self._execution_timer.elapsed() / 1000.0
@@ -1843,42 +1843,42 @@ class MainWindow(DockingMainWindow):
                     padding: 0 10px;
                 }
             """)
-            # Limpa após 5 segundos
+            # Clears after 5 seconds
             QTimer.singleShot(5000, self._clear_execution_label)
         self._is_executing = False
 
     def _update_execution_time(self):
-        """Atualiza o label com o tempo de execução"""
+        """Updates the label with execution time"""
         if self._is_executing:
             elapsed = self._execution_timer.elapsed() / 1000.0
-            mode = f"{self._execution_mode}" if self._execution_mode else "Código"
-            self.execution_label.setText(f"  Executando {mode} {elapsed:.1f}s")
+            mode = f"{self._execution_mode}" if self._execution_mode else "Code"
+            self.execution_label.setText(f"  Running {mode} {elapsed:.1f}s")
 
     def _clear_execution_label(self):
-        """Limpa o label de execução"""
+        """Clears the execution label"""
         if not self._is_executing:
             self.execution_label.setText("")
 
     def _setup_shortcuts(self):
-        """Configura atalhos globais da aplicação"""
+        """Configures global application shortcuts"""
         from PyQt6.QtGui import QShortcut, QKeySequence
         from PyQt6.QtCore import Qt
 
         # Guardar shortcuts como atributos para evitar garbage collection
         self._shortcuts = []
 
-        # Mapear ações para callbacks
+        # Map actions to callbacks
         shortcuts_map = {
-            # Execução
+            # Execution
             "execute_sql": self._execute_current_block,
             "execute_all": self._execute_all_blocks,
             "clear_results": self._clear_results,
-            # Arquivo
+            # File
             "open_file": self._open_file,
             "save_file": self._save_file,
             "save_as": self._save_file_as,
             "export_script": self._export_as_script,
-            # Sessões
+            # Sessions
             "new_tab": self._new_session,
             "new_session": self._new_session,
             "close_tab": self._close_current_session,
@@ -1892,7 +1892,7 @@ class MainWindow(DockingMainWindow):
             "new_connection": self._new_connection,
             # Schema
             "reload_schema": self._reload_schema,
-            # Ferramentas
+            # Tools
             "settings": self._show_settings,
         }
 
@@ -1912,7 +1912,7 @@ class MainWindow(DockingMainWindow):
         CodeEditor.set_app_shortcuts(app_keys)
 
     def _reload_shortcuts(self):
-        """Re-registra todos os atalhos (chamado quando usuário altera configurações)"""
+        """Re-registers all shortcuts (called when user changes settings)"""
         from PyQt6.QtGui import QShortcut, QKeySequence
         from PyQt6.QtCore import Qt
 
@@ -1922,18 +1922,18 @@ class MainWindow(DockingMainWindow):
             shortcut.deleteLater()
         self._shortcuts.clear()
 
-        # Mapear ações para callbacks
+        # Map actions to callbacks
         shortcuts_map = {
-            # Execução
+            # Execution
             "execute_sql": self._execute_current_block,
             "execute_all": self._execute_all_blocks,
             "clear_results": self._clear_results,
-            # Arquivo
+            # File
             "open_file": self._open_file,
             "save_file": self._save_file,
             "save_as": self._save_file_as,
             "export_script": self._export_as_script,
-            # Sessões
+            # Sessions
             "new_tab": self._new_session,
             "new_session": self._new_session,
             "close_tab": self._close_current_session,
@@ -1947,7 +1947,7 @@ class MainWindow(DockingMainWindow):
             "new_connection": self._new_connection,
             # Schema
             "reload_schema": self._reload_schema,
-            # Ferramentas
+            # Tools
             "settings": self._show_settings,
         }
 
@@ -1969,7 +1969,7 @@ class MainWindow(DockingMainWindow):
     # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
 
     def _close_current_session(self):
-        """Fecha a sessao/aba atual - delega para _close_session_tab"""
+        """Closes the current session/tab - delegates to _close_session_tab"""
         current_index = self.session_tabs.currentIndex()
         if current_index >= 0:
             widget = self.session_tabs.widget(current_index)
@@ -1979,8 +1979,8 @@ class MainWindow(DockingMainWindow):
                 if has_code:
                     reply = QMessageBox.question(
                         self,
-                        "Fechar Sessao",
-                        "Tem certeza que deseja fechar esta sessao?\n\nO codigo nao salvo sera perdido.",
+                        "Close Session",
+                        "Are you sure you want to close this session?\n\nUnsaved code will be lost.",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No,
                     )
@@ -1991,7 +1991,7 @@ class MainWindow(DockingMainWindow):
                 self._close_session_tab(current_index)
 
     def _duplicate_session(self, index: int):
-        """Duplica uma sessao - cria nova sessao com paineis e copia conteudo"""
+        """Duplicates a session - creates new session with panels and copies content"""
         widget = self.session_tabs.widget(index)
         if not widget or not hasattr(widget, "editor"):
             return
@@ -2038,7 +2038,7 @@ class MainWindow(DockingMainWindow):
                 except Exception:
                     pass
 
-            # Conectar sinais do widget
+            # Connect signals do widget
             new_widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
             new_widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
             new_widget.connection_changed.connect(
@@ -2077,7 +2077,7 @@ class MainWindow(DockingMainWindow):
             self._creating_session = False
 
     def _find_in_editor(self):
-        """Abre busca no bloco focado do editor atual."""
+        """Opens search in the focused block of the current editor."""
         widget = self._get_current_session_widget()
         if widget and widget.editor:
             block = widget.editor.get_focused_block()
@@ -2085,7 +2085,7 @@ class MainWindow(DockingMainWindow):
                 block.editor._open_find()
 
     def _replace_in_editor(self):
-        """Abre busca+substituicao no bloco focado do editor atual."""
+        """Opens find+replace in the focused block of the current editor."""
         widget = self._get_current_session_widget()
         if widget and widget.editor:
             block = widget.editor.get_focused_block()
@@ -2112,42 +2112,42 @@ class MainWindow(DockingMainWindow):
         formatted, error = format_code(code, lang)
 
         if error:
-            self.action_label.setText(f"Formatacao: {error}")
-            self.statusBar().showMessage(f"Erro ao formatar: {error}", 5000)
+            self.action_label.setText(f"Formatting: {error}")
+            self.statusBar().showMessage(f"Formatting error: {error}", 5000)
             return
 
         if formatted != code:
-            # Preservar posicao do cursor
+            # Preserve cursor position
             sci = block.editor._sci
             line, col = sci.getCursorPosition()
             block.editor.set_text(formatted)
             # Restaurar cursor (limitar a linhas existentes)
             max_line = sci.lines() - 1
             sci.setCursorPosition(min(line, max_line), col)
-            self.action_label.setText(f"[{lang.upper()}] Codigo formatado")
+            self.action_label.setText(f"[{lang.upper()}] Code formatted")
         else:
-            self.action_label.setText(f"[{lang.upper()}] Codigo ja esta formatado")
+            self.action_label.setText(f"[{lang.upper()}] Code already formatted")
 
     def _add_block_to_current_session(self):
-        """Adiciona novo bloco de código na sessão atual"""
+        """Adds a new code block in the current session"""
         widget = self._get_current_session_widget()
         if widget and widget.editor:
             widget.editor.add_block()
 
     def _manage_connections(self):
-        """Abre diálogo de gerenciamento de conexões"""
+        """Opens the connection management dialog"""
         dialog = ConnectionsManagerDialog(self.connection_manager, theme_manager=self.theme_manager, parent=self)
         dialog.connection_selected.connect(self._connect_from_manager)
         dialog.exec()
-        # Atualizar lista após fechar o diálogo
+        # Update list after closing dialog
         self._refresh_connections_list()
 
     def _connect_from_manager(self, name: str, config: dict):
-        """Conecta a partir do gerenciador de conexoes - mesmo comportamento do painel lateral"""
+        """Connects from the connection manager - same behavior as the side panel"""
         self._quick_connect(name)
 
     def _new_connection(self):
-        """Abre dialogo para nova conexao"""
+        """Opens dialog for new connection"""
         dialog = ConnectionEditDialog(
             connection_name=None,
             config=None,
@@ -2159,7 +2159,7 @@ class MainWindow(DockingMainWindow):
         if dialog.exec():
             name, config = dialog.get_result()
 
-            # Salva a conexão
+            # Save connection
             self.connection_manager.save_connection_config(
                 name,
                 config["db_type"],
@@ -2177,15 +2177,15 @@ class MainWindow(DockingMainWindow):
 
             self._update_connection_status()
             self._refresh_connections_list()
-            self._log_info(f"Conexão '{name}' criada com sucesso")
-            self.action_label.setText(f"Conexão '{name}' criada")
+            self._log_info(f"Connection '{name}' created successfully")
+            self.action_label.setText(f"Connection '{name}' created")
 
     def _edit_connection(self, connection_name: str):
-        """Abre dialogo para editar uma conexao especifica"""
-        # Obter config da conexão
+        """Opens dialog to edit a specific connection"""
+        # Get connection config
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
-            self._show_warning("Erro", f"Conexão '{connection_name}' não encontrada")
+            self._show_warning("Error", f"Connection '{connection_name}' not found")
             return
 
         dialog = ConnectionEditDialog(
@@ -2203,7 +2203,7 @@ class MainWindow(DockingMainWindow):
             if name != connection_name:
                 self.connection_manager.delete_connection_config(connection_name)
 
-            # Salva a conexão
+            # Save connection
             self.connection_manager.save_connection_config(
                 name,
                 new_config["db_type"],
@@ -2221,13 +2221,13 @@ class MainWindow(DockingMainWindow):
 
             self._update_connection_status()
             self._refresh_connections_list()
-            self._log_info(f"Conexão '{name}' atualizada com sucesso")
-            self.action_label.setText(f"Conexão '{name}' atualizada")
+            self._log_info(f"Connection '{name}' updated successfully")
+            self.action_label.setText(f"Connection '{name}' updated")
 
-    # === Métodos auxiliares para diálogos com ícones ===
+    # === Helper methods for dialogs with icons ===
 
     def _show_warning(self, title: str, message: str):
-        """Mostra warning com ícone"""
+        """Shows warning with icon"""
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Warning)
         msg.setWindowTitle(title)
@@ -2236,7 +2236,7 @@ class MainWindow(DockingMainWindow):
         msg.exec()
 
     def _show_error(self, title: str, message: str):
-        """Mostra erro com ícone"""
+        """Shows error with icon"""
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Critical)
         msg.setWindowTitle(title)
@@ -2245,7 +2245,7 @@ class MainWindow(DockingMainWindow):
         msg.exec()
 
     def _show_info(self, title: str, message: str):
-        """Mostra informação com ícone"""
+        """Shows information with icon"""
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Information)
         msg.setWindowTitle(title)
@@ -2254,23 +2254,23 @@ class MainWindow(DockingMainWindow):
         msg.exec()
 
     def _disconnect(self):
-        """Desconecta a sessão atual"""
+        """Disconnects the current session"""
         session = self.session_manager.focused_session
         if session and session.is_connected:
-            # Limpar conexão da sessão
+            # Clear session connection
             session.clear_connection()
             self._update_connection_status()
-            self.action_label.setText("Desconectado")
+            self.action_label.setText("Disconnected")
 
     def _update_connection_status(self):
-        """Atualiza status da conexão da sessão atual"""
+        """Updates the connection status of the current session"""
         session = self.session_manager.focused_session
 
         if session and session.is_connected:
             conn_name = session.connection_name
             connector = session.connector
 
-            # Obter config da conexão
+            # Get connection config
             config = self.connection_manager.get_connection_config(conn_name)
             host = config.get("host", "localhost") if config else "localhost"
             db = config.get("database", "") if config else ""
@@ -2279,7 +2279,7 @@ class MainWindow(DockingMainWindow):
             # === PAINEL LATERAL ===
             self.connection_panel.set_active_connection(conn_name, host=host, database=db, db_type=db_type)
 
-            # Destacar conexão ativa na lista
+            # Highlight active connection in list
             for i in range(self.connections_list.count()):
                 item = self.connections_list.item(i)
                 if item.data(Qt.ItemDataRole.UserRole) == conn_name:
@@ -2298,7 +2298,7 @@ class MainWindow(DockingMainWindow):
                 }
             """)
 
-            # Usar cor configurada na conexão (ou azul padrão)
+            # Use configured connection color (or default blue)
             status_color = config.get("color", "#007acc") if config else "#007acc"
             if not status_color:
                 status_color = "#007acc"
@@ -2309,7 +2309,7 @@ class MainWindow(DockingMainWindow):
             self.connections_list.clearSelection()
 
             # === STATUSBAR ===
-            self.connection_status_bar.setText("Desconectado")
+            self.connection_status_bar.setText("Disconnected")
             self.connection_status_bar.setStyleSheet("""
                 QLabel {
                     color: white;
@@ -2322,24 +2322,24 @@ class MainWindow(DockingMainWindow):
             self.statusbar.setStyleSheet("QStatusBar { background-color: #3e3e42; color: white; }}")
 
     def _execute_current_block(self):
-        """Executa o bloco atualmente focado com sua linguagem"""
+        """Executes the currently focused block with its language"""
         editor = self._get_current_editor()
         if not editor:
             return
 
-        # Se é um BlockEditor, usa a execução inteligente (mesma lógica do botão)
+        # If it's a BlockEditor, uses smart execution (same logic as button)
         from src.editors.block_editor import BlockEditor
 
         if isinstance(editor, BlockEditor):
             editor._execute_smart()
         else:
-            # Editor antigo - executa como Python por padrão
+            # Legacy editor - executes as Python by default
             code = editor.get_selected_or_all_text().strip()
             if code:
                 self._execute_python(code)
 
     def _execute_all_blocks(self):
-        """Executa todos os blocos em sequência"""
+        """Executes all blocks in sequence"""
         editor = self._get_current_editor()
         if not editor:
             return
@@ -2355,7 +2355,7 @@ class MainWindow(DockingMainWindow):
                 self._execute_python(code)
 
     def _force_execute_sql(self):
-        """Força execução do bloco atual como SQL"""
+        """Forces execution of current block as SQL"""
         editor = self._get_current_editor()
         if not editor:
             return
@@ -2371,7 +2371,7 @@ class MainWindow(DockingMainWindow):
             self._execute_sql(code.strip())
 
     def _force_execute_python(self):
-        """Força execução do bloco atual como Python"""
+        """Forces execution of current block as Python"""
         editor = self._get_current_editor()
         if not editor:
             return
@@ -2387,7 +2387,7 @@ class MainWindow(DockingMainWindow):
             self._execute_python(code.strip())
 
     def _force_execute_cross(self):
-        """Força execução do bloco atual como Cross-Syntax"""
+        """Forces execution of current block as Cross-Syntax"""
         editor = self._get_current_editor()
         if not editor:
             return
@@ -2403,98 +2403,98 @@ class MainWindow(DockingMainWindow):
             self._execute_cross_syntax(code.strip())
 
     def _execute_sql(self, query: str):
-        """Executa query SQL em background"""
+        """Executes SQL query in background"""
         query = query.strip()
         if not query:
-            # Pegar da aba atual se vazio
+            # Get from current tab if empty
             editor = self._get_current_editor()
             if editor:
                 query = editor.get_selected_or_all_text().strip()
             if not query:
                 return
 
-        # Usar conexão da sessão atual
+        # Use current session connection
         session = self.session_manager.focused_session
         if not session or not session.is_connected:
             self._show_warning(
-                "Atenção", "Nenhuma conexão ativa nesta sessão. Conecte-se a um banco de dados primeiro."
+                "Warning", "No active connection in this session. Connect to a database first."
             )
             return
 
         connector = session.connector
 
-        # Detectar comando USE database (executa síncrono pois é rápido)
+        # Detect USE database command (runs synchronously since it's fast)
         use_match = re.match(r"^\s*USE\s+\[?([^\]\s;]+)\]?\s*;?\s*$", query, re.IGNORECASE)
         if use_match:
             database_name = use_match.group(1)
             try:
                 self._start_execution_timer("SQL")
-                self.action_label.setText(f"[SQL] Alterando para banco {database_name}...")
+                self.action_label.setText(f"[SQL] Switching to database {database_name}...")
 
                 connector.change_database(database_name)
 
-                # Atualiza statusbar
+                # Update statusbar
                 self._update_connection_status()
 
-                # Recarregar Object Explorer para o novo banco
+                # Reload Object Explorer for the new database
                 connection_name = getattr(session, "connection_name", "") or ""
                 if connection_name:
                     self._schema_service.invalidate_cache(connection_name)
                     self._schema_service.load_schema(connector, connection_name)
 
-                    # Emitir sinal de mudanca de conexao para atualizar UI
+                    # Emit connection change signal to update UI
                     current_widget = self._get_current_session_widget()
                     if current_widget and hasattr(current_widget, "connection_changed"):
                         current_widget.connection_changed.emit(connection_name, database_name)
 
-                self._log_info(f"[SQL] Banco alterado para: {database_name}")
-                self.action_label.setText(f"[SQL] Banco: {database_name}")
+                self._log_info(f"[SQL] Database changed to: {database_name}")
+                self.action_label.setText(f"[SQL] Database: {database_name}")
                 self._stop_execution_timer()
                 return
 
             except Exception as e:
                 self._stop_execution_timer()
-                QMessageBox.critical(self, "Erro", f"Erro ao trocar banco de dados:\n{str(e)}")
-                self.action_label.setText("[SQL] Erro ao trocar banco")
+                QMessageBox.critical(self, "Error", f"Error switching database:\n{str(e)}")
+                self.action_label.setText("[SQL] Error switching database")
                 return
 
-        # Execução em background
+        # Background execution
         self._start_execution_timer("SQL")
-        self.action_label.setText("[SQL] Executando query...")
+        self.action_label.setText("[SQL] Running query...")
 
-        # Marcar aba como rodando
+        # Mark tab as running
         running_tab_index = self._mark_tab_running(True)
 
-        # Salvar banco atual para detectar mudanca via USE dentro do batch
+        # Save current database to detect change via USE within batch
         try:
             current_db_before = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
         except Exception:
             current_db_before = ""
 
-        # Criar thread e worker
+        # Create thread and worker
         thread = QThread()
         worker = SqlWorker(connector, query)
         worker.moveToThread(thread)
 
-        # Conectar sinais
+        # Connect signals
         thread.started.connect(worker.run)
         worker.finished.connect(
             lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index, current_db_before)
         )
 
-        # Limpeza segura: so deletar quando thread realmente parar
+        # Safe cleanup: only delete when thread actually stops
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._remove_worker_thread(thread))
 
-        # Manter referencia
+        # Keep reference
         self._worker_threads.append((thread, worker))
 
-        # Iniciar
+        # Start
         thread.start()
 
-    def _display_figures_in_results(self, figures: list, label: str = "Resultado"):
-        """Exibe rich outputs (imagens/HTML/JSON) no painel de resultados."""
+    def _display_figures_in_results(self, figures: list, label: str = "Result"):
+        """Displays rich outputs (images/HTML/JSON) in the results panel."""
         results_panel = self.global_results_viewer
         if not results_panel or not figures:
             return
@@ -2503,18 +2503,18 @@ class MainWindow(DockingMainWindow):
 
     def _handle_execution_result(self, result=None, error=None, execution_type="Unknown", additional_info=""):
         """
-        Método centralizado para tratar resultados de execução
+        Centralized method for handling execution results
 
         Args:
-            result: Resultado da execução (DataFrame, string, etc) ou None
+            result: Execution result (DataFrame, string, etc) or None
             error: Mensagem de erro ou None
-            execution_type: Tipo da execução ("SQL", "Python", "Cross-Syntax")
-            additional_info: Informação adicional para logs
+            execution_type: Execution type ("SQL", "Python", "Cross-Syntax")
+            additional_info: Additional information for logs
         """
         if error:
             # ERRO → OUTPUT (console)
             self._show_error_output(f"[{execution_type}] {error}")
-            self.action_label.setText(f"[{execution_type}] Erro ao executar")
+            self.action_label.setText(f"[{execution_type}] Execution error")
             return False  # Indica erro
 
         if result is None:
@@ -2530,10 +2530,10 @@ class MainWindow(DockingMainWindow):
         if isinstance(result, pd.DataFrame):
             # DATAFRAME -> GRID (results)
             if results_panel:
-                results_panel.display_dataframe(result, f"Resultado {execution_type}")
+                results_panel.display_dataframe(result, f"{execution_type} Result")
             self.show_panel("results")
             rows = len(result)
-            self._log_info(f"[{execution_type}] {additional_info or f'DataFrame exibido ({rows:,} linhas)'}")
+            self._log_info(f"[{execution_type}] {additional_info or f'DataFrame displayed ({rows:,} rows)'}")
             return True
 
         elif isinstance(result, (list, tuple)) and len(result) > 0:
@@ -2542,14 +2542,14 @@ class MainWindow(DockingMainWindow):
                 df = pd.DataFrame(result)
                 if len(df) > 0:
                     if results_panel:
-                        results_panel.display_dataframe(df, f"Resultado {execution_type}")
+                        results_panel.display_dataframe(df, f"{execution_type} Result")
                     self.show_panel("results")
-                    self._log_info(f"[{execution_type}] Lista convertida para DataFrame ({len(df)} linhas)")
+                    self._log_info(f"[{execution_type}] List converted to DataFrame ({len(df)} rows)")
                     return True
             except:
                 pass
 
-            # Se não conseguiu converter, vai para output
+            # If could not convert, goes to output
             self._log(f"[{execution_type}] {repr(result)}")
             return True
 
@@ -2562,14 +2562,14 @@ class MainWindow(DockingMainWindow):
                     else pd.DataFrame(result)
                 )
                 if results_panel:
-                    results_panel.display_dataframe(df, f"Resultado {execution_type}")
+                    results_panel.display_dataframe(df, f"{execution_type} Result")
                 self.show_panel("results")
-                self._log_info(f"[{execution_type}] Dicionário convertido para DataFrame")
+                self._log_info(f"[{execution_type}] Dictionary converted to DataFrame")
                 return True
             except:
                 pass
 
-            # Se não conseguiu converter, vai para output
+            # If could not convert, goes to output
             self._log(f"[{execution_type}] {repr(result)}")
             return True
 
@@ -2579,17 +2579,17 @@ class MainWindow(DockingMainWindow):
             return True
 
     def _remove_worker_thread(self, thread):
-        """Remove thread da lista de workers ativos (chamado via thread.finished)."""
+        """Removes thread from active workers list (called via thread.finished)."""
         self._worker_threads = [(t, w) for t, w in self._worker_threads if t != thread]
 
     def _on_sql_finished(self, df, error, thread, tab_index, db_before=""):
         """Callback quando SQL termina"""
         self._stop_execution_timer()
 
-        # Remover marcação de rodando
+        # Remove running mark
         self._mark_tab_running(False, tab_index)
 
-        # Parar thread (finished signal cuida da limpeza)
+        # Stop thread (finished signal handles cleanup)
         thread.quit()
 
         # Detectar mudanca de banco via USE dentro do batch SQL
@@ -2597,28 +2597,28 @@ class MainWindow(DockingMainWindow):
 
         # FORCAR: Se ha erro, SEMPRE mostrar output
         if error:
-            self._show_error_output(f"[SQL] Erro: {error}")
-            self.action_label.setText("[SQL] Erro ao executar")
-            self._send_notification("Query SQL", f"Erro: {str(error)[:50]}...", success=False, tab_index=tab_index)
+            self._show_error_output(f"[SQL] Error: {error}")
+            self.action_label.setText("[SQL] Execution error")
+            self._send_notification("Query SQL", f"Error: {str(error)[:50]}...", success=False, tab_index=tab_index)
             return
 
-        # SÓ se não há erro, usar método centralizado
+        # ONLY if there is no error, use centralized method
         success = self._handle_execution_result(
             result=df,
-            error=None,  # Garantir que error é None aqui
+            error=None,  # Ensure error is None here
             execution_type="SQL",
-            additional_info=f"Executado com sucesso ({len(df):,} linhas retornadas)" if df is not None else "",
+            additional_info=f"Executed successfully ({len(df):,} rows returned)" if df is not None else "",
         )
 
         if success:
             rows = len(df) if df is not None else 0
-            self.action_label.setText(f"[SQL] {rows:,} linhas retornadas")
+            self.action_label.setText(f"[SQL] {rows:,} rows returned")
             self._send_notification(
-                "Query SQL", f"Concluida! {rows:,} linhas retornadas", success=True, tab_index=tab_index
+                "SQL Query", f"Complete! {rows:,} rows returned", success=True, tab_index=tab_index
             )
 
     def _check_database_changed_after_sql(self, db_before: str):
-        """Verifica se o banco mudou apos execucao SQL (ex: USE dentro de batch).
+        """Checks if the database changed after SQL execution (e.g. USE within batch).
 
         Se mudou, recarrega o Object Explorer com o novo banco.
         """
@@ -2648,10 +2648,10 @@ class MainWindow(DockingMainWindow):
                     current_widget.connection_changed.emit(connection_name, db_after)
 
     def _execute_python(self, code: str):
-        """Executa código Python em background"""
+        """Executes Python code in background"""
         code = code.strip()
         if not code:
-            # Pegar da aba atual se vazio
+            # Get from current tab if empty
             editor = self._get_current_editor()
             if editor:
                 code = editor.get_selected_or_all_text().strip()
@@ -2659,23 +2659,23 @@ class MainWindow(DockingMainWindow):
                 return
 
         self._start_execution_timer("Python")
-        self.action_label.setText("[Python] Executando código...")
+        self.action_label.setText("[Python] Running code...")
 
-        # Marcar aba como rodando
+        # Mark tab as running
         running_tab_index = self._mark_tab_running(True)
 
-        # Namespace com os DataFrames
+        # Namespace with DataFrames
         namespace = self.results_manager.get_namespace()
 
-        # Sempre usar a lógica centralizada
+        # Always use centralized logic
         is_expression = False
 
-        # Criar thread e worker
+        # Create thread and worker
         thread = QThread()
         worker = PythonWorker(code, namespace, is_expression)
         worker.moveToThread(thread)
 
-        # Conectar sinais
+        # Connect signals
         thread.started.connect(worker.run)
         worker.finished.connect(
             lambda result, output, err, namespace, figures: self._on_python_finished(
@@ -2683,86 +2683,86 @@ class MainWindow(DockingMainWindow):
             )
         )
 
-        # Limpeza segura: so deletar quando thread realmente parar
+        # Safe cleanup: only delete when thread actually stops
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._remove_worker_thread(thread))
 
-        # Manter referencia
+        # Keep reference
         self._worker_threads.append((thread, worker))
 
-        # Iniciar
+        # Start
         thread.start()
 
     def _on_python_finished(self, result_value, output, error, updated_namespace, figures, thread, tab_index):
         """Callback quando Python termina"""
         self._stop_execution_timer()
 
-        # Salvar namespace atualizado
+        # Save updated namespace
         self.results_manager.update_namespace(updated_namespace)
 
-        # Atualizar autocomplete Python com namespace atualizado
+        # Update Python autocomplete with updated namespace
         if updated_namespace:
             self._push_python_namespace(updated_namespace)
 
-        # Remover marcacao de rodando
+        # Remove running mark
         self._mark_tab_running(False, tab_index)
 
-        # Parar thread (finished signal cuida da limpeza)
+        # Stop thread (finished signal handles cleanup)
         thread.quit()
 
-        # FORCAR: Se ha erro, SEMPRE mostrar output primeiro
+        # FORCE: If there is an error, ALWAYS show output first
         if error:
-            self._show_error_output(f"[Python] Erro: {error}")
-            self.action_label.setText("[Python] Erro ao executar")
-            self._send_notification("Python", f"Erro: {str(error)[:50]}...", success=False, tab_index=tab_index)
+            self._show_error_output(f"[Python] Error: {error}")
+            self.action_label.setText("[Python] Execution error")
+            self._send_notification("Python", f"Error: {str(error)[:50]}...", success=False, tab_index=tab_index)
             return
 
-        # Mostra output de print()/stderr (se houver) -> painel output
+        # Show output from print()/stderr (if any) -> output panel
         if output:
             self._log(output.strip())
 
-        # Decidir o que mostrar no painel Results:
-        # Prioridade: rich outputs (graficos/html/json) > DataFrame > nada
+        # Decide what to show in the Results panel:
+        # Priority: rich outputs (charts/html/json) > DataFrame > nothing
         has_figures = bool(figures)
         results_panel = self.global_results_viewer
 
         if has_figures and result_value is not None and isinstance(result_value, pd.DataFrame):
-            # Rich outputs + DataFrame: mostrar rich output no results
+            # Rich outputs + DataFrame: show rich output in results
             if results_panel:
-                results_panel.display_rich_output(figures, "Resultado")
+                results_panel.display_rich_output(figures, "Result")
             self.show_panel("results")
             self._update_variables_view()
-            self.action_label.setText("[Python] Grafico + dados gerados!")
-            self._send_notification("Python", "Grafico + dados gerados!", success=True, tab_index=tab_index)
+            self.action_label.setText("[Python] Chart + data generated!")
+            self._send_notification("Python", "Chart + data generated!", success=True, tab_index=tab_index)
         elif has_figures:
-            # So rich outputs: mostrar no results
+            # Only rich outputs: show in results
             if results_panel:
-                results_panel.display_rich_output(figures, "Resultado")
+                results_panel.display_rich_output(figures, "Result")
             self.show_panel("results")
             self._update_variables_view()
-            self.action_label.setText("[Python] Resultado exibido!")
-            self._send_notification("Python", "Resultado exibido!", success=True, tab_index=tab_index)
+            self.action_label.setText("[Python] Result displayed!")
+            self._send_notification("Python", "Result displayed!", success=True, tab_index=tab_index)
         elif result_value is not None:
-            # Resultado sem graficos: usar handler centralizado
+            # Result without charts: use centralized handler
             success = self._handle_execution_result(result=result_value, error=None, execution_type="Python")
             if success:
                 self._update_variables_view()
-                self.action_label.setText("[Python] Executado com sucesso!")
-                self._send_notification("Python", "Executado com sucesso!", success=True, tab_index=tab_index)
+                self.action_label.setText("[Python] Executed successfully!")
+                self._send_notification("Python", "Executed successfully!", success=True, tab_index=tab_index)
         else:
-            # Sem resultado, sem graficos: so output
+            # No result, no charts: only output
             if output:
                 self.show_panel("output")
             self._update_variables_view()
-            self.action_label.setText("[Python] Executado com sucesso!")
-            self._send_notification("Python", "Executado com sucesso!", success=True, tab_index=tab_index)
+            self.action_label.setText("[Python] Executed successfully!")
+            self._send_notification("Python", "Executed successfully!", success=True, tab_index=tab_index)
 
     def _execute_cross_syntax(self, code: str):
-        """Executa código com sintaxe cross {{ SQL }} em background"""
+        """Executes cross syntax {{ SQL }} code in background"""
         code = code.strip()
         if not code:
-            # Pegar da aba atual se vazio
+            # Get from current tab if empty
             editor = self._get_current_editor()
             if editor:
                 code = editor.get_selected_or_all_text().strip()
@@ -2770,127 +2770,127 @@ class MainWindow(DockingMainWindow):
                 return
 
         self._start_execution_timer("Cross")
-        self.action_label.setText("[Cross-Syntax] Executando...")
+        self.action_label.setText("[Cross-Syntax] Running...")
 
-        # Marcar aba como rodando
+        # Mark tab as running
         running_tab_index = self._mark_tab_running(True)
 
-        # Validar sintaxe primeiro (síncrono, é rápido)
+        # Validate syntax first (synchronous, it's fast)
         is_valid, error = self.mixed_executor.validate_syntax(code)
         if not is_valid:
             self._stop_execution_timer()
             self._mark_tab_running(False, running_tab_index)
-            self._show_error_output(f"[Cross-Syntax] Erro de sintaxe: {error}")
-            self.action_label.setText("[Cross-Syntax] Erro de sintaxe")
+            self._show_error_output(f"[Cross-Syntax] Syntax error: {error}")
+            self.action_label.setText("[Cross-Syntax] Syntax error")
             return
 
-        # Usar conexão da sessão atual
+        # Use current session connection
         session = self.session_manager.focused_session
         if not session or not session.is_connected:
             self._stop_execution_timer()
             self._mark_tab_running(False, running_tab_index)
             QMessageBox.warning(
-                self, "Atenção", "Nenhuma conexão ativa nesta sessão. Conecte a um banco de dados primeiro."
+                self, "Warning", "No active connection in this session. Connect to a database first."
             )
-            self.action_label.setText("[Cross-Syntax] Sem conexão")
+            self.action_label.setText("[Cross-Syntax] No connection")
             return
 
-        # Guardar referência da sessão que iniciou a execução
+        # Keep reference to session that started execution
         executing_session = session
 
         self.mixed_executor.db_connector = session.connector
 
-        # Criar thread e worker - usar namespace da sessão que está executando
+        # Create thread and worker - use namespace of the executing session
         thread = QThread()
         worker = CrossSyntaxWorker(self.mixed_executor, code, session.namespace)
         worker.moveToThread(thread)
 
-        # Conectar sinais - passar a sessão que iniciou
+        # Connect signals - pass the session that started
         thread.started.connect(worker.run)
         worker.finished.connect(
             lambda result, err: self._on_cross_finished(result, err, code, thread, running_tab_index, executing_session)
         )
 
-        # Limpeza segura: so deletar quando thread realmente parar
+        # Safe cleanup: only delete when thread actually stops
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._remove_worker_thread(thread))
 
-        # Manter referência
+        # Keep reference
         self._worker_threads.append((thread, worker))
 
-        # Iniciar
+        # Start
         thread.start()
 
     def _on_cross_finished(self, result, error, code, thread, tab_index, session):
         """Callback quando Cross-Syntax termina
 
         Args:
-            result: Resultado da execução
-            error: Erro se houver
-            code: Código executado
-            thread: Thread usada
-            tab_index: Índice da aba
-            session: Sessão que INICIOU a execução (não a focada atual)
+            result: Execution result
+            error: Error if any
+            code: Executed code
+            thread: Thread used
+            tab_index: Tab index
+            session: Session that STARTED the execution (not the currently focused one)
         """
         self._stop_execution_timer()
 
-        # Remover marcação de rodando
+        # Remove running mark
         self._mark_tab_running(False, tab_index)
 
-        # Parar thread (finished signal cuida da limpeza)
+        # Stop thread (finished signal handles cleanup)
         thread.quit()
 
-        # Marcar blocos como não executando
+        # Mark blocks as not executing
         widget = self._get_current_session_widget()
         if widget and hasattr(widget.editor, "mark_execution_finished"):
             widget.editor.mark_execution_finished()
 
-        # FORÇAR: Se há erro, SEMPRE mostrar output primeiro
+        # FORCE: If there is an error, ALWAYS show output first
         if error:
-            self._show_error_output(f"[Cross-Syntax] Erro: {error}")
-            self.action_label.setText("[Cross-Syntax] Erro ao executar")
-            self._send_notification("Cross-Syntax", f"Erro: {str(error)[:50]}...", success=False, tab_index=tab_index)
+            self._show_error_output(f"[Cross-Syntax] Error: {error}")
+            self.action_label.setText("[Cross-Syntax] Execution error")
+            self._send_notification("Cross-Syntax", f"Error: {str(error)[:50]}...", success=False, tab_index=tab_index)
             return
 
-        # Mostra output primeiro (se houver)
+        # Show output first (if any)
         if result and result.get("output"):
             self._log(result["output"].strip())
 
-        # Mostra queries executadas no log
+        # Show executed queries in log
         if result and result.get("queries_executed"):
-            # Exibir variáveis criadas
+            # Display created variables
             queries = self.mixed_executor.extract_queries(code)
             for var_name, sql in queries:
-                # Buscar no namespace da sessão que executou
+                # Search in namespace of the session that executed
                 var_value = session.namespace.get(var_name)
                 if var_value is not None:
                     if isinstance(var_value, pd.DataFrame):
                         rows = len(var_value)
-                        self._log_info(f"[Cross-Syntax] Variável '{var_name}' criada ({rows:,} linhas)")
+                        self._log_info(f"[Cross-Syntax] Variable '{var_name}' created ({rows:,} rows)")
                     else:
-                        self._log_info(f"[Cross-Syntax] Variável '{var_name}' criada")
+                        self._log_info(f"[Cross-Syntax] Variable '{var_name}' created")
 
-        # SÓ se não há erro, usar método centralizado
+        # ONLY if there is no error, use centralized method
         success = self._handle_execution_result(
             result=result.get("result") if result else None,
-            error=None,  # Garantir que error é None aqui
+            error=None,  # Ensure error is None here
             execution_type="Cross-Syntax",
         )
 
         if success:
-            # Atualiza variáveis - da sessão que executou, se ainda for a focada
+            # Updates variables - from the session that executed, if still focused
             if session == self.session_manager.focused_session:
                 self._update_variables_view()
-                # Atualizar autocomplete Python com namespace atualizado
+                # Update Python autocomplete with updated namespace
                 self._push_python_namespace(session.namespace)
 
-            self.action_label.setText("[Cross-Syntax] Executado com sucesso!")
+            self.action_label.setText("[Cross-Syntax] Executed successfully!")
 
-            # Notificação de sucesso
+            # Success notification
             queries_count = result.get("queries_executed", 0) if result else 0
             self._send_notification(
-                "Cross-Syntax", f"Concluido! {queries_count} queries executadas", success=True, tab_index=tab_index
+                "Cross-Syntax", f"Complete! {queries_count} queries executed", success=True, tab_index=tab_index
             )
 
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
@@ -2982,13 +2982,13 @@ class MainWindow(DockingMainWindow):
         self._focus_window_and_tab(None)
 
     def _log_info(self, message: str):
-        """Adiciona mensagem ao log com timestamp (sem mostrar painel)"""
+        """Adds message to log with timestamp (without showing panel)"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
         if self.global_output_panel:
             self.global_output_panel.text_edit.append(f"[{timestamp}] {message}")
 
     def _log(self, message: str):
-        """Adiciona mensagem ao log com timestamp e mostra painel output"""
+        """Adds message to log with timestamp and shows output panel"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
         if self.global_output_panel:
             self.global_output_panel.text_edit.append(f"[{timestamp}] {message}")
@@ -2997,7 +2997,7 @@ class MainWindow(DockingMainWindow):
         self.show_panel("output")
 
     def _show_error_output(self, error_msg: str):
-        """Mostra erro no Output em vermelho e alterna para o painel de Output"""
+        """Shows error in Output in red and switches to the Output panel"""
         if not self.global_output_panel:
             return
         # Adiciona timestamp e erro em vermelho usando HTML
@@ -3013,7 +3013,7 @@ class MainWindow(DockingMainWindow):
         scrollbar.setValue(scrollbar.maximum())
 
     def _update_variables_view(self):
-        """Atualiza visualizacao de variaveis em memoria"""
+        """Updates variable visualization in memory"""
         panel = self.global_variables_panel
         if not panel:
             return
@@ -3021,11 +3021,11 @@ class MainWindow(DockingMainWindow):
         panel.display_dataframe(vars_df, "Variaveis")
 
     def _clear_results(self):
-        """Limpa todos os resultados"""
+        """Clears all results"""
         reply = QMessageBox.question(
             self,
-            "Confirmar",
-            "Deseja limpar todos os resultados em memória?",
+            "Confirm",
+            "Do you want to clear all results in memory?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 
@@ -3040,7 +3040,7 @@ class MainWindow(DockingMainWindow):
             output = self.global_output_panel
             if output:
                 output.text_edit.clear()
-            self.action_label.setText("Resultados limpos")
+            self.action_label.setText("Results cleared")
 
     def _new_file(self):
         """Limpa editor da aba atual"""
@@ -3049,48 +3049,48 @@ class MainWindow(DockingMainWindow):
             editor.clear()
 
     def _open_file(self):
-        """Abre workspace ou arquivo de código"""
+        """Opens workspace or code file"""
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Abrir Arquivo",
+            "Open File",
             "",
-            "Arquivos Suportados (*.sql *.py *.ipynb *.dpw);;DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;Jupyter Notebook (*.ipynb);;All Files (*.*)",
+            "Supported Files (*.sql *.py *.ipynb *.dpw);;DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;Jupyter Notebook (*.ipynb);;All Files (*.*)",
         )
         if filename:
-            # Verifica se é workspace
+            # Check if it is workspace
             if filename.endswith(".dpw"):
                 self._open_workspace(filename)
             else:
-                # Criar NOVA aba para o arquivo
+                # Create NEW tab for file
                 self._open_code_file(filename)
 
     def _open_code_file(self, filename: str):
-        """Abre arquivo de codigo em nova aba com paineis completos"""
+        """Opens code file in new tab with complete panels"""
         try:
-            # 1. Ler conteudo do arquivo (ou celulas se for notebook)
+            # 1. Read file content (or cells if notebook)
             is_notebook = filename.endswith(".ipynb")
             cells = None
             content = ""
 
             if is_notebook:
-                # Importar servico para parsear notebook
+                # Import service to parse notebook
                 from src.services.file_import_service import FileImportService
 
                 try:
                     cells = FileImportService.parse_ipynb_file(filename)
-                    # Guardar conteudo original como JSON
+                    # Keep original content as JSON
                     with open(filename, "r", encoding="utf-8") as f:
                         content = f.read()
                 except ValueError as e:
                     from PyQt6.QtWidgets import QMessageBox
 
-                    QMessageBox.critical(self, "Erro", f"Erro ao abrir notebook: {e}")
+                    QMessageBox.critical(self, "Error", f"Error opening notebook: {e}")
                     return
             else:
                 with open(filename, "r", encoding="utf-8") as f:
                     content = f.read()
 
-            # 2. Detectar linguagem e configurar contexto
+            # 2. Detect language and configure context
             if filename.endswith(".py"):
                 language = "python"
                 self._original_file_type = "python"
@@ -3139,7 +3139,7 @@ class MainWindow(DockingMainWindow):
                         if new_block:
                             new_block.set_code(cell["code"])
             else:
-                # Arquivo tradicional: um bloco unico
+                # File tradicional: um bloco unico
                 blocks = widget.editor.get_blocks()
                 if blocks:
                     blocks[0].set_language(language)
@@ -3161,46 +3161,46 @@ class MainWindow(DockingMainWindow):
             if index >= 0:
                 self.session_tabs.setCurrentIndex(index)
 
-            # Garantir que contexto de arquivo sobreviva a eventos de tab change
+            # Ensure file context survives tab change events
             self._original_file_path = filename
             self._original_file_type = widget._original_file_type
 
-            self.main_statusbar.show_save_feedback(f"Arquivo aberto: {filename}")
+            self.main_statusbar.show_save_feedback(f"File opened: {filename}")
             self.main_statusbar.set_file_info(filename)
 
-            # 9. Atualizar titulo da janela com contexto
+            # 9. Update window title with context
             self._update_window_title()
 
-            # 10. Trocar paineis para a nova sessao
+            # 10. Switch panels to new session
             self._switch_session_panels(session.session_id)
 
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
 
-            QMessageBox.critical(self, "Erro", f"Erro ao abrir arquivo: {e}")
+            QMessageBox.critical(self, "Error", f"Error opening file: {e}")
 
     def _save_file(self):
-        """Sistema inteligente de salvamento"""
+        """Intelligent saving system"""
         self._save_intelligently()
 
     def _save_file_as(self):
-        """Salvar Como - detecta contexto para oferecer filtro adequado"""
+        """Save As - detects context to offer appropriate filter"""
         context = self._detect_file_context()
 
         if context == "sql":
-            filter_text = "Arquivos SQL (*.sql);;DataPyn Workspace (*.dpw);;Todos os arquivos (*.*)"
+            filter_text = "SQL Files (*.sql);;DataPyn Workspace (*.dpw);;All Files (*.*)"
         elif context == "python":
-            filter_text = "Arquivos Python (*.py);;DataPyn Workspace (*.dpw);;Todos os arquivos (*.*)"
+            filter_text = "Python Files (*.py);;DataPyn Workspace (*.dpw);;All Files (*.*)"
         else:
-            filter_text = "DataPyn Workspace (*.dpw);;Arquivos SQL (*.sql);;Arquivos Python (*.py);;Todos os arquivos (*.*)"
+            filter_text = "DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)"
 
         filename, selected_filter = QFileDialog.getSaveFileName(
-            self, "Salvar Como", "", filter_text
+            self, "Save As", "", filter_text
         )
         if filename:
             if filename.endswith(".dpw"):
                 self._save_workspace_to_file(filename)
-                self.main_statusbar.show_save_feedback(f"Workspace salvo: {filename}")
+                self.main_statusbar.show_save_feedback(f"Workspace saved: {filename}")
                 self.main_statusbar.set_file_info(filename)
             elif filename.endswith(".sql"):
                 self._original_file_path = filename
@@ -3211,7 +3211,7 @@ class MainWindow(DockingMainWindow):
                 self._original_file_type = "python"
                 self._save_single_file(filename, "python")
             else:
-                # Inferir pelo contexto ou adicionar extensao padrao
+                # Infer from context or add default extension
                 if context == "sql":
                     filename += ".sql"
                     self._original_file_path = filename
@@ -3225,24 +3225,24 @@ class MainWindow(DockingMainWindow):
                 else:
                     filename += ".dpw"
                     self._save_workspace_to_file(filename)
-                    self.main_statusbar.show_save_feedback(f"Workspace salvo: {filename}")
+                    self.main_statusbar.show_save_feedback(f"Workspace saved: {filename}")
                     self.main_statusbar.set_file_info(filename)
 
             self._update_window_title()
 
     def _open_workspace(self, filename: str):
-        """Abre um workspace de um arquivo específico"""
+        """Opens a workspace from a specific file"""
         try:
-            # Carregar workspace do arquivo
+            # Load workspace from file
             workspace = self.workspace_manager.load_workspace(filename)
 
-            # Fechar todas as sessões atuais
+            # Close all current sessions
             self._close_all_sessions()
 
-            # Recarregar sessões do workspace
+            # Reload sessions from workspace
             self._restore_sessions()
 
-            self.main_statusbar.show_save_feedback(f"Workspace aberto: {filename}")
+            self.main_statusbar.show_save_feedback(f"Workspace opened: {filename}")
             self.main_statusbar.set_file_info(filename)
             self._update_window_title()
 
@@ -3250,11 +3250,11 @@ class MainWindow(DockingMainWindow):
             import traceback
 
             traceback.print_exc()
-            QMessageBox.critical(self, "Erro ao Abrir Workspace", f"Erro ao carregar workspace:\n{str(e)}")
+            QMessageBox.critical(self, "Error Opening Workspace", f"Error loading workspace:\n{str(e)}")
 
     def _save_workspace_to_file(self, filename: str):
-        """Salva workspace em arquivo específico"""
-        # Sincronizar sessão atual
+        """Saves workspace to a specific file"""
+        # Synchronize current session
         widget = self._get_current_session_widget()
         if widget:
             widget.sync_to_session()
@@ -3273,7 +3273,7 @@ class MainWindow(DockingMainWindow):
 
         dock_visible = self.connections_dock.isVisible() if hasattr(self, "connections_dock") else True
 
-        # Salvar no workspace manager com caminho específico
+        # Save in workspace manager with specific path
         self.workspace_manager.save_workspace(
             tabs=[],
             active_tab=0,
@@ -3284,11 +3284,11 @@ class MainWindow(DockingMainWindow):
             file_path=filename,  # Passa o caminho do arquivo
         )
 
-        # Limpar marcadores de modificação das abas
+        # Clear tab modification markers
         self._clear_modification_markers()
 
     def _clear_modification_markers(self):
-        """Remove asteriscos das abas, reseta flags e atualiza hashes"""
+        """Removes asterisks from tabs, resets flags and updates hashes"""
         for i in range(self.session_tabs.count()):
             widget = self.session_tabs.widget(i)
             if hasattr(widget, "_is_modified"):
@@ -3302,7 +3302,7 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.setTabText(i, current_text[:-2])
 
     def _update_status(self):
-        """Atualiza status periodicamente (sem I/O na thread principal)."""
+        """Updates status periodically (no I/O on main thread)."""
         # Check rapido sem I/O - apenas verifica estado do pool
         session = self.session_manager.focused_session
         if session and session.connector and not session.connector.is_connected():
@@ -3312,7 +3312,7 @@ class MainWindow(DockingMainWindow):
     # _change_theme removido - tema fixo em 'dark'
 
     def _apply_app_theme(self):
-        """Aplica tema na aplicação (não nos editores)"""
+        """Applies theme to the application (not to editors)"""
         colors = self.theme_manager.get_app_colors()
 
         # Aplicar estilo geral na janela
@@ -3472,25 +3472,25 @@ class MainWindow(DockingMainWindow):
                     widget.apply_theme()
 
     def _show_about(self):
-        """Mostra diálogo sobre"""
+        """Shows the about dialog"""
         QMessageBox.about(
             self,
-            "Sobre DataPyn",
+            "About DataPyn",
             f"""<h2>DataPyn IDE</h2>
-            <p><b>Versão {self._current_version}</b></p>
-            <p>IDE moderna para consultas SQL com manipulação Python integrada</p>
+            <p><b>Version {self._current_version}</b></p>
+            <p>Modern IDE for SQL queries with integrated Python manipulation</p>
             
-            <p><b>Tecnologias:</b></p>
+            <p><b>Technologies:</b></p>
             <ul>
                 <li>Python 3.12+</li>
-                <li>PyQt6 - Interface gráfica</li>
-                <li>Pandas & Polars - Análise de dados</li>
-                <li>SQLAlchemy - Abstração de banco de dados</li>
-                <li>QScintilla - Editor de código</li>
-                <li>Matplotlib - Visualização de dados</li>
+                <li>PyQt6 - Graphical interface</li>
+                <li>Pandas & Polars - Data analysis</li>
+                <li>SQLAlchemy - Database abstraction</li>
+                <li>QScintilla - Code editor</li>
+                <li>Matplotlib - Data visualization</li>
             </ul>
             
-            <p><b>Bancos de Dados Suportados:</b></p>
+            <p><b>Supported Databases:</b></p>
             <ul>
                 <li>Microsoft SQL Server</li>
                 <li>MySQL / MariaDB</li>
@@ -3498,20 +3498,20 @@ class MainWindow(DockingMainWindow):
                 <li>SQLite</li>
             </ul>
             
-            <p><b>Licença:</b> MIT License</p>
-            <p><b>Repositório:</b> <a href="https://github.com/natharuc/datapyn">github.com/natharuc/datapyn</a></p>
+            <p><b>License:</b> MIT License</p>
+            <p><b>Repository:</b> <a href="https://github.com/natharuc/datapyn">github.com/natharuc/datapyn</a></p>
             
-            <p style="margin-top: 15px; color: #888;">Desenvolvido com Python e PyQt6</p>
+            <p style="margin-top: 15px; color: #888;">Built with Python and PyQt6</p>
             """,
         )
 
     def _show_package_manager(self):
-        """Mostra dialogo de gerenciamento de pacotes"""
+        """Shows package manager dialog"""
         dialog = PackageManagerDialog(theme_manager=self.theme_manager, parent=self)
         dialog.exec()
 
     def _show_settings(self):
-        """Mostra diálogo de configurações"""
+        """Shows the settings dialog"""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
         dialog.exec()
@@ -3547,17 +3547,17 @@ class MainWindow(DockingMainWindow):
             else:
                 return DEFAULT_VERSION
         except Exception as e:
-            logger.warning(f"Erro ao ler versao do pyproject.toml: {e}")
+            logger.warning(f"Error reading version from pyproject.toml: {e}")
             return DEFAULT_VERSION
 
     def _check_for_updates(self):
-        """Verifica manualmente por atualizacoes"""
+        """Manually checks for updates"""
         if not self.auto_update_service.is_auto_update_enabled():
             reply = QMessageBox.question(
                 self,
-                "Auto-Update Desabilitado",
-                "A verificacao automatica de atualizacoes esta desabilitada.\n\n"
-                "Deseja habilitar e verificar por atualizacoes?",
+                "Auto-Update Disabled",
+                "Automatic update checking is disabled.\n\n"
+                "Do you want to enable it and check for updates?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
@@ -3565,73 +3565,73 @@ class MainWindow(DockingMainWindow):
             else:
                 return
 
-        # Mostrar dialog de loading
+        # Show loading dialog
         self._update_checking_dialog = UpdateCheckingDialog(self)
         
-        # Iniciar verificacao
+        # Start verificacao
         self.auto_update_service.check_for_updates(
             on_available=lambda v, url, notes: self._on_update_check_complete(v, url, notes),
             on_no_update=lambda: self._on_update_check_complete(None, None, None),
             on_error=lambda msg: self._on_update_check_error(msg),
         )
         
-        # Mostrar dialog (modal)
+        # Show dialog (modal)
         self._update_checking_dialog.exec()
 
     def _on_update_check_complete(self, version: str, download_url: str, release_notes: str):
-        """Callback quando verificacao de atualizacao e concluida"""
-        # Fechar dialog de loading
+        """Callback when update check is complete"""
+        # Close loading dialog
         if hasattr(self, "_update_checking_dialog") and self._update_checking_dialog:
             self._update_checking_dialog.close()
         
         if version:
-            # Ha atualizacao disponivel
+            # Update available
             self._on_update_available(version, download_url, release_notes)
         else:
-            # Nao ha atualizacao
+            # No update available
             self._on_no_update_available()
 
     def _check_for_updates_silent(self):
-        """Verifica por atualizacoes silenciosamente ao iniciar"""
+        """Silently checks for updates on startup"""
         if not self.auto_update_service.is_auto_update_enabled():
             return
 
         self.auto_update_service.check_for_updates(
             on_available=self._on_update_available,
             on_no_update=lambda: None,  # Silencioso se nao houver atualizacao
-            on_error=lambda msg: logger.info(f"Verificacao de atualizacao falhou: {msg}"),
+            on_error=lambda msg: logger.info(f"Update check failed: {msg}"),
         )
 
     def _on_update_available(self, version: str, download_url: str, release_notes: str):
-        """Callback quando uma atualizacao esta disponivel"""
-        self.statusbar.showMessage(f"Nova versao disponivel: {version}", 5000)
+        """Callback when an update is available"""
+        self.statusbar.showMessage(f"New version available: {version}", 5000)
 
         dialog = UpdateDialog(self._current_version, version, release_notes, self)
         if dialog.exec() == UpdateDialog.DialogCode.Accepted and dialog.should_download:
             self._download_update(version, download_url)
 
     def _on_no_update_available(self):
-        """Callback quando nao ha atualizacoes"""
-        self.statusbar.showMessage("Voce ja esta usando a versao mais recente!", 5000)
+        """Callback when no updates are available"""
+        self.statusbar.showMessage("You are already using the latest version!", 5000)
         QMessageBox.information(
             self,
-            "Nenhuma Atualizacao",
-            f"Voce ja esta usando a versao mais recente do DataPyn ({self._current_version}).",
+            "No Updates",
+            f"You are already using the latest version of DataPyn ({self._current_version}).",
         )
 
     def _on_update_check_error(self, error_message: str):
-        """Callback quando ocorre erro ao verificar atualizacoes"""
-        # Fechar dialog de loading
+        """Callback when an error occurs while checking for updates"""
+        # Close loading dialog
         if hasattr(self, "_update_checking_dialog") and self._update_checking_dialog:
             self._update_checking_dialog.close()
         
-        self.statusbar.showMessage("Erro ao verificar atualizacoes", 5000)
+        self.statusbar.showMessage("Error checking for updates", 5000)
         QMessageBox.warning(
-            self, "Erro na Verificacao", f"Nao foi possivel verificar atualizacoes:\n\n{error_message}"
+            self, "Verification Error", f"Could not check for updates:\n\n{error_message}"
         )
 
     def _download_update(self, version: str, download_url: str):
-        """Inicia o download da atualizacao"""
+        """Starts the update download"""
         download_dialog = UpdateDownloadDialog(version, self)
 
         self.auto_update_service.download_update(
@@ -3645,15 +3645,15 @@ class MainWindow(DockingMainWindow):
         download_dialog.exec()
 
     def _on_download_complete(self, installer_path: str, download_dialog):
-        """Callback quando o download e concluido"""
+        """Callback when the download is complete"""
         download_dialog.download_complete(installer_path)
 
         reply = QMessageBox.question(
             self,
-            "Download Concluido",
-            "O instalador foi baixado com sucesso!\n\n"
-            "Deseja instalar a atualizacao agora?\n\n"
-            "Nota: O DataPyn sera fechado e o instalador sera executado.",
+            "Download Complete",
+            "The installer was downloaded successfully!\n\n"
+            "Do you want to install the update now?\n\n"
+            "Note: DataPyn will close and the installer will run.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 
@@ -3662,30 +3662,30 @@ class MainWindow(DockingMainWindow):
                 QApplication.quit()
             else:
                 QMessageBox.critical(
-                    self, "Erro na Instalacao", "Nao foi possivel iniciar a instalacao da atualizacao."
+                    self, "Installation Error", "Could not start the update installation."
                 )
 
     def _new_session(self):
-        """Cria nova sessão, herdando a conexão da aba atual (se houver)"""
-        # Guard para evitar criação duplicada
+        """Creates a new session, inheriting the connection from the current tab (if any)"""
+        # Guard to prevent duplicate creation
         if hasattr(self, "_creating_session") and self._creating_session:
             return
         self._creating_session = True
 
         try:
-            # Capturar conexão da sessão ativa ANTES de criar a nova
+            # Capture active session connection BEFORE creating new one
             previous_connection = None
             current_widget = self._get_current_session_widget()
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
 
-            # Se está no estado vazio, remover o placeholder
+            # If in empty state, remove the placeholder
             self._hide_empty_state()
 
             session = self.session_manager.create_session()
             widget = self._create_session_widget(session)
 
-            # Herdar conexão da aba anterior
+            # Inherit connection from previous tab
             if previous_connection:
                 try:
                     connected = session.connect(previous_connection)
@@ -3698,15 +3698,15 @@ class MainWindow(DockingMainWindow):
                             if idx >= 0:
                                 self.session_tabs.set_tab_connection_color(idx, color)
                 except Exception as e:
-                    print(f"[AVISO] Nao foi possivel herdar conexao: {e}")
+                    print(f"[WARNING] Could not inherit connection: {e}")
 
-            # Atualizar título da janela (contexto pode ter mudado)
+            # Update window title (context may have changed)
             self._update_window_title()
         finally:
             self._creating_session = False
 
     def _handle_empty_state_drop(self, file_paths):
-        """Trata drop de arquivos na tela de estado vazio"""
+        """Handles file drop on empty state screen"""
         import os
 
         data_files = []
@@ -3738,7 +3738,7 @@ class MainWindow(DockingMainWindow):
                     widget._on_file_dropped(file_path)
 
     def _show_empty_state(self):
-        """Mostra estado vazio quando nao ha sessoes, escondendo paineis"""
+        """Shows empty state when there are no sessions, hiding panels"""
         if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
             return  # Ja esta mostrando
 
@@ -3757,7 +3757,7 @@ class MainWindow(DockingMainWindow):
         main_window_ref = self
 
         class DropEmptyStateWidget(QWidget):
-            """Widget de estado vazio com suporte a drag-and-drop de arquivos"""
+            """Empty state widget with drag-and-drop file support"""
 
             def __init__(self, parent=None):
                 super().__init__(parent)
@@ -3800,7 +3800,7 @@ class MainWindow(DockingMainWindow):
         layout.addWidget(icon_label)
 
         # Texto principal
-        title_label = QLabel("Nenhum script aberto")
+        title_label = QLabel("No script open")
         title_label.setStyleSheet("""
             font-size: 24px;
             font-weight: bold;
@@ -3812,7 +3812,7 @@ class MainWindow(DockingMainWindow):
         layout.addWidget(title_label)
 
         # Subtitulo com dica de drag-and-drop
-        subtitle_label = QLabel("Crie uma nova sessao ou arraste um arquivo para comecar")
+        subtitle_label = QLabel("Create a new session or drag a file to get started")
         subtitle_label.setStyleSheet("""
             font-size: 14px;
             color: #888888;
@@ -3824,7 +3824,7 @@ class MainWindow(DockingMainWindow):
 
         # Botao iniciar
         colors = get_colors()
-        start_button = QPushButton("  Iniciar  ")
+        start_button = QPushButton("  Start  ")
         start_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {colors.interactive_primary};
@@ -3858,7 +3858,7 @@ class MainWindow(DockingMainWindow):
         self.session_tabs.setCurrentIndex(index)
 
     def _hide_empty_state(self):
-        """Remove estado vazio e restaura paineis"""
+        """Removes empty state and restores panels"""
         if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
             index = self.session_tabs.indexOf(self._empty_state_widget)
             if index >= 0:
@@ -3874,7 +3874,7 @@ class MainWindow(DockingMainWindow):
             self.variables_dock.show()
 
     def _create_session_widget(self, session):
-        """Cria widget para uma sessao e adiciona a aba"""
+        """Creates widget for a session and adds it to a tab"""
         widget = SessionWidget(session, theme_manager=self.theme_manager)
 
         # Criar paineis por sessao (Results, Output, Variables)
@@ -3892,7 +3892,7 @@ class MainWindow(DockingMainWindow):
         widget._content_hash = self._compute_widget_content_hash(widget)
         widget._is_modified = False
 
-        # Conectar sinais do widget
+        # Connect signals do widget
         widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
         widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
         widget.connection_changed.connect(
@@ -3933,7 +3933,7 @@ class MainWindow(DockingMainWindow):
         return widget
 
     def _on_session_renamed(self, index: int, new_name: str):
-        """Callback quando sessão é renomeada pelo componente SessionTabs"""
+        """Callback when session is renamed by SessionTabs component"""
         widget = self.session_tabs.widget(index)
         if not isinstance(widget, SessionWidget):
             return
@@ -3942,7 +3942,7 @@ class MainWindow(DockingMainWindow):
         self._save_sessions()
 
     def _close_session_tab(self, index: int):
-        """Fecha aba de sessao"""
+        """Closes session tab"""
         widget = self.session_tabs.widget(index)
         if not isinstance(widget, SessionWidget):
             return
@@ -3987,8 +3987,8 @@ class MainWindow(DockingMainWindow):
             self._closing_session = False
 
     def _on_session_tab_changed(self, index: int):
-        """Evento quando muda de aba de sessão"""
-        # Ignorar durante operações que alteram tabs
+        """Event when session tab changes"""
+        # Ignore during operations that alter tabs
         if hasattr(self, "_restoring_sessions") and self._restoring_sessions:
             return
         if hasattr(self, "_creating_session") and self._creating_session:
@@ -3996,7 +3996,7 @@ class MainWindow(DockingMainWindow):
         if hasattr(self, "_closing_session") and self._closing_session:
             return
 
-        # Se clicar no + cria nova sessão
+        # If clicking + creates new session
         if self.session_tabs.tabText(index).strip() == "+":
             self._new_session()
             return
@@ -4019,10 +4019,10 @@ class MainWindow(DockingMainWindow):
         self._update_window_title()
 
     def _on_session_focused(self, session):
-        """Callback quando uma sessão é focada"""
-        # Atualizar status bar e painel de conexão com info da sessão
+        """Callback when a session is focused"""
+        # Update status bar and connection panel with session info
         if session.is_connected:
-            # Atualizar status bar
+            # Update status bar
             self.connection_status_bar.setText(session.connection_name)
             self.connection_status_bar.setStyleSheet("""
                 QLabel {
@@ -4033,7 +4033,7 @@ class MainWindow(DockingMainWindow):
                 }
             """)
 
-            # Atualizar painel de conexão ativa
+            # Update active connection panel
             config = self.connection_manager.get_connection_config(session.connection_name)
             if config:
                 self.connection_panel.set_active_connection(
@@ -4045,7 +4045,7 @@ class MainWindow(DockingMainWindow):
             else:
                 self.connection_panel.set_active_connection(session.connection_name)
 
-            # Destacar conexão na lista
+            # Highlight connection in list
             for i in range(self.connections_list.count()):
                 item = self.connections_list.item(i)
                 if item.data(Qt.ItemDataRole.UserRole) == session.connection_name:
@@ -4053,7 +4053,7 @@ class MainWindow(DockingMainWindow):
                     break
         else:
             # Desconectado
-            self.connection_status_bar.setText("Desconectado")
+            self.connection_status_bar.setText("Disconnected")
             self.connection_status_bar.setStyleSheet("""
                 QLabel {
                     color: #f48771;
@@ -4063,39 +4063,39 @@ class MainWindow(DockingMainWindow):
                 }
             """)
 
-            # Limpar painel de conexão ativa
+            # Clear active connection panel
             self.connection_panel.set_disconnected()
 
-        self.action_label.setText(f"Sessão: {session.title}")
+        self.action_label.setText(f"Session: {session.title}")
 
-        # Atualizar título da janela quando sessão é focada
+        # Update window title when session is focused
         self._update_window_title()
 
     def _on_session_status_changed(self, session, message: str):
-        """Callback quando status de uma sessão muda"""
-        # Só atualiza se for a sessão focada
+        """Callback when a session status changes"""
+        # Only updates if it is the focused session
         if self.session_manager.focused_session == session:
             self.action_label.setText(message)
 
     def _on_session_connection_changed(self, session, connection_name: str, database: str):
         """
-        SERVIÇO CENTRALIZADO: Gerencia mudanças de conexão de sessão
+        CENTRALIZED SERVICE: Manages session connection changes
 
-        Este método centraliza TODAS as atualizações quando uma sessão conecta/troca de banco:
-        - Atualiza painel de conexões ativas
-        - Destaca conexão na lista
+        This method centralizes ALL updates when a session connects/switches database:
+        - Updates active connections panel
+        - Highlights connection in list
         - Atualiza status bar
 
         Args:
-            session: Sessão que mudou a conexão
-            connection_name: Nome da conexão
+            session: Session that changed the connection
+            connection_name: Connection name
             database: Nome do banco de dados atual
         """
-        # Só atualiza se for a sessão focada
+        # Only updates if it is the focused session
         if self.session_manager.focused_session != session:
             return
 
-        # Obter config da conexão
+        # Get connection config
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
             return
@@ -4106,10 +4106,10 @@ class MainWindow(DockingMainWindow):
         # Usar o banco retornado (pode ter mudado via USE)
         current_db = database if database else config.get("database", "")
 
-        # === ATUALIZAR PAINEL DE CONEXÕES ATIVAS ===
+        # === UPDATE ACTIVE CONNECTIONS PANEL ===
         self.connection_panel.set_active_connection(connection_name, host=host, database=current_db, db_type=db_type)
 
-        # === DESTACAR CONEXÃO NA LISTA ===
+        # === HIGHLIGHT CONNECTION IN LIST ===
         for i in range(self.connections_list.count()):
             item = self.connections_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == connection_name:
@@ -4121,7 +4121,7 @@ class MainWindow(DockingMainWindow):
 
         # === DEFINIR COR DA ABA ===
         color = config.get("color", "#007ACC") or "#007ACC"
-        # Encontrar índice da aba desta sessão
+        # Find tab index of this session
         for i in range(self.session_tabs.count()):
             widget = self.session_tabs.widget(i)
             if isinstance(widget, SessionWidget) and widget.session == session:
@@ -4133,17 +4133,17 @@ class MainWindow(DockingMainWindow):
             self._schema_service.load_schema(session.connector, connection_name)
 
     def _reload_schema(self):
-        """Recarrega o schema SQL da conexao do bloco focado (ou da sessao).
+        """Reloads the SQL schema from the focused block connection (or session).
 
         Usa a conexao do bloco focado se ele tiver conexao customizada,
         caso contrario usa a conexao da sessao ativa.
         """
         widget = self._get_current_session_widget()
         if not widget:
-            self.statusBar().showMessage("Nenhuma sessao ativa", 3000)
+            self.statusBar().showMessage("No active session", 3000)
             return
 
-        # Determinar conexao: bloco focado ou sessao
+        # Determine connection: focused block or session
         connection_name = None
         connector = None
 
@@ -4154,33 +4154,33 @@ class MainWindow(DockingMainWindow):
                 connection_name = block_conn
 
         if not connection_name:
-            # Usar conexao da sessao
+            # Use session connection
             if widget.session.is_connected and widget.session.connection_name:
                 connection_name = widget.session.connection_name
                 connector = widget.session.connector
 
         if not connection_name:
-            self.statusBar().showMessage("Nenhuma conexao ativa para recarregar schema", 3000)
+            self.statusBar().showMessage("No active connection to reload schema", 3000)
             return
 
-        # Invalidar cache e recarregar
+        # Invalidate cache and reload
         self._schema_service.invalidate_cache(connection_name)
-        self.statusBar().showMessage(f"Recarregando schema de '{connection_name}'...", 5000)
+        self.statusBar().showMessage(f"Reloading schema for '{connection_name}'...", 5000)
 
         if connector and connector.is_connected():
             self._schema_service.load_schema(connector, connection_name)
         else:
-            # Precisa obter connector do ConnectionManager
+            # Need to get connector from ConnectionManager
             from src.database.connection_manager import ConnectionManager
             manager = ConnectionManager()
             conn = manager.connections.get(connection_name)
             if conn and conn.is_connected():
                 self._schema_service.load_schema(conn, connection_name)
             else:
-                self.statusBar().showMessage(f"Conexao '{connection_name}' nao esta ativa", 3000)
+                self.statusBar().showMessage(f"Connection '{connection_name}' is not active", 3000)
 
     def _on_schema_loaded(self, schema: dict, connection_name: str):
-        """Callback quando schema do banco e carregado pelo SchemaService.
+        """Callback when database schema is loaded by SchemaService.
 
         Distribui o schema para os editores Monaco (blocos SQL) que usam
         a conexao correspondente.
@@ -4240,7 +4240,7 @@ class MainWindow(DockingMainWindow):
                             self.object_explorer_dock.show()
 
     def _on_block_connection_changed(self, block, connection_name: str):
-        """Callback quando conexao de um bloco individual muda.
+        """Callback when an individual block connection changes.
 
         Carrega schema da nova conexao e aplica ao bloco (em background).
         """
@@ -4282,7 +4282,7 @@ class MainWindow(DockingMainWindow):
                 lambda connector: self._schema_service.load_schema(connector, connection_name)
             )
             worker.error.connect(
-                lambda msg: self._log_info(f"Erro ao carregar schema para bloco ({connection_name}): {msg}")
+                lambda msg: self._log_info(f"Error loading schema for block ({connection_name}): {msg}")
             )
             worker.finished.connect(thread.quit)
             thread.finished.connect(worker.deleteLater)
@@ -4292,10 +4292,10 @@ class MainWindow(DockingMainWindow):
             self._worker_threads.append((thread, worker))
             thread.start()
         except Exception as e:
-            self._log_info(f"Erro ao carregar schema para bloco ({connection_name}): {e}")
+            self._log_info(f"Error loading schema for block ({connection_name}): {e}")
 
     def _on_insert_variable_in_editor(self, var_name: str):
-        """Insere nome da variavel no editor focado da sessao ativa"""
+        """Inserts variable name in the focused editor of the active session"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
             block = current_widget.editor.get_focused_block()
@@ -4303,7 +4303,7 @@ class MainWindow(DockingMainWindow):
                 block.editor.insert_text_at_cursor(var_name)
 
     def _on_delete_variable(self, var_name: str):
-        """Remove variavel do namespace da sessao ativa"""
+        """Removes variable from the active session namespace"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "session"):
             ns = current_widget.session.namespace
@@ -4312,7 +4312,7 @@ class MainWindow(DockingMainWindow):
                 current_widget.session.variables_changed.emit(ns)
 
     def _push_python_namespace(self, namespace: dict):
-        """Envia namespace Python atualizado para os editores Monaco.
+        """Sends updated Python namespace to Monaco editors.
 
         Chamado apos execucao Python para alimentar autocomplete.
         """
@@ -4383,22 +4383,22 @@ class MainWindow(DockingMainWindow):
         return None
 
     def _get_current_editor(self) -> UnifiedEditor:
-        """Retorna editor da sessão ativa"""
+        """Returns the editor of the active session"""
         widget = self._get_current_session_widget()
         if widget:
             return widget.editor
         return None
 
     def _save_sessions(self):
-        """Salva todas as sessões"""
-        # Sincronizar código dos widgets para as sessões
+        """Saves all sessions"""
+        # Synchronize code from widgets to sessions
         for session_id, widget in self._session_widgets.items():
             widget.sync_to_session()
 
         # Salvar via SessionManager
         self.session_manager.save_sessions()
 
-        # Também salvar geometria da janela no workspace
+        # Also save window geometry in workspace
         window_geometry = {
             "x": self.geometry().x(),
             "y": self.geometry().y(),
@@ -4410,52 +4410,52 @@ class MainWindow(DockingMainWindow):
         dock_visible = self.connections_dock.isVisible() if hasattr(self, "connections_dock") else True
 
         # Salvar no workspace manager (para geometria)
-        # Nota: active_connection agora é por sessão, salvo junto com cada sessão
+        # Note: active_connection is now per session, saved with each session
         self.workspace_manager.save_workspace(
-            tabs=[],  # Não mais usado para abas
+            tabs=[],  # No longer used for tabs
             active_tab=0,
-            active_connection=None,  # Conexão agora é por sessão
+            active_connection=None,  # Connection is now per session
             window_geometry=window_geometry,
             splitter_sizes=[],
             dock_visible=dock_visible,
         )
 
     def _restore_sessions(self):
-        """Restaura sessões salvas - carrega incrementalmente"""
+        """Restores saved sessions - loads incrementally"""
         self._restoring_sessions = True
 
-        # Carregar sessões do disco
+        # Load sessions from disk
         self.session_manager.load_sessions(self.connection_manager)
 
         # Salvar workspace para restaurar geometria depois
         workspace = self.workspace_manager.load_workspace()
         self._pending_workspace_restore = workspace
 
-        # Fila de sessões para carregar incrementalmente
+        # Queue of sessions to load incrementally
         self._sessions_to_load = list(self.session_manager.sessions)
 
         self._restoring_sessions = False
 
-        # Iniciar carregamento das sessões incrementalmente
+        # Start loading sessions incrementally
         if self._sessions_to_load:
             QTimer.singleShot(50, self._load_next_session)
         else:
-            # Se não há sessões, mostrar estado vazio
+            # If there are no sessions, show empty state
             self._show_empty_state()
 
     def _load_next_session(self):
-        """Carrega a próxima sessão da fila"""
+        """Loads the next session from the queue"""
         if not self._sessions_to_load:
-            # Focar na sessão ativa
+            # Focus on active session
             focused = self.session_manager.focused_session
             if focused:
                 index = self.session_manager.get_session_index(focused.session_id)
                 if index >= 0:
                     self.session_tabs.setCurrentIndex(index)
 
-                # Atualizar indicador de conexão (se existir connection_panel)
+                # Update connection indicator (if connection_panel exists)
                 if focused.is_connected and hasattr(self, "connection_panel"):
-                    # database_name removido - Session só tem connection_name
+                    # database_name removed - Session only has connection_name
                     self.connection_panel.set_active_connection(
                         focused.connection_name,
                         focused.connection_name,  # usar connection_name no lugar de database_name
@@ -4464,17 +4464,17 @@ class MainWindow(DockingMainWindow):
 
         session = self._sessions_to_load.pop(0)
 
-        # Criar widget para a sessão
+        # Create widget for session
         self._create_session_widget(session)
 
         # Processar eventos pendentes da UI
         QApplication.processEvents()
 
-        # Agendar próxima sessão
+        # Schedule next session
         QTimer.singleShot(10, self._load_next_session)
 
     def _restore_window_state(self):
-        """Restaura geometria da janela, splitter e dock após inicialização"""
+        """Restores window geometry, splitter and dock after initialization"""
         if not hasattr(self, "_pending_workspace_restore"):
             return
 
@@ -4498,23 +4498,23 @@ class MainWindow(DockingMainWindow):
         if hasattr(self, "connections_dock"):
             self.connections_dock.setVisible(dock_visible)
 
-        # Restaurar conexão ativa (após UI estar pronta)
+        # Restore active connection (after UI is ready)
         if workspace.get("active_connection"):
             try:
                 self._reconnect_saved_connection(workspace["active_connection"])
             except Exception as e:
-                print(f"Não foi possível restaurar conexão: {e}")
+                print(f"Could not restore connection: {e}")
 
-        # Limpar referência
+        # Clear reference
         del self._pending_workspace_restore
 
     def _reconnect_saved_connection(self, connection_name: str):
-        """Reconecta à conexão salva automaticamente"""
+        """Reconnects to saved connection automatically"""
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
             return
 
-        # Pegar senha se necessário
+        # Get password if necessary
         password = ""
         if not config.get("use_windows_auth", False):
             # Tentar conectar sem senha primeiro (pode ter salvo)
@@ -4535,17 +4535,17 @@ class MainWindow(DockingMainWindow):
 
             self.connection_manager.mark_connection_used(connection_name)
             self._update_connection_status()
-            self.action_label.setText(f"Reconectado a {connection_name}")
+            self.action_label.setText(f"Reconnected to {connection_name}")
 
         except Exception as e:
-            print(f"Erro ao reconectar {connection_name}: {e}")
-            # Não falha silenciosamente - mostra na statusbar
-            self.action_label.setText(f"Falha ao reconectar: {connection_name}")
+            print(f"Error reconnecting {connection_name}: {e}")
+            # Does not fail silently - shows in statusbar
+            self.action_label.setText(f"Reconnection failed: {connection_name}")
 
     def _execute_cross_syntax_for_session(self, session, code: str):
-        """Executa cross-syntax para uma sessão específica"""
-        # TODO: Implementar cross-syntax por sessão
-        # Por agora, usa o método global
+        """Executes cross-syntax for a specific session"""
+        # TODO: Implement cross-syntax per session
+        # For now, uses the global method
         self._execute_cross_syntax(code)
 
     # =========================================================================
@@ -4554,22 +4554,22 @@ class MainWindow(DockingMainWindow):
 
     def _detect_file_context(self) -> str:
         """
-        Detecta o contexto atual baseado no número de blocos e tipos
+        Detects the current context based on the number of blocks and types
 
         Returns:
             'sql'       - um bloco SQL apenas
             'python'    - um bloco Python apenas
-            'workspace' - múltiplos blocos ou arquivo .dpw
+            'workspace' - multiple blocks or .dpw file
         """
-        # Se tem múltiplas sessões = sempre workspace
+        # If has multiple sessions = always workspace
         if len(self._session_widgets) > 1:
             return "workspace"
 
-        # Se arquivo original já é workspace
+        # If original file is already workspace
         if self._original_file_type == "workspace":
             return "workspace"
 
-        # Se não há sessões mas há arquivo original sql/py, usa tipo do arquivo
+        # If there are no sessions but there is an original sql/py file, use file type
         current_widget = self._get_current_session_widget()
         if not current_widget:
             if self._original_file_type in ["sql", "python"]:
@@ -4586,7 +4586,7 @@ class MainWindow(DockingMainWindow):
         if len(blocks) == 1:
             block_language = blocks[0].get_language()
             if self._original_file_type in ["sql", "python"]:
-                # Se bloco é compatível com arquivo original
+                # If block is compatible with original file
                 if (self._original_file_type == "sql" and block_language == "sql") or (
                     self._original_file_type == "python" and block_language == "python"
                 ):
@@ -4603,7 +4603,7 @@ class MainWindow(DockingMainWindow):
         return "workspace"
 
     def _update_window_title(self):
-        """Atualiza titulo da janela com indicador de contexto e caminho do arquivo"""
+        """Updates window title with context indicator and file path"""
         base_title = "DataPyn"
 
         # Detectar contexto atual
@@ -4672,13 +4672,13 @@ class MainWindow(DockingMainWindow):
 
             # Feedback visual para o usuario
             save_path = str(self.workspace_manager.current_file_path or self.workspace_manager.config_path)
-            self.main_statusbar.show_save_feedback(f"Workspace salvo: {save_path}")
+            self.main_statusbar.show_save_feedback(f"Workspace saved: {save_path}")
             self.main_statusbar.set_file_info(save_path)
 
             self._clear_modification_markers()
 
     def _save_single_file(self, file_path: str, file_type: str):
-        """Salva conteudo em arquivo unico (sql/py)"""
+        """Saves content to single file (sql/py)"""
         try:
             current_widget = self._get_current_session_widget()
             if not current_widget:
@@ -4701,7 +4701,7 @@ class MainWindow(DockingMainWindow):
             current_widget.session.file_path = file_path
             current_widget.session.original_file_type = file_type
 
-            # Atualizar hash do conteudo apos salvar (agora e o novo "original")
+            # Update content hash after saving (now it's the new "original")
             current_widget._content_hash = self._compute_widget_content_hash(current_widget)
             current_widget._is_modified = False
 
@@ -4714,7 +4714,7 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.setTabText(index, filename)
                 current_widget.session.title = filename
 
-            self.main_statusbar.show_save_feedback(f"Arquivo salvo: {file_path}")
+            self.main_statusbar.show_save_feedback(f"File saved: {file_path}")
             self.main_statusbar.set_file_info(file_path)
 
             self._update_window_title()
@@ -4722,23 +4722,23 @@ class MainWindow(DockingMainWindow):
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
 
-            QMessageBox.critical(self, "Erro", f"Erro ao salvar arquivo: {e}")
+            QMessageBox.critical(self, "Error", f"Error saving file: {e}")
 
     def _save_single_file_as(self, file_type: str):
-        """Pede caminho para salvar arquivo único"""
+        """Asks for path to save single file"""
         from PyQt6.QtWidgets import QFileDialog
 
         if file_type == "sql":
-            filter_text = "Arquivos SQL (*.sql);;Todos os arquivos (*.*)"
+            filter_text = "SQL Files (*.sql);;All Files (*.*)"
             default_ext = ".sql"
         else:
-            filter_text = "Arquivos Python (*.py);;Todos os arquivos (*.*)"
+            filter_text = "Python Files (*.py);;All Files (*.*)"
             default_ext = ".py"
 
-        filename, _ = QFileDialog.getSaveFileName(self, f"Salvar Arquivo {file_type.upper()}", "", filter_text)
+        filename, _ = QFileDialog.getSaveFileName(self, f"Save {file_type.upper()} File", "", filter_text)
 
         if filename:
-            # Garantir extensão correta
+            # Ensure correct extension
             if not filename.endswith(default_ext):
                 filename += default_ext
 
@@ -4747,24 +4747,24 @@ class MainWindow(DockingMainWindow):
             self._save_single_file(filename, file_type)
 
     def _export_as_script(self):
-        """Exporta a análise atual como um script Python completo"""
+        """Exports the current analysis as a complete Python script"""
         from PyQt6.QtWidgets import QFileDialog
         
         current_widget = self._get_current_session_widget()
         if not current_widget:
-            QMessageBox.warning(self, "Aviso", "Nenhuma sessão ativa para exportar.")
+            QMessageBox.warning(self, "Warning", "No active session to export.")
             return
         
         blocks = current_widget.editor.get_blocks()
         if not blocks:
-            QMessageBox.warning(self, "Aviso", "Não há blocos de código para exportar.")
+            QMessageBox.warning(self, "Warning", "No code blocks to export.")
             return
         
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Exportar como Script Python",
+            "Export as Python Script",
             "",
-            "Arquivos Python (*.py);;Todos os arquivos (*.*)"
+            "Python Files (*.py);;All Files (*.*)"
         )
         
         if not filename:
@@ -4779,26 +4779,26 @@ class MainWindow(DockingMainWindow):
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(script_content)
             
-            self.action_label.setText(f"Script exportado: {filename}")
+            self.action_label.setText(f"Script exported: {filename}")
             QMessageBox.information(
                 self,
-                "Exportação Concluída",
-                f"Script Python exportado com sucesso para:\n{filename}"
+                "Export Complete",
+                f"Python script exported successfully to:\n{filename}"
             )
         
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao exportar script: {e}")
+            QMessageBox.critical(self, "Error", f"Error exporting script: {e}")
     
     def _generate_script_from_blocks(self, blocks, session_widget) -> str:
-        """Gera o código Python completo a partir dos blocos"""
+        """Generates complete Python code from the blocks"""
         lines = []
         
         lines.append('"""')
-        lines.append('Script Python Exportado do DataPyn')
+        lines.append('Python Script Exported from DataPyn')
         lines.append('')
-        lines.append(f'Gerado em: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        lines.append(f'Generated at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
         if session_widget.session.connection_name:
-            lines.append(f'Conexão: {session_widget.session.connection_name}')
+            lines.append(f'Connection: {session_widget.session.connection_name}')
         lines.append('"""')
         lines.append('')
         
@@ -4824,8 +4824,8 @@ class MainWindow(DockingMainWindow):
         lines.append('')
         
         if has_sql or has_cross:
-            lines.append('# Configuração da Conexão de Banco de Dados')
-            lines.append('# IMPORTANTE: Ajuste as credenciais abaixo conforme sua configuração')
+            lines.append('# Database Connection Configuration')
+            lines.append('# IMPORTANT: Adjust the credentials below according to your configuration')
             
             if session_widget.session.connection_name:
                 conn_name = session_widget.session.connection_name
@@ -4837,39 +4837,39 @@ class MainWindow(DockingMainWindow):
                     database = config.get('database', 'database')
                     username = config.get('username', 'user')
                     
-                    lines.append(f"# Tipo de banco: {db_type}")
+                    lines.append(f"# Database type: {db_type}")
                     lines.append(f"DB_HOST = '{host}'")
                     lines.append(f"DB_PORT = {port}")
                     lines.append(f"DB_NAME = '{database}'")
                     lines.append(f"DB_USER = '{username}'")
-                    lines.append("DB_PASSWORD = ''  # Preencha a senha aqui")
+                    lines.append("DB_PASSWORD = ''  # Enter password here")
                     lines.append('')
                     
                     if db_type == 'mysql':
-                        lines.append("# String de conexão MySQL")
+                        lines.append("# MySQL connection string")
                         lines.append("connection_string = f'mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'")
                     elif db_type == 'postgresql':
-                        lines.append("# String de conexão PostgreSQL")
+                        lines.append("# PostgreSQL connection string")
                         lines.append("connection_string = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'")
                     elif db_type == 'sqlserver':
-                        lines.append("# String de conexão SQL Server")
+                        lines.append("# SQL Server connection string")
                         lines.append("# Requer: pip install pyodbc")
                         lines.append("connection_string = f'mssql+pyodbc://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server'")
                     else:
-                        lines.append(f"# String de conexão {db_type}")
-                        lines.append("connection_string = ''  # Configure a string de conexão apropriada")
+                        lines.append(f"# {db_type} connection string")
+                        lines.append("connection_string = ''  # Configure the appropriate connection string")
                     
                     lines.append('')
-                    lines.append('# Criar engine de conexão')
+                    lines.append('# Create connection engine')
                     lines.append('engine = create_engine(connection_string)')
                     lines.append('')
             else:
-                lines.append("connection_string = ''  # Configure sua string de conexão")
+                lines.append("connection_string = ''  # Configure your connection string")
                 lines.append('engine = create_engine(connection_string)')
                 lines.append('')
         
         lines.append('# ========================================')
-        lines.append('# Blocos de Código')
+        lines.append('# Code Blocks')
         lines.append('# ========================================')
         lines.append('')
         
@@ -4881,15 +4881,15 @@ class MainWindow(DockingMainWindow):
             if not code:
                 continue
             
-            lines.append(f'# --- Bloco {i}: {lang.upper()}' + (f' ({block_name})' if block_name else '') + ' ---')
+            lines.append(f'# --- Block {i}: {lang.upper()}' + (f' ({block_name})' if block_name else '') + ' ---')
             
             if lang == 'sql':
-                lines.append('# SQL Query executada via pandas')
-                var_name = block_name if block_name else f'df_bloco_{i}'
+                lines.append('# SQL Query executed via pandas')
+                var_name = block_name if block_name else f'df_block_{i}'
                 lines.append(f'{var_name} = pd.read_sql("""')
                 lines.append(code)
                 lines.append('""", engine)')
-                lines.append(f'print(f"Query executada: {{len({var_name})}} linhas retornadas")')
+                lines.append(f'print(f"Query executed: {{len({var_name})}} rows returned")')
             
             elif lang == 'cross':
                 lines.append('# Cross-syntax: SQL + Python')
@@ -4897,19 +4897,19 @@ class MainWindow(DockingMainWindow):
                 lines.append(processed_code)
             
             elif lang == 'python':
-                lines.append('# Código Python')
+                lines.append('# Python code')
                 lines.append(code)
             
             lines.append('')
         
         lines.append('# ========================================')
-        lines.append('# Fim do Script')
+        lines.append('# End of Script')
         lines.append('# ========================================')
         
         return '\n'.join(lines)
     
     def _convert_cross_syntax_to_python(self, code: str, block_index: int) -> str:
-        """Converte sintaxe cross (var = {{ SQL }}) para Python puro"""
+        """Converts cross syntax (var = {{ SQL }}) to pure Python"""
         import re
         
         # Match pattern: variable_name = {{ SQL query }}
@@ -4927,7 +4927,7 @@ class MainWindow(DockingMainWindow):
             var_name = match.group(1)
             sql = match.group(2).strip()
             
-            lines.append(f'# Query SQL atribuída a variável {var_name}')
+            lines.append(f'# SQL query assigned to variable {var_name}')
             lines.append(f'{var_name} = pd.read_sql("""')
             lines.append(sql)
             lines.append('""", engine)')
@@ -4941,8 +4941,8 @@ class MainWindow(DockingMainWindow):
         return '\n'.join(lines)
 
     def closeEvent(self, event):
-        """Ao fechar a janela"""
-        # Verificar se há execução em andamento
+        """On window close"""
+        # Check if there is execution in progress
         has_running = any(
             widget._is_executing for widget in self._session_widgets.values() if hasattr(widget, "_is_executing")
         )
@@ -4950,8 +4950,8 @@ class MainWindow(DockingMainWindow):
         if has_running:
             reply = QMessageBox.question(
                 self,
-                "Execução em andamento",
-                "Há código sendo executado. Deseja cancelar e fechar a aplicação?",
+                "Execution in progress",
+                "There is code being executed. Do you want to cancel and close the application?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -4960,21 +4960,21 @@ class MainWindow(DockingMainWindow):
                 event.ignore()
                 return
 
-            # Cancelar todas as execuções
+            # Cancel all executions
             for widget in self._session_widgets.values():
                 if hasattr(widget, "_cancel_requested"):
                     widget._cancel_requested = True
 
-        # Salvar sessões antes de fechar
+        # Save sessions before closing
         self._save_sessions()
 
-        # Cleanup de todas as sessões
+        # Cleanup all sessions
         for widget in self._session_widgets.values():
             widget.cleanup()
 
         self.session_manager.cleanup_all()
 
-        # Fechar conexões
+        # Close connections
         self.connection_manager.close_all()
 
         # Limpar schema service
