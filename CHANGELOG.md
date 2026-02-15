@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-02-15)
+
+### Bug Fixes
+
+- Adicionar logger em main_window.py para evitar NameError
+  ([`ae35e0b`](https://github.com/natharuc/datapyn/commit/ae35e0b9c864c88fcef6463ae09f220de3bffc9d))
+
+### Features
+
+- Ajuste em build de msi
+  ([`ac17936`](https://github.com/natharuc/datapyn/commit/ac17936e191180f750c45f59ff5fb3883be82ae6))
+
+
 ## v1.2.0 (2026-02-14)
 
 ### Bug Fixes
