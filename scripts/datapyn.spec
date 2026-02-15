@@ -82,7 +82,9 @@ a = Analysis(
         'setuptools',
         'pip',
         'wheel',
-        'distutils',
+        # NOT 'distutils' - PyInstaller has a pre_safe_import_module hook
+        # that aliases distutils -> setuptools._distutils on Python 3.12+.
+        # Excluding it causes ValueError in the alias_module step.
         # Documentation
         'sphinx',
         'pydoc',

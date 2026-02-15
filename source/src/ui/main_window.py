@@ -48,6 +48,7 @@ try:
 except ImportError:
     HAS_QTAWESOME = False
 
+logger = logging.getLogger(__name__)
 
 
 from src.editors import UnifiedEditor
