@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.5.1 (2026-02-16)
+
+### Refactoring
+
+- Remove Monaco Editor, fix splash screen e build
+  ([`73b7fe2`](https://github.com/natharuc/datapyn/commit/73b7fe292bf419087a9ec5c75047288eb0d97585))
+
+
 ## v1.5.0 (2026-02-16)
 
 ### Bug Fixes
