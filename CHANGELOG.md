@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-02-16)
+
+### Continuous Integration
+
+- Ignore test files that require real database connections
+  ([`f521ab1`](https://github.com/natharuc/datapyn/commit/f521ab18947b2ac77a4624480c757911680eef5f))
+
+### Documentation
+
+- Add translation tracking plan for en-US migration
+  ([`00e96c3`](https://github.com/natharuc/datapyn/commit/00e96c3d1736d9925b8925a5f19124521fb0c877))
+
+### Features
+
+- Ajuste em geraçã de msi
+  ([`2333baa`](https://github.com/natharuc/datapyn/commit/2333baa15941bb11894eeab6a9f0663e05527eab))
+
+- Ajuste em geraçã de msi
+  ([`fe4c288`](https://github.com/natharuc/datapyn/commit/fe4c28815627ffc754cb031cd442ddb4c201abd9))
+
+- English interface
+  ([`484080f`](https://github.com/natharuc/datapyn/commit/484080f05b67a39b8063f0a0b6687cecd7d643b5))
+
+- I18n system with JSON translations and language selector
+  ([`d1c0ba9`](https://github.com/natharuc/datapyn/commit/d1c0ba92683ef439bbf7be0eee754a8706d510c2))
+
+
 ## v1.3.0 (2026-02-15)
 
 ### Bug Fixes
