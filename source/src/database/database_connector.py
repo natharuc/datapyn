@@ -545,9 +545,9 @@ class DatabaseConnector:
         elif self.db_type in ("mysql", "mariadb"):
             return f"USE `{database}`"
         elif self.db_type == "postgresql":
-            # PostgreSQL does not support USE command;
-            # database switching requires a new connection.
-            # We use SET search_path as a fallback for schema switching.
+            # PostgreSQL does not support USE command for database switching
+            # (that requires a new connection). This changes the schema search path
+            # within the current database, which is the closest equivalent.
             return f'SET search_path TO "{database}"'
         else:
             return f"USE {database}"

@@ -1048,14 +1048,14 @@ class MainWindow(DockingMainWindow):
         if hasattr(widget, "connection_changed"):
             widget.connection_changed.emit(connection_name, database_name)
 
-        # Update focused block's database panel
+        # Update focused block's database panel (direct update to avoid signal loop)
         if hasattr(widget, "editor"):
             focused_block = widget.editor.get_focused_block()
             if not focused_block:
                 focused_block = widget.editor.get_last_focused_block()
             if focused_block and hasattr(focused_block, "db_panel"):
-                focused_block.db_panel.set_database(database_name)
                 focused_block._database_name = database_name
+                focused_block.db_panel.set_database(database_name)
 
     def _on_object_explorer_refresh(self):
         """Object Explorer refresh - reloads schema from active connection"""
@@ -2479,15 +2479,15 @@ class MainWindow(DockingMainWindow):
                     if current_widget and hasattr(current_widget, "connection_changed"):
                         current_widget.connection_changed.emit(connection_name, database_name)
 
-                # Update focused block's database panel
+                # Update focused block's database panel (direct update to avoid signal loop)
                 current_widget = self._get_current_session_widget()
                 if current_widget and hasattr(current_widget, "editor"):
                     focused_block = current_widget.editor.get_focused_block()
                     if not focused_block:
                         focused_block = current_widget.editor.get_last_focused_block()
                     if focused_block and hasattr(focused_block, "db_panel"):
-                        focused_block.db_panel.set_database(database_name)
                         focused_block._database_name = database_name
+                        focused_block.db_panel.set_database(database_name)
 
                 self._log_info(S.status.database_changed.format(name=database_name))
                 self.action_label.setText(S.status.sql_database.format(name=database_name))
@@ -2689,14 +2689,14 @@ class MainWindow(DockingMainWindow):
                 if current_widget and hasattr(current_widget, "connection_changed"):
                     current_widget.connection_changed.emit(connection_name, db_after)
 
-                # Update focused block's database panel
+                # Update focused block's database panel (direct update to avoid signal loop)
                 if current_widget and hasattr(current_widget, "editor"):
                     focused_block = current_widget.editor.get_focused_block()
                     if not focused_block:
                         focused_block = current_widget.editor.get_last_focused_block()
                     if focused_block and hasattr(focused_block, "db_panel"):
-                        focused_block.db_panel.set_database(db_after)
                         focused_block._database_name = db_after
+                        focused_block.db_panel.set_database(db_after)
 
     def _execute_python(self, code: str):
         """Executes Python code in background"""

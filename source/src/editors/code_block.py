@@ -592,7 +592,7 @@ class CodeBlock(QFrame):
         """Database was dragged from Object Explorer to panel"""
         self._database_name = database_name
         self.db_panel.set_database(database_name)
-        self.database_changed.emit(self, database_name)
+        self.database_changed.emit(self, database_name or "")
 
     def _update_connection_panel_visibility(self):
         """Update connection and database panel visibility (SQL only)"""
