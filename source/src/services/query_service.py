@@ -1,11 +1,11 @@
 """
-Query Service - Serviço para execução de queries SQL
+Query Service - Service for SQL query execution
 
-Responsabilidades:
-- Executar queries SQL via workers
-- Validar queries
-- Gerenciar histórico de queries
-- Tratar erros de forma consistente
+Responsibilities:
+- Execute SQL queries via workers
+- Validate queries
+- Manage query history
+- Handle errors consistently
 """
 
 from typing import Optional, Callable, List
@@ -19,7 +19,7 @@ from ..state import ApplicationState
 
 @dataclass
 class QueryResult:
-    """Resultado de uma query"""
+    """Query result"""
 
     dataframe: Optional[pd.DataFrame]
     query: str
@@ -45,12 +45,12 @@ class QueryResult:
 
 class QueryService:
     """
-    Serviço de execução de queries SQL
+    SQL query execution service
 
-    Usa ApplicationState para obter conexão ativa.
-    Executa queries via workers assíncronos.
+    Uses ApplicationState to get active connection.
+    Executes queries via async workers.
 
-    Exemplo:
+    Example:
         service = QueryService()
         service.execute_query(
             "SELECT * FROM users",
@@ -73,41 +73,41 @@ class QueryService:
         on_finished: Optional[Callable[[], None]] = None,
     ):
         """
-        Executa query SQL de forma assíncrona
+        Execute SQL query asynchronously
 
         Args:
-            query: SQL a executar
-            on_success: Callback com QueryResult
-            on_error: Callback com mensagem de erro
-            on_started: Callback ao iniciar
-            on_finished: Callback ao finalizar (sempre)
+            query: SQL to execute
+            on_success: Callback with QueryResult
+            on_error: Callback with error message
+            on_started: Callback on start
+            on_finished: Callback on finish (always)
         """
-        # Valida que há conexão ativa
+        # Validate active connection exists
         conn = self.app_state.get_active_connection()
         if not conn or not conn.is_connected:
-            error_msg = "Nenhuma conexão ativa disponível"
+            error_msg = "No active connection available"
             if on_error:
                 on_error(error_msg)
             return
 
-        # Cria worker
+        # Create worker
         from ..database import ConnectionManager
 
         conn_manager = ConnectionManager()
         connector = conn_manager.get_connection(conn.name)
 
         if not connector:
-            error_msg = f"Conexão '{conn.name}' não encontrada"
+            error_msg = f"Connection '{conn.name}' not found"
             if on_error:
                 on_error(error_msg)
             return
 
         worker = SqlExecutionWorker(connector, query)
 
-        # Tempo de início
+        # Start time
         start_time = datetime.now()
 
-        # Conectar callbacks
+        # Connect callbacks
         if on_started:
             worker.started.connect(on_started)
 
@@ -115,31 +115,31 @@ class QueryService:
             worker.finished.connect(on_finished)
 
         def handle_result(df: pd.DataFrame):
-            """Handler interno para resultado"""
+            """Internal handler for result"""
             execution_time = (datetime.now() - start_time).total_seconds()
 
             result = QueryResult(
                 dataframe=df, query=query, execution_time=execution_time, rows_affected=len(df) if df is not None else 0
             )
 
-            # Adiciona ao histórico
+            # Add to history
             self._query_history.append(result)
 
-            # Atualiza estado da conexão
+            # Update connection status
             self.app_state.update_connection_status(conn.name, True)
 
             if on_success:
                 on_success(result)
 
         def handle_error(error_msg: str):
-            """Handler interno para erro"""
+            """Internal handler for error"""
             execution_time = (datetime.now() - start_time).total_seconds()
 
             result = QueryResult(
                 dataframe=None, query=query, execution_time=execution_time, rows_affected=0, error=error_msg
             )
 
-            # Adiciona ao histórico
+            # Add to history
             self._query_history.append(result)
 
             if on_error:
@@ -148,20 +148,20 @@ class QueryService:
         worker.result_ready.connect(handle_result)
         worker.error.connect(handle_error)
 
-        # Executa worker
+        # Execute worker
         execute_worker(worker)
 
     def get_query_history(self, limit: int = 50) -> List[QueryResult]:
-        """Retorna histórico de queries"""
+        """Return query history"""
         return self._query_history[-limit:]
 
     def clear_history(self):
-        """Limpa histórico de queries"""
+        """Clear query history"""
         self._query_history.clear()
 
     def validate_query(self, query: str) -> tuple[bool, str]:
         """
-        Valida query SQL (básico)
+        Validate SQL query (basic)
 
         Returns:
             (is_valid, error_message)
@@ -169,14 +169,14 @@ class QueryService:
         query = query.strip()
 
         if not query:
-            return False, "Query vazia"
+            return False, "Empty query"
 
-        # Validações básicas
+        # Basic validations
         dangerous_keywords = ["DROP DATABASE", "DROP SCHEMA", "TRUNCATE TABLE"]
         query_upper = query.upper()
 
         for keyword in dangerous_keywords:
             if keyword in query_upper:
-                return False, f"Operação perigosa detectada: {keyword}"
+                return False, f"Dangerous operation detected: {keyword}"
 
         return True, ""

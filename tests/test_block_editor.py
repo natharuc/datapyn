@@ -106,7 +106,7 @@ class TestCodeBlock:
         assert block.run_btn.text() == ""
 
         block.set_running(True)
-        assert "Executando" in block.status_label.text()
+        assert "Running" in block.status_label.text()
 
         block.set_running(False)
         # Apos execucao, mostra tempo de execucao
@@ -401,7 +401,7 @@ class TestSessionWidgetWithBlocks:
         widget._on_execute_sql("SELECT 1")
 
         # Deve ter erro de conexão
-        assert any("conexão" in o.lower() for o in outputs)
+        assert any("connection" in o.lower() or "no active" in o.lower() for o in outputs)
 
     def test_change_language_multiple_times(self, widget):
         """Deve funcionar mudar linguagem múltiplas vezes"""

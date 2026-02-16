@@ -1,8 +1,8 @@
 """
-DockableWidget - Classe base para widgets que podem ser movidos/agrupados
+DockableWidget - Base class for widgets that can be moved/grouped
 
-Similar às dock windows do Visual Studio, permite arrastar abas para
-diferentes posições com indicadores visuais.
+Similar to Visual Studio dock windows, allows dragging tabs to
+different positions with visual indicators.
 """
 
 from PyQt6.QtWidgets import (
@@ -24,7 +24,7 @@ from enum import Enum
 
 
 class DockPosition(Enum):
-    """Posições possíveis para docking"""
+    """Possible docking positions"""
 
     LEFT = "left"
     RIGHT = "right"
@@ -35,9 +35,9 @@ class DockPosition(Enum):
 
 
 class DockableWidget(QWidget):
-    """Widget base que pode ser movido e agrupado"""
+    """Base widget that can be moved and grouped"""
 
-    # Sinais
+    # Signals
     tab_detached = pyqtSignal(str, QWidget)  # (title, widget)
     tab_dropped = pyqtSignal(str, QWidget, int, QPoint)  # (title, widget, position, pos)
     dock_request = pyqtSignal(object, int)  # (widget, position)
@@ -47,7 +47,7 @@ class DockableWidget(QWidget):
         super().__init__(parent)
 
         self.title = title
-        self.widgets: Dict[str, QWidget] = {}  # título -> widget
+        self.widgets: Dict[str, QWidget] = {}  # title -> widget
         self.is_floating = False
         self.drag_start_position = QPoint()
         self.show_header = show_header
@@ -56,27 +56,27 @@ class DockableWidget(QWidget):
         self._setup_style()
 
     def _setup_ui(self):
-        """Configura UI"""
+        """Configure UI"""
         self.setMinimumSize(200, 150)
 
-        # Layout principal
+        # Main layout
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
 
-        # Header com título e controles (opcional)
+        # Header with title and controls (optional)
         if self.show_header:
             self.header = self._create_header()
             self.layout.addWidget(self.header)
 
-        # Container de abas
+        # Tab container
         self.tab_widget = DragDropTabWidget(self)
         self.tab_widget.tab_detached.connect(self.tab_detached.emit)
         self.tab_widget.tab_dropped.connect(self.tab_dropped.emit)
         self.layout.addWidget(self.tab_widget)
 
     def _create_header(self) -> QFrame:
-        """Cria header com título e controles"""
+        """Create header with title and controls"""
         header = QFrame()
         header.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         header.setFixedHeight(28)
@@ -84,19 +84,19 @@ class DockableWidget(QWidget):
         layout = QHBoxLayout(header)
         layout.setContentsMargins(8, 4, 4, 4)
 
-        # Título
+        # Title
         self.title_label = QLabel(self.title)
         self.title_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         layout.addWidget(self.title_label)
 
         layout.addStretch()
 
-        # Botões de controle
+        # Control buttons
         self.float_btn = QPushButton()
         self.float_btn.setIcon(qta.icon("mdi.window-restore", color="#888"))
         self.float_btn.setFixedSize(20, 20)
         self.float_btn.setFlat(True)
-        self.float_btn.setToolTip("Tornar flutuante")
+        self.float_btn.setToolTip("Make floating")
         self.float_btn.clicked.connect(self._toggle_floating)
         layout.addWidget(self.float_btn)
 
@@ -104,14 +104,14 @@ class DockableWidget(QWidget):
         self.close_btn.setIcon(qta.icon("mdi.close", color="#888"))
         self.close_btn.setFixedSize(20, 20)
         self.close_btn.setFlat(True)
-        self.close_btn.setToolTip("Fechar painel")
+        self.close_btn.setToolTip("Close panel")
         self.close_btn.clicked.connect(self.hide)
         layout.addWidget(self.close_btn)
 
         return header
 
     def _setup_style(self):
-        """Configura estilo"""
+        """Configure style"""
         self.setStyleSheet("""
             DockableWidget {
                 background-color: #2d2d30;
@@ -132,18 +132,18 @@ class DockableWidget(QWidget):
         """)
 
     def add_tab(self, widget: QWidget, title: str, icon=None):
-        """Adiciona uma aba"""
+        """Add a tab"""
         index = self.tab_widget.addTab(widget, title)
         if icon:
             self.tab_widget.setTabIcon(index, icon)
         self.widgets[title] = widget
 
-        # Atualiza título do painel se for a primeira aba
+        # Update panel title if first tab
         if len(self.widgets) == 1:
             self.set_title(title)
 
     def remove_tab(self, title: str):
-        """Remove uma aba"""
+        """Remove a tab"""
         if title in self.widgets:
             widget = self.widgets[title]
             index = self.tab_widget.indexOf(widget)
@@ -152,13 +152,13 @@ class DockableWidget(QWidget):
             del self.widgets[title]
 
     def set_title(self, title: str):
-        """Define título do painel"""
+        """Set panel title"""
         self.title = title
         if self.show_header and hasattr(self, "title_label"):
             self.title_label.setText(title)
 
     def _toggle_floating(self):
-        """Alterna entre flutuante e ancorado"""
+        """Toggle between floating and docked"""
         self.is_floating = not self.is_floating
 
         if self.is_floating:
@@ -166,21 +166,21 @@ class DockableWidget(QWidget):
             self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
             self.show()
             self.float_btn.setIcon(qta.icon("mdi.dock-window", color="#888"))
-            self.float_btn.setToolTip("Ancorar painel")
+            self.float_btn.setToolTip("Dock panel")
         else:
             self.float_btn.setIcon(qta.icon("mdi.window-restore", color="#888"))
-            self.float_btn.setToolTip("Tornar flutuante")
+            self.float_btn.setToolTip("Make floating")
 
     def get_current_widget(self) -> Optional[QWidget]:
-        """Retorna widget da aba atual"""
+        """Return current tab widget"""
         return self.tab_widget.currentWidget()
 
     def get_tab_count(self) -> int:
-        """Retorna número de abas"""
+        """Return number of tabs"""
         return self.tab_widget.count()
 
     def isEmpty(self) -> bool:
-        """Verifica se painel está vazio"""
+        """Check if panel is empty"""
         return self.get_tab_count() == 0
 
     def show(self):
@@ -206,9 +206,9 @@ class DockableWidget(QWidget):
 
 
 class DragDropTabWidget(QTabWidget):
-    """TabWidget com suporte a drag/drop de abas"""
+    """TabWidget with tab drag/drop support"""
 
-    # Sinais
+    # Signals
     tab_detached = pyqtSignal(str, QWidget)  # (title, widget)
     tab_dropped = pyqtSignal(str, QWidget, int, QPoint)  # (title, widget, position, pos)
 
@@ -216,26 +216,26 @@ class DragDropTabWidget(QTabWidget):
         super().__init__(parent)
 
         self.setAcceptDrops(True)
-        self.setMovable(False)  # Desabilita movable padrão para usar nosso sistema
+        self.setMovable(False)  # Disable default movable to use our system
         self.setTabsClosable(True)
 
-        # Personalizar barra de abas
+        # Customize tab bar
         self.tabBar().setMouseTracking(True)
 
-        # Configurar drag nas abas
+        # Configure tab drag
         self.tabBar().setAcceptDrops(True)
 
         # State tracking
         self.drag_start_position = QPoint()
         self._dragging = False
 
-        # Desabilita drag padrão do TabBar
+        # Disable default TabBar drag
         self.tabBar().setMovable(False)
 
         self._setup_style()
 
     def _setup_style(self):
-        """Configura estilo das abas"""
+        """Configure tab style"""
         self.setStyleSheet("""
             QTabWidget::pane {
                 border: none;
@@ -279,9 +279,9 @@ class DragDropTabWidget(QTabWidget):
         """)
 
     def mousePressEvent(self, event):
-        """Inicia drag se for botão esquerdo"""
+        """Start drag if left button"""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Verifica se clicou em uma aba
+            # Check if clicked on a tab
             tab_index = self.tabBar().tabAt(event.pos())
             if tab_index >= 0:
                 self.drag_start_position = event.pos()
@@ -290,36 +290,36 @@ class DragDropTabWidget(QTabWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        """Detecta início do drag"""
+        """Detect drag start"""
         if not (event.buttons() & Qt.MouseButton.LeftButton):
             return super().mouseMoveEvent(event)
 
-        # Verifica se temos posição inicial válida
+        # Check if we have valid starting position
         if not hasattr(self, "drag_start_position"):
             return super().mouseMoveEvent(event)
 
-        # Verifica distância mínima para iniciar drag (mais tolerante)
+        # Check minimum distance to start drag (more tolerant)
         drag_distance = (event.pos() - self.drag_start_position).manhattanLength()
-        if drag_distance < 10:  # Distância fixa menor que startDragDistance padrão
+        if drag_distance < 10:  # Fixed distance smaller than default startDragDistance
             return super().mouseMoveEvent(event)
 
-        # Obtém aba sob o cursor da posição inicial
+        # Get tab under cursor from initial position
         tab_index = self.tabBar().tabAt(self.drag_start_position)
         if tab_index < 0:
             return super().mouseMoveEvent(event)
 
-        # Previne múltiplos drags
+        # Prevent multiple drags
         if hasattr(self, "_dragging") and self._dragging:
             return
 
         print(f"DEBUG: Iniciando drag da aba {tab_index}")
         self._start_drag(tab_index)
 
-        # Não chama super() para evitar processamento padrão
+        # Don't call super() to avoid default processing
         event.accept()
 
     def _start_drag(self, tab_index: int):
-        """Inicia operação de drag"""
+        """Start drag operation"""
         self._dragging = True
 
         tab_text = self.tabText(tab_index)
@@ -331,20 +331,20 @@ class DragDropTabWidget(QTabWidget):
             self._dragging = False
             return
 
-        # Guarda informações antes de remover
+        # Save information before removing
         removed_widget = tab_widget
 
-        # Criar dados do drag
+        # Create drag data
         drag = QDrag(self)
         mime_data = QMimeData()
         mime_data.setText(f"datapyn_tab:{tab_text}")
 
-        # Adiciona referência direta ao widget no drag
+        # Add direct reference to widget in drag
         drag.tab_widget = removed_widget
         drag.tab_title = tab_text
         drag.setMimeData(mime_data)
 
-        # Criar pixmap da aba
+        # Create tab pixmap
         pixmap = QPixmap(120, 30)
         pixmap.fill(QColor(60, 60, 60, 200))
 
@@ -356,67 +356,67 @@ class DragDropTabWidget(QTabWidget):
         drag.setPixmap(pixmap)
         drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
 
-        # Remove a aba agora antes do drag
+        # Remove tab now before drag
         self.removeTab(tab_index)
 
-        # Executar drag
+        # Execute drag
         result = drag.exec(Qt.DropAction.MoveAction)
 
         print(f"DEBUG: Drag result - {result}")
 
         if result == Qt.DropAction.MoveAction:
-            # Emitir sinal de aba destacada
+            # Emit detached tab signal
             self.tab_detached.emit(tab_text, removed_widget)
-            print(f"DEBUG: Aba destacada emitida - {tab_text}")
+            print(f"DEBUG: Tab detached emitted - {tab_text}")
         else:
-            # Drag cancelado, readiciona a aba
+            # Drag cancelled, re-add tab
             self.insertTab(tab_index, removed_widget, tab_text)
-            print(f"DEBUG: Drag cancelado, aba recolocada - {tab_text}")
+            print(f"DEBUG: Drag cancelled, tab replaced - {tab_text}")
 
         self._dragging = False
 
     def dragEnterEvent(self, event):
-        """Aceita drops de abas"""
+        """Accept tab drops"""
         if event.mimeData().hasText() and event.mimeData().text().startswith("datapyn_tab:"):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        """Processa drop de aba"""
+        """Process tab drop"""
         if not (event.mimeData().hasText() and event.mimeData().text().startswith("datapyn_tab:")):
             return
 
         tab_title = event.mimeData().text().replace("datapyn_tab:", "")
         position = self._get_drop_position(event.pos())
 
-        # Pega referência ao widget do drag (se disponível)
+        # Get reference to drag widget (if available)
         source_drag = event.source()
         dropped_widget = None
         if hasattr(source_drag, "tab_widget"):
             dropped_widget = source_drag.tab_widget
 
         if position == DockPosition.CENTER and dropped_widget:
-            # Adiciona diretamente como aba neste painel
+            # Add directly as tab to this panel
             self.addTab(dropped_widget, tab_title)
             event.acceptProposedAction()
         else:
-            # Emitir sinal para docking manager processar
+            # Emit signal for docking manager to process
             self.tab_dropped.emit(tab_title, dropped_widget, position.value, event.pos())
             event.acceptProposedAction()
 
     def _get_drop_position(self, pos: QPoint):
-        """Determina posição de drop baseada na posição do cursor"""
+        """Determine drop position based on cursor position"""
         rect = self.rect()
 
-        # Margens para áreas de docking
-        margin = 30  # Área de borda para criar novos painéis
+        # Margins for docking areas
+        margin = 30  # Border area to create new panels
 
-        # Áreas de borda para split
+        # Border areas for split
         left_area = QRect(0, 0, margin, rect.height())
         right_area = QRect(rect.width() - margin, 0, margin, rect.height())
         top_area = QRect(0, 0, rect.width(), margin)
         bottom_area = QRect(0, rect.height() - margin, rect.width(), margin)
 
-        # Centro para adicionar como aba
+        # Center to add as tab
         center_area = QRect(margin, margin, rect.width() - 2 * margin, rect.height() - 2 * margin)
 
         if left_area.contains(pos):
@@ -428,6 +428,6 @@ class DragDropTabWidget(QTabWidget):
         elif bottom_area.contains(pos):
             return DockPosition.BOTTOM
         elif center_area.contains(pos):
-            return DockPosition.CENTER  # Adicionar como aba
+            return DockPosition.CENTER  # Add as tab
         else:
             return DockPosition.TAB  # Fallback

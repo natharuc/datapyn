@@ -1,31 +1,31 @@
 # ============================================================
-# Exemplos de Sintaxe Mista (SQL + Python)
+# Mixed Syntax Examples (SQL + Python)
 # ============================================================
 #
-# A sintaxe mista permite escrever queries SQL diretamente
-# no código Python usando as funções query() e execute()
+# Mixed syntax allows writing SQL queries directly
+# in Python code using query() and execute() functions
 #
-# IMPORTANTE: Execute este código no Editor Python (Shift+F5)
+# IMPORTANT: Run this code in the Python Editor (Shift+F5)
 # ============================================================
 
-# Exemplo 1: Query básica com resultado em variável
+# Example 1: Basic query with result in variable
 # --------------------------------------------------
 clientes = query("SELECT * FROM clientes WHERE ativo = 1")
-print(f"Total de clientes ativos: {len(clientes)}")
+print(f"Total active clients: {len(clientes)}")
 print(clientes.head())
 
 
-# Exemplo 2: Múltiplas queries e manipulação
+# Example 2: Multiple queries and manipulation
 # -------------------------------------------
 vendas = query("SELECT * FROM vendas WHERE data >= '2024-01-01'")
 produtos = query("SELECT * FROM produtos")
 
-# Agora manipule com Pandas normalmente
+# Now manipulate with Pandas normally
 vendas_por_produto = vendas.groupby("produto_id")["valor"].sum()
 print(vendas_por_produto)
 
 
-# Exemplo 3: Query com JOIN
+# Example 3: Query with JOIN
 # --------------------------
 resultado = query("""
     SELECT 
@@ -43,31 +43,31 @@ resultado = query("""
 print(resultado)
 
 
-# Exemplo 4: Usar resultado de uma query em outra
+# Example 4: Use result from one query in another
 # ------------------------------------------------
 top_clientes = query("SELECT id FROM clientes ORDER BY total_compras DESC LIMIT 10")
 
-# Converte para lista de IDs
+# Convert to list of IDs
 ids = top_clientes["id"].tolist()
 ids_str = ",".join(map(str, ids))
 
-# Usa na próxima query
+# Use in next query
 pedidos = query(f"SELECT * FROM pedidos WHERE cliente_id IN ({ids_str})")
-print(f"Total de pedidos dos top 10 clientes: {len(pedidos)}")
+print(f"Total orders from top 10 clients: {len(pedidos)}")
 
 
-# Exemplo 5: Execute para INSERT/UPDATE/DELETE
+# Example 5: Execute for INSERT/UPDATE/DELETE
 # ---------------------------------------------
-# execute() retorna número de linhas afetadas
+# execute() returns number of affected rows
 linhas = execute("""
     UPDATE clientes 
     SET ultimo_acesso = NOW() 
     WHERE id = 123
 """)
-print(f"{linhas} linha(s) atualizada(s)")
+print(f"{linhas} row(s) updated")
 
 
-# Exemplo 6: Combinar com análise Python
+# Example 6: Combine with Python analysis
 # ---------------------------------------
 vendas_mes = query("""
     SELECT 
@@ -78,28 +78,28 @@ vendas_mes = query("""
     ORDER BY mes
 """)
 
-# Calcular crescimento mês a mês
+# Calculate month-over-month growth
 vendas_mes["crescimento"] = vendas_mes["total"].pct_change() * 100
-print("\nCrescimento mensal:")
+print("\nMonthly growth:")
 print(vendas_mes)
 
 
-# Exemplo 7: Filtrar com Python e salvar no banco
+# Example 7: Filter with Python and save to database
 # ------------------------------------------------
 todos_produtos = query("SELECT * FROM produtos")
 
-# Filtrar produtos com estoque baixo
+# Filter low stock products
 estoque_baixo = todos_produtos[todos_produtos["estoque"] < 10]
 
-# Criar alerta (poderia salvar em outra tabela)
+# Create alert (could save to another table)
 for _, produto in estoque_baixo.iterrows():
-    print(f"⚠️ ALERTA: {produto['nome']} com estoque baixo: {produto['estoque']} unidades")
+    print(f"⚠️ ALERT: {produto['nome']} with low stock: {produto['estoque']} units")
 
-    # Poderia fazer:
+    # Could do:
     # execute(f"INSERT INTO alertas (produto_id, tipo) VALUES ({produto['id']}, 'estoque_baixo')")
 
 
-# Exemplo 8: Query parametrizada (CUIDADO com SQL Injection!)
+# Example 8: Parameterized query (BE CAREFUL with SQL Injection!)
 # ------------------------------------------------------------
 status = "ativo"
 limite = 100
@@ -110,30 +110,30 @@ clientes_filtrados = query(f"""
     LIMIT {limite}
 """)
 
-print(f"Encontrados {len(clientes_filtrados)} clientes")
+print(f"Found {len(clientes_filtrados)} clients")
 
 
-# Exemplo 9: Análise complexa
+# Example 9: Complex analysis
 # ----------------------------
-# Buscar vendas
+# Fetch sales
 vendas = query("SELECT * FROM vendas WHERE YEAR(data) = 2024")
 
-# Estatísticas com Pandas
-print("\n=== Estatísticas de Vendas 2024 ===")
-print(f"Total de vendas: {len(vendas)}")
-print(f"Valor total: R$ {vendas['valor'].sum():,.2f}")
-print(f"Ticket médio: R$ {vendas['valor'].mean():,.2f}")
-print(f"Maior venda: R$ {vendas['valor'].max():,.2f}")
-print(f"Menor venda: R$ {vendas['valor'].min():,.2f}")
+# Statistics with Pandas
+print("\n=== 2024 Sales Statistics ===")
+print(f"Total sales: {len(vendas)}")
+print(f"Total value: R$ {vendas['valor'].sum():,.2f}")
+print(f"Average ticket: R$ {vendas['valor'].mean():,.2f}")
+print(f"Highest sale: R$ {vendas['valor'].max():,.2f}")
+print(f"Lowest sale: R$ {vendas['valor'].min():,.2f}")
 
-# Vendas por mês
+# Sales by month
 vendas["mes"] = vendas["data"].dt.month
 vendas_por_mes = vendas.groupby("mes")["valor"].sum()
-print("\nVendas por mês:")
+print("\nSales by month:")
 print(vendas_por_mes)
 
 
-# Exemplo 10: Criar DataFrame e exportar
+# Example 10: Create DataFrame and export
 # ---------------------------------------
 relatorio = query("""
     SELECT 
@@ -147,25 +147,25 @@ relatorio = query("""
     ORDER BY receita DESC
 """)
 
-# Adicionar percentual
+# Add percentage
 relatorio["percentual"] = (relatorio["receita"] / relatorio["receita"].sum() * 100).round(2)
 
-print("\nRelatório por Categoria:")
+print("\nReport by Category:")
 print(relatorio)
 
-# Para exportar: clique com botão direito na aba "Resultados" > Exportar
+# To export: right-click on "Results" tab > Export
 
 
 # ============================================================
-# DICAS
+# TIPS
 # ============================================================
 #
-# 1. Use query() para SELECT (retorna DataFrame)
-# 2. Use execute() para INSERT/UPDATE/DELETE (retorna nº de linhas)
-# 3. Resultados ficam em variáveis Python normais
-# 4. Manipule com Pandas após receber
-# 5. Cuidado com SQL Injection em queries dinâmicas
-# 6. A conexão com o banco deve estar ativa
-# 7. Erros SQL aparecem no Output Python
+# 1. Use query() for SELECT (returns DataFrame)
+# 2. Use execute() for INSERT/UPDATE/DELETE (returns number of rows)
+# 3. Results are stored in normal Python variables
+# 4. Manipulate with Pandas after receiving
+# 5. Be careful with SQL Injection in dynamic queries
+# 6. Database connection must be active
+# 7. SQL errors appear in Python Output
 #
 # ============================================================

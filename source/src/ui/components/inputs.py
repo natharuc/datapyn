@@ -235,7 +235,7 @@ class StyledLabel(QLabel):
 
 
 class FormField(QWidget):
-    """Campo de formulário com label"""
+    """Form field with label"""
 
     valueChanged = pyqtSignal()
 
@@ -290,11 +290,11 @@ class FormField(QWidget):
 
 
 class SearchInput(QWidget):
-    """Campo de busca com ícone"""
+    """Search field with icon"""
 
     textChanged = pyqtSignal(str)
 
-    def __init__(self, placeholder: str = "Buscar...", parent=None):
+    def __init__(self, placeholder: str = "Search...", parent=None):
         super().__init__(parent)
 
         layout = QHBoxLayout(self)

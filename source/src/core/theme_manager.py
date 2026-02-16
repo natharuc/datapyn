@@ -1,5 +1,5 @@
 """
-Gerenciador de temas da aplicação
+Application theme manager
 """
 
 import json
@@ -8,7 +8,7 @@ from typing import Dict, Any, List
 from PyQt6.QtGui import QColor
 
 
-# Definição dos temas disponíveis
+# Available themes definition
 THEMES = {
     "dark": {
         "name": "Dark (VS Code)",
@@ -224,12 +224,12 @@ THEMES = {
 
 
 class ThemeManager:
-    """Gerencia temas da aplicação"""
+    """Manages application themes"""
 
     def __init__(self, config_path: str = None, initial_theme: str = "dark"):
-        # Tema geral da aplicação
+        # General application theme
         self.current_theme = initial_theme if initial_theme in THEMES else "dark"
-        # Tema específico dos editores (se None, usa o tema geral)
+        # Specific editor theme (if None, uses general theme)
         self.editor_theme = None
 
     def _load_theme(self) -> str:
@@ -249,7 +249,7 @@ class ThemeManager:
         return False
 
     def set_editor_theme(self, theme_name: str):
-        """Define tema específico para editores"""
+        """Set specific theme for editors"""
         if theme_name in THEMES:
             self.editor_theme = theme_name
             return True
@@ -260,7 +260,7 @@ class ThemeManager:
         return self.editor_theme or self.current_theme
 
     def get_current_theme(self) -> Dict[str, Any]:
-        """Retorna configuração do tema atual"""
+        """Returns current theme configuration"""
         return THEMES.get(self.current_theme, THEMES["dark"])
 
     def get_theme_name(self) -> str:
@@ -268,7 +268,7 @@ class ThemeManager:
         return self.current_theme
 
     def get_available_themes(self) -> List[tuple]:
-        """Retorna lista de temas disponíveis [(id, nome), ...]"""
+        """Return list of available themes [(id, name), ...]"""
         return [(theme_id, theme["name"]) for theme_id, theme in THEMES.items()]
 
     def get_editor_colors(self) -> Dict[str, QColor]:
@@ -296,7 +296,7 @@ class ThemeManager:
         return {k: QColor(v) for k, v in colors.items()}
 
     def get_app_colors(self) -> Dict[str, str]:
-        """Retorna cores da aplicação"""
+        """Returns application colors"""
         theme = self.get_current_theme()
         return theme["app"]
 

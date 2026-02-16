@@ -1,5 +1,5 @@
 """
-Diálogo de gerenciamento de conexões salvas
+Dialog for managing saved connections
 """
 
 from PyQt6.QtWidgets import (
@@ -29,6 +29,7 @@ from PyQt6.QtGui import QColor, QBrush, QAction
 from typing import Optional
 
 from src.core.theme_manager import ThemeManager
+from src.language import S
 
 try:
     import qtawesome as qta
@@ -39,9 +40,9 @@ except ImportError:
 
 
 class DraggableTreeWidget(QTreeWidget):
-    """TreeWidget com suporte a drag-and-drop de conexões para grupos"""
+    """TreeWidget with drag-and-drop support for connections to groups"""
 
-    item_dropped = pyqtSignal(str, str)  # connection_name, target_group ('' para raiz)
+    item_dropped = pyqtSignal(str, str)  # connection_name, target_group ('' for root)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,8 +53,8 @@ class DraggableTreeWidget(QTreeWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
     def dropEvent(self, event):
-        """Processa drop de conexão em grupo"""
-        # Pega item sendo arrastado
+        """Processes connection drop into group"""
+        # Gets item being dragged
         dragged_item = self.currentItem()
         if not dragged_item:
             event.ignore()
@@ -61,13 +62,13 @@ class DraggableTreeWidget(QTreeWidget):
 
         dragged_data = dragged_item.data(0, Qt.ItemDataRole.UserRole)
         if not dragged_data or dragged_data.get("type") != "connection":
-            # Só permite arrastar conexões, não grupos
+            # Only allows dragging connections, not groups
             event.ignore()
             return
 
         connection_name = dragged_data.get("name", "")
 
-        # Pega item de destino (onde soltou)
+        # Gets target item (where dropped)
         target_item = self.itemAt(event.position().toPoint())
         target_group = ""
 
@@ -75,27 +76,27 @@ class DraggableTreeWidget(QTreeWidget):
             target_data = target_item.data(0, Qt.ItemDataRole.UserRole)
             if target_data:
                 if target_data.get("type") == "group":
-                    # Soltou em um grupo
+                    # Dropped on a group
                     target_group = target_data.get("name", "")
                 elif target_data.get("type") == "connection":
-                    # Soltou em outra conexão - verifica se está dentro de grupo
+                    # Dropped on another connection - checks if inside a group
                     parent = target_item.parent()
                     if parent:
                         parent_data = parent.data(0, Qt.ItemDataRole.UserRole)
                         if parent_data and parent_data.get("type") == "group":
                             target_group = parent_data.get("name", "")
 
-        # Emite sinal para processar a mudança
+        # Emits signal to process the change
         self.item_dropped.emit(connection_name, target_group)
 
-        # Ignora o evento padrão (vamos recarregar a árvore manualmente)
+        # Ignores the default event (we'll reload the tree manually)
         event.ignore()
 
 
 class ConnectionsManagerDialog(QDialog):
-    """Diálogo para gerenciar conexões salvas"""
+    """Dialog for managing saved connections"""
 
-    connection_selected = pyqtSignal(str, dict)  # nome, config
+    connection_selected = pyqtSignal(str, dict)  # name, config
 
     def __init__(self, connection_manager, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -104,7 +105,7 @@ class ConnectionsManagerDialog(QDialog):
         self.selected_connection = None
         self.selected_group = None
 
-        self.setWindowTitle("Gerenciar Conexões")
+        self.setWindowTitle(S.connections_manager.title)
         self.resize(900, 600)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
 
@@ -112,30 +113,30 @@ class ConnectionsManagerDialog(QDialog):
         self._load_connections()
 
     def _setup_ui(self):
-        """Configura interface"""
+        """Sets up the UI"""
         layout = QVBoxLayout(self)
 
-        # Aplicar tema
+        # Apply theme
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
-        # Splitter para árvore e detalhes
+        # Splitter for tree and details
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Painel esquerdo: árvore de conexões
+        # Left panel: connections tree
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Toolbar de grupos
+        # Groups toolbar
         toolbar_layout = QHBoxLayout()
 
-        btn_new_group = QPushButton(" Novo Grupo")
+        btn_new_group = QPushButton(S.connections_manager.btn_new_group)
         if HAS_QTAWESOME:
             btn_new_group.setIcon(qta.icon("mdi.folder-plus", color="#4ec9b0"))
         btn_new_group.clicked.connect(self._new_group)
         toolbar_layout.addWidget(btn_new_group)
 
-        btn_new_conn = QPushButton(" Nova Conexão")
+        btn_new_conn = QPushButton(S.connections_manager.btn_new_connection)
         if HAS_QTAWESOME:
             btn_new_conn.setIcon(qta.icon("mdi.database-plus", color="#569cd6"))
         btn_new_conn.clicked.connect(self._new_connection)
@@ -144,25 +145,25 @@ class ConnectionsManagerDialog(QDialog):
         toolbar_layout.addStretch()
         left_layout.addLayout(toolbar_layout)
 
-        # Árvore de conexões com suporte a drag-and-drop
+        # Connections tree with drag-and-drop support
         self.tree = DraggableTreeWidget()
-        self.tree.setHeaderLabels(["Conexões"])
+        self.tree.setHeaderLabels([S.connections_manager.header_connections])
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemClicked.connect(self._on_item_clicked)
         self.tree.item_dropped.connect(self._on_connection_dropped)
-        # Duplo clique deve EDITAR conexão ou renomear grupo inline
+        # Double click should EDIT connection or rename group inline
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         left_layout.addWidget(self.tree)
 
         splitter.addWidget(left_panel)
 
-        # Painel direito: detalhes da conexão
+        # Right panel: connection details
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Grupo de informações
+        # Information group
         info_group = QFrame()
         info_group.setFrameShape(QFrame.Shape.StyledPanel)
         info_group_layout = QVBoxLayout(info_group)
@@ -174,7 +175,7 @@ class ConnectionsManagerDialog(QDialog):
         if HAS_QTAWESOME:
             icon_label.setPixmap(qta.icon("mdi.information", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("DETALHES DA CONEXÃO")
+        title = QLabel(S.connections_manager.section_details)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
@@ -192,35 +193,35 @@ class ConnectionsManagerDialog(QDialog):
         self.lbl_created = QLabel("-")
         self.lbl_last_used = QLabel("-")
 
-        info_layout.addRow("Nome:", self.lbl_name)
-        info_layout.addRow("Tipo:", self.lbl_type)
-        info_layout.addRow("Host:", self.lbl_host)
-        info_layout.addRow("Database:", self.lbl_database)
-        info_layout.addRow("Usuário:", self.lbl_username)
-        info_layout.addRow("Grupo:", self.lbl_group)
-        info_layout.addRow("Criado em:", self.lbl_created)
-        info_layout.addRow("Último uso:", self.lbl_last_used)
+        info_layout.addRow(S.connections_manager.detail_name, self.lbl_name)
+        info_layout.addRow(S.connections_manager.detail_type, self.lbl_type)
+        info_layout.addRow(S.connections_manager.detail_host, self.lbl_host)
+        info_layout.addRow(S.connections_manager.detail_database, self.lbl_database)
+        info_layout.addRow(S.connections_manager.detail_user, self.lbl_username)
+        info_layout.addRow(S.connections_manager.detail_group, self.lbl_group)
+        info_layout.addRow(S.connections_manager.detail_created_at, self.lbl_created)
+        info_layout.addRow(S.connections_manager.detail_last_used, self.lbl_last_used)
 
         right_layout.addWidget(info_group)
 
-        # Botões de ação
+        # Action buttons
         actions_layout = QHBoxLayout()
 
-        self.btn_connect = QPushButton(" Conectar")
+        self.btn_connect = QPushButton(S.connections_manager.btn_connect)
         if HAS_QTAWESOME:
             self.btn_connect.setIcon(qta.icon("mdi.lan-connect", color="#4ec9b0"))
         self.btn_connect.clicked.connect(self._connect_selected)
         self.btn_connect.setEnabled(False)
         actions_layout.addWidget(self.btn_connect)
 
-        self.btn_edit = QPushButton(" Editar")
+        self.btn_edit = QPushButton(S.connections_manager.btn_edit)
         if HAS_QTAWESOME:
             self.btn_edit.setIcon(qta.icon("mdi.pencil", color="#569cd6"))
         self.btn_edit.clicked.connect(self._edit_selected)
         self.btn_edit.setEnabled(False)
         actions_layout.addWidget(self.btn_edit)
 
-        self.btn_delete = QPushButton(" Excluir")
+        self.btn_delete = QPushButton(S.connections_manager.btn_delete)
         if HAS_QTAWESOME:
             self.btn_delete.setIcon(qta.icon("mdi.delete", color="#f48771"))
         self.btn_delete.clicked.connect(self._delete_selected)
@@ -235,25 +236,25 @@ class ConnectionsManagerDialog(QDialog):
 
         layout.addWidget(splitter)
 
-        # Botões do diálogo
+        # Dialog buttons
         buttons_layout = QHBoxLayout()
         buttons_layout.addStretch()
 
-        btn_close = QPushButton("Fechar")
+        btn_close = QPushButton(S.connections_manager.btn_close)
         btn_close.clicked.connect(self.reject)
         buttons_layout.addWidget(btn_close)
 
         layout.addLayout(buttons_layout)
 
     def _load_connections(self):
-        """Carrega conexões na árvore"""
+        """Loads connections into the tree"""
         self.tree.clear()
 
-        # Carregar grupos
+        # Load groups
         groups = self.connection_manager.get_groups()
         group_items = {}
 
-        # Criar items de grupos
+        # Create group items
         for group_name, group_data in groups.items():
             item = QTreeWidgetItem([group_name])
             item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "name": group_name})
@@ -261,7 +262,7 @@ class ConnectionsManagerDialog(QDialog):
             if HAS_QTAWESOME:
                 item.setIcon(0, qta.icon("mdi.folder", color="#dcdcaa"))
 
-            # Aplicar cor se definida
+            # Apply color if set
             if group_data.get("color"):
                 color = QColor(group_data["color"])
                 item.setForeground(0, QBrush(color))
@@ -269,7 +270,7 @@ class ConnectionsManagerDialog(QDialog):
             group_items[group_name] = item
             self.tree.addTopLevelItem(item)
 
-        # Carregar conexões
+        # Load connections
         all_connections = self.connection_manager.saved_configs.get("connections", {})
 
         for conn_name, conn_config in all_connections.items():
@@ -281,7 +282,7 @@ class ConnectionsManagerDialog(QDialog):
             if HAS_QTAWESOME:
                 db_type = conn_config.get("db_type", "")
                 icon_color = "#569cd6"
-                # Usa cor configurada ou cor do tipo de banco
+                # Uses configured color or database type color
                 if conn_config.get("color"):
                     icon_color = conn_config["color"]
                 elif db_type == "sqlserver":
@@ -293,12 +294,12 @@ class ConnectionsManagerDialog(QDialog):
 
                 item.setIcon(0, qta.icon("mdi.database", color=icon_color))
 
-            # Aplicar cor se definida
+            # Apply color if set
             if conn_config.get("color"):
                 color = QColor(conn_config["color"])
                 item.setForeground(0, QBrush(color))
 
-            # Adicionar ao grupo ou raiz
+            # Add to group or root
             if group and group in group_items:
                 group_items[group].addChild(item)
                 group_items[group].setExpanded(True)
@@ -308,7 +309,7 @@ class ConnectionsManagerDialog(QDialog):
         self.tree.expandAll()
 
     def _on_item_clicked(self, item, column):
-        """Ao clicar em um item"""
+        """When clicking an item"""
         data = item.data(0, Qt.ItemDataRole.UserRole)
 
         if data and data["type"] == "connection":
@@ -327,24 +328,24 @@ class ConnectionsManagerDialog(QDialog):
             self.btn_delete.setEnabled(True)
 
     def _on_connection_dropped(self, connection_name: str, target_group: str):
-        """Processa quando uma conexão é arrastada para um grupo"""
+        """Processes when a connection is dragged to a group"""
         if not connection_name:
             return
 
-        # Pega configuração atual da conexão
+        # Gets current connection configuration
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
             return
 
-        # Verifica se o grupo mudou
+        # Checks if the group changed
         current_group = config.get("group", "")
         if current_group == target_group:
-            return  # Não mudou nada
+            return  # Nothing changed
 
-        # Atualiza o grupo da conexão
+        # Updates the connection's group
         config["group"] = target_group
 
-        # Salva a conexão com o novo grupo
+        # Saves the connection with the new group
         self.connection_manager.save_connection_config(
             connection_name,
             config.get("db_type", "sqlserver"),
@@ -354,35 +355,35 @@ class ConnectionsManagerDialog(QDialog):
             config.get("username", ""),
             config.get("save_password", False),
             config.get("password", ""),
-            target_group,  # Novo grupo
+            target_group,  # New group
             config.get("use_windows_auth", False),
             config.get("color", ""),
         )
 
-        # Recarrega a árvore
+        # Reloads the tree
         self._load_connections()
 
-        # Feedback visual
+        # Visual feedback
         if target_group:
-            print(f"Conexão '{connection_name}' movida para grupo '{target_group}'")
+            print(f"Connection '{connection_name}' moved to group '{target_group}'")
         else:
-            print(f"Conexão '{connection_name}' removida do grupo")
+            print(f"Connection '{connection_name}' removed from group")
 
     def _on_item_double_clicked(self, item, column):
-        """Ao dar duplo clique - edita conexão ou renomeia grupo inline"""
+        """On double click - edits connection or renames group inline"""
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
             return
 
         if data["type"] == "connection":
-            # Conexão: abrir edição
+            # Connection: open edit
             self._edit_selected()
         elif data["type"] == "group":
-            # Grupo: editar inline (como nas abas)
+            # Group: edit inline (like tabs)
             self._rename_group_inline(item)
 
     def _show_connection_details(self, name: str):
-        """Mostra detalhes de uma conexão"""
+        """Shows connection details"""
         config = self.connection_manager.get_connection_config(name)
         if not config:
             return
@@ -394,23 +395,23 @@ class ConnectionsManagerDialog(QDialog):
 
         username = config.get("username", "-")
         if config.get("use_windows_auth"):
-            username = "[Windows Authentication]"
+            username = S.connections_manager.windows_auth
         self.lbl_username.setText(username)
 
-        self.lbl_group.setText(config.get("group", "[Sem grupo]"))
+        self.lbl_group.setText(config.get("group", "") or S.connections_manager.no_group)
 
         created = config.get("created_at", "-")
         if created and created != "-":
             created = created.split("T")[0] + " " + created.split("T")[1][:8]
         self.lbl_created.setText(created)
 
-        last_used = config.get("last_used") or "Nunca"
-        if last_used and last_used != "Nunca":
+        last_used = config.get("last_used") or S.connections_manager.never_used
+        if last_used and last_used != S.connections_manager.never_used:
             last_used = last_used.split("T")[0] + " " + last_used.split("T")[1][:8]
         self.lbl_last_used.setText(last_used)
 
     def _clear_connection_details(self):
-        """Limpa detalhes"""
+        """Clears details"""
         self.lbl_name.setText("-")
         self.lbl_type.setText("-")
         self.lbl_host.setText("-")
@@ -421,7 +422,7 @@ class ConnectionsManagerDialog(QDialog):
         self.lbl_last_used.setText("-")
 
     def _show_context_menu(self, position):
-        """Mostra menu de contexto"""
+        """Shows context menu"""
         item = self.tree.itemAt(position)
         if not item:
             return
@@ -433,7 +434,7 @@ class ConnectionsManagerDialog(QDialog):
         menu = QMenu(self)
 
         if data["type"] == "connection":
-            act_connect = QAction("Conectar", self)
+            act_connect = QAction(S.connections_manager.ctx_connect, self)
             if HAS_QTAWESOME:
                 act_connect.setIcon(qta.icon("fa5s.plug"))
             act_connect.triggered.connect(self._connect_selected)
@@ -441,13 +442,13 @@ class ConnectionsManagerDialog(QDialog):
 
             menu.addSeparator()
 
-            act_edit = QAction("Editar", self)
+            act_edit = QAction(S.connections_manager.ctx_edit, self)
             if HAS_QTAWESOME:
                 act_edit.setIcon(qta.icon("fa5s.edit"))
             act_edit.triggered.connect(self._edit_selected)
             menu.addAction(act_edit)
 
-            act_duplicate = QAction("Duplicar", self)
+            act_duplicate = QAction(S.connections_manager.ctx_duplicate, self)
             if HAS_QTAWESOME:
                 act_duplicate.setIcon(qta.icon("fa5s.copy"))
             act_duplicate.triggered.connect(self._duplicate_connection)
@@ -455,14 +456,14 @@ class ConnectionsManagerDialog(QDialog):
 
             menu.addSeparator()
 
-            act_delete = QAction("Excluir", self)
+            act_delete = QAction(S.connections_manager.ctx_delete, self)
             if HAS_QTAWESOME:
                 act_delete.setIcon(qta.icon("fa5s.trash"))
             act_delete.triggered.connect(self._delete_selected)
             menu.addAction(act_delete)
 
         elif data["type"] == "group":
-            act_color = QAction("Mudar Cor", self)
+            act_color = QAction(S.connections_manager.ctx_change_color, self)
             if HAS_QTAWESOME:
                 act_color.setIcon(qta.icon("fa5s.palette"))
             act_color.triggered.connect(self._change_group_color)
@@ -470,7 +471,7 @@ class ConnectionsManagerDialog(QDialog):
 
             menu.addSeparator()
 
-            act_delete = QAction("Excluir Grupo", self)
+            act_delete = QAction(S.connections_manager.ctx_delete_group, self)
             if HAS_QTAWESOME:
                 act_delete.setIcon(qta.icon("fa5s.trash"))
             act_delete.triggered.connect(self._delete_selected)
@@ -479,10 +480,10 @@ class ConnectionsManagerDialog(QDialog):
         menu.exec(self.tree.viewport().mapToGlobal(position))
 
     def _new_group(self):
-        """Cria novo grupo"""
+        """Creates a new group"""
         dialog = QInputDialog(self)
-        dialog.setWindowTitle("Novo Grupo")
-        dialog.setLabelText("Nome do grupo:")
+        dialog.setWindowTitle(S.connections_manager.dialog_new_group_title)
+        dialog.setLabelText(S.connections_manager.dialog_new_group_prompt)
         dialog.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         dialog.resize(400, 150)
 
@@ -490,61 +491,61 @@ class ConnectionsManagerDialog(QDialog):
             name = dialog.textValue()
             if name:
                 if name in self.connection_manager.get_groups():
-                    QMessageBox.warning(self, "Aviso", "Já existe um grupo com este nome!")
+                    QMessageBox.warning(self, S.dialogs.warning, S.connections_manager.dialog_group_exists)
                     return
 
                 self.connection_manager.create_group(name)
                 self._load_connections()
 
     def _rename_group_inline(self, item: QTreeWidgetItem):
-        """Renomeia grupo inline (editável diretamente no item)"""
+        """Renames group inline (editable directly on the item)"""
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data or data["type"] != "group":
             return
 
         old_name = data["name"]
 
-        # Tornar item editável
+        # Make item editable
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         self.tree.editItem(item, 0)
 
-        # Conectar sinal para validar após edição
+        # Connect signal to validate after editing
         def on_item_changed(changed_item, column):
             if changed_item != item:
                 return
 
             new_name = changed_item.text(0).strip()
 
-            # Desconectar sinal para evitar loop
+            # Disconnect signal to avoid loop
             try:
                 self.tree.itemChanged.disconnect(on_item_changed)
             except:
                 pass
 
-            # Validar novo nome
+            # Validate new name
             if not new_name or new_name == old_name:
-                # Restaurar nome antigo
+                # Restore old name
                 changed_item.setText(0, old_name)
                 changed_item.setFlags(changed_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 return
 
             if new_name in self.connection_manager.get_groups():
-                QMessageBox.warning(self, "Aviso", "Já existe um grupo com este nome!")
+                QMessageBox.warning(self, S.dialogs.warning, S.connections_manager.dialog_group_exists)
                 changed_item.setText(0, old_name)
                 changed_item.setFlags(changed_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 return
 
-            # Renomear grupo
+            # Rename group
             self.connection_manager.rename_group(old_name, new_name)
             self.selected_group = new_name
             changed_item.setFlags(changed_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            # Atualizar data do item
+            # Update item data
             changed_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "name": new_name})
 
         self.tree.itemChanged.connect(on_item_changed)
 
     def _change_group_color(self):
-        """Muda cor do grupo"""
+        """Changes group color"""
         if not self.selected_group:
             return
 
@@ -557,7 +558,7 @@ class ConnectionsManagerDialog(QDialog):
                 self._load_connections()
 
     def _new_connection(self):
-        """Cria nova conexão"""
+        """Creates a new connection"""
         from .connection_edit_dialog import ConnectionEditDialog
 
         dialog = ConnectionEditDialog(
@@ -586,17 +587,17 @@ class ConnectionsManagerDialog(QDialog):
             )
 
             self._load_connections()
-            QMessageBox.information(self, "Sucesso", f"Conexão '{name}' salva com sucesso!")
+            QMessageBox.information(self, S.dialogs.success, S.connections_manager.dialog_connection_saved.format(name=name))
 
     def _edit_selected(self):
-        """Edita conexão ou grupo selecionado"""
+        """Edits selected connection or group"""
         if self.selected_connection:
             self._edit_connection()
         elif self.selected_group:
             self._rename_group()
 
     def _edit_connection(self):
-        """Edita conexão selecionada"""
+        """Edits selected connection"""
         if not self.selected_connection:
             return
 
@@ -634,10 +635,10 @@ class ConnectionsManagerDialog(QDialog):
 
             self.selected_connection = new_name
             self._load_connections()
-            QMessageBox.information(self, "Sucesso", "Conexão atualizada com sucesso!")
+            QMessageBox.information(self, S.dialogs.success, S.connections_manager.dialog_connection_updated)
 
     def _duplicate_connection(self):
-        """Duplica conexão selecionada"""
+        """Duplicates selected connection"""
         if not self.selected_connection:
             return
 
@@ -646,12 +647,12 @@ class ConnectionsManagerDialog(QDialog):
             return
 
         new_name, ok = QInputDialog.getText(
-            self, "Duplicar Conexão", "Nome da nova conexão:", text=f"{self.selected_connection} (cópia)"
+            self, S.connections_manager.dialog_duplicate_title, S.connections_manager.dialog_duplicate_prompt, text=S.connections_manager.dialog_duplicate_default.format(name=self.selected_connection)
         )
 
         if ok and new_name:
             if new_name in self.connection_manager.saved_configs.get("connections", {}):
-                QMessageBox.warning(self, "Aviso", "Já existe uma conexão com este nome!")
+                QMessageBox.warning(self, S.dialogs.warning, S.connections_manager.dialog_duplicate_exists)
                 return
 
             self.connection_manager.save_connection_config(
@@ -661,7 +662,7 @@ class ConnectionsManagerDialog(QDialog):
                 config["port"],
                 config["database"],
                 config.get("username", ""),
-                False,  # Não duplicar senha
+                False,  # Don't duplicate password
                 "",
                 config.get("group", ""),
                 config.get("use_windows_auth", False),
@@ -669,15 +670,15 @@ class ConnectionsManagerDialog(QDialog):
             )
 
             self._load_connections()
-            QMessageBox.information(self, "Sucesso", f"Conexão '{new_name}' criada!")
+            QMessageBox.information(self, S.dialogs.success, S.connections_manager.dialog_connection_duplicated.format(name=new_name))
 
     def _delete_selected(self):
-        """Exclui conexão ou grupo selecionado"""
+        """Deletes selected connection or group"""
         if self.selected_connection:
             reply = QMessageBox.question(
                 self,
-                "Confirmar Exclusão",
-                f"Deseja realmente excluir a conexão '{self.selected_connection}'?",
+                S.connections_manager.dialog_confirm_delete_title,
+                S.connections_manager.dialog_confirm_delete_conn.format(name=self.selected_connection),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
 
@@ -693,9 +694,8 @@ class ConnectionsManagerDialog(QDialog):
         elif self.selected_group:
             reply = QMessageBox.question(
                 self,
-                "Confirmar Exclusão",
-                f"Deseja realmente excluir o grupo '{self.selected_group}'?\n"
-                "As conexões dentro dele serão movidas para a raiz.",
+                S.connections_manager.dialog_confirm_delete_title,
+                S.connections_manager.dialog_confirm_delete_group.format(name=self.selected_group),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
 
@@ -708,7 +708,7 @@ class ConnectionsManagerDialog(QDialog):
                 self.btn_delete.setEnabled(False)
 
     def _connect_selected(self):
-        """Conecta à conexão selecionada"""
+        """Connects to the selected connection"""
         if not self.selected_connection:
             return
 
@@ -716,6 +716,6 @@ class ConnectionsManagerDialog(QDialog):
         if not config:
             return
 
-        # Emitir sinal com a conexão selecionada
+        # Emit signal with the selected connection
         self.connection_selected.emit(self.selected_connection, config)
         self.accept()

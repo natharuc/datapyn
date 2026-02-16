@@ -86,7 +86,7 @@ class TestDatabaseConnectorConnectionString:
                 db_type="oracle", host="localhost", port=1521, database="testdb", username="user", password="pass"
             )
 
-        assert "não suportado" in str(exc_info.value)
+        assert "Unsupported database type" in str(exc_info.value)
 
 
 class TestDatabaseConnectorState:

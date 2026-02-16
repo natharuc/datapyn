@@ -1,6 +1,6 @@
 """
-Interfaces para editores de código.
-Seguindo o princípio de Inversão de Dependência (SOLID).
+Interfaces for code editors.
+Following Dependency Inversion Principle (SOLID).
 """
 
 from .code_editor_interface import ICodeEditor

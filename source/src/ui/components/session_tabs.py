@@ -1,7 +1,7 @@
 """
-Tabs de sessão
+Session tabs
 
-Gerencia as abas de sessão da IDE.
+Manages session tabs in the IDE.
 """
 
 from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit
@@ -13,21 +13,23 @@ import subprocess
 import os
 import math
 
+from src.language import S
+
 
 class SessionTabBar(QTabBar):
-    """TabBar customizado para sessões"""
+    """Custom TabBar for sessions"""
 
     tab_renamed = pyqtSignal(int, str)  # index, new_name
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._tab_colors: Dict[int, str] = {}  # Armazena cor por índice da aba
+        self._tab_colors: Dict[int, str] = {}  # Store color by tab index
 
         self._setup_style()
         self._setup_context_menu()
 
     def _setup_style(self):
-        """Configura estilo"""
+        """Configure style"""
         self.setStyleSheet("""
             QTabBar {
                 background-color: #252526;
@@ -63,96 +65,96 @@ class SessionTabBar(QTabBar):
         """)
 
     def _setup_context_menu(self):
-        """Configura context menu"""
+        """Configure context menu"""
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
     def _show_context_menu(self, pos):
-        """Mostra context menu"""
+        """Show context menu"""
         index = self.tabAt(pos)
         if index < 0:
             return
 
         menu = QMenu(self)
 
-        # Obter caminho do arquivo se existir
+        # Get file path if exists
         tab_widget = self.parent()
         widget = tab_widget.widget(index)
         file_path = getattr(widget, "file_path", None) if widget else None
 
-        # 1. Abrir local do arquivo
+        # 1. Open file location
         if file_path and os.path.exists(file_path):
-            open_location_action = QAction(qta.icon("mdi.folder-open"), "Abrir Local do Arquivo", self)
+            open_location_action = QAction(qta.icon("mdi.folder-open"), S.session_tabs.ctx_open_file_location, self)
             open_location_action.triggered.connect(lambda: self._open_file_location(file_path))
             menu.addAction(open_location_action)
             menu.addSeparator()
 
-        # 2. Fechar tudo
-        close_all_action = QAction(qta.icon("mdi.close-box-multiple"), "Fechar Tudo", self)
+        # 2. Close all
+        close_all_action = QAction(qta.icon("mdi.close-box-multiple"), S.session_tabs.ctx_close_all, self)
         close_all_action.triggered.connect(lambda: self._close_all_tabs())
         menu.addAction(close_all_action)
 
-        # 3. Fechar todas as outras
-        close_others_action = QAction(qta.icon("mdi.close-box-outline"), "Fechar Todas as Outras", self)
+        # 3. Close all others
+        close_others_action = QAction(qta.icon("mdi.close-box-outline"), S.session_tabs.ctx_close_all_others, self)
         close_others_action.triggered.connect(lambda: self._close_other_tabs(index))
         menu.addAction(close_others_action)
 
         menu.addSeparator()
 
-        # 4. Renomear
-        rename_action = QAction(qta.icon("mdi.pencil"), "Renomear", self)
+        # 4. Rename
+        rename_action = QAction(qta.icon("mdi.pencil"), S.session_tabs.ctx_rename, self)
         rename_action.triggered.connect(lambda: self._rename_tab_inline(index))
         menu.addAction(rename_action)
 
-        # 5. Duplicar
-        duplicate_action = QAction(qta.icon("mdi.content-copy"), "Duplicar", self)
+        # 5. Duplicate
+        duplicate_action = QAction(qta.icon("mdi.content-copy"), S.session_tabs.ctx_duplicate, self)
         duplicate_action.triggered.connect(lambda: self._duplicate_tab(index))
         menu.addAction(duplicate_action)
 
         menu.addSeparator()
 
-        # 5. Fechar
-        close_action = QAction(qta.icon("mdi.close"), "Fechar", self)
+        # 6. Close
+        close_action = QAction(qta.icon("mdi.close"), S.session_tabs.ctx_close, self)
         close_action.triggered.connect(lambda: self._close_tab(index))
         menu.addAction(close_action)
 
         menu.exec(self.mapToGlobal(pos))
 
     def _open_file_location(self, file_path):
-        """Abre o local do arquivo no explorer"""
+        """Open file location in explorer"""
         import os.path
 
         if os.path.exists(file_path):
             if os.name == "nt":  # Windows
-                # Comando correto: explorer.exe /select,"caminho"
+                # Correct command: explorer.exe /select,"path"
                 subprocess.run(["explorer.exe", f'/select,"{file_path}"'])
             elif os.name == "posix":  # Linux/Mac
                 folder = os.path.dirname(file_path)
                 subprocess.run(["xdg-open", folder])
 
     def _close_all_tabs(self):
-        """Fecha todas as abas"""
+        """Close all tabs"""
         tab_widget = self.parent()
         if tab_widget:
-            # Fechar de trás para frente para evitar mudanças de índice
+            # Close from back to front to avoid index changes
             for i in range(tab_widget.count() - 1, -1, -1):
                 tab_widget.session_closed.emit(i)
 
     def _close_other_tabs(self, keep_index):
-        """Fecha todas as abas exceto a especificada"""
+        """Close all tabs except the specified one"""
         tab_widget = self.parent()
         if tab_widget:
-            # Fechar de trás para frente
+            # Close from back to front
             for i in range(tab_widget.count() - 1, -1, -1):
                 if i != keep_index:
                     tab_widget.session_closed.emit(i)
 
     def _rename_tab_inline(self, index):
-        """Renomeia a aba usando input inline"""
+        """Rename tab using inline input"""
         if index < 0:
             return
 
-        # Criar QLineEdit para edição inline
+        # Create QLineEdit for inline editing
         line_edit = QLineEdit(self)
         line_edit.setText(self.tabText(index))
         line_edit.selectAll()
@@ -166,7 +168,7 @@ class SessionTabBar(QTabBar):
             }
         """)
 
-        # Função para salvar o novo nome
+        # Function to save the new name
         def save_name():
             new_name = line_edit.text().strip()
             if new_name:
@@ -174,30 +176,30 @@ class SessionTabBar(QTabBar):
                 self.tab_renamed.emit(index, new_name)
             line_edit.deleteLater()
 
-        # Conectar Enter para salvar
+        # Connect Enter to save
         line_edit.returnPressed.connect(save_name)
         line_edit.editingFinished.connect(save_name)
 
-        # Posicionar o line_edit sobre a aba (deixar 60px à direita para o close button)
+        # Position line_edit over the tab (leave 60px on right for close button)
         tab_rect = self.tabRect(index)
         line_edit.setGeometry(tab_rect.adjusted(8, 6, -60, -6))
         line_edit.show()
         line_edit.setFocus()
 
     def _duplicate_tab(self, index):
-        """Duplica a aba"""
+        """Duplicate tab"""
         tab_widget = self.parent()
         if tab_widget and hasattr(tab_widget, "duplicate_session"):
             tab_widget.duplicate_session.emit(index)
 
     def _close_tab(self, index):
-        """Fecha uma aba"""
+        """Close a tab"""
         tab_widget = self.parent()
         if tab_widget:
             tab_widget.session_closed.emit(index)
 
     def mouseDoubleClickEvent(self, event):
-        """Renomear aba ao dar duplo clique usando input inline"""
+        """Rename tab on double-click using inline input"""
         index = self.tabAt(event.pos())
         if index >= 0:
             self._rename_tab_inline(index)
@@ -205,18 +207,18 @@ class SessionTabBar(QTabBar):
             super().mouseDoubleClickEvent(event)
 
     def set_tab_connection_color(self, index: int, color: str):
-        """Define cor da conexão para uma aba específica"""
+        """Set connection color for a specific tab"""
         self._tab_colors[index] = color
-        self.update()  # Força repaint
+        self.update()  # Force repaint
 
     def clear_tab_connection_color(self, index: int):
-        """Remove cor da conexão de uma aba"""
+        """Remove connection color from tab"""
         if index in self._tab_colors:
             del self._tab_colors[index]
             self.update()
 
     def paintEvent(self, event):
-        """Override para pintar bordas coloridas nas abas"""
+        """Override to paint colored borders on tabs"""
         # Pintar normalmente primeiro
         super().paintEvent(event)
 
@@ -225,10 +227,10 @@ class SessionTabBar(QTabBar):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         for index, color in self._tab_colors.items():
-            if index < self.count():  # Verifica se índice ainda é válido
+            if index < self.count():  # Check if index is still valid
                 rect = self.tabRect(index)
                 if rect.isValid():
-                    # Pintar linha colorida na parte inferior da aba
+                    # Paint colored line at bottom of tab
                     pen = QPen(QColor(color))
                     pen.setWidth(3)
                     painter.setPen(pen)
@@ -236,23 +238,23 @@ class SessionTabBar(QTabBar):
 
 
 class SessionTabs(QTabWidget):
-    """Widget de abas de sessao"""
+    """Session tabs widget"""
 
-    # Sinais
+    # Signals
     session_changed = pyqtSignal(int)  # index
     session_closed = pyqtSignal(int)  # index
     session_renamed = pyqtSignal(int, str)  # index, new_name
     new_session_requested = pyqtSignal()
-    duplicate_session = pyqtSignal(int)  # index - duplicar sessao
+    duplicate_session = pyqtSignal(int)  # index - duplicate session
 
-    # Cores do spinner
+    # Spinner colors
     _SPINNER_COLOR = QColor("#FFD700")
     _SPINNER_BG = QColor(80, 80, 80, 60)
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Estado de execucao por indice de aba
+        # Execution state by tab index
         self._running_tabs: Dict[int, bool] = {}
         self._spinner_angle = 0
         self._spinner_timer = QTimer(self)
@@ -263,22 +265,22 @@ class SessionTabs(QTabWidget):
         self._connect_signals()
 
     def _setup_ui(self):
-        """Configura UI"""
-        # TabBar customizado
+        """Configure UI"""
+        # Custom TabBar
         self.tab_bar = SessionTabBar()
         self.setTabBar(self.tab_bar)
 
-        # Configurações
+        # Settings
         self.setTabsClosable(True)
         self.setMovable(True)
         self.setDocumentMode(True)
 
     def _setup_close_button(self, index):
-        """Configura ícone X no botão de fechar da aba - elegante e compacto"""
+        """Configure X icon on tab close button - elegant and compact"""
         from PyQt6.QtWidgets import QToolButton
         from PyQt6.QtCore import Qt
 
-        # Criar botão customizado compacto e elegante com ícone X
+        # Create compact and elegant custom button with X icon
         close_btn = QToolButton()
         close_btn.setIcon(qta.icon("mdi.close", color="#999999", scale_factor=0.7))
         close_btn.setFixedSize(20, 20)
@@ -307,10 +309,10 @@ class SessionTabs(QTabWidget):
         close_btn.enterEvent = on_hover_enter
         close_btn.leaveEvent = on_hover_leave
 
-        # IMPORTANTE: Buscar índice dinamicamente no momento do click
-        # porque os índices mudam quando abas são removidas
+        # IMPORTANT: Find index dynamically at click time
+        # because indices change when tabs are removed
         def request_close():
-            # Encontrar o índice atual desta aba pelo botão
+            # Find current index of this tab by button
             for i in range(self.count()):
                 btn = self.tabBar().tabButton(i, QTabBar.ButtonPosition.RightSide)
                 if btn == close_btn:
@@ -319,11 +321,11 @@ class SessionTabs(QTabWidget):
 
         close_btn.clicked.connect(request_close)
 
-        # Substituir botão padrão
+        # Replace default button
         self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, close_btn)
 
     def _setup_style(self):
-        """Configura estilo"""
+        """Configure style"""
         self.setStyleSheet("""
             QTabWidget::pane {
                 border: none;
@@ -336,7 +338,7 @@ class SessionTabs(QTabWidget):
         """)
 
     def _connect_signals(self):
-        """Conecta sinais"""
+        """Connect signals"""
         self.currentChanged.connect(self.session_changed.emit)
         self.tabCloseRequested.connect(self._on_close_requested)
         self.tab_bar.tab_renamed.connect(self.session_renamed.emit)
@@ -347,15 +349,15 @@ class SessionTabs(QTabWidget):
         self.session_closed.emit(index)
 
     def add_session(self, widget: QWidget, name: str, make_current: bool = True) -> int:
-        """Adiciona nova sessão
+        """Add new session
 
         Returns:
-            Índice da nova aba
+            Index of new tab
         """
         # Adicionar aba normalmente
         index = self.addTab(widget, name)
 
-        # Configurar botão de fechar customizado
+        # Configure custom close button
         self._setup_close_button(index)
 
         if make_current:
@@ -364,25 +366,25 @@ class SessionTabs(QTabWidget):
         return index
 
     def remove_session(self, index: int):
-        """Remove sessão (permite fechar última aba)"""
-        # Limpar cor da aba antes de remover
+        """Remove session (allows closing last tab)"""
+        # Clear tab color before removing
         self.tab_bar.clear_tab_connection_color(index)
         self.removeTab(index)
 
     def rename_session(self, index: int, name: str):
-        """Renomeia sessão"""
+        """Rename session"""
         self.setTabText(index, name)
 
     def set_tab_color(self, index: int, color: str):
-        """Define cor do tab (para indicar status)"""
+        """Set tab color (to indicate status)"""
         self.tabBar().setTabTextColor(index, QColor(color))
 
     def set_tab_connection_color(self, index: int, color: str):
-        """Define faixa colorida no tab para indicar conexão ativa"""
+        """Set colored strip on tab to indicate active connection"""
         self.tab_bar.set_tab_connection_color(index, color)
 
     def set_tab_running(self, index: int, is_running: bool):
-        """Indica se sessao esta executando com spinner animado."""
+        """Indicate if session is running with animated spinner."""
         if is_running:
             self._running_tabs[index] = True
             # Iniciar timer de animacao se necessario
@@ -398,7 +400,7 @@ class SessionTabs(QTabWidget):
             self.setTabIcon(index, QIcon())
 
     def _tick_spinner(self):
-        """Avanca a animacao do spinner e atualiza icones."""
+        """Advance spinner animation and update icons."""
         self._spinner_angle = (self._spinner_angle + 30) % 360
         icon = self._make_spinner_icon()
         for idx in list(self._running_tabs):
@@ -440,16 +442,16 @@ class SessionTabs(QTabWidget):
         return self.tabText(index)
 
     def refresh_close_buttons(self):
-        """Reaplica o botão de fechar customizado em todas as abas (exceto a última 'nova aba').
+        """Reapply custom close button to all tabs (except last 'new tab').
 
-        Use isto quando o estilo foi alterado em runtime para forçar atualização dos botões.
+        Use this when style has been changed at runtime to force button update.
         """
         total = self.count()
-        # Não tocar na última aba que é o botão de nova aba (index = total-1)
+        # Don't touch last tab which is the new tab button (index = total-1)
         for i in range(total - 1):
-            # Reaplica o botão customizado
+            # Reapply custom button
             try:
                 self._setup_close_button(i)
             except Exception:
-                # Não falhar se uma aba estiver em processo de remoção
+                # Don't fail if a tab is being removed
                 continue

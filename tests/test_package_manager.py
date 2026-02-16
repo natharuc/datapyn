@@ -288,7 +288,7 @@ class TestUninstallPackage:
         svc = PackageManagerService()
         result = svc.uninstall_package("pip")
         assert result.success is False
-        assert "protegido" in result.error
+        assert "protected" in result.error
         mock_run.assert_not_called()
 
     @patch("src.services.package_manager_service.subprocess.run")
@@ -297,7 +297,7 @@ class TestUninstallPackage:
         svc = PackageManagerService()
         result = svc.uninstall_package("pyqt6")
         assert result.success is False
-        assert "protegido" in result.error
+        assert "protected" in result.error
         mock_run.assert_not_called()
 
     @patch("src.services.package_manager_service.subprocess.run")
@@ -465,7 +465,7 @@ class TestProtectedPackages:
         svc = PackageManagerService()
         result = svc.uninstall_package(name)
         assert result.success is False
-        assert "protegido" in result.error
+        assert "protected" in result.error
         mock_run.assert_not_called()
 
 
@@ -485,7 +485,7 @@ class TestPackageManagerDialog:
         with patch.object(PackageManagerDialog, "_load_installed"):
             dialog = PackageManagerDialog(theme_manager=ThemeManager(), parent=None)
             qtbot.addWidget(dialog)
-            assert dialog.windowTitle() == "Gerenciador de Pacotes"
+            assert dialog.windowTitle() == "Package Manager"
             assert dialog.minimumWidth() >= 780
             assert dialog.minimumHeight() >= 560
 
@@ -615,7 +615,7 @@ class TestWorkers:
         with qtbot.waitSignal(worker.finished, timeout=5000) as blocker:
             worker.start()
         assert blocker.args[0].success is False
-        assert "desconhecida" in blocker.args[0].error
+        assert "Unknown operation" in blocker.args[0].error
 
 
 # ===========================================================================
@@ -726,7 +726,7 @@ class TestDialogWorkerCleanup:
 
             buttons = widget.findChildren(QPushButton)
             assert len(buttons) == 1
-            assert "Instalar" in buttons[0].text()
+            assert "Install" in buttons[0].text()
 
     def test_operation_done_reloads_installed(self, qtbot):
         """Apos operacao bem sucedida, recarrega lista de instalados"""
@@ -760,7 +760,7 @@ class TestDialogWorkerCleanup:
 
             assert dialog.table.rowCount() == 1
             assert "pacoteinexistente" in dialog.lbl_info.text()
-            assert "instalar" in dialog.lbl_info.text().lower()
+            assert "install" in dialog.lbl_info.text().lower()
 
 
 # ===========================================================================

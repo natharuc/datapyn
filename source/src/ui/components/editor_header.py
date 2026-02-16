@@ -1,7 +1,7 @@
 """
-Header do editor
+Editor header
 
-Exibe atalhos e informações do editor.
+Displays shortcuts and editor information.
 """
 
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt
 
 
 class EditorHeader(QWidget):
-    """Header com informações de atalhos"""
+    """Header with shortcut information"""
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)

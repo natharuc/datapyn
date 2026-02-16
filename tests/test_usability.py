@@ -152,7 +152,7 @@ class TestSQLExecution:
         main_window._on_sql_finished(None, "Erro de teste", mock_thread, 0)
 
         # Deve mostrar erro
-        assert "Erro" in main_window.action_label.text()
+        assert "error" in main_window.action_label.text().lower()
 
     def test_sql_finished_callback_with_dataframe(self, main_window, qtbot):
         """Callback de SQL com DataFrame deve exibir resultado"""
@@ -165,7 +165,7 @@ class TestSQLExecution:
         main_window._on_sql_finished(df, None, mock_thread, 0)
 
         # Deve indicar sucesso
-        assert "linhas" in main_window.action_label.text().lower()
+        assert "rows" in main_window.action_label.text().lower()
 
 
 # === TESTES DE EXECUÇÃO PYTHON ===
@@ -194,7 +194,7 @@ class TestPythonExecution:
 
         # Deve mostrar sucesso
         assert (
-            "sucesso" in main_window.action_label.text().lower() or "linhas" in main_window.action_label.text().lower()
+            "success" in main_window.action_label.text().lower() or "rows" in main_window.action_label.text().lower()
         )
 
     def test_python_finished_with_list(self, main_window, qtbot):
@@ -218,7 +218,7 @@ class TestPythonExecution:
 
         main_window._on_python_finished(None, "", "SyntaxError: invalid syntax", {}, [], mock_thread, 0)
 
-        assert "Erro" in main_window.action_label.text()
+        assert "error" in main_window.action_label.text().lower()
 
     def test_python_finished_with_output(self, main_window, qtbot):
         """Python com print deve mostrar no output"""

@@ -1,5 +1,5 @@
 """
-Diálogo unificado para criar e editar conexões
+Unified dialog for creating and editing connections
 """
 
 from PyQt6.QtWidgets import (
@@ -23,6 +23,7 @@ from PyQt6.QtGui import QColor
 
 from src.database import DatabaseConnector
 from src.core.theme_manager import ThemeManager
+from src.language import S
 
 try:
     import qtawesome as qta
@@ -33,7 +34,7 @@ except ImportError:
 
 
 class ConnectionTestWorker(QThread):
-    """Worker para testar conexão em background"""
+    """Worker to test connection in background"""
 
     finished = pyqtSignal(bool, str)  # success, message
 
@@ -68,14 +69,14 @@ class ConnectionTestWorker(QThread):
             )
 
             connector.disconnect()
-            self.finished.emit(True, "Conexão testada com sucesso!")
+            self.finished.emit(True, S.connection_edit.test_success)
 
         except Exception as e:
-            self.finished.emit(False, f"Erro: {str(e)}")
+            self.finished.emit(False, S.connection_edit.test_error.format(error=str(e)))
 
 
 class ConnectionEditDialog(QDialog):
-    """Diálogo unificado para criar e editar conexões"""
+    """Unified dialog for creating and editing connections"""
 
     def __init__(
         self,
@@ -92,9 +93,9 @@ class ConnectionEditDialog(QDialog):
         self.theme_manager = theme_manager or ThemeManager()
         self.selected_color = self.config.get("color", "")
         self.is_new = connection_name is None or connection_name == ""
-        self.connector = None  # Para teste de conexão
+        self.connector = None  # For connection test
 
-        title = "Nova Conexão" if self.is_new else f"Editar Conexão: {connection_name}"
+        title = S.connection_edit.title_new if self.is_new else S.connection_edit.title_edit.format(name=connection_name)
         self.setWindowTitle(title)
         self.resize(500, 650)
 
@@ -103,13 +104,13 @@ class ConnectionEditDialog(QDialog):
             self._load_config()
 
     def _setup_ui(self):
-        """Configura interface"""
+        """Sets up the UI"""
         layout = QVBoxLayout(self)
 
-        # Aplicar tema
+        # Apply theme
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
-        # Grupo de informações básicas
+        # Basic information group
         basic_group = QFrame()
         basic_group.setFrameShape(QFrame.Shape.StyledPanel)
         basic_group_layout = QVBoxLayout(basic_group)
@@ -121,7 +122,7 @@ class ConnectionEditDialog(QDialog):
         if HAS_QTAWESOME:
             icon_label.setPixmap(qta.icon("mdi.database-cog", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("INFORMAÇÕES DA CONEXÃO")
+        title = QLabel(S.connection_edit.section_connection_info)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
@@ -131,30 +132,30 @@ class ConnectionEditDialog(QDialog):
         basic_group_layout.addLayout(basic_layout)
 
         self.txt_name = QLineEdit()
-        self.txt_name.setPlaceholderText("Nome para identificar a conexão")
-        basic_layout.addRow("Nome:", self.txt_name)
+        self.txt_name.setPlaceholderText(S.connection_edit.placeholder_name)
+        basic_layout.addRow(S.connection_edit.label_name, self.txt_name)
 
         self.cmb_type = QComboBox()
         self.cmb_type.addItems(["sqlserver", "mysql", "mariadb", "postgresql"])
         self.cmb_type.currentTextChanged.connect(self._on_db_type_changed)
-        basic_layout.addRow("Tipo de Banco:", self.cmb_type)
+        basic_layout.addRow(S.connection_edit.label_db_type, self.cmb_type)
 
         self.txt_host = QLineEdit()
-        self.txt_host.setPlaceholderText("localhost ou IP do servidor")
-        basic_layout.addRow("Host:", self.txt_host)
+        self.txt_host.setPlaceholderText(S.connection_edit.placeholder_host)
+        basic_layout.addRow(S.connection_edit.label_host, self.txt_host)
 
         self.spin_port = QSpinBox()
         self.spin_port.setRange(1, 65535)
         self.spin_port.setValue(1433)
-        basic_layout.addRow("Porta:", self.spin_port)
+        basic_layout.addRow(S.connection_edit.label_port, self.spin_port)
 
         self.txt_database = QLineEdit()
-        self.txt_database.setPlaceholderText("Nome do banco (opcional)")
-        basic_layout.addRow("Database:", self.txt_database)
+        self.txt_database.setPlaceholderText(S.connection_edit.placeholder_database)
+        basic_layout.addRow(S.connection_edit.label_database, self.txt_database)
 
         layout.addWidget(basic_group)
 
-        # Grupo de autenticação
+        # Authentication group
         auth_group = QFrame()
         auth_group.setFrameShape(QFrame.Shape.StyledPanel)
         auth_group_layout = QVBoxLayout(auth_group)
@@ -166,7 +167,7 @@ class ConnectionEditDialog(QDialog):
         if HAS_QTAWESOME:
             icon_label.setPixmap(qta.icon("mdi.lock", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("AUTENTICAÇÃO")
+        title = QLabel(S.connection_edit.section_authentication)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
@@ -175,34 +176,31 @@ class ConnectionEditDialog(QDialog):
         auth_layout = QFormLayout()
         auth_group_layout.addLayout(auth_layout)
 
-        self.chk_windows_auth = QCheckBox("Usar Windows Authentication")
+        self.chk_windows_auth = QCheckBox(S.connection_edit.checkbox_windows_auth)
         self.chk_windows_auth.stateChanged.connect(self._toggle_windows_auth)
         auth_layout.addRow(self.chk_windows_auth)
 
         self.txt_username = QLineEdit()
-        self.txt_username.setPlaceholderText("Usuário do banco")
-        auth_layout.addRow("Usuário:", self.txt_username)
+        self.txt_username.setPlaceholderText(S.connection_edit.placeholder_username)
+        auth_layout.addRow(S.connection_edit.label_username, self.txt_username)
 
         self.txt_password = QLineEdit()
         self.txt_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.txt_password.setPlaceholderText("Senha")
-        auth_layout.addRow("Senha:", self.txt_password)
+        self.txt_password.setPlaceholderText(S.connection_edit.placeholder_password)
+        auth_layout.addRow(S.connection_edit.label_password, self.txt_password)
 
-        self.chk_save_password = QCheckBox("Salvar senha (não recomendado)")
+        self.chk_save_password = QCheckBox(S.connection_edit.checkbox_save_password)
         auth_layout.addRow(self.chk_save_password)
 
-        # Opcao de SSL (apenas para SQL Server)
-        self.chk_trust_cert = QCheckBox("Confiar no certificado do servidor (TrustServerCertificate)")
-        self.chk_trust_cert.setChecked(False)  # Padrao: nao confiar (mais seguro)
-        self.chk_trust_cert.setToolTip(
-            "Marque está opção se o servidor não possui certificado SSL válido.\n"
-            "Comum em ambientes de desenvolvimento ou servidores internos."
-        )
+        # SSL option (SQL Server only)
+        self.chk_trust_cert = QCheckBox(S.connection_edit.checkbox_trust_cert)
+        self.chk_trust_cert.setChecked(False)  # Default: don't trust (more secure)
+        self.chk_trust_cert.setToolTip(S.connection_edit.tooltip_trust_cert)
         auth_layout.addRow(self.chk_trust_cert)
 
         layout.addWidget(auth_group)
 
-        # Grupo de organização
+        # Organization group
         org_group = QFrame()
         org_group.setFrameShape(QFrame.Shape.StyledPanel)
         org_group_layout = QVBoxLayout(org_group)
@@ -214,7 +212,7 @@ class ConnectionEditDialog(QDialog):
         if HAS_QTAWESOME:
             icon_label.setPixmap(qta.icon("mdi.folder-cog", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("ORGANIZAÇÃO")
+        title = QLabel(S.connection_edit.section_organization)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
@@ -224,31 +222,31 @@ class ConnectionEditDialog(QDialog):
         org_group_layout.addLayout(org_layout)
 
         self.cmb_group = QComboBox()
-        self.cmb_group.addItem("[Sem grupo]", "")
+        self.cmb_group.addItem(S.connection_edit.combo_no_group, "")
         for group_name in self.groups.keys():
             self.cmb_group.addItem(group_name, group_name)
-        org_layout.addRow("Grupo:", self.cmb_group)
+        org_layout.addRow(S.connection_edit.label_group, self.cmb_group)
 
-        # Cor
+        # Color
         color_layout = QHBoxLayout()
-        self.lbl_color = QLabel("Nenhuma")
+        self.lbl_color = QLabel(S.connection_edit.combo_none_color)
         self.lbl_color.setMinimumWidth(100)
         self.lbl_color.setStyleSheet("border: 1px solid #555; padding: 3px;")
-        btn_choose_color = QPushButton("Escolher Cor")
+        btn_choose_color = QPushButton(S.connection_edit.btn_choose_color)
         btn_choose_color.clicked.connect(self._choose_color)
-        btn_clear_color = QPushButton("Limpar")
+        btn_clear_color = QPushButton(S.connection_edit.btn_clear_color)
         btn_clear_color.clicked.connect(self._clear_color)
         color_layout.addWidget(self.lbl_color)
         color_layout.addWidget(btn_choose_color)
         color_layout.addWidget(btn_clear_color)
-        org_layout.addRow("Cor:", color_layout)
+        org_layout.addRow(S.connection_edit.label_color, color_layout)
 
         layout.addWidget(org_group)
 
-        # Botões
+        # Buttons
         buttons_layout = QHBoxLayout()
 
-        btn_test = QPushButton(" Testar Conexão")
+        btn_test = QPushButton(S.connection_edit.btn_test_connection)
         btn_test.setObjectName("btnTest")
         if HAS_QTAWESOME:
             btn_test.setIcon(qta.icon("mdi.lan-connect", color="white"))
@@ -257,23 +255,23 @@ class ConnectionEditDialog(QDialog):
 
         buttons_layout.addStretch()
 
-        btn_save = QPushButton(" Salvar")
+        btn_save = QPushButton(S.connection_edit.btn_save)
         if HAS_QTAWESOME:
             btn_save.setIcon(qta.icon("mdi.content-save", color="white"))
         btn_save.clicked.connect(self._on_save)
         buttons_layout.addWidget(btn_save)
 
-        btn_cancel = QPushButton("Cancelar")
+        btn_cancel = QPushButton(S.connection_edit.btn_cancel)
         btn_cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(btn_cancel)
 
         layout.addLayout(buttons_layout)
 
-        # Ajustes iniciais
+        # Initial adjustments
         self._toggle_windows_auth_visibility()
 
     def _load_config(self):
-        """Carrega configuração atual"""
+        """Loads current configuration"""
         self.txt_name.setText(self.connection_name)
 
         db_type = self.config.get("db_type", "sqlserver")
@@ -288,7 +286,7 @@ class ConnectionEditDialog(QDialog):
         use_windows_auth = self.config.get("use_windows_auth", False)
         self.chk_windows_auth.setChecked(use_windows_auth)
 
-        # Trust Server Certificate (padrao: False para seguranca)
+        # Trust Server Certificate (default: False for security)
         trust_cert = self.config.get("trust_server_certificate", False)
         self.chk_trust_cert.setChecked(trust_cert)
 
@@ -298,13 +296,13 @@ class ConnectionEditDialog(QDialog):
             self.txt_password.setText(self.config.get("password", ""))
             self.chk_save_password.setChecked(True)
 
-        # Grupo
+        # Group
         group = self.config.get("group", "")
         index = self.cmb_group.findData(group)
         if index >= 0:
             self.cmb_group.setCurrentIndex(index)
 
-        # Cor
+        # Color
         if self.selected_color:
             self._update_color_label()
 
@@ -312,24 +310,24 @@ class ConnectionEditDialog(QDialog):
         self._toggle_windows_auth_visibility()
 
     def _on_db_type_changed(self):
-        """Ao mudar tipo de banco"""
+        """When database type changes"""
         db_type = self.cmb_type.currentText()
 
-        # Ajustar porta padrão
+        # Adjust default port
         default_ports = {"sqlserver": 1433, "mysql": 3306, "mariadb": 3306, "postgresql": 5432}
         self.spin_port.setValue(default_ports.get(db_type, 1433))
 
         self._toggle_windows_auth_visibility()
 
     def _toggle_windows_auth(self):
-        """Toggle de campos de autenticação"""
+        """Toggle authentication fields"""
         is_windows_auth = self.chk_windows_auth.isChecked()
         self.txt_username.setEnabled(not is_windows_auth)
         self.txt_password.setEnabled(not is_windows_auth)
         self.chk_save_password.setEnabled(not is_windows_auth)
 
     def _toggle_windows_auth_visibility(self):
-        """Mostra/esconde Windows Auth e Trust Cert baseado no tipo de banco"""
+        """Shows/hides Windows Auth and Trust Cert based on database type"""
         is_sqlserver = self.cmb_type.currentText() == "sqlserver"
         self.chk_windows_auth.setVisible(is_sqlserver)
         self.chk_trust_cert.setVisible(is_sqlserver)
@@ -337,22 +335,22 @@ class ConnectionEditDialog(QDialog):
             self.chk_windows_auth.setChecked(False)
 
     def _choose_color(self):
-        """Escolhe cor para a conexão"""
+        """Chooses color for the connection"""
         current_color = QColor(self.selected_color) if self.selected_color else QColor()
-        color = QColorDialog.getColor(current_color, self, "Escolher Cor")
+        color = QColorDialog.getColor(current_color, self, "Choose Color")
 
         if color.isValid():
             self.selected_color = color.name()
             self._update_color_label()
 
     def _clear_color(self):
-        """Remove cor"""
+        """Removes color"""
         self.selected_color = ""
-        self.lbl_color.setText("Nenhuma")
+        self.lbl_color.setText(S.connection_edit.combo_none_color)
         self.lbl_color.setStyleSheet("border: 1px solid #555; padding: 3px;")
 
     def _update_color_label(self):
-        """Atualiza label de cor"""
+        """Updates color label"""
         if self.selected_color:
             self.lbl_color.setText(self.selected_color)
             self.lbl_color.setStyleSheet(
@@ -360,13 +358,13 @@ class ConnectionEditDialog(QDialog):
             )
 
     def _test_connection(self):
-        """Testa a conexao com as configuracoes atuais em background"""
-        # Criar loading dialog com botao cancelar
+        """Tests the connection with current settings in background"""
+        # Create loading dialog with cancel button
         db_name = self.txt_database.text() or self.txt_host.text()
         self.loading_dialog = QProgressDialog(self)
-        self.loading_dialog.setWindowTitle("Testando Conexao")
-        self.loading_dialog.setLabelText(f"Testando conexao com {db_name}...")
-        self.loading_dialog.setCancelButtonText("Cancelar")
+        self.loading_dialog.setWindowTitle(S.connection_edit.dialog_testing_title)
+        self.loading_dialog.setLabelText(S.connection_edit.dialog_testing_msg.format(name=db_name))
+        self.loading_dialog.setCancelButtonText(S.connection_edit.btn_cancel)
         self.loading_dialog.setRange(0, 0)  # Indeterminate progress
         self.loading_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.loading_dialog.setWindowFlags(
@@ -376,7 +374,7 @@ class ConnectionEditDialog(QDialog):
         self.loading_dialog.canceled.connect(self._cancel_test_connection)
         self.loading_dialog.show()
 
-        # Criar e iniciar worker
+        # Create and start worker
         self._test_cancelled = False
         self.test_worker = ConnectionTestWorker(
             db_type=self.cmb_type.currentText(),
@@ -392,40 +390,40 @@ class ConnectionEditDialog(QDialog):
         self.test_worker.start()
 
     def _cancel_test_connection(self):
-        """Cancela o teste de conexao em andamento"""
+        """Cancels the ongoing connection test"""
         self._test_cancelled = True
         if hasattr(self, 'test_worker') and self.test_worker.isRunning():
             self.test_worker.terminate()
             self.test_worker.wait(2000)
 
     def _on_test_finished(self, success: bool, message: str):
-        """Callback quando teste de conexao termina"""
+        """Callback when connection test finishes"""
         if self._test_cancelled:
-            return  # Ignorar resultado se foi cancelado
+            return  # Ignore result if cancelled
 
         self.loading_dialog.close()
 
         if success:
-            QMessageBox.information(self, "Sucesso", message)
+            QMessageBox.information(self, S.dialogs.success, message)
         else:
-            QMessageBox.critical(self, "Erro", message)
+            QMessageBox.critical(self, S.dialogs.error, message)
 
     def _on_save(self):
-        """Valida e salva"""
+        """Validates and saves"""
         name = self.txt_name.text().strip()
 
         if not name:
-            QMessageBox.warning(self, "Atenção", "Por favor, informe um nome para a conexão.")
+            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_name_required)
             return
 
         if not self.txt_host.text().strip():
-            QMessageBox.warning(self, "Atenção", "Por favor, informe o host.")
+            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_host_required)
             return
 
         self.accept()
 
     def get_result(self):
-        """Retorna nome e configuração editados"""
+        """Returns edited name and configuration"""
         name = self.txt_name.text().strip()
 
         config = {
@@ -447,10 +445,10 @@ class ConnectionEditDialog(QDialog):
         return name, config
 
     def get_connection_name(self) -> str:
-        """Retorna o nome da conexão (compatibilidade)"""
+        """Returns the connection name (compatibility)"""
         return self.txt_name.text().strip()
 
     def get_config(self) -> dict:
-        """Retorna a configuração (compatibilidade)"""
+        """Returns the configuration (compatibility)"""
         _, config = self.get_result()
         return config

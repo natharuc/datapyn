@@ -1,5 +1,5 @@
 """
-Gerenciador de múltiplas conexões de banco de dados
+Multiple database connections manager
 """
 
 from typing import Dict, Optional, List
@@ -11,7 +11,7 @@ from datetime import datetime
 
 
 class ConnectionManager:
-    """Gerencia múltiplas conexões salvas com suporte a grupos/pastas"""
+    """Manages multiple saved connections with groups/folders support"""
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
@@ -25,19 +25,19 @@ class ConnectionManager:
         self.active_connection: Optional[str] = None
 
     def _load_configs(self) -> dict:
-        """Carrega configurações salvas"""
+        """Load saved configurations"""
         if self.config_path.exists():
             with open(self.config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Migrar formato antigo para novo (com grupos)
+                # Migrate old format to new (with groups)
                 if isinstance(data, dict) and "groups" not in data:
-                    # Formato antigo: apenas dict de conexões
+                    # Old format: just dict of connections
                     return {"groups": {}, "connections": data}
                 return data
         return {"groups": {}, "connections": {}}
 
     def _save_configs(self):
-        """Salva configurações"""
+        """Save configurations"""
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(self.saved_configs, f, indent=2)
 
@@ -56,7 +56,7 @@ class ConnectionManager:
         color: str = "",
         trust_server_certificate: bool = False,
     ):
-        """Salva uma configuração de conexão"""
+        """Save a connection configuration"""
         config = {
             "db_type": db_type,
             "host": host,
@@ -72,18 +72,18 @@ class ConnectionManager:
         }
 
         if save_password and password:
-            # TODO: Implementar armazenamento seguro de senha (keyring)
+            # TODO: Implement secure password storage (keyring)
             config["password"] = password
 
         self.saved_configs["connections"][name] = config
         self._save_configs()
 
     def get_saved_connections(self) -> list:
-        """Retorna lista de conexões salvas"""
+        """Return list of saved connections"""
         return list(self.saved_configs.get("connections", {}).keys())
 
     def get_connection_config(self, name: str) -> Optional[dict]:
-        """Retorna configuração de uma conexão salva"""
+        """Return configuration of a saved connection"""
         return self.saved_configs.get("connections", {}).get(name)
 
     def update_connection_config(
@@ -102,17 +102,17 @@ class ConnectionManager:
         color: str = "",
         trust_server_certificate: bool = False,
     ):
-        """Atualiza uma configuração de conexão existente"""
+        """Update an existing connection configuration"""
         if old_name in self.saved_configs.get("connections", {}):
-            # Manter data de criação
+            # Keep creation date
             old_config = self.saved_configs["connections"][old_name]
             created_at = old_config.get("created_at", datetime.now().isoformat())
 
-            # Remover conexão antiga se nome mudou
+            # Remove old connection if name changed
             if old_name != new_name:
                 del self.saved_configs["connections"][old_name]
 
-            # Salvar com novo nome
+            # Save with new name
             self.save_connection_config(
                 new_name,
                 db_type,
@@ -128,18 +128,18 @@ class ConnectionManager:
                 trust_server_certificate,
             )
 
-            # Restaurar data de criação
+            # Restore creation date
             self.saved_configs["connections"][new_name]["created_at"] = created_at
             self._save_configs()
 
     def delete_connection_config(self, name: str):
-        """Remove uma configuração salva"""
+        """Remove a saved configuration"""
         if name in self.saved_configs.get("connections", {}):
             del self.saved_configs["connections"][name]
             self._save_configs()
 
     def create_group(self, name: str, color: str = "", parent: str = ""):
-        """Cria um grupo/pasta para organizar conexões"""
+        """Create a group/folder to organize connections"""
         if "groups" not in self.saved_configs:
             self.saved_configs["groups"] = {}
 
@@ -151,13 +151,13 @@ class ConnectionManager:
         self._save_configs()
 
     def get_groups(self) -> Dict[str, dict]:
-        """Retorna todos os grupos"""
+        """Return all groups"""
         return self.saved_configs.get("groups", {})
 
     def delete_group(self, name: str):
-        """Remove um grupo (move conexões para raiz)"""
+        """Remove a group (move connections to root)"""
         if name in self.saved_configs.get("groups", {}):
-            # Move todas as conexões deste grupo para raiz
+            # Move all connections from this group to root
             for conn_name, conn_config in self.saved_configs.get("connections", {}).items():
                 if conn_config.get("group") == name:
                     conn_config["group"] = ""
@@ -166,20 +166,20 @@ class ConnectionManager:
             self._save_configs()
 
     def rename_group(self, old_name: str, new_name: str):
-        """Renomeia um grupo"""
+        """Rename a group"""
         if old_name in self.saved_configs.get("groups", {}):
-            # Atualizar referências nas conexões
+            # Update references in connections
             for conn_config in self.saved_configs.get("connections", {}).values():
                 if conn_config.get("group") == old_name:
                     conn_config["group"] = new_name
 
-            # Renomear grupo
+            # Rename group
             self.saved_configs["groups"][new_name] = self.saved_configs["groups"][old_name]
             del self.saved_configs["groups"][old_name]
             self._save_configs()
 
     def get_connections_by_group(self, group: str = None) -> Dict[str, dict]:
-        """Retorna conexões de um grupo específico (None = sem grupo)"""
+        """Return connections from a specific group (None = no group)"""
         group = group or ""
         return {
             name: config
@@ -188,7 +188,7 @@ class ConnectionManager:
         }
 
     def mark_connection_used(self, name: str):
-        """Marca última vez que conexão foi usada"""
+        """Mark last time connection was used"""
         if name in self.saved_configs.get("connections", {}):
             self.saved_configs["connections"][name]["last_used"] = datetime.now().isoformat()
             self._save_configs()
@@ -196,7 +196,7 @@ class ConnectionManager:
     def create_connection(
         self, name: str, db_type: str, host: str, port: int, database: str, username: str, password: str, **kwargs
     ) -> DatabaseConnector:
-        """Cria uma nova conexão"""
+        """Create a new connection"""
         connector = DatabaseConnector()
         connector.connect(db_type, host, port, database, username, password, **kwargs)
         self.connections[name] = connector
@@ -204,22 +204,22 @@ class ConnectionManager:
         return connector
 
     def get_connection(self, name: str) -> Optional[DatabaseConnector]:
-        """Retorna uma conexão existente"""
+        """Return an existing connection"""
         return self.connections.get(name)
 
     def get_active_connection(self) -> Optional[DatabaseConnector]:
-        """Retorna a conexão ativa"""
+        """Return active connection"""
         if self.active_connection:
             return self.connections.get(self.active_connection)
         return None
 
     def set_active_connection(self, name: str):
-        """Define a conexão ativa"""
+        """Set active connection"""
         if name in self.connections:
             self.active_connection = name
 
     def close_connection(self, name: str):
-        """Fecha uma conexão"""
+        """Close a connection"""
         if name in self.connections:
             self.connections[name].disconnect()
             del self.connections[name]
@@ -227,6 +227,6 @@ class ConnectionManager:
                 self.active_connection = None
 
     def close_all(self):
-        """Fecha todas as conexões"""
+        """Close all connections"""
         for name in list(self.connections.keys()):
             self.close_connection(name)

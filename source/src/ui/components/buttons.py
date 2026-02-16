@@ -1,8 +1,8 @@
 """
-Botões estilizados reutilizáveis
+Reusable styled buttons
 
-DEPRECATED: Use src.design_system.Button ao invés deste
-Mantido para compatibilidade com código legado.
+DEPRECATED: Use src.design_system.Button instead
+Maintained for legacy code compatibility.
 """
 
 from src.design_system import (
@@ -173,42 +173,42 @@ class StyledButton(QPushButton):
 
 
 class PrimaryButton(StyledButton):
-    """Botão primário (ação principal)"""
+    """Primary button (main action)"""
 
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
         super().__init__(text, icon_name, "primary", parent)
 
 
 class SecondaryButton(StyledButton):
-    """Botão secundário"""
+    """Secondary button"""
 
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
         super().__init__(text, icon_name, "secondary", parent)
 
 
 class DangerButton(StyledButton):
-    """Botão de perigo (ações destrutivas)"""
+    """Danger button (destructive actions)"""
 
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
         super().__init__(text, icon_name, "danger", parent)
 
 
 class SuccessButton(StyledButton):
-    """Botão de sucesso"""
+    """Success button"""
 
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
         super().__init__(text, icon_name, "success", parent)
 
 
 class GhostButton(StyledButton):
-    """Botão fantasma (sem background)"""
+    """Ghost button (no background)"""
 
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
         super().__init__(text, icon_name, "ghost", parent)
 
 
 class ToolbarButton(StyledButton):
-    """Botão para toolbar"""
+    """Toolbar button"""
 
     def __init__(self, text: str = "", icon_name: str = None, parent=None):
         super().__init__(text, icon_name, "toolbar", parent)

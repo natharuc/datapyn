@@ -7,6 +7,8 @@ import re
 from typing import Any, Dict
 import pandas as pd
 
+from src.language import S
+
 
 class MixedLanguageExecutor:
     """Executor que permite misturar SQL e Python"""
@@ -96,7 +98,7 @@ class MixedLanguageExecutor:
         Executa SQL e retorna DataFrame
         """
         if not self.db_connector or not self.db_connector.is_connected():
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError(S.mixed_executor.no_connection)
 
         # Executar query
         df = self.db_connector.execute_query(sql)
@@ -105,12 +107,12 @@ class MixedLanguageExecutor:
 
     def _execute_statement(self, sql: str) -> int:
         """
-        Função execute() disponível no código
+        Funcao execute() disponivel no codigo
         Executa statement SQL (INSERT, UPDATE, DELETE)
-        Retorna número de linhas afetadas
+        Retorna numero de linhas afetadas
         """
         if not self.db_connector or not self.db_connector.is_connected():
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError(S.mixed_executor.no_connection)
 
         # Executar statement
         rows = self.db_connector.execute_statement(sql)
@@ -147,7 +149,7 @@ class MixedLanguageExecutor:
         queries = self.extract_queries(code)
 
         if not queries:
-            return (False, "Nenhuma query encontrada com sintaxe {{ SQL }}")
+            return (False, S.mixed_executor.no_query_found)
 
         # Processar código
         processed_code, _ = self._process_double_brace_syntax(code)
@@ -156,7 +158,7 @@ class MixedLanguageExecutor:
         try:
             compile(processed_code, "<string>", "exec")
         except SyntaxError as e:
-            return (False, f"Erro de sintaxe Python: {e}")
+            return (False, S.mixed_executor.syntax_error.format(error=e))
 
         return (True, "")
 

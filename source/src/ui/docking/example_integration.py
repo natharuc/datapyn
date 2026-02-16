@@ -1,8 +1,8 @@
 """
-Exemplo de integração do sistema de docking com painéis existentes
+Example integration of docking system with existing panels
 
 Este arquivo mostra como integrar o novo sistema de docking
-com os painéis existentes: Results, Output, Variables
+with existing panels: Results, Output, Variables
 """
 
 from PyQt6.QtWidgets import (
@@ -115,10 +115,10 @@ class MockVariablesPanel(QWidget):
         header.setStyleSheet("font-weight: bold; padding: 5px;")
         layout.addWidget(header)
 
-        # Lista de variáveis
+        # Variables list
         self.variables_list = QListWidget()
 
-        # Variáveis de exemplo
+        # Example variables
         variables = [
             "df - DataFrame (3x2)",
             "df2 - DataFrame (1x2)",
@@ -134,7 +134,7 @@ class MockVariablesPanel(QWidget):
 
 
 class MockEditorArea(QWidget):
-    """Mock da área de editores para testar docking"""
+    """Mock editor area for testing docking"""
 
     def __init__(self):
         super().__init__()
@@ -164,7 +164,7 @@ class MockEditorArea(QWidget):
             }
         """)
 
-        # Código de exemplo
+        # Example code
         example_code = """
 import pandas as pd
 import numpy as np
@@ -172,7 +172,7 @@ import numpy as np
 # Carrega dados
 df = pd.read_csv('data.csv')
 
-# Análise exploratória
+# Exploratory analysis
 print(df.info())
 print(df.describe())
 
@@ -180,7 +180,7 @@ print(df.describe())
 df_filtered = df[df['CEP'] == '28400-000']
 print(f"Registros filtrados: {len(df_filtered)}")
 
-# Visualização
+# Visualization
 df_filtered.head(10)
         """
 
@@ -194,7 +194,7 @@ class DockingExampleWindow(DockingMainWindow):
 
     Esta classe mostra como:
     1. Herdar de DockingMainWindow
-    2. Adicionar painéis dockable
+    2. Add dockable panels
     3. Configurar layout inicial
     4. Permitir reposicionamento
     """
@@ -206,24 +206,24 @@ class DockingExampleWindow(DockingMainWindow):
         self._setup_dockable_panels()
 
     def _setup_content(self):
-        """Configura conteúdo central (editores)"""
+        """Configure central content (editors)"""
         editor_area = MockEditorArea()
         self.set_central_content(editor_area)
 
     def _setup_dockable_panels(self):
-        """Configura painéis dockable"""
+        """Configure dockable panels"""
 
-        # Results Panel (bottom por padrão)
+        # Results Panel (bottom by default)
         results_widget = MockResultsViewer()
         self.add_dockable_panel(name="results", widget=results_widget, title="Results", position="bottom", visible=True)
 
-        # Output Panel (bottom por padrão, mesma área que Results)
+        # Output Panel (bottom by default, same area as Results)
         output_widget = MockOutputPanel()
         results_panel = self.get_panel("results")
         if results_panel:
             results_panel.add_tab(output_widget, "Output")
 
-        # Variables Panel (right por padrão)
+        # Variables Panel (right by default)
         variables_widget = MockVariablesPanel()
         self.add_dockable_panel(
             name="variables", widget=variables_widget, title="Variables", position="right", visible=True
@@ -239,15 +239,15 @@ class DockingExampleWindow(DockingMainWindow):
         print(f"Panel '{name}' {status}")
 
     def _on_layout_restored(self):
-        """Callback quando layout é restaurado"""
+        """Callback when layout is restored"""
         print("Layout restored from saved configuration")
 
 
 def main():
-    """Função principal para testar o sistema de docking"""
+    """Main function to test docking system"""
     app = QApplication(sys.argv)
 
-    # Configura estilo escuro básico
+    # Configure basic dark style
     app.setStyle("Fusion")
 
     dark_palette = """
@@ -281,14 +281,14 @@ def main():
     window = DockingExampleWindow()
     window.show()
 
-    # Instrução para usuário
+    # User instructions
     print("\n" + "=" * 60)
     print("DOCKING SYSTEM DEMO")
     print("=" * 60)
     print("- Arraste as abas (Results, Output, Variables) para reposicionar")
-    print("- Use View > Panels menu para mostrar/esconder painéis")
-    print("- Use View > Reset Layout para restaurar layout padrão")
-    print("- Layout é salvo automaticamente")
+    print("- Use View > Panels menu to show/hide panels")
+    print("- Use View > Reset Layout to restore default layout")
+    print("- Layout is saved automatically")
     print("=" * 60 + "\n")
 
     sys.exit(app.exec())

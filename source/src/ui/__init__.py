@@ -1,10 +1,10 @@
 """
-UI do DataPyn
+DataPyn UI
 
-Estrutura componentizada:
-- components/: Widgets reutilizáveis (ResultsViewer, SessionWidget)
-- dialogs/: Diálogos modais (ConnectionEditDialog, SettingsDialog)
-- main_window.py: Janela principal
+Componentized structure:
+- components/: Reusable widgets (ResultsViewer, SessionWidget)
+- dialogs/: Modal dialogs (ConnectionEditDialog, SettingsDialog)
+- main_window.py: Main window
 """
 
 from .main_window import MainWindow

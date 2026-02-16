@@ -6,9 +6,11 @@ from PyQt6.QtWidgets import QStatusBar, QLabel
 from PyQt6.QtCore import QTimer, QElapsedTimer
 import qtawesome as qta
 
+from src.language import S
+
 
 class MainStatusBar(QStatusBar):
-    """StatusBar principal"""
+    """Main status bar"""
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -19,7 +21,7 @@ class MainStatusBar(QStatusBar):
         self._setup_timer()
 
     def _setup_style(self):
-        """Configura estilo da statusbar"""
+        """Configure statusbar style"""
         self.setStyleSheet("""
             QStatusBar {
                 background-color: #252526;
@@ -34,27 +36,27 @@ class MainStatusBar(QStatusBar):
         """)
 
     def _update_connection_icon(self, connected: bool, text: str = ""):
-        """Atualiza ícone de conexão"""
+        """Update connection icon"""
         if connected:
             icon = qta.icon("mdi.database-check", color="#4caf50")
-            label = f" {text}" if text else " Conectado"
+            label = f" {text}" if text else f" {S.status.connected}"
         else:
             icon = qta.icon("mdi.database-off", color="#757575")
-            label = " Desconectado"
+            label = f" {S.status.disconnected}"
 
         self.connection_label.setPixmap(icon.pixmap(16, 16))
         self.connection_label.setText(label)
 
     def _setup_widgets(self):
-        # Acao
-        self.action_label = QLabel("Pronto")
+        # Action
+        self.action_label = QLabel(S.status.ready)
         self.addWidget(self.action_label, 1)
 
-        # Arquivo ativo (exibe caminho do arquivo aberto)
+        # Active file (displays open file path)
         self.file_label = QLabel("")
         self.addPermanentWidget(self.file_label)
 
-        # Conexao com icone
+        # Connection with icon
         self.connection_label = QLabel()
         self._update_connection_icon(False)
         self.addPermanentWidget(self.connection_label)
@@ -64,10 +66,10 @@ class MainStatusBar(QStatusBar):
         self.addPermanentWidget(self.timer_label)
 
         # Cursor
-        self.cursor_label = QLabel("Ln 1, Col 1")
+        self.cursor_label = QLabel(S.status.cursor_position.format(line=1, col=1))
         self.addPermanentWidget(self.cursor_label)
 
-        # Timer para restaurar estilo apos feedback
+        # Timer to restore style after feedback
         self._feedback_timer = QTimer()
         self._feedback_timer.setSingleShot(True)
         self._feedback_timer.timeout.connect(self._restore_action_style)
@@ -79,13 +81,13 @@ class MainStatusBar(QStatusBar):
         self.update_timer.setInterval(100)
 
     def _update_connection_icon(self, connected: bool, text: str = ""):
-        """Atualiza ícone de conexão"""
+        """Update connection icon"""
         if connected:
             icon = qta.icon("mdi.database-check", color="#4caf50")
-            label = f" {text}" if text else " Conectado"
+            label = f" {text}" if text else f" {S.status.connected}"
         else:
             icon = qta.icon("mdi.database-off", color="#757575")
-            label = " Desconectado"
+            label = f" {S.status.disconnected}"
 
         self.connection_label.setPixmap(icon.pixmap(16, 16))
         self.connection_label.setText(label)
@@ -94,7 +96,7 @@ class MainStatusBar(QStatusBar):
         self.action_label.setText(text)
 
     def set_file_info(self, file_path: str = ""):
-        """Exibe caminho do arquivo ativo na statusbar"""
+        """Display active file path in statusbar"""
         if file_path:
             self.file_label.setText(f"  {file_path}")
             self.file_label.setToolTip(file_path)
@@ -124,7 +126,7 @@ class MainStatusBar(QStatusBar):
         """)
 
     def set_connection(self, connection_name: str = None, db_type: str = None):
-        """Define conexão"""
+        """Set connection"""
         if connection_name:
             text = f"{connection_name}"
             if db_type:
@@ -134,7 +136,7 @@ class MainStatusBar(QStatusBar):
             self._update_connection_icon(False)
 
     def set_cursor_position(self, line: int, column: int):
-        self.cursor_label.setText(f"Ln {line}, Col {column}")
+        self.cursor_label.setText(S.status.cursor_position.format(line=line, col=column))
 
     def start_timer(self):
         self.elapsed_timer.start()

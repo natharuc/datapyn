@@ -1,7 +1,7 @@
 """
-Loading Component - Indicador de carregamento
+Loading Component - Loading indicator
 
-Estados visuais para operações assíncronas.
+Visual states for asynchronous operations.
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar
@@ -13,14 +13,14 @@ from ..design_system import get_colors, TYPOGRAPHY, SPACING
 
 class LoadingSpinner(QWidget):
     """
-    Spinner de carregamento simples
+    Simple loading spinner
 
-    Exemplo:
-        spinner = LoadingSpinner(message="Carregando...")
+    Example:
+        spinner = LoadingSpinner(message="Loading...")
         spinner.start()
     """
 
-    def __init__(self, message: str = "Carregando...", parent=None):
+    def __init__(self, message: str = "Loading...", parent=None):
         super().__init__(parent)
 
         self.message = message
@@ -32,21 +32,21 @@ class LoadingSpinner(QWidget):
         self._timer.timeout.connect(self._rotate)
 
     def _setup_ui(self):
-        """Configura UI"""
+        """Sets up UI"""
         colors = get_colors()
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setSpacing(SPACING.space_3)
 
-        # Spinner visual (simplificado - texto animado)
+        # Spinner visual (simplified - animated text)
         self.spinner_label = QLabel("⏳")
         font = QFont(TYPOGRAPHY.font_family_primary)
         font.setPixelSize(32)
         self.spinner_label.setFont(font)
         self.spinner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Mensagem
+        # Message
         self.message_label = QLabel(self.message)
         msg_font = QFont(TYPOGRAPHY.font_family_primary)
         msg_font.setPixelSize(TYPOGRAPHY.text_base)
@@ -58,37 +58,37 @@ class LoadingSpinner(QWidget):
         layout.addWidget(self.message_label)
 
     def _rotate(self):
-        """Anima spinner"""
+        """Animates spinner"""
         frames = ["⏳", "⌛"]
         self._current_frame = (self._current_frame + 1) % len(frames)
         self.spinner_label.setText(frames[self._current_frame])
 
     def start(self):
-        """Inicia animação"""
+        """Starts animation"""
         if not self._is_spinning:
             self._is_spinning = True
             self._timer.start(500)  # 500ms
 
     def stop(self):
-        """Para animação"""
+        """Stops animation"""
         if self._is_spinning:
             self._is_spinning = False
             self._timer.stop()
             self.spinner_label.setText("OK")
 
     def set_message(self, message: str):
-        """Atualiza mensagem"""
+        """Updates message"""
         self.message = message
         self.message_label.setText(message)
 
 
 class ProgressIndicator(QWidget):
     """
-    Barra de progresso com mensagem
+    Progress bar with message
 
-    Exemplo:
+    Example:
         progress = ProgressIndicator()
-        progress.set_progress(50, "Processando...")
+        progress.set_progress(50, "Processing...")
     """
 
     def __init__(self, parent=None):
@@ -96,13 +96,13 @@ class ProgressIndicator(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        """Configura UI"""
+        """Sets up UI"""
         colors = get_colors()
 
         layout = QVBoxLayout(self)
         layout.setSpacing(SPACING.space_2)
 
-        # Mensagem
+        # Message
         self.message_label = QLabel()
         font = QFont(TYPOGRAPHY.font_family_primary)
         font.setPixelSize(TYPOGRAPHY.text_sm)
@@ -115,7 +115,7 @@ class ProgressIndicator(QWidget):
         self.progress_bar.setFixedHeight(8)
         self.progress_bar.setTextVisible(False)
 
-        # Estilo moderno para progress bar
+        # Modern style for progress bar
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
                 border: none;
@@ -132,29 +132,29 @@ class ProgressIndicator(QWidget):
 
     def set_progress(self, value: int, message: str = ""):
         """
-        Define progresso
+        Sets progress
 
         Args:
             value: 0-100
-            message: Mensagem descritiva
+            message: Descriptive message
         """
         self.progress_bar.setValue(value)
         if message:
             self.message_label.setText(message)
 
     def reset(self):
-        """Reseta progresso"""
+        """Resets progress"""
         self.progress_bar.setValue(0)
         self.message_label.setText("")
 
 
 class LoadingOverlay(QWidget):
     """
-    Overlay de carregamento que cobre todo o parent
+    Loading overlay that covers the entire parent
 
-    Exemplo:
+    Example:
         overlay = LoadingOverlay(parent_widget)
-        overlay.show_loading("Conectando...")
+        overlay.show_loading("Connecting...")
         overlay.hide_loading()
     """
 
@@ -165,17 +165,17 @@ class LoadingOverlay(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        """Configura UI"""
+        """Sets up UI"""
         colors = get_colors()
 
-        # Fundo semi-transparente
+        # Semi-transparent background
         self.setStyleSheet(f"""
             LoadingOverlay {{
                 background-color: {colors.bg_overlay};
             }}
         """)
 
-        # Layout centralizado
+        # Centered layout
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -183,24 +183,24 @@ class LoadingOverlay(QWidget):
         self.spinner = LoadingSpinner()
         layout.addWidget(self.spinner)
 
-    def show_loading(self, message: str = "Carregando..."):
-        """Mostra overlay com mensagem"""
+    def show_loading(self, message: str = "Loading..."):
+        """Shows overlay with message"""
         self.spinner.set_message(message)
         self.spinner.start()
         self.setVisible(True)
-        self.raise_()  # Traz para frente
+        self.raise_()  # Bring to front
 
-        # Ajusta tamanho para cobrir parent
+        # Adjust size to cover parent
         if self.parent():
             self.resize(self.parent().size())
 
     def hide_loading(self):
-        """Esconde overlay"""
+        """Hides overlay"""
         self.spinner.stop()
         self.setVisible(False)
 
     def resizeEvent(self, event):
-        """Ajusta tamanho quando parent redimensiona"""
+        """Adjusts size when parent resizes"""
         if self.parent():
             self.resize(self.parent().size())
         super().resizeEvent(event)

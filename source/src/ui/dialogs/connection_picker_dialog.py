@@ -1,8 +1,8 @@
 """
-Dialogo simples para selecionar uma conexao salva.
+Simple dialog for selecting a saved connection.
 
-Reutiliza a lista de conexoes (DraggableConnectionList + ConnectionItem)
-do painel lateral. O usuario clica 2x para selecionar.
+Reuses the connection list (DraggableConnectionList + ConnectionItem)
+from the sidebar panel. The user double-clicks to select.
 """
 
 from PyQt6.QtWidgets import (
@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 
 from src.core.theme_manager import ThemeManager
+from src.language import S
 
 try:
     import qtawesome as qta
@@ -25,7 +26,7 @@ except ImportError:
 
 
 class ConnectionPickerDialog(QDialog):
-    """Dialogo para selecionar uma conexao salva (duplo clique)"""
+    """Dialog for selecting a saved connection (double click)"""
 
     def __init__(self, connection_manager, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -34,7 +35,7 @@ class ConnectionPickerDialog(QDialog):
         self.selected_connection = None
         self._selected_config = None
 
-        self.setWindowTitle("Selecionar Conexao")
+        self.setWindowTitle(S.connection_picker.title)
         self.resize(380, 420)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
 
@@ -42,7 +43,7 @@ class ConnectionPickerDialog(QDialog):
         self._load_connections()
 
     def _setup_ui(self):
-        """Configura interface"""
+        """Sets up the UI"""
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
         layout = QVBoxLayout(self)
@@ -55,18 +56,18 @@ class ConnectionPickerDialog(QDialog):
             icon_label = QLabel()
             icon_label.setPixmap(qta.icon("mdi.database-search", color="#64b5f6").pixmap(20, 20))
             header.addWidget(icon_label)
-        title = QLabel("SELECIONE UMA CONEXAO")
+        title = QLabel(S.connection_picker.header)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
-        # Instrucao
-        hint = QLabel("Clique duas vezes para selecionar")
+        # Instruction
+        hint = QLabel(S.connection_picker.hint)
         hint.setStyleSheet("color: #666; font-size: 11px; font-style: italic;")
         layout.addWidget(hint)
 
-        # Lista de conexoes - reutiliza componentes do connection_panel
+        # Connection list - reuses components from connection_panel
         from src.ui.components.connection_panel import (
             DraggableConnectionList,
             ConnectionItem,
@@ -74,7 +75,7 @@ class ConnectionPickerDialog(QDialog):
         )
 
         self.list_widget = DraggableConnectionList()
-        self.list_widget.setDragEnabled(False)  # Sem drag neste contexto
+        self.list_widget.setDragEnabled(False)  # No drag in this context
         self.list_widget.setMinimumHeight(250)
         self.list_widget.setIconSize(QSize(28, 28))
         self.list_widget.setSpacing(2)
@@ -83,18 +84,18 @@ class ConnectionPickerDialog(QDialog):
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.list_widget, 1)
 
-        # Botoes
+        # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        cancel_btn = QPushButton("Cancelar")
+        cancel_btn = QPushButton(S.connection_picker.btn_cancel)
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 
         layout.addLayout(btn_layout)
 
     def _load_connections(self):
-        """Carrega conexoes salvas na lista"""
+        """Loads saved connections into the list"""
         from src.ui.components.connection_panel import ConnectionItem, ConnectionItemWidget
 
         self.list_widget.clear()
@@ -112,7 +113,7 @@ class ConnectionPickerDialog(QDialog):
             self.list_widget.setItemWidget(item, widget)
 
     def _on_item_double_clicked(self, item: QListWidgetItem):
-        """Duplo clique seleciona a conexao e fecha o dialogo"""
+        """Double click selects the connection and closes the dialog"""
         conn_name = item.data(Qt.ItemDataRole.UserRole)
         if conn_name:
             self.selected_connection = conn_name
@@ -120,5 +121,5 @@ class ConnectionPickerDialog(QDialog):
             self.accept()
 
     def get_result(self):
-        """Retorna (connection_name, config) ou (None, None)"""
+        """Returns (connection_name, config) or (None, None)"""
         return self.selected_connection, self._selected_config

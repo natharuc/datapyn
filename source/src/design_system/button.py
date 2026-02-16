@@ -1,16 +1,16 @@
 """
-Button Component - Botão estilizado seguindo padrões do design system
+Button Component - Stylized button following design system patterns
 
-Tipos de botões:
-- primary: Ação principal
-- secondary: Ação secundária
-- danger: Ação destrutiva
-- success: Ação positiva
+Button types:
+- primary: Main action
+- secondary: Secondary action
+- danger: Destructive action
+- success: Positive action
 - ghost: Sem background
 
 Tamanhos:
 - sm: Pequeno
-- md: Médio (padrão)
+- md: Medium (default)
 - lg: Grande
 
 Estados:
@@ -33,14 +33,14 @@ except ImportError:
 
 class Button(QPushButton):
     """
-    Botão estilizado seguindo design system
+    Stylized button following design system
 
     Exemplo:
         btn = Button("Executar", variant="primary", size="md")
         btn.set_loading(True)
     """
 
-    clicked_safe = pyqtSignal()  # Emitido apenas se não estiver disabled/loading
+    clicked_safe = pyqtSignal()  # Emitted only if not disabled/loading
 
     def __init__(
         self,
@@ -63,18 +63,18 @@ class Button(QPushButton):
         self._setup_ui()
         self._apply_styles()
 
-        # Conectar clique seguro
+        # Connect safe click
         self.clicked.connect(self._on_clicked)
 
     def _setup_ui(self):
-        """Configura UI do botão"""
+        """Sets up button UI"""
         # Icon
         if self.icon_name and HAS_QTAWESOME:
             icon = qta.icon(self.icon_name, color=self._get_icon_color())
             self.setIcon(icon)
 
         # Cursor via stylesheet
-        # self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))  # Removido - causa warning
+        # self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))  # Removed - causes warning
 
         # Font
         font = QFont(TYPOGRAPHY.font_family_primary)
@@ -94,7 +94,7 @@ class Button(QPushButton):
         self.setFixedHeight(height)
 
     def _get_font_size(self) -> int:
-        """Retorna tamanho da fonte baseado no size"""
+        """Returns font size based on size"""
         size_map = {
             "sm": TYPOGRAPHY.text_sm,
             "md": TYPOGRAPHY.text_base,
@@ -103,7 +103,7 @@ class Button(QPushButton):
         return size_map.get(self.size, TYPOGRAPHY.text_base)
 
     def _get_padding(self) -> str:
-        """Retorna padding baseado no size"""
+        """Returns padding based on size"""
         size_map = {
             "sm": f"{SPACING.space_1}px {SPACING.space_3}px",
             "md": f"{SPACING.space_2}px {SPACING.space_4}px",
@@ -112,7 +112,7 @@ class Button(QPushButton):
         return size_map.get(self.size, f"{SPACING.space_2}px {SPACING.space_4}px")
 
     def _get_icon_color(self) -> str:
-        """Retorna cor do ícone baseado no variant"""
+        """Returns icon color based on variant"""
         colors = get_colors()
         if self.variant == "ghost":
             return colors.text_secondary
@@ -121,10 +121,10 @@ class Button(QPushButton):
         return colors.text_primary
 
     def _apply_styles(self):
-        """Aplica stylesheet baseado em variant e state"""
+        """Applies stylesheet based on variant and state"""
         colors = get_colors()
 
-        # Mapa de cores por variant
+        # Color map by variant
         variant_colors = {
             "primary": (
                 colors.interactive_primary,
@@ -145,7 +145,7 @@ class Button(QPushButton):
 
         bg, bg_hover, bg_active, text_color = variant_colors.get(self.variant, variant_colors["secondary"])
 
-        # Border para secondary e ghost
+        # Border for secondary and ghost
         border_style = ""
         if self.variant in ("secondary", "ghost"):
             border_style = f"border: 1px solid {colors.border_default};"
@@ -182,14 +182,14 @@ class Button(QPushButton):
         self.setStyleSheet(stylesheet)
 
     def set_loading(self, loading: bool):
-        """Define estado de loading"""
+        """Sets loading state"""
         self._is_loading = loading
         self.setEnabled(not loading)
 
         if loading:
             original_text = self.text()
             self.setText(f"{original_text}...")
-            # TODO: Adicionar spinner icon quando disponível
+            # TODO: Add spinner icon when available
         else:
             # Remove "..." do final
             text = self.text()
@@ -197,28 +197,28 @@ class Button(QPushButton):
                 self.setText(text[:-3])
 
     def is_loading(self) -> bool:
-        """Retorna se está em loading"""
+        """Returns if is loading"""
         return self._is_loading
 
     def _on_clicked(self):
-        """Handler interno de click - emite clicked_safe apenas se válido"""
+        """Internal click handler - emits clicked_safe only if valid"""
         if not self._is_loading and self.isEnabled():
             self.clicked_safe.emit()
 
     def set_variant(self, variant: str):
-        """Altera variant dinamicamente"""
+        """Changes variant dynamically"""
         self.variant = variant
         self._apply_styles()
 
     def update_theme(self):
-        """Atualiza estilos quando tema muda"""
+        """Updates styles when theme changes"""
         self._apply_styles()
         if self.icon_name and HAS_QTAWESOME:
             icon = qta.icon(self.icon_name, color=self._get_icon_color())
             self.setIcon(icon)
 
 
-# Aliases para conveniência
+# Convenience aliases
 class PrimaryButton(Button):
     def __init__(self, text: str = "", **kwargs):
         super().__init__(text, variant="primary", **kwargs)

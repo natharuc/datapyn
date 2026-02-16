@@ -1,8 +1,7 @@
-"""
-Painel de Variaveis
+"""Variables Panel
 
-Exibe variaveis em memoria da sessao com nome, tipo e valor.
-Inclui context menu e double-click para inserir no editor.
+Displays session variables in memory with name, type, and value.
+Includes context menu and double-click to insert into editor.
 """
 
 from PyQt6.QtWidgets import (
@@ -16,6 +15,8 @@ from typing import Dict, Any, Optional
 
 from .buttons import GhostButton
 
+from src.language import S
+
 try:
     import qtawesome as qta
 
@@ -25,16 +26,16 @@ except ImportError:
 
 
 class VariablesTableModel(QAbstractTableModel):
-    """Model para exibir variáveis em tabela"""
+    """Model to display variables in table"""
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager
-        self._variables: list = []  # Lista de dicts {name, type, value, raw}
+        self._variables: list = []  # List of dicts {name, type, value, raw}
         self._update_colors()
 
     def _update_colors(self):
-        """Atualiza cores do tema"""
+        """Update theme colors"""
         if self.theme_manager:
             colors = self.theme_manager.get_table_colors()
             self._row_even = QColor(colors["row_even"])
@@ -52,27 +53,27 @@ class VariablesTableModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
     def set_variables(self, namespace: Dict[str, Any]):
-        """Define variáveis a partir do namespace"""
+        """Set variables from namespace"""
         self.beginResetModel()
 
         self._variables = []
 
-        # Filtrar variáveis internas
+        # Filter internal variables
         for name, value in namespace.items():
             if name.startswith("_") or name in ("pd", "np", "plt", "sns"):
                 continue
 
             type_name = type(value).__name__
 
-            # Preview do valor
+            # Preview of value
             if isinstance(value, pd.DataFrame):
-                preview = f"DataFrame ({len(value)} rows × {len(value.columns)} cols)"
+                preview = S.variables_panel.preview_dataframe.format(rows=len(value), cols=len(value.columns))
             elif isinstance(value, pd.Series):
-                preview = f"Series ({len(value)} items)"
+                preview = S.variables_panel.preview_series.format(n=len(value))
             elif isinstance(value, (list, tuple)):
-                preview = f"{type_name} [{len(value)} items]"
+                preview = S.variables_panel.preview_list_type.format(type=type_name, n=len(value))
             elif isinstance(value, dict):
-                preview = f"dict {{{len(value)} keys}}"
+                preview = S.variables_panel.preview_dict.format(n=len(value))
             elif isinstance(value, str):
                 preview = repr(value[:50]) + ("..." if len(value) > 50 else "")
             else:
@@ -80,13 +81,13 @@ class VariablesTableModel(QAbstractTableModel):
 
             self._variables.append({"name": name, "type": type_name, "value": preview, "raw": value})
 
-        # Ordenar por nome
+        # Sort by name
         self._variables.sort(key=lambda x: x["name"])
 
         self.endResetModel()
 
     def clear(self):
-        """Limpa variáveis"""
+        """Clear variables"""
         self.beginResetModel()
         self._variables = []
         self.endResetModel()
@@ -116,7 +117,7 @@ class VariablesTableModel(QAbstractTableModel):
             return self._row_even if index.row() % 2 == 0 else self._row_odd
 
         if role == Qt.ItemDataRole.ForegroundRole:
-            # Cores por tipo
+            # Colors by type
             type_colors = {
                 "DataFrame": QColor("#4ec9b0"),
                 "Series": QColor("#4ec9b0"),
@@ -138,38 +139,38 @@ class VariablesTableModel(QAbstractTableModel):
                 return font
 
         if role == Qt.ItemDataRole.UserRole:
-            # Retorna valor raw para uso externo
+            # Return raw value for external use
             return var["raw"]
 
         return QVariant()
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            headers = ["Nome", "Tipo", "Valor"]
+            headers = [S.variables_panel.header_name, S.variables_panel.header_type, S.variables_panel.header_value]
             return headers[section] if section < len(headers) else ""
         return QVariant()
 
     def get_variable(self, row: int) -> Optional[Any]:
-        """Retorna valor raw da variável"""
+        """Return raw value of variable"""
         if 0 <= row < len(self._variables):
             return self._variables[row]["raw"]
         return None
 
     def get_variable_name(self, row: int) -> Optional[str]:
-        """Retorna nome da variável"""
+        """Return variable name"""
         if 0 <= row < len(self._variables):
             return self._variables[row]["name"]
         return None
 
 
 class VariablesPanel(QWidget):
-    """Painel de visualizacao de variaveis"""
+    """Variables visualization panel"""
 
-    # Sinais
+    # Signals
     variable_selected = pyqtSignal(str, object)  # name, value
-    variable_double_clicked = pyqtSignal(str, object)  # name, value (para abrir em viewer)
-    insert_variable_name = pyqtSignal(str)  # name (para inserir no editor focado)
-    delete_variable = pyqtSignal(str)  # name (para remover do namespace)
+    variable_double_clicked = pyqtSignal(str, object)  # name, value (to open in viewer)
+    insert_variable_name = pyqtSignal(str)  # name (to insert in focused editor)
+    delete_variable = pyqtSignal(str)  # name (to remove from namespace)
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -179,7 +180,7 @@ class VariablesPanel(QWidget):
         self._apply_theme()
 
     def _setup_ui(self):
-        """Configura UI"""
+        """Configure UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -191,14 +192,14 @@ class VariablesPanel(QWidget):
         toolbar_layout.setSpacing(8)
 
         # Info label
-        self.info_label = QLabel("Nenhuma variável")
+        self.info_label = QLabel(S.variables_panel.no_variables)
         self.info_label.setStyleSheet("color: #808080;")
         toolbar_layout.addWidget(self.info_label)
 
         toolbar_layout.addStretch()
 
-        # Botão refresh
-        self.btn_refresh = GhostButton("Atualizar")
+        # Refresh button
+        self.btn_refresh = GhostButton(S.variables_panel.btn_refresh)
         if HAS_QTAWESOME:
             self.btn_refresh.setIcon(qta.icon("fa5s.sync", color="#888888"))
         toolbar_layout.addWidget(self.btn_refresh)
@@ -228,7 +229,7 @@ class VariablesPanel(QWidget):
         self.model = VariablesTableModel(theme_manager=self.theme_manager)
         self.table_view.setModel(self.model)
 
-        # Configurar colunas
+        # Configure columns
         header = self.table_view.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -270,54 +271,54 @@ class VariablesPanel(QWidget):
         self._apply_theme()
 
     def set_variables(self, namespace: Dict[str, Any]):
-        """Define variáveis do namespace"""
+        """Set variables from namespace"""
         self.model.set_variables(namespace)
 
         count = self.model.rowCount()
         if count == 0:
-            self.info_label.setText("Nenhuma variável")
+            self.info_label.setText(S.variables_panel.no_variables)
         elif count == 1:
-            self.info_label.setText("1 variável")
+            self.info_label.setText(S.variables_panel.one_variable)
         else:
-            self.info_label.setText(f"{count} variáveis")
+            self.info_label.setText(S.variables_panel.n_variables.format(n=count))
 
-    def display_dataframe(self, df: Optional[pd.DataFrame], title: str = "Variáveis"):
-        """Compatibilidade com ResultsViewer - aceita DataFrame de variáveis"""
+    def display_dataframe(self, df: Optional[pd.DataFrame], title: str = "Variables"):
+        """Compatibility with ResultsViewer - accepts DataFrame of variables"""
         if df is None or df.empty:
             self.clear()
             return
 
-        # Converter DataFrame para namespace
-        # O DataFrame geralmente tem colunas: Nome, Tipo, Valor, Shape, Preview
+        # Convert DataFrame to namespace
+        # DataFrame usually has columns: Name, Type, Value, Shape, Preview
         namespace = {}
-        if "Nome" in df.columns and "Valor" in df.columns:
+        if "Name" in df.columns and "Value" in df.columns:
             for _, row in df.iterrows():
-                name = row.get("Nome", "")
+                name = row.get("Name", "")
                 value = row.get("Preview", row.get("Valor", ""))
-                # Guardar o valor bruto ou string para exibição
+                # Store raw value or string for display
                 namespace[name] = value
 
         self.set_variables(namespace)
-        self.info_label.setText(f"{len(df)} variáveis")
+        self.info_label.setText(S.variables_panel.n_variables.format(n=len(df)))
 
     def set_data(self, df: Optional[pd.DataFrame]):
-        """Compatibilidade com ResultsViewer - aceita DataFrame de variáveis"""
+        """Compatibility with ResultsViewer - accepts DataFrame of variables"""
         self.display_dataframe(df)
 
     def clear(self):
-        """Limpa variáveis"""
+        """Clear variables"""
         self.model.clear()
-        self.info_label.setText("Nenhuma variável")
+        self.info_label.setText(S.variables_panel.no_variables)
 
     def _on_click(self, index: QModelIndex):
-        """Quando variavel e selecionada"""
+        """When variable is selected"""
         name = self.model.get_variable_name(index.row())
         value = self.model.get_variable(index.row())
         if name:
             self.variable_selected.emit(name, value)
 
     def _on_double_click(self, index: QModelIndex):
-        """Quando variavel e clicada duas vezes - insere nome no editor focado"""
+        """When variable is double-clicked - insert name in focused editor"""
         name = self.model.get_variable_name(index.row())
         value = self.model.get_variable(index.row())
         if name:
@@ -325,7 +326,7 @@ class VariablesPanel(QWidget):
             self.variable_double_clicked.emit(name, value)
 
     def _on_context_menu(self, pos):
-        """Context menu com opcoes uteis para a variavel"""
+        """Context menu with useful options for the variable"""
         index = self.table_view.indexAt(pos)
         if not index.isValid():
             return
@@ -338,7 +339,7 @@ class VariablesPanel(QWidget):
 
         menu = QMenu(self)
 
-        # Aplicar estilo ao menu
+        # Apply style to menu
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
             menu.setStyleSheet(f"""
@@ -364,74 +365,74 @@ class VariablesPanel(QWidget):
 
         type_name = type(value).__name__
 
-        # Inserir nome no editor
-        act_insert = menu.addAction("Inserir no editor")
+        # Insert name in editor
+        act_insert = menu.addAction(S.variables_panel.ctx_insert_in_editor)
         act_insert.triggered.connect(lambda: self.insert_variable_name.emit(name))
 
         menu.addSeparator()
 
-        # Copiar nome
-        act_copy_name = menu.addAction("Copiar nome")
+        # Copy name
+        act_copy_name = menu.addAction(S.variables_panel.ctx_copy_name)
         act_copy_name.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
-        # Copiar valor
-        act_copy_value = menu.addAction("Copiar valor")
+        # Copy value
+        act_copy_value = menu.addAction(S.variables_panel.ctx_copy_value)
         act_copy_value.triggered.connect(
             lambda: QApplication.clipboard().setText(self._get_copyable_value(value))
         )
 
-        # Copiar tipo
-        act_copy_type = menu.addAction("Copiar tipo")
+        # Copy type
+        act_copy_type = menu.addAction(S.variables_panel.ctx_copy_type)
         act_copy_type.triggered.connect(
             lambda: QApplication.clipboard().setText(type_name)
         )
 
         menu.addSeparator()
 
-        # Opcoes especificas por tipo
+        # Type-specific options
         if isinstance(value, pd.DataFrame):
-            act_shape = menu.addAction(f"Shape: {value.shape[0]} x {value.shape[1]}")
+            act_shape = menu.addAction(S.variables_panel.ctx_shape_info.format(rows=value.shape[0], cols=value.shape[1]))
             act_shape.setEnabled(False)
 
-            act_cols = menu.addAction("Copiar colunas")
+            act_cols = menu.addAction(S.variables_panel.ctx_copy_columns)
             act_cols.triggered.connect(
                 lambda: QApplication.clipboard().setText(", ".join(value.columns.tolist()))
             )
 
-            act_dtypes = menu.addAction("Copiar dtypes")
+            act_dtypes = menu.addAction(S.variables_panel.ctx_copy_dtypes)
             act_dtypes.triggered.connect(
                 lambda: QApplication.clipboard().setText(str(value.dtypes))
             )
 
-            act_head = menu.addAction("Copiar head(5)")
+            act_head = menu.addAction(S.variables_panel.ctx_copy_head)
             act_head.triggered.connect(
                 lambda: QApplication.clipboard().setText(value.head(5).to_string())
             )
 
-            act_csv = menu.addAction("Copiar como CSV")
+            act_csv = menu.addAction(S.variables_panel.ctx_copy_as_csv)
             act_csv.triggered.connect(
                 lambda: QApplication.clipboard().setText(value.to_csv(index=False))
             )
 
         elif isinstance(value, (list, dict, tuple)):
-            act_len = menu.addAction(f"Tamanho: {len(value)}")
+            act_len = menu.addAction(S.variables_panel.ctx_size_info.format(n=len(value)))
             act_len.setEnabled(False)
 
         elif isinstance(value, str):
-            act_len = menu.addAction(f"Tamanho: {len(value)} chars")
+            act_len = menu.addAction(S.variables_panel.ctx_size_chars.format(n=len(value)))
             act_len.setEnabled(False)
 
         menu.addSeparator()
 
-        # Deletar variavel
-        act_delete = menu.addAction("Remover variavel")
+        # Delete variable
+        act_delete = menu.addAction(S.variables_panel.ctx_remove_variable)
         act_delete.triggered.connect(lambda: self.delete_variable.emit(name))
 
         menu.exec(self.table_view.viewport().mapToGlobal(pos))
 
     @staticmethod
     def _get_copyable_value(value) -> str:
-        """Retorna representacao copiavel do valor"""
+        """Return copyable representation of value"""
         if isinstance(value, pd.DataFrame):
             return value.to_string()
         elif isinstance(value, pd.Series):

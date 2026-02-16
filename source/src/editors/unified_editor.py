@@ -1,5 +1,5 @@
 """
-Editor de código unificado que suporta SQL e Python
+Unified code editor that supports SQL and Python
 """
 
 from PyQt6.Qsci import QsciScintilla, QsciLexerSQL, QsciLexerPython
@@ -10,13 +10,13 @@ from src.core.theme_manager import ThemeManager
 
 
 class UnifiedEditor(QsciScintilla):
-    """Editor de código que suporta SQL e Python"""
+    """Code editor that supports SQL and Python"""
 
-    execute_sql = pyqtSignal(str)  # código SQL
-    execute_python = pyqtSignal(str)  # código Python
-    execute_cross_syntax = pyqtSignal(str)  # código com sintaxe mista
+    execute_sql = pyqtSignal(str)  # SQL code
+    execute_python = pyqtSignal(str)  # Python code
+    execute_cross_syntax = pyqtSignal(str)  # code with mixed syntax
 
-    # Referência compartilhada do ThemeManager
+    # Shared ThemeManager reference
     _theme_manager = None
 
     def __init__(self, parent=None, lexer_type="sql", theme_manager=None):
@@ -42,7 +42,7 @@ class UnifiedEditor(QsciScintilla):
         self.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
         self.setMarginWidth(0, "00000")
 
-        # Indentação
+        # Indentation
         self.setIndentationsUseTabs(False)
         self.setTabWidth(4)
         self.setAutoIndent(True)
@@ -50,7 +50,7 @@ class UnifiedEditor(QsciScintilla):
         # Linhas
         self.setCaretLineVisible(True)
 
-        # Cursor (caret) - garantir que seja visível
+        # Cursor (caret) - ensure it's visible
         self.setCaretWidth(2)  # Cursor mais largo
 
         # Brace matching
@@ -73,7 +73,7 @@ class UnifiedEditor(QsciScintilla):
         self.setCaretForegroundColor(colors["caret"])
         self.setCaretLineBackgroundColor(colors["caret_line"])
 
-        # Seleção
+        # Selection
         self.setSelectionBackgroundColor(colors["selection"])
 
         # Margins
@@ -137,7 +137,7 @@ class UnifiedEditor(QsciScintilla):
         self.setLexer(lexer)
 
     def apply_theme(self, theme_manager: ThemeManager = None):
-        """Reaplica tema (chamado quando usuário muda tema)"""
+        """Reapply theme (called when user changes theme)"""
         if theme_manager:
             UnifiedEditor._theme_manager = theme_manager
         self._apply_theme()
@@ -156,37 +156,37 @@ class UnifiedEditor(QsciScintilla):
 
     def keyPressEvent(self, event: QKeyEvent):
         """Intercepta teclas para atalhos personalizados"""
-        # Shift+Enter - Executar Python
+        # Shift+Enter - Run Python
         if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
             text = self.get_selected_or_all_text()
             if text.strip():
                 self.execute_python.emit(text)
-            return  # Não propaga o evento
+            return  # Don't propagate event
 
-        # Ctrl+Shift+Enter - Executar Cross-Syntax
+        # Ctrl+Shift+Enter - Run Cross-Syntax
         if event.key() == Qt.Key.Key_Return and event.modifiers() == (
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
         ):
             text = self.get_selected_or_all_text()
             if text.strip():
                 self.execute_cross_syntax.emit(text)
-            return  # Não propaga o evento
+            return  # Don't propagate event
 
-        # F5 - Executar SQL
+        # F5 - Run SQL
         if event.key() == Qt.Key.Key_F5 and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             text = self.get_selected_or_all_text()
             if text.strip():
                 self.execute_sql.emit(text)
-            return  # Não propaga o evento
+            return  # Don't propagate event
 
-        # Ctrl+Shift+F5 - Executar Cross-Syntax
+        # Ctrl+Shift+F5 - Run Cross-Syntax
         if event.key() == Qt.Key.Key_F5 and event.modifiers() == (
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
         ):
             text = self.get_selected_or_all_text()
             if text.strip():
                 self.execute_cross_syntax.emit(text)
-            return  # Não propaga o evento
+            return  # Don't propagate event
 
-        # Propaga outros eventos normalmente
+        # Propagate other events normally
         super().keyPressEvent(event)

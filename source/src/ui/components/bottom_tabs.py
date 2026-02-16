@@ -1,7 +1,6 @@
-"""
-Bottom Tabs - Container de abas inferiores
+"""Bottom Tabs - Bottom tabs container
 
-Contém as abas de Resultados, Output e Variáveis.
+Contains tabs for Results, Output, and Variables.
 """
 
 from PyQt6.QtWidgets import QTabWidget, QWidget
@@ -10,15 +9,16 @@ import qtawesome as qta
 from typing import Optional
 import pandas as pd
 
+from src.language import S
 from .results_viewer import ResultsViewer
 from .output_panel import OutputPanel
 from .variables_panel import VariablesPanel
 
 
 class BottomTabs(QTabWidget):
-    """Container com abas de resultados, output e variáveis"""
+    """Container with tabs for results, output, and variables"""
 
-    # Sinais
+    # Signals
     tab_changed = pyqtSignal(int)  # index
 
     def __init__(self, theme_manager=None, parent=None):
@@ -30,28 +30,28 @@ class BottomTabs(QTabWidget):
         self._connect_signals()
 
     def _setup_ui(self):
-        """Configura UI"""
-        # Tab: Resultados
+        """Configure UI"""
+        # Tab: Results
         self.results_viewer = ResultsViewer(theme_manager=self.theme_manager)
-        self.addTab(self.results_viewer, "Resultados")
+        self.addTab(self.results_viewer, S.bottom_tabs.results)
         self.setTabIcon(0, qta.icon("mdi.table-eye", color="#64b5f6"))
 
         # Tab: Output/Logs
         self.output_panel = OutputPanel(theme_manager=self.theme_manager)
-        self.addTab(self.output_panel, "Output")
+        self.addTab(self.output_panel, S.bottom_tabs.output)
         self.setTabIcon(1, qta.icon("mdi.console", color="#64b5f6"))
 
-        # Tab: Variáveis
+        # Tab: Variables
         self.variables_panel = VariablesPanel(theme_manager=self.theme_manager)
-        self.addTab(self.variables_panel, "Variáveis")
+        self.addTab(self.variables_panel, S.bottom_tabs.variables)
         self.setTabIcon(2, qta.icon("mdi.variable", color="#64b5f6"))
 
     def _setup_style(self):
-        """Configura estilo"""
+        """Configure style"""
         self._apply_theme()
 
     def _apply_theme(self):
-        """Aplica o tema atual"""
+        """Apply current theme"""
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
             bg = colors.get("background", "#1e1e1e")
@@ -89,93 +89,93 @@ class BottomTabs(QTabWidget):
         """)
 
     def _connect_signals(self):
-        """Conecta sinais"""
+        """Connect signals"""
         self.currentChanged.connect(self.tab_changed.emit)
 
     def set_theme_manager(self, theme_manager):
-        """Define theme manager para todos os componentes"""
+        """Set theme manager for all components"""
         self.theme_manager = theme_manager
         self._apply_theme()
         self.results_viewer.set_theme_manager(theme_manager)
         self.output_panel.set_theme_manager(theme_manager)
         self.variables_panel.set_theme_manager(theme_manager)
 
-    # === Métodos de conveniência para Resultados ===
+    # === Convenience methods for Results ===
 
     def set_results(self, df: Optional[pd.DataFrame], var_name: str = "df"):
-        """Define dados nos resultados"""
+        """Set results data"""
         self.results_viewer.display_dataframe(df, var_name)
         self.show_results()
 
     def clear_results(self):
-        """Limpa resultados"""
+        """Clear results"""
         self.results_viewer.clear()
 
     def show_results(self):
-        """Mostra aba de resultados"""
+        """Show results tab"""
         self.setCurrentWidget(self.results_viewer)
 
-    # === Métodos de conveniência para Output ===
+    # === Convenience methods for Output ===
 
     def log(self, text: str):
-        """Adiciona log"""
+        """Add log"""
         self.output_panel.log(text)
 
     def log_success(self, text: str):
-        """Adiciona log de sucesso"""
+        """Add success log"""
         self.output_panel.success(text)
 
     def log_warning(self, text: str):
-        """Adiciona log de warning"""
+        """Add warning log"""
         self.output_panel.warning(text)
 
     def log_error(self, text: str):
-        """Adiciona log de erro"""
+        """Add error log"""
         self.output_panel.error(text)
         self.show_output()
 
     def append_output(self, text: str, error: bool = False):
-        """Compatibilidade com código antigo"""
+        """Compatibility with old code"""
         self.output_panel.append_output(text, error)
 
     def clear_output(self):
-        """Limpa output"""
+        """Clear output"""
         self.output_panel.clear()
 
     def show_output(self):
-        """Mostra aba de output"""
+        """Show output tab"""
         self.setCurrentWidget(self.output_panel)
 
-    # === Métodos de conveniência para Variáveis ===
+    # === Convenience methods for Variables ===
 
     def set_variables(self, namespace: dict):
-        """Define variáveis"""
+        """Set variables"""
         self.variables_panel.set_variables(namespace)
 
     def clear_variables(self):
-        """Limpa variáveis"""
+        """Clear variables"""
         self.variables_panel.clear()
 
     def show_variables(self):
-        """Mostra aba de variáveis"""
+        """Show variables tab"""
         self.setCurrentWidget(self.variables_panel)
 
-    # === Métodos gerais ===
+    # === General methods ===
 
     def clear_all(self):
-        """Limpa todos os painéis"""
+        """Clear all panels"""
         self.clear_results()
         self.clear_output()
         self.clear_variables()
 
-    # === Compatibilidade com código antigo ===
+    # === Compatibility with old code ===
 
     @property
     def output_text(self):
-        """Compatibilidade: retorna o text_edit do output"""
+        """Compatibility: return output text_edit"""
         return self.output_panel.text_edit
 
     @property
     def variables_viewer(self):
-        """Compatibilidade: retorna o variables_panel"""
+        """Compatibility: return variables_panel"""
         return self.variables_panel

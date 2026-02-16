@@ -1,19 +1,17 @@
 """
-Componentes de UI reutilizáveis do DataPyn
+DataPyn Reusable UI Components
 
-Estrutura:
-- buttons.py: Botões estilizados (PrimaryButton, SecondaryButton, etc)
-- inputs.py: Campos de entrada (StyledLineEdit, StyledComboBox, etc)
-- toolbar.py: Toolbar principal
-- statusbar.py: Barra de status
-- connection_panel.py: Painel lateral de conexões
-- session_tabs.py: Tabs de sessão
-- editor_header.py: Header do editor com atalhos
-- results_viewer.py: Visualizador de resultados
-- session_widget.py: Widget completo de sessão
+Structure:
+- buttons.py: Styled buttons (PrimaryButton, SecondaryButton, etc)
+- inputs.py: Input fields (StyledLineEdit, StyledComboBox, etc)
+- toolbar.py: Main toolbar
+- statusbar.py: Status bar
+- connection_panel.py: Connections side panel
+- session_tabs.py: Session tabs
+- editor_header.py: Editor header with shortcuts
+- results_viewer.py: Results viewer
+- session_widget.py: Complete session widget
 """
-
-# Botões
 from .buttons import (
     StyledButton,
     PrimaryButton,

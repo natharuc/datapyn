@@ -6,20 +6,22 @@ from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy
 from PyQt6.QtCore import pyqtSignal, QSize
 import qtawesome as qta
 
-# Cor padrao para todos os icones da toolbar (consistente)
+from src.language import S
+
+# Default color for all toolbar icons (consistent)
 _ICON_COLOR = "#b0b0b0"
 _ICON_HOVER = "#ffffff"
 
 
 class MainToolbar(QToolBar):
-    """Toolbar principal"""
+    """Main toolbar"""
 
     new_connection_clicked = pyqtSignal()
     new_tab_clicked = pyqtSignal()
     run_clicked = pyqtSignal()
 
     def __init__(self, theme_manager=None, parent=None):
-        super().__init__("Principal", parent)
+        super().__init__("Main", parent)
         self.theme_manager = theme_manager
         self.setMovable(False)
         self.setIconSize(QSize(16, 16))
@@ -27,7 +29,7 @@ class MainToolbar(QToolBar):
         self._setup_buttons()
 
     def _setup_style(self):
-        """Configura estilo da toolbar"""
+        """Configure toolbar style"""
         self.setStyleSheet(f"""
             QToolBar {{
                 background-color: #252526;
@@ -59,25 +61,25 @@ class MainToolbar(QToolBar):
         """)
 
     def _setup_buttons(self):
-        """Botoes com icones uniformes"""
-        # Nova Aba
-        self.btn_new_tab = QPushButton(" Nova Aba")
+        """Buttons with uniform icons"""
+        # New Tab
+        self.btn_new_tab = QPushButton(S.toolbar.new_tab)
         self.btn_new_tab.setIcon(qta.icon("mdi.tab-plus", color=_ICON_COLOR))
         self.btn_new_tab.clicked.connect(self.new_tab_clicked.emit)
         self.addWidget(self.btn_new_tab)
 
         self.addSeparator()
 
-        # Nova Conexao
-        self.btn_new_conn = QPushButton(" Conexao")
+        # Connection
+        self.btn_new_conn = QPushButton(S.toolbar.connection)
         self.btn_new_conn.setIcon(qta.icon("mdi.database-plus", color=_ICON_COLOR))
         self.btn_new_conn.clicked.connect(self.new_connection_clicked.emit)
         self.addWidget(self.btn_new_conn)
 
         self.addSeparator()
 
-        # Executar
-        self.btn_run = QPushButton(" Executar (F5)")
+        # Run
+        self.btn_run = QPushButton(S.toolbar.run)
         self.btn_run.setIcon(qta.icon("mdi.play", color=_ICON_COLOR))
         self.btn_run.clicked.connect(self.run_clicked.emit)
         self.addWidget(self.btn_run)

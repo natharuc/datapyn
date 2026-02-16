@@ -1,8 +1,8 @@
 """
-Sistema de Docking - Painéis repositionaveis como Visual Studio
+Docking System - Repositionable panels like Visual Studio
 
-Permite arrastar e reposicionar abas (Resultados, Output, Variáveis)
-em qualquer área da tela com indicadores visuais.
+Allows dragging and repositioning tabs (Results, Output, Variables)
+anywhere on screen with visual indicators.
 """
 
 from .dockable_widget import DockableWidget, DragDropTabWidget, DockPosition

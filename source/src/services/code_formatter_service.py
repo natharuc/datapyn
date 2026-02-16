@@ -1,7 +1,7 @@
 """
-Servico de formatacao de codigo.
+Code formatting service.
 
-Formata Python (via ruff) e SQL (via sqlparse).
+Formats Python (via ruff) and SQL (via sqlparse).
 """
 
 import subprocess
@@ -13,26 +13,26 @@ logger = logging.getLogger(__name__)
 
 
 def format_python(code: str, line_length: int = 88) -> tuple[str, str | None]:
-    """Formata codigo Python usando ruff format.
+    """Format Python code using ruff format.
 
     Args:
-        code: Codigo Python a formatar.
-        line_length: Comprimento maximo da linha.
+        code: Python code to format.
+        line_length: Maximum line length.
 
     Returns:
-        Tupla (codigo_formatado, erro).
-        Se erro for None, a formatacao foi bem-sucedida.
+        Tuple (formatted_code, error).
+        If error is None, formatting was successful.
     """
     if not code.strip():
         return code, None
 
     try:
-        # Encontrar ruff no mesmo ambiente do Python
+        # Find ruff in same Python environment
         venv_dir = Path(sys.executable).parent
         ruff_exe = venv_dir / "ruff.exe" if sys.platform == "win32" else venv_dir / "ruff"
 
         if not ruff_exe.exists():
-            # Tentar via python -m ruff
+            # Try via python -m ruff
             ruff_cmd = [sys.executable, "-m", "ruff"]
         else:
             ruff_cmd = [str(ruff_exe)]
@@ -48,14 +48,14 @@ def format_python(code: str, line_length: int = 88) -> tuple[str, str | None]:
         if result.returncode == 0:
             return result.stdout, None
         else:
-            err_msg = result.stderr.strip() or "Erro desconhecido no ruff"
-            logger.warning("Ruff format falhou: %s", err_msg)
+            err_msg = result.stderr.strip() or "Unknown ruff error"
+            logger.warning("Ruff format failed: %s", err_msg)
             return code, err_msg
 
     except FileNotFoundError:
-        return code, "ruff nao encontrado. Instale com: pip install ruff"
+        return code, "ruff not found. Install with: pip install ruff"
     except subprocess.TimeoutExpired:
-        return code, "Timeout ao formatar (>10s)"
+        return code, "Timeout formatting (>10s)"
     except Exception as e:
         return code, str(e)
 
@@ -68,19 +68,19 @@ def format_sql(
     reindent: bool = True,
     strip_comments: bool = False,
 ) -> tuple[str, str | None]:
-    """Formata codigo SQL usando sqlparse.
+    """Format SQL code using sqlparse.
 
     Args:
-        code: Codigo SQL a formatar.
-        keyword_case: Case das keywords ('upper', 'lower', 'capitalize').
-        identifier_case: Case dos identificadores (None = nao altera).
-        indent_width: Largura da indentacao.
-        reindent: Se deve reindentar o codigo.
-        strip_comments: Se deve remover comentarios.
+        code: SQL code to format.
+        keyword_case: Keyword case ('upper', 'lower', 'capitalize').
+        identifier_case: Identifier case (None = don't change).
+        indent_width: Indentation width.
+        reindent: Whether to reindent code.
+        strip_comments: Whether to remove comments.
 
     Returns:
-        Tupla (codigo_formatado, erro).
-        Se erro for None, a formatacao foi bem-sucedida.
+        Tuple (formatted_code, error).
+        If error is None, formatting was successful.
     """
     if not code.strip():
         return code, None
@@ -99,20 +99,20 @@ def format_sql(
         return formatted, None
 
     except ImportError:
-        return code, "sqlparse nao encontrado. Instale com: pip install sqlparse"
+        return code, "sqlparse not found. Install with: pip install sqlparse"
     except Exception as e:
         return code, str(e)
 
 
 def format_code(code: str, language: str) -> tuple[str, str | None]:
-    """Formata codigo de acordo com a linguagem.
+    """Format code according to language.
 
     Args:
-        code: Codigo a formatar.
-        language: Linguagem ('python', 'sql', 'cross').
+        code: Code to format.
+        language: Language ('python', 'sql', 'cross').
 
     Returns:
-        Tupla (codigo_formatado, erro).
+        Tuple (formatted_code, error).
     """
     language = language.lower()
 
@@ -121,4 +121,4 @@ def format_code(code: str, language: str) -> tuple[str, str | None]:
     elif language in ("sql", "cross"):
         return format_sql(code)
     else:
-        return code, f"Formatador nao disponivel para '{language}'"
+        return code, f"Formatter not available for '{language}'"

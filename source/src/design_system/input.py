@@ -4,7 +4,7 @@ Input Component - Campo de entrada estilizado
 Tipos:
 - text: Input de texto simples
 - password: Input de senha
-- number: Input numérico
+- number: Numeric input
 - search: Input de busca
 
 Estados:
@@ -23,7 +23,7 @@ class Input(QLineEdit):
     Input estilizado seguindo design system
 
     Exemplo:
-        input = Input(placeholder="Digite seu nome")
+        input = Input(placeholder="Enter your name")
         input.set_error(True)
     """
 
@@ -40,7 +40,7 @@ class Input(QLineEdit):
         self._apply_styles()
 
     def _setup_ui(self):
-        """Configura UI do input"""
+        """Sets up input UI"""
         # Font
         font = QFont(TYPOGRAPHY.font_family_primary)
         font.setPixelSize(TYPOGRAPHY.text_base)
@@ -54,7 +54,7 @@ class Input(QLineEdit):
             self.setEchoMode(QLineEdit.EchoMode.Password)
 
     def _apply_styles(self):
-        """Aplica stylesheet"""
+        """Applies stylesheet"""
         colors = get_colors()
 
         border_color = colors.danger if self._has_error else colors.border_default
@@ -85,22 +85,22 @@ class Input(QLineEdit):
         self.setStyleSheet(stylesheet)
 
     def set_error(self, has_error: bool):
-        """Define estado de erro"""
+        """Sets error state"""
         self._has_error = has_error
         self._apply_styles()
 
     def update_theme(self):
-        """Atualiza estilos quando tema muda"""
+        """Updates styles when theme changes"""
         self._apply_styles()
 
 
 class FormField(QWidget):
     """
-    Campo de formulário com label e input
+    Form field with label and input
 
     Exemplo:
-        field = FormField("Nome", placeholder="Digite seu nome")
-        field.set_error("Campo obrigatório")
+        field = FormField("Name", placeholder="Enter your name")
+        field.set_error("Required field")
     """
 
     value_changed = pyqtSignal(str)
@@ -116,7 +116,7 @@ class FormField(QWidget):
         self._setup_ui(placeholder, input_type)
 
     def _setup_ui(self, placeholder: str, input_type: str):
-        """Configura UI do campo"""
+        """Sets up field UI"""
         colors = get_colors()
 
         layout = QVBoxLayout(self)
@@ -142,7 +142,7 @@ class FormField(QWidget):
         self.input.textChanged.connect(self.value_changed.emit)
         layout.addWidget(self.input)
 
-        # Error label (inicialmente invisível)
+        # Error label (initially invisible)
         error_font = QFont(TYPOGRAPHY.font_family_primary)
         error_font.setPixelSize(TYPOGRAPHY.text_xs)
 
@@ -153,7 +153,7 @@ class FormField(QWidget):
         layout.addWidget(self.error_label)
 
     def set_error(self, error_message: str = None):
-        """Define mensagem de erro"""
+        """Sets error message"""
         has_error = error_message is not None
         self.input.set_error(has_error)
 
@@ -164,20 +164,20 @@ class FormField(QWidget):
             self.error_label.setVisible(False)
 
     def value(self) -> str:
-        """Retorna valor do input"""
+        """Returns input value"""
         return self.input.text()
 
     def set_value(self, value: str):
-        """Define valor do input"""
+        """Sets input value"""
         self.input.setText(value)
 
     def clear(self):
-        """Limpa input e erro"""
+        """Clears input and error"""
         self.input.clear()
         self.set_error(None)
 
     def update_theme(self):
-        """Atualiza tema"""
+        """Updates theme"""
         colors = get_colors()
         self.label.setStyleSheet(f"color: {colors.text_primary};")
         self.error_label.setStyleSheet(f"color: {colors.danger};")

@@ -115,32 +115,48 @@ jobs:
       - name: Build | Generate Installer Assets
         shell: pwsh
         run: |
-          # Dialog bitmap (493x312, 24-bit BMP)
-          # Banner bitmap (493x58, 24-bit BMP)
-          # Using PowerShell to create simple placeholder bitmaps
+          # Dialog bitmap (493x312, 24-bit BMP) - LEFT side (0-163px) is for logo/branding
+          # Banner bitmap (493x58, 24-bit BMP) - RIGHT side is for logo (left side has page titles)
           Add-Type -AssemblyName System.Drawing
           
-          # Dialog background (493x312)
+          # Dialog background (493x312) - Logo on LEFT side only (pixels 0-163)
+          # WiX uses pixels 164-493 for wizard text, so we stay in 0-163
           $dialogBmp = New-Object System.Drawing.Bitmap(493, 312)
           $graphics = [System.Drawing.Graphics]::FromImage($dialogBmp)
           $graphics.Clear([System.Drawing.Color]::White)
-          $font = New-Object System.Drawing.Font("Arial", 24, [System.Drawing.FontStyle]::Bold)
+          
+          # Draw a subtle gradient-like left panel
+          $leftPanel = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(245, 248, 252))
+          $graphics.FillRectangle($leftPanel, 0, 0, 164, 312)
+          
+          # Logo text centered in LEFT panel (0-163px width)
+          $font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
           $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 120, 212))
-          $graphics.DrawString("DataPyn", $font, $brush, 150, 130)
-          $font2 = New-Object System.Drawing.Font("Arial", 12)
-          $brush2 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Gray)
-          $graphics.DrawString("Data Analysis Tool", $font2, $brush2, 165, 170)
+          $graphics.DrawString("DataPyn", $font, $brush, 25, 120)
+          
+          $font2 = New-Object System.Drawing.Font("Segoe UI", 9)
+          $brush2 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(100, 100, 100))
+          $graphics.DrawString("Data Analysis", $font2, $brush2, 35, 150)
+          $graphics.DrawString("Tool", $font2, $brush2, 60, 168)
+          
           $graphics.Dispose()
           $dialogBmp.Save("scripts\installer_dialog.bmp", [System.Drawing.Imaging.ImageFormat]::Bmp)
           $dialogBmp.Dispose()
           
-          # Banner (493x58)
+          # Banner (493x58) - Logo on RIGHT side (WiX puts page title on left)
           $bannerBmp = New-Object System.Drawing.Bitmap(493, 58)
           $graphics = [System.Drawing.Graphics]::FromImage($bannerBmp)
           $graphics.Clear([System.Drawing.Color]::White)
-          $font = New-Object System.Drawing.Font("Arial", 16, [System.Drawing.FontStyle]::Bold)
+          
+          # Draw subtle bottom border
+          $borderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(220, 220, 220), 1)
+          $graphics.DrawLine($borderPen, 0, 57, 493, 57)
+          
+          # Logo on RIGHT side of banner (avoid left side where page titles appear)
+          $font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
           $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 120, 212))
-          $graphics.DrawString("DataPyn", $font, $brush, 10, 18)
+          $graphics.DrawString("DataPyn", $font, $brush, 410, 18)
+          
           $graphics.Dispose()
           $bannerBmp.Save("scripts\installer_banner.bmp", [System.Drawing.Imaging.ImageFormat]::Bmp)
           $bannerBmp.Dispose()

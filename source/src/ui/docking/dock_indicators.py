@@ -1,8 +1,8 @@
 """
-DockIndicators - Indicadores visuais de posicionamento
+DockIndicators - Visual positioning indicators
 
-Mostra onde a aba será posicionada durante o drag,
-igual aos indicadores do Visual Studio.
+Shows where the tab will be positioned during drag,
+just like Visual Studio indicators.
 """
 
 from PyQt6.QtWidgets import QWidget, QApplication
@@ -13,7 +13,7 @@ from .dockable_widget import DockPosition
 
 
 class DockIndicators(QWidget):
-    """Indicadores visuais para docking"""
+    """Visual indicators for docking"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -30,11 +30,11 @@ class DockIndicators(QWidget):
         self._calculate_indicators()
 
     def _calculate_indicators(self):
-        """Calcula posições dos indicadores"""
+        """Calculate indicator positions"""
         center = QPoint(100, 100)
         size = 40
 
-        # Indicadores em cruz
+        # Cross indicators
         self.indicator_rects = {
             DockPosition.TOP: QRect(center.x() - size // 2, center.y() - size - 10, size, size),
             DockPosition.BOTTOM: QRect(center.x() - size // 2, center.y() + 10, size, size),
@@ -44,14 +44,14 @@ class DockIndicators(QWidget):
         }
 
     def show_at_widget(self, widget: QWidget, cursor_pos: QPoint):
-        """Mostra indicadores próximos ao widget"""
+        """Show indicators near widget"""
         self.target_widget = widget
 
-        # Posiciona no centro do widget
+        # Position at widget center
         widget_center = widget.rect().center()
         global_center = widget.mapToGlobal(widget_center)
 
-        # Ajusta para manter na tela
+        # Adjust to keep on screen
         screen = QApplication.screenAt(global_center)
         if screen:
             screen_rect = screen.geometry()
@@ -63,21 +63,21 @@ class DockIndicators(QWidget):
         self.update()
 
     def update_highlight(self, cursor_pos: QPoint) -> Optional[DockPosition]:
-        """Atualiza destaque baseado na posição do cursor"""
+        """Update highlight based on cursor position"""
         if not self.target_widget:
             return None
 
-        # Converte posição do cursor para coordenadas locais dos indicadores
+        # Convert cursor position to local indicator coordinates
         local_pos = self.mapFromGlobal(cursor_pos)
 
-        # Verifica qual indicador está sob o cursor
+        # Check which indicator is under cursor
         new_position = None
         for position, rect in self.indicator_rects.items():
             if rect.contains(local_pos):
                 new_position = position
                 break
 
-        # Atualiza se mudou
+        # Update if changed
         if new_position != self.current_position:
             self.current_position = new_position
             self.update()
@@ -85,30 +85,30 @@ class DockIndicators(QWidget):
         return self.current_position
 
     def hide_indicators(self):
-        """Esconde indicadores"""
+        """Hide indicators"""
         self.current_position = None
         self.target_widget = None
         self.hide()
 
     def paintEvent(self, event):
-        """Desenha os indicadores"""
+        """Draw indicators"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Fundo semi-transparente
+        # Semi-transparent background
         painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
 
-        # Desenha cada indicador
+        # Draw each indicator
         for position, rect in self.indicator_rects.items():
             self._draw_indicator(painter, position, rect)
 
         painter.end()
 
     def _draw_indicator(self, painter: QPainter, position: DockPosition, rect: QRect):
-        """Desenha um indicador"""
-        # Cores
+        """Draw an indicator"""
+        # Colors
         if position == self.current_position:
-            bg_color = QColor(0, 122, 204, 200)  # Azul VS Code
+            bg_color = QColor(0, 122, 204, 200)  # VS Code blue
             border_color = QColor(0, 122, 204)
             text_color = QColor(255, 255, 255)
         else:
@@ -116,12 +116,12 @@ class DockIndicators(QWidget):
             border_color = QColor(100, 100, 100)
             text_color = QColor(204, 204, 204)
 
-        # Desenha fundo
+        # Draw background
         painter.setBrush(QBrush(bg_color))
         painter.setPen(QPen(border_color, 2))
         painter.drawRoundedRect(rect, 6, 6)
 
-        # Desenha ícone/texto
+        # Draw icon/text
         painter.setPen(QPen(text_color))
         painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
 
@@ -129,7 +129,7 @@ class DockIndicators(QWidget):
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, icon_text)
 
     def _get_icon_text(self, position: DockPosition) -> str:
-        """Retorna texto/ícone para cada posição"""
+        """Return text/icon for each position"""
         icons = {
             DockPosition.TOP: "↑",
             DockPosition.BOTTOM: "↓",
@@ -141,7 +141,7 @@ class DockIndicators(QWidget):
 
 
 class DockPreview(QWidget):
-    """Preview visual de onde o painel será posicionado"""
+    """Visual preview of where panel will be positioned"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -153,22 +153,22 @@ class DockPreview(QWidget):
         self.preview_rect = QRect()
 
     def show_preview(self, rect: QRect):
-        """Mostra preview na área especificada"""
+        """Show preview in specified area"""
         self.preview_rect = rect
         self.setGeometry(rect)
         self.show()
         self.update()
 
     def hide_preview(self):
-        """Esconde preview"""
+        """Hide preview"""
         self.hide()
 
     def paintEvent(self, event):
-        """Desenha o preview"""
+        """Draw preview"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Fundo azul semi-transparente
+        # Semi-transparent blue background
         bg_color = QColor(0, 122, 204, 80)
         border_color = QColor(0, 122, 204, 160)
 

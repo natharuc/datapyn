@@ -20,11 +20,13 @@ import qtawesome as qta
 import os
 import re
 
+from src.language import S
 
-# Pasta de icones customizados
+
+# Custom icons folder
 ICONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "assets", "icons", "db")
 
-# Mapeamento de icones e cores por tipo de banco (fallback para qtawesome)
+# Icon and color mapping by database type (fallback to qtawesome)
 DB_TYPE_ICONS = {
     "sqlserver": {"icon": "mdi.database", "color": "#CC2927"},  # SQL Server - vermelho Microsoft
     "mssql": {"icon": "mdi.database", "color": "#CC2927"},  # Alias
@@ -37,7 +39,7 @@ DB_TYPE_ICONS = {
 
 
 def _normalize_db_type(db_type: str) -> str:
-    """Normaliza o nome do tipo de banco"""
+    """Normalize database type name"""
     db_type_lower = (db_type or "").lower().replace(" ", "").replace("_", "")
 
     if "sql" in db_type_lower and "server" in db_type_lower:
@@ -55,41 +57,41 @@ def _normalize_db_type(db_type: str) -> str:
 
 
 def _load_svg_with_color(svg_path: str, color: str, size: int = 32) -> QIcon:
-    """Carrega SVG e aplica cor customizada
+    """Load SVG and apply custom color
 
     Args:
-        svg_path: Caminho para o arquivo SVG
-        color: Cor em formato hex (#RRGGBB)
-        size: Tamanho do icone em pixels
+        svg_path: Path to SVG file
+        color: Color in hex format (#RRGGBB)
+        size: Icon size in pixels
 
     Returns:
-        QIcon com a cor aplicada
+        QIcon with applied color
     """
     try:
         with open(svg_path, "r", encoding="utf-8") as f:
             svg_content = f.read()
 
-        # Substitui cores no CSS (dentro de <style> ou atributo style)
-        # Padroes: fill:#XXXXXX ou fill: #XXXXXX ou fill:rgb(...) etc
+        # Replace colors in CSS (inside <style> or style attribute)
+        # Patterns: fill:#XXXXXX or fill: #XXXXXX or fill:rgb(...) etc
         svg_content = re.sub(r"fill\s*:\s*#[0-9a-fA-F]{3,6}", f"fill:{color}", svg_content)
         svg_content = re.sub(r"stroke\s*:\s*#[0-9a-fA-F]{3,6}", f"stroke:{color}", svg_content)
 
-        # Substitui cores em atributos (fill="..." e stroke="...")
+        # Replace colors in attributes (fill="..." and stroke="...")
         svg_content = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg_content)
         svg_content = re.sub(r'stroke="[^"]*"', f'stroke="{color}"', svg_content)
 
-        # Se nao tinha fill, adiciona no primeiro elemento de path/circle/rect
+        # If no fill, add to first path/circle/rect element
         if "fill=" not in svg_content and "fill:" not in svg_content:
             svg_content = re.sub(r"<(path|circle|rect|polygon)", f'<\\1 fill="{color}"', svg_content)
 
-        # Renderiza o SVG
+        # Render SVG
         svg_bytes = QByteArray(svg_content.encode("utf-8"))
         renderer = QSvgRenderer(svg_bytes)
 
         if not renderer.isValid():
             return None
 
-        # Cria pixmap e pinta o SVG
+        # Create pixmap and paint SVG
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
 
@@ -100,43 +102,43 @@ def _load_svg_with_color(svg_path: str, color: str, size: int = 32) -> QIcon:
         return QIcon(pixmap)
 
     except Exception as e:
-        print(f"Erro ao carregar SVG {svg_path}: {e}")
+        print(f"Error loading SVG {svg_path}: {e}")
         return None
 
 
 def get_db_icon(db_type: str, custom_color: str = None) -> QIcon:
-    """Retorna icone para o tipo de banco
+    """Return icon for database type
 
-    Prioridade:
-    1. SVG customizado em assets/icons/db/{db_type}.svg
-    2. Icone padrao do qtawesome
+    Priority:
+    1. Custom SVG in assets/icons/db/{db_type}.svg
+    2. Default qtawesome icon
 
     Args:
-        db_type: Tipo do banco (sqlserver, mysql, etc)
-        custom_color: Cor customizada (opcional, sobrescreve padrao)
+        db_type: Database type (sqlserver, mysql, etc)
+        custom_color: Custom color (optional, overrides default)
 
     Returns:
-        QIcon com icone do banco
+        QIcon with database icon
     """
     db_type_normalized = _normalize_db_type(db_type)
 
-    # Pega cor padrao ou customizada
+    # Get default or custom color
     config = DB_TYPE_ICONS.get(db_type_normalized, {"icon": "mdi.database", "color": "#64b5f6"})
     color = custom_color if custom_color else config["color"]
 
-    # Tenta carregar SVG customizado
+    # Try to load custom SVG
     svg_path = os.path.join(ICONS_DIR, f"{db_type_normalized}.svg")
     if os.path.exists(svg_path):
         icon = _load_svg_with_color(svg_path, color)
         if icon:
             return icon
 
-    # Fallback para qtawesome
+    # Fallback to qtawesome
     return qta.icon(config["icon"], color=color)
 
 
 class ConnectionItemWidget(QWidget):
-    """Widget customizado para item de conexao com nome e grupo em linhas separadas"""
+    """Custom widget for connection item with name and group in separate lines"""
 
     def __init__(self, name: str, group: str = "", icon: QIcon = None, parent=None):
         super().__init__(parent)
@@ -152,18 +154,18 @@ class ConnectionItemWidget(QWidget):
             icon_label.setFixedSize(28, 28)
             layout.addWidget(icon_label)
 
-        # Container para textos
+        # Container for texts
         text_container = QWidget()
         text_layout = QVBoxLayout(text_container)
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(0)
 
-        # Nome da conexao (linha principal)
+        # Connection name (main line)
         self.name_label = QLabel(name)
         self.name_label.setStyleSheet("font-size: 13px; font-weight: 500;")
         text_layout.addWidget(self.name_label)
 
-        # Grupo (linha secundaria - menor e cinza)
+        # Group (secondary line - smaller and gray)
         if group:
             self.group_label = QLabel(group)
             self.group_label.setStyleSheet("font-size: 10px;")
@@ -174,7 +176,7 @@ class ConnectionItemWidget(QWidget):
 
 
 class DraggableConnectionList(QListWidget):
-    """QListWidget que permite arrastar conexões"""
+    """QListWidget that allows dragging connections"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -182,12 +184,12 @@ class DraggableConnectionList(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
 
     def startDrag(self, supportedActions):
-        """Inicia drag de uma conexão"""
+        """Start connection drag"""
         item = self.currentItem()
         if not item:
             return
 
-        # Obter dados da conexão
+        # Get connection data
         conn_name = None
         db_type = "mysql"
 
@@ -200,32 +202,32 @@ class DraggableConnectionList(QListWidget):
         if not conn_name:
             return
 
-        # Criar MimeData com informacoes da conexao
+        # Create MimeData with connection info
         mime_data = QMimeData()
         mime_data.setData("application/x-connection-name", conn_name.encode("utf-8"))
         mime_data.setData("application/x-db-type", db_type.encode("utf-8"))
 
-        # Incluir cor da conexao se disponivel
+        # Include connection color if available
         conn_color = ""
         if isinstance(item, ConnectionItem):
             conn_color = item.config.get("color", "") or ""
         if conn_color:
             mime_data.setData("application/x-connection-color", conn_color.encode("utf-8"))
 
-        # Criar drag
+        # Create drag
         drag = QDrag(self)
         drag.setMimeData(mime_data)
 
-        # Ícone do drag
+        # Drag icon
         icon = get_db_icon(db_type)
         drag.setPixmap(icon.pixmap(32, 32))
 
-        # Executar drag
+        # Execute drag
         drag.exec(Qt.DropAction.CopyAction)
 
 
 class ConnectionItem(QListWidgetItem):
-    """Item de conexao com icone especifico por banco"""
+    """Connection item with database-specific icon"""
 
     def __init__(self, name: str, config: dict):
         super().__init__()
@@ -238,19 +240,19 @@ class ConnectionItem(QListWidgetItem):
         group = config.get("group", "")
         custom_color = config.get("color", "")
 
-        # Icone especifico por tipo de banco (SVG customizado ou qtawesome)
+        # Database-specific icon (custom SVG or qtawesome)
         self.icon = get_db_icon(db_type, custom_color if custom_color else None)
         self.group = group
 
-        # Tooltip completo
+        # Complete tooltip
         self.setToolTip(f"{db_type}\n{host}\n{database}")
 
-        # Tamanho para acomodar 2 linhas se tiver grupo
+        # Size to accommodate 2 lines if has group
         self.setSizeHint(QSize(250, 48 if group else 36))
 
 
 class ActiveConnectionWidget(QFrame):
-    """Widget de conexao ativa - flat design"""
+    """Active connection widget - flat design"""
 
     disconnect_clicked = pyqtSignal()
 
@@ -265,19 +267,19 @@ class ActiveConnectionWidget(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        # Header com icone
+        # Header with icon
         header = QHBoxLayout()
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon("mdi.connection", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("CONEXAO ATIVA")
+        title = QLabel(S.connection_panel.section_active)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
-        # Nome
-        self.name_label = QLabel("Nenhuma")
+        # Name
+        self.name_label = QLabel(S.connection_panel.label_none)
         self.name_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(self.name_label)
 
@@ -287,8 +289,8 @@ class ActiveConnectionWidget(QFrame):
         self.info_label.setStyleSheet("color: #888; font-size: 12px;")
         layout.addWidget(self.info_label)
 
-        # Botao
-        self.btn_disconnect = QPushButton(" Desconectar")
+        # Button
+        self.btn_disconnect = QPushButton(f" {S.connection_panel.btn_disconnect}")
         self.btn_disconnect.setIcon(qta.icon("mdi.link-off", color="white"))
         self.btn_disconnect.setObjectName("danger")
         self.btn_disconnect.setEnabled(False)
@@ -296,7 +298,7 @@ class ActiveConnectionWidget(QFrame):
         layout.addWidget(self.btn_disconnect)
 
     def set_connection(self, name: str, host: str = "", database: str = "", db_type: str = ""):
-        """Define conexao"""
+        """Set connection"""
         self.name_label.setText(name)
 
         info_parts = []
@@ -311,20 +313,20 @@ class ActiveConnectionWidget(QFrame):
         self.btn_disconnect.setEnabled(True)
 
     def set_disconnected(self):
-        """Define como desconectado"""
-        self.name_label.setText("Nenhuma")
+        """Set as disconnected"""
+        self.name_label.setText(S.connection_panel.label_none)
         self.info_label.setText("")
         self.btn_disconnect.setEnabled(False)
 
 
 class ConnectionsList(QFrame):
-    """Lista de conexoes - flat design"""
+    """Connections list - flat design"""
 
     connection_double_clicked = pyqtSignal(str)
-    new_tab_connection_requested = pyqtSignal(str)  # Conectar sempre em nova aba
+    new_tab_connection_requested = pyqtSignal(str)  # Always connect in new tab
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
-    edit_connection_clicked = pyqtSignal(str)  # Sinal para editar conexão diretamente
+    edit_connection_clicked = pyqtSignal(str)  # Signal to edit connection directly
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -333,7 +335,7 @@ class ConnectionsList(QFrame):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)  # Volta margem normal
+        layout.setContentsMargins(12, 12, 12, 12)  # Back to normal margin
         layout.setSpacing(8)
 
         # Header
@@ -341,35 +343,35 @@ class ConnectionsList(QFrame):
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon("mdi.database-cog", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("CONEXOES SALVAS")
+        title = QLabel(S.connection_panel.section_saved)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
-        # Lista (com drag enabled)
+        # List (with drag enabled)
         self.list_widget = DraggableConnectionList()
         self.list_widget.setMinimumHeight(150)
-        self.list_widget.setIconSize(QSize(28, 28))  # Icones maiores
-        self.list_widget.setSpacing(2)  # Espacamento entre itens
-        self.list_widget.setWordWrap(True)  # Permite quebra de linha
-        self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)  # Nao trunca com "..."
+        self.list_widget.setIconSize(QSize(28, 28))  # Larger icons
+        self.list_widget.setSpacing(2)  # Spacing between items
+        self.list_widget.setWordWrap(True)  # Allow line break
+        self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)  # Don't truncate with "..."
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         # Context menu
         self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.list_widget)
 
-        # Botoes
+        # Buttons
         btn_layout = QHBoxLayout()
 
-        self.btn_new = QPushButton(" Nova")
+        self.btn_new = QPushButton(f" {S.connection_panel.btn_new}")
         self.btn_new.setIcon(qta.icon("mdi.plus-circle", color="white"))
         self.btn_new.setObjectName("primary")
         self.btn_new.clicked.connect(self.new_connection_clicked.emit)
         btn_layout.addWidget(self.btn_new)
 
-        self.btn_manage = QPushButton(" Gerenciar")
+        self.btn_manage = QPushButton(f" {S.connection_panel.btn_manage}")
         self.btn_manage.setIcon(qta.icon("mdi.cog", color="white"))
         self.btn_manage.clicked.connect(self.manage_connections_clicked.emit)
         btn_layout.addWidget(self.btn_manage)
@@ -377,7 +379,7 @@ class ConnectionsList(QFrame):
         layout.addLayout(btn_layout)
 
     def _on_item_double_clicked(self, item: QListWidgetItem):
-        """Emite sinal quando item e clicado duas vezes"""
+        """Emit signal when item is double-clicked"""
         from PyQt6.QtGui import QGuiApplication
 
         conn_name = None
@@ -387,17 +389,17 @@ class ConnectionsList(QFrame):
             conn_name = item.data(Qt.ItemDataRole.UserRole)
 
         if conn_name:
-            # Verificar se CTRL está pressionado
+            # Check if CTRL is pressed
             modifiers = QGuiApplication.keyboardModifiers()
             if modifiers & Qt.KeyboardModifier.ControlModifier:
-                # CTRL pressionado - sempre nova aba
+                # CTRL pressed - always new tab
                 self.new_tab_connection_requested.emit(conn_name)
             else:
-                # Comportamento normal
+                # Normal behavior
                 self.connection_double_clicked.emit(conn_name)
 
     def _show_context_menu(self, pos):
-        """Mostra menu de contexto na conexao"""
+        """Show context menu on connection"""
         item = self.list_widget.itemAt(pos)
         if not item:
             return
@@ -408,31 +410,31 @@ class ConnectionsList(QFrame):
 
         menu = QMenu(self)
 
-        connect_action = QAction(qta.icon("mdi.lan-connect", color="#4ec9b0"), " Conectar", self)
+        connect_action = QAction(qta.icon("mdi.lan-connect", color="#4ec9b0"), f" {S.connection_panel.ctx_connect}", self)
         connect_action.triggered.connect(lambda: self.connection_double_clicked.emit(conn_name))
         menu.addAction(connect_action)
 
-        new_tab_action = QAction(qta.icon("mdi.tab-plus", color="#4ec9b0"), " Conectar em Nova Aba", self)
+        new_tab_action = QAction(qta.icon("mdi.tab-plus", color="#4ec9b0"), f" {S.connection_panel.ctx_connect_new_tab}", self)
         new_tab_action.triggered.connect(lambda: self.new_tab_connection_requested.emit(conn_name))
         menu.addAction(new_tab_action)
 
         menu.addSeparator()
 
-        edit_action = QAction(qta.icon("mdi.pencil", color="#569cd6"), " Editar", self)
+        edit_action = QAction(qta.icon("mdi.pencil", color="#569cd6"), f" {S.connection_panel.ctx_edit}", self)
         edit_action.triggered.connect(lambda: self._edit_connection(conn_name))
         menu.addAction(edit_action)
 
         menu.exec(self.list_widget.mapToGlobal(pos))
 
     def _edit_connection(self, conn_name: str):
-        """Emite sinal para editar conexao diretamente"""
+        """Emit signal to edit connection directly"""
         self.edit_connection_clicked.emit(conn_name)
 
     def refresh(self, connections: list):
-        """Atualiza lista de conexoes
+        """Refresh connections list
 
         Args:
-            connections: Lista de tuplas (name, config)
+            connections: List of tuples (name, config)
         """
         self.list_widget.clear()
 
@@ -441,21 +443,21 @@ class ConnectionsList(QFrame):
             item.setData(Qt.ItemDataRole.UserRole, name)
             self.list_widget.addItem(item)
 
-            # Widget customizado com nome e grupo separados
+            # Custom widget with name and group separated
             widget = ConnectionItemWidget(name, item.group, item.icon)
             self.list_widget.setItemWidget(item, widget)
 
 
 class ConnectionPanel(QWidget):
-    """Painel de conexoes (widget para dock)"""
+    """Connection panel (dock widget)"""
 
-    # Sinais
+    # Signals
     connection_requested = pyqtSignal(str)  # connection_name
-    new_tab_connection_requested = pyqtSignal(str)  # connection_name para nova aba
+    new_tab_connection_requested = pyqtSignal(str)  # connection_name for new tab
     disconnect_clicked = pyqtSignal()
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
-    edit_connection_clicked = pyqtSignal(str)  # connection_name para editar
+    edit_connection_clicked = pyqtSignal(str)  # connection_name to edit
 
     def __init__(self, connection_manager=None, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -471,20 +473,20 @@ class ConnectionPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)  # Padding geral de 10px em todos os lados
+        layout.setContentsMargins(10, 10, 10, 10)  # Overall padding of 10px on all sides
 
         self.active_widget = ActiveConnectionWidget()
-        self.active_widget.setMaximumHeight(150)  # Fixa altura da conexão ativa
+        self.active_widget.setMaximumHeight(150)  # Fix active connection height
         layout.addWidget(self.active_widget)
 
         self.connections_list = ConnectionsList()
-        # Faz a lista ocupar todo espaço restante
+        # Make list occupy all remaining space
         layout.addWidget(self.connections_list, 1)  # stretch=1
 
-        # Remove addStretch() para deixar connections_list ocupar tudo
+        # Remove addStretch() to let connections_list occupy everything
 
     def _connect_signals(self):
-        """Conecta sinais internos aos externos"""
+        """Connect internal signals to external ones"""
         self.active_widget.disconnect_clicked.connect(self.disconnect_clicked.emit)
         self.connections_list.connection_double_clicked.connect(self.connection_requested.emit)
         self.connections_list.new_tab_connection_requested.connect(self.new_tab_connection_requested.emit)
@@ -493,21 +495,21 @@ class ConnectionPanel(QWidget):
         self.connections_list.edit_connection_clicked.connect(self.edit_connection_clicked.emit)
 
     def set_active_connection(self, name: str, host: str = "", database: str = "", db_type: str = ""):
-        """Define conexao ativa"""
+        """Set active connection"""
         self.active_widget.set_connection(name, host, database, db_type)
 
     def set_disconnected(self):
-        """Define como desconectado"""
+        """Set as disconnected"""
         self.active_widget.set_disconnected()
 
     def refresh_connections(self, connections: list = None):
-        """Atualiza lista de conexoes
+        """Refresh connections list
 
         Args:
-            connections: Lista de tuplas (name, config) ou None para usar connection_manager
+            connections: List of tuples (name, config) or None to use connection_manager
         """
         if connections is None and self.connection_manager:
-            # Buscar do connection manager
+            # Fetch from connection manager
             connections = []
             for conn_name in self.connection_manager.get_saved_connections():
                 config = self.connection_manager.get_connection_config(conn_name)

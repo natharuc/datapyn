@@ -1,10 +1,10 @@
 """
-Connection Service - Serviço para gerenciamento de conexões de banco de dados
+Connection Service - Service for database connection management
 
-Responsabilidades:
-- Criar/remover conexões
-- Testar conexões
-- Sincronizar com ApplicationState
+Responsibilities:
+- Create/remove connections
+- Test connections
+- Synchronize with ApplicationState
 """
 
 from typing import Optional, Callable
@@ -17,7 +17,7 @@ from ..database import ConnectionManager
 
 @dataclass
 class ConnectionConfig:
-    """Configuração de conexão"""
+    """Connection configuration"""
 
     name: str
     db_type: str
@@ -31,12 +31,12 @@ class ConnectionConfig:
 
 class ConnectionService:
     """
-    Serviço de gerenciamento de conexões
+    Connection management service
 
-    Sincroniza com ApplicationState e ConnectionManager.
-    Executa conexões via workers assíncronos.
+    Synchronizes with ApplicationState and ConnectionManager.
+    Executes connections via async workers.
 
-    Exemplo:
+    Example:
         service = ConnectionService()
         config = ConnectionConfig(...)
         service.connect(
@@ -60,16 +60,16 @@ class ConnectionService:
         on_finished: Optional[Callable[[], None]] = None,
     ):
         """
-        Conecta a banco de dados de forma assíncrona
+        Connect to database asynchronously
 
         Args:
-            config: Configuração da conexão
-            on_success: Callback em caso de sucesso
-            on_error: Callback com mensagem de erro
-            on_started: Callback ao iniciar
-            on_finished: Callback ao finalizar (sempre)
+            config: Connection configuration
+            on_success: Callback on success
+            on_error: Callback with error message
+            on_started: Callback on start
+            on_finished: Callback on finish (always)
         """
-        # Cria worker
+        # Create worker
         worker = DatabaseConnectionWorker(
             self.conn_manager,
             config.name,
@@ -82,7 +82,7 @@ class ConnectionService:
             config.use_windows_auth,
         )
 
-        # Conectar callbacks
+        # Connect callbacks
         if on_started:
             worker.started.connect(on_started)
 
@@ -90,8 +90,8 @@ class ConnectionService:
             worker.finished.connect(on_finished)
 
         def handle_success():
-            """Handler interno para sucesso"""
-            # Adiciona ao estado
+            """Internal handler for success"""
+            # Add to state
             self.app_state.add_connection(
                 name=config.name,
                 db_type=config.db_type,
@@ -105,28 +105,28 @@ class ConnectionService:
                 on_success()
 
         def handle_error(error_msg: str):
-            """Handler interno para erro"""
+            """Internal handler for error"""
             if on_error:
                 on_error(error_msg)
 
         worker.connection_success.connect(handle_success)
         worker.error.connect(handle_error)
 
-        # Executa worker
+        # Execute worker
         execute_worker(worker)
 
     def disconnect(self, conn_name: str) -> tuple[bool, str]:
         """
-        Desconecta de um banco
+        Disconnect from database
 
         Returns:
             (success, error_message)
         """
         try:
-            # Remove do manager
+            # Remove from manager
             self.conn_manager.remove_connection(conn_name)
 
-            # Remove do estado
+            # Remove from state
             self.app_state.remove_connection(conn_name)
 
             return True, ""
@@ -135,13 +135,13 @@ class ConnectionService:
 
     def test_connection(self, config: ConnectionConfig, *, on_result: Optional[Callable[[bool, str], None]] = None):
         """
-        Testa conexão sem salvar
+        Test connection without saving
 
         Args:
-            config: Configuração da conexão
-            on_result: Callback com (success, message)
+            config: Connection configuration
+            on_result: Callback with (success, message)
         """
-        # Usa nome temporário
+        # Use temporary name
         temp_name = f"_test_{config.name}"
         temp_config = ConnectionConfig(
             name=temp_name,
@@ -155,10 +155,10 @@ class ConnectionService:
         )
 
         def on_success():
-            # Remove conexão de teste
+            # Remove test connection
             self.conn_manager.remove_connection(temp_name)
             if on_result:
-                on_result(True, "Conexão bem-sucedida!")
+                on_result(True, "Connection successful!")
 
         def on_error(error_msg: str):
             if on_result:
@@ -167,10 +167,10 @@ class ConnectionService:
         self.connect(temp_config, on_success=on_success, on_error=on_error)
 
     def get_active_connection_name(self) -> Optional[str]:
-        """Retorna nome da conexão ativa"""
+        """Return active connection name"""
         conn = self.app_state.get_active_connection()
         return conn.name if conn else None
 
     def set_active_connection(self, conn_name: str):
-        """Define conexão ativa"""
+        """Set active connection"""
         self.app_state.set_active_connection(conn_name)

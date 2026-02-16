@@ -29,6 +29,8 @@ from PyQt6.QtGui import QFont, QColor, QAction
 
 from .buttons import GhostButton
 
+from src.language import S
+
 try:
     import qtawesome as qta
 
@@ -42,26 +44,26 @@ logger = logging.getLogger(__name__)
 
 
 class ObjectExplorerPanel(QWidget):
-    """Painel de Object Explorer - exibe estrutura do banco em arvore"""
+    """Object Explorer Panel - displays database structure in tree"""
 
-    # Sinais
-    insert_text_requested = pyqtSignal(str)  # texto para inserir (append) no editor focado
+    # Signals
+    insert_text_requested = pyqtSignal(str)  # text to insert (append) in focused editor
     select_top_requested = pyqtSignal(str, str)  # schema, table_name -> SELECT TOP 1000
-    query_requested = pyqtSignal(str)  # query SQL para executar
-    database_switch_requested = pyqtSignal(str)  # nome do banco para trocar
+    query_requested = pyqtSignal(str)  # SQL query to execute
+    database_switch_requested = pyqtSignal(str)  # database name to switch to
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager
-        self._current_schema = None  # schema dict do SchemaService
+        self._current_schema = None  # schema dict from SchemaService
         self._current_connection = ""
-        self._all_databases = []  # lista de todos os bancos do servidor
+        self._all_databases = []  # list of all databases from server
         self._filter_timer = None
         self._setup_ui()
         self._apply_theme()
 
     def _setup_ui(self):
-        """Configura UI"""
+        """Configure UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -73,14 +75,14 @@ class ObjectExplorerPanel(QWidget):
         toolbar_layout.setSpacing(8)
 
         # Info label
-        self.info_label = QLabel("Nenhuma conexao")
+        self.info_label = QLabel(S.object_explorer.no_connection)
         self.info_label.setStyleSheet("color: #808080;")
         toolbar_layout.addWidget(self.info_label)
 
         toolbar_layout.addStretch()
 
-        # Botao refresh
-        self.btn_refresh = GhostButton("Atualizar")
+        # Refresh button
+        self.btn_refresh = GhostButton(S.object_explorer.btn_refresh)
         if HAS_QTAWESOME:
             self.btn_refresh.setIcon(qta.icon("fa5s.sync", color="#888888"))
         toolbar_layout.addWidget(self.btn_refresh)
@@ -93,9 +95,9 @@ class ObjectExplorerPanel(QWidget):
         """)
         layout.addWidget(toolbar)
 
-        # Campo de busca
+        # Search field
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Buscar tabelas e colunas...")
+        self.search_input.setPlaceholderText(S.object_explorer.placeholder_search)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setStyleSheet("""
             QLineEdit {
@@ -134,7 +136,7 @@ class ObjectExplorerPanel(QWidget):
         layout.addWidget(self.tree)
 
     def _apply_theme(self):
-        """Aplica tema ao tree widget"""
+        """Apply theme to tree widget"""
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
@@ -163,18 +165,18 @@ class ObjectExplorerPanel(QWidget):
         """)
 
     def set_theme_manager(self, theme_manager):
-        """Define theme manager"""
+        """Set theme manager"""
         self.theme_manager = theme_manager
         self._apply_theme()
 
     def set_schema(self, schema: dict, connection_name: str = ""):
-        """Define o schema a ser exibido na arvore.
+        """Set the schema to be displayed in the tree.
 
         Args:
-            schema: dict com keys 'database', 'tables', 'columns',
-                    opcionalmente 'databases' (lista de todos os bancos)
-                    (formato do SchemaService)
-            connection_name: nome da conexao
+            schema: dict with keys 'database', 'tables', 'columns',
+                    optionally 'databases' (list of all databases)
+                    (format from SchemaService)
+            connection_name: connection name
         """
         self._current_schema = schema
         self._current_connection = connection_name
@@ -183,20 +185,20 @@ class ObjectExplorerPanel(QWidget):
         self._build_tree(schema)
 
     def clear(self):
-        """Limpa a arvore"""
+        """Clear tree"""
         self.tree.clear()
         self._current_schema = None
         self._current_connection = ""
         self._all_databases = []
-        self.info_label.setText("Nenhuma conexao")
+        self.info_label.setText(S.object_explorer.no_connection)
         self.search_input.clear()
 
     def _build_tree(self, schema: dict):
-        """Constroi a arvore a partir do schema"""
+        """Build tree from schema"""
         self.tree.clear()
 
         if not schema:
-            self.info_label.setText("Nenhuma conexao")
+            self.info_label.setText(S.object_explorer.no_connection)
             return
 
         tables = schema.get("tables", [])
@@ -224,7 +226,7 @@ class ObjectExplorerPanel(QWidget):
                         if not has_match and filter_text not in db.lower():
                             continue
 
-                    display = f"{db}  (conectado)" if not filter_text else db
+                    display = f"{db}  ({S.object_explorer.db_connected.format(db='')})" if not filter_text else db
                     db_item = QTreeWidgetItem(self.tree, [display])
                     db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
 
@@ -252,7 +254,7 @@ class ObjectExplorerPanel(QWidget):
                         db_item.setIcon(0, qta.icon("mdi.database", color="#888888"))
         else:
             # Fallback: apenas o banco conectado (sem lista de bancos)
-            db_display = db_name or self._current_connection or "Banco"
+            db_display = db_name or self._current_connection or "Database"
             db_item = QTreeWidgetItem(self.tree, [db_display])
             db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
 
@@ -271,9 +273,9 @@ class ObjectExplorerPanel(QWidget):
         col_count = sum(len(v) for v in columns.values())
         db_count = len(all_databases)
         if db_count > 0:
-            self.info_label.setText(f"{db_count} bancos, {table_count} tabelas")
+            self.info_label.setText(S.object_explorer.info_dbs_tables.format(dbs=db_count, tables=table_count))
         else:
-            self.info_label.setText(f"{table_count} tabelas, {col_count} colunas")
+            self.info_label.setText(S.object_explorer.info_tables_cols.format(tables=table_count, cols=col_count))
 
     def _add_tables_to_node(self, parent_item, tables, columns, filter_text=""):
         """Adiciona tabelas e colunas a um no da arvore.
@@ -326,7 +328,7 @@ class ObjectExplorerPanel(QWidget):
                 is_view = "VIEW" in table_type.upper()
                 label = table_name
                 if is_view:
-                    label = f"{table_name} (view)"
+                    label = f"{table_name} {S.object_explorer.view_suffix}"
 
                 table_item = QTreeWidgetItem(parent, [label])
                 table_item.setData(
@@ -461,7 +463,7 @@ class ObjectExplorerPanel(QWidget):
         if item_type == "table":
             # Selecionar 1000 linhas
             qualified = f"{schema_name}.{name}" if schema_name else name
-            act_select = menu.addAction("Selecionar 1000 linhas")
+            act_select = menu.addAction(S.object_explorer.ctx_select_top)
             act_select.triggered.connect(
                 lambda: self.query_requested.emit(f"SELECT TOP 1000 * FROM {qualified}")
             )
@@ -469,16 +471,16 @@ class ObjectExplorerPanel(QWidget):
             menu.addSeparator()
 
             # Inserir nome no editor
-            act_insert = menu.addAction("Inserir nome no editor")
+            act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
             act_insert.triggered.connect(lambda: self.insert_text_requested.emit(name))
 
             # Copiar nome
-            act_copy = menu.addAction("Copiar nome")
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_name)
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
             # Copiar nome qualificado
             if schema_name:
-                act_copy_qual = menu.addAction("Copiar nome qualificado")
+                act_copy_qual = menu.addAction(S.object_explorer.ctx_copy_qualified)
                 act_copy_qual.triggered.connect(
                     lambda: QApplication.clipboard().setText(f"{schema_name}.{name}")
                 )
@@ -488,16 +490,16 @@ class ObjectExplorerPanel(QWidget):
             col_type = data.get("data_type", "")
 
             # Inserir nome no editor
-            act_insert = menu.addAction("Inserir nome no editor")
+            act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
             act_insert.triggered.connect(lambda: self.insert_text_requested.emit(name))
 
             # Copiar nome
-            act_copy = menu.addAction("Copiar nome")
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_name)
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
             # Copiar como table.column
             if table_name:
-                act_copy_full = menu.addAction(f"Copiar como {table_name}.{name}")
+                act_copy_full = menu.addAction(S.object_explorer.ctx_copy_as_qualified.format(table=table_name, name=name))
                 act_copy_full.triggered.connect(
                     lambda: QApplication.clipboard().setText(f"{table_name}.{name}")
                 )
@@ -505,18 +507,18 @@ class ObjectExplorerPanel(QWidget):
             menu.addSeparator()
 
             # Info do tipo (desabilitado)
-            act_type_info = menu.addAction(f"Tipo: {col_type}")
+            act_type_info = menu.addAction(S.object_explorer.ctx_type_info.format(type=col_type))
             act_type_info.setEnabled(False)
 
         elif item_type == "database":
-            # Trocar para este banco
-            act_switch = menu.addAction(f"Usar banco '{name}'")
+            # Switch to this database
+            act_switch = menu.addAction(S.object_explorer.ctx_use_database.format(name=name))
             act_switch.triggered.connect(lambda: self.database_switch_requested.emit(name))
 
             menu.addSeparator()
 
-            # Copiar nome do banco
-            act_copy = menu.addAction("Copiar nome")
+            # Copy database name
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_db_name)
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
         else:

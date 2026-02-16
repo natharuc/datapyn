@@ -1,5 +1,5 @@
 """
-State Management - Gerenciamento de estado da aplicação
+State Management - Application state management
 """
 
 from .app_state import (

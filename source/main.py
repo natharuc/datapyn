@@ -10,6 +10,7 @@ from PyQt6.QtGui import QIcon, QPalette, QColor
 from PyQt6.QtCore import Qt
 from src.ui import MainWindow
 from src.design_system.tokens import get_colors
+from src.language import init_language
 
 
 # Configurar logging
@@ -80,6 +81,12 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DataPyn")
     app.setOrganizationName("DataPyn")
+
+    # Initialize i18n before creating any UI widgets
+    from PyQt6.QtCore import QSettings
+    settings = QSettings("DataPyn", "DataPyn")
+    language = settings.value("language", "en-US")
+    init_language(language)
 
     # Estilo Fusion para visual consistente cross-platform
     app.setStyle("Fusion")
