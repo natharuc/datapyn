@@ -92,7 +92,7 @@ class TestExportToTableWorker:
         worker.run()
         assert len(results) == 1
         assert results[0][0] is False
-        assert "vazio" in results[0][1].lower()
+        assert "empty" in results[0][1].lower()
 
     def test_worker_exports_small_df(self, qtbot):
         """Exporta DataFrame pequeno com executemany"""
@@ -158,7 +158,7 @@ class TestExportToTableWorker:
 
         assert len(finished) == 1
         assert finished[0][0] is False
-        assert "cancelada" in finished[0][1].lower()
+        assert "cancelled" in finished[0][1].lower()
 
     def test_worker_handles_executemany_exception(self, qtbot):
         """Worker captura excecoes do cursor.executemany"""
@@ -361,7 +361,7 @@ class TestExportToTableDialog:
         qtbot.addWidget(dialog)
 
         assert dialog.connection_combo.count() == 2
-        assert dialog.windowTitle() == "Exportar para Tabela"
+        assert dialog.windowTitle() == "Export to Table"
 
     def test_dialog_no_maximize_minimize_buttons(self, qtbot):
         """Dialogo nao deve ter botoes de maximizar/minimizar"""

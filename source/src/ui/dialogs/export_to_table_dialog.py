@@ -1,11 +1,11 @@
 """
-Dialogo para exportar DataFrame para uma tabela no banco de dados.
+Dialog for exporting DataFrame to a database table.
 
-Permite escolher:
-- Nome da tabela (suporta #tabela para temporarias)
-- Conexao de destino (entre as conexoes ativas da aba)
-- Comportamento se tabela existe (append, replace, fail)
-- Tamanho do chunk para insercao
+Allows choosing:
+- Table name (supports #table for temporary tables)
+- Destination connection (among active connections in the tab)
+- Behavior if table exists (append, replace, fail)
+- Chunk size for insertion
 """
 
 from PyQt6.QtWidgets import (
@@ -36,15 +36,15 @@ logger = logging.getLogger(__name__)
 
 
 class ExportToTableWorker(QObject):
-    """Worker para exportar DataFrame via raw cursor + Polars (executemany).
+    """Worker to export DataFrame via raw cursor + Polars (executemany).
 
-    Bypassa pandas.to_sql() e SQLAlchemy, usando cursor.executemany()
-    com fast_executemany para maxima performance de INSERT.
+    Bypasses pandas.to_sql() and SQLAlchemy, using cursor.executemany()
+    with fast_executemany for maximum INSERT performance.
     """
 
-    progress = pyqtSignal(int, int)  # (linhas_inseridas, total)
+    progress = pyqtSignal(int, int)  # (inserted_rows, total)
     finished = pyqtSignal(bool, str)  # (success, message)
-    status = pyqtSignal(str)  # mensagem de status
+    status = pyqtSignal(str)  # status message
 
     def __init__(self, df_polars, engine, table_name, if_exists, chunksize, schema=None):
         super().__init__()
@@ -58,13 +58,13 @@ class ExportToTableWorker(QObject):
         self._dialect = getattr(engine.dialect, "name", "mssql")
 
     def cancel(self):
-        """Solicita cancelamento da exportacao"""
+        """Requests export cancellation"""
         self._cancelled = True
 
     # ---- helpers SQL ----
 
     def _quote(self, name):
-        """Quoting de identificadores por dialeto"""
+        """Identifier quoting by dialect"""
         if self._dialect in ("mysql", "mariadb"):
             return f"`{name}`"
         if self._dialect == "mssql":
@@ -72,7 +72,7 @@ class ExportToTableWorker(QObject):
         return f'"{name}"'
 
     def _qualified_name(self):
-        """Retorna nome qualificado (schema.tabela) com quoting"""
+        """Returns qualified name (schema.table) with quoting"""
         if self.table_name.startswith("#"):
             return self.table_name
         q = self._quote
@@ -81,13 +81,13 @@ class ExportToTableWorker(QObject):
         return q(self.table_name)
 
     def _placeholder(self):
-        """Placeholder do driver: ? para pyodbc/sqlite3/mariadb, %s para pymysql/psycopg2"""
+        """Driver placeholder: ? for pyodbc/sqlite3/mariadb, %s for pymysql/psycopg2"""
         if self._dialect in ("mssql", "sqlite", "mariadb"):
             return "?"
         return "%s"
 
     def _get_sql_type(self, dtype):
-        """Mapeia tipo Polars para tipo SQL do dialeto"""
+        """Maps Polars type to SQL type for the dialect"""
         is_mssql = self._dialect == "mssql"
         if dtype.is_integer():
             if dtype in (pl.Int8, pl.UInt8):
@@ -109,26 +109,26 @@ class ExportToTableWorker(QObject):
         return "NVARCHAR(MAX)" if is_mssql else "TEXT"
 
     def _create_table_ddl(self):
-        """Gera DDL CREATE TABLE baseado nos dtypes do DataFrame"""
+        """Generates DDL CREATE TABLE based on DataFrame dtypes"""
         cols = []
         for name, dtype in zip(self.df.columns, self.df.dtypes):
             sql_type = self._get_sql_type(dtype)
             cols.append(f"{self._quote(name)} {sql_type}")
         return f"CREATE TABLE {self._qualified_name()} ({', '.join(cols)})"
 
-    # ---- execucao principal ----
+    # ---- main execution ----
 
     def run(self):
-        """Executa a exportacao via raw cursor + executemany"""
+        """Executes the export via raw cursor + executemany"""
         try:
             total_rows = self.df.height
             if total_rows == 0:
-                self.finished.emit(False, "DataFrame vazio, nada para exportar")
+                self.finished.emit(False, "Empty DataFrame, nothing to export")
                 return
 
-            self.status.emit(f"Preparando {total_rows:,} linhas...")
+            self.status.emit(f"Preparing {total_rows:,} rows...")
 
-            # Cast tipos complexos para string (Binary, List, Struct)
+            # Cast complex types to string (Binary, List, Struct)
             cast_exprs = []
             for col, dtype in zip(self.df.columns, self.df.dtypes):
                 if dtype == pl.Binary or dtype.is_nested():
@@ -145,31 +145,31 @@ class ExportToTableWorker(QObject):
                 if hasattr(cursor, "fast_executemany"):
                     cursor.fast_executemany = True
 
-                # DDL: tratar if_exists
+                # DDL: handle if_exists
                 if self.if_exists == "replace":
                     cursor.execute(f"DROP TABLE IF EXISTS {qualified}")
                     raw_conn.commit()
                     cursor.execute(self._create_table_ddl())
                     raw_conn.commit()
                 elif self.if_exists == "fail":
-                    # CREATE TABLE falha naturalmente se tabela ja existe
+                    # CREATE TABLE fails naturally if table already exists
                     cursor.execute(self._create_table_ddl())
                     raw_conn.commit()
                 elif self.if_exists == "append":
-                    # Cria se nao existe; ignora erro se ja existe
+                    # Creates if not exists; ignores error if already exists
                     try:
                         cursor.execute(self._create_table_ddl())
                         raw_conn.commit()
                     except Exception:
                         raw_conn.rollback()
 
-                # INSERT parametrizado
+                # Parameterized INSERT
                 cols_sql = ", ".join(self._quote(c) for c in self.df.columns)
                 phs = ", ".join([self._placeholder()] * len(self.df.columns))
                 insert_sql = f"INSERT INTO {qualified} ({cols_sql}) VALUES ({phs})"
 
                 self.status.emit(
-                    f"Exportando {total_rows:,} linhas para '{self.table_name}'..."
+                    f"Exporting {total_rows:,} rows to '{self.table_name}'..."
                 )
 
                 rows_done = 0
@@ -178,7 +178,7 @@ class ExportToTableWorker(QObject):
                         raw_conn.rollback()
                         self.finished.emit(
                             False,
-                            f"Exportacao cancelada. {rows_done:,} linhas foram inseridas.",
+                            f"Export cancelled. {rows_done:,} rows were inserted.",
                         )
                         return
 
@@ -192,12 +192,12 @@ class ExportToTableWorker(QObject):
                     rows_done = end
                     self.progress.emit(rows_done, total_rows)
                     self.status.emit(
-                        f"Exportando... {rows_done:,}/{total_rows:,} linhas"
+                        f"Exporting... {rows_done:,}/{total_rows:,} rows"
                     )
 
                 self.finished.emit(
                     True,
-                    f"{total_rows:,} linhas exportadas para '{self.table_name}'",
+                    f"{total_rows:,} rows exported to '{self.table_name}'",
                 )
 
             finally:
@@ -210,11 +210,11 @@ class ExportToTableWorker(QObject):
             error_msg = str(e)
             if len(error_msg) > 300:
                 error_msg = error_msg[:300] + "..."
-            self.finished.emit(False, f"Erro ao exportar: {error_msg}")
+            self.finished.emit(False, f"Error exporting: {error_msg}")
 
 
 class ExportToTableDialog(QDialog):
-    """Dialogo para exportar DataFrame para tabela no banco de dados"""
+    """Dialog for exporting DataFrame to database table"""
 
     def __init__(
         self,
@@ -226,10 +226,10 @@ class ExportToTableDialog(QDialog):
     ):
         """
         Args:
-            df: DataFrame a exportar
-            connections: dict {nome: DatabaseConnector} com conexoes ativas
-            current_connection: nome da conexao pre-selecionada (bloco/aba)
-            theme_manager: gerenciador de tema
+            df: DataFrame to export
+            connections: dict {name: DatabaseConnector} with active connections
+            current_connection: name of the pre-selected connection (block/tab)
+            theme_manager: theme manager
         """
         super().__init__(parent)
         self.df = df
@@ -241,7 +241,7 @@ class ExportToTableDialog(QDialog):
         self._worker = None
         self._is_exporting = False
 
-        self.setWindowTitle("Exportar para Tabela")
+        self.setWindowTitle("Export to Table")
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         self.setMinimumWidth(480)
         self.setFixedHeight(380)
@@ -250,32 +250,32 @@ class ExportToTableDialog(QDialog):
         self._apply_style()
 
     def _setup_ui(self):
-        """Configura a interface"""
+        """Sets up the UI"""
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # Info do DataFrame
-        info_label = QLabel(f"{len(self.df):,} linhas  x  {len(self.df.columns)} colunas")
+        # DataFrame info
+        info_label = QLabel(f"{len(self.df):,} rows  x  {len(self.df.columns)} columns")
         info_label.setFont(QFont("Segoe UI", 9))
         info_label.setStyleSheet("color: #888; margin-bottom: 4px;")
         layout.addWidget(info_label)
 
-        # Formulario
+        # Form
         form_layout = QFormLayout()
         form_layout.setSpacing(8)
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Nome da tabela
+        # Table name
         self.table_name_edit = QLineEdit()
-        self.table_name_edit.setPlaceholderText("ex: minha_tabela ou #temp")
+        self.table_name_edit.setPlaceholderText("e.g.: my_table or #temp")
         self.table_name_edit.setToolTip(
-            "Use # no inicio para criar tabela temporaria (SQL Server)\n"
-            "Ex: #dados_temp, minha_tabela, schema.tabela"
+            "Use # at the beginning to create a temporary table (SQL Server)\n"
+            "E.g.: #temp_data, my_table, schema.table"
         )
-        form_layout.addRow("Tabela:", self.table_name_edit)
+        form_layout.addRow("Table:", self.table_name_edit)
 
-        # Conexao de destino
+        # Destination connection
         self.connection_combo = QComboBox()
         self.connection_combo.setMinimumWidth(250)
         for name in sorted(self.connections.keys()):
@@ -286,36 +286,36 @@ class ExportToTableDialog(QDialog):
                 label = f"{name} ({db_type} - {db_name})" if db_name else f"{name} ({db_type})"
                 self.connection_combo.addItem(label, name)
 
-        # Pre-selecionar conexao atual
+        # Pre-select current connection
         if self.current_connection:
             for i in range(self.connection_combo.count()):
                 if self.connection_combo.itemData(i) == self.current_connection:
                     self.connection_combo.setCurrentIndex(i)
                     break
 
-        form_layout.addRow("Conexao:", self.connection_combo)
+        form_layout.addRow("Connection:", self.connection_combo)
 
-        # Se tabela existe
+        # If table exists
         self.if_exists_combo = QComboBox()
-        self.if_exists_combo.addItem("Substituir (DROP + CREATE)", "replace")
-        self.if_exists_combo.addItem("Acrescentar (INSERT)", "append")
-        self.if_exists_combo.addItem("Falhar (erro se existir)", "fail")
+        self.if_exists_combo.addItem("Replace (DROP + CREATE)", "replace")
+        self.if_exists_combo.addItem("Append (INSERT)", "append")
+        self.if_exists_combo.addItem("Fail (error if exists)", "fail")
         self.if_exists_combo.setCurrentIndex(0)
-        form_layout.addRow("Se existir:", self.if_exists_combo)
+        form_layout.addRow("If exists:", self.if_exists_combo)
 
         # Chunk size
         self.chunk_spin = QSpinBox()
         self.chunk_spin.setMinimum(100)
         self.chunk_spin.setMaximum(100000)
         self.chunk_spin.setValue(1000)
-        self.chunk_spin.setSuffix(" linhas")
-        self.chunk_spin.setToolTip("Numero de linhas por lote de insercao")
-        form_layout.addRow("Lote:", self.chunk_spin)
+        self.chunk_spin.setSuffix(" rows")
+        self.chunk_spin.setToolTip("Number of rows per insert batch")
+        form_layout.addRow("Batch:", self.chunk_spin)
 
         layout.addLayout(form_layout)
 
-        # Progresso
-        self.progress_group = QGroupBox("Progresso")
+        # Progress
+        self.progress_group = QGroupBox("Progress")
         progress_layout = QVBoxLayout(self.progress_group)
         progress_layout.setContentsMargins(8, 16, 8, 8)
 
@@ -326,7 +326,7 @@ class ExportToTableDialog(QDialog):
         self.progress_bar.setTextVisible(True)
         progress_layout.addWidget(self.progress_bar)
 
-        self.status_label = QLabel("Pronto para exportar")
+        self.status_label = QLabel("Ready to export")
         self.status_label.setFont(QFont("Segoe UI", 9))
         progress_layout.addWidget(self.status_label)
 
@@ -335,16 +335,16 @@ class ExportToTableDialog(QDialog):
 
         layout.addStretch()
 
-        # Botoes
+        # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setObjectName("btnCancel")
         self.btn_cancel.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_export = QPushButton("  Exportar")
+        self.btn_export = QPushButton("  Export")
         self.btn_export.setIcon(qta.icon("mdi.database-export", color="white"))
         self.btn_export.setDefault(True)
         self.btn_export.clicked.connect(self._on_export)
@@ -353,10 +353,10 @@ class ExportToTableDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _apply_style(self):
-        """Aplica estilo dark theme consistente com outros dialogos"""
+        """Applies dark theme style consistent with other dialogs"""
         base = self.theme_manager.get_dialog_stylesheet()
         colors = self.theme_manager.get_app_colors()
-        # Complementar com estilos especificos do progress bar e disabled
+        # Complement with specific styles for progress bar and disabled
         extra = f"""
             QProgressBar {{
                 background-color: {colors["border"]};
@@ -378,21 +378,21 @@ class ExportToTableDialog(QDialog):
         self.setStyleSheet(base + extra)
 
     def _validate(self) -> bool:
-        """Valida campos antes de exportar"""
+        """Validates fields before exporting"""
         table_name = self.table_name_edit.text().strip()
         if not table_name:
-            QMessageBox.warning(self, "Validacao", "Informe o nome da tabela")
+            QMessageBox.warning(self, "Validation", "Enter the table name")
             self.table_name_edit.setFocus()
             return False
 
         if self.connection_combo.count() == 0:
-            QMessageBox.warning(self, "Validacao", "Nenhuma conexao ativa disponivel")
+            QMessageBox.warning(self, "Validation", "No active connection available")
             return False
 
         return True
 
     def _on_export(self):
-        """Inicia a exportacao"""
+        """Starts the export"""
         if not self._validate():
             return
 
@@ -406,10 +406,10 @@ class ExportToTableDialog(QDialog):
 
         connector = self.connections.get(conn_name)
         if not connector or not connector.engine:
-            QMessageBox.critical(self, "Erro", f"Conexao '{conn_name}' nao esta ativa")
+            QMessageBox.critical(self, "Error", f"Connection '{conn_name}' is not active")
             return
 
-        # Separar schema.table se aplicavel
+        # Separate schema.table if applicable
         schema = None
         actual_table = table_name
         if "." in table_name and not table_name.startswith("#"):
@@ -417,44 +417,44 @@ class ExportToTableDialog(QDialog):
             schema = parts[0]
             actual_table = parts[1]
 
-        # Desabilitar campos durante exportacao
+        # Disable fields during export
         self._is_exporting = True
         self.btn_export.setEnabled(False)
         self.table_name_edit.setEnabled(False)
         self.connection_combo.setEnabled(False)
         self.if_exists_combo.setEnabled(False)
         self.chunk_spin.setEnabled(False)
-        self.btn_cancel.setText("Cancelar Exportacao")
+        self.btn_cancel.setText("Cancel Export")
 
-        # Mostrar progresso
+        # Show progress
         self.progress_group.setVisible(True)
         self.progress_bar.setValue(0)
-        self.status_label.setText("Iniciando exportacao...")
+        self.status_label.setText("Starting export...")
 
-        # Converter para Polars para exportacao rapida
+        # Convert to Polars for fast export
         try:
             df_polars = pl.from_pandas(self.df)
         except Exception:
             try:
-                # Fallback: converter tipos nullable pandas (Int64, StringDtype)
-                # para tipos simples numpy-backed antes da conversao
+                # Fallback: convert nullable pandas types (Int64, StringDtype)
+                # to simple numpy-backed types before conversion
                 df_clean = self.df.copy()
                 for col in df_clean.columns:
                     if pd.api.types.is_extension_array_dtype(df_clean[col]):
                         df_clean[col] = df_clean[col].astype(object)
                 df_polars = pl.from_pandas(df_clean)
             except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Erro ao converter DataFrame: {e}")
+                QMessageBox.critical(self, "Error", f"Error converting DataFrame: {e}")
                 self._is_exporting = False
                 self.btn_export.setEnabled(True)
                 self.table_name_edit.setEnabled(True)
                 self.connection_combo.setEnabled(True)
                 self.if_exists_combo.setEnabled(True)
                 self.chunk_spin.setEnabled(True)
-                self.btn_cancel.setText("Cancelar")
+                self.btn_cancel.setText("Cancel")
                 return
 
-        # Criar worker
+        # Create worker
         self._thread = QThread()
         self._worker = ExportToTableWorker(
             df_polars=df_polars,
@@ -466,7 +466,7 @@ class ExportToTableDialog(QDialog):
         )
         self._worker.moveToThread(self._thread)
 
-        # Conectar sinais
+        # Connect signals
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.status.connect(self._on_status)
@@ -475,18 +475,18 @@ class ExportToTableDialog(QDialog):
         self._thread.start()
 
     def _on_progress(self, current, total):
-        """Atualiza barra de progresso"""
+        """Updates progress bar"""
         if total > 0:
             pct = int(current / total * 100)
             self.progress_bar.setValue(pct)
             self.progress_bar.setFormat(f"{current:,}/{total:,} ({pct}%)")
 
     def _on_status(self, message):
-        """Atualiza label de status"""
+        """Updates status label"""
         self.status_label.setText(message)
 
     def _cleanup_thread(self):
-        """Aguarda thread finalizar e limpa referencias"""
+        """Waits for thread to finish and clears references"""
         if self._thread is not None:
             self._thread.quit()
             self._thread.wait(5000)
@@ -494,37 +494,37 @@ class ExportToTableDialog(QDialog):
         self._worker = None
 
     def _on_finished(self, success, message):
-        """Exportacao finalizada"""
+        """Export finished"""
         self._is_exporting = False
         self._cleanup_thread()
 
         if success:
             self.progress_bar.setValue(100)
             self.status_label.setText(message)
-            QMessageBox.information(self, "Exportacao Concluida", message)
+            QMessageBox.information(self, "Export Complete", message)
             self.accept()
         else:
-            self.status_label.setText(f"Erro: {message}")
-            QMessageBox.critical(self, "Erro na Exportacao", message)
+            self.status_label.setText(f"Error: {message}")
+            QMessageBox.critical(self, "Export Error", message)
 
-            # Reabilitar campos
+            # Re-enable fields
             self.btn_export.setEnabled(True)
             self.table_name_edit.setEnabled(True)
             self.connection_combo.setEnabled(True)
             self.if_exists_combo.setEnabled(True)
             self.chunk_spin.setEnabled(True)
-            self.btn_cancel.setText("Cancelar")
+            self.btn_cancel.setText("Cancel")
 
     def _on_cancel(self):
-        """Cancela exportacao ou fecha dialogo"""
+        """Cancels export or closes dialog"""
         if self._is_exporting and self._worker:
             self._worker.cancel()
-            self.status_label.setText("Cancelando...")
+            self.status_label.setText("Cancelling...")
         else:
             self.reject()
 
     def closeEvent(self, event):
-        """Impede fechar durante exportacao"""
+        """Prevents closing during export"""
         if self._is_exporting:
             event.ignore()
             self._on_cancel()
