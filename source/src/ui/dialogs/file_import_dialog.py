@@ -1,13 +1,13 @@
 """
-FileImportDialog - Dialogo para configurar importacao de arquivos de dados
+FileImportDialog - Dialog for configuring data file import
 
-Quando o usuario arrasta CSV, JSON ou XLSX, este dialogo permite configurar:
-- Nome da variavel (DataFrame)
-- Separador (CSV)
+When the user drags CSV, JSON or XLSX, this dialog allows configuring:
+- Variable name (DataFrame)
+- Separator (CSV)
 - Encoding
 - Sheet (XLSX)
-- Limitar linhas
-- Outras opcoes relevantes por tipo
+- Limit rows
+- Other relevant options by type
 """
 
 import os
@@ -32,7 +32,7 @@ from src.core.theme_manager import ThemeManager
 from src.services.file_import_service import FileImportService
 
 
-# Encodings comuns
+# Common encodings
 ENCODINGS = [
     "utf-8",
     "latin-1",
@@ -43,18 +43,18 @@ ENCODINGS = [
     "utf-32",
 ]
 
-# Separadores comuns para CSV
+# Common separators for CSV
 CSV_SEPARATORS = [
-    (";", "Ponto-e-virgula (;)"),
-    (",", "Virgula (,)"),
+    (";", "Semicolon (;)"),
+    (",", "Comma (,)"),
     ("\\t", "Tab (\\t)"),
     ("|", "Pipe (|)"),
-    (" ", "Espaco"),
+    (" ", "Space"),
 ]
 
 
 class FileImportDialog(QDialog):
-    """Dialogo para configurar importacao de arquivos de dados."""
+    """Dialog for configuring data file import."""
 
     def __init__(self, file_path: str, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -63,7 +63,7 @@ class FileImportDialog(QDialog):
         self._ext = os.path.splitext(file_path.lower())[1]
         self._result_code = None
 
-        self.setWindowTitle("Importar Arquivo")
+        self.setWindowTitle("Import File")
         self.setMinimumWidth(480)
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -79,30 +79,30 @@ class FileImportDialog(QDialog):
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Titulo
-        title = QLabel("Importar Dados")
+        # Title
+        title = QLabel("Import Data")
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
         title.setFont(title_font)
         layout.addWidget(title)
 
-        # Arquivo selecionado
+        # Selected file
         file_name = os.path.basename(self.file_path)
-        file_label = QLabel(f"Arquivo: {file_name}")
+        file_label = QLabel(f"File: {file_name}")
         file_label.setStyleSheet("color: #808080; font-size: 11px;")
         layout.addWidget(file_label)
 
-        # Grupo: Configuracoes gerais
-        general_group = QGroupBox("Geral")
+        # Group: General settings
+        general_group = QGroupBox("General")
         general_form = QFormLayout(general_group)
         general_form.setSpacing(8)
 
-        # Nome da variavel
+        # Variable name
         default_name = FileImportService._normalize_var_name(self.file_path)
         self.var_name_input = QLineEdit(default_name)
-        self.var_name_input.setPlaceholderText("Nome do DataFrame")
-        general_form.addRow("Variavel:", self.var_name_input)
+        self.var_name_input.setPlaceholderText("DataFrame name")
+        general_form.addRow("Variable:", self.var_name_input)
 
         # Encoding
         self.encoding_combo = QComboBox()
@@ -110,13 +110,13 @@ class FileImportDialog(QDialog):
         self.encoding_combo.setCurrentText("utf-8")
         general_form.addRow("Encoding:", self.encoding_combo)
 
-        # Limitar linhas
+        # Limit rows
         nrows_container = QWidget()
         nrows_layout = QHBoxLayout(nrows_container)
         nrows_layout.setContentsMargins(0, 0, 0, 0)
         nrows_layout.setSpacing(8)
 
-        self.limit_rows_check = QCheckBox("Limitar")
+        self.limit_rows_check = QCheckBox("Limit")
         self.limit_rows_check.setChecked(False)
         nrows_layout.addWidget(self.limit_rows_check)
 
@@ -125,16 +125,16 @@ class FileImportDialog(QDialog):
         self.nrows_spin.setMaximum(10_000_000)
         self.nrows_spin.setValue(1000)
         self.nrows_spin.setEnabled(False)
-        self.nrows_spin.setSuffix(" linhas")
+        self.nrows_spin.setSuffix(" rows")
         nrows_layout.addWidget(self.nrows_spin)
         nrows_layout.addStretch()
 
         self.limit_rows_check.toggled.connect(self.nrows_spin.setEnabled)
-        general_form.addRow("Linhas:", nrows_container)
+        general_form.addRow("Rows:", nrows_container)
 
         layout.addWidget(general_group)
 
-        # Grupo: Opcoes especificas do tipo
+        # Group: Type-specific options
         if self._ext == ".csv":
             self._setup_csv_options(layout)
         elif self._ext in (".xlsx", ".xls"):
@@ -142,16 +142,16 @@ class FileImportDialog(QDialog):
         elif self._ext == ".json":
             self._setup_json_options(layout)
 
-        # Botoes
+        # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        btn_cancel = QPushButton("Cancelar")
+        btn_cancel = QPushButton("Cancel")
         btn_cancel.setObjectName("btnCancel")
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
 
-        btn_import = QPushButton("Importar")
+        btn_import = QPushButton("Import")
         btn_import.setDefault(True)
         btn_import.clicked.connect(self._on_import)
         btn_layout.addWidget(btn_import)
@@ -159,28 +159,28 @@ class FileImportDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _setup_csv_options(self, layout):
-        """Opcoes especificas de CSV"""
+        """CSV-specific options"""
         csv_group = QGroupBox("CSV")
         csv_form = QFormLayout(csv_group)
         csv_form.setSpacing(8)
 
-        # Separador
+        # Separator
         self.separator_combo = QComboBox()
         for sep_val, sep_label in CSV_SEPARATORS:
             self.separator_combo.addItem(sep_label, sep_val)
-        self.separator_combo.setCurrentIndex(0)  # ; por padrao
-        csv_form.addRow("Separador:", self.separator_combo)
+        self.separator_combo.setCurrentIndex(0)  # ; by default
+        csv_form.addRow("Separator:", self.separator_combo)
 
-        # Header (linha do cabecalho)
+        # Header (header row)
         self.header_combo = QComboBox()
-        self.header_combo.addItem("Primeira linha", 0)
-        self.header_combo.addItem("Sem cabecalho", None)
-        csv_form.addRow("Cabecalho:", self.header_combo)
+        self.header_combo.addItem("First row", 0)
+        self.header_combo.addItem("No header", None)
+        csv_form.addRow("Header:", self.header_combo)
 
         # Decimal
         self.decimal_combo = QComboBox()
-        self.decimal_combo.addItem("Ponto (.)", ".")
-        self.decimal_combo.addItem("Virgula (,)", ",")
+        self.decimal_combo.addItem("Period (.)", ".")
+        self.decimal_combo.addItem("Comma (,)", ",")
         csv_form.addRow("Decimal:", self.decimal_combo)
 
         # Skip rows
@@ -188,71 +188,71 @@ class FileImportDialog(QDialog):
         self.skip_rows_spin.setMinimum(0)
         self.skip_rows_spin.setMaximum(10000)
         self.skip_rows_spin.setValue(0)
-        csv_form.addRow("Pular linhas:", self.skip_rows_spin)
+        csv_form.addRow("Skip rows:", self.skip_rows_spin)
 
         layout.addWidget(csv_group)
 
     def _setup_xlsx_options(self, layout):
-        """Opcoes especificas de Excel"""
+        """Excel-specific options"""
         xlsx_group = QGroupBox("Excel")
         xlsx_form = QFormLayout(xlsx_group)
         xlsx_form.setSpacing(8)
 
         # Sheet name
         self.sheet_input = QLineEdit()
-        self.sheet_input.setPlaceholderText("0 (primeira sheet) ou nome da sheet")
+        self.sheet_input.setPlaceholderText("0 (first sheet) or sheet name")
         self.sheet_input.setText("0")
         xlsx_form.addRow("Sheet:", self.sheet_input)
 
         # Header
         self.xlsx_header_combo = QComboBox()
-        self.xlsx_header_combo.addItem("Primeira linha", 0)
-        self.xlsx_header_combo.addItem("Sem cabecalho", None)
-        xlsx_form.addRow("Cabecalho:", self.xlsx_header_combo)
+        self.xlsx_header_combo.addItem("First row", 0)
+        self.xlsx_header_combo.addItem("No header", None)
+        xlsx_form.addRow("Header:", self.xlsx_header_combo)
 
         # Skip rows
         self.xlsx_skip_rows_spin = QSpinBox()
         self.xlsx_skip_rows_spin.setMinimum(0)
         self.xlsx_skip_rows_spin.setMaximum(10000)
         self.xlsx_skip_rows_spin.setValue(0)
-        xlsx_form.addRow("Pular linhas:", self.xlsx_skip_rows_spin)
+        xlsx_form.addRow("Skip rows:", self.xlsx_skip_rows_spin)
 
         layout.addWidget(xlsx_group)
 
     def _setup_json_options(self, layout):
-        """Opcoes especificas de JSON"""
+        """JSON-specific options"""
         json_group = QGroupBox("JSON")
         json_form = QFormLayout(json_group)
         json_form.setSpacing(8)
 
         # Orient
         self.orient_combo = QComboBox()
-        self.orient_combo.addItem("Auto-detectar", "")
+        self.orient_combo.addItem("Auto-detect", "")
         self.orient_combo.addItem("records", "records")
         self.orient_combo.addItem("columns", "columns")
         self.orient_combo.addItem("index", "index")
         self.orient_combo.addItem("split", "split")
         self.orient_combo.addItem("values", "values")
-        json_form.addRow("Orientacao:", self.orient_combo)
+        json_form.addRow("Orientation:", self.orient_combo)
 
         # Lines (JSON Lines format)
-        self.json_lines_check = QCheckBox("JSON Lines (uma linha por registro)")
-        json_form.addRow("Formato:", self.json_lines_check)
+        self.json_lines_check = QCheckBox("JSON Lines (one line per record)")
+        json_form.addRow("Format:", self.json_lines_check)
 
         layout.addWidget(json_group)
 
     def _apply_theme(self):
-        """Aplica tema do ThemeManager"""
+        """Applies ThemeManager theme"""
         if self.theme_manager:
             self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
     def _on_import(self):
-        """Gera codigo de importacao e aceita o dialogo"""
+        """Generates import code and accepts the dialog"""
         var_name = self.var_name_input.text().strip()
         if not var_name:
             var_name = "df"
 
-        # Validar nome de variavel Python
+        # Validate Python variable name
         if not var_name.isidentifier():
             var_name = FileImportService._normalize_var_name(self.file_path)
 
@@ -261,7 +261,7 @@ class FileImportDialog(QDialog):
         self.accept()
 
     def _generate_code(self, var_name: str) -> str:
-        """Gera codigo Python de importacao baseado nas configuracoes."""
+        """Generates Python import code based on settings."""
         safe_path = self.file_path.replace("\\", "/")
         encoding = self.encoding_combo.currentText()
         nrows = self.nrows_spin.value() if self.limit_rows_check.isChecked() else None
@@ -276,7 +276,7 @@ class FileImportDialog(QDialog):
         return f'import pandas as pd\n{var_name} = pd.read_csv("{safe_path}")\n{var_name}'
 
     def _generate_csv_code(self, var_name: str, path: str, encoding: str, nrows) -> str:
-        """Gera codigo para importacao CSV"""
+        """Generates code for CSV import"""
         sep = self.separator_combo.currentData()
         header_val = self.header_combo.currentData()
         decimal = self.decimal_combo.currentData()
@@ -307,18 +307,18 @@ class FileImportDialog(QDialog):
         return "\n".join(lines)
 
     def _generate_xlsx_code(self, var_name: str, path: str, nrows) -> str:
-        """Gera codigo para importacao Excel usando fastexcel"""
+        """Generates code for Excel import using fastexcel"""
         sheet_text = self.sheet_input.text().strip()
         header_val = self.xlsx_header_combo.currentData()
         skip_rows = self.xlsx_skip_rows_spin.value()
 
-        # Determinar sheet (index ou nome)
+        # Determine sheet (index or name)
         try:
             sheet_val = int(sheet_text)
         except ValueError:
             sheet_val = sheet_text if sheet_text else 0
 
-        # Parametros para load_sheet / load_sheet_by_name
+        # Parameters for load_sheet / load_sheet_by_name
         sheet_params = []
 
         if header_val is None:
@@ -347,7 +347,7 @@ class FileImportDialog(QDialog):
         return "\n".join(lines)
 
     def _generate_json_code(self, var_name: str, path: str, encoding: str, nrows) -> str:
-        """Gera codigo para importacao JSON"""
+        """Generates code for JSON import"""
         orient = self.orient_combo.currentData()
         lines_mode = self.json_lines_check.isChecked()
 
@@ -372,10 +372,10 @@ class FileImportDialog(QDialog):
         return "\n".join(lines)
 
     def get_result(self):
-        """Retorna o codigo gerado e o nome da variavel.
+        """Returns the generated code and the variable name.
 
         Returns:
-            Tuple (code: str, var_name: str) ou (None, None) se cancelado
+            Tuple (code: str, var_name: str) or (None, None) if cancelled
         """
         if self._result_code:
             return self._result_code, self._result_var_name
