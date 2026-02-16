@@ -82,30 +82,47 @@ def main():
     app.setApplicationName("DataPyn")
     app.setOrganizationName("DataPyn")
 
-    # Initialize i18n before creating any UI widgets
-    from PyQt6.QtCore import QSettings
-    settings = QSettings("DataPyn", "DataPyn")
-    language = settings.value("language", "en-US")
-    init_language(language)
-
     # Estilo Fusion para visual consistente cross-platform
     app.setStyle("Fusion")
 
     # Paleta dark nativa
     _apply_dark_palette(app)
 
+    # Splash screen - exibe imediatamente enquanto carrega
+    from src.ui.splash_screen import SplashScreen
+
+    splash = SplashScreen()
+    splash.show()
+    app.processEvents()
+
+    splash.set_progress(10, "Loading language settings...")
+
+    # Initialize i18n before creating any UI widgets
+    from PyQt6.QtCore import QSettings
+    settings = QSettings("DataPyn", "DataPyn")
+    language = settings.value("language", "en-US")
+    init_language(language)
+
+    splash.set_progress(25, "Loading design system...")
+
     # Obter cores do design system
     colors = get_colors()
 
-    # Definir ícone da aplicação (afeta todas as janelas)
+    # Definir icone da aplicacao (afeta todas as janelas)
     icon_path = get_icon_path()
     if os.path.exists(icon_path):
         app_icon = QIcon(icon_path)
         app.setWindowIcon(app_icon)
 
-    # Criar e mostrar janela principal
-    window = MainWindow()
-    window.show()
+    splash.set_progress(40, "Initializing application...")
+
+    # Criar janela principal (a parte mais pesada)
+    window = MainWindow(splash=splash)
+
+    splash.set_progress(100, "Ready!")
+
+    # Fechar splash e mostrar janela
+    splash.finish_with_window(window)
 
     # Iniciar loop de eventos
     sys.exit(app.exec())

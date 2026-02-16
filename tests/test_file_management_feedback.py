@@ -164,7 +164,8 @@ class TestSaveFileFeedback:
         QApplication.processEvents()
 
         action_text = main_window.main_statusbar.action_label.text()
-        assert "Arquivo salvo" in action_text
+        # i18n: accepts both Portuguese and English
+        assert "salvo" in action_text.lower() or "saved" in action_text.lower()
         assert temp_sql_file in action_text
 
     def test_save_updates_statusbar_file_info(self, main_window, temp_sql_file):
@@ -191,7 +192,8 @@ class TestSaveFileFeedback:
         QApplication.processEvents()
 
         action_text = main_window.main_statusbar.action_label.text()
-        assert "Workspace salvo" in action_text
+        # i18n: accepts both Portuguese and English
+        assert "salvo" in action_text.lower() or "saved" in action_text.lower()
 
     def test_open_file_shows_path_in_statusbar(self, main_window, temp_sql_file):
         """Verifica que abrir arquivo exibe caminho na statusbar"""

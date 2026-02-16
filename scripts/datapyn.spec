@@ -26,6 +26,7 @@ hiddenimports = [
     'PyQt6.QtCore',
     'PyQt6.QtGui', 
     'PyQt6.QtWidgets',
+    'PyQt6.QtSvg',
     'PyQt6.Qsci',
     'pandas',
     'numpy',
@@ -127,16 +128,15 @@ a = Analysis(
         'profile',
         'pstats',
         'timeit',
-        # Unused encodings (keep utf-8, latin1, ascii)
+        # Unused encodings (keep utf-8, latin1, ascii, cp437, cp850, cp1252)
+        # cp437 is required by zipfile (PyInstaller runtime)
+        # cp850/cp1252 are Windows defaults for pt-BR/Western Europe
         'encodings.cp037',
         'encodings.cp424',
-        'encodings.cp437',
         'encodings.cp500',
         'encodings.cp720',
         'encodings.cp737',
         'encodings.cp775',
-        'encodings.cp850',
-        'encodings.cp852',
         'encodings.cp855',
         'encodings.cp856',
         'encodings.cp857',
@@ -159,7 +159,6 @@ a = Analysis(
         'encodings.cp1140',
         'encodings.cp1250',
         'encodings.cp1251',
-        'encodings.cp1252',
         'encodings.cp1253',
         'encodings.cp1254',
         'encodings.cp1255',

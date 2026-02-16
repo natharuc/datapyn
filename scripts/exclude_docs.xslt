@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   XSLT Transform para heat.exe
-  Remove arquivos desnecessarios do MSI (docs, logs, cache, etc.)
-  
+  Remove apenas arquivos de cache Python do MSI.
+  Mantemos .md, .txt, LICENSE etc. pois bibliotecas como mariadb, numpy
+  e matplotlib referenciam esses arquivos em runtime (dist-info).
+
   Uses xsl:key to match Component IDs with ComponentRef IDs,
   ensuring both are removed together (hash-based IDs don't contain filenames).
 -->
@@ -12,14 +14,6 @@
 
   <!-- Key to collect IDs of components that should be excluded -->
   <xsl:key name="ExcludedComponents" match="wix:Component[
-    contains(wix:File/@Source, '.md') or
-    contains(wix:File/@Source, '.txt') or
-    contains(wix:File/@Source, '.rst') or
-    contains(wix:File/@Source, '.log') or
-    contains(wix:File/@Source, 'README') or
-    contains(wix:File/@Source, 'LICENSE') or
-    contains(wix:File/@Source, 'CHANGELOG') or
-    contains(wix:File/@Source, 'INTEGRATION_GUIDE') or
     contains(wix:File/@Source, '__pycache__') or
     contains(wix:File/@Source, '.pyc') or
     contains(wix:File/@Source, '.pyo')
@@ -32,16 +26,8 @@
     </xsl:copy>
   </xsl:template>
 
-  <!-- Remove components with files matching documentation patterns -->
+  <!-- Remove components with Python cache files -->
   <xsl:template match="wix:Component[
-    contains(wix:File/@Source, '.md') or
-    contains(wix:File/@Source, '.txt') or
-    contains(wix:File/@Source, '.rst') or
-    contains(wix:File/@Source, '.log') or
-    contains(wix:File/@Source, 'README') or
-    contains(wix:File/@Source, 'LICENSE') or
-    contains(wix:File/@Source, 'CHANGELOG') or
-    contains(wix:File/@Source, 'INTEGRATION_GUIDE') or
     contains(wix:File/@Source, '__pycache__') or
     contains(wix:File/@Source, '.pyc') or
     contains(wix:File/@Source, '.pyo')

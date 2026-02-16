@@ -392,7 +392,15 @@ class CrossSyntaxWorker(QObject):
 class MainWindow(DockingMainWindow):
     """Janela principal da IDE"""
 
-    def __init__(self):
+    def __init__(self, splash=None):
+        self._splash = splash
+
+        def _sp(value, msg):
+            if self._splash:
+                self._splash.set_progress(value, msg)
+
+        _sp(45, "Loading managers...")
+
         # Inicializar atributos ANTES de chamar super().__init__()
         # to prevent DockingMainWindow._setup_ui() from accessing uninitialized attributes
 
@@ -433,6 +441,8 @@ class MainWindow(DockingMainWindow):
         # Icons
         self.icons = self._setup_icons()
 
+        _sp(55, "Building docking system...")
+
         # Agora chama super().__init__() que vai inicializar o docking system
         super().__init__()
 
@@ -449,8 +459,13 @@ class MainWindow(DockingMainWindow):
         # Apply theme after configuring editor themes
         self._apply_app_theme()
 
+        _sp(65, "Building interface...")
+
         # Configure MainWindow-specific UI
         self._setup_ui()
+
+        _sp(75, "Creating menus and toolbar...")
+
         self._create_menus()
         self._create_toolbar()
         self._create_statusbar()
@@ -458,6 +473,8 @@ class MainWindow(DockingMainWindow):
 
         # Connect signals do SessionManager
         self.session_manager.session_focused.connect(self._on_session_focused)
+
+        _sp(90, "Applying theme...")
 
         # Apply initial theme
         self._apply_app_theme()
