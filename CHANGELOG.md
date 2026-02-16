@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.5.0 (2026-02-16)
+
+### Bug Fixes
+
+- MSI build - XSLT ComponentRef removal and include language files
+  ([`874438d`](https://github.com/natharuc/datapyn/commit/874438d3ec1775c9344b8b5d873c195fb3dfb2f3))
+
+### Features
+
+- Installer BMPs with DataPyn logo and simplified CI workflow
+  ([`1d3c840`](https://github.com/natharuc/datapyn/commit/1d3c840e1f349c2f8d30c87a8bcbe31f4f009045))
+
+
 ## v1.4.0 (2026-02-16)
 
 ### Continuous Integration
