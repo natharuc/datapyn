@@ -19,7 +19,7 @@ def _get_svg_path() -> str:
         base_path = sys._MEIPASS
     else:
         base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_path, "assets", "datapyn_logo.svg")
+    return os.path.join(base_path, "src", "assets", "datapyn_logo.svg") if getattr(sys, "frozen", False) else os.path.join(base_path, "assets", "datapyn_logo.svg")
 
 
 def _get_version() -> str:
@@ -48,7 +48,7 @@ class SplashScreen(QSplashScreen):
 
     # Dimensoes
     WIDTH = 480
-    HEIGHT = 320
+    HEIGHT = 360
 
     # Cores
     BG_COLOR = QColor("#181A20")
@@ -102,9 +102,9 @@ class SplashScreen(QSplashScreen):
         painter.fillRect(0, 0, self.WIDTH, 3, grad_top)
 
         # -- Logo SVG --
-        logo_size = 96
+        logo_size = 128
         logo_x = (self.WIDTH - logo_size) // 2
-        logo_y = 48
+        logo_y = 40
         if self._svg_renderer:
             self._svg_renderer.render(
                 painter, QRectF(logo_x, logo_y, logo_size, logo_size)

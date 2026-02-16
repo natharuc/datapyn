@@ -4198,7 +4198,7 @@ class MainWindow(DockingMainWindow):
     def _on_schema_loaded(self, schema: dict, connection_name: str):
         """Callback when database schema is loaded by SchemaService.
 
-        Distribui o schema para os editores Monaco (blocos SQL) que usam
+        Distribui o schema para os blocos SQL que usam
         a conexao correspondente.
         Se connection_name e a conexao da sessao, aplica aos blocos sem conexao customizada.
         Se connection_name e uma conexao de bloco especifico, aplica so a esse bloco.
@@ -4329,7 +4329,7 @@ class MainWindow(DockingMainWindow):
                 current_widget.session.variables_changed.emit(ns)
 
     def _push_python_namespace(self, namespace: dict):
-        """Sends updated Python namespace to Monaco editors.
+        """Sends updated Python namespace to code editors.
 
         Chamado apos execucao Python para alimentar autocomplete.
         """

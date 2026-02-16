@@ -8,9 +8,6 @@ import logging
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QPalette, QColor
 from PyQt6.QtCore import Qt
-from src.ui import MainWindow
-from src.design_system.tokens import get_colors
-from src.language import init_language
 
 
 # Configurar logging
@@ -99,6 +96,7 @@ def main():
 
     # Initialize i18n before creating any UI widgets
     from PyQt6.QtCore import QSettings
+    from src.language import init_language
     settings = QSettings("DataPyn", "DataPyn")
     language = settings.value("language", "en-US")
     init_language(language)
@@ -106,6 +104,7 @@ def main():
     splash.set_progress(25, "Loading design system...")
 
     # Obter cores do design system
+    from src.design_system.tokens import get_colors
     colors = get_colors()
 
     # Definir icone da aplicacao (afeta todas as janelas)
@@ -116,7 +115,8 @@ def main():
 
     splash.set_progress(40, "Initializing application...")
 
-    # Criar janela principal (a parte mais pesada)
+    # Criar janela principal (a parte mais pesada - import deferido)
+    from src.ui import MainWindow
     window = MainWindow(splash=splash)
 
     splash.set_progress(100, "Ready!")

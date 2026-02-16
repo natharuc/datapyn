@@ -75,20 +75,9 @@ def test_implementations():
     try:
         from src.editors.code_editor import CodeEditor
 
-        print(f"✅ CodeEditor (QScintilla) disponível")
+        print("CodeEditor (QScintilla) disponivel")
     except Exception as e:
-        print(f"⚠️  CodeEditor: {e}")
-
-    # Testar Monaco
-    try:
-        from src.editors.monaco_editor import MonacoEditor, MONACO_AVAILABLE
-
-        if MONACO_AVAILABLE:
-            print(f"✅ MonacoEditor disponível (monaco-qt instalado)")
-        else:
-            print(f"⚠️  MonacoEditor disponível (monaco-qt NÃO instalado)")
-    except Exception as e:
-        print(f"⚠️  MonacoEditor: {e}")
+        print(f"CodeEditor: {e}")
 
     return True
 
@@ -128,26 +117,14 @@ def test_code_block():
 
 
 def show_how_to_switch():
-    """Mostra como trocar de editor"""
+    """Mostra informacao do editor usado"""
     print("\n" + "=" * 60)
-    print("COMO TROCAR DE EDITOR")
+    print("EDITOR DE CODIGO")
     print("=" * 60)
 
     print("""
-1. Abra: src/editors/editor_config.py
-
-2. Altere a linha:
-   EDITOR_TYPE: Literal['qscintilla', 'monaco'] = 'qscintilla'
-   
-   Para:
-   EDITOR_TYPE: Literal['qscintilla', 'monaco'] = 'monaco'
-
-3. Se escolher Monaco, instale:
-   pip install monaco-qt
-
-4. Reinicie o DataPyn
-
-✅ Pronto! Todos os blocos de código usarão o novo editor.
+O DataPyn usa QScintilla como editor de codigo.
+Arquivo de configuracao: src/editors/editor_config.py
 """)
 
 
