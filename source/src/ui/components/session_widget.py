@@ -107,6 +107,7 @@ class SessionWidget(QWidget):
     status_changed = pyqtSignal(str)  # status message
     connection_changed = pyqtSignal(str, str)  # (connection_name, database)
     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
+    block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -279,6 +280,9 @@ class SessionWidget(QWidget):
 
         # Block connection change (to reload autocomplete)
         self.editor.block_connection_changed.connect(self.block_connection_changed.emit)
+
+        # Block database change
+        self.editor.block_database_changed.connect(self.block_database_changed.emit)
 
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)

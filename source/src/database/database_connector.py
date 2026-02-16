@@ -216,7 +216,7 @@ class DatabaseConnector:
             # Detect USE command to update current database
             import re
 
-            use_match = re.search(r"\bUSE\s+\[?(\w+)\]?\s*;?\s*$", query.strip(), re.IGNORECASE | re.MULTILINE)
+            use_match = re.search(r"\bUSE\s+[\[`]?(\w+)[\]`]?\s*;?\s*$", query.strip(), re.IGNORECASE | re.MULTILINE)
             if use_match:
                 new_db = use_match.group(1)
                 logger.info(f"Detected USE command {new_db}")
@@ -517,8 +517,9 @@ class DatabaseConnector:
             raise ConnectionError("No active database connection")
 
         try:
+            use_command = self._build_use_command(database)
             with self.engine.connect() as conn:
-                conn.execute(text(f"USE [{database}]"))
+                conn.execute(text(use_command))
                 conn.commit()
 
             # Update internal params
@@ -529,6 +530,27 @@ class DatabaseConnector:
         except Exception as e:
             logger.error(f"Error changing database: {str(e)}")
             raise
+
+    def _build_use_command(self, database: str) -> str:
+        """Build the USE command with correct syntax for the current database type.
+
+        Args:
+            database: Database name
+
+        Returns:
+            str: USE command with correct quoting for the DB type
+        """
+        if self.db_type == "sqlserver":
+            return f"USE [{database}]"
+        elif self.db_type in ("mysql", "mariadb"):
+            return f"USE `{database}`"
+        elif self.db_type == "postgresql":
+            # PostgreSQL does not support USE command;
+            # database switching requires a new connection.
+            # We use SET search_path as a fallback for schema switching.
+            return f'SET search_path TO "{database}"'
+        else:
+            return f"USE {database}"
 
     def get_current_database(self) -> str:
         """Return current database name"""

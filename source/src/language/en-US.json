@@ -380,6 +380,7 @@
 
   "block": {
     "conn_tab_default": "Tab Default",
+    "db_default": "Default DB",
     "lang_python": "Python",
     "lang_sql": "SQL",
     "lang_cross_syntax": "Cross-Syntax",

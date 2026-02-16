@@ -158,6 +158,114 @@ class BlockConnectionPanel(QFrame):
             self.dragLeaveEvent(event)
 
 
+class BlockDatabasePanel(QFrame):
+    """
+    Panel to display and allow switching the database for a block.
+    Shows icon + database name, accepts drag & drop of databases from Object Explorer.
+    """
+
+    database_clicked = pyqtSignal()  # User clicked on panel
+    database_dropped = pyqtSignal(str)  # database_name (drag & drop from Object Explorer)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._database_name = None
+        self._setup_ui()
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _setup_ui(self):
+        self.setFrameStyle(QFrame.Shape.NoFrame)
+        self.setLineWidth(0)
+        self.setStyleSheet("""
+            BlockDatabasePanel {
+                background: #2d2d2d;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+            }
+            BlockDatabasePanel:hover {
+                border-color: #555;
+            }
+        """)
+
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(4)
+
+        # Icon
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(16, 16)
+        self.icon_label.setScaledContents(True)
+        self.icon_label.setPixmap(qta.icon("mdi.database-outline", color="#888").pixmap(16, 16))
+        layout.addWidget(self.icon_label)
+
+        # Database name
+        self.name_label = QLabel(S.block.db_default)
+        self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.name_label.setMinimumWidth(40)
+        layout.addWidget(self.name_label, 1)
+
+    def set_database(self, database_name: str = None):
+        """Set the database to display"""
+        self._database_name = database_name
+
+        if database_name:
+            self.name_label.setText(database_name)
+            self.name_label.setStyleSheet("color: #fff; font-size: 11px; font-weight: 500;")
+            self.icon_label.setPixmap(qta.icon("mdi.database", color="#569cd6").pixmap(16, 16))
+        else:
+            self.name_label.setText(S.block.db_default)
+            self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
+            self.icon_label.setPixmap(qta.icon("mdi.database-outline", color="#888").pixmap(16, 16))
+
+    def get_database_name(self):
+        """Return current database name (None = connection default)"""
+        return self._database_name
+
+    def mousePressEvent(self, event):
+        """Click on panel"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.database_clicked.emit()
+        super().mousePressEvent(event)
+
+    def dragEnterEvent(self, event):
+        """Accept database drag from Object Explorer"""
+        if event.mimeData().hasFormat("application/x-database-name"):
+            event.acceptProposedAction()
+            self.setStyleSheet("""
+                BlockDatabasePanel {
+                    background: #353535;
+                    border: 1px solid #569cd6;
+                    border-radius: 3px;
+                }
+            """)
+
+    def dragLeaveEvent(self, event):
+        """Remove highlight on exit"""
+        self.setStyleSheet("""
+            BlockDatabasePanel {
+                background: #2d2d2d;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+            }
+            BlockDatabasePanel:hover {
+                border-color: #555;
+            }
+        """)
+
+    def dropEvent(self, event):
+        """Receive dragged database"""
+        if event.mimeData().hasFormat("application/x-database-name"):
+            database_name = event.mimeData().data("application/x-database-name").data().decode("utf-8")
+            self.database_dropped.emit(database_name)
+            event.acceptProposedAction()
+
+            # Restore style
+            self.dragLeaveEvent(event)
+
+
 class CodeBlock(QFrame):
     """
     An individual code block.
@@ -175,6 +283,7 @@ class CodeBlock(QFrame):
     cancel_requested = pyqtSignal(object)  # self - to cancel execution
     select_connection_requested = pyqtSignal(object)  # self - to open connection dialog
     connection_name_changed = pyqtSignal(object, str)  # self, connection_name - when block connection changes
+    database_changed = pyqtSignal(object, str)  # self, database_name - when block database changes
 
     LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00", "cross": "#6B4C9A"}
 
@@ -191,6 +300,7 @@ class CodeBlock(QFrame):
         self._last_execution_time = None
         self._default_language = default_language
         self._connection_name = None  # None = use session connection
+        self._database_name = None  # None = use connection default database
         self._block_name = ""  # Block name (namespace prefix)
 
         self._setup_ui()
@@ -329,6 +439,13 @@ class CodeBlock(QFrame):
         self.conn_panel.setMaximumWidth(220)
         control_layout.addWidget(self.conn_panel)
 
+        # Database panel (only visible for SQL, next to connection panel)
+        self.db_panel = BlockDatabasePanel()
+        self.db_panel.setFixedHeight(CTRL_H)
+        self.db_panel.setMinimumWidth(80)
+        self.db_panel.setMaximumWidth(180)
+        control_layout.addWidget(self.db_panel)
+
         # Status
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("""
@@ -431,6 +548,8 @@ class CodeBlock(QFrame):
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
         self.conn_panel.connection_clicked.connect(self._on_connection_panel_clicked)
         self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
+        self.db_panel.database_clicked.connect(self._on_database_panel_clicked)
+        self.db_panel.database_dropped.connect(self._on_database_dropped)
         self.run_btn.clicked.connect(lambda: self.execute_requested.emit(self))
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         self.cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self))
@@ -465,11 +584,22 @@ class CodeBlock(QFrame):
         self.conn_panel.set_connection(connection_name, db_type or None, color or None)
         self.connection_name_changed.emit(self, connection_name)
 
+    def _on_database_panel_clicked(self):
+        """Database panel was clicked - emit signal"""
+        self.database_changed.emit(self, self._database_name or "")
+
+    def _on_database_dropped(self, database_name: str):
+        """Database was dragged from Object Explorer to panel"""
+        self._database_name = database_name
+        self.db_panel.set_database(database_name)
+        self.database_changed.emit(self, database_name)
+
     def _update_connection_panel_visibility(self):
-        """Update connection panel visibility (SQL only)"""
+        """Update connection and database panel visibility (SQL only)"""
         lang = self.lang_combo.currentData()
         is_sql = lang == "sql"
         self.conn_panel.setVisible(is_sql)
+        self.db_panel.setVisible(is_sql)
 
     def _update_style(self):
         lang = self.get_language()
@@ -537,6 +667,16 @@ class CodeBlock(QFrame):
         self._connection_name = conn_name
         self.conn_panel.set_connection(conn_name, db_type, color)
         self.connection_name_changed.emit(self, conn_name)
+
+    def get_database_name(self) -> str:
+        """Return custom database name or None (uses connection default)"""
+        return self._database_name
+
+    def set_database_name(self, database_name: str):
+        """Set custom database for this block"""
+        self._database_name = database_name
+        self.db_panel.set_database(database_name)
+        self.database_changed.emit(self, database_name or "")
 
     def is_focused(self) -> bool:
         return self._is_focused
@@ -676,6 +816,8 @@ class CodeBlock(QFrame):
                 data["db_type"] = self.conn_panel._db_type
             if hasattr(self, "conn_panel") and getattr(self.conn_panel, "_color", None):
                 data["connection_color"] = self.conn_panel._color
+        if self._database_name:
+            data["database_name"] = self._database_name
         return data
 
     @classmethod
@@ -694,6 +836,9 @@ class CodeBlock(QFrame):
             db_type = data.get("db_type")
             color = data.get("connection_color")
             block.set_connection_name(data["connection_name"], db_type, color)
+        # Restore custom database
+        if "database_name" in data and data["database_name"]:
+            block.set_database_name(data["database_name"])
         return block
 
     # === Drag ===
