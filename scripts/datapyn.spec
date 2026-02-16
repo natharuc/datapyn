@@ -49,7 +49,12 @@ for ext in ['*.ico', '*.svg', '*.png', '*.jpg']:
 assets_datas = [(f, os.path.join('src', 'assets', os.path.relpath(os.path.dirname(f), os.path.join(ROOT_DIR, 'source', 'src', 'assets')))) 
                 for f in assets_files]
 
-datas = assets_datas + [
+# Language files (i18n JSON translations)
+language_dir = os.path.join(ROOT_DIR, 'source', 'src', 'language')
+language_datas = [(f, os.path.join('src', 'language'))
+                  for f in glob.glob(os.path.join(language_dir, '*.json'))]
+
+datas = assets_datas + language_datas + [
     # Monaco Editor - HTML + VS loader/workers
     (os.path.join(ROOT_DIR, 'source', 'src', 'editors', 'monaco'), os.path.join('monaco')),
     # pyproject.toml para leitura de versao
