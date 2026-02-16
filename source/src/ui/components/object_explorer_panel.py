@@ -24,8 +24,8 @@ from PyQt6.QtWidgets import (
     QMenu,
     QApplication,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QColor, QAction
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData
+from PyQt6.QtGui import QFont, QColor, QAction, QDrag
 
 from .buttons import GhostButton
 
@@ -125,6 +125,8 @@ class ObjectExplorerPanel(QWidget):
         self.tree.setIndentation(16)
         self.tree.setAnimated(True)
         self.tree.setExpandsOnDoubleClick(False)
+        self.tree.setDragEnabled(True)
+        self.tree.setDefaultDropAction(Qt.DropAction.CopyAction)
 
         # Context menu
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -132,6 +134,9 @@ class ObjectExplorerPanel(QWidget):
 
         # Double click
         self.tree.itemDoubleClicked.connect(self._on_double_click)
+
+        # Override startDrag to provide database mime data
+        self.tree.startDrag = self._start_drag
 
         layout.addWidget(self.tree)
 
@@ -419,6 +424,29 @@ class ObjectExplorerPanel(QWidget):
             self.database_switch_requested.emit(name)
         elif item_type in ("table", "column", "schema") and name:
             self.insert_text_requested.emit(name)
+
+    def _start_drag(self, supported_actions):
+        """Start drag for database items from Object Explorer"""
+        item = self.tree.currentItem()
+        if not item:
+            return
+
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+
+        item_type = data.get("type", "")
+        name = data.get("name", "")
+
+        if item_type != "database" or not name:
+            return
+
+        mime_data = QMimeData()
+        mime_data.setData("application/x-database-name", name.encode("utf-8"))
+
+        drag = QDrag(self.tree)
+        drag.setMimeData(mime_data)
+        drag.exec(Qt.DropAction.CopyAction)
 
     def _on_context_menu(self, pos):
         """Menu de contexto"""

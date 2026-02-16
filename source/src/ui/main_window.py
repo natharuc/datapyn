@@ -1048,6 +1048,15 @@ class MainWindow(DockingMainWindow):
         if hasattr(widget, "connection_changed"):
             widget.connection_changed.emit(connection_name, database_name)
 
+        # Update focused block's database panel (direct update to avoid signal loop)
+        if hasattr(widget, "editor"):
+            focused_block = widget.editor.get_focused_block()
+            if not focused_block:
+                focused_block = widget.editor.get_last_focused_block()
+            if focused_block and hasattr(focused_block, "db_panel"):
+                focused_block._database_name = database_name
+                focused_block.db_panel.set_database(database_name)
+
     def _on_object_explorer_refresh(self):
         """Object Explorer refresh - reloads schema from active connection"""
         current_widget = self._get_current_session_widget()
@@ -2066,6 +2075,9 @@ class MainWindow(DockingMainWindow):
             new_widget.block_connection_changed.connect(
                 lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
             )
+            new_widget.block_database_changed.connect(
+                lambda block, db_name: self._on_block_database_changed(block, db_name)
+            )
 
             # Register widget
             self._session_widgets[session.session_id] = new_widget
@@ -2443,7 +2455,8 @@ class MainWindow(DockingMainWindow):
         connector = session.connector
 
         # Detect USE database command (runs synchronously since it's fast)
-        use_match = re.match(r"^\s*USE\s+\[?([^\]\s;]+)\]?\s*;?\s*$", query, re.IGNORECASE)
+        # Supports: USE db, USE [db], USE `db`, USE db;
+        use_match = re.match(r"^\s*USE\s+[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$", query, re.IGNORECASE)
         if use_match:
             database_name = use_match.group(1)
             try:
@@ -2465,6 +2478,16 @@ class MainWindow(DockingMainWindow):
                     current_widget = self._get_current_session_widget()
                     if current_widget and hasattr(current_widget, "connection_changed"):
                         current_widget.connection_changed.emit(connection_name, database_name)
+
+                # Update focused block's database panel (direct update to avoid signal loop)
+                current_widget = self._get_current_session_widget()
+                if current_widget and hasattr(current_widget, "editor"):
+                    focused_block = current_widget.editor.get_focused_block()
+                    if not focused_block:
+                        focused_block = current_widget.editor.get_last_focused_block()
+                    if focused_block and hasattr(focused_block, "db_panel"):
+                        focused_block._database_name = database_name
+                        focused_block.db_panel.set_database(database_name)
 
                 self._log_info(S.status.database_changed.format(name=database_name))
                 self.action_label.setText(S.status.sql_database.format(name=database_name))
@@ -2665,6 +2688,15 @@ class MainWindow(DockingMainWindow):
                 current_widget = self._get_current_session_widget()
                 if current_widget and hasattr(current_widget, "connection_changed"):
                     current_widget.connection_changed.emit(connection_name, db_after)
+
+                # Update focused block's database panel (direct update to avoid signal loop)
+                if current_widget and hasattr(current_widget, "editor"):
+                    focused_block = current_widget.editor.get_focused_block()
+                    if not focused_block:
+                        focused_block = current_widget.editor.get_last_focused_block()
+                    if focused_block and hasattr(focused_block, "db_panel"):
+                        focused_block._database_name = db_after
+                        focused_block.db_panel.set_database(db_after)
 
     def _execute_python(self, code: str):
         """Executes Python code in background"""
@@ -3917,6 +3949,9 @@ class MainWindow(DockingMainWindow):
         widget.block_connection_changed.connect(
             lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
         )
+        widget.block_database_changed.connect(
+            lambda block, db_name: self._on_block_database_changed(block, db_name)
+        )
 
         # Conectar sinal de modificacao do editor para rastreamento por hash
         widget.editor.content_changed.connect(lambda w=widget: self._on_editor_modified(w))
@@ -4310,6 +4345,36 @@ class MainWindow(DockingMainWindow):
             thread.start()
         except Exception as e:
             self._log_info(f"Error loading schema for block ({connection_name}): {e}")
+
+    def _on_block_database_changed(self, block, database_name: str):
+        """Callback when a block's database is changed.
+
+        Switches the database of the block's connection (or session connection).
+        """
+        if not database_name:
+            return
+
+        current_widget = self._get_current_session_widget()
+        if not current_widget or not hasattr(current_widget, "session"):
+            return
+
+        session = current_widget.session
+
+        # Determine which connector to use (block-specific or session)
+        block_conn_name = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+        if block_conn_name:
+            # Block has its own connection - not switching session connector
+            return
+
+        connector = getattr(session, "connector", None)
+        connection_name = getattr(session, "connection_name", "") or ""
+
+        if not connector or not connector.is_connected():
+            self.statusBar().showMessage(S.status.no_active_connection, 3000)
+            return
+
+        # Switch database in background
+        self._on_object_explorer_database_switch(database_name)
 
     def _on_insert_variable_in_editor(self, var_name: str):
         """Inserts variable name in the focused editor of the active session"""

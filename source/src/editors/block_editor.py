@@ -62,6 +62,9 @@ class BlockEditor(QWidget):
     # Signal when block connection changes
     block_connection_changed = pyqtSignal(object, str)  # CodeBlock, connection_name
 
+    # Signal when block database changes
+    block_database_changed = pyqtSignal(object, str)  # CodeBlock, database_name
+
     # Signal when data file is dropped (to show import dialog)
     file_dropped = pyqtSignal(str)  # file_path
 
@@ -326,6 +329,7 @@ class BlockEditor(QWidget):
         block.move_requested.connect(self._on_block_move_requested)
         block.select_connection_requested.connect(self.select_connection_for_block.emit)
         block.connection_name_changed.connect(self.block_connection_changed.emit)
+        block.database_changed.connect(self.block_database_changed.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
 
         # Determine position
