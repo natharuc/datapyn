@@ -96,7 +96,7 @@ class MixedLanguageExecutor:
         Executa SQL e retorna DataFrame
         """
         if not self.db_connector or not self.db_connector.is_connected():
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError("No active database connection")
 
         # Executar query
         df = self.db_connector.execute_query(sql)
@@ -110,7 +110,7 @@ class MixedLanguageExecutor:
         Retorna número de linhas afetadas
         """
         if not self.db_connector or not self.db_connector.is_connected():
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError("No active database connection")
 
         # Executar statement
         rows = self.db_connector.execute_statement(sql)
@@ -156,7 +156,7 @@ class MixedLanguageExecutor:
         try:
             compile(processed_code, "<string>", "exec")
         except SyntaxError as e:
-            return (False, f"Erro de sintaxe Python: {e}")
+            return (False, f"Python syntax error: {e}")
 
         return (True, "")
 

@@ -1,11 +1,11 @@
 """
-Session - Representa uma sessão de trabalho independente
+Session - Represents an independent work session
 
-Cada aba do editor é uma sessão que contém:
-- Conexão de banco própria
-- Namespace Python próprio (variáveis)
-- Estado de execução
-- Threads próprias
+Each editor tab is a session that contains:
+- Its own database connection
+- Its own Python namespace (variables)
+- Execution state
+- Its own threads
 """
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
@@ -18,16 +18,16 @@ from io import StringIO
 
 class Session(QObject):
     """
-    Representa uma sessão de trabalho independente.
+    Represents an independent work session.
 
-    Cada sessão tem seu próprio:
-    - Conexão de banco de dados
-    - Namespace Python (variáveis)
-    - Estado de execução
+    Each session has its own:
+    - Database connection
+    - Python namespace (variables)
+    - Execution state
     - Workers/Threads
     """
 
-    # Sinais para notificar mudanças de estado
+    # Signals to notify state changes
     connection_changed = pyqtSignal(str)  # connection_name ou ''
     status_changed = pyqtSignal(str)  # status text
     execution_started = pyqtSignal(str)  # mode (sql, python, cross)
@@ -41,17 +41,17 @@ class Session(QObject):
         self.title = title
         self.created_at = datetime.now()
 
-        # Conexão de banco (referência, não o objeto em si)
+        # Connection reference (not the object itself)
         self._connection_name: Optional[str] = None
         self._connector = None
 
-        # Namespace Python para variáveis
+        # Python namespace for variables
         self._namespace: Dict[str, Any] = {}
 
-        # Estado
+        # State
         self._is_executing = False
-        self._last_status = "Pronto"
-        self._code = ""  # Compatibilidade
+        self._last_status = "Ready"
+        self._code = ""  # Compatibility
         self._blocks: list = []  # Lista de blocos [{language, code}]
 
         # Workers ativos (threads)
@@ -89,56 +89,56 @@ class Session(QObject):
 
     @property
     def blocks(self) -> list:
-        """Lista de blocos [{language, code}]"""
+        """List of blocks [{language, code}]"""
         return self._blocks
 
     @blocks.setter
     def blocks(self, value: list):
         self._blocks = value
 
-    # === CONEXÃO ===
+    # === CONNECTION ===
 
     def set_connection(self, connection_name: str, connector):
-        """Define a conexão desta sessão"""
+        """Sets the connection for this session"""
         self._connection_name = connection_name
         self._connector = connector
         self.connection_changed.emit(connection_name)
-        self.status_changed.emit(f"Conectado a {connection_name}")
+        self.status_changed.emit(f"Connected to {connection_name}")
 
     def connect(self, connection_name: str, password: str = "") -> bool:
         """
-        Conecta a sessão a um banco de dados usando ConnectionManager
+        Connects the session to a database using ConnectionManager
 
         Args:
-            connection_name: Nome da conexão
-            password: Senha (se necessário)
+            connection_name: Connection name
+            password: Password (if required)
 
         Returns:
-            True se conectou com sucesso
+            True if connected successfully
         """
         try:
             from src.database.connection_manager import ConnectionManager
             from src.database.database_connector import DatabaseConnector
 
-            # Desconectar conexão atual se existir
+            # Disconnect current connection if it exists
             if self._connector:
                 self.clear_connection()
 
-            # Obter configuração
+            # Get configuration
             manager = ConnectionManager()
             config = manager.get_connection_config(connection_name)
 
             if not config:
-                print(f"[ERRO] Conexão '{connection_name}' não encontrada")
+                print(f"[ERROR] Connection '{connection_name}' not found")
                 return False
 
-            # Criar nova conexão
+            # Create new connection
             connector = DatabaseConnector()
 
-            # Usar senha fornecida ou salva
+            # Use provided password or saved one
             pwd = password if password else config.get("password", "")
 
-            # Conectar
+            # Connect
             connector.connect(
                 db_type=config["db_type"],
                 host=config["host"],
@@ -159,12 +159,12 @@ class Session(QObject):
         except Exception as e:
             import traceback
 
-            print(f"[ERRO] Falha ao conectar: {str(e)}")
+            print(f"[ERROR] Connection failed: {str(e)}")
             traceback.print_exc()
             return False
 
     def disconnect(self):
-        """Desconecta o banco de dados desta sessão"""
+        """Disconnects the database from this session"""
         if self._connector and self._connector.is_connected:
             try:
                 self._connector.disconnect()
@@ -173,42 +173,42 @@ class Session(QObject):
         self.clear_connection()
 
     def clear_connection(self):
-        """Remove a conexão desta sessão"""
+        """Removes the connection from this session"""
         self._connection_name = None
         self._connector = None
         self.connection_changed.emit("")
-        self.status_changed.emit("Desconectado")
+        self.status_changed.emit("Disconnected")
 
-    # === NAMESPACE (VARIÁVEIS) ===
+    # === NAMESPACE (VARIABLES) ===
 
     def set_variable(self, name: str, value: Any):
-        """Define uma variável no namespace"""
+        """Sets a variable in the namespace"""
         self._namespace[name] = value
         self.variables_changed.emit(self._namespace)
 
     def get_variable(self, name: str) -> Any:
-        """Obtém uma variável do namespace"""
+        """Gets a variable from the namespace"""
         return self._namespace.get(name)
 
     def clear_namespace(self):
-        """Limpa todas as variáveis"""
+        """Clears all variables"""
         self._namespace.clear()
         self.variables_changed.emit(self._namespace)
 
     def update_namespace(self, variables: Dict[str, Any]):
-        """Atualiza múltiplas variáveis"""
+        """Updates multiple variables"""
         self._namespace.update(variables)
         self.variables_changed.emit(self._namespace)
 
-    # === EXECUÇÃO ===
+    # === EXECUTION ===
 
     def start_execution(self, mode: str):
-        """Marca início de execução"""
+        """Marks execution start"""
         self._is_executing = True
         self.execution_started.emit(mode)
 
     def finish_execution(self, success: bool, message: str):
-        """Marca fim de execução"""
+        """Marks execution end"""
         self._is_executing = False
         self._last_status = message
         self.execution_finished.emit(success, message)
@@ -217,16 +217,16 @@ class Session(QObject):
     # === THREAD MANAGEMENT ===
 
     def register_thread(self, thread: QThread):
-        """Registra uma thread ativa"""
+        """Registers an active thread"""
         self._active_threads.append(thread)
 
     def unregister_thread(self, thread: QThread):
-        """Remove uma thread da lista"""
+        """Removes a thread from the list"""
         if thread in self._active_threads:
             self._active_threads.remove(thread)
 
     def stop_all_threads(self):
-        """Para todas as threads ativas"""
+        """Stops all active threads"""
         for thread in self._active_threads[:]:
             if thread.isRunning():
                 thread.quit()
@@ -236,29 +236,29 @@ class Session(QObject):
     # === SERIALIZAÇÃO ===
 
     def serialize(self) -> Dict[str, Any]:
-        """Serializa a sessão para persistência"""
+        """Serializes the session for persistence"""
         return {
             "session_id": self.session_id,
             "title": self.title,
             "connection_name": self._connection_name,
-            "code": self._code,  # Compatibilidade
-            "blocks": self._blocks,  # Novo: lista de blocos
+            "code": self._code,  # Compatibility
+            "blocks": self._blocks,  # New: list of blocks
             "created_at": self.created_at.isoformat(),
-            "file_path": getattr(self, "file_path", None),  # Caminho do arquivo original
-            "original_file_type": getattr(self, "original_file_type", None),  # Tipo do arquivo (sql/py/dpw)
-            # Não serializa namespace (pode ter objetos não serializáveis)
-            # Não serializa connector (precisa reconectar)
+            "file_path": getattr(self, "file_path", None),  # Original file path
+            "original_file_type": getattr(self, "original_file_type", None),  # File type (sql/py/dpw)
+            # Don't serialize namespace (may have non-serializable objects)
+            # Don't serialize connector (needs to reconnect)
         }
 
     @classmethod
     def deserialize(cls, data: Dict[str, Any]) -> "Session":
-        """Cria uma sessão a partir de dados serializados"""
+        """Creates a session from serialized data"""
         session = cls(session_id=data.get("session_id", ""), title=data.get("title", "Script"))
         session._connection_name = data.get("connection_name")
         session._code = data.get("code", "")
         session._blocks = data.get("blocks", [])
-        session.file_path = data.get("file_path")  # Restaurar caminho do arquivo
-        session.original_file_type = data.get("original_file_type")  # Restaurar tipo do arquivo
+        session.file_path = data.get("file_path")  # Restore file path
+        session.original_file_type = data.get("original_file_type")  # Restore file type
         if data.get("created_at"):
             try:
                 session.created_at = datetime.fromisoformat(data["created_at"])
@@ -268,17 +268,17 @@ class Session(QObject):
 
     def initialize(self, connection_manager=None):
         """
-        Inicializa a sessão após deserialização.
-        Reconecta ao banco se necessário.
+        Initializes the session after deserialization.
+        Reconnects to the database if necessary.
         """
         if self._connection_name and connection_manager:
-            # Primeiro tenta pegar conexão existente
+            # First try to get existing connection
             connector = connection_manager.get_connection(self._connection_name)
             if connector and connector.is_connected():
                 self._connector = connector
                 self.connection_changed.emit(self._connection_name)
             else:
-                # Tenta reconectar automaticamente
+                # Try to reconnect automatically
                 try:
                     config = connection_manager.get_connection_config(self._connection_name)
                     if config:
@@ -297,27 +297,27 @@ class Session(QObject):
                             self._connector = connector
                             self.connection_changed.emit(self._connection_name)
                 except Exception as e:
-                    print(f"Erro ao reconectar sessão '{self.title}' a '{self._connection_name}': {e}")
-                    # Limpa conexão se falhar
+                    print(f"Error reconnecting session '{self.title}' to '{self._connection_name}': {e}")
+                    # Clear connection if it fails
                     self._connection_name = None
 
     # === CLEANUP ===
 
     def cleanup(self):
-        """Limpa recursos da sessão de forma segura"""
+        """Cleans up session resources safely"""
         try:
             self.stop_all_threads()
         except Exception:
-            pass  # Ignora erros durante cleanup
+            pass  # Ignore errors during cleanup
 
         try:
             self._namespace.clear()
         except Exception:
-            pass  # Ignora erros durante cleanup
-        # Não desconecta o banco aqui (pode ser compartilhado)
+            pass  # Ignore errors during cleanup
+        # Don't disconnect the database here (may be shared)
 
     def __del__(self):
         try:
             self.cleanup()
         except Exception:
-            pass  # Previne crashes durante destruição do objeto
+            pass  # Prevent crashes during object destruction

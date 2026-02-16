@@ -1,5 +1,5 @@
 """
-Gerenciador de atalhos de teclado configuráveis
+Configurable keyboard shortcut manager
 """
 
 from typing import Dict, Callable
@@ -10,10 +10,10 @@ from pathlib import Path
 
 
 class ShortcutManager:
-    """Gerencia atalhos de teclado configuráveis"""
+    """Manages configurable keyboard shortcuts"""
 
     DEFAULT_SHORTCUTS = {
-        # Execução
+        # Execution
         "execute_sql": "F5",
         "execute_all": "Ctrl+F5",
         "clear_results": "Ctrl+Shift+C",
@@ -22,7 +22,7 @@ class ShortcutManager:
         "save_file": "Ctrl+S",
         "save_as": "Ctrl+Shift+S",
         "export_script": "Ctrl+Shift+E",
-        # Sessões
+        # Sessions
         "new_tab": "Ctrl+T",
         "new_session": "Ctrl+N",
         "close_tab": "Ctrl+W",
@@ -51,7 +51,7 @@ class ShortcutManager:
         self.active_shortcuts: Dict[str, QShortcut] = {}
 
     def _load_shortcuts(self) -> Dict[str, str]:
-        """Carrega atalhos do arquivo de configuração"""
+        """Loads shortcuts from configuration file"""
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
@@ -65,21 +65,21 @@ class ShortcutManager:
         return self.DEFAULT_SHORTCUTS.copy()
 
     def save_shortcuts(self):
-        """Salva atalhos no arquivo de configuração"""
+        """Save shortcuts to config file"""
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump({"shortcuts": self.shortcuts}, f, indent=2)
 
     def get_shortcut(self, action: str) -> str:
-        """Retorna o atalho para uma ação"""
+        """Return shortcut for an action"""
         return self.shortcuts.get(action, "")
 
     def set_shortcut(self, action: str, key_sequence: str):
-        """Define um novo atalho para uma ação"""
+        """Sets a new shortcut for an action"""
         self.shortcuts[action] = key_sequence
         self.save_shortcuts()
 
     def reset_to_defaults(self):
-        """Reseta todos os atalhos para o padrão"""
+        """Reset all shortcuts to default"""
         self.shortcuts = self.DEFAULT_SHORTCUTS.copy()
         self.save_shortcuts()
 

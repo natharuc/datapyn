@@ -1,8 +1,8 @@
 """
-Panel Component - Painel estilizado para agrupamento visual
+Panel Component - Styled panel for visual grouping
 
-Similar ao Card do shadcn/ui.
-Usado para agrupar conteúdo relacionado.
+Similar to shadcn/ui Card.
+Used to group related content.
 """
 
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget
@@ -14,10 +14,10 @@ from ..design_system import get_colors, TYPOGRAPHY, SPACING, RADIUS, SHADOW
 
 class Panel(QFrame):
     """
-    Painel estilizado para agrupamento visual
+    Styled panel for visual grouping
 
-    Exemplo:
-        panel = Panel(title="Resultados")
+    Example:
+        panel = Panel(title="Results")
         panel.set_content(my_widget)
     """
 
@@ -35,13 +35,13 @@ class Panel(QFrame):
         self._apply_styles()
 
     def _setup_ui(self):
-        """Configura UI do painel"""
-        # Layout principal
+        """Sets up panel UI"""
+        # Main layout
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
 
-        # Header (se tiver título)
+        # Header (if has title)
         if self.title_text:
             self._create_header()
 
@@ -54,14 +54,14 @@ class Panel(QFrame):
         self.main_layout.addWidget(self.content_container)
 
     def _create_header(self):
-        """Cria header do painel"""
+        """Creates panel header"""
         colors = get_colors()
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(self._padding, SPACING.space_3, self._padding, SPACING.space_3)
 
-        # Título
+        # Title
         title_font = QFont(TYPOGRAPHY.font_family_primary)
         title_font.setPixelSize(TYPOGRAPHY.text_lg)
         title_font.setWeight(TYPOGRAPHY.font_semibold)
@@ -73,7 +73,7 @@ class Panel(QFrame):
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
-        # Estilo do header
+        # Header style
         header.setStyleSheet(f"""
             QWidget {{
                 background-color: {colors.bg_secondary};
@@ -85,7 +85,7 @@ class Panel(QFrame):
         self.header = header
 
     def _apply_styles(self):
-        """Aplica estilos ao painel"""
+        """Applies styles to the panel"""
         colors = get_colors()
 
         bg_color = colors.bg_elevated if self.elevated else colors.bg_primary
@@ -102,22 +102,22 @@ class Panel(QFrame):
         self.setStyleSheet(stylesheet)
 
     def set_content(self, widget: QWidget):
-        """Define widget de conteúdo"""
-        # Remove widgets anteriores
+        """Sets content widget"""
+        # Remove previous widgets
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        # Adiciona novo widget
+        # Add new widget
         self.content_layout.addWidget(widget)
 
     def add_content(self, widget: QWidget):
-        """Adiciona widget ao conteúdo (sem remover anteriores)"""
+        """Adds widget to content (without removing previous)"""
         self.content_layout.addWidget(widget)
 
     def update_theme(self):
-        """Atualiza estilos quando tema muda"""
+        """Updates styles when theme changes"""
         self._apply_styles()
 
         if self.title_text:
@@ -133,9 +133,9 @@ class Panel(QFrame):
 
 class PanelGroup(QWidget):
     """
-    Grupo de painéis com espaçamento consistente
+    Panel group with consistent spacing
 
-    Exemplo:
+    Example:
         group = PanelGroup(orientation="vertical")
         group.add_panel(panel1)
         group.add_panel(panel2)
@@ -150,7 +150,7 @@ class PanelGroup(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        """Configura UI do grupo"""
+        """Sets up group UI"""
         if self.orientation == "vertical":
             self.layout = QVBoxLayout(self)
         else:
@@ -160,9 +160,9 @@ class PanelGroup(QWidget):
         self.layout.setSpacing(self._spacing)
 
     def add_panel(self, panel: Panel):
-        """Adiciona painel ao grupo"""
+        """Adds panel to group"""
         self.layout.addWidget(panel)
 
     def add_widget(self, widget: QWidget):
-        """Adiciona widget qualquer ao grupo"""
+        """Adds any widget to group"""
         self.layout.addWidget(widget)

@@ -37,15 +37,15 @@ from src.core.theme_manager import ThemeManager
 
 
 class CSVExportDialog(QDialog):
-    """Diálogo para configurar exportação CSV"""
+    """Dialog to configure CSV export"""
 
     def __init__(self, parent=None, theme_manager: ThemeManager = None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
-        self.setWindowTitle("Exportar CSV")
+        self.setWindowTitle("Export CSV")
         self.setMinimumWidth(400)
 
-        # Remover botões maximizar/minimizar
+        # Remove maximize/minimize buttons
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint)
 
         self._setup_ui()
@@ -56,48 +56,48 @@ class CSVExportDialog(QDialog):
 
         form = QFormLayout()
 
-        # Delimitador
+        # Delimiter
         self.delimiter_combo = QComboBox()
-        self.delimiter_combo.addItem("Ponto e Vírgula (;)", ";")
-        self.delimiter_combo.addItem("Vírgula (,)", ",")
+        self.delimiter_combo.addItem("Semicolon (;)", ";")
+        self.delimiter_combo.addItem("Comma (,)", ",")
         self.delimiter_combo.addItem("Tab (\\t)", "\t")
         self.delimiter_combo.addItem("Pipe (|)", "|")
-        form.addRow("Delimitador:", self.delimiter_combo)
+        form.addRow("Delimiter:", self.delimiter_combo)
 
         # Encoding
         self.encoding_combo = QComboBox()
-        self.encoding_combo.addItem("UTF-8 com BOM (Excel)", "utf-8-sig")
+        self.encoding_combo.addItem("UTF-8 with BOM (Excel)", "utf-8-sig")
         self.encoding_combo.addItem("UTF-8", "utf-8")
         self.encoding_combo.addItem("Latin-1 (ISO-8859-1)", "latin-1")
         self.encoding_combo.addItem("Windows-1252", "cp1252")
-        form.addRow("Codificação:", self.encoding_combo)
+        form.addRow("Encoding:", self.encoding_combo)
 
-        # Incluir cabeçalho
+        # Include header
         self.header_check = QCheckBox()
         self.header_check.setChecked(True)
-        form.addRow("Incluir cabeçalho:", self.header_check)
+        form.addRow("Include header:", self.header_check)
 
-        # Abrir pasta após exportar
+        # Open folder after export
         self.open_folder_check = QCheckBox()
         self.open_folder_check.setChecked(True)
-        form.addRow("Abrir pasta após exportar:", self.open_folder_check)
+        form.addRow("Open folder after export:", self.open_folder_check)
 
         layout.addLayout(form)
 
-        # Botões (invertendo ordem: Cancel, OK)
+        # Buttons (reversing order: Cancel, OK)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        # Aplicar tema
+        # Apply theme
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
     def _load_settings(self):
-        """Carrega configurações salvas"""
+        """Load saved settings"""
         settings = QSettings("DataPyn", "CSVExport")
 
-        # Delimitador
+        # Delimiter
         delimiter = settings.value("delimiter", ";")
         index = self.delimiter_combo.findData(delimiter)
         if index >= 0:
@@ -113,12 +113,12 @@ class CSVExportDialog(QDialog):
         header = settings.value("header", True, type=bool)
         self.header_check.setChecked(header)
 
-        # Abrir pasta
+        # Open folder
         open_folder = settings.value("open_folder", True, type=bool)
         self.open_folder_check.setChecked(open_folder)
 
     def _save_settings(self):
-        """Salva configurações"""
+        """Save settings"""
         settings = QSettings("DataPyn", "CSVExport")
         settings.setValue("delimiter", self.get_delimiter())
         settings.setValue("encoding", self.get_encoding())
@@ -126,7 +126,7 @@ class CSVExportDialog(QDialog):
         settings.setValue("open_folder", self.get_open_folder())
 
     def accept(self):
-        """Salva configurações ao aceitar"""
+        """Save settings when accepting"""
         self._save_settings()
         super().accept()
 
@@ -243,47 +243,47 @@ class ResultsViewer(QWidget):
         self.export_destination = QComboBox()
         self.export_destination.addItem("Clipboard", "clipboard")
         self.export_destination.setItemIcon(0, qta.icon("mdi.clipboard-text", color="#64b5f6"))
-        self.export_destination.addItem("Arquivo", "file")
+        self.export_destination.addItem("File", "file")
         self.export_destination.setItemIcon(1, qta.icon("mdi.file-export", color="#64b5f6"))
         self.export_destination.setMinimumWidth(140)
-        self.export_destination.setToolTip("Destino da exportação")
+        self.export_destination.setToolTip("Export destination")
         self.toolbar.addWidget(self.export_destination)
         self.toolbar.addSeparator()
 
-        # Botões da toolbar
+        # Toolbar buttons
         self.btn_export_csv = QPushButton("CSV")
         self.btn_export_excel = QPushButton("Excel")
         self.btn_export_json = QPushButton("JSON")
-        self.btn_copy = QPushButton("Copiar Tudo")
+        self.btn_copy = QPushButton("Copy All")
 
         self.toolbar.addWidget(self.btn_export_csv)
         self.toolbar.addWidget(self.btn_export_excel)
         self.toolbar.addWidget(self.btn_export_json)
         self.toolbar.addWidget(self.btn_copy)
 
-        # Botao Exportar para Tabela (banco de dados)
+        # Export to Table button (database)
         self.toolbar.addSeparator()
-        self.btn_export_table = QPushButton("  Tabela")
+        self.btn_export_table = QPushButton("  Table")
         self.btn_export_table.setIcon(qta.icon("mdi.database-export", color="#4fc3f7"))
-        self.btn_export_table.setToolTip("Exportar dados para uma tabela no banco de dados (to_sql)")
+        self.btn_export_table.setToolTip("Export data to a database table (to_sql)")
         self.toolbar.addWidget(self.btn_export_table)
 
         # Info label
-        self.info_label = QLabel("Nenhum resultado")
+        self.info_label = QLabel("No results")
         self.toolbar.addSeparator()
         self.toolbar.addWidget(self.info_label)
 
         layout.addWidget(self.toolbar)
 
-        # Botao salvar imagem (oculto por padrao)
-        self.btn_save_image = QPushButton("Salvar Imagem")
+        # Save image button (hidden by default)
+        self.btn_save_image = QPushButton("Save Image")
         self.btn_save_image.setVisible(False)
         self.toolbar.addWidget(self.btn_save_image)
 
-        # QStackedWidget: pagina 0 = tabela, pagina 1 = imagem
+        # QStackedWidget: page 0 = table, page 1 = image
         self.stack = QStackedWidget()
 
-        # Pagina 0 - Tabela
+        # Page 0 - Table
         self.table_view = QTableView()
         self._apply_table_style()
 
@@ -778,14 +778,14 @@ class ResultsViewer(QWidget):
         self.btn_save_image.setVisible(False)
 
     def clear(self):
-        """Limpa a visualizacao"""
+        """Clear visualization"""
         self.current_df = None
         self._current_image_bytes = None
         self.model.update_data(pd.DataFrame())
         self.image_label.clear()
         self.html_viewer.clear()
         self.json_tree.clear()
-        self.info_label.setText("Nenhum resultado")
+        self.info_label.setText("No results")
         self.stack.setCurrentIndex(0)
         self.btn_save_image.setVisible(False)
         self.btn_export_csv.setVisible(True)
@@ -796,19 +796,19 @@ class ResultsViewer(QWidget):
         self.export_destination.setVisible(True)
 
     def _get_export_destination(self) -> str:
-        """Retorna o destino selecionado: 'clipboard' ou 'file'"""
+        """Return selected destination: 'clipboard' or 'file'"""
         return self.export_destination.currentData()
 
     def _show_clipboard_success(self, format_name: str):
-        """Mostra feedback de sucesso ao copiar para clipboard"""
-        self.info_label.setText(f"{format_name} copiado!")
+        """Show success feedback when copying to clipboard"""
+        self.info_label.setText(f"{format_name} copied!")
 
     def _export_csv(self):
-        """Exporta para CSV (clipboard ou arquivo)"""
+        """Export to CSV (clipboard or file)"""
         if self.current_df is None:
             return
 
-        # Sempre abrir diálogo de configuração
+        # Always open configuration dialog
         dialog = CSVExportDialog(self, theme_manager=self.theme_manager)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -821,7 +821,7 @@ class ResultsViewer(QWidget):
         destination = self._get_export_destination()
 
         if destination == "clipboard":
-            # Exportar para clipboard com configurações
+            # Export to clipboard with settings
             from PyQt6.QtWidgets import QApplication
 
             csv_text = self.current_df.to_csv(index=False, sep=delimiter, encoding=encoding, header=include_header)
@@ -829,9 +829,9 @@ class ResultsViewer(QWidget):
             self._show_clipboard_success("CSV")
             return
 
-        # Exportar para arquivo
+        # Export to file
 
-        filename, _ = QFileDialog.getSaveFileName(self, "Salvar CSV", "", "CSV Files (*.csv)")
+        filename, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
         if not filename:
             return
 
@@ -845,17 +845,17 @@ class ResultsViewer(QWidget):
                 subprocess.run(["explorer", "/select,", os.path.normpath(filename)])
 
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao exportar CSV:\n{str(e)}")
+            QMessageBox.critical(self, "Error", f"Error exporting CSV:\n{str(e)}")
 
     def _export_excel(self):
-        """Exporta para Excel (clipboard ou arquivo)"""
+        """Export to Excel (clipboard or file)"""
         if self.current_df is None:
             return
 
         destination = self._get_export_destination()
 
         if destination == "clipboard":
-            # Excel no clipboard - formato tab-separated que Excel entende
+            # Excel in clipboard - tab-separated format that Excel understands
             from PyQt6.QtWidgets import QApplication
 
             excel_text = self.current_df.to_csv(index=False, sep="\t")
@@ -863,18 +863,18 @@ class ResultsViewer(QWidget):
             self._show_clipboard_success("Excel (tab)")
             return
 
-        # Exportar para arquivo
-        filename, _ = QFileDialog.getSaveFileName(self, "Salvar Excel", "", "Excel Files (*.xlsx)")
+        # Export to file
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Excel", "", "Excel Files (*.xlsx)")
         if filename:
             if not filename.lower().endswith(".xlsx"):
                 filename += ".xlsx"
             try:
                 self.current_df.to_excel(filename, index=False)
             except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Erro ao exportar Excel:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Error exporting Excel:\n{str(e)}")
 
     def _export_json(self):
-        """Exporta para JSON (clipboard ou arquivo)"""
+        """Export to JSON (clipboard or file)"""
         if self.current_df is None:
             return
 
@@ -888,32 +888,32 @@ class ResultsViewer(QWidget):
             self._show_clipboard_success("JSON")
             return
 
-        # Exportar para arquivo
-        filename, _ = QFileDialog.getSaveFileName(self, "Salvar JSON", "", "JSON Files (*.json)")
+        # Export to file
+        filename, _ = QFileDialog.getSaveFileName(self, "Save JSON", "", "JSON Files (*.json)")
         if filename:
             if not filename.lower().endswith(".json"):
                 filename += ".json"
             try:
                 self.current_df.to_json(filename, orient="records", indent=2, force_ascii=False)
             except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Erro ao exportar JSON:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Error exporting JSON:\n{str(e)}")
 
     def _copy_to_clipboard(self):
-        """Copia dados formatados para clipboard"""
+        """Copy formatted data to clipboard"""
         from PyQt6.QtWidgets import QApplication
 
         if self.current_df is not None:
             text = self.current_df.to_string(index=False)
             QApplication.instance().clipboard().setText(text)
-            self._show_clipboard_success("Tabela")
+            self._show_clipboard_success("Table")
 
     def _save_image(self):
-        """Salva a imagem exibida em arquivo"""
+        """Save displayed image to file"""
         if not self._current_image_bytes:
             return
 
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Salvar Imagem", "", "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
+            self, "Save Image", "", "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
         )
         if filename:
             if not any(filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg")):
@@ -922,21 +922,21 @@ class ResultsViewer(QWidget):
                 with open(filename, "wb") as f:
                     f.write(self._current_image_bytes)
             except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Erro ao salvar imagem:\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Error saving image:\n{str(e)}")
 
     def _export_to_table(self):
-        """Exporta o DataFrame atual para uma tabela no banco de dados"""
+        """Export current DataFrame to a database table"""
         if self.current_df is None or len(self.current_df) == 0:
-            QMessageBox.warning(self, "Exportar para Tabela", "Nenhum dado para exportar")
+            QMessageBox.warning(self, "Export to Table", "No data to export")
             return
 
-        # Obter conexoes ativas da MainWindow
+        # Get active connections from MainWindow
         main_window = self._get_main_window()
         if not main_window:
-            QMessageBox.warning(self, "Exportar para Tabela", "Janela principal nao encontrada")
+            QMessageBox.warning(self, "Export to Table", "Main window not found")
             return
 
-        # Coletar conexoes ativas de todas as sessoes
+        # Collect active connections from all sessions
         connections = {}
         if hasattr(main_window, "_session_widgets"):
             for widget in main_window._session_widgets.values():
@@ -950,12 +950,12 @@ class ResultsViewer(QWidget):
         if not connections:
             QMessageBox.warning(
                 self,
-                "Exportar para Tabela",
-                "Nenhuma conexao ativa disponivel.\n\nConecte-se a um banco de dados primeiro.",
+                "Export to Table",
+                "No active connection available.\n\nConnect to a database first.",
             )
             return
 
-        # Determinar conexao atual (do bloco focado ou da sessao)
+        # Determine current connection (from focused block or session)
         current_connection = ""
         current_widget = main_window._get_current_session_widget()
         if current_widget:

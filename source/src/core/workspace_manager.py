@@ -1,5 +1,5 @@
 """
-Gerenciador de workspace - salva e restaura estado da aplicação
+Workspace manager - saves and restores application state
 """
 
 import json
@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional
 
 
 class WorkspaceManager:
-    """Gerencia estado do workspace (abas, conexões, código, geometria)"""
+    """Manages workspace state (tabs, connections, code, geometry)"""
 
     def __init__(self, config_path: str = None):
         if config_path is None:
@@ -17,7 +17,7 @@ class WorkspaceManager:
         self.config_path = Path(config_path)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Guarda o caminho do arquivo de workspace atual (quando usuário abre/salva um arquivo específico)
+        # Store current workspace file path (when user opens/saves a specific file)
         self.current_file_path: Optional[Path] = None
 
     def save_workspace(
@@ -35,12 +35,12 @@ class WorkspaceManager:
 
         Args:
             tabs: Lista de dicts com {'code': str, 'connection': str, 'title': str}
-            active_tab: Índice da aba ativa
-            active_connection: Nome da conexão ativa
+            active_tab: Active tab index
+            active_connection: Active connection name
             window_geometry: Dict com x, y, width, height, maximized
             splitter_sizes: Lista com tamanhos do splitter [editor, results]
-            dock_visible: Se o dock de conexões está visível
-            file_path: Caminho para salvar arquivo (se None, usa current_file_path ou config_path padrão)
+            dock_visible: Whether connections dock is visible
+            file_path: Path to save file (if None, uses current_file_path or default config_path)
         """
         workspace = {
             "tabs": tabs,
@@ -65,13 +65,13 @@ class WorkspaceManager:
 
     def load_workspace(self, file_path: str = None) -> Dict[str, Any]:
         """
-        Carrega estado do workspace
+        Load workspace state
 
         Args:
-            file_path: Caminho do arquivo para carregar (se None, usa config_path padrão)
+            file_path: File path to load (if None, uses default config_path)
 
         Returns:
-            Dict com 'tabs', 'active_tab', 'active_connection', 'window_geometry', etc
+            Dict with 'tabs', 'active_tab', 'active_connection', 'window_geometry', etc
         """
         default = {
             "tabs": [{"code": "", "connection": None, "title": "Script 1"}],
@@ -96,7 +96,7 @@ class WorkspaceManager:
             with open(load_path, "r", encoding="utf-8") as f:
                 workspace = json.load(f)
 
-            # Validação básica
+            # Basic validation
             if "tabs" not in workspace or not workspace["tabs"]:
                 workspace["tabs"] = default["tabs"]
 
@@ -111,7 +111,7 @@ class WorkspaceManager:
             return workspace
 
         except Exception as e:
-            print(f"Erro ao carregar workspace: {e}")
+            print(f"Error loading workspace: {e}")
             return default
 
     def clear_workspace(self):

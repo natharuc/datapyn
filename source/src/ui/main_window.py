@@ -85,7 +85,7 @@ DEFAULT_VERSION = "1.1.6"  # Default version if unable to read from pyproject.to
 class SqlWorker(QObject):
     """Worker for executing SQL in background"""
 
-    finished = pyqtSignal(object, str)  # (result_df ou None, error_msg ou '')
+    finished = pyqtSignal(object, str)  # (result_df or None, error_msg or '')
 
     def __init__(self, connector, query):
         super().__init__()
@@ -118,15 +118,15 @@ class PythonWorker(QObject):
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         try:
-            # Configurar matplotlib para backend nao-interativo (Agg) com tema escuro
+            # Configure matplotlib for non-interactive backend (Agg) with dark theme
             self._setup_matplotlib_backend()
 
-            # Snapshot de DataFrames antes da execucao para detectar novos
+            # Snapshot of DataFrames before execution to detect new ones
             df_snapshot = {k: id(v) for k, v in self.namespace.items() if isinstance(v, pd.DataFrame)}
 
-            # Captura stdout E stderr no mesmo buffer
-            # Assim print(), logging.info(), warnings, sys.stderr.write()
-            # todos aparecem no output panel
+            # Capture stdout AND stderr to same buffer
+            # Thus print(), logging.info(), warnings, sys.stderr.write()
+            # all appear in output panel
             captured = StringIO()
             sys.stdout = captured
             sys.stderr = captured
@@ -137,7 +137,7 @@ class PythonWorker(QObject):
             sys.stderr = old_stderr
             output = captured.getvalue()
 
-            # Capturar figuras matplotlib pendentes
+            # Capture pending matplotlib figures
             figures = self._capture_matplotlib_figures()
 
             # Se resultado e None, verificar se novos DataFrames foram criados
@@ -284,7 +284,7 @@ class PythonWorker(QObject):
 
             if isinstance(result, MplFigure):
                 if has_captured_figures:
-                    # Ja capturado por _capture_matplotlib_figures, nao duplicar
+                    # Already captured by _capture_matplotlib_figures, don't duplicate
                     return None, extra_outputs
                 buf = io.BytesIO()
                 result.savefig(
@@ -457,7 +457,7 @@ class MainWindow(DockingMainWindow):
         # Connect signals do SessionManager
         self.session_manager.session_focused.connect(self._on_session_focused)
 
-        # Aplicar tema inicial
+        # Apply initial theme
         self._apply_app_theme()
 
         # Timer to update status
@@ -526,26 +526,26 @@ class MainWindow(DockingMainWindow):
                 return self.main_window.global_variables_panel
 
             def log(self, message, prefix="INFO"):
-                """Compatibilidade: log para output global"""
+                """Compatibility: log to global output"""
                 if self.main_window.global_output_panel:
                     self.main_window.global_output_panel.log(message, prefix)
 
             def log_error(self, message):
-                """Compatibilidade: log de erro para output global"""
+                """Compatibility: error log to global output"""
                 if self.main_window.global_output_panel:
                     self.main_window.global_output_panel.error(message)
 
             def error(self, message):
-                """Compatibilidade: alias para log_error"""
+                """Compatibility: alias for log_error"""
                 self.log_error(message)
 
             def log_success(self, message):
-                """Compatibilidade: log de sucesso para output global"""
+                """Compatibility: success log to global output"""
                 if self.main_window.global_output_panel:
                     self.main_window.global_output_panel.success(message)
 
             def log_warning(self, message):
-                """Compatibilidade: log de warning para output global"""
+                """Compatibility: warning log to global output"""
                 if self.main_window.global_output_panel:
                     self.main_window.global_output_panel.warning(message)
 
@@ -570,7 +570,7 @@ class MainWindow(DockingMainWindow):
 
             @property
             def output_text(self):
-                """Compatibilidade: acesso ao texto do output global"""
+                """Compatibility: access to global output text"""
                 if self.main_window.global_output_panel:
                     return self.main_window.global_output_panel
                 return None
@@ -610,26 +610,26 @@ class MainWindow(DockingMainWindow):
                     return self.main_window.global_variables_panel
 
                 def log(self, message, prefix="INFO"):
-                    """Compatibilidade: log para output global"""
+                    """Compatibility: log to global output"""
                     if self.main_window.global_output_panel:
                         self.main_window.global_output_panel.log(message, prefix)
 
                 def log_error(self, message):
-                    """Compatibilidade: log de erro para output global"""
+                    """Compatibility: error log to global output"""
                     if self.main_window.global_output_panel:
                         self.main_window.global_output_panel.error(message)
 
                 def error(self, message):
-                    """Compatibilidade: alias para log_error"""
+                    """Compatibility: alias for log_error"""
                     self.log_error(message)
 
                 def log_success(self, message):
-                    """Compatibilidade: log de sucesso para output global"""
+                    """Compatibility: success log to global output"""
                     if self.main_window.global_output_panel:
                         self.main_window.global_output_panel.success(message)
 
                 def log_warning(self, message):
-                    """Compatibilidade: log de warning para output global"""
+                    """Compatibility: warning log to global output"""
                     if self.main_window.global_output_panel:
                         self.main_window.global_output_panel.warning(message)
 
@@ -654,7 +654,7 @@ class MainWindow(DockingMainWindow):
 
                 @property
                 def output_text(self):
-                    """Compatibilidade: acesso ao texto do output global"""
+                    """Compatibility: access to global output text"""
                     if self.main_window.global_output_panel:
                         return self.main_window.global_output_panel
                     return None
@@ -844,7 +844,7 @@ class MainWindow(DockingMainWindow):
         self.connection_panel.edit_connection_clicked.connect(self._edit_connection)
         self.connection_panel.disconnect_clicked.connect(self._disconnect)
 
-        # Criar dock widget
+        # Create dock widget
         self.connections_dock = QDockWidget("Connections", self)
         self.connections_dock.setObjectName("ConnectionsDock")  # Para saveState/restoreState
         self.connections_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -875,12 +875,12 @@ class MainWindow(DockingMainWindow):
         )
         self.connections_dock.setFeatures(features)
 
-        # Criar propriedades de compatibilidade
+        # Create compatibility properties
         self._setup_connection_panel_compat()
 
     def _setup_connection_panel_compat(self):
         """Creates compatibility properties for legacy code"""
-        # Mapeia atributos antigos para o novo componente
+        # Maps old attributes to new component
         self.connections_list = self.connection_panel.connections_list.list_widget
         self.active_conn_name_label = self.connection_panel.active_widget.name_label
         self.active_conn_info_label = self.connection_panel.active_widget.info_label
@@ -1097,7 +1097,7 @@ class MainWindow(DockingMainWindow):
         self.variables_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
 
-        # Configurar tamanhos minimos para garantir visibilidade
+        # Configure minimum sizes to ensure visibility
         self.results_dock.setMinimumHeight(180)
         self.output_dock.setMinimumHeight(180)
         self.variables_dock.setMinimumWidth(200)
@@ -1149,7 +1149,7 @@ class MainWindow(DockingMainWindow):
         info["output"].deleteLater()
         info["variables"].deleteLater()
 
-        # Remover Object Explorer da sessao
+        # Remove Object Explorer from session
         if hasattr(self, "_session_explorers"):
             self._remove_session_explorer(session_id)
 
@@ -1539,8 +1539,8 @@ class MainWindow(DockingMainWindow):
 
     def _connect_new_tab(self, connection_name: str):
         """
-        Conecta a um banco de dados SEMPRE criando uma nova aba.
-        Usado quando CTRL+duplo-click ou 'Conectar em Nova Aba' no menu.
+        Connects to a database ALWAYS creating a new tab.
+        Used when CTRL+double-click or 'Connect in New Tab' in menu.
         """
         # Always create new tab
         self._new_session()
@@ -1797,7 +1797,7 @@ class MainWindow(DockingMainWindow):
         self.main_statusbar = MainStatusBar(theme_manager=self.theme_manager)
         self.setStatusBar(self.main_statusbar)
 
-        # Criar propriedades de compatibilidade
+        # Create compatibility properties
         self.statusbar = self.main_statusbar
         self.connection_status_bar = self.main_statusbar.connection_label
         self.action_label = self.main_statusbar.action_label
@@ -1896,7 +1896,7 @@ class MainWindow(DockingMainWindow):
             "settings": self._show_settings,
         }
 
-        # Criar atalhos a partir do ShortcutManager
+        # Create shortcuts from ShortcutManager
         app_keys = set()
         for action, callback in shortcuts_map.items():
             key_sequence = self.shortcut_manager.get_shortcut(action)
@@ -1951,7 +1951,7 @@ class MainWindow(DockingMainWindow):
             "settings": self._show_settings,
         }
 
-        # Criar novos atalhos
+        # Create new shortcuts
         app_keys = set()
         for action, callback in shortcuts_map.items():
             key_sequence = self.shortcut_manager.get_shortcut(action)
@@ -1962,7 +1962,7 @@ class MainWindow(DockingMainWindow):
                 self._shortcuts.append(shortcut)
                 app_keys.add(key_sequence)
 
-        # Atualizar editores
+        # Update editors
         from src.editors.code_editor import CodeEditor
         CodeEditor.set_app_shortcuts(app_keys)
 
@@ -1999,42 +1999,42 @@ class MainWindow(DockingMainWindow):
         # Guard para evitar que _on_session_tab_changed dispare _new_session
         self._creating_session = True
         try:
-            # Criar nova sessao com paineis
+            # Create new session with panels
             session = self.session_manager.create_session()
             new_widget = SessionWidget(session, theme_manager=self.theme_manager)
 
-            # Criar paineis para a nova sessao
+            # Create panels for new session
             self._create_session_panels(session.session_id)
 
-            # Copiar todo o conteudo do editor
+            # Copy all editor content
             source_blocks = widget.editor.get_blocks()
 
-            # Remover blocos existentes na nova sessao (exceto o ultimo)
+            # Remove existing blocks from new session (except last)
             new_blocks = new_widget.editor.get_blocks()
             for b in new_blocks[:-1]:
                 new_widget.editor.remove_block(b)
 
-            # Se fonte tem blocos, usa o primeiro bloco vazio da nova sessao
+            # If source has blocks, use first empty block from new session
             if source_blocks:
                 first_new_block = new_widget.editor.get_blocks()[0]
                 first_new_block.set_language(source_blocks[0].get_language())
                 first_new_block.set_code(source_blocks[0].get_code())
 
-                # Adicionar os demais blocos
+                # Add remaining blocks
                 for block in source_blocks[1:]:
                     new_block = new_widget.editor.add_block(language=block.get_language())
                     new_block.set_code(block.get_code())
 
-            # Copiar file_path se existir
+            # Copy file_path if exists
             if hasattr(widget, "file_path"):
                 new_widget.file_path = widget.file_path
 
-            # Herdar conexao da sessao original
+            # Inherit connection from original session
             if hasattr(widget, "session") and widget.session.connection_name:
                 try:
                     connected = session.connect(widget.session.connection_name)
                     if not connected:
-                        pass  # Conexao falhou, sessao fica sem conexao
+                        pass  # Connection failed, session remains without connection
                 except Exception:
                     pass
 
@@ -2048,21 +2048,21 @@ class MainWindow(DockingMainWindow):
                 lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
             )
 
-            # Registrar widget
+            # Register widget
             self._session_widgets[session.session_id] = new_widget
 
-            # Nome da nova aba
+            # New tab name
             original_name = self.session_tabs.tabText(index)
             new_name = f"{original_name} (copia)"
 
-            # Inserir antes do ultimo tab (botao nova aba)
+            # Insert before last tab (new tab button)
             insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
             tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
 
-            # Configurar botao de fechar customizado
+            # Configure custom close button
             self.session_tabs._setup_close_button(tab_index)
 
-            # Aplicar cor da aba se sessao original tinha conexao
+            # Apply tab color if original session had connection
             if session.connection_name:
                 config = self.connection_manager.get_connection_config(session.connection_name)
                 if config:
@@ -2940,10 +2940,10 @@ class MainWindow(DockingMainWindow):
                 self._tray_icon.setIcon(icon)
                 self._tray_icon.show()
 
-            # Capturar tab_index para o closure
+            # Capture tab_index for closure
             self._notification_tab = tab_index
 
-            # Conectar click apenas uma vez
+            # Connect click only once
             try:
                 self._tray_icon.activated.disconnect()
             except TypeError:
@@ -2969,7 +2969,7 @@ class MainWindow(DockingMainWindow):
             self._focus_window_and_tab(tab)
 
     def _focus_window_and_tab(self, tab_index: int = None):
-        """Traz a janela para frente, foca, e seleciona a aba que notificou"""
+        """Brings window to front, focuses, and selects the tab that notified"""
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.raise_()
         self.activateWindow()
@@ -2978,7 +2978,7 @@ class MainWindow(DockingMainWindow):
             self.session_tabs.setCurrentIndex(tab_index)
 
     def _focus_window(self):
-        """Traz a janela para frente e foca"""
+        """Brings window to front and focuses"""
         self._focus_window_and_tab(None)
 
     def _log_info(self, message: str):
@@ -3043,7 +3043,7 @@ class MainWindow(DockingMainWindow):
             self.action_label.setText("Results cleared")
 
     def _new_file(self):
-        """Limpa editor da aba atual"""
+        """Clears current tab editor"""
         editor = self._get_current_editor()
         if editor:
             editor.clear()
@@ -3315,7 +3315,7 @@ class MainWindow(DockingMainWindow):
         """Applies theme to the application (not to editors)"""
         colors = self.theme_manager.get_app_colors()
 
-        # Aplicar estilo geral na janela
+        # Apply general style to window
         self.setStyleSheet(f"""
             QMainWindow {{
                 background-color: {colors["background"]};
@@ -3517,7 +3517,7 @@ class MainWindow(DockingMainWindow):
         dialog.exec()
 
     def _toggle_auto_update(self, checked: bool):
-        """Ativa ou desativa auto-update"""
+        """Enables or disables auto-update"""
         self.auto_update_service.set_auto_update_enabled(checked)
         if checked:
             self.statusbar.showMessage("Auto-update ativado", 3000)
@@ -3525,17 +3525,17 @@ class MainWindow(DockingMainWindow):
             self.statusbar.showMessage("Auto-update desativado", 3000)
 
     def _get_current_version(self) -> str:
-        """Obtem a versao atual do pyproject.toml"""
+        """Gets current version from pyproject.toml"""
         try:
             import tomllib
             import os
 
-            # Caminho para o pyproject.toml
+            # Path to pyproject.toml
             if getattr(sys, "frozen", False):
-                # Se executando como executavel, usar versao embutida
+                # If running as executable, use embedded version
                 base_path = sys._MEIPASS
             else:
-                # Em desenvolvimento, ir ate a raiz do projeto
+                # In development, go to project root
                 base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
             pyproject_path = os.path.join(base_path, "pyproject.toml")
@@ -3690,7 +3690,7 @@ class MainWindow(DockingMainWindow):
                 try:
                     connected = session.connect(previous_connection)
                     if connected:
-                        # Aplicar cor da aba
+                        # Apply tab color
                         config = self.connection_manager.get_connection_config(previous_connection)
                         if config:
                             color = config.get("color", "#007ACC") or "#007ACC"
@@ -3916,7 +3916,7 @@ class MainWindow(DockingMainWindow):
         # Adicionar aba usando metodo do SessionTabs (ja lida com botao +)
         index = self.session_tabs.add_session(widget, session.title)
 
-        # Durante restauracao, aplicar cor da aba baseada na conexao da sessao
+        # During restoration, apply tab color based on session connection
         if hasattr(session, "_connection_name") and session._connection_name:
             config = self.connection_manager.get_connection_config(session._connection_name)
             if config:
@@ -4216,14 +4216,14 @@ class MainWindow(DockingMainWindow):
                 block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
 
                 if block_conn:
-                    # Bloco com conexao customizada: so aplica se eh a mesma conexao
+                    # Block with custom connection: only apply if same connection
                     if block_conn == connection_name:
                         block.editor.set_sql_schema(schema)
                 elif session_conn == connection_name:
-                    # Bloco sem conexao customizada: aplica se eh a conexao da sessao
+                    # Block without custom connection: apply if session connection
                     block.editor.set_sql_schema(schema)
 
-        # Atualizar Object Explorer da sessao correspondente
+        # Update Object Explorer for corresponding session
         if hasattr(self, "_session_explorers"):
             for sid, widget in self._session_widgets.items():
                 if not (hasattr(widget, "session") and widget.session):
@@ -4242,7 +4242,7 @@ class MainWindow(DockingMainWindow):
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback when an individual block connection changes.
 
-        Carrega schema da nova conexao e aplica ao bloco (em background).
+        Loads schema from new connection and applies to block (in background).
         """
         if not connection_name:
             return
@@ -4376,7 +4376,7 @@ class MainWindow(DockingMainWindow):
             self._update_window_title()
 
     def _get_current_session_widget(self) -> SessionWidget:
-        """Retorna SessionWidget da aba ativa"""
+        """Returns active tab SessionWidget"""
         widget = self.session_tabs.currentWidget()
         if isinstance(widget, SessionWidget):
             return widget
@@ -4639,7 +4639,7 @@ class MainWindow(DockingMainWindow):
             self.main_statusbar.set_file_info(file_path_for_statusbar)
 
     def _save_intelligently(self):
-        """Sistema inteligente de salvamento baseado no contexto"""
+        """Intelligent save system based on context"""
         context = self._detect_file_context()
 
         if context in ["sql", "python"]:

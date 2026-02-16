@@ -1,7 +1,7 @@
 """
-Painel de Output/Logs
+Output/Logs Panel
 
-Exibe mensagens de log, saída de comandos e erros.
+Displays log messages, command output, and errors.
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QDialog, QDialogButtonBox
@@ -21,9 +21,9 @@ except ImportError:
 
 
 class OutputPanel(QWidget):
-    """Painel de output/logs com formatação"""
+    """Output/logs panel with formatting"""
 
-    # Sinais
+    # Signals
     cleared = pyqtSignal()
 
     def __init__(self, theme_manager=None, parent=None):
@@ -34,12 +34,12 @@ class OutputPanel(QWidget):
         self._apply_theme()
 
     def _setup_ui(self):
-        """Configura UI"""
+        """Configure UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Toolbar do output
+        # Output toolbar
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(5, 3, 5, 3)
@@ -47,15 +47,15 @@ class OutputPanel(QWidget):
 
         toolbar_layout.addStretch()
 
-        # Botão limpar
-        self.btn_clear = GhostButton("Limpar")
+        # Clear button
+        self.btn_clear = GhostButton("Clear")
         if HAS_QTAWESOME:
             self.btn_clear.setIcon(qta.icon("fa5s.trash", color="#888888"))
         self.btn_clear.clicked.connect(self.clear)
         toolbar_layout.addWidget(self.btn_clear)
 
-        # Botão copiar
-        self.btn_copy = GhostButton("Copiar")
+        # Copy button
+        self.btn_copy = GhostButton("Copy")
         if HAS_QTAWESOME:
             self.btn_copy.setIcon(qta.icon("fa5s.copy", color="#888888"))
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
@@ -69,7 +69,7 @@ class OutputPanel(QWidget):
         """)
         layout.addWidget(toolbar)
 
-        # Area de texto
+        # Text area
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setFont(QFont("Consolas", 10))
@@ -77,7 +77,7 @@ class OutputPanel(QWidget):
         layout.addWidget(self.text_edit)
 
     def _apply_theme(self):
-        """Aplica tema"""
+        """Apply theme"""
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
@@ -93,27 +93,27 @@ class OutputPanel(QWidget):
         """)
 
     def set_theme_manager(self, theme_manager):
-        """Define theme manager"""
+        """Set theme manager"""
         self.theme_manager = theme_manager
         self._apply_theme()
 
     def append(self, text: str, level: str = "info"):
-        """Adiciona texto ao output
+        """Add text to output
 
         Args:
-            text: Texto a adicionar
-            level: Nivel ('info', 'success', 'warning', 'error')
+            text: Text to add
+            level: Level ('info', 'success', 'warning', 'error')
         """
         timestamp = datetime.now().strftime("%H:%M:%S")
 
         colors = {"info": "#9cdcfe", "success": "#4ec9b0", "warning": "#dcdcaa", "error": "#f48771", "debug": "#808080"}
         color = colors.get(level, colors["info"])
 
-        # Icones por nivel
-        icons = {"info": "", "success": "[OK]", "warning": "[AVISO]", "error": "[ERRO]", "debug": "[DEBUG]"}
+        # Icons by level
+        icons = {"info": "", "success": "[OK]", "warning": "[WARNING]", "error": "[ERROR]", "debug": "[DEBUG]"}
         icon = icons.get(level, "")
 
-        # Escapar HTML e converter \n em <br> para preservar formatacao
+        # Escape HTML and convert \n to <br> to preserve formatting
         safe_text = html_module.escape(text).replace("\n", "<br>")
 
         if icon:
@@ -123,30 +123,30 @@ class OutputPanel(QWidget):
 
         self.text_edit.append(html)
 
-        # Scroll para o final
+        # Scroll to end
         cursor = self.text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.text_edit.setTextCursor(cursor)
 
     def append_output(self, text: str, error: bool = False):
-        """Método de compatibilidade com código antigo"""
+        """Compatibility method with old code"""
         level = "error" if error else "info"
         self.append(text, level)
 
     def log(self, text: str):
-        """Adiciona log de info"""
+        """Add info log"""
         self.append(text, "info")
 
     def success(self, text: str):
-        """Adiciona log de sucesso"""
+        """Add success log"""
         self.append(text, "success")
 
     def warning(self, text: str):
-        """Adiciona log de warning"""
+        """Add warning log"""
         self.append(text, "warning")
 
     def error(self, text: str):
-        """Adiciona log de erro"""
+        """Add error log"""
         self.append(text, "error")
 
     def debug(self, text: str):
@@ -202,7 +202,7 @@ class OutputPanel(QWidget):
         self.cleared.emit()
 
     def _copy_to_clipboard(self):
-        """Copia conteúdo para clipboard"""
+        """Copy content to clipboard"""
         from PyQt6.QtWidgets import QApplication
 
         text = self.text_edit.toPlainText()

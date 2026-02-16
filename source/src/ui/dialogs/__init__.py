@@ -1,7 +1,7 @@
 """
-Diálogos do DataPyn
+DataPyn Dialogs
 
-Diálogos são janelas modais para interação com o usuário.
+Dialogs are modal windows for user interaction.
 """
 
 from .connection_edit_dialog import ConnectionEditDialog

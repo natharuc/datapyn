@@ -1,11 +1,11 @@
 """
-Python Execution Service - Serviço para execução de código Python
+Python Execution Service - Service for Python code execution
 
-Responsabilidades:
-- Executar código Python via workers
-- Gerenciar namespace compartilhado
-- Capturar outputs e erros
-- Validar código antes de executar
+Responsibilities:
+- Execute Python code via workers
+- Manage shared namespace
+- Capture outputs and errors
+- Validate code before executing
 """
 
 from typing import Optional, Callable, Dict, Any
@@ -19,7 +19,7 @@ from ..state import ApplicationState
 
 @dataclass
 class PythonExecutionResult:
-    """Resultado de execução Python"""
+    """Python execution result"""
 
     code: str
     result: Any
@@ -44,12 +44,12 @@ class PythonExecutionResult:
 
 class PythonExecutionService:
     """
-    Serviço de execução de código Python
+    Python code execution service
 
-    Gerencia namespace compartilhado entre execuções.
-    Executa código via workers assíncronos.
+    Manages shared namespace between executions.
+    Executes code via async workers.
 
-    Exemplo:
+    Example:
         service = PythonExecutionService()
         service.execute_code(
             "df.head()",
@@ -63,10 +63,10 @@ class PythonExecutionService:
         self._init_namespace()
 
     def _init_namespace(self):
-        """Inicializa namespace com imports comuns"""
+        """Initialize namespace with common imports"""
         namespace = self.app_state.get_namespace()
 
-        # Adiciona imports padrão se não existirem
+        # Add standard imports if they don't exist
         if "pd" not in namespace:
             import pandas as pd
 
@@ -91,33 +91,33 @@ class PythonExecutionService:
         on_finished: Optional[Callable[[], None]] = None,
     ):
         """
-        Executa código Python de forma assíncrona
+        Execute Python code asynchronously
 
         Args:
-            code: Código Python a executar
-            is_expression: Se True, avalia como expressão (usa eval)
-            on_success: Callback com PythonExecutionResult
-            on_error: Callback com mensagem de erro
-            on_started: Callback ao iniciar
-            on_finished: Callback ao finalizar (sempre)
+            code: Python code to execute
+            is_expression: If True, evaluate as expression (uses eval)
+            on_success: Callback with PythonExecutionResult
+            on_error: Callback with error message
+            on_started: Callback on start
+            on_finished: Callback on finish (always)
         """
-        # Valida código
+        # Validate code
         is_valid, error_msg = self.validate_code(code)
         if not is_valid:
             if on_error:
                 on_error(error_msg)
             return
 
-        # Namespace compartilhado
+        # Shared namespace
         namespace = self.app_state.get_namespace()
 
-        # Cria worker
+        # Create worker
         worker = PythonExecutionWorker(code, namespace, is_expression)
 
-        # Tempo de início
+        # Start time
         start_time = datetime.now()
 
-        # Conectar callbacks
+        # Connect callbacks
         if on_started:
             worker.started.connect(on_started)
 
@@ -125,21 +125,21 @@ class PythonExecutionService:
             worker.finished.connect(on_finished)
 
         def handle_result(result, stdout, stderr):
-            """Handler interno para resultado"""
+            """Internal handler for result"""
             execution_time = (datetime.now() - start_time).total_seconds()
 
             exec_result = PythonExecutionResult(
                 code=code, result=result, stdout=stdout, stderr=stderr, execution_time=execution_time
             )
 
-            # Atualiza variáveis no estado se houver novos valores
+            # Update variables in state if there are new values
             self._update_state_variables(namespace)
 
             if on_success:
                 on_success(exec_result)
 
         def handle_error(error_msg: str):
-            """Handler interno para erro"""
+            """Internal handler for error"""
             execution_time = (datetime.now() - start_time).total_seconds()
 
             exec_result = PythonExecutionResult(
@@ -152,28 +152,28 @@ class PythonExecutionService:
         worker.execution_complete.connect(handle_result)
         worker.error.connect(handle_error)
 
-        # Executa worker
+        # Execute worker
         execute_worker(worker)
 
     def _update_state_variables(self, namespace: Dict[str, Any]):
-        """Atualiza ApplicationState com novas variáveis do namespace"""
+        """Update ApplicationState with new variables from namespace"""
         import pandas as pd
 
-        # Apenas sincroniza DataFrames e tipos básicos
+        # Only sync DataFrames and basic types
         for name, value in namespace.items():
-            # Ignora privados e builtins
+            # Ignore private and builtins
             if name.startswith("_"):
                 continue
 
-            # Apenas tipos que fazem sentido mostrar
+            # Only types that make sense to show
             if isinstance(value, (pd.DataFrame, pd.Series, int, float, str, list, dict)):
                 current = self.app_state.get_variable(name)
-                if current is not value:  # Mudou
+                if current is not value:  # Changed
                     self.app_state.set_variable(name, value)
 
     def validate_code(self, code: str) -> tuple[bool, str]:
         """
-        Valida código Python (sintaxe)
+        Validate Python code (syntax)
 
         Returns:
             (is_valid, error_message)
@@ -181,20 +181,20 @@ class PythonExecutionService:
         code = code.strip()
 
         if not code:
-            return False, "Código vazio"
+            return False, "Empty code"
 
         try:
-            # Tenta parsear como AST
+            # Try to parse as AST
             ast.parse(code)
             return True, ""
         except SyntaxError as e:
-            return False, f"Erro de sintaxe: {e}"
+            return False, f"Syntax error: {e}"
 
     def get_namespace(self) -> Dict[str, Any]:
-        """Retorna namespace atual"""
+        """Return current namespace"""
         return self.app_state.get_namespace()
 
     def clear_namespace(self):
-        """Limpa namespace (mantém imports padrão)"""
+        """Clear namespace (keep standard imports)"""
         self.app_state.clear_namespace()
         self._init_namespace()

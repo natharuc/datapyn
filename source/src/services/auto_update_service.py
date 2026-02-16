@@ -1,6 +1,6 @@
 """
-Servico de auto-atualizacao para o DataPyn
-Verifica e instala atualizacoes do GitHub Releases
+Auto-update service for DataPyn
+Checks and installs updates from GitHub Releases
 """
 
 import sys
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class UpdateChecker(QObject):
-    """Worker para verificar atualizacoes em background"""
+    """Worker to check for updates in background"""
 
     update_available = pyqtSignal(str, str, str)  # version, download_url, release_notes
     no_update_available = pyqtSignal()
@@ -30,7 +30,7 @@ class UpdateChecker(QObject):
         self.repo_name = repo_name
 
     def run(self):
-        """Verifica se ha atualizacoes disponiveis"""
+        """Check if updates are available"""
         try:
             url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases/latest"
             response = requests.get(url, timeout=10)
@@ -38,12 +38,12 @@ class UpdateChecker(QObject):
 
             release_data = response.json()
             latest_version = release_data["tag_name"]
-            # Remove 'v' prefix se presente (ex: v1.0.0 -> 1.0.0)
+            # Remove 'v' prefix if present (e.g. v1.0.0 -> 1.0.0)
             if latest_version.startswith("v"):
                 latest_version = latest_version[1:]
             release_notes = release_data.get("body", "")
 
-            # Encontrar o asset MSI para Windows
+            # Find MSI asset for Windows
             download_url = None
             for asset in release_data.get("assets", []):
                 if asset["name"].endswith("-windows.msi"):
@@ -51,33 +51,33 @@ class UpdateChecker(QObject):
                     break
 
             if not download_url:
-                self.check_failed.emit("Nenhum instalador Windows encontrado na release")
+                self.check_failed.emit("No Windows installer found in release")
                 return
 
-            # Comparar versoes
+            # Compare versions
             if self._is_newer_version(latest_version, self.current_version):
                 self.update_available.emit(latest_version, download_url, release_notes)
             else:
                 self.no_update_available.emit()
 
         except requests.RequestException as e:
-            logger.error(f"Erro ao verificar atualizacoes: {e}")
-            self.check_failed.emit(f"Erro de rede: {str(e)}")
+            logger.error(f"Error checking for updates: {e}")
+            self.check_failed.emit(f"Network error: {str(e)}")
         except Exception as e:
-            logger.error(f"Erro inesperado ao verificar atualizacoes: {e}")
-            self.check_failed.emit(f"Erro: {str(e)}")
+            logger.error(f"Unexpected error checking for updates: {e}")
+            self.check_failed.emit(f"Error: {str(e)}")
 
     def _is_newer_version(self, latest: str, current: str) -> bool:
-        """Compara versoes no formato semantic versioning"""
+        """Compare versions in semantic versioning format"""
         try:
-            # Remove sufixos como -dryrun, -alpha, etc.
+            # Remove suffixes like -dryrun, -alpha, etc.
             latest_clean = latest.split("-")[0]
             current_clean = current.split("-")[0]
 
             latest_parts = [int(x) for x in latest_clean.split(".")]
             current_parts = [int(x) for x in current_clean.split(".")]
 
-            # Garantir mesmo tamanho
+            # Ensure same size
             while len(latest_parts) < 3:
                 latest_parts.append(0)
             while len(current_parts) < 3:
@@ -85,12 +85,12 @@ class UpdateChecker(QObject):
 
             return latest_parts > current_parts
         except (ValueError, IndexError):
-            logger.warning(f"Erro ao comparar versoes: {latest} vs {current}")
+            logger.warning(f"Error comparing versions: {latest} vs {current}")
             return False
 
 
 class UpdateDownloader(QObject):
-    """Worker para baixar atualizacoes em background"""
+    """Worker to download updates in background"""
 
     download_progress = pyqtSignal(int)  # percentage
     download_complete = pyqtSignal(str)  # file_path
@@ -102,13 +102,13 @@ class UpdateDownloader(QObject):
         self.filename = filename
 
     def run(self):
-        """Baixa o instalador"""
+        """Download the installer"""
         try:
-            # Criar diretorio temporario para o download
+            # Create temporary directory for download
             temp_dir = tempfile.gettempdir()
             file_path = os.path.join(temp_dir, self.filename)
 
-            # Download com progresso
+            # Download with progress
             response = requests.get(self.download_url, stream=True, timeout=30)
             response.raise_for_status()
 
@@ -127,15 +127,15 @@ class UpdateDownloader(QObject):
             self.download_complete.emit(file_path)
 
         except requests.RequestException as e:
-            logger.error(f"Erro ao baixar atualizacao: {e}")
-            self.download_failed.emit(f"Erro de rede: {str(e)}")
+            logger.error(f"Error downloading update: {e}")
+            self.download_failed.emit(f"Network error: {str(e)}")
         except Exception as e:
-            logger.error(f"Erro inesperado ao baixar atualizacao: {e}")
-            self.download_failed.emit(f"Erro: {str(e)}")
+            logger.error(f"Unexpected error downloading update: {e}")
+            self.download_failed.emit(f"Error: {str(e)}")
 
 
 class AutoUpdateService:
-    """Servico principal de auto-atualizacao"""
+    """Main auto-update service"""
 
     def __init__(self, current_version: str, repo_owner: str = "natharuc", repo_name: str = "datapyn"):
         self.current_version = current_version
@@ -143,36 +143,36 @@ class AutoUpdateService:
         self.repo_name = repo_name
         self.settings = QSettings("DataPyn", "DataPyn")
 
-        # Threads e workers (manter referencia para evitar GC)
+        # Threads and workers (keep reference to avoid GC)
         self._check_thread: Optional[QThread] = None
         self._checker: Optional[UpdateChecker] = None
         self._download_thread: Optional[QThread] = None
         self._downloader: Optional[UpdateDownloader] = None
 
     def is_auto_update_enabled(self) -> bool:
-        """Verifica se auto-update esta habilitado"""
+        """Check if auto-update is enabled"""
         return self.settings.value("auto_update/enabled", True, type=bool)
 
     def set_auto_update_enabled(self, enabled: bool):
-        """Habilita ou desabilita auto-update"""
+        """Enable or disable auto-update"""
         self.settings.setValue("auto_update/enabled", enabled)
 
     def check_for_updates(self, on_available, on_no_update, on_error):
         """
-        Verifica se ha atualizacoes disponiveis
+        Check if updates are available
         
         Args:
             on_available: callback(version, download_url, release_notes)
             on_no_update: callback()
             on_error: callback(error_message)
         """
-        # Verificar se ja existe thread em execucao (com try/except para objeto deletado)
+        # Check if thread already running (with try/except for deleted object)
         try:
             if self._check_thread and self._check_thread.isRunning():
-                logger.warning("Verificacao de atualizacao ja em andamento")
+                logger.warning("Update check already in progress")
                 return
         except RuntimeError:
-            # Objeto C++ foi deletado, limpar referencia
+            # C++ object was deleted, clear reference
             self._check_thread = None
 
         self._check_thread = QThread()
@@ -185,7 +185,7 @@ class AutoUpdateService:
         self._checker.no_update_available.connect(on_no_update)
         self._checker.check_failed.connect(on_error)
 
-        # Cleanup - limpar referencia quando thread terminar
+        # Cleanup - clear reference when thread finishes
         def cleanup_check_thread():
             self._check_thread = None
             self._checker = None
@@ -200,22 +200,22 @@ class AutoUpdateService:
 
     def download_update(self, download_url: str, version: str, on_progress, on_complete, on_error):
         """
-        Baixa a atualizacao
+        Download the update
         
         Args:
-            download_url: URL do instalador MSI
-            version: Versao sendo baixada
+            download_url: MSI installer URL
+            version: Version being downloaded
             on_progress: callback(percentage)
             on_complete: callback(file_path)
             on_error: callback(error_message)
         """
-        # Verificar se ja existe download em execucao (com try/except para objeto deletado)
+        # Check if download already running (with try/except for deleted object)
         try:
             if self._download_thread and self._download_thread.isRunning():
-                logger.warning("Download de atualizacao ja em andamento")
+                logger.warning("Update download already in progress")
                 return
         except RuntimeError:
-            # Objeto C++ foi deletado, limpar referencia
+            # C++ object was deleted, clear reference
             self._download_thread = None
 
         filename = f"DataPyn-{version}-windows.msi"
@@ -230,7 +230,7 @@ class AutoUpdateService:
         self._downloader.download_complete.connect(on_complete)
         self._downloader.download_failed.connect(on_error)
 
-        # Cleanup - limpar referencia quando thread terminar
+        # Cleanup - clear reference when thread finishes
         def cleanup_download_thread():
             self._download_thread = None
             self._downloader = None
@@ -244,45 +244,45 @@ class AutoUpdateService:
 
     def install_update(self, installer_path: str) -> bool:
         """
-        Inicia a instalacao da atualizacao
+        Start update installation
         
         Args:
-            installer_path: Caminho do instalador MSI
+            installer_path: MSI installer path
             
         Returns:
-            True se a instalacao foi iniciada com sucesso
+            True if installation started successfully
         """
         try:
             if not os.path.exists(installer_path):
-                logger.error(f"Instalador nao encontrado: {installer_path}")
+                logger.error(f"Installer not found: {installer_path}")
                 return False
 
-            # Validar que o arquivo e um MSI e esta em diretorio temporario
+            # Validate file is MSI and in temp directory
             if not installer_path.lower().endswith(".msi"):
-                logger.error(f"Arquivo nao e um instalador MSI: {installer_path}")
+                logger.error(f"File is not an MSI installer: {installer_path}")
                 return False
 
-            # Validar que esta em diretorio temporario (seguranca)
+            # Validate it's in temp directory (security)
             temp_dir = tempfile.gettempdir()
             if not os.path.commonpath([installer_path, temp_dir]) == temp_dir:
-                logger.error(f"Instalador nao esta em diretorio temporario: {installer_path}")
+                logger.error(f"Installer not in temp directory: {installer_path}")
                 return False
 
-            # Executar o instalador MSI
-            # /i = instalar
-            # /passive = mostrar barra de progresso mas sem interacao
-            # /norestart = nao reiniciar automaticamente
+            # Execute MSI installer
+            # /i = install
+            # /passive = show progress bar but no interaction
+            # /norestart = don't restart automatically
             subprocess.Popen(["msiexec", "/i", installer_path, "/passive", "/norestart"])
 
-            logger.info(f"Instalacao iniciada: {installer_path}")
+            logger.info(f"Installation started: {installer_path}")
             return True
 
         except Exception as e:
-            logger.error(f"Erro ao iniciar instalacao: {e}")
+            logger.error(f"Error starting installation: {e}")
             return False
 
     def cleanup(self):
-        """Limpa recursos"""
+        """Clean up resources"""
         if self._check_thread and self._check_thread.isRunning():
             self._check_thread.quit()
             self._check_thread.wait()

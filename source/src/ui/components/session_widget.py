@@ -1,9 +1,9 @@
 """
-SessionWidget - Widget completo que representa uma sessão
+SessionWidget - Complete widget representing a session
 
-Contém todos os componentes de uma sessão:
-- Editor de código (UnifiedEditor)
-- BottomTabs (Resultados, Output, Variáveis)
+Contains all session components:
+- Code editor (UnifiedEditor)
+- BottomTabs (Results, Output, Variables)
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QLabel
@@ -20,13 +20,13 @@ from datetime import datetime
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
 from src.editors import BlockEditor
-# from src.ui.components.bottom_tabs import BottomTabs  # Removido - usando paineis globais
+# from src.ui.components.bottom_tabs import BottomTabs  # Removed - using global panels
 
 logger = logging.getLogger(__name__)
 
 
 class SessionConnectionWorker(QObject):
-    """Worker para conectar ao banco em background"""
+    """Worker to connect to database in background"""
 
     finished = pyqtSignal(bool, str)  # (success, message)
 
@@ -40,15 +40,15 @@ class SessionConnectionWorker(QObject):
         try:
             success = self.session.connect(self.connection_name, self.password)
             if success:
-                self.finished.emit(True, f"✓ Conectado a {self.connection_name}")
+                self.finished.emit(True, f"✓ Connected to {self.connection_name}")
             else:
-                self.finished.emit(False, f"✗ Falha ao conectar a {self.connection_name}")
+                self.finished.emit(False, f"✗ Failed to connect to {self.connection_name}")
         except Exception as e:
-            self.finished.emit(False, f"[ERRO] {str(e)}")
+            self.finished.emit(False, f"[ERROR] {str(e)}")
 
 
 class SessionSqlWorker(QObject):
-    """Worker para executar SQL em background para uma sessao"""
+    """Worker to execute SQL in background for a session"""
 
     finished = pyqtSignal(object, str)  # (result_df ou None, error_msg)
 
@@ -63,7 +63,7 @@ class SessionSqlWorker(QObject):
             self.finished.emit(df, "")
         except Exception as e:
             error_msg = str(e)
-            # Detectar se foi cancelamento
+            # Detect if it was cancellation
             cancelled = getattr(self.connector, "_cancelled", False)
             lower_msg = error_msg.lower()
             if cancelled or "cancel" in lower_msg or "abort" in lower_msg:
@@ -73,33 +73,33 @@ class SessionSqlWorker(QObject):
 
 
 class SessionPythonWorker(QObject):
-    """Worker para executar Python em background para uma sessão"""
+    """Worker to execute Python in background for a session"""
 
     finished = pyqtSignal(object, str, str, dict)  # (result, output, error, updated_namespace)
 
     def __init__(self, code, namespace, is_expression):
         super().__init__()
         self.code = code
-        self.namespace = namespace.copy()  # Cópia para thread safety
+        self.namespace = namespace.copy()  # Copy for thread safety
         self.is_expression = is_expression
 
     def run(self):
         """REMOVIDO - usar PythonWorker centralizado do main_window.py"""
-        raise NotImplementedError("Use PythonWorker do main_window.py - execução centralizada!")
+        raise NotImplementedError("Use PythonWorker from main_window.py - centralized execution!")
 
 
 class SessionWidget(QWidget):
     """
-    Widget completo que representa uma sessão.
+    Complete widget representing a session.
 
-    Contém:
-    - Editor de código
-    - Tabela de resultados
+    Contains:
+    - Code editor
+    - Results table
     - Output/Logs
-    - Variáveis em memória
+    - Variables in memory
     """
 
-    # Sinais para a MainWindow
+    # Signals for MainWindow
     execute_sql = pyqtSignal(str)  # query
     execute_python = pyqtSignal(str)  # code
     execute_cross_syntax = pyqtSignal(str)  # code
@@ -113,20 +113,20 @@ class SessionWidget(QWidget):
         self.session = session
         self.theme_manager = theme_manager or ThemeManager()
 
-        # Workers ativos
+        # Active workers
         self._sql_thread: Optional[QThread] = None
         self._python_thread: Optional[QThread] = None
         self._connection_thread: Optional[QThread] = None
         self._connection_worker: Optional[SessionConnectionWorker] = None
 
-        # Cor da conexão (será definida ao conectar)
-        self._connection_color: str = "#007ACC"  # Default: azul primário
+        # Connection color (will be set when connecting)
+        self._connection_color: str = "#007ACC"  # Default: primary blue
 
-        # Fila de execução para múltiplos blocos
-        self._execution_queue: list = []  # Lista de (language, code, block, block_name, connection_name)
+        # Execution queue for multiple blocks
+        self._execution_queue: list = []  # List of (language, code, block, block_name, connection_name)
         self._is_executing: bool = False
-        self._cancel_requested: bool = False  # Flag de cancelamento
-        self._current_block_name: str = None  # Nome do bloco atualmente executando (para namespace isolado)
+        self._cancel_requested: bool = False  # Cancellation flag
+        self._current_block_name: str = None  # Currently executing block name (for isolated namespace)
 
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
@@ -134,22 +134,22 @@ class SessionWidget(QWidget):
         self._setup_ui()
         self._connect_signals()
 
-        # Restaurar blocos se existirem
+        # Restore blocks if they exist
         if session.blocks:
             self.editor.from_list(session.blocks)
         elif session.code:
-            # Compatibilidade: código antigo sem blocos
+            # Compatibility: old code without blocks
             self.editor.setText(session.code)
 
-        # Conexoes sao selecionadas por bloco via panel clicavel (nao precisa popular lista)
+        # Connections are selected per block via clickable panel (no need to populate list)
 
     def _setup_ui(self):
-        """Configura a UI do widget"""
+        """Configure widget UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Splitter principal (vertical) - Editor em cima, Resultados embaixo
+        # Main splitter (vertical) - Editor on top, Results on bottom
         self.splitter = QSplitter(Qt.Orientation.Vertical)
 
         # === PARTE SUPERIOR: Editor de Blocos ===
@@ -157,21 +157,21 @@ class SessionWidget(QWidget):
         editor_layout = QVBoxLayout(editor_container)
         editor_layout.setContentsMargins(5, 5, 5, 5)
 
-        # Editor de blocos (substitui o UnifiedEditor)
+        # Block editor (replaces UnifiedEditor)
         self.editor = BlockEditor(theme_manager=self.theme_manager)
         editor_layout.addWidget(self.editor)
 
         self.splitter.addWidget(editor_container)
 
-        # Nota: BottomTabs removido - usando painéis globais da MainWindow
-        # Layout agora é só o editor (painéis Results/Output/Variables são dockable)
+        # Note: BottomTabs removed - using global panels from MainWindow
+        # Layout now only contains the editor (Results/Output/Variables panels are dockable)
 
-        layout.addWidget(self.editor)  # Layout simplificado: apenas editor
+        layout.addWidget(self.editor)  # Simplified layout: just editor
 
-        # Overlay de loading (inicialmente oculto)
+        # Loading overlay (initially hidden)
         self._loading_overlay = QLabel(self)
         self._loading_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Estilo será definido dinamicamente em _show_loading
+        # Style will be set dynamically in _show_loading
         self._loading_overlay.hide()
         self._loading_overlay.raise_()
 
@@ -197,21 +197,21 @@ class SessionWidget(QWidget):
 
     @property
     def bottom_tabs(self):
-        """Compatibilidade: retorna objeto que delega para painéis dockable"""
-        # Sempre retornar o mesmo objeto para manter consistência
+        """Compatibility: returns object that delegates to dockable panels"""
+        # Always return the same object for consistency
         if not hasattr(self, "_bottom_tabs_cache"):
             main_window = self._get_main_window()
             self._bottom_tabs_cache = main_window.bottom_tabs if main_window else None
         return self._bottom_tabs_cache
 
     def _get_main_window(self):
-        """Obtém referência à MainWindow"""
+        """Get MainWindow reference"""
         parent = self.parent()
         while parent and not hasattr(parent, "global_results_viewer"):
             parent = parent.parent()
         return parent
 
-    # === Métodos de delegação para painéis globais ===
+    # === Delegation methods for global panels ===
 
     def _show_output(self):
         """Mostra o painel de output"""
@@ -234,7 +234,7 @@ class SessionWidget(QWidget):
             main_window.show_panel("results")
 
     def _log_error(self, text):
-        """Registra erro no output global"""
+        """Log error to global output"""
         main_window = self._get_main_window()
         if main_window and main_window.global_output_panel:
             main_window.global_output_panel.error(text)
@@ -253,65 +253,65 @@ class SessionWidget(QWidget):
             main_window.global_output_panel.clear()
 
     def _set_variables(self, variables_dict):
-        """Define variáveis no painel global"""
+        """Set variables in global panel"""
         main_window = self._get_main_window()
         if main_window and main_window.global_variables_panel:
             main_window.global_variables_panel.set_variables(
                 variables_dict
-            )  # Corrigido de refresh_variables para set_variables
+            )  # Fixed from refresh_variables to set_variables
 
     def _connect_signals(self):
-        """Conecta sinais do editor"""
-        # BlockEditor emite sinais com a linguagem correta
+        """Connect editor signals"""
+        # BlockEditor emits signals with correct language
         self.editor.execute_sql.connect(self._on_execute_sql)
         self.editor.execute_python.connect(self._on_execute_python)
         self.editor.execute_cross_syntax.connect(self._on_execute_cross_syntax)
 
-        # Fila de execução (múltiplos blocos)
+        # Execution queue (multiple blocks)
         self.editor.execute_queue.connect(self._on_execute_queue)
 
-        # Cancelamento
+        # Cancellation
         self.editor.cancel_execution.connect(self._on_cancel_execution)
 
-        # Seleção de conexão para bloco específico
+        # Connection selection for specific block
         self.editor.select_connection_for_block.connect(self._on_block_select_connection)
 
-        # Mudanca de conexao de um bloco (para recarregar autocomplete)
+        # Block connection change (to reload autocomplete)
         self.editor.block_connection_changed.connect(self.block_connection_changed.emit)
 
-        # Drop de arquivo de dados (abre dialogo de importacao)
+        # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
 
-        # Conectar sinais da sessao
+        # Connect session signals
         self.session.variables_changed.connect(self._update_variables_view)
 
     def _format_log(self, log_type: str, message: str = "") -> str:
-        """Formata mensagem de log com timestamp e tipo"""
+        """Format log message with timestamp and type"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         if message:
             return f"[{timestamp}][{log_type}] {message}"
         return f"[{timestamp}][{log_type}]"
 
-    # === EXECUÇÃO SQL ===
+    # === SQL EXECUTION ===
 
     def _on_execute_sql(self, query: str, block_name: str = None, connection_name: str = None):
-        """Executa SQL em background
+        """Execute SQL in background
 
         Args:
             query: SQL query
-            block_name: Nome do bloco (nome da variavel do DataFrame)
-            connection_name: Nome da conexao customizada (None = usa padrao da sessao)
+            block_name: Block name (DataFrame variable name)
+            connection_name: Custom connection name (None = use session default)
         """
-        # Determinar qual conexao usar
+        # Determine which connection to use
         if connection_name:
-            # Buscar conexao especifica - auto-conectar se necessario
+            # Fetch specific connection - auto-connect if needed
             from src.database.connection_manager import ConnectionManager
             from src.database.database_connector import DatabaseConnector
 
             manager = ConnectionManager()
             connector = manager.get_connection(connection_name)
             if not connector or not connector.is_connected():
-                # Tentar auto-conectar a partir da config salva
+                # Try to auto-connect from saved config
                 config = manager.get_connection_config(connection_name)
                 if config:
                     try:
@@ -329,26 +329,26 @@ class SessionWidget(QWidget):
                         if connector.is_connected:
                             manager.connections[connection_name] = connector
                         else:
-                            self.append_output(f"[ERRO] Falha ao conectar a '{connection_name}'", error=True)
-                            self.status_changed.emit("Erro: Conexao falhou")
+                            self.append_output(f"[ERROR] Failed to connect to '{connection_name}'", error=True)
+                            self.status_changed.emit("Error: Connection failed")
                             self._process_next_in_queue()
                             return
                     except Exception as e:
-                        self.append_output(f"[ERRO] Erro ao conectar a '{connection_name}': {e}", error=True)
-                        self.status_changed.emit("Erro: Conexao falhou")
+                        self.append_output(f"[ERROR] Error connecting to '{connection_name}': {e}", error=True)
+                        self.status_changed.emit("Error: Connection failed")
                         self._process_next_in_queue()
                         return
                 else:
-                    self.append_output(f"[ERRO] Conexao '{connection_name}' nao encontrada", error=True)
-                    self.status_changed.emit("Erro: Conexao indisponivel")
+                    self.append_output(f"[ERROR] Connection '{connection_name}' not found", error=True)
+                    self.status_changed.emit("Error: Connection unavailable")
                     self._process_next_in_queue()
                     return
             conn_label = connection_name
         else:
-            # Usar conexao padrao da sessao
+            # Use session default connection
             if not self.session.is_connected:
-                self.append_output("[ERRO] Nenhuma conexão ativa nesta sessão", error=True)
-                self.status_changed.emit("Erro: Sem conexão")
+                self.append_output("[ERROR] No active connection in this session", error=True)
+                self.status_changed.emit("Error: No connection")
                 self._process_next_in_queue()
                 return
             connector = self.session.connector
@@ -368,10 +368,10 @@ class SessionWidget(QWidget):
         self._sql_worker = SessionSqlWorker(connector, query)
         self._sql_worker.moveToThread(self._sql_thread)
 
-        # Guardar block_name para usar no callback
+        # Store block_name to use in callback
         self._current_block_name = block_name
 
-        # Registrar thread na sessão
+        # Register thread in session
         self.session.register_thread(self._sql_thread)
 
         # Conectar sinais
@@ -382,10 +382,10 @@ class SessionWidget(QWidget):
         self._sql_thread.start()
 
     def _on_sql_finished(self, df: Optional[pd.DataFrame], error: str):
-        """Callback quando SQL termina"""
-        # Se foi cancelado, ignorar resultado (UI ja foi limpa pelo cancel)
+        """Callback when SQL finishes"""
+        # If cancelled, ignore result (UI already cleaned by cancel)
         if error == "__CANCELLED__" or self._cancel_requested:
-            # Thread cleanup silencioso
+            # Silent thread cleanup
             if self._sql_thread:
                 try:
                     self._sql_thread.quit()
@@ -396,7 +396,7 @@ class SessionWidget(QWidget):
                 self._sql_thread = None
             return
 
-        # Parar thread
+        # Stop thread
         if self._sql_thread:
             self._sql_thread.quit()
             self._sql_thread.wait()
@@ -408,30 +408,30 @@ class SessionWidget(QWidget):
         self.editor.mark_execution_finished(current_block)
 
         if error:
-            self.append_output(self._format_log("SQL", f"ERRO: {error}"), error=True)
-            self.session.finish_execution(False, f"Erro: {error[:50]}...")
-            self.status_changed.emit("Erro SQL")
+            self.append_output(self._format_log("SQL", f"ERROR: {error}"), error=True)
+            self.session.finish_execution(False, f"Error: {error[:50]}...")
+            self.status_changed.emit("SQL Error")
             self._show_output()
         else:
-            # Determinar prefixo do namespace (isolado por bloco ou global)
+            # Determine namespace prefix (isolated per block or global)
             if self._current_block_name:
-                var_base = self._current_block_name  # nome do bloco
+                var_base = self._current_block_name  # block name
             else:
                 var_base = "df"  # fallback (compatibilidade)
 
-            # Verificar se retornou lista de DataFrames (multiplos SELECTs)
+            # Check if returned list of DataFrames (multiple SELECTs)
             if isinstance(df, list):
-                # Multiplos DataFrames - criar variaveis
+                # Multiple DataFrames - create variables
                 total_rows = sum(len(d) for d in df)
                 self.append_output(self._format_log("SQL", f"{len(df)} consultas, {total_rows:,} linhas totais"))
 
-                # Criar variaveis: teste, teste1, teste2, ...
+                # Create variables: test, test1, test2, ...
                 for i, dataframe in enumerate(df):
                     var_name = var_base if i == 0 else f"{var_base}{i}"
                     self.session.set_variable(var_name, dataframe)
                     self.append_output(self._format_log("SQL", f"{var_name}: {len(dataframe):,} linhas"))
 
-                # Exibir apenas o ultimo DataFrame no grid
+                # Display only last DataFrame in grid
                 last_df = df[-1]
                 last_var_name = f"{var_base}{len(df) - 1}" if len(df) > 1 else var_base
                 self._set_results(last_df, last_var_name)
@@ -440,7 +440,7 @@ class SessionWidget(QWidget):
                 self.session.finish_execution(True, f"SQL: {len(df)} consultas")
                 self.status_changed.emit(f"SQL: {len(df)} consultas")
             else:
-                # DataFrame unico
+                # Single DataFrame
                 rows = len(df) if df is not None else 0
                 var_name = var_base
                 self.append_output(self._format_log("SQL", f"{rows:,} linhas -> {var_name}"))
@@ -448,28 +448,28 @@ class SessionWidget(QWidget):
                 self.session.finish_execution(True, f"SQL: {rows:,} linhas")
                 self.status_changed.emit(f"SQL: {rows:,} linhas")
 
-                # Salvar no namespace da sessão
+                # Save in session namespace
                 self.session.set_variable(var_name, df)
                 self.session.set_variable("_last_result", df)
 
-            # Limpar block_name apos uso
+            # Clear block_name after use
             self._current_block_name = None
 
-            # Verificar se banco mudou (comando USE)
+            # Check if database changed (USE command)
             if self.session.connector:
                 current_db = self.session.connector.get_current_database()
                 if self.session.connection_name:
                     self.connection_changed.emit(self.session.connection_name, current_db)
 
-        # Processar próximo da fila se houver
+        # Process next in queue if available
         self._is_executing = False
         self._process_next_in_queue()
 
-    # === EXECUÇÃO PYTHON ===
+    # === PYTHON EXECUTION ===
 
     def _on_execute_python(self, code: str):
-        """Executa Python em background"""
-        # Se já está executando, adiciona na fila
+        """Execute Python in background"""
+        # If already executing, add to queue
         if self._is_executing or (self._python_thread and self._python_thread.isRunning()):
             self._execution_queue.append(("python", code))
             return
@@ -478,14 +478,14 @@ class SessionWidget(QWidget):
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
         self.session.start_execution("python")
         self.status_changed.emit("Executando Python...")
-        # Preparar namespace com df se existir
+        # Prepare namespace with df if exists
         namespace = self.session.namespace.copy()
         namespace["pd"] = pd
 
-        # Injetar variaveis de banco para acesso direto no codigo Python
+        # Inject database variables for direct access in Python code
         self._inject_db_variables(namespace)
 
-        # Verificar se é expressão
+        # Check if it's an expression
         is_expression = False
         try:
             compile(code, "<string>", "eval")
@@ -493,7 +493,7 @@ class SessionWidget(QWidget):
         except SyntaxError:
             pass
 
-        # Usar PythonWorker CENTRALIZADO do main_window
+        # Use CENTRALIZED PythonWorker from main_window
         from src.ui.main_window import PythonWorker
 
         # Criar worker e thread
@@ -509,12 +509,12 @@ class SessionWidget(QWidget):
         self._python_thread.start()
 
     def _on_python_finished_adapted(self, result, output: str, error: str, namespace: dict, figures: list = None):
-        """Adapter para usar PythonWorker centralizado"""
-        # Chama o callback original com namespace atualizado
+        """Adapter to use centralized PythonWorker"""
+        # Call original callback with updated namespace
         self._on_python_finished(result, output, error, namespace, figures or [])
 
     def _on_python_finished(self, result, output: str, error: str, updated_namespace: dict, figures: list = None):
-        """Callback quando Python termina"""
+        """Callback when Python finishes"""
         figures = figures or []
 
         if self._python_thread:
@@ -528,9 +528,9 @@ class SessionWidget(QWidget):
         self.editor.mark_execution_finished(current_block)
 
         if error:
-            self.append_output(self._format_log("PYTHON", f"ERRO:\n{error}"), error=True)
-            self.session.finish_execution(False, "Erro Python")
-            self.status_changed.emit("Erro Python")
+            self.append_output(self._format_log("PYTHON", f"ERROR:\n{error}"), error=True)
+            self.session.finish_execution(False, "Python Error")
+            self.status_changed.emit("Python Error")
             self._show_output()
         else:
             has_dataframe_result = False
@@ -555,14 +555,14 @@ class SessionWidget(QWidget):
             if has_figures:
                 self._set_figures(figures)
 
-            # Logica de exibicao:
+            # Display logic:
             # - Figuras + DataFrame -> mostra figuras (prioridade visual)
             # - Figuras -> mostra figuras
             # - DataFrame -> mostra grid
             # - Output -> mostra output
             if has_figures:
                 if has_dataframe_result:
-                    self.status_changed.emit(f"Grafico + dados gerados!")
+                    self.status_changed.emit(f"Chart + data generated!")
                 else:
                     self.status_changed.emit(f"Grafico exibido!")
             elif has_dataframe_result:
@@ -573,23 +573,23 @@ class SessionWidget(QWidget):
             else:
                 self.status_changed.emit("Python executado")
 
-            # Atualizar namespace da sessao
+            # Update session namespace
             if updated_namespace:
                 self.session.update_namespace(updated_namespace)
 
             self.session.finish_execution(True, "Python executado")
 
-        # Processar proximo da fila se houver
+        # Process next in queue if exists
         self._is_executing = False
         self._process_next_in_queue()
 
-    # === EXECUÇÃO CROSS-SYNTAX ===
+    # === CROSS-SYNTAX EXECUTION ===
 
     def _on_execute_cross_syntax(self, code: str):
         """Emite sinal para MainWindow processar cross-syntax"""
         self.execute_cross_syntax.emit(code)
 
-    # === FILA DE EXECUÇÃO ===
+    # === EXECUTION QUEUE ===
 
     def _on_execute_queue(self, queue: list):
         """
@@ -598,24 +598,24 @@ class SessionWidget(QWidget):
         Args:
             queue: Lista de tuplas (language, code, block)
         """
-        # Reset flag de cancelamento
+        # Reset cancellation flag
         self._cancel_requested = False
 
-        # Adiciona todos à fila
+        # Add all to queue
         self._execution_queue.extend(queue)
 
-        # Inicia processamento se não estiver executando
+        # Start processing if not executing
         if not self._is_executing:
             self._process_next_in_queue()
 
     def _on_cancel_execution(self):
-        """Cancela a execucao atual e limpa a fila"""
+        """Cancel current execution and clear queue"""
         self._cancel_requested = True
         self._execution_queue.clear()
 
-        # Cancelar query SQL no banco de dados (cancelamento real)
+        # Cancel SQL query in database (real cancellation)
         if self._sql_thread and self._sql_thread.isRunning():
-            # Tentar cancelar a query no banco antes de parar a thread
+            # Try to cancel query in database before stopping thread
             if hasattr(self, "_sql_worker") and self._sql_worker:
                 connector = getattr(self._sql_worker, "connector", None)
                 if connector and hasattr(connector, "cancel_query"):
@@ -662,7 +662,7 @@ class SessionWidget(QWidget):
         # Marcar todos os blocos como nao executando (limpa visual)
         self.editor.mark_execution_finished()
 
-        self.append_output(self._format_log("CANCELADO", "Execucao cancelada pelo usuario"), error=True)
+        self.append_output(self._format_log("CANCELLED", "Execution cancelled by user"), error=True)
         self._show_output()
         self.status_changed.emit("Execucao cancelada")
 
@@ -673,8 +673,8 @@ class SessionWidget(QWidget):
         self._cancel_requested = False
 
     def _process_next_in_queue(self):
-        """Processa o próximo item da fila de execução"""
-        # Verifica se foi cancelado
+        """Process next item in execution queue"""
+        # Check if cancelled
         if self._cancel_requested:
             self._cancel_requested = False
             return
@@ -684,13 +684,13 @@ class SessionWidget(QWidget):
             self.editor.mark_execution_finished()
             return
 
-        # Pega próximo da fila
+        # Get next from queue
         item = self._execution_queue.pop(0)
 
-        # Suporta formatos:
-        # Antigo: (language, code)
-        # Medio: (language, code, block)
-        # Novo: (language, code, block, block_name, connection_name)
+        # Supports formats:
+        # Old: (language, code)
+        # Medium: (language, code, block)
+        # New: (language, code, block, block_name, connection_name)
         if len(item) >= 5:
             language, code, block, block_name, connection_name = item[:5]
             if block:
@@ -707,21 +707,21 @@ class SessionWidget(QWidget):
             block_name = None
             connection_name = None
 
-        # Executa de acordo com a linguagem
+        # Execute according to language
         if language == "sql":
             self._on_execute_sql(code, block_name=block_name, connection_name=connection_name)
         elif language == "python":
             self._on_execute_python(code)
         elif language == "cross":
             self._on_execute_cross_syntax(code)
-            # Cross-syntax é síncrono (processado pela MainWindow)
-            # Então continuamos para o próximo
+            # Cross-syntax is synchronous (processed by MainWindow)
+            # So we continue to the next
             self._process_next_in_queue()
 
     # === OUTPUT/LOG ===
 
     def append_output(self, text: str, error: bool = False):
-        """Adiciona texto ao output"""
+        """Add text to output"""
         if error:
             self._log_error(text)
         else:
@@ -731,11 +731,11 @@ class SessionWidget(QWidget):
         """Limpa o output"""
         self._clear_output()
 
-    # === VARIÁVEIS ===
+    # === VARIABLES ===
 
     def _update_variables_view(self, namespace: dict):
-        """Atualiza visualizacao de variaveis, incluindo variaveis de banco"""
-        # Filtrar variaveis internas
+        """Update variables view, including database variables"""
+        # Filter internal variables
         visible_vars = {k: v for k, v in namespace.items() if not k.startswith("_") and k not in ("pd", "np", "plt")}
 
         # Injetar variaveis de banco de dados se houver conexao ativa
@@ -794,39 +794,39 @@ class SessionWidget(QWidget):
     # === TEMA ===
 
     def apply_theme(self):
-        """Aplica o tema atual"""
+        """Apply current theme"""
         self.editor.apply_theme()
-        # Theme manager delegado para painéis globais - não necessário mais
+        # Theme manager delegated to global panels - no longer needed
 
     # === ESTADO ===
 
     def get_code(self) -> str:
-        """Retorna o código atual do editor"""
+        """Return current editor code"""
         return self.editor.text()
 
     def set_code(self, code: str):
-        """Define o código do editor"""
+        """Set editor code"""
         self.editor.setText(code)
 
     def sync_to_session(self):
-        """Sincroniza estado do widget para a sessao"""
+        """Sync widget state to session"""
         self.session.code = self.get_code()  # Compatibilidade
         self.session.blocks = self.editor.to_list()  # Novo: blocos
-        # Sincronizar file_path e tipo do arquivo
+        # Sync file_path and file type
         if hasattr(self, "file_path") and self.file_path:
             self.session.file_path = self.file_path
         if hasattr(self, "_original_file_type") and self._original_file_type:
             self.session.original_file_type = self._original_file_type
 
     def sync_from_session(self):
-        """Sincroniza estado da sessão para o widget"""
+        """Sync session state to widget"""
         if self.session.blocks:
             self.editor.from_list(self.session.blocks)
         elif self.session.code:
             self.set_code(self.session.code)
 
     def _on_file_dropped(self, file_path: str):
-        """Abre dialogo de importacao quando arquivo de dados e solto no editor"""
+        """Open import dialog when data file is dropped on editor"""
         try:
             from src.ui.dialogs.file_import_dialog import FileImportDialog
 
@@ -841,11 +841,11 @@ class SessionWidget(QWidget):
                     # Executar o codigo automaticamente
                     self._on_execute_python(code)
         except Exception as e:
-            self.append_output(f"[ERRO] Falha ao importar arquivo: {e}", error=True)
+            self.append_output(f"[ERROR] Failed to import file: {e}", error=True)
             self._show_output()
 
     def _on_block_select_connection(self, block):
-        """Abre dialogo simples para selecionar conexao de um bloco SQL"""
+        """Opens simple dialog to select connection for a SQL block"""
         try:
             from src.ui.dialogs.connection_picker_dialog import ConnectionPickerDialog
 
@@ -867,22 +867,22 @@ class SessionWidget(QWidget):
                     color = config.get("color", "") if config else ""
                     block.set_connection_name(conn_name, db_type, color or None)
         except Exception as e:
-            print(f"Erro ao abrir dialogo de conexao: {e}")
+            print(f"Error opening connection dialog: {e}")
 
-    # === CONEXÃO ===
+    # === CONNECTION ===
 
     def connect_to_database(self, connection_name: str, password: str = "") -> bool:
         """
-        Conecta esta sessão a um banco de dados (em background)
+        Connect this session to a database (in background)
 
         Args:
-            connection_name: Nome da conexão
-            password: Senha (se necessário)
+            connection_name: Connection name
+            password: Password (if required)
 
         Returns:
-            True (sempre, pois é assíncrono)
+            True (always, as it's asynchronous)
         """
-        # Obter cor da conexão
+        # Get connection color
         from src.database.connection_manager import ConnectionManager
 
         manager = ConnectionManager()
@@ -890,13 +890,13 @@ class SessionWidget(QWidget):
         if config:
             self._connection_color = config.get("color", "#007ACC") or "#007ACC"
 
-        # Cancelar conexão anterior se ainda estiver rodando
+        # Cancel previous connection if still running
         try:
             if self._connection_thread and self._connection_thread.isRunning():
                 self._connection_thread.quit()
-                self._connection_thread.wait(500)  # Esperar até 500ms
+                self._connection_thread.wait(500)  # Wait up to 500ms
         except RuntimeError:
-            pass  # Thread já foi deletada
+            pass  # Thread was already deleted
 
         # Mostrar loading overlay
         self._show_loading(f"Conectando a {connection_name}...")
@@ -919,14 +919,14 @@ class SessionWidget(QWidget):
         return True
 
     def is_connecting(self) -> bool:
-        """Verifica se está em processo de conexão"""
+        """Check if connection is in progress"""
         try:
             return self._connection_thread is not None and self._connection_thread.isRunning()
         except RuntimeError:
-            return False  # Thread foi deletada
+            return False  # Thread was deleted
 
     def _on_connection_finished(self, success: bool, message: str):
-        """Callback quando conexão termina"""
+        """Callback when connection finishes"""
         # Esconder loading
         self._hide_loading()
 
@@ -934,7 +934,7 @@ class SessionWidget(QWidget):
         if success:
             self.append_output(message)
             self.status_changed.emit(message)
-            # Emitir sinal de mudança de conexão
+            # Emit connection change signal
             if self.session.connection_name and self.session.connector:
                 db = (
                     self.session.connector.get_current_database()
@@ -944,13 +944,13 @@ class SessionWidget(QWidget):
                 self.connection_changed.emit(self.session.connection_name, db)
         else:
             self.append_output(message, error=True)
-            self.status_changed.emit("Erro na conexão")
+            self.status_changed.emit("Connection error")
 
     def _show_loading(self, message: str):
-        """Mostra overlay de loading"""
+        """Show loading overlay"""
         if self._loading_overlay:
             self._loading_overlay.setText(message)
-            # Aplicar estilo com cor dinâmica
+            # Apply style with dynamic color
             self._loading_overlay.setStyleSheet(f"""
                 QLabel {{
                     background-color: rgba(30, 30, 30, 230);
@@ -962,19 +962,19 @@ class SessionWidget(QWidget):
                     padding: 30px 50px;
                 }}
             """)
-            # Ajustar tamanho e posição
+            # Adjust size and position
             self._loading_overlay.resize(self.size())
             self._loading_overlay.move(0, 0)
             self._loading_overlay.show()
             self._loading_overlay.raise_()
 
     def _hide_loading(self):
-        """Esconde overlay de loading"""
+        """Hide loading overlay"""
         if self._loading_overlay:
             self._loading_overlay.hide()
 
     def resizeEvent(self, event):
-        """Ajusta overlay de loading ao redimensionar"""
+        """Adjust loading overlay on resize"""
         super().resizeEvent(event)
         if self._loading_overlay and self._loading_overlay.isVisible():
             self._loading_overlay.resize(self.size())
@@ -982,24 +982,24 @@ class SessionWidget(QWidget):
     # === CLEANUP ===
 
     def cleanup(self):
-        """Limpa recursos"""
+        """Clean resources"""
         try:
             if self._sql_thread and self._sql_thread.isRunning():
                 self._sql_thread.quit()
                 self._sql_thread.wait()
         except RuntimeError:
-            pass  # Thread já foi deletada
+            pass  # Thread was already deleted
 
         try:
             if self._python_thread and self._python_thread.isRunning():
                 self._python_thread.quit()
                 self._python_thread.wait()
         except RuntimeError:
-            pass  # Thread já foi deletada
+            pass  # Thread was already deleted
 
         try:
             if self._connection_thread and self._connection_thread.isRunning():
                 self._connection_thread.quit()
                 self._connection_thread.wait()
         except RuntimeError:
-            pass  # Thread já foi deletada
+            pass  # Thread was already deleted

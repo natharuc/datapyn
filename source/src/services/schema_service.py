@@ -1,11 +1,11 @@
 """
-SchemaService - Servico em background para carregar e cachear a estrutura do banco de dados.
+SchemaService - Background service to load and cache database structure.
 
-Usa information_schema para carregar tabelas, colunas, tipos e chaves.
-Fornece os dados para autocomplete SQL no Monaco Editor.
+Uses information_schema to load tables, columns, types and keys.
+Provides data for SQL autocomplete in Monaco Editor.
 
-Thread-safe: cada carregamento usa thread propria com cleanup seguro.
-Erros sao silenciados - o usuario pode forcar recarga manualmente.
+Thread-safe: each load uses its own thread with safe cleanup.
+Errors are silenced - user can force reload manually.
 """
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 class SchemaWorker(QObject):
-    """Worker que carrega schema do banco em background thread"""
+    """Worker that loads database schema in background thread"""
 
     finished = pyqtSignal(dict)  # {tables: [...], columns: {...}}
     error = pyqtSignal(str)
-    progress = pyqtSignal(str)  # mensagem de progresso
+    progress = pyqtSignal(str)  # progress message
 
     def __init__(self, connector):
         super().__init__()
@@ -29,22 +29,22 @@ class SchemaWorker(QObject):
         self._cancelled = False
 
     def cancel(self):
-        """Marca worker como cancelado"""
+        """Mark worker as cancelled"""
         self._cancelled = True
 
     def run(self):
-        """Carrega schema completo do banco via information_schema.
+        """Load complete schema from database via information_schema.
 
-        Silencia erros individuais - retorna schema parcial se algo falhar.
+        Silences individual errors - returns partial schema if something fails.
         """
         try:
-            self.progress.emit("Carregando estrutura do banco...")
+            self.progress.emit("Loading database structure...")
             schema = {"tables": [], "columns": {}, "database": "", "databases": []}
 
             if self._cancelled:
                 return
 
-            # Obter banco atual
+            # Get current database
             try:
                 db_name = self.connector.get_current_database()
                 schema["database"] = db_name or ""
@@ -54,7 +54,7 @@ class SchemaWorker(QObject):
             if self._cancelled:
                 return
 
-            # Obter lista de todos os bancos do servidor
+            # Get list of all server databases
             try:
                 databases_query = self._get_databases_query()
                 df = self.connector.execute_query(databases_query)
@@ -63,12 +63,12 @@ class SchemaWorker(QObject):
                         db = str(row.iloc[0])
                         schema["databases"].append(db)
             except Exception as e:
-                logger.debug(f"Erro ao carregar lista de bancos: {e}")
+                logger.debug(f"Error loading database list: {e}")
 
             if self._cancelled:
                 return
 
-            # Obter tabelas e views
+            # Get tables and views
             try:
                 tables_query = self._get_tables_query()
                 df = self.connector.execute_query(tables_query)
@@ -83,12 +83,12 @@ class SchemaWorker(QObject):
                         }
                         schema["tables"].append(table_info)
             except Exception as e:
-                logger.debug(f"Erro ao carregar tabelas: {e}")
+                logger.debug(f"Error loading tables: {e}")
 
             if self._cancelled:
                 return
 
-            # Obter colunas de todas as tabelas
+            # Get columns of all tables
             try:
                 columns_query = self._get_columns_query()
                 df = self.connector.execute_query(columns_query)
@@ -106,27 +106,27 @@ class SchemaWorker(QObject):
                             schema["columns"][table_name] = []
                         schema["columns"][table_name].append(col_info)
             except Exception as e:
-                logger.debug(f"Erro ao carregar colunas: {e}")
+                logger.debug(f"Error loading columns: {e}")
 
             if self._cancelled:
                 return
 
             self.progress.emit(
-                f"Schema carregado: {len(schema['tables'])} tabelas, "
-                f"{sum(len(v) for v in schema['columns'].values())} colunas"
+                f"Schema loaded: {len(schema['tables'])} tables, "
+                f"{sum(len(v) for v in schema['columns'].values())} columns"
             )
             self.finished.emit(schema)
 
         except Exception as e:
-            # Silenciar erros - nao interromper o usuario
-            logger.warning(f"Erro ao carregar schema: {e}")
+            # Silence errors - don't interrupt user
+            logger.warning(f"Error loading schema: {e}")
             try:
                 self.error.emit(str(e))
             except RuntimeError:
-                pass  # Qt object pode ter sido deletado
+                pass  # Qt object may have been deleted
 
     def _get_databases_query(self) -> str:
-        """Query para obter lista de todos os bancos do servidor"""
+        """Query to get list of all server databases"""
         db_type = getattr(self.connector, "db_type", "").lower()
 
         if db_type in ("mssql", "sqlserver"):
@@ -138,7 +138,7 @@ class SchemaWorker(QObject):
             return "SHOW DATABASES"
 
     def _get_tables_query(self) -> str:
-        """Query para obter tabelas - compativel com todos os SGBDs"""
+        """Query to get tables - compatible with all DBMS"""
         db_type = getattr(self.connector, "db_type", "").lower()
 
         if db_type in ("mssql", "sqlserver"):
@@ -157,7 +157,7 @@ class SchemaWorker(QObject):
                 ORDER BY table_schema, table_name
             """
         else:
-            # MySQL, MariaDB e outros
+            # MySQL, MariaDB and others
             return """
                 SELECT TABLE_SCHEMA as table_schema,
                        TABLE_NAME as table_name,
@@ -168,7 +168,7 @@ class SchemaWorker(QObject):
             """
 
     def _get_columns_query(self) -> str:
-        """Query para obter colunas - compativel com todos os SGBDs"""
+        """Query to get columns - compatible with all DBMS"""
         db_type = getattr(self.connector, "db_type", "").lower()
 
         if db_type in ("mssql", "sqlserver"):
@@ -205,96 +205,96 @@ class SchemaWorker(QObject):
 
 class SchemaService(QObject):
     """
-    Servico que gerencia o cache de schema do banco de dados.
+    Service that manages database schema cache.
 
-    Carrega schema em background quando uma conexao e estabelecida.
-    Emite sinal com o schema carregado para atualizar o autocomplete.
+    Loads schema in background when connection is established.
+    Emits signal with loaded schema to update autocomplete.
 
-    Thread-safe: guarda referencia a threads ativas para evitar
+    Thread-safe: keeps reference to active threads to avoid
     "QThread: Destroyed while thread is still running".
     """
 
-    schema_loaded = pyqtSignal(dict, str)  # Emite schema completo + connection_name
+    schema_loaded = pyqtSignal(dict, str)  # Emits complete schema + connection_name
     schema_error = pyqtSignal(str)
     loading_progress = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._active_threads: list = []  # threads ativas para manter referencia
+        self._active_threads: list = []  # active threads to keep reference
         self._cache: Dict[str, dict] = {}  # connection_name -> schema
 
     def load_schema(self, connector, connection_name: str = ""):
         """
-        Inicia carregamento do schema em background.
+        Start loading schema in background.
 
-        Thread-safe: cancela worker anterior mas deixa thread finalizar naturalmente.
+        Thread-safe: cancels previous worker but lets thread finish naturally.
 
         Args:
-            connector: DatabaseConnector com conexao ativa
-            connection_name: Nome da conexao (para cache)
+            connector: DatabaseConnector with active connection
+            connection_name: Connection name (for cache)
         """
-        # Cancelar workers anteriores (nao emitirao sinais)
+        # Cancel previous workers (won't emit signals)
         self._cancel_pending_workers()
 
-        # Verificar cache
+        # Check cache
         if connection_name and connection_name in self._cache:
             self.schema_loaded.emit(self._cache[connection_name], connection_name)
             return
 
         try:
-            # Criar worker e thread
+            # Create worker and thread
             thread = QThread()
             worker = SchemaWorker(connector)
             worker.moveToThread(thread)
 
-            # Conectar sinais
+            # Connect signals
             thread.started.connect(worker.run)
             worker.finished.connect(lambda schema: self._on_finished(schema, connection_name))
             worker.error.connect(self._on_error)
             worker.progress.connect(self.loading_progress.emit)
 
-            # Cleanup seguro: worker e thread sao deletados apos finalizacao
+            # Safe cleanup: worker and thread are deleted after completion
             worker.finished.connect(thread.quit)
             worker.error.connect(thread.quit)
             thread.finished.connect(lambda: self._cleanup_thread(thread, worker))
 
-            # Guardar referencia para evitar garbage collection
+            # Keep reference to avoid garbage collection
             self._active_threads.append((thread, worker))
 
             thread.start()
         except Exception as e:
-            logger.warning(f"Erro ao iniciar carregamento de schema: {e}")
+            logger.warning(f"Error starting schema load: {e}")
 
     def _on_finished(self, schema: dict, connection_name: str):
-        """Schema carregado com sucesso"""
+        """Schema loaded successfully"""
         try:
             if connection_name:
                 self._cache[connection_name] = schema
             self.schema_loaded.emit(schema, connection_name)
         except RuntimeError:
-            pass  # Qt object pode ter sido deletado
+            pass  # Qt object may have been deleted
 
     def _on_error(self, error: str):
-        """Erro ao carregar schema - silencia para nao atrapalhar o usuario"""
-        logger.warning(f"Erro ao carregar schema: {error}")
+        """Error loading schema - silence to not disturb user"""
+        logger.warning(f"Error loading schema: {error}")
         try:
             self.schema_error.emit(error)
         except RuntimeError:
             pass
 
     def get_cached_schema(self, connection_name: str) -> Optional[dict]:
-        """Retorna schema cacheado ou None"""
+        """Return cached schema or None"""
         return self._cache.get(connection_name)
 
     def invalidate_cache(self, connection_name: str = ""):
-        """Invalida cache de uma conexao ou todas"""
+        """Invalidate cache for one connection or all"""
         if connection_name:
             self._cache.pop(connection_name, None)
         else:
             self._cache.clear()
 
     def _cancel_pending_workers(self):
-        """Cancela workers pendentes (marca como cancelados)"""
+        """Cancel pending workers (mark as cancelled)"""
         for thread, worker in self._active_threads:
             try:
                 if worker:
@@ -303,7 +303,7 @@ class SchemaService(QObject):
                 pass
 
     def _cleanup_thread(self, thread, worker):
-        """Remove thread finalizada da lista de ativas e agenda deleteLater"""
+        """Remove finished thread from active list and schedule deleteLater"""
         try:
             self._active_threads = [
                 (t, w) for t, w in self._active_threads if t is not thread
@@ -316,8 +316,8 @@ class SchemaService(QObject):
             pass
 
     def cleanup(self):
-        """Limpa recursos - espera threads finalizarem com timeout"""
-        # Cancelar todos os workers
+        """Clean up resources - wait for threads to finish with timeout"""
+        # Cancel all workers
         for thread, worker in self._active_threads:
             try:
                 if worker:
@@ -325,7 +325,7 @@ class SchemaService(QObject):
             except RuntimeError:
                 pass
 
-        # Esperar threads finalizarem
+        # Wait for threads to finish
         for thread, worker in self._active_threads:
             try:
                 if thread and thread.isRunning():

@@ -1,8 +1,8 @@
 """
-Workers - Threads de background para operações pesadas
+Workers - Background threads for heavy operations
 
-Separa completamente a lógica de processamento da UI.
-Cada worker emite sinais com resultados, nunca manipula UI diretamente.
+Completely separates processing logic from UI.
+Each worker emits signals with results, never manipulates UI directly.
 """
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
@@ -15,12 +15,12 @@ import pandas as pd
 
 class BaseWorker(QObject):
     """
-    Base abstrata para workers
+    Abstract base for workers
 
-    Garante que todos os workers sigam o mesmo padrão:
-    - started: Emitido ao iniciar
-    - finished: Emitido ao terminar (sempre)
-    - error: Emitido se houver erro
+    Ensures all workers follow the same pattern:
+    - started: Emitted when starting
+    - finished: Emitted when done (always)
+    - error: Emitted if there's an error
     """
 
     started = pyqtSignal()
@@ -28,17 +28,17 @@ class BaseWorker(QObject):
     error = pyqtSignal(str)
 
     def run(self):
-        """Sobrescrever em subclasses"""
+        """Override in subclasses"""
         raise NotImplementedError
 
 
 class SqlExecutionWorker(BaseWorker):
     """
-    Worker para execução de queries SQL em background
+    Worker for running SQL queries in background
 
     Signals:
-        - result_ready(DataFrame): Query executada com sucesso
-        - error(str): Erro na execução
+        - result_ready(DataFrame): Query executed successfully
+        - error(str): Execution error
     """
 
     result_ready = pyqtSignal(object)  # pd.DataFrame ou None
@@ -49,14 +49,14 @@ class SqlExecutionWorker(BaseWorker):
         self.query = query
 
     def run(self):
-        """Executa query SQL"""
+        """Run SQL query"""
         self.started.emit()
 
         try:
             df = self.connector.execute_query(self.query)
             self.result_ready.emit(df)
         except Exception as e:
-            error_msg = f"Erro SQL: {str(e)}"
+            error_msg = f"SQL Error: {str(e)}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -64,11 +64,11 @@ class SqlExecutionWorker(BaseWorker):
 
 class DatabaseConnectionWorker(BaseWorker):
     """
-    Worker para conectar a banco de dados em background
+    Worker for connecting to database in background
 
     Signals:
-        - connection_success(): Conexão estabelecida
-        - error(str): Erro na conexão
+        - connection_success(): Connection established
+        - error(str): Connection error
     """
 
     connection_success = pyqtSignal()
@@ -97,7 +97,7 @@ class DatabaseConnectionWorker(BaseWorker):
         self.use_windows_auth = use_windows_auth
 
     def run(self):
-        """Conecta ao banco"""
+        """Connect to database"""
         self.started.emit()
 
         try:
@@ -113,31 +113,31 @@ class DatabaseConnectionWorker(BaseWorker):
             )
             self.connection_success.emit()
         except Exception as e:
-            error_msg = f"Erro de conexão: {str(e)}\n{traceback.format_exc()}"
+            error_msg = f"Connection error: {str(e)}\n{traceback.format_exc()}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
 
 
 class PythonExecutionWorker(BaseWorker):
-    """REMOVIDO - usar PythonWorker do main_window.py"""
+    """REMOVED - use PythonWorker from main_window.py"""
 
     execution_complete = pyqtSignal(object, str, str)
 
     def __init__(self, code: str, namespace: dict, is_expression: bool = False):
         super().__init__()
-        raise NotImplementedError("Use PythonWorker do main_window.py - execução centralizada!")
+        raise NotImplementedError("Use PythonWorker from main_window.py - centralized execution!")
 
 
 class MixedSyntaxExecutionWorker(BaseWorker):
     """
-    Worker para execução de sintaxe mista (SQL + Python)
+    Worker for mixed syntax execution (SQL + Python)
 
-    Executa código com padrão {{ SQL }} integrado.
+    Runs code with {{ SQL }} pattern integrated.
 
     Signals:
-        - execution_complete(result_dict): Execução finalizada
-        - error(str): Erro na execução
+        - execution_complete(result_dict): Execution finished
+        - error(str): Execution error
     """
 
     execution_complete = pyqtSignal(dict)  # {output, queries_executed, result}
@@ -149,14 +149,14 @@ class MixedSyntaxExecutionWorker(BaseWorker):
         self.namespace = namespace
 
     def run(self):
-        """Executa sintaxe mista"""
+        """Run mixed syntax"""
         self.started.emit()
 
         try:
             result = self.executor.parse_and_execute(self.code, self.namespace)
             self.execution_complete.emit(result)
         except Exception as e:
-            error_msg = f"Erro Mixed Syntax:\n{traceback.format_exc()}"
+            error_msg = f"Mixed Syntax Error:\n{traceback.format_exc()}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -164,16 +164,16 @@ class MixedSyntaxExecutionWorker(BaseWorker):
 
 class DataFrameOperationWorker(BaseWorker):
     """
-    Worker genérico para operações em DataFrames
+    Generic worker for DataFrame operations
 
-    Útil para operações pesadas como:
-    - Merge de grandes datasets
-    - Group by complexos
-    - Transformações custosas
+    Useful for heavy operations like:
+    - Merge of large datasets
+    - Complex group by
+    - Expensive transformations
 
     Signals:
-        - operation_complete(result): Operação finalizada
-        - error(str): Erro na operação
+        - operation_complete(result): Operation finished
+        - error(str): Operation error
     """
 
     operation_complete = pyqtSignal(object)  # pd.DataFrame ou outro resultado
@@ -181,8 +181,8 @@ class DataFrameOperationWorker(BaseWorker):
     def __init__(self, operation_func, *args, **kwargs):
         """
         Args:
-            operation_func: Função que retorna um DataFrame
-            *args, **kwargs: Argumentos para operation_func
+            operation_func: Function that returns a DataFrame
+            *args, **kwargs: Arguments for operation_func
         """
         super().__init__()
         self.operation_func = operation_func
@@ -190,14 +190,14 @@ class DataFrameOperationWorker(BaseWorker):
         self.kwargs = kwargs
 
     def run(self):
-        """Executa operação"""
+        """Run operation"""
         self.started.emit()
 
         try:
             result = self.operation_func(*self.args, **self.kwargs)
             self.operation_complete.emit(result)
         except Exception as e:
-            error_msg = f"Erro na operação: {str(e)}\n{traceback.format_exc()}"
+            error_msg = f"Operation error: {str(e)}\n{traceback.format_exc()}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -205,11 +205,11 @@ class DataFrameOperationWorker(BaseWorker):
 
 class DatabaseSwitchWorker(BaseWorker):
     """
-    Worker para trocar banco de dados em background
+    Worker for switching database in background
 
     Signals:
-        - switch_success(str): Banco trocado com sucesso (nome do banco)
-        - error(str): Erro na troca
+        - switch_success(str): Database switched successfully (database name)
+        - error(str): Switch error
     """
 
     switch_success = pyqtSignal(str)
@@ -220,14 +220,14 @@ class DatabaseSwitchWorker(BaseWorker):
         self.database_name = database_name
 
     def run(self):
-        """Troca banco de dados"""
+        """Switch database"""
         self.started.emit()
 
         try:
             self.connector.change_database(self.database_name)
             self.switch_success.emit(self.database_name)
         except Exception as e:
-            error_msg = f"Erro ao trocar banco: {str(e)}"
+            error_msg = f"Database switch error: {str(e)}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -235,11 +235,11 @@ class DatabaseSwitchWorker(BaseWorker):
 
 class BlockConnectionWorker(BaseWorker):
     """
-    Worker para conectar bloco individual a banco de dados em background
+    Worker for connecting individual block to database in background
 
     Signals:
-        - connection_ready(object): Connector conectado
-        - error(str): Erro na conexão
+        - connection_ready(object): Connector connected
+        - error(str): Connection error
     """
 
     connection_ready = pyqtSignal(object)
@@ -259,7 +259,7 @@ class BlockConnectionWorker(BaseWorker):
         self.trust_server_certificate = trust_server_certificate
 
     def run(self):
-        """Conecta ao banco"""
+        """Connect to database"""
         self.started.emit()
 
         try:
@@ -280,27 +280,27 @@ class BlockConnectionWorker(BaseWorker):
             if connector.is_connected():
                 self.connection_ready.emit(connector)
             else:
-                self.error.emit("Falha ao conectar ao banco")
+                self.error.emit("Failed to connect to database")
         except Exception as e:
-            error_msg = f"Erro de conexão: {str(e)}"
+            error_msg = f"Connection error: {str(e)}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
 
 
-# Utility function para executar workers facilmente
+# Utility function to run workers easily
 def execute_worker(worker: BaseWorker, parent_thread: QThread = None) -> QThread:
     """
-    Helper para executar um worker em uma thread separada
+    Helper to run a worker in a separate thread
 
     Args:
-        worker: Instância do worker
-        parent_thread: Thread pai (opcional)
+        worker: Worker instance
+        parent_thread: Parent thread (optional)
 
     Returns:
-        QThread: Thread criada
+        QThread: Created thread
 
-    Exemplo:
+    Example:
         worker = SqlExecutionWorker(connector, "SELECT * FROM users")
         worker.result_ready.connect(self.on_result)
         worker.error.connect(self.on_error)
@@ -309,13 +309,13 @@ def execute_worker(worker: BaseWorker, parent_thread: QThread = None) -> QThread
     thread = QThread(parent_thread)
     worker.moveToThread(thread)
 
-    # Conectar sinais de lifecycle
+    # Connect lifecycle signals
     thread.started.connect(worker.run)
     worker.finished.connect(thread.quit)
     worker.finished.connect(worker.deleteLater)
     thread.finished.connect(thread.deleteLater)
 
-    # Iniciar thread
+    # Start thread
     thread.start()
 
     return thread

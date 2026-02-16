@@ -11,7 +11,7 @@ from PyQt6.Qsci import QsciScintilla, QsciLexerSQL
 class SQLEditor(QsciScintilla):
     """Editor de SQL com syntax highlighting e autocompletar"""
 
-    execute_requested = pyqtSignal(str)  # Sinal quando F5 é pressionado
+    execute_requested = pyqtSignal(str)  # Signal when F5 is pressed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -20,7 +20,7 @@ class SQLEditor(QsciScintilla):
         self._setup_shortcuts()
 
     def _setup_editor(self):
-        """Configura as propriedades básicas do editor"""
+        """Configure basic editor properties"""
         # Fonte
         font = QFont("Consolas", 11)
         font.setStyleHint(QFont.StyleHint.Monospace)
@@ -32,7 +32,7 @@ class SQLEditor(QsciScintilla):
         self.setMarginsForegroundColor(QColor("#6e7681"))
         self.setMarginsBackgroundColor(QColor("#1e1e1e"))
 
-        # Indentação
+        # Indentation
         self.setIndentationGuides(True)
         self.setTabWidth(4)
         self.setIndentationsUseTabs(False)
@@ -43,7 +43,7 @@ class SQLEditor(QsciScintilla):
         self.setMatchedBraceBackgroundColor(QColor("#3e4451"))
         self.setMatchedBraceForegroundColor(QColor("#61afef"))
 
-        # Seleção
+        # Selection
         self.setSelectionBackgroundColor(QColor("#264f78"))
 
         # Caret (cursor)
@@ -58,7 +58,7 @@ class SQLEditor(QsciScintilla):
         self.setAutoCompletionCaseSensitivity(False)
         self.setAutoCompletionReplaceWord(True)
 
-        # Folding (dobra de código)
+        # Folding (code folding)
         self.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)
         self.setFoldMarginColors(QColor("#1e1e1e"), QColor("#1e1e1e"))
 
@@ -82,7 +82,7 @@ class SQLEditor(QsciScintilla):
         lexer.setColor(QColor("#d4d4d4"), QsciLexerSQL.Default)
         lexer.setPaper(QColor("#1e1e1e"), QsciLexerSQL.Default)
 
-        # Comentários
+        # Comments
         lexer.setColor(QColor("#6a9955"), QsciLexerSQL.Comment)
         lexer.setColor(QColor("#6a9955"), QsciLexerSQL.CommentLine)
         lexer.setColor(QColor("#6a9955"), QsciLexerSQL.CommentDoc)
@@ -94,7 +94,7 @@ class SQLEditor(QsciScintilla):
         lexer.setColor(QColor("#ce9178"), QsciLexerSQL.SingleQuotedString)
         lexer.setColor(QColor("#ce9178"), QsciLexerSQL.DoubleQuotedString)
 
-        # Números
+        # Numbers
         lexer.setColor(QColor("#b5cea8"), QsciLexerSQL.Number)
 
         # Operadores
@@ -103,35 +103,35 @@ class SQLEditor(QsciScintilla):
         # Identificadores
         lexer.setColor(QColor("#9cdcfe"), QsciLexerSQL.Identifier)
 
-        # O QsciLexerSQL já vem com keywords SQL pré-configuradas
-        # Não é necessário definir manualmente
+        # QsciLexerSQL already comes with pre-configured SQL keywords
+        # No need to define manually
 
         self.setLexer(lexer)
 
     def _setup_shortcuts(self):
-        """Configura atalhos de teclado"""
-        # F5 - Executar query
+        """Configure keyboard shortcuts"""
+        # F5 - Run query
         shortcut_execute = QShortcut(QKeySequence(Qt.Key.Key_F5), self)
         shortcut_execute.activated.connect(self._on_execute)
 
-        # Ctrl+Enter - Executar query
+        # Ctrl+Enter - Run query
         shortcut_execute2 = QShortcut(QKeySequence("Ctrl+Return"), self)
         shortcut_execute2.activated.connect(self._on_execute)
 
-        # Ctrl+/ - Comentar/descomentar linha
+        # Ctrl+/ - Comment/uncomment line
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self)
         shortcut_comment.activated.connect(self.toggle_comment)
 
     def _on_execute(self):
-        """Callback quando executar query é solicitado"""
+        """Callback when run query is requested"""
         text = self.selectedText() if self.hasSelectedText() else self.text()
         if text.strip():
             self.execute_requested.emit(text)
 
     def toggle_comment(self):
-        """Comenta/descomenta a linha ou seleção atual"""
+        """Comment/uncomment current line or selection"""
         if self.hasSelectedText():
-            # Comentar seleção
+            # Comment selection
             start_line, start_index, end_line, end_index = self.getSelection()
             for line in range(start_line, end_line + 1):
                 line_text = self.text(line)
@@ -144,7 +144,7 @@ class SQLEditor(QsciScintilla):
                 self.setSelection(line, 0, line, len(line_text))
                 self.replaceSelectedText(new_text)
         else:
-            # Comentar linha atual
+            # Comment current line
             line, index = self.getCursorPosition()
             line_text = self.text(line)
             if line_text.strip().startswith("--"):

@@ -1,5 +1,5 @@
 """
-Conector de banco de dados com suporte para múltiplos SGBDs
+Database connector with support for multiple DBMS
 """
 
 from typing import Optional, Dict, Any, List, Union
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseConnector:
-    """Classe para gerenciar conexões com diferentes bancos de dados"""
+    """Class to manage connections with different databases"""
 
     SUPPORTED_DATABASES = {
         "sqlserver": "SQL Server",
@@ -27,27 +27,27 @@ class DatabaseConnector:
         self.engine: Optional[Engine] = None
         self.connection_params: Dict[str, Any] = {}
         self.db_type: str = ""
-        self._active_raw_conn = None  # Referencia para cancelamento
-        self._active_cursor = None  # Referencia ao cursor para cancelamento
-        self._cancelled = False  # Flag de cancelamento
+        self._active_raw_conn = None  # Reference for cancellation
+        self._active_cursor = None  # Cursor reference for cancellation
+        self._cancelled = False  # Cancellation flag
 
     def connect(
         self, db_type: str, host: str, port: int, database: str, username: str = "", password: str = "", **kwargs
     ) -> bool:
         """
-        Conecta ao banco de dados
+        Connect to database
 
         Args:
-            db_type: Tipo do banco (sqlserver, mysql, mariadb, postgresql)
-            host: Endereço do servidor
-            port: Porta do servidor
-            database: Nome do banco de dados
-            username: Usuário (opcional para Windows Auth)
-            password: Senha (opcional para Windows Auth)
-            **kwargs: Parâmetros adicionais (use_windows_auth=True para SQL Server)
+            db_type: Database type (sqlserver, mysql, mariadb, postgresql)
+            host: Server address
+            port: Server port
+            database: Database name
+            username: User (optional for Windows Auth)
+            password: Password (optional for Windows Auth)
+            **kwargs: Additional parameters (use_windows_auth=True for SQL Server)
 
         Returns:
-            bool: True se conectou com sucesso
+            bool: True if connected successfully
         """
         try:
             connection_string = self._build_connection_string(
@@ -56,9 +56,9 @@ class DatabaseConnector:
 
             self.engine = create_engine(connection_string, pool_pre_ping=True)
 
-            # Registrar evento no pool para garantir que toda conexao
-            # retirada do pool use o banco correto (resolve o problema
-            # com USE <db> que so afeta uma conexao do pool)
+            # Register pool event to ensure every connection
+            # pulled from pool uses correct database (solves problem
+            # with USE <db> that only affects one pool connection)
             if db_type == "sqlserver":
                 connector_ref = self
 
@@ -71,34 +71,34 @@ class DatabaseConnector:
                             cursor.execute(f"USE [{current_db}]")
                             cursor.close()
                         except Exception:
-                            pass  # Silenciar - o USE no batch vai pegar o erro
+                            pass  # Silence - USE in batch will catch error
 
-            # Testa a conexão
+            # Test connection
             with self.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
 
             self.db_type = db_type
             self.connection_params = {"host": host, "port": port, "database": database, "username": username}
 
-            logger.info(f"Conectado ao {self.SUPPORTED_DATABASES[db_type]}: {host}/{database}")
+            logger.info(f"Connected to {self.SUPPORTED_DATABASES[db_type]}: {host}/{database}")
             return True
 
         except Exception as e:
-            logger.error(f"Erro ao conectar ao banco: {str(e)}")
+            logger.error(f"Database connection error: {str(e)}")
             raise
 
     def _get_available_odbc_driver(self) -> str:
         """
-        Detecta o driver ODBC do SQL Server instalado no sistema.
-        Retorna o driver mais recente disponivel por ordem de prioridade.
+        Detect SQL Server ODBC driver installed on the system.
+        Returns the most recent available driver in priority order.
 
         Returns:
-            str: Nome do driver ODBC encontrado
+            str: Name of ODBC driver found
 
         Raises:
-            RuntimeError: Se nenhum driver compativel for encontrado
+            RuntimeError: If no compatible driver is found
         """
-        # Ordem de prioridade: drivers mais recentes primeiro
+        # Priority order: most recent drivers first
         preferred_drivers = [
             "ODBC Driver 18 for SQL Server",
             "ODBC Driver 17 for SQL Server",
@@ -107,41 +107,41 @@ class DatabaseConnector:
             "ODBC Driver 11 for SQL Server",
             "SQL Server Native Client 11.0",
             "SQL Server Native Client 10.0",
-            "SQL Server",  # Driver antigo, ultima opcao
+            "SQL Server",  # Old driver, last option
         ]
 
         try:
             available_drivers = pyodbc.drivers()
-            logger.info(f"Drivers ODBC disponiveis: {available_drivers}")
+            logger.info(f"Available ODBC drivers: {available_drivers}")
 
             for driver in preferred_drivers:
                 if driver in available_drivers:
-                    logger.info(f"Driver ODBC selecionado: {driver}")
+                    logger.info(f"Selected ODBC driver: {driver}")
                     return driver
 
-            # Se nenhum driver preferido encontrado, tenta usar qualquer um com "SQL Server"
+            # If no preferred driver found, try using any with "SQL Server"
             for driver in available_drivers:
                 if "SQL Server" in driver:
-                    logger.warning(f"Usando driver alternativo: {driver}")
+                    logger.warning(f"Using alternative driver: {driver}")
                     return driver
 
         except Exception as e:
-            logger.error(f"Erro ao listar drivers ODBC: {e}")
+            logger.error(f"Error listing ODBC drivers: {e}")
 
         raise RuntimeError(
-            "Nenhum driver ODBC do SQL Server encontrado.\n"
-            "Instale o 'ODBC Driver 18 for SQL Server' em:\n"
+            "No SQL Server ODBC driver found.\n"
+            "Install 'ODBC Driver 18 for SQL Server' at:\n"
             "https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server"
         )
 
     def _build_connection_string(
         self, db_type: str, host: str, port: int, database: str, username: str, password: str, **kwargs
     ) -> str:
-        """Constrói a string de conexão baseada no tipo de banco"""
+        """Build connection string based on database type"""
         from urllib.parse import quote_plus
 
         if db_type == "sqlserver":
-            # Detectar driver automaticamente ou usar o especificado
+            # Auto-detect driver or use specified one
             driver = kwargs.get("driver")
             if not driver:
                 driver = self._get_available_odbc_driver()
@@ -149,7 +149,7 @@ class DatabaseConnector:
             use_windows_auth = kwargs.get("use_windows_auth", False)
             trust_cert = kwargs.get("trust_server_certificate", False)
 
-            # Usar connection string ODBC direta
+            # Use direct ODBC connection string
             if use_windows_auth:
                 # Windows Authentication
                 odbc_string = (
@@ -175,235 +175,235 @@ class DatabaseConnector:
             return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_string)}"
 
         elif db_type == "mysql":
-            # URL encode username e password para caracteres especiais
+            # URL encode username and password for special characters
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
             return f"mysql+pymysql://{user_encoded}:{pass_encoded}@{host}:{port}/{database}?charset=utf8mb4"
 
         elif db_type == "mariadb":
-            # URL encode username e password para caracteres especiais
+            # URL encode username and password for special characters
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
             return f"mariadb+mariadbconnector://{user_encoded}:{pass_encoded}@{host}:{port}/{database}"
 
         elif db_type == "postgresql":
-            # URL encode username e password para caracteres especiais
-            # Importante para Azure PostgreSQL onde o usuario e "user@server"
+            # URL encode username and password for special characters
+            # Important for Azure PostgreSQL where user is "user@server"
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
             return f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{host}:{port}/{database}"
 
         else:
-            raise ValueError(f"Tipo de banco não suportado: {db_type}")
+            raise ValueError(f"Unsupported database type: {db_type}")
 
     def execute_query(self, query: str) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """
-        Executa uma query SQL e retorna um DataFrame ou lista de DataFrames
+        Execute SQL query and return DataFrame or list of DataFrames
 
-        Suporta múltiplos comandos SQL. Para queries com múltiplos SELECTs,
-        retorna uma lista de DataFrames (um para cada SELECT).
+        Supports multiple SQL commands. For queries with multiple SELECTs,
+        returns a list of DataFrames (one for each SELECT).
 
         Args:
-            query: Query SQL a ser executada (pode conter múltiplos comandos)
+            query: SQL query to execute (can contain multiple commands)
 
         Returns:
-            Union[pd.DataFrame, List[pd.DataFrame]]: Resultado da query ou lista de resultados
+            Union[pd.DataFrame, List[pd.DataFrame]]: Query result or list of results
         """
         if not self.engine:
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError("No active database connection")
 
         try:
-            # Detectar comando USE para atualizar banco atual
+            # Detect USE command to update current database
             import re
 
             use_match = re.search(r"\bUSE\s+\[?(\w+)\]?\s*;?\s*$", query.strip(), re.IGNORECASE | re.MULTILINE)
             if use_match:
                 new_db = use_match.group(1)
-                logger.info(f"Detectado comando USE {new_db}")
-                # Atualizar banco atual
+                logger.info(f"Detected USE command {new_db}")
+                # Update current database
                 self.connection_params["database"] = new_db
 
-            # Remove comandos GO (SQL Server)
+            # Remove GO commands (SQL Server)
             query_clean = query.replace("GO\n", "\n").replace("GO ", " ")
 
-            # Para SQL Server, executar como batch e capturar resultados
+            # For SQL Server, execute as batch and capture results
             if self.db_type == "sqlserver":
                 return self._execute_mssql_batch(query_clean)
 
-            # Para outros bancos, usar lógica antiga
+            # For other databases, use legacy logic
             return self._execute_generic_query(query_clean)
 
         except Exception as e:
-            logger.error(f"Erro ao executar query: {str(e)}")
+            logger.error(f"Error executing query: {str(e)}")
             raise
 
     def cancel_query(self):
-        """Cancela a query em execucao.
+        """Cancel running query.
 
-        Funciona para SQL Server (pyodbc) e PostgreSQL (psycopg2).
-        Para MySQL/MariaDB, interrompe via flag.
+        Works for SQL Server (pyodbc) and PostgreSQL (psycopg2).
+        For MySQL/MariaDB, interrupts via flag.
         """
         self._cancelled = True
 
         try:
             if self.db_type == "sqlserver":
-                # pyodbc: cancel() e metodo do Cursor, nao da Connection
+                # pyodbc: cancel() is a Cursor method, not Connection
                 cursor = self._active_cursor
                 if cursor is not None:
                     cursor.cancel()
-                    logger.info("Query SQL Server cancelada via cursor.cancel()")
+                    logger.info("SQL Server query cancelled via cursor.cancel()")
                 else:
-                    logger.warning("Cancel solicitado mas cursor nao disponivel")
+                    logger.warning("Cancel requested but cursor not available")
             elif self.db_type == "postgresql":
-                # psycopg2: cancel() envia cancel request ao servidor
+                # psycopg2: cancel() sends cancel request to server
                 raw_conn = self._active_raw_conn
                 if raw_conn is not None and hasattr(raw_conn, "cancel"):
                     raw_conn.cancel()
-                    logger.info("Query PostgreSQL cancelada via connection.cancel()")
+                    logger.info("PostgreSQL query cancelled via connection.cancel()")
             else:
-                # MySQL/MariaDB: nao tem cancel nativo no driver,
-                # mas a flag _cancelled ira interromper o processamento
-                logger.info(f"Cancel solicitado para {self.db_type} (via flag)")
+                # MySQL/MariaDB: no native cancel in driver,
+                # but _cancelled flag will interrupt processing
+                logger.info(f"Cancel requested for {self.db_type} (via flag)")
         except Exception as e:
-            logger.warning(f"Erro ao cancelar query: {e}")
+            logger.warning(f"Error cancelling query: {e}")
 
     def _execute_mssql_batch(self, query: str) -> pd.DataFrame:
-        """Executa batch de comandos SQL Server e retorna último resultado"""
+        """Execute SQL Server batch and return last result"""
         import pyodbc
 
         self._cancelled = False
-        last_error = None  # Declarar ANTES do try para ser acessível no finally
+        last_error = None  # Declare BEFORE try to be accessible in finally
         cursor = None
         raw_conn = None
 
         try:
-            # Usar raw connection do pyodbc para acessar nextset()
+            # Use raw pyodbc connection to access nextset()
             raw_conn = self.engine.raw_connection()
-            self._active_raw_conn = raw_conn  # Expor para cancelamento
+            self._active_raw_conn = raw_conn  # Expose for cancellation
             cursor = raw_conn.cursor()
-            self._active_cursor = cursor  # Expor cursor para cancelamento
+            self._active_cursor = cursor  # Expose cursor for cancellation
 
-            # CRITICO: Garantir que esta conexao do pool esta no banco correto.
-            # O pool do SQLAlchemy pode devolver qualquer conexao, e um comando
-            # USE anterior pode ter sido executado em outra conexao do pool.
+            # CRITICAL: Ensure this pool connection is in the correct database.
+            # SQLAlchemy pool can return any connection, and a previous USE
+            # command may have been executed in another pool connection.
             current_db = self.connection_params.get("database", "")
             if current_db:
                 try:
                     cursor.execute(f"USE [{current_db}]")
-                    # Consumir possivel result set do USE
+                    # Consume possible result set from USE
                     while cursor.nextset():
                         pass
                 except Exception as e:
-                    logger.warning(f"Falha ao definir banco [{current_db}]: {e}")
+                    logger.warning(f"Failed to set database [{current_db}]: {e}")
 
-            # Executar query completa
+            # Execute complete query
             cursor.execute(query)
 
-            # Capturar todos os result sets
+            # Capture all result sets
             dataframes = []
             result_set_count = 0
 
-            # Processar todos os result sets em um loop
+            # Process all result sets in a loop
             while True:
                 result_set_count += 1
 
                 try:
-                    if cursor.description:  # Tem colunas (é um SELECT)
-                        # Preservar case original das colunas
+                    if cursor.description:  # Has columns (is a SELECT)
+                        # Preserve original column case
                         columns = [col[0] for col in cursor.description]
                         rows = cursor.fetchall()
-                        logger.info(f"Result set {result_set_count}: {len(rows)} linhas, colunas: {columns}")
+                        logger.info(f"Result set {result_set_count}: {len(rows)} rows, columns: {columns}")
                         if rows:
                             df = pd.DataFrame.from_records(rows, columns=columns)
                             dataframes.append(df)
                     else:
-                        logger.info(f"Result set {result_set_count}: sem descrição (não retorna dados)")
+                        logger.info(f"Result set {result_set_count}: no description (doesn't return data)")
                 except pyodbc.Error as e:
                     last_error = str(e)
-                    logger.error(f"Erro PYODBC no result set {result_set_count}: {last_error}")
-                    break  # Para ao encontrar erro
+                    logger.error(f"PYODBC error in result set {result_set_count}: {last_error}")
+                    break  # Stop on error
                 except Exception as e:
                     last_error = str(e)
-                    logger.error(f"Erro GENERICO no result set {result_set_count}: {last_error}")
-                    break  # Para ao encontrar erro
+                    logger.error(f"GENERIC error in result set {result_set_count}: {last_error}")
+                    break  # Stop on error
 
-                # Tentar próximo result set
+                # Try next result set
                 try:
-                    logger.info(f"Tentando nextset após result set {result_set_count}...")
+                    logger.info(f"Trying nextset after result set {result_set_count}...")
                     has_next = cursor.nextset()
-                    logger.info(f"nextset retornou: {has_next}")
+                    logger.info(f"nextset returned: {has_next}")
 
-                    # CRÍTICO: pyodbc NÃO lança exceção em nextset() quando há erro!
-                    # O erro fica em cursor.messages - precisamos verificar ANTES de continuar
+                    # CRITICAL: pyodbc DOESN'T throw exception in nextset() when there's an error!
+                    # The error stays in cursor.messages - we need to check BEFORE continuing
                     if hasattr(cursor, "messages") and cursor.messages:
-                        logger.info(f"Mensagens após nextset: {cursor.messages}")
+                        logger.info(f"Messages after nextset: {cursor.messages}")
                         for msg in cursor.messages:
-                            # Mensagens são tuplas: (estado_sql, mensagem)
+                            # Messages are tuples: (sql_state, message)
                             if len(msg) >= 2:
                                 sql_state = msg[0]
                                 error_msg = msg[1]
-                                logger.info(f"SQL State: {sql_state}, Mensagem: {error_msg}")
+                                logger.info(f"SQL State: {sql_state}, Message: {error_msg}")
 
-                                # Estados SQL de erro começam com classe 01-99 (exceto 01 que é warning)
+                                # SQL error states start with class 01-99 (except 01 which is warning)
                                 # 42S02 = Invalid object name
                                 # 42000 = Syntax error
-                                if sql_state and sql_state != "01000":  # 01000 é informational
+                                if sql_state and sql_state != "01000":  # 01000 is informational
                                     last_error = error_msg
-                                    logger.error(f"ERRO SQL detectado em messages: {last_error}")
+                                    logger.error(f"SQL ERROR detected in messages: {last_error}")
                                     break
 
                     if last_error:
-                        break  # Para se encontrou erro nas mensagens
+                        break  # Stop if error found in messages
 
                     if not has_next:
                         break
                 except pyodbc.Error as e:
-                    # Erro ao tentar próximo result set - pode ser erro SQL
+                    # Error trying next result set - could be SQL error
                     last_error = str(e)
-                    logger.error(f"Erro PYODBC ao processar nextset: {last_error}")
+                    logger.error(f"PYODBC error processing nextset: {last_error}")
                     break
                 except Exception as e:
                     last_error = str(e)
-                    logger.error(f"Erro GENERICO ao processar nextset: {last_error}")
+                    logger.error(f"GENERIC error processing nextset: {last_error}")
                     break
 
-            # Se houve erro, lançar exceção para reportar ao usuário
+            # If there was an error, throw exception to report to user
             if last_error:
                 raise Exception(last_error)
 
             # Commit
             raw_conn.commit()
 
-            logger.info(f"Total de result sets: {result_set_count}, DataFrames capturados: {len(dataframes)}")
+            logger.info(f"Total result sets: {result_set_count}, DataFrames captured: {len(dataframes)}")
 
-            # Se capturou múltiplos resultados, retornar lista de DataFrames
+            # If captured multiple results, return list of DataFrames
             if len(dataframes) > 1:
-                logger.info(f"Retornando lista com {len(dataframes)} DataFrames")
+                logger.info(f"Returning list with {len(dataframes)} DataFrames")
                 return dataframes
 
-            # Se capturou um único resultado, retornar diretamente
+            # If captured single result, return directly
             if dataframes:
-                logger.info(f"Retornando único DataFrame com {len(dataframes[0])} linhas")
+                logger.info(f"Returning single DataFrame with {len(dataframes[0])} rows")
                 return dataframes[0]
 
-            # Nenhum resultado - retornar mensagem de sucesso
+            # No results - return success message
             rows_affected = cursor.rowcount
             if rows_affected >= 0:
-                msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                msg = f"Command executed successfully. {rows_affected} row(s) affected."
             else:
-                msg = "Comando executado com sucesso."
+                msg = "Command executed successfully."
 
             logger.info(msg)
-            return pd.DataFrame({"Resultado": [msg]})
+            return pd.DataFrame({"Result": [msg]})
 
         except Exception as e:
-            logger.error(f"Erro ao executar batch SQL Server: {str(e)}")
-            raise  # Re-lançar erro para o usuário ver
+            logger.error(f"Error executing SQL Server batch: {str(e)}")
+            raise  # Re-throw error for user to see
 
         finally:
-            self._active_raw_conn = None  # Limpar referencia
-            self._active_cursor = None  # Limpar referencia cursor
-            # Fechar cursor e conexao
+            self._active_raw_conn = None  # Clear reference
+            self._active_cursor = None  # Clear cursor reference
+            # Close cursor and connection
             if cursor:
                 try:
                     cursor.close()
@@ -417,12 +417,12 @@ class DatabaseConnector:
                     pass
 
     def _execute_generic_query(self, query: str) -> pd.DataFrame:
-        """Executa query genérica para bancos não-MSSQL"""
-        # Separa por ponto e vírgula para detectar múltiplos comandos
+        """Execute generic query for non-MSSQL databases"""
+        # Split by semicolon to detect multiple commands
         commands = [cmd.strip() for cmd in query.split(";") if cmd.strip()]
 
         if len(commands) > 1:
-            # Múltiplos comandos - executar todos e capturar resultados dos SELECTs
+            # Multiple commands - execute all and capture SELECT results
             dataframes = []
 
             with self.engine.connect() as conn:
@@ -430,127 +430,127 @@ class DatabaseConnector:
                     cmd_upper = cmd.strip().upper()
 
                     if cmd_upper.startswith("SELECT") or cmd_upper.startswith("SHOW"):
-                        # É SELECT - captura resultado
+                        # Is SELECT - capture result
                         try:
                             df = pd.read_sql(cmd, self.engine)
-                            logger.info(f"SELECT executado: {len(df)} linhas retornadas")
+                            logger.info(f"SELECT executed: {len(df)} rows returned")
                             dataframes.append(df)
                         except Exception as e:
-                            logger.error(f"Erro ao executar SELECT: {str(e)}")
+                            logger.error(f"Error executing SELECT: {str(e)}")
                             raise
                     else:
-                        # Não é SELECT - executa como statement
+                        # Not SELECT - execute as statement
                         conn.execute(text(cmd))
 
                 conn.commit()
 
-            # Se capturou múltiplos resultados, retornar lista de DataFrames
+            # If captured multiple results, return list of DataFrames
             if len(dataframes) > 1:
-                logger.info(f"Retornando lista com {len(dataframes)} DataFrames")
+                logger.info(f"Returning list with {len(dataframes)} DataFrames")
                 return dataframes
 
-            # Se capturou um único resultado, retornar diretamente
+            # If captured single result, return directly
             if dataframes:
-                logger.info(f"Retornando único DataFrame com {len(dataframes[0])} linhas")
+                logger.info(f"Returning single DataFrame with {len(dataframes[0])} rows")
                 return dataframes[0]
 
-            # Nenhum SELECT executado - retornar mensagem de sucesso
-            msg = "Comandos executados com sucesso."
+            # No SELECT executed - return success message
+            msg = "Commands executed successfully."
             logger.info(msg)
-            return pd.DataFrame({"Resultado": [msg]})
+            return pd.DataFrame({"Result": [msg]})
         else:
-            # Comando único - tenta buscar resultados
+            # Single command - try to fetch results
             try:
                 df = pd.read_sql(query, self.engine)
-                logger.info(f"Query executada com sucesso. Linhas retornadas: {len(df)}")
+                logger.info(f"Query executed successfully. Rows returned: {len(df)}")
                 return df
             except:
-                # Não retorna dados - executa como statement
+                # Doesn't return data - execute as statement
                 with self.engine.connect() as conn:
                     result = conn.execute(text(query))
                     conn.commit()
                     rows_affected = result.rowcount
 
                     if rows_affected >= 0:
-                        msg = f"Comando executado com sucesso. {rows_affected} linha(s) afetada(s)."
+                        msg = f"Command executed successfully. {rows_affected} row(s) affected."
                     else:
-                        msg = "Comando executado com sucesso."
+                        msg = "Command executed successfully."
 
                     logger.info(msg)
-                    return pd.DataFrame({"Resultado": [msg]})
+                    return pd.DataFrame({"Result": [msg]})
 
     def execute_statement(self, statement: str) -> int:
         """
-        Executa um statement SQL (INSERT, UPDATE, DELETE, etc)
+        Execute SQL statement (INSERT, UPDATE, DELETE, etc)
 
         Args:
-            statement: Statement SQL a ser executado
+            statement: SQL statement to execute
 
         Returns:
-            int: Número de linhas afetadas
+            int: Number of affected rows
         """
         if not self.engine:
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError("No active database connection")
 
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(text(statement))
                 conn.commit()
                 rows_affected = result.rowcount
-                logger.info(f"Statement executado. Linhas afetadas: {rows_affected}")
+                logger.info(f"Statement executed. Affected rows: {rows_affected}")
                 return rows_affected
         except Exception as e:
-            logger.error(f"Erro ao executar statement: {str(e)}")
+            logger.error(f"Error executing statement: {str(e)}")
             raise
 
     def change_database(self, database: str) -> bool:
         """
-        Troca o banco de dados atual
+        Change current database
 
         Args:
-            database: Nome do novo banco de dados
+            database: New database name
 
         Returns:
-            bool: True se trocou com sucesso
+            bool: True if changed successfully
         """
         if not self.engine:
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError("No active database connection")
 
         try:
             with self.engine.connect() as conn:
                 conn.execute(text(f"USE [{database}]"))
                 conn.commit()
 
-            # Atualiza params internos
+            # Update internal params
             self.connection_params["database"] = database
-            logger.info(f"Banco alterado para: {database}")
+            logger.info(f"Database changed to: {database}")
             return True
 
         except Exception as e:
-            logger.error(f"Erro ao trocar banco: {str(e)}")
+            logger.error(f"Error changing database: {str(e)}")
             raise
 
     def get_current_database(self) -> str:
-        """Retorna o nome do banco de dados atual"""
+        """Return current database name"""
         return self.connection_params.get("database", "")
 
     def disconnect(self):
-        """Desconecta do banco de dados"""
+        """Disconnect from database"""
         if self.engine:
             self.engine.dispose()
             self.engine = None
-            logger.info("Desconectado do banco de dados")
+            logger.info("Disconnected from database")
 
     def is_connected(self) -> bool:
-        """Verifica se ha uma conexao ativa (check rapido, sem I/O).
+        """Check if there is an active connection (quick check, no I/O).
 
-        Apenas verifica se o engine existe. disconnect() seta engine=None.
-        NAO faz SELECT 1 na thread principal para evitar bloquear a UI.
+        Only checks if engine exists. disconnect() sets engine=None.
+        DOES NOT do SELECT 1 on main thread to avoid blocking UI.
         """
         return self.engine is not None
 
     def ping(self) -> bool:
-        """Testa conexao real com SELECT 1. Usar apenas em background thread."""
+        """Test real connection with SELECT 1. Use only in background thread."""
         if not self.engine:
             return False
         try:
@@ -561,9 +561,9 @@ class DatabaseConnector:
             return False
 
     def get_tables(self) -> pd.DataFrame:
-        """Retorna lista de tabelas do banco"""
+        """Return list of database tables"""
         if not self.engine:
-            raise ConnectionError("Não há conexão ativa com o banco de dados")
+            raise ConnectionError("No active database connection")
 
         queries = {
             "sqlserver": """

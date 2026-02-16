@@ -36,11 +36,11 @@ class TestBlockConnectionPanel:
     """Testes para o panel de conexao clicavel"""
 
     def test_panel_initial_state(self, qapp):
-        """Panel deve iniciar sem conexao (padrao da aba)"""
+        """Panel should start without connection (tab default)"""
         panel = BlockConnectionPanel()
         assert panel.get_connection_name() is None
         assert panel._db_type is None
-        assert panel.name_label.text() == "Padrao da aba"
+        assert panel.name_label.text() == "Tab Default"
 
     def test_panel_set_connection(self, qapp):
         """set_connection deve atualizar nome e db_type"""
@@ -52,13 +52,13 @@ class TestBlockConnectionPanel:
         assert panel.name_label.text() == "MinhaConn"
 
     def test_panel_set_connection_none_resets(self, qapp):
-        """set_connection(None) deve voltar para 'Padrao da aba'"""
+        """set_connection(None) should return to 'Tab Default'"""
         panel = BlockConnectionPanel()
         panel.set_connection("MinhaConn", "mysql")
 
         panel.set_connection(None, None)
         assert panel.get_connection_name() is None
-        assert panel.name_label.text() == "Padrao da aba"
+        assert panel.name_label.text() == "Tab Default"
 
     def test_panel_accepts_drops(self, qapp):
         """Panel deve aceitar drops"""

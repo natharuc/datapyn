@@ -10,7 +10,7 @@ from PyQt6.Qsci import QsciScintilla, QsciLexerPython
 class PythonEditor(QsciScintilla):
     """Editor de Python com syntax highlighting"""
 
-    execute_requested = pyqtSignal(str)  # Sinal quando Shift+F5 é pressionado
+    execute_requested = pyqtSignal(str)  # Signal when Shift+F5 is pressed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -19,7 +19,7 @@ class PythonEditor(QsciScintilla):
         self._setup_shortcuts()
 
     def _setup_editor(self):
-        """Configura as propriedades básicas do editor"""
+        """Configure basic editor properties"""
         # Fonte
         font = QFont("Consolas", 11)
         font.setStyleHint(QFont.StyleHint.Monospace)
@@ -31,7 +31,7 @@ class PythonEditor(QsciScintilla):
         self.setMarginsForegroundColor(QColor("#6e7681"))
         self.setMarginsBackgroundColor(QColor("#1e1e1e"))
 
-        # Indentação Python
+        # Python indentation
         self.setIndentationGuides(True)
         self.setTabWidth(4)
         self.setIndentationsUseTabs(False)
@@ -43,7 +43,7 @@ class PythonEditor(QsciScintilla):
         self.setMatchedBraceBackgroundColor(QColor("#3e4451"))
         self.setMatchedBraceForegroundColor(QColor("#61afef"))
 
-        # Seleção
+        # Selection
         self.setSelectionBackgroundColor(QColor("#264f78"))
 
         # Caret (cursor)
@@ -82,7 +82,7 @@ class PythonEditor(QsciScintilla):
         lexer.setColor(QColor("#d4d4d4"), QsciLexerPython.Default)
         lexer.setPaper(QColor("#1e1e1e"), QsciLexerPython.Default)
 
-        # Comentários
+        # Comments
         lexer.setColor(QColor("#6a9955"), QsciLexerPython.Comment)
         lexer.setColor(QColor("#6a9955"), QsciLexerPython.CommentBlock)
 
@@ -95,7 +95,7 @@ class PythonEditor(QsciScintilla):
         lexer.setColor(QColor("#ce9178"), QsciLexerPython.TripleSingleQuotedString)
         lexer.setColor(QColor("#ce9178"), QsciLexerPython.TripleDoubleQuotedString)
 
-        # Números
+        # Numbers
         lexer.setColor(QColor("#b5cea8"), QsciLexerPython.Number)
 
         # Operadores
@@ -104,7 +104,7 @@ class PythonEditor(QsciScintilla):
         # Identificadores
         lexer.setColor(QColor("#9cdcfe"), QsciLexerPython.Identifier)
 
-        # Funções
+        # Functions
         lexer.setColor(QColor("#dcdcaa"), QsciLexerPython.FunctionMethodName)
 
         # Classes
@@ -117,28 +117,28 @@ class PythonEditor(QsciScintilla):
 
     def _setup_shortcuts(self):
         """Configura atalhos de teclado"""
-        # Shift+F5 - Executar código Python
+        # Shift+F5 - Run Python code
         shortcut_execute = QShortcut(QKeySequence("Shift+F5"), self)
         shortcut_execute.activated.connect(self._on_execute)
 
-        # Ctrl+Shift+Enter - Executar código Python
+        # Ctrl+Shift+Enter - Run Python code
         shortcut_execute2 = QShortcut(QKeySequence("Ctrl+Shift+Return"), self)
         shortcut_execute2.activated.connect(self._on_execute)
 
-        # Ctrl+/ - Comentar/descomentar linha
+        # Ctrl+/ - Comment/uncomment line
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self)
         shortcut_comment.activated.connect(self.toggle_comment)
 
     def _on_execute(self):
-        """Callback quando executar código é solicitado"""
+        """Callback when run code is requested"""
         text = self.selectedText() if self.hasSelectedText() else self.text()
         if text.strip():
             self.execute_requested.emit(text)
 
     def toggle_comment(self):
-        """Comenta/descomenta a linha ou seleção atual"""
+        """Comment/uncomment current line or selection"""
         if self.hasSelectedText():
-            # Comentar seleção
+            # Comment selection
             start_line, start_index, end_line, end_index = self.getSelection()
             for line in range(start_line, end_line + 1):
                 line_text = self.text(line)
@@ -151,7 +151,7 @@ class PythonEditor(QsciScintilla):
                 self.setSelection(line, 0, line, len(line_text))
                 self.replaceSelectedText(new_text)
         else:
-            # Comentar linha atual
+            # Comment current line
             line, index = self.getCursorPosition()
             line_text = self.text(line)
             if line_text.strip().startswith("#"):
@@ -167,9 +167,9 @@ class PythonEditor(QsciScintilla):
     def insert_python_template(self, template_name: str):
         """Insere um template Python"""
         templates = {
-            "filter": "# Filtrar dados\nfiltered_df = df[df['coluna'] > valor]",
-            "groupby": "# Agrupar dados\ngrouped = df.groupby('coluna').agg({'coluna2': 'sum'})",
-            "plot": "# Plotar dados\nimport matplotlib.pyplot as plt\ndf.plot(kind='bar')\nplt.show()",
+            "filter": "# Filter data\nfiltered_df = df[df['column'] > value]",
+            "groupby": "# Group data\ngrouped = df.groupby('column').agg({'column2': 'sum'})",
+            "plot": "# Plot data\nimport matplotlib.pyplot as plt\ndf.plot(kind='bar')\nplt.show()",
             "export": "# Exportar para CSV\ndf.to_csv('resultado.csv', index=False)",
         }
 

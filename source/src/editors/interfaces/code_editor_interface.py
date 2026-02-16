@@ -1,10 +1,10 @@
 """
-Interface abstrata para editores de código.
+Abstract interface for code editors.
 
-Define o contrato que qualquer implementação de editor deve seguir.
-Permite trocar a implementação (QScintilla, Monaco, Ace, etc.) sem alterar o resto da aplicação.
+Defines the contract that any editor implementation must follow.
+Allows swapping implementation (QScintilla, Monaco, Ace, etc.) without changing the rest of the application.
 
-Usa Protocol (PEP 544) para duck typing estrutural - não requer herança explícita.
+Uses Protocol (PEP 544) for structural duck typing - doesn't require explicit inheritance.
 """
 
 from typing import Protocol, runtime_checkable
@@ -14,47 +14,47 @@ from PyQt6.QtWidgets import QWidget
 @runtime_checkable
 class ICodeEditor(Protocol):
     """
-    Interface (Protocol) para editores de código.
+    Interface (Protocol) for code editors.
 
-    Qualquer editor concreto (QScintilla, Monaco, etc.) deve implementar estes métodos.
-    A aplicação deve depender apenas desta interface, nunca da implementação concreta.
+    Any concrete editor (QScintilla, Monaco, etc.) must implement these methods.
+    The application should depend only on this interface, never on concrete implementation.
 
-    Usando Protocol, não é necessário herdar explicitamente - basta implementar os métodos.
+    Using Protocol, explicit inheritance is not necessary - just implement the methods.
 
-    Signals esperados (devem ser definidos na implementação):
-        - text_changed: Emitido quando o texto muda
-        - execute_requested: Emitido quando usuário pede execução (F5)
-        - focus_in: Emitido quando editor ganha foco
-        - focus_out: Emitido quando editor perde foco
+    Expected signals (must be defined in implementation):
+        - text_changed: Emitted when text changes
+        - execute_requested: Emitted when user requests execution (F5)
+        - focus_in: Emitted when editor gains focus
+        - focus_out: Emitted when editor loses focus
     """
 
-    # === Métodos de Texto ===
+    # === Text Methods ===
 
     def get_text(self) -> str:
-        """Retorna todo o texto do editor."""
+        """Returns all editor text."""
         ...
 
     def set_text(self, text: str) -> None:
-        """Define o texto do editor."""
+        """Sets the editor text."""
         ...
 
     def get_selected_text(self) -> str:
-        """Retorna o texto selecionado ou string vazia."""
+        """Returns selected text or empty string."""
         ...
 
     def has_selection(self) -> bool:
-        """Verifica se há texto selecionado."""
+        """Checks if there is selected text."""
         ...
 
     def clear(self) -> None:
-        """Limpa todo o texto do editor."""
+        """Clears all editor text."""
         ...
 
-    # === Configurações ===
+    # === Settings ===
 
     def set_language(self, language: str) -> None:
         """
-        Define a linguagem para syntax highlighting.
+        Sets the language for syntax highlighting.
 
         Args:
             language: 'python', 'sql', 'cross', etc.
@@ -62,56 +62,56 @@ class ICodeEditor(Protocol):
         ...
 
     def get_language(self) -> str:
-        """Retorna a linguagem atual."""
+        """Returns the current language."""
         ...
 
     def set_theme(self, theme_name: str) -> None:
         """
-        Define o tema do editor.
+        Sets the editor theme.
 
         Args:
-            theme_name: Nome do tema ('dark', 'light', 'monokai', etc.)
+            theme_name: Theme name ('dark', 'light', 'monokai', etc.)
         """
         ...
 
     def apply_theme(self) -> None:
-        """Aplica/atualiza o tema atual do ThemeManager."""
+        """Applies/updates the current ThemeManager theme."""
         ...
 
-    # === Configurações visuais ===
+    # === Visual settings ===
 
     def set_font(self, family: str, size: int) -> None:
-        """Define a fonte do editor."""
+        """Sets the editor font."""
         ...
 
     def set_read_only(self, read_only: bool) -> None:
-        """Define se o editor é somente leitura."""
+        """Sets if editor is read-only."""
         ...
 
     def set_line_numbers_visible(self, visible: bool) -> None:
-        """Define se os números de linha são visíveis."""
+        """Sets if line numbers are visible."""
         ...
 
-    # === Métodos auxiliares ===
+    # === Helper methods ===
 
     def get_line_count(self) -> int:
-        """Retorna o número de linhas."""
+        """Returns the number of lines."""
         ...
 
     def get_current_line(self) -> int:
-        """Retorna a linha atual do cursor (0-indexed)."""
+        """Returns the current cursor line (0-indexed)."""
         ...
 
     def go_to_line(self, line: int) -> None:
-        """Move o cursor para a linha especificada (0-indexed)."""
+        """Moves cursor to the specified line (0-indexed)."""
         ...
 
     # === Widget ===
 
     def get_widget(self) -> QWidget:
         """
-        Retorna o widget Qt do editor para adicionar em layouts.
+        Returns the Qt widget of the editor to add to layouts.
 
-        Pode retornar `self` se a classe herda de QWidget.
+        Can return `self` if the class inherits from QWidget.
         """
         ...

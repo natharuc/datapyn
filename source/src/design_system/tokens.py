@@ -1,13 +1,13 @@
 """
-Design Tokens - Sistema de design centralizado
+Design Tokens - Centralized design system
 
-Inspirado em shadcn/ui, define todos os tokens visuais da aplicação:
-- Cores
-- Tipografia
-- Espaçamentos
-- Sombras
-- Bordas
-- Animações
+Inspired by shadcn/ui, defines all visual tokens of the application:
+- Colors
+- Typography
+- Spacing
+- Shadows
+- Borders
+- Animations
 """
 
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ from typing import Dict
 
 @dataclass
 class ColorPalette:
-    """Paleta de cores semântica"""
+    """Semantic color palette"""
 
     # Backgrounds
     bg_primary: str
@@ -70,7 +70,7 @@ class ColorPalette:
 
 @dataclass
 class Typography:
-    """Sistema tipográfico"""
+    """Typographic system"""
 
     # Families
     font_family_primary: str
@@ -99,7 +99,7 @@ class Typography:
 
 @dataclass
 class Spacing:
-    """Sistema de espaçamento consistente"""
+    """Consistent spacing system"""
 
     space_0: int  # 0px
     space_1: int  # 4px
