@@ -6,6 +6,8 @@ from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy
 from PyQt6.QtCore import pyqtSignal, QSize
 import qtawesome as qta
 
+from src.language import S
+
 # Default color for all toolbar icons (consistent)
 _ICON_COLOR = "#b0b0b0"
 _ICON_HOVER = "#ffffff"
@@ -61,7 +63,7 @@ class MainToolbar(QToolBar):
     def _setup_buttons(self):
         """Buttons with uniform icons"""
         # New Tab
-        self.btn_new_tab = QPushButton(" New Tab")
+        self.btn_new_tab = QPushButton(S.toolbar.new_tab)
         self.btn_new_tab.setIcon(qta.icon("mdi.tab-plus", color=_ICON_COLOR))
         self.btn_new_tab.clicked.connect(self.new_tab_clicked.emit)
         self.addWidget(self.btn_new_tab)
@@ -69,7 +71,7 @@ class MainToolbar(QToolBar):
         self.addSeparator()
 
         # Connection
-        self.btn_new_conn = QPushButton(" Connection")
+        self.btn_new_conn = QPushButton(S.toolbar.connection)
         self.btn_new_conn.setIcon(qta.icon("mdi.database-plus", color=_ICON_COLOR))
         self.btn_new_conn.clicked.connect(self.new_connection_clicked.emit)
         self.addWidget(self.btn_new_conn)
@@ -77,7 +79,7 @@ class MainToolbar(QToolBar):
         self.addSeparator()
 
         # Run
-        self.btn_run = QPushButton(" Run (F5)")
+        self.btn_run = QPushButton(S.toolbar.run)
         self.btn_run.setIcon(qta.icon("mdi.play", color=_ICON_COLOR))
         self.btn_run.clicked.connect(self.run_clicked.emit)
         self.addWidget(self.btn_run)

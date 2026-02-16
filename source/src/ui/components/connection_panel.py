@@ -20,6 +20,8 @@ import qtawesome as qta
 import os
 import re
 
+from src.language import S
+
 
 # Custom icons folder
 ICONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "assets", "icons", "db")
@@ -270,14 +272,14 @@ class ActiveConnectionWidget(QFrame):
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon("mdi.connection", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("ACTIVE CONNECTION")
+        title = QLabel(S.connection_panel.section_active)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
         # Name
-        self.name_label = QLabel("None")
+        self.name_label = QLabel(S.connection_panel.label_none)
         self.name_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(self.name_label)
 
@@ -288,7 +290,7 @@ class ActiveConnectionWidget(QFrame):
         layout.addWidget(self.info_label)
 
         # Button
-        self.btn_disconnect = QPushButton(" Disconnect")
+        self.btn_disconnect = QPushButton(f" {S.connection_panel.btn_disconnect}")
         self.btn_disconnect.setIcon(qta.icon("mdi.link-off", color="white"))
         self.btn_disconnect.setObjectName("danger")
         self.btn_disconnect.setEnabled(False)
@@ -312,7 +314,7 @@ class ActiveConnectionWidget(QFrame):
 
     def set_disconnected(self):
         """Set as disconnected"""
-        self.name_label.setText("None")
+        self.name_label.setText(S.connection_panel.label_none)
         self.info_label.setText("")
         self.btn_disconnect.setEnabled(False)
 
@@ -341,7 +343,7 @@ class ConnectionsList(QFrame):
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon("mdi.database-cog", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
-        title = QLabel("SAVED CONNECTIONS")
+        title = QLabel(S.connection_panel.section_saved)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
@@ -363,13 +365,13 @@ class ConnectionsList(QFrame):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        self.btn_new = QPushButton(" New")
+        self.btn_new = QPushButton(f" {S.connection_panel.btn_new}")
         self.btn_new.setIcon(qta.icon("mdi.plus-circle", color="white"))
         self.btn_new.setObjectName("primary")
         self.btn_new.clicked.connect(self.new_connection_clicked.emit)
         btn_layout.addWidget(self.btn_new)
 
-        self.btn_manage = QPushButton(" Manage")
+        self.btn_manage = QPushButton(f" {S.connection_panel.btn_manage}")
         self.btn_manage.setIcon(qta.icon("mdi.cog", color="white"))
         self.btn_manage.clicked.connect(self.manage_connections_clicked.emit)
         btn_layout.addWidget(self.btn_manage)
@@ -408,17 +410,17 @@ class ConnectionsList(QFrame):
 
         menu = QMenu(self)
 
-        connect_action = QAction(qta.icon("mdi.lan-connect", color="#4ec9b0"), " Connect", self)
+        connect_action = QAction(qta.icon("mdi.lan-connect", color="#4ec9b0"), f" {S.connection_panel.ctx_connect}", self)
         connect_action.triggered.connect(lambda: self.connection_double_clicked.emit(conn_name))
         menu.addAction(connect_action)
 
-        new_tab_action = QAction(qta.icon("mdi.tab-plus", color="#4ec9b0"), " Connect in New Tab", self)
+        new_tab_action = QAction(qta.icon("mdi.tab-plus", color="#4ec9b0"), f" {S.connection_panel.ctx_connect_new_tab}", self)
         new_tab_action.triggered.connect(lambda: self.new_tab_connection_requested.emit(conn_name))
         menu.addAction(new_tab_action)
 
         menu.addSeparator()
 
-        edit_action = QAction(qta.icon("mdi.pencil", color="#569cd6"), " Edit", self)
+        edit_action = QAction(qta.icon("mdi.pencil", color="#569cd6"), f" {S.connection_panel.ctx_edit}", self)
         edit_action.triggered.connect(lambda: self._edit_connection(conn_name))
         menu.addAction(edit_action)
 

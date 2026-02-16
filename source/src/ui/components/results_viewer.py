@@ -34,6 +34,7 @@ import os
 import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
+from src.language import S
 
 
 class CSVExportDialog(QDialog):
@@ -42,7 +43,7 @@ class CSVExportDialog(QDialog):
     def __init__(self, parent=None, theme_manager: ThemeManager = None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
-        self.setWindowTitle("Export CSV")
+        self.setWindowTitle(S.csv_export.dialog_title)
         self.setMinimumWidth(400)
 
         # Remove maximize/minimize buttons
@@ -58,29 +59,29 @@ class CSVExportDialog(QDialog):
 
         # Delimiter
         self.delimiter_combo = QComboBox()
-        self.delimiter_combo.addItem("Semicolon (;)", ";")
-        self.delimiter_combo.addItem("Comma (,)", ",")
-        self.delimiter_combo.addItem("Tab (\\t)", "\t")
-        self.delimiter_combo.addItem("Pipe (|)", "|")
-        form.addRow("Delimiter:", self.delimiter_combo)
+        self.delimiter_combo.addItem(S.csv_export.delimiter_semicolon, ";")
+        self.delimiter_combo.addItem(S.csv_export.delimiter_comma, ",")
+        self.delimiter_combo.addItem(S.csv_export.delimiter_tab, "\t")
+        self.delimiter_combo.addItem(S.csv_export.delimiter_pipe, "|")
+        form.addRow(S.csv_export.label_delimiter, self.delimiter_combo)
 
         # Encoding
         self.encoding_combo = QComboBox()
-        self.encoding_combo.addItem("UTF-8 with BOM (Excel)", "utf-8-sig")
-        self.encoding_combo.addItem("UTF-8", "utf-8")
-        self.encoding_combo.addItem("Latin-1 (ISO-8859-1)", "latin-1")
-        self.encoding_combo.addItem("Windows-1252", "cp1252")
-        form.addRow("Encoding:", self.encoding_combo)
+        self.encoding_combo.addItem(S.csv_export.encoding_utf8bom, "utf-8-sig")
+        self.encoding_combo.addItem(S.csv_export.encoding_utf8, "utf-8")
+        self.encoding_combo.addItem(S.csv_export.encoding_latin1, "latin-1")
+        self.encoding_combo.addItem(S.csv_export.encoding_cp1252, "cp1252")
+        form.addRow(S.csv_export.label_encoding, self.encoding_combo)
 
         # Include header
         self.header_check = QCheckBox()
         self.header_check.setChecked(True)
-        form.addRow("Include header:", self.header_check)
+        form.addRow(S.csv_export.label_include_header, self.header_check)
 
         # Open folder after export
         self.open_folder_check = QCheckBox()
         self.open_folder_check.setChecked(True)
-        form.addRow("Open folder after export:", self.open_folder_check)
+        form.addRow(S.csv_export.label_open_folder, self.open_folder_check)
 
         layout.addLayout(form)
 
@@ -241,20 +242,20 @@ class ResultsViewer(QWidget):
 
         # Combobox de destino (Clipboard ou File)
         self.export_destination = QComboBox()
-        self.export_destination.addItem("Clipboard", "clipboard")
+        self.export_destination.addItem(S.results.dest_clipboard, "clipboard")
         self.export_destination.setItemIcon(0, qta.icon("mdi.clipboard-text", color="#64b5f6"))
-        self.export_destination.addItem("File", "file")
+        self.export_destination.addItem(S.results.dest_file, "file")
         self.export_destination.setItemIcon(1, qta.icon("mdi.file-export", color="#64b5f6"))
         self.export_destination.setMinimumWidth(140)
-        self.export_destination.setToolTip("Export destination")
+        self.export_destination.setToolTip(S.results.tooltip_export_dest)
         self.toolbar.addWidget(self.export_destination)
         self.toolbar.addSeparator()
 
         # Toolbar buttons
-        self.btn_export_csv = QPushButton("CSV")
-        self.btn_export_excel = QPushButton("Excel")
-        self.btn_export_json = QPushButton("JSON")
-        self.btn_copy = QPushButton("Copy All")
+        self.btn_export_csv = QPushButton(S.results.btn_csv)
+        self.btn_export_excel = QPushButton(S.results.btn_excel)
+        self.btn_export_json = QPushButton(S.results.btn_json)
+        self.btn_copy = QPushButton(S.results.btn_copy_all)
 
         self.toolbar.addWidget(self.btn_export_csv)
         self.toolbar.addWidget(self.btn_export_excel)
@@ -263,20 +264,20 @@ class ResultsViewer(QWidget):
 
         # Export to Table button (database)
         self.toolbar.addSeparator()
-        self.btn_export_table = QPushButton("  Table")
+        self.btn_export_table = QPushButton(S.results.btn_table)
         self.btn_export_table.setIcon(qta.icon("mdi.database-export", color="#4fc3f7"))
-        self.btn_export_table.setToolTip("Export data to a database table (to_sql)")
+        self.btn_export_table.setToolTip(S.results.tooltip_export_table)
         self.toolbar.addWidget(self.btn_export_table)
 
         # Info label
-        self.info_label = QLabel("No results")
+        self.info_label = QLabel(S.results.no_results)
         self.toolbar.addSeparator()
         self.toolbar.addWidget(self.info_label)
 
         layout.addWidget(self.toolbar)
 
         # Save image button (hidden by default)
-        self.btn_save_image = QPushButton("Save Image")
+        self.btn_save_image = QPushButton(S.results.btn_save_image)
         self.btn_save_image.setVisible(False)
         self.toolbar.addWidget(self.btn_save_image)
 
@@ -320,7 +321,7 @@ class ResultsViewer(QWidget):
 
         # Pagina 3 - JSON Tree
         self.json_tree = QTreeWidget()
-        self.json_tree.setHeaderLabels(["Chave", "Valor", "Tipo"])
+        self.json_tree.setHeaderLabels([S.results.json_header_key, S.results.json_header_value, S.results.json_header_type])
         self.json_tree.setAlternatingRowColors(True)
         self.json_tree.setColumnWidth(0, 250)
         self.json_tree.setColumnWidth(1, 400)
@@ -420,7 +421,7 @@ class ResultsViewer(QWidget):
         # Atualiza info
         rows = len(df)
         cols = len(df.columns)
-        self.info_label.setText(f"{var_name}: {rows:,} linhas x {cols} colunas")
+        self.info_label.setText(S.results.info_df_dimensions.format(var_name=var_name, rows=f"{rows:,}", cols=cols))
 
         # Mostrar tabela e botoes de export
         self.stack.setCurrentIndex(0)
@@ -432,13 +433,15 @@ class ResultsViewer(QWidget):
         self.export_destination.setVisible(True)
         self.btn_save_image.setVisible(False)
 
-    def display_image(self, image_bytes: bytes, label: str = "Grafico"):
+    def display_image(self, image_bytes: bytes, label: str = None):
         """Exibe uma imagem (PNG bytes) no painel de resultados.
 
         Args:
             image_bytes: Bytes da imagem PNG
             label: Texto descritivo para a info label
         """
+        if label is None:
+            label = S.results.label_chart
         self._current_image_bytes = image_bytes
 
         img = QImage()
@@ -466,7 +469,7 @@ class ResultsViewer(QWidget):
         # Guardar pixmap original para redimensionar
         self._original_pixmap = pixmap
 
-        self.info_label.setText(f"{label} ({img.width()} x {img.height()} px)")
+        self.info_label.setText(S.results.info_image_size.format(label=label, width=img.width(), height=img.height()))
 
         # Mostrar imagem e botao salvar, esconder export de dados
         self.stack.setCurrentIndex(1)
@@ -477,13 +480,15 @@ class ResultsViewer(QWidget):
         self.export_destination.setVisible(False)
         self.btn_save_image.setVisible(True)
 
-    def display_images(self, images_bytes_list: list, label: str = "Graficos"):
+    def display_images(self, images_bytes_list: list, label: str = None):
         """Exibe multiplas imagens combinadas verticalmente.
 
         Args:
             images_bytes_list: Lista de bytes PNG
             label: Texto descritivo
         """
+        if label is None:
+            label = S.results.label_charts
         if not images_bytes_list:
             return
 
@@ -547,7 +552,7 @@ class ResultsViewer(QWidget):
         )
         self.image_label.setPixmap(scaled)
 
-        self.info_label.setText(f"{label} ({len(images)} imagens)")
+        self.info_label.setText(S.results.info_images_count.format(label=label, count=len(images)))
 
         # Mostrar imagem e botao salvar
         self.stack.setCurrentIndex(1)
@@ -637,11 +642,11 @@ class ResultsViewer(QWidget):
         if isinstance(data, dict):
             self._populate_json_tree(self.json_tree.invisibleRootItem(), data, type_color)
             count = len(data)
-            self.info_label.setText(f"{label} (dict: {count} chaves)")
+            self.info_label.setText(S.results.info_json_dict.format(label=label, count=count))
         elif isinstance(data, list):
             self._populate_json_tree(self.json_tree.invisibleRootItem(), data, type_color)
             count = len(data)
-            self.info_label.setText(f"{label} (list: {count} itens)")
+            self.info_label.setText(S.results.info_json_list.format(label=label, count=count))
         else:
             # Tentar converter para dict/list via json
             try:
@@ -675,7 +680,7 @@ class ResultsViewer(QWidget):
                     item.setText(0, str(key))
                     type_name = "dict" if isinstance(value, dict) else "list"
                     count = len(value)
-                    item.setText(1, f"{{{count} itens}}" if isinstance(value, dict) else f"[{count} itens]")
+                    item.setText(1, S.results.json_dict_items.format(count=count) if isinstance(value, dict) else S.results.json_list_items.format(count=count))
                     item.setText(2, type_name)
                     item.setForeground(2, type_color)
                     self._populate_json_tree(item, value, type_color)
@@ -692,7 +697,7 @@ class ResultsViewer(QWidget):
                     item.setText(0, f"[{i}]")
                     type_name = "dict" if isinstance(value, dict) else "list"
                     count = len(value)
-                    item.setText(1, f"{{{count} itens}}" if isinstance(value, dict) else f"[{count} itens]")
+                    item.setText(1, S.results.json_dict_items.format(count=count) if isinstance(value, dict) else S.results.json_list_items.format(count=count))
                     item.setText(2, type_name)
                     item.setForeground(2, type_color)
                     self._populate_json_tree(item, value, type_color)
@@ -716,7 +721,7 @@ class ResultsViewer(QWidget):
             return f'"{value}"'
         return str(value)
 
-    def display_rich_output(self, outputs: list, label: str = "Resultado"):
+    def display_rich_output(self, outputs: list, label: str = None):
         """Exibe rich outputs baseado no tipo de cada item.
 
         Aceita lista de dicts com tipo:
@@ -728,6 +733,8 @@ class ResultsViewer(QWidget):
 
         Prioridade quando ha tipos mistos: image > html > json
         """
+        if label is None:
+            label = S.results.label_result
         if not outputs:
             return
 
@@ -785,7 +792,7 @@ class ResultsViewer(QWidget):
         self.image_label.clear()
         self.html_viewer.clear()
         self.json_tree.clear()
-        self.info_label.setText("No results")
+        self.info_label.setText(S.results.no_results)
         self.stack.setCurrentIndex(0)
         self.btn_save_image.setVisible(False)
         self.btn_export_csv.setVisible(True)
@@ -801,7 +808,7 @@ class ResultsViewer(QWidget):
 
     def _show_clipboard_success(self, format_name: str):
         """Show success feedback when copying to clipboard"""
-        self.info_label.setText(f"{format_name} copied!")
+        self.info_label.setText(S.results.clipboard_success.format(format=format_name))
 
     def _export_csv(self):
         """Export to CSV (clipboard or file)"""
@@ -831,7 +838,7 @@ class ResultsViewer(QWidget):
 
         # Export to file
 
-        filename, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
+        filename, _ = QFileDialog.getSaveFileName(self, S.results.save_csv_title, "", S.results.filter_csv)
         if not filename:
             return
 
@@ -845,7 +852,7 @@ class ResultsViewer(QWidget):
                 subprocess.run(["explorer", "/select,", os.path.normpath(filename)])
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error exporting CSV:\n{str(e)}")
+            QMessageBox.critical(self, S.results.error_title, S.results.error_export_csv.format(error=str(e)))
 
     def _export_excel(self):
         """Export to Excel (clipboard or file)"""
@@ -864,14 +871,14 @@ class ResultsViewer(QWidget):
             return
 
         # Export to file
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Excel", "", "Excel Files (*.xlsx)")
+        filename, _ = QFileDialog.getSaveFileName(self, S.results.save_excel_title, "", S.results.filter_excel)
         if filename:
             if not filename.lower().endswith(".xlsx"):
                 filename += ".xlsx"
             try:
                 self.current_df.to_excel(filename, index=False)
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error exporting Excel:\n{str(e)}")
+                QMessageBox.critical(self, S.results.error_title, S.results.error_export_excel.format(error=str(e)))
 
     def _export_json(self):
         """Export to JSON (clipboard or file)"""
@@ -889,14 +896,14 @@ class ResultsViewer(QWidget):
             return
 
         # Export to file
-        filename, _ = QFileDialog.getSaveFileName(self, "Save JSON", "", "JSON Files (*.json)")
+        filename, _ = QFileDialog.getSaveFileName(self, S.results.save_json_title, "", S.results.filter_json)
         if filename:
             if not filename.lower().endswith(".json"):
                 filename += ".json"
             try:
                 self.current_df.to_json(filename, orient="records", indent=2, force_ascii=False)
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error exporting JSON:\n{str(e)}")
+                QMessageBox.critical(self, S.results.error_title, S.results.error_export_json.format(error=str(e)))
 
     def _copy_to_clipboard(self):
         """Copy formatted data to clipboard"""
@@ -913,7 +920,7 @@ class ResultsViewer(QWidget):
             return
 
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Save Image", "", "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
+            self, S.results.save_image_title, "", S.results.filter_image
         )
         if filename:
             if not any(filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg")):
@@ -922,18 +929,18 @@ class ResultsViewer(QWidget):
                 with open(filename, "wb") as f:
                     f.write(self._current_image_bytes)
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error saving image:\n{str(e)}")
+                QMessageBox.critical(self, S.results.error_title, S.results.error_save_image.format(error=str(e)))
 
     def _export_to_table(self):
         """Export current DataFrame to a database table"""
         if self.current_df is None or len(self.current_df) == 0:
-            QMessageBox.warning(self, "Export to Table", "No data to export")
+            QMessageBox.warning(self, S.results.error_title, S.results.export_table_no_data)
             return
 
         # Get active connections from MainWindow
         main_window = self._get_main_window()
         if not main_window:
-            QMessageBox.warning(self, "Export to Table", "Main window not found")
+            QMessageBox.warning(self, S.results.error_title, S.results.export_table_no_window)
             return
 
         # Collect active connections from all sessions
@@ -950,8 +957,8 @@ class ResultsViewer(QWidget):
         if not connections:
             QMessageBox.warning(
                 self,
-                "Export to Table",
-                "No active connection available.\n\nConnect to a database first.",
+                S.results.error_title,
+                S.results.export_table_no_connection,
             )
             return
 

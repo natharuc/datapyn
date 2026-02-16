@@ -198,7 +198,7 @@ class TestBlockConnectionWorker:
         worker.run()
 
         assert error_received["msg"] is not None
-        assert "Falha ao conectar" in error_received["msg"]
+        assert "Failed to connect" in error_received["msg"]
 
     @patch("src.database.database_connector.DatabaseConnector")
     def test_run_always_emits_finished(self, mock_connector_cls, qtbot):

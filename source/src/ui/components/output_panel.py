@@ -12,6 +12,8 @@ import html as html_module
 
 from .buttons import IconButton, GhostButton
 
+from src.language import S
+
 try:
     import qtawesome as qta
 
@@ -48,14 +50,14 @@ class OutputPanel(QWidget):
         toolbar_layout.addStretch()
 
         # Clear button
-        self.btn_clear = GhostButton("Clear")
+        self.btn_clear = GhostButton(S.output_panel.btn_clear)
         if HAS_QTAWESOME:
             self.btn_clear.setIcon(qta.icon("fa5s.trash", color="#888888"))
         self.btn_clear.clicked.connect(self.clear)
         toolbar_layout.addWidget(self.btn_clear)
 
         # Copy button
-        self.btn_copy = GhostButton("Copy")
+        self.btn_copy = GhostButton(S.output_panel.btn_copy)
         if HAS_QTAWESOME:
             self.btn_copy.setIcon(qta.icon("fa5s.copy", color="#888888"))
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
@@ -110,7 +112,7 @@ class OutputPanel(QWidget):
         color = colors.get(level, colors["info"])
 
         # Icons by level
-        icons = {"info": "", "success": "[OK]", "warning": "[WARNING]", "error": "[ERROR]", "debug": "[DEBUG]"}
+        icons = {"info": "", "success": S.output_panel.level_ok, "warning": S.output_panel.level_warning, "error": S.output_panel.level_error, "debug": S.output_panel.level_debug}
         icon = icons.get(level, "")
 
         # Escape HTML and convert \n to <br> to preserve formatting
@@ -164,7 +166,7 @@ class OutputPanel(QWidget):
         plain_text = block.text()
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("Detalhe do Log")
+        dlg.setWindowTitle(S.output_panel.dialog_log_detail)
         dlg.resize(720, 400)
         dlg.setMinimumSize(400, 200)
 
@@ -183,13 +185,13 @@ class OutputPanel(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        copy_btn = QPushButton("Copiar")
+        copy_btn = QPushButton(S.output_panel.btn_copy_detail)
         copy_btn.clicked.connect(lambda: (
             __import__("PyQt6.QtWidgets", fromlist=["QApplication"]).QApplication.clipboard().setText(plain_text)
         ))
         btn_layout.addWidget(copy_btn)
 
-        close_btn = QPushButton("Fechar")
+        close_btn = QPushButton(S.output_panel.btn_close_detail)
         close_btn.clicked.connect(dlg.accept)
         btn_layout.addWidget(close_btn)
 

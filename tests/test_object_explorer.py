@@ -104,7 +104,7 @@ class TestObjectExplorerCreation:
     def test_initial_state_empty(self, explorer):
         """Estado inicial sem dados"""
         assert explorer.tree.topLevelItemCount() == 0
-        assert explorer.info_label.text() == "Nenhuma conexao"
+        assert explorer.info_label.text() == "No connection"
 
     def test_has_refresh_button(self, explorer):
         """Botao refresh existe"""
@@ -190,8 +190,8 @@ class TestObjectExplorerSetSchema:
     def test_set_schema_updates_info(self, explorer, sample_schema):
         """Info label atualizado apos set_schema"""
         explorer.set_schema(sample_schema, "conn1")
-        assert "3 tabelas" in explorer.info_label.text()
-        assert "8 colunas" in explorer.info_label.text()
+        assert "3 tables" in explorer.info_label.text()
+        assert "8 columns" in explorer.info_label.text()
 
     def test_set_schema_multiple_schemas(self, explorer, multi_schema):
         """Multiplos schemas criam nos intermediarios"""
@@ -236,7 +236,7 @@ class TestObjectExplorerMultipleDatabases:
             item = explorer.tree.topLevelItem(i)
             data = item.data(0, Qt.ItemDataRole.UserRole)
             if data and data.get("name") == "testdb":
-                assert "(conectado)" in item.text(0)
+                assert "(connected)" in item.text(0)
                 found_connected = True
                 break
         assert found_connected
@@ -256,7 +256,7 @@ class TestObjectExplorerMultipleDatabases:
     def test_multi_db_info_shows_db_count(self, explorer, multi_db_schema):
         """Info label mostra contagem de bancos"""
         explorer.set_schema(multi_db_schema, "conn1")
-        assert "3 bancos" in explorer.info_label.text()
+        assert "3 databases" in explorer.info_label.text()
 
 
 class TestObjectExplorerClear:
@@ -269,7 +269,7 @@ class TestObjectExplorerClear:
 
         explorer.clear()
         assert explorer.tree.topLevelItemCount() == 0
-        assert explorer.info_label.text() == "Nenhuma conexao"
+        assert explorer.info_label.text() == "No connection"
 
     def test_clear_resets_schema(self, explorer, sample_schema):
         """Clear reseta schema interno"""

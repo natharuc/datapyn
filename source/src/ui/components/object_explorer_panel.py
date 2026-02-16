@@ -29,6 +29,8 @@ from PyQt6.QtGui import QFont, QColor, QAction
 
 from .buttons import GhostButton
 
+from src.language import S
+
 try:
     import qtawesome as qta
 
@@ -73,14 +75,14 @@ class ObjectExplorerPanel(QWidget):
         toolbar_layout.setSpacing(8)
 
         # Info label
-        self.info_label = QLabel("No connection")
+        self.info_label = QLabel(S.object_explorer.no_connection)
         self.info_label.setStyleSheet("color: #808080;")
         toolbar_layout.addWidget(self.info_label)
 
         toolbar_layout.addStretch()
 
         # Refresh button
-        self.btn_refresh = GhostButton("Refresh")
+        self.btn_refresh = GhostButton(S.object_explorer.btn_refresh)
         if HAS_QTAWESOME:
             self.btn_refresh.setIcon(qta.icon("fa5s.sync", color="#888888"))
         toolbar_layout.addWidget(self.btn_refresh)
@@ -95,7 +97,7 @@ class ObjectExplorerPanel(QWidget):
 
         # Search field
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search tables and columns...")
+        self.search_input.setPlaceholderText(S.object_explorer.placeholder_search)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setStyleSheet("""
             QLineEdit {
@@ -188,7 +190,7 @@ class ObjectExplorerPanel(QWidget):
         self._current_schema = None
         self._current_connection = ""
         self._all_databases = []
-        self.info_label.setText("No connection")
+        self.info_label.setText(S.object_explorer.no_connection)
         self.search_input.clear()
 
     def _build_tree(self, schema: dict):
@@ -196,7 +198,7 @@ class ObjectExplorerPanel(QWidget):
         self.tree.clear()
 
         if not schema:
-            self.info_label.setText("No connection")
+            self.info_label.setText(S.object_explorer.no_connection)
             return
 
         tables = schema.get("tables", [])
@@ -224,7 +226,7 @@ class ObjectExplorerPanel(QWidget):
                         if not has_match and filter_text not in db.lower():
                             continue
 
-                    display = f"{db}  (conectado)" if not filter_text else db
+                    display = f"{db}  ({S.object_explorer.db_connected.format(db='')})" if not filter_text else db
                     db_item = QTreeWidgetItem(self.tree, [display])
                     db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
 
@@ -271,9 +273,9 @@ class ObjectExplorerPanel(QWidget):
         col_count = sum(len(v) for v in columns.values())
         db_count = len(all_databases)
         if db_count > 0:
-            self.info_label.setText(f"{db_count} bancos, {table_count} tabelas")
+            self.info_label.setText(S.object_explorer.info_dbs_tables.format(dbs=db_count, tables=table_count))
         else:
-            self.info_label.setText(f"{table_count} tabelas, {col_count} colunas")
+            self.info_label.setText(S.object_explorer.info_tables_cols.format(tables=table_count, cols=col_count))
 
     def _add_tables_to_node(self, parent_item, tables, columns, filter_text=""):
         """Adiciona tabelas e colunas a um no da arvore.
@@ -326,7 +328,7 @@ class ObjectExplorerPanel(QWidget):
                 is_view = "VIEW" in table_type.upper()
                 label = table_name
                 if is_view:
-                    label = f"{table_name} (view)"
+                    label = f"{table_name} {S.object_explorer.view_suffix}"
 
                 table_item = QTreeWidgetItem(parent, [label])
                 table_item.setData(
@@ -461,7 +463,7 @@ class ObjectExplorerPanel(QWidget):
         if item_type == "table":
             # Selecionar 1000 linhas
             qualified = f"{schema_name}.{name}" if schema_name else name
-            act_select = menu.addAction("Selecionar 1000 linhas")
+            act_select = menu.addAction(S.object_explorer.ctx_select_top)
             act_select.triggered.connect(
                 lambda: self.query_requested.emit(f"SELECT TOP 1000 * FROM {qualified}")
             )
@@ -469,16 +471,16 @@ class ObjectExplorerPanel(QWidget):
             menu.addSeparator()
 
             # Inserir nome no editor
-            act_insert = menu.addAction("Inserir nome no editor")
+            act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
             act_insert.triggered.connect(lambda: self.insert_text_requested.emit(name))
 
             # Copiar nome
-            act_copy = menu.addAction("Copiar nome")
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_name)
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
             # Copiar nome qualificado
             if schema_name:
-                act_copy_qual = menu.addAction("Copy qualified name")
+                act_copy_qual = menu.addAction(S.object_explorer.ctx_copy_qualified)
                 act_copy_qual.triggered.connect(
                     lambda: QApplication.clipboard().setText(f"{schema_name}.{name}")
                 )
@@ -488,16 +490,16 @@ class ObjectExplorerPanel(QWidget):
             col_type = data.get("data_type", "")
 
             # Inserir nome no editor
-            act_insert = menu.addAction("Inserir nome no editor")
+            act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
             act_insert.triggered.connect(lambda: self.insert_text_requested.emit(name))
 
             # Copiar nome
-            act_copy = menu.addAction("Copiar nome")
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_name)
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
             # Copiar como table.column
             if table_name:
-                act_copy_full = menu.addAction(f"Copiar como {table_name}.{name}")
+                act_copy_full = menu.addAction(S.object_explorer.ctx_copy_as_qualified.format(table=table_name, name=name))
                 act_copy_full.triggered.connect(
                     lambda: QApplication.clipboard().setText(f"{table_name}.{name}")
                 )
@@ -505,18 +507,18 @@ class ObjectExplorerPanel(QWidget):
             menu.addSeparator()
 
             # Info do tipo (desabilitado)
-            act_type_info = menu.addAction(f"Tipo: {col_type}")
+            act_type_info = menu.addAction(S.object_explorer.ctx_type_info.format(type=col_type))
             act_type_info.setEnabled(False)
 
         elif item_type == "database":
             # Switch to this database
-            act_switch = menu.addAction(f"Use database '{name}'")
+            act_switch = menu.addAction(S.object_explorer.ctx_use_database.format(name=name))
             act_switch.triggered.connect(lambda: self.database_switch_requested.emit(name))
 
             menu.addSeparator()
 
             # Copy database name
-            act_copy = menu.addAction("Copy name")
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_db_name)
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
         else:

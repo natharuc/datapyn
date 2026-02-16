@@ -22,6 +22,7 @@ import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.editors.code_block import CodeBlock
+from src.language import S
 
 
 class BlockEditor(QWidget):
@@ -119,7 +120,7 @@ class BlockEditor(QWidget):
         # Small button with + icon
         self.add_btn = QPushButton()
         self.add_btn.setIcon(qta.icon("mdi.plus", color="#888"))
-        self.add_btn.setToolTip("Add block")
+        self.add_btn.setToolTip(S.block_editor.tooltip_add_block)
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_btn.setFixedSize(24, 24)  # Small 24x24 button
         self.add_btn.setStyleSheet("""

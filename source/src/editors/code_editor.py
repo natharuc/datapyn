@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.Qsci import QsciScintilla, QsciLexerPython, QsciLexerSQL, QsciAPIs
 
+from src.language import S
+
 
 # ---------------------------------------------------------------------------
 # FindReplaceBar - Barra de busca/substituicao integrada
@@ -108,24 +110,24 @@ class FindReplaceBar(QWidget):
         find_row.setSpacing(4)
 
         self.find_input = QLineEdit()
-        self.find_input.setPlaceholderText("Buscar...")
+        self.find_input.setPlaceholderText(S.find_replace.placeholder_find)
         self.find_input.setStyleSheet(self._INPUT_STYLE)
         self.find_input.returnPressed.connect(self._on_find_next)
         self.find_input.textChanged.connect(self._on_find_text_changed)
         find_row.addWidget(self.find_input, 1)
 
         self.match_case_cb = QCheckBox("Aa")
-        self.match_case_cb.setToolTip("Diferenciar maiusculas/minusculas")
+        self.match_case_cb.setToolTip(S.find_replace.tooltip_match_case)
         self.match_case_cb.setStyleSheet(self._CHECK_STYLE)
         find_row.addWidget(self.match_case_cb)
 
         self.whole_word_cb = QCheckBox("W")
-        self.whole_word_cb.setToolTip("Palavra inteira")
+        self.whole_word_cb.setToolTip(S.find_replace.tooltip_whole_word)
         self.whole_word_cb.setStyleSheet(self._CHECK_STYLE)
         find_row.addWidget(self.whole_word_cb)
 
         self.regex_cb = QCheckBox(".*")
-        self.regex_cb.setToolTip("Expressao regular")
+        self.regex_cb.setToolTip(S.find_replace.tooltip_regex)
         self.regex_cb.setStyleSheet(self._CHECK_STYLE)
         find_row.addWidget(self.regex_cb)
 
@@ -134,28 +136,28 @@ class FindReplaceBar(QWidget):
         find_row.addWidget(self.info_label)
 
         btn_prev = QPushButton("\u2191")  # arrow up
-        btn_prev.setToolTip("Anterior (Shift+Enter)")
+        btn_prev.setToolTip(S.find_replace.tooltip_prev)
         btn_prev.setStyleSheet(self._BTN_STYLE)
         btn_prev.setFixedWidth(28)
         btn_prev.clicked.connect(self._on_find_prev)
         find_row.addWidget(btn_prev)
 
         btn_next = QPushButton("\u2193")  # arrow down
-        btn_next.setToolTip("Proximo (Enter)")
+        btn_next.setToolTip(S.find_replace.tooltip_next)
         btn_next.setStyleSheet(self._BTN_STYLE)
         btn_next.setFixedWidth(28)
         btn_next.clicked.connect(self._on_find_next)
         find_row.addWidget(btn_next)
 
         self.toggle_replace_btn = QPushButton("\u25B6")  # right triangle
-        self.toggle_replace_btn.setToolTip("Expandir Replace (Ctrl+H)")
+        self.toggle_replace_btn.setToolTip(S.find_replace.tooltip_toggle_replace)
         self.toggle_replace_btn.setStyleSheet(self._BTN_STYLE)
         self.toggle_replace_btn.setFixedWidth(28)
         self.toggle_replace_btn.clicked.connect(self._toggle_replace)
         find_row.addWidget(self.toggle_replace_btn)
 
         btn_close = QPushButton("\u2715")  # multiplication X
-        btn_close.setToolTip("Fechar (Esc)")
+        btn_close.setToolTip(S.find_replace.tooltip_close)
         btn_close.setStyleSheet(self._BTN_STYLE)
         btn_close.setFixedWidth(28)
         btn_close.clicked.connect(self.close_bar)
@@ -170,18 +172,18 @@ class FindReplaceBar(QWidget):
         replace_row.setSpacing(4)
 
         self.replace_input = QLineEdit()
-        self.replace_input.setPlaceholderText("Substituir...")
+        self.replace_input.setPlaceholderText(S.find_replace.placeholder_replace)
         self.replace_input.setStyleSheet(self._INPUT_STYLE)
         replace_row.addWidget(self.replace_input, 1)
 
-        btn_replace_one = QPushButton("Subst")
-        btn_replace_one.setToolTip("Substituir proximo")
+        btn_replace_one = QPushButton(S.find_replace.btn_replace_one)
+        btn_replace_one.setToolTip(S.find_replace.tooltip_replace_one)
         btn_replace_one.setStyleSheet(self._BTN_STYLE)
         btn_replace_one.clicked.connect(self._on_replace_one)
         replace_row.addWidget(btn_replace_one)
 
-        btn_replace_all = QPushButton("Todos")
-        btn_replace_all.setToolTip("Substituir todos")
+        btn_replace_all = QPushButton(S.find_replace.btn_replace_all)
+        btn_replace_all.setToolTip(S.find_replace.tooltip_replace_all)
         btn_replace_all.setStyleSheet(self._BTN_STYLE)
         btn_replace_all.clicked.connect(self._on_replace_all)
         replace_row.addWidget(btn_replace_all)

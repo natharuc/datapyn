@@ -74,19 +74,19 @@ class TestExportScriptBasic:
         file_menu = None
         
         for action in menubar.actions():
-            if "Arquivo" in action.text():
+            if "File" in action.text():
                 file_menu = action.menu()
                 break
         
-        assert file_menu is not None, "Menu Arquivo não encontrado"
+        assert file_menu is not None, "Menu File not found"
         
         export_action = None
         for action in file_menu.actions():
-            if "Exportar como Script" in action.text():
+            if "Export as Script" in action.text():
                 export_action = action
                 break
         
-        assert export_action is not None, "Item 'Exportar como Script...' não encontrado no menu"
+        assert export_action is not None, "Item 'Export as Script...' not found in menu"
 
     def test_export_method_exists(self, main_window):
         """Verifica se o método _export_as_script existe"""
@@ -102,7 +102,7 @@ class TestExportScriptBasic:
         with patch.object(QMessageBox, "warning") as mock_warning:
             main_window._export_as_script()
             mock_warning.assert_called_once()
-            assert "Nenhuma sessão ativa" in str(mock_warning.call_args)
+            assert "No active session" in str(mock_warning.call_args)
         
         main_window._get_current_session_widget = original_method
 
@@ -118,7 +118,7 @@ class TestExportScriptBasic:
         ):
             main_window._export_as_script()
             mock_warning.assert_called_once()
-            assert "blocos" in str(mock_warning.call_args).lower()
+            assert "no code blocks" in str(mock_warning.call_args).lower()
 
     def test_export_dialog_cancelled_does_nothing(self, main_window, qtbot):
         """Cancelar diálogo de salvar não deve fazer nada"""
@@ -165,8 +165,8 @@ class TestExportScriptGeneration:
         assert "pd.read_sql" in content
         
         # Deve ter comentários
-        assert "Script Python Exportado do DataPyn" in content
-        assert "Bloco 1: SQL" in content
+        assert "Python Script Exported from DataPyn" in content
+        assert "Block 1: SQL" in content
 
     def test_export_single_python_block(self, main_window, qtbot, tmp_path):
         """Exportar bloco Python único deve gerar script correto"""
@@ -316,7 +316,7 @@ print(len(data))"""
         content = output_file.read_text(encoding='utf-8')
         
         # Deve ter apenas 2 blocos (SELECT 1 e SELECT 2)
-        assert content.count("Bloco") >= 2
+        assert content.count("Block") >= 2
         assert "SELECT 1" in content
         assert "SELECT 2" in content
 

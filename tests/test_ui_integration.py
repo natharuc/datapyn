@@ -418,7 +418,7 @@ class TestExecutionWithoutDB:
 
             # Deve ter mensagem de erro no output global
             output_text = main_window.global_output_panel.get_text()  # Usar painel global
-            assert "Erro" in output_text or "conexão" in output_text.lower()
+            assert "ERROR" in output_text or "No active connection" in output_text
 
 
 # === TESTES DE INTEGRAÇÃO ===

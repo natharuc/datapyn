@@ -23,6 +23,7 @@ import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.editors.editor_config import get_code_editor_class
+from src.language import S
 
 
 class BlockConnectionPanel(QFrame):
@@ -69,7 +70,7 @@ class BlockConnectionPanel(QFrame):
         layout.addWidget(self.icon_label)
 
         # Connection name
-        self.name_label = QLabel("Tab Default")
+        self.name_label = QLabel(S.block.conn_tab_default)
         self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
         self.name_label.setMinimumWidth(40)
         layout.addWidget(self.name_label, 1)
@@ -96,7 +97,7 @@ class BlockConnectionPanel(QFrame):
                 self.icon_label.setPixmap(qta.icon("mdi.database", color=icon_color).pixmap(16, 16))
         else:
             # Tab default
-            self.name_label.setText("Tab Default")
+            self.name_label.setText(S.block.conn_tab_default)
             self.name_label.setStyleSheet("color: #aaa; font-size: 11px;")
             self.icon_label.setPixmap(qta.icon("mdi.link-variant", color="#888").pixmap(16, 16))
 
@@ -239,7 +240,7 @@ class CodeBlock(QFrame):
         # Drag handle
         self.drag_handle = QPushButton()
         self.drag_handle.setFixedSize(CTRL_H, CTRL_H)
-        self.drag_handle.setToolTip("Drag to reposition")
+        self.drag_handle.setToolTip(S.block.tooltip_drag)
         self.drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
         self.drag_handle.setIcon(qta.icon("mdi.drag-horizontal-variant", color="#666"))
         self.drag_handle.setStyleSheet("""
@@ -304,7 +305,7 @@ class CodeBlock(QFrame):
 
         # Block name field
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Block name")
+        self.name_input.setPlaceholderText(S.block.placeholder_name)
         self.name_input.setFixedWidth(120)
         self.name_input.setFixedHeight(CTRL_H)
         self.name_input.setStyleSheet(f"""
@@ -343,9 +344,9 @@ class CodeBlock(QFrame):
         # Cancel button (only visible during execution)
         self.cancel_btn = QPushButton()
         self.cancel_btn.setIcon(qta.icon("mdi.stop-circle-outline", color="#e74c3c"))
-        self.cancel_btn.setText(" Cancelar")
+        self.cancel_btn.setText(S.block.btn_cancel)
         self.cancel_btn.setFixedHeight(CTRL_H)
-        self.cancel_btn.setToolTip("Cancel execution (Esc)")
+        self.cancel_btn.setToolTip(S.block.tooltip_cancel)
         self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cancel_btn.setStyleSheet("""
             QPushButton {
@@ -368,7 +369,7 @@ class CodeBlock(QFrame):
         # Run button (with icon)
         self.run_btn = QPushButton()
         self.run_btn.setFixedSize(CTRL_H, CTRL_H)
-        self.run_btn.setToolTip("Run (F5)")
+        self.run_btn.setToolTip(S.block.tooltip_run)
         self.run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._run_icon_play = True  # Track icon state
         control_layout.addWidget(self.run_btn)
@@ -377,7 +378,7 @@ class CodeBlock(QFrame):
         self.remove_btn = QPushButton()
         self.remove_btn.setIcon(qta.icon("mdi.close", color="#666"))
         self.remove_btn.setFixedSize(CTRL_H, CTRL_H)
-        self.remove_btn.setToolTip("Remove block")
+        self.remove_btn.setToolTip(S.block.tooltip_remove)
         self.remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.remove_btn.setStyleSheet("""
             QPushButton {
@@ -545,7 +546,7 @@ class CodeBlock(QFrame):
         self._is_waiting = waiting
         if waiting:
             self.run_btn.setIcon(qta.icon("mdi.pause", color="#95a5a6"))
-            self.status_label.setText("Waiting")
+            self.status_label.setText(S.block.status_waiting)
             self.status_label.setStyleSheet("""
                 QLabel {
                     color: #95a5a6;
@@ -566,7 +567,7 @@ class CodeBlock(QFrame):
         if running:
             self._execution_start_time = time.time()
             self.run_btn.setIcon(qta.icon("mdi.stop", color="#f39c12"))
-            self.status_label.setText("Running")
+            self.status_label.setText(S.block.status_running)
             self.status_label.setStyleSheet("""
                 QLabel {
                     color: #f39c12;
@@ -611,7 +612,7 @@ class CodeBlock(QFrame):
         self._is_waiting = False
         self._update_style()
         self.cancel_btn.hide()
-        self.status_label.setText("Cancelled")
+        self.status_label.setText(S.block.status_cancelled)
         self.status_label.setStyleSheet("""
             QLabel {
                 color: #e74c3c;
@@ -629,7 +630,7 @@ class CodeBlock(QFrame):
         self._is_waiting = False
         self._update_style()
         self.cancel_btn.hide()
-        self.status_label.setText("Error")
+        self.status_label.setText(S.block.status_error)
         self.status_label.setStyleSheet("""
             QLabel {
                 color: #e74c3c;
@@ -709,7 +710,7 @@ class CodeBlock(QFrame):
         pixmap.fill(QColor(60, 60, 60, 200))
         painter = QPainter(pixmap)
         painter.setPen(QColor(200, 200, 200))
-        painter.drawText(10, 20, f"[{self.get_language().upper()}] Block")
+        painter.drawText(10, 20, S.block.drag_label.format(lang=self.get_language().upper()))
         painter.end()
 
         drag.setPixmap(pixmap)

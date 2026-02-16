@@ -9,6 +9,7 @@ import qtawesome as qta
 from typing import Optional
 import pandas as pd
 
+from src.language import S
 from .results_viewer import ResultsViewer
 from .output_panel import OutputPanel
 from .variables_panel import VariablesPanel
@@ -32,17 +33,17 @@ class BottomTabs(QTabWidget):
         """Configure UI"""
         # Tab: Results
         self.results_viewer = ResultsViewer(theme_manager=self.theme_manager)
-        self.addTab(self.results_viewer, "Results")
+        self.addTab(self.results_viewer, S.bottom_tabs.results)
         self.setTabIcon(0, qta.icon("mdi.table-eye", color="#64b5f6"))
 
         # Tab: Output/Logs
         self.output_panel = OutputPanel(theme_manager=self.theme_manager)
-        self.addTab(self.output_panel, "Output")
+        self.addTab(self.output_panel, S.bottom_tabs.output)
         self.setTabIcon(1, qta.icon("mdi.console", color="#64b5f6"))
 
         # Tab: Variables
         self.variables_panel = VariablesPanel(theme_manager=self.theme_manager)
-        self.addTab(self.variables_panel, "Variables")
+        self.addTab(self.variables_panel, S.bottom_tabs.variables)
         self.setTabIcon(2, qta.icon("mdi.variable", color="#64b5f6"))
 
     def _setup_style(self):

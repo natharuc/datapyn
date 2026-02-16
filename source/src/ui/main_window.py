@@ -77,6 +77,7 @@ from src.design_system.tokens import get_colors, DARK_COLORS
 
 # Services
 from src.services import AutoUpdateService
+from src.language import S
 
 # Constantes
 DEFAULT_VERSION = "1.1.6"  # Default version if unable to read from pyproject.toml
@@ -706,7 +707,7 @@ class MainWindow(DockingMainWindow):
 
     def _setup_ui(self):
         """Configures the main interface"""
-        self.setWindowTitle("DataPyn - IDE SQL + Python")
+        self.setWindowTitle(S.main_window.window_title)
         self.setGeometry(100, 100, 1400, 900)
 
         # Carregar cores do design system
@@ -845,7 +846,7 @@ class MainWindow(DockingMainWindow):
         self.connection_panel.disconnect_clicked.connect(self._disconnect)
 
         # Create dock widget
-        self.connections_dock = QDockWidget("Connections", self)
+        self.connections_dock = QDockWidget(S.dock.connections, self)
         self.connections_dock.setObjectName("ConnectionsDock")  # Para saveState/restoreState
         self.connections_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.connections_dock.setWidget(self.connection_panel)
@@ -898,7 +899,7 @@ class MainWindow(DockingMainWindow):
         self._session_explorers: dict = {}
 
         # Criar dock widget
-        self.object_explorer_dock = QDockWidget("Object Explorer", self)
+        self.object_explorer_dock = QDockWidget(S.dock.object_explorer, self)
         self.object_explorer_dock.setObjectName("ObjectExplorerDock")
         self.object_explorer_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.object_explorer_dock.setWidget(self._object_explorer_stack)
@@ -995,10 +996,10 @@ class MainWindow(DockingMainWindow):
         connection_name = getattr(session, "connection_name", "") or ""
 
         if not connector or not connector.is_connected():
-            self.statusBar().showMessage("No active connection", 3000)
+            self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
 
-        self.statusBar().showMessage(f"Switching database to: {database_name}...", 10000)
+        self.statusBar().showMessage(S.status.switching_database.format(name=database_name), 10000)
 
         from src.workers import DatabaseSwitchWorker
 
@@ -1021,7 +1022,7 @@ class MainWindow(DockingMainWindow):
 
     def _on_database_switch_success(self, database_name, connection_name, connector, widget):
         """Callback when database switch completes successfully"""
-        self.statusBar().showMessage(f"Database changed to: {database_name}", 5000)
+        self.statusBar().showMessage(S.status.database_changed.format(name=database_name), 5000)
 
         self._schema_service.invalidate_cache(connection_name)
         self._schema_service.load_schema(connector, connection_name)
@@ -1074,7 +1075,7 @@ class MainWindow(DockingMainWindow):
         """
 
         # Results Panel
-        self.results_dock = QDockWidget("Results", self)
+        self.results_dock = QDockWidget(S.dock.results, self)
         self.results_dock.setObjectName("ResultsDock")
         self.results_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.results_dock.setWidget(self._results_stack)
@@ -1082,7 +1083,7 @@ class MainWindow(DockingMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
 
         # Output Panel
-        self.output_dock = QDockWidget("Output", self)
+        self.output_dock = QDockWidget(S.dock.output, self)
         self.output_dock.setObjectName("OutputDock")
         self.output_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.output_dock.setWidget(self._output_stack)
@@ -1090,7 +1091,7 @@ class MainWindow(DockingMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
 
         # Variables Panel
-        self.variables_dock = QDockWidget("Variables", self)
+        self.variables_dock = QDockWidget(S.dock.variables, self)
         self.variables_dock.setObjectName("VariablesDock")
         self.variables_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.variables_dock.setWidget(self._variables_stack)
@@ -1482,7 +1483,7 @@ class MainWindow(DockingMainWindow):
         """Resets layout completely (clears settings and applies default)"""
         reply = QMessageBox.question(
             self,
-            "Confirm Reset",
+            S.dialogs.confirm_reset_title,
             "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -1492,7 +1493,7 @@ class MainWindow(DockingMainWindow):
             print("DEBUG: Resetting layout completely by user request")
             self._clear_saved_layout()
             self._setup_default_layout()
-            QMessageBox.information(self, "Layout Reset", "Panel layout has been reset to default.")
+            QMessageBox.information(self, S.dialogs.layout_reset_title, S.dialogs.layout_reset_msg)
 
     def closeEvent(self, event):
         """DISABLED - Does not save layout on close for safety"""
@@ -1516,13 +1517,13 @@ class MainWindow(DockingMainWindow):
             current_widget = self._get_current_session_widget()
 
         if not current_widget:
-            self._show_warning("Error", "Could not create new tab")
+            self._show_warning(S.dialogs.error, "Could not create new tab")
             return
 
         # Get config (metadata only, not connection)
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
-            self._show_warning("Error", f"Connection '{connection_name}' not found")
+            self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
 
         # Get password if necessary
@@ -1535,7 +1536,7 @@ class MainWindow(DockingMainWindow):
         current_widget.connect_to_database(connection_name, password)
 
         # Update status (tab will show loading internally)
-        self.action_label.setText(f"Connecting to {connection_name}...")
+        self.action_label.setText(S.status.connecting_to.format(name=connection_name))
 
     def _connect_new_tab(self, connection_name: str):
         """
@@ -1547,13 +1548,13 @@ class MainWindow(DockingMainWindow):
         current_widget = self._get_current_session_widget()
 
         if not current_widget:
-            self._show_warning("Error", "Could not create new tab")
+            self._show_warning(S.dialogs.error, "Could not create new tab")
             return
 
         # Get config (metadata only, not connection)
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
-            self._show_warning("Error", f"Connection '{connection_name}' not found")
+            self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
 
         # Get password if necessary
@@ -1565,38 +1566,38 @@ class MainWindow(DockingMainWindow):
         current_widget.connect_to_database(connection_name, password)
 
         # Update status
-        self.action_label.setText(f"Connecting to {connection_name} (new tab)...")
+        self.action_label.setText(S.status.connecting_to_new_tab.format(name=connection_name))
 
     def _create_menus(self):
         """Creates the menus"""
         menubar = self.menuBar()
 
         # File Menu
-        file_menu = menubar.addMenu("&File")
+        file_menu = menubar.addMenu(S.menu.file)
 
-        new_action = QAction("&New Tab", self)
+        new_action = QAction(S.menu.new_tab, self)
         # Shortcut managed by ShortcutManager (Ctrl+T)
         new_action.triggered.connect(self._new_session)
         file_menu.addAction(new_action)
 
-        open_action = QAction("&Open...", self)
+        open_action = QAction(S.menu.open, self)
         # Shortcut managed by ShortcutManager (Ctrl+O)
         open_action.triggered.connect(self._open_file)
         file_menu.addAction(open_action)
 
-        save_action = QAction("&Save", self)
+        save_action = QAction(S.menu.save, self)
         # Shortcut managed by ShortcutManager (Ctrl+S)
         save_action.triggered.connect(self._save_file)
         file_menu.addAction(save_action)
 
-        save_as_action = QAction("Save &As...", self)
+        save_as_action = QAction(S.menu.save_as, self)
         # Shortcut managed by ShortcutManager (Ctrl+Shift+S)
         save_as_action.triggered.connect(self._save_file_as)
         file_menu.addAction(save_as_action)
 
         file_menu.addSeparator()
 
-        export_script_action = QAction("&Export as Script...", self)
+        export_script_action = QAction(S.menu.export_script, self)
         if HAS_QTAWESOME:
             export_script_action.setIcon(qta.icon("mdi.file-export", color="#b0b0b0"))
         # Shortcut managed by ShortcutManager (Ctrl+Shift+E)
@@ -1605,15 +1606,15 @@ class MainWindow(DockingMainWindow):
 
         file_menu.addSeparator()
 
-        exit_action = QAction("E&xit", self)
+        exit_action = QAction(S.menu.exit, self)
         exit_action.setShortcut(QKeySequence.StandardKey.Quit)  # Keep system default Quit
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
         # Connection Menu
-        conn_menu = menubar.addMenu("&Connection")
+        conn_menu = menubar.addMenu(S.menu.connection)
 
-        manage_conn_action = QAction("&Manage Connections...", self)
+        manage_conn_action = QAction(S.menu.manage_connections, self)
         if HAS_QTAWESOME:
             manage_conn_action.setIcon(self.icons["database"])
         # Shortcut managed by ShortcutManager (Ctrl+Shift+M)
@@ -1622,30 +1623,30 @@ class MainWindow(DockingMainWindow):
 
         conn_menu.addSeparator()
 
-        new_conn_action = QAction("&New Connection...", self)
+        new_conn_action = QAction(S.menu.new_connection, self)
         if HAS_QTAWESOME:
             new_conn_action.setIcon(self.icons["plug"])
         # Shortcut managed by ShortcutManager (Ctrl+Shift+D)
         new_conn_action.triggered.connect(self._new_connection)
         conn_menu.addAction(new_conn_action)
 
-        disconnect_action = QAction("&Disconnect", self)
+        disconnect_action = QAction(S.menu.disconnect, self)
         if HAS_QTAWESOME:
             disconnect_action.setIcon(self.icons["trash"])
         disconnect_action.triggered.connect(self._disconnect)
         conn_menu.addAction(disconnect_action)
 
         # Run Menu
-        run_menu = menubar.addMenu("&Run")
+        run_menu = menubar.addMenu(S.menu.run)
 
-        run_current_action = QAction("Run &Current Block", self)
+        run_current_action = QAction(S.menu.run_current_block, self)
         if HAS_QTAWESOME:
             run_current_action.setIcon(self.icons["play"])
         # Shortcut managed by ShortcutManager (F5)
         run_current_action.triggered.connect(self._execute_current_block)
         run_menu.addAction(run_current_action)
 
-        run_all_action = QAction("Run &All Blocks", self)
+        run_all_action = QAction(S.menu.run_all_blocks, self)
         if HAS_QTAWESOME:
             run_all_action.setIcon(qta.icon("mdi.fast-forward", color="#b0b0b0"))
         # Shortcut managed by ShortcutManager (Ctrl+F5)
@@ -1654,7 +1655,7 @@ class MainWindow(DockingMainWindow):
 
         run_menu.addSeparator()
 
-        clear_results_action = QAction("&Clear Results", self)
+        clear_results_action = QAction(S.menu.clear_results, self)
         if HAS_QTAWESOME:
             clear_results_action.setIcon(self.icons["trash"])
         # Shortcut managed by ShortcutManager (Ctrl+Shift+C)
@@ -1662,13 +1663,13 @@ class MainWindow(DockingMainWindow):
         run_menu.addAction(clear_results_action)
 
         # View Menu
-        view_menu = menubar.addMenu("&View")
+        view_menu = menubar.addMenu(S.menu.view)
 
         # Panels Submenu
-        panels_menu = view_menu.addMenu("&Panels")
+        panels_menu = view_menu.addMenu(S.menu.panels)
 
         # Results panel toggle
-        results_action = QAction("&Results", self)
+        results_action = QAction(S.menu.panel_results, self)
         results_action.setCheckable(True)
         results_action.setChecked(True)
         results_action.triggered.connect(lambda checked: self._toggle_panel_visibility("results", checked))
@@ -1676,7 +1677,7 @@ class MainWindow(DockingMainWindow):
         self.results_action = results_action
 
         # Output panel toggle
-        output_action = QAction("&Output", self)
+        output_action = QAction(S.menu.panel_output, self)
         output_action.setCheckable(True)
         output_action.setChecked(True)
         output_action.triggered.connect(lambda checked: self._toggle_output_tab(checked))
@@ -1684,7 +1685,7 @@ class MainWindow(DockingMainWindow):
         self.output_action = output_action
 
         # Variables panel toggle
-        variables_action = QAction("&Variables", self)
+        variables_action = QAction(S.menu.panel_variables, self)
         variables_action.setCheckable(True)
         variables_action.setChecked(True)
         variables_action.triggered.connect(lambda checked: self._toggle_panel_visibility("variables", checked))
@@ -1692,7 +1693,7 @@ class MainWindow(DockingMainWindow):
         self.variables_action = variables_action
 
         # Connections panel toggle
-        connections_action = QAction("&Connections", self)
+        connections_action = QAction(S.menu.panel_connections, self)
         connections_action.setCheckable(True)
         connections_action.setChecked(True)
         connections_action.triggered.connect(lambda checked: self.connections_dock.setVisible(checked))
@@ -1700,7 +1701,7 @@ class MainWindow(DockingMainWindow):
         self.connections_action = connections_action
 
         # Object Explorer toggle
-        object_explorer_action = QAction("&Object Explorer", self)
+        object_explorer_action = QAction(S.menu.panel_object_explorer, self)
         object_explorer_action.setCheckable(True)
         object_explorer_action.setChecked(False)
         object_explorer_action.triggered.connect(
@@ -1712,21 +1713,21 @@ class MainWindow(DockingMainWindow):
         view_menu.addSeparator()
 
         # Restore default view
-        restore_action = QAction("&Restore Default View", self)
+        restore_action = QAction(S.menu.restore_default_view, self)
         restore_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
         restore_action.triggered.connect(self._restore_default_layout)
         view_menu.addAction(restore_action)
 
         # Reset layout completely (clears saved settings)
-        reset_layout_action = QAction("&Complete Layout Reset", self)
+        reset_layout_action = QAction(S.menu.complete_layout_reset, self)
         reset_layout_action.setShortcut(QKeySequence("Ctrl+Shift+Alt+R"))
         reset_layout_action.triggered.connect(self._reset_layout_completely)
         view_menu.addAction(reset_layout_action)
 
         # Tools Menu
-        tools_menu = menubar.addMenu("&Tools")
+        tools_menu = menubar.addMenu(S.menu.tools)
 
-        packages_action = QAction("&Package Manager...", self)
+        packages_action = QAction(S.menu.package_manager, self)
         if HAS_QTAWESOME:
             packages_action.setIcon(qta.icon("mdi.package-variant", color="#b0b0b0"))
         packages_action.triggered.connect(self._show_package_manager)
@@ -1734,7 +1735,7 @@ class MainWindow(DockingMainWindow):
 
         tools_menu.addSeparator()
 
-        settings_action = QAction("&Shortcut Settings...", self)
+        settings_action = QAction(S.menu.shortcut_settings, self)
         if HAS_QTAWESOME:
             settings_action.setIcon(self.icons["cog"])
         # Shortcut managed by ShortcutManager (Ctrl+,)
@@ -1744,7 +1745,7 @@ class MainWindow(DockingMainWindow):
         tools_menu.addSeparator()
 
         # Auto-update toggle
-        auto_update_action = QAction("Enable &Auto-Update", self)
+        auto_update_action = QAction(S.menu.auto_update, self)
         auto_update_action.setCheckable(True)
         auto_update_action.setChecked(self.auto_update_service.is_auto_update_enabled())
         auto_update_action.triggered.connect(self._toggle_auto_update)
@@ -1752,9 +1753,9 @@ class MainWindow(DockingMainWindow):
         self._auto_update_action = auto_update_action  # Save reference to update state
 
         # Help Menu
-        help_menu = menubar.addMenu("&Help")
+        help_menu = menubar.addMenu(S.menu.help)
 
-        check_updates_action = QAction("Check for &Updates...", self)
+        check_updates_action = QAction(S.menu.check_updates, self)
         if HAS_QTAWESOME:
             check_updates_action.setIcon(qta.icon("mdi.update", color="#b0b0b0"))
         check_updates_action.triggered.connect(self._check_for_updates)
@@ -1762,7 +1763,7 @@ class MainWindow(DockingMainWindow):
 
         help_menu.addSeparator()
 
-        about_action = QAction("&About", self)
+        about_action = QAction(S.menu.about, self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
@@ -1852,7 +1853,7 @@ class MainWindow(DockingMainWindow):
         if self._is_executing:
             elapsed = self._execution_timer.elapsed() / 1000.0
             mode = f"{self._execution_mode}" if self._execution_mode else "Code"
-            self.execution_label.setText(f"  Running {mode} {elapsed:.1f}s")
+            self.execution_label.setText(S.status.running_mode_elapsed.format(mode=mode, elapsed=f"{elapsed:.1f}"))
 
     def _clear_execution_label(self):
         """Clears the execution label"""
@@ -1979,8 +1980,8 @@ class MainWindow(DockingMainWindow):
                 if has_code:
                     reply = QMessageBox.question(
                         self,
-                        "Close Session",
-                        "Are you sure you want to close this session?\n\nUnsaved code will be lost.",
+                        S.dialogs.close_session_title,
+                        S.dialogs.close_session_msg,
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No,
                     )
@@ -2112,8 +2113,8 @@ class MainWindow(DockingMainWindow):
         formatted, error = format_code(code, lang)
 
         if error:
-            self.action_label.setText(f"Formatting: {error}")
-            self.statusBar().showMessage(f"Formatting error: {error}", 5000)
+            self.action_label.setText(S.status.formatting_error.format(error=error))
+            self.statusBar().showMessage(S.status.formatting_error.format(error=error), 5000)
             return
 
         if formatted != code:
@@ -2124,9 +2125,9 @@ class MainWindow(DockingMainWindow):
             # Restaurar cursor (limitar a linhas existentes)
             max_line = sci.lines() - 1
             sci.setCursorPosition(min(line, max_line), col)
-            self.action_label.setText(f"[{lang.upper()}] Code formatted")
+            self.action_label.setText(S.status.code_formatted.format(lang=lang.upper()))
         else:
-            self.action_label.setText(f"[{lang.upper()}] Code already formatted")
+            self.action_label.setText(S.status.code_already_formatted.format(lang=lang.upper()))
 
     def _add_block_to_current_session(self):
         """Adds a new code block in the current session"""
@@ -2177,15 +2178,15 @@ class MainWindow(DockingMainWindow):
 
             self._update_connection_status()
             self._refresh_connections_list()
-            self._log_info(f"Connection '{name}' created successfully")
-            self.action_label.setText(f"Connection '{name}' created")
+            self._log_info(S.status.connection_created.format(name=name))
+            self.action_label.setText(S.status.connection_created.format(name=name))
 
     def _edit_connection(self, connection_name: str):
         """Opens dialog to edit a specific connection"""
         # Get connection config
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
-            self._show_warning("Error", f"Connection '{connection_name}' not found")
+            self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
 
         dialog = ConnectionEditDialog(
@@ -2221,8 +2222,8 @@ class MainWindow(DockingMainWindow):
 
             self._update_connection_status()
             self._refresh_connections_list()
-            self._log_info(f"Connection '{name}' updated successfully")
-            self.action_label.setText(f"Connection '{name}' updated")
+            self._log_info(S.status.connection_updated.format(name=name))
+            self.action_label.setText(S.status.connection_updated.format(name=name))
 
     # === Helper methods for dialogs with icons ===
 
@@ -2260,7 +2261,7 @@ class MainWindow(DockingMainWindow):
             # Clear session connection
             session.clear_connection()
             self._update_connection_status()
-            self.action_label.setText("Disconnected")
+            self.action_label.setText(S.status.disconnected)
 
     def _update_connection_status(self):
         """Updates the connection status of the current session"""
@@ -2309,7 +2310,7 @@ class MainWindow(DockingMainWindow):
             self.connections_list.clearSelection()
 
             # === STATUSBAR ===
-            self.connection_status_bar.setText("Disconnected")
+            self.connection_status_bar.setText(S.status.disconnected)
             self.connection_status_bar.setStyleSheet("""
                 QLabel {
                     color: white;
@@ -2417,7 +2418,7 @@ class MainWindow(DockingMainWindow):
         session = self.session_manager.focused_session
         if not session or not session.is_connected:
             self._show_warning(
-                "Warning", "No active connection in this session. Connect to a database first."
+                S.dialogs.warning, S.dialogs.cross_no_connection_msg
             )
             return
 
@@ -2429,7 +2430,7 @@ class MainWindow(DockingMainWindow):
             database_name = use_match.group(1)
             try:
                 self._start_execution_timer("SQL")
-                self.action_label.setText(f"[SQL] Switching to database {database_name}...")
+                self.action_label.setText(S.status.sql_switching_database.format(name=database_name))
 
                 connector.change_database(database_name)
 
@@ -2447,20 +2448,20 @@ class MainWindow(DockingMainWindow):
                     if current_widget and hasattr(current_widget, "connection_changed"):
                         current_widget.connection_changed.emit(connection_name, database_name)
 
-                self._log_info(f"[SQL] Database changed to: {database_name}")
-                self.action_label.setText(f"[SQL] Database: {database_name}")
+                self._log_info(S.status.database_changed.format(name=database_name))
+                self.action_label.setText(S.status.sql_database.format(name=database_name))
                 self._stop_execution_timer()
                 return
 
             except Exception as e:
                 self._stop_execution_timer()
-                QMessageBox.critical(self, "Error", f"Error switching database:\n{str(e)}")
-                self.action_label.setText("[SQL] Error switching database")
+                QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_switching_db.format(error=str(e)))
+                self.action_label.setText(S.status.sql_error_switching)
                 return
 
         # Background execution
         self._start_execution_timer("SQL")
-        self.action_label.setText("[SQL] Running query...")
+        self.action_label.setText(S.status.sql_running_query)
 
         # Mark tab as running
         running_tab_index = self._mark_tab_running(True)
@@ -2514,7 +2515,7 @@ class MainWindow(DockingMainWindow):
         if error:
             # ERRO → OUTPUT (console)
             self._show_error_output(f"[{execution_type}] {error}")
-            self.action_label.setText(f"[{execution_type}] Execution error")
+            self.action_label.setText(S.status.execution_error_generic.format(type=execution_type))
             return False  # Indica erro
 
         if result is None:
@@ -2533,7 +2534,7 @@ class MainWindow(DockingMainWindow):
                 results_panel.display_dataframe(result, f"{execution_type} Result")
             self.show_panel("results")
             rows = len(result)
-            self._log_info(f"[{execution_type}] {additional_info or f'DataFrame displayed ({rows:,} rows)'}")
+            self._log_info(f"[{execution_type}] {additional_info or S.log.df_displayed.format(type=execution_type, rows=f'{rows:,}')}")
             return True
 
         elif isinstance(result, (list, tuple)) and len(result) > 0:
@@ -2544,7 +2545,7 @@ class MainWindow(DockingMainWindow):
                     if results_panel:
                         results_panel.display_dataframe(df, f"{execution_type} Result")
                     self.show_panel("results")
-                    self._log_info(f"[{execution_type}] List converted to DataFrame ({len(df)} rows)")
+                    self._log_info(S.log.list_converted.format(type=execution_type, rows=len(df)))
                     return True
             except:
                 pass
@@ -2564,7 +2565,7 @@ class MainWindow(DockingMainWindow):
                 if results_panel:
                     results_panel.display_dataframe(df, f"{execution_type} Result")
                 self.show_panel("results")
-                self._log_info(f"[{execution_type}] Dictionary converted to DataFrame")
+                self._log_info(S.log.dict_converted.format(type=execution_type))
                 return True
             except:
                 pass
@@ -2598,8 +2599,8 @@ class MainWindow(DockingMainWindow):
         # FORCAR: Se ha erro, SEMPRE mostrar output
         if error:
             self._show_error_output(f"[SQL] Error: {error}")
-            self.action_label.setText("[SQL] Execution error")
-            self._send_notification("Query SQL", f"Error: {str(error)[:50]}...", success=False, tab_index=tab_index)
+            self.action_label.setText(S.status.sql_execution_error)
+            self._send_notification(S.notification.sql_query, S.notification.error.format(error=str(error)[:50]), success=False, tab_index=tab_index)
             return
 
         # ONLY if there is no error, use centralized method
@@ -2612,9 +2613,9 @@ class MainWindow(DockingMainWindow):
 
         if success:
             rows = len(df) if df is not None else 0
-            self.action_label.setText(f"[SQL] {rows:,} rows returned")
+            self.action_label.setText(S.status.sql_rows_returned.format(rows=f"{rows:,}"))
             self._send_notification(
-                "SQL Query", f"Complete! {rows:,} rows returned", success=True, tab_index=tab_index
+                S.notification.sql_query, S.notification.complete_rows.format(rows=f"{rows:,}"), success=True, tab_index=tab_index
             )
 
     def _check_database_changed_after_sql(self, db_before: str):
@@ -2659,7 +2660,7 @@ class MainWindow(DockingMainWindow):
                 return
 
         self._start_execution_timer("Python")
-        self.action_label.setText("[Python] Running code...")
+        self.action_label.setText(S.status.python_running)
 
         # Mark tab as running
         running_tab_index = self._mark_tab_running(True)
@@ -2714,8 +2715,8 @@ class MainWindow(DockingMainWindow):
         # FORCE: If there is an error, ALWAYS show output first
         if error:
             self._show_error_output(f"[Python] Error: {error}")
-            self.action_label.setText("[Python] Execution error")
-            self._send_notification("Python", f"Error: {str(error)[:50]}...", success=False, tab_index=tab_index)
+            self.action_label.setText(S.status.python_execution_error)
+            self._send_notification(S.notification.python, S.notification.error.format(error=str(error)[:50]), success=False, tab_index=tab_index)
             return
 
         # Show output from print()/stderr (if any) -> output panel
@@ -2733,30 +2734,30 @@ class MainWindow(DockingMainWindow):
                 results_panel.display_rich_output(figures, "Result")
             self.show_panel("results")
             self._update_variables_view()
-            self.action_label.setText("[Python] Chart + data generated!")
-            self._send_notification("Python", "Chart + data generated!", success=True, tab_index=tab_index)
+            self.action_label.setText(S.status.python_chart_data)
+            self._send_notification(S.notification.python, S.notification.chart_data, success=True, tab_index=tab_index)
         elif has_figures:
             # Only rich outputs: show in results
             if results_panel:
                 results_panel.display_rich_output(figures, "Result")
             self.show_panel("results")
             self._update_variables_view()
-            self.action_label.setText("[Python] Result displayed!")
-            self._send_notification("Python", "Result displayed!", success=True, tab_index=tab_index)
+            self.action_label.setText(S.status.python_result_displayed)
+            self._send_notification(S.notification.python, S.notification.result_displayed, success=True, tab_index=tab_index)
         elif result_value is not None:
             # Result without charts: use centralized handler
             success = self._handle_execution_result(result=result_value, error=None, execution_type="Python")
             if success:
                 self._update_variables_view()
-                self.action_label.setText("[Python] Executed successfully!")
-                self._send_notification("Python", "Executed successfully!", success=True, tab_index=tab_index)
+                self.action_label.setText(S.status.python_executed)
+                self._send_notification(S.notification.python, S.notification.executed, success=True, tab_index=tab_index)
         else:
             # No result, no charts: only output
             if output:
                 self.show_panel("output")
             self._update_variables_view()
-            self.action_label.setText("[Python] Executed successfully!")
-            self._send_notification("Python", "Executed successfully!", success=True, tab_index=tab_index)
+            self.action_label.setText(S.status.python_executed)
+            self._send_notification(S.notification.python, S.notification.executed, success=True, tab_index=tab_index)
 
     def _execute_cross_syntax(self, code: str):
         """Executes cross syntax {{ SQL }} code in background"""
@@ -2770,7 +2771,7 @@ class MainWindow(DockingMainWindow):
                 return
 
         self._start_execution_timer("Cross")
-        self.action_label.setText("[Cross-Syntax] Running...")
+        self.action_label.setText(S.status.cross_running)
 
         # Mark tab as running
         running_tab_index = self._mark_tab_running(True)
@@ -2781,7 +2782,7 @@ class MainWindow(DockingMainWindow):
             self._stop_execution_timer()
             self._mark_tab_running(False, running_tab_index)
             self._show_error_output(f"[Cross-Syntax] Syntax error: {error}")
-            self.action_label.setText("[Cross-Syntax] Syntax error")
+            self.action_label.setText(S.status.cross_syntax_error)
             return
 
         # Use current session connection
@@ -2790,9 +2791,9 @@ class MainWindow(DockingMainWindow):
             self._stop_execution_timer()
             self._mark_tab_running(False, running_tab_index)
             QMessageBox.warning(
-                self, "Warning", "No active connection in this session. Connect to a database first."
+                self, S.dialogs.warning, S.dialogs.cross_no_connection_msg
             )
-            self.action_label.setText("[Cross-Syntax] No connection")
+            self.action_label.setText(S.status.cross_no_connection)
             return
 
         # Keep reference to session that started execution
@@ -2849,8 +2850,8 @@ class MainWindow(DockingMainWindow):
         # FORCE: If there is an error, ALWAYS show output first
         if error:
             self._show_error_output(f"[Cross-Syntax] Error: {error}")
-            self.action_label.setText("[Cross-Syntax] Execution error")
-            self._send_notification("Cross-Syntax", f"Error: {str(error)[:50]}...", success=False, tab_index=tab_index)
+            self.action_label.setText(S.status.cross_execution_error)
+            self._send_notification(S.notification.cross_syntax, S.notification.error.format(error=str(error)[:50]), success=False, tab_index=tab_index)
             return
 
         # Show output first (if any)
@@ -2867,9 +2868,9 @@ class MainWindow(DockingMainWindow):
                 if var_value is not None:
                     if isinstance(var_value, pd.DataFrame):
                         rows = len(var_value)
-                        self._log_info(f"[Cross-Syntax] Variable '{var_name}' created ({rows:,} rows)")
+                        self._log_info(S.log.cross_variable_created.format(name=var_name, rows=f"{rows:,}"))
                     else:
-                        self._log_info(f"[Cross-Syntax] Variable '{var_name}' created")
+                        self._log_info(S.log.cross_variable_created_no_rows.format(name=var_name))
 
         # ONLY if there is no error, use centralized method
         success = self._handle_execution_result(
@@ -2885,12 +2886,12 @@ class MainWindow(DockingMainWindow):
                 # Update Python autocomplete with updated namespace
                 self._push_python_namespace(session.namespace)
 
-            self.action_label.setText("[Cross-Syntax] Executed successfully!")
+            self.action_label.setText(S.status.cross_executed)
 
             # Success notification
             queries_count = result.get("queries_executed", 0) if result else 0
             self._send_notification(
-                "Cross-Syntax", f"Complete! {queries_count} queries executed", success=True, tab_index=tab_index
+                S.notification.cross_syntax, S.notification.complete_queries.format(count=queries_count), success=True, tab_index=tab_index
             )
 
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
@@ -3024,8 +3025,8 @@ class MainWindow(DockingMainWindow):
         """Clears all results"""
         reply = QMessageBox.question(
             self,
-            "Confirm",
-            "Do you want to clear all results in memory?",
+            S.dialogs.confirm_clear_title,
+            S.dialogs.confirm_clear_msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 
@@ -3040,7 +3041,7 @@ class MainWindow(DockingMainWindow):
             output = self.global_output_panel
             if output:
                 output.text_edit.clear()
-            self.action_label.setText("Results cleared")
+            self.action_label.setText(S.status.results_cleared)
 
     def _new_file(self):
         """Clears current tab editor"""
@@ -3052,9 +3053,9 @@ class MainWindow(DockingMainWindow):
         """Opens workspace or code file"""
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Open File",
+            S.dialogs.open_file_title,
             "",
-            "Supported Files (*.sql *.py *.ipynb *.dpw);;DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;Jupyter Notebook (*.ipynb);;All Files (*.*)",
+            S.dialogs.open_file_filter,
         )
         if filename:
             # Check if it is workspace
@@ -3084,7 +3085,7 @@ class MainWindow(DockingMainWindow):
                 except ValueError as e:
                     from PyQt6.QtWidgets import QMessageBox
 
-                    QMessageBox.critical(self, "Error", f"Error opening notebook: {e}")
+                    QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_opening_notebook.format(error=e))
                     return
             else:
                 with open(filename, "r", encoding="utf-8") as f:
@@ -3165,7 +3166,7 @@ class MainWindow(DockingMainWindow):
             self._original_file_path = filename
             self._original_file_type = widget._original_file_type
 
-            self.main_statusbar.show_save_feedback(f"File opened: {filename}")
+            self.main_statusbar.show_save_feedback(S.status.file_opened.format(filename=filename))
             self.main_statusbar.set_file_info(filename)
 
             # 9. Update window title with context
@@ -3177,7 +3178,7 @@ class MainWindow(DockingMainWindow):
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
 
-            QMessageBox.critical(self, "Error", f"Error opening file: {e}")
+            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_opening_file.format(error=e))
 
     def _save_file(self):
         """Intelligent saving system"""
@@ -3195,12 +3196,12 @@ class MainWindow(DockingMainWindow):
             filter_text = "DataPyn Workspace (*.dpw);;SQL Files (*.sql);;Python Files (*.py);;All Files (*.*)"
 
         filename, selected_filter = QFileDialog.getSaveFileName(
-            self, "Save As", "", filter_text
+            self, S.dialogs.save_as_title, "", filter_text
         )
         if filename:
             if filename.endswith(".dpw"):
                 self._save_workspace_to_file(filename)
-                self.main_statusbar.show_save_feedback(f"Workspace saved: {filename}")
+                self.main_statusbar.show_save_feedback(S.status.workspace_saved.format(path=filename))
                 self.main_statusbar.set_file_info(filename)
             elif filename.endswith(".sql"):
                 self._original_file_path = filename
@@ -3225,7 +3226,7 @@ class MainWindow(DockingMainWindow):
                 else:
                     filename += ".dpw"
                     self._save_workspace_to_file(filename)
-                    self.main_statusbar.show_save_feedback(f"Workspace saved: {filename}")
+                    self.main_statusbar.show_save_feedback(S.status.workspace_saved.format(path=filename))
                     self.main_statusbar.set_file_info(filename)
 
             self._update_window_title()
@@ -3242,7 +3243,7 @@ class MainWindow(DockingMainWindow):
             # Reload sessions from workspace
             self._restore_sessions()
 
-            self.main_statusbar.show_save_feedback(f"Workspace opened: {filename}")
+            self.main_statusbar.show_save_feedback(S.status.workspace_opened.format(filename=filename))
             self.main_statusbar.set_file_info(filename)
             self._update_window_title()
 
@@ -3250,7 +3251,7 @@ class MainWindow(DockingMainWindow):
             import traceback
 
             traceback.print_exc()
-            QMessageBox.critical(self, "Error Opening Workspace", f"Error loading workspace:\n{str(e)}")
+            QMessageBox.critical(self, S.dialogs.error_opening_workspace_title, S.dialogs.error_opening_workspace_msg.format(error=str(e)))
 
     def _save_workspace_to_file(self, filename: str):
         """Saves workspace to a specific file"""
@@ -3475,12 +3476,12 @@ class MainWindow(DockingMainWindow):
         """Shows the about dialog"""
         QMessageBox.about(
             self,
-            "About DataPyn",
-            f"""<h2>DataPyn IDE</h2>
-            <p><b>Version {self._current_version}</b></p>
-            <p>Modern IDE for SQL queries with integrated Python manipulation</p>
+            S.about.title,
+            f"""<h2>{S.about.ide_name}</h2>
+            <p><b>{S.about.version.format(version=self._current_version)}</b></p>
+            <p>{S.about.description}</p>
             
-            <p><b>Technologies:</b></p>
+            <p><b>{S.about.technologies}</b></p>
             <ul>
                 <li>Python 3.12+</li>
                 <li>PyQt6 - Graphical interface</li>
@@ -3490,7 +3491,7 @@ class MainWindow(DockingMainWindow):
                 <li>Matplotlib - Data visualization</li>
             </ul>
             
-            <p><b>Supported Databases:</b></p>
+            <p><b>{S.about.databases}</b></p>
             <ul>
                 <li>Microsoft SQL Server</li>
                 <li>MySQL / MariaDB</li>
@@ -3498,10 +3499,10 @@ class MainWindow(DockingMainWindow):
                 <li>SQLite</li>
             </ul>
             
-            <p><b>License:</b> MIT License</p>
+            <p><b>{S.about.license}</b></p>
             <p><b>Repository:</b> <a href="https://github.com/natharuc/datapyn">github.com/natharuc/datapyn</a></p>
             
-            <p style="margin-top: 15px; color: #888;">Built with Python and PyQt6</p>
+            <p style="margin-top: 15px; color: #888;">{S.about.built_with}</p>
             """,
         )
 
@@ -3520,9 +3521,9 @@ class MainWindow(DockingMainWindow):
         """Enables or disables auto-update"""
         self.auto_update_service.set_auto_update_enabled(checked)
         if checked:
-            self.statusbar.showMessage("Auto-update ativado", 3000)
+            self.statusbar.showMessage(S.status.auto_update_enabled, 3000)
         else:
-            self.statusbar.showMessage("Auto-update desativado", 3000)
+            self.statusbar.showMessage(S.status.auto_update_disabled, 3000)
 
     def _get_current_version(self) -> str:
         """Gets current version from pyproject.toml"""
@@ -3555,9 +3556,8 @@ class MainWindow(DockingMainWindow):
         if not self.auto_update_service.is_auto_update_enabled():
             reply = QMessageBox.question(
                 self,
-                "Auto-Update Disabled",
-                "Automatic update checking is disabled.\n\n"
-                "Do you want to enable it and check for updates?",
+                S.dialogs.auto_update_disabled_title,
+                S.dialogs.auto_update_disabled_msg,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
@@ -3604,7 +3604,7 @@ class MainWindow(DockingMainWindow):
 
     def _on_update_available(self, version: str, download_url: str, release_notes: str):
         """Callback when an update is available"""
-        self.statusbar.showMessage(f"New version available: {version}", 5000)
+        self.statusbar.showMessage(S.status.new_version_available.format(version=version), 5000)
 
         dialog = UpdateDialog(self._current_version, version, release_notes, self)
         if dialog.exec() == UpdateDialog.DialogCode.Accepted and dialog.should_download:
@@ -3612,11 +3612,11 @@ class MainWindow(DockingMainWindow):
 
     def _on_no_update_available(self):
         """Callback when no updates are available"""
-        self.statusbar.showMessage("You are already using the latest version!", 5000)
+        self.statusbar.showMessage(S.status.latest_version, 5000)
         QMessageBox.information(
             self,
-            "No Updates",
-            f"You are already using the latest version of DataPyn ({self._current_version}).",
+            S.dialogs.no_updates_title,
+            S.dialogs.no_updates_msg.format(version=self._current_version),
         )
 
     def _on_update_check_error(self, error_message: str):
@@ -3625,9 +3625,9 @@ class MainWindow(DockingMainWindow):
         if hasattr(self, "_update_checking_dialog") and self._update_checking_dialog:
             self._update_checking_dialog.close()
         
-        self.statusbar.showMessage("Error checking for updates", 5000)
+        self.statusbar.showMessage(S.status.error_checking_updates, 5000)
         QMessageBox.warning(
-            self, "Verification Error", f"Could not check for updates:\n\n{error_message}"
+            self, S.dialogs.verification_error_title, S.dialogs.verification_error_msg.format(error=error_message)
         )
 
     def _download_update(self, version: str, download_url: str):
@@ -3650,10 +3650,8 @@ class MainWindow(DockingMainWindow):
 
         reply = QMessageBox.question(
             self,
-            "Download Complete",
-            "The installer was downloaded successfully!\n\n"
-            "Do you want to install the update now?\n\n"
-            "Note: DataPyn will close and the installer will run.",
+            S.dialogs.download_complete_title,
+            S.dialogs.download_complete_msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 
@@ -3662,7 +3660,7 @@ class MainWindow(DockingMainWindow):
                 QApplication.quit()
             else:
                 QMessageBox.critical(
-                    self, "Installation Error", "Could not start the update installation."
+                    self, S.dialogs.installation_error_title, S.dialogs.installation_error_msg
                 )
 
     def _new_session(self):
@@ -3800,7 +3798,7 @@ class MainWindow(DockingMainWindow):
         layout.addWidget(icon_label)
 
         # Texto principal
-        title_label = QLabel("No script open")
+        title_label = QLabel(S.empty_state.title)
         title_label.setStyleSheet("""
             font-size: 24px;
             font-weight: bold;
@@ -3812,7 +3810,7 @@ class MainWindow(DockingMainWindow):
         layout.addWidget(title_label)
 
         # Subtitulo com dica de drag-and-drop
-        subtitle_label = QLabel("Create a new session or drag a file to get started")
+        subtitle_label = QLabel(S.empty_state.subtitle)
         subtitle_label.setStyleSheet("""
             font-size: 14px;
             color: #888888;
@@ -3824,7 +3822,7 @@ class MainWindow(DockingMainWindow):
 
         # Botao iniciar
         colors = get_colors()
-        start_button = QPushButton("  Start  ")
+        start_button = QPushButton(f"  {S.empty_state.start_button}  ")
         start_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {colors.interactive_primary};
@@ -4053,7 +4051,7 @@ class MainWindow(DockingMainWindow):
                     break
         else:
             # Desconectado
-            self.connection_status_bar.setText("Disconnected")
+            self.connection_status_bar.setText(S.status.disconnected)
             self.connection_status_bar.setStyleSheet("""
                 QLabel {
                     color: #f48771;
@@ -4066,7 +4064,7 @@ class MainWindow(DockingMainWindow):
             # Clear active connection panel
             self.connection_panel.set_disconnected()
 
-        self.action_label.setText(f"Session: {session.title}")
+        self.action_label.setText(S.status.session_label.format(title=session.title))
 
         # Update window title when session is focused
         self._update_window_title()
@@ -4117,7 +4115,7 @@ class MainWindow(DockingMainWindow):
                 break
 
         # === ATUALIZAR STATUS BAR ===
-        self.action_label.setText(f"Conectado: {connection_name} ({current_db})")
+        self.action_label.setText(S.status.connected_to.format(name=connection_name, db=current_db))
 
         # === DEFINIR COR DA ABA ===
         color = config.get("color", "#007ACC") or "#007ACC"
@@ -4140,7 +4138,7 @@ class MainWindow(DockingMainWindow):
         """
         widget = self._get_current_session_widget()
         if not widget:
-            self.statusBar().showMessage("No active session", 3000)
+            self.statusBar().showMessage(S.status.no_active_session, 3000)
             return
 
         # Determine connection: focused block or session
@@ -4160,12 +4158,12 @@ class MainWindow(DockingMainWindow):
                 connector = widget.session.connector
 
         if not connection_name:
-            self.statusBar().showMessage("No active connection to reload schema", 3000)
+            self.statusBar().showMessage(S.status.no_active_connection_reload, 3000)
             return
 
         # Invalidate cache and reload
         self._schema_service.invalidate_cache(connection_name)
-        self.statusBar().showMessage(f"Reloading schema for '{connection_name}'...", 5000)
+        self.statusBar().showMessage(S.status.reloading_schema.format(name=connection_name), 5000)
 
         if connector and connector.is_connected():
             self._schema_service.load_schema(connector, connection_name)
@@ -4177,7 +4175,7 @@ class MainWindow(DockingMainWindow):
             if conn and conn.is_connected():
                 self._schema_service.load_schema(conn, connection_name)
             else:
-                self.statusBar().showMessage(f"Connection '{connection_name}' is not active", 3000)
+                self.statusBar().showMessage(S.status.connection_not_active.format(name=connection_name), 3000)
 
     def _on_schema_loaded(self, schema: dict, connection_name: str):
         """Callback when database schema is loaded by SchemaService.
@@ -4187,16 +4185,17 @@ class MainWindow(DockingMainWindow):
         Se connection_name e a conexao da sessao, aplica aos blocos sem conexao customizada.
         Se connection_name e uma conexao de bloco especifico, aplica so a esse bloco.
         """
+        tables_total = len(schema.get('tables', []))
+        cols_total = sum(len(v) for v in schema.get('columns', {}).values())
         self._log_info(
-            f"Schema carregado ({connection_name}): {len(schema.get('tables', []))} tabelas, "
-            f"{sum(len(v) for v in schema.get('columns', {}).values())} colunas"
+            S.log.schema_loaded.format(name=connection_name, tables=tables_total, cols=cols_total)
         )
 
         # Feedback na statusbar
         tables_count = len(schema.get("tables", []))
         cols_count = sum(len(v) for v in schema.get("columns", {}).values())
         self.statusBar().showMessage(
-            f"Schema '{connection_name}' carregado: {tables_count} tabelas, {cols_count} colunas", 5000
+            S.status.schema_loaded.format(name=connection_name, tables=tables_count, cols=cols_count), 5000
         )
 
         # Enviar schema para blocos que usam esta conexao
@@ -4535,12 +4534,12 @@ class MainWindow(DockingMainWindow):
 
             self.connection_manager.mark_connection_used(connection_name)
             self._update_connection_status()
-            self.action_label.setText(f"Reconnected to {connection_name}")
+            self.action_label.setText(S.status.reconnected_to.format(name=connection_name))
 
         except Exception as e:
             print(f"Error reconnecting {connection_name}: {e}")
             # Does not fail silently - shows in statusbar
-            self.action_label.setText(f"Reconnection failed: {connection_name}")
+            self.action_label.setText(S.status.reconnection_failed.format(name=connection_name))
 
     def _execute_cross_syntax_for_session(self, session, code: str):
         """Executes cross-syntax for a specific session"""
@@ -4672,7 +4671,7 @@ class MainWindow(DockingMainWindow):
 
             # Feedback visual para o usuario
             save_path = str(self.workspace_manager.current_file_path or self.workspace_manager.config_path)
-            self.main_statusbar.show_save_feedback(f"Workspace saved: {save_path}")
+            self.main_statusbar.show_save_feedback(S.status.workspace_saved.format(path=save_path))
             self.main_statusbar.set_file_info(save_path)
 
             self._clear_modification_markers()
@@ -4714,7 +4713,7 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.setTabText(index, filename)
                 current_widget.session.title = filename
 
-            self.main_statusbar.show_save_feedback(f"File saved: {file_path}")
+            self.main_statusbar.show_save_feedback(S.status.file_saved.format(path=file_path))
             self.main_statusbar.set_file_info(file_path)
 
             self._update_window_title()
@@ -4722,7 +4721,7 @@ class MainWindow(DockingMainWindow):
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
 
-            QMessageBox.critical(self, "Error", f"Error saving file: {e}")
+            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_saving_file.format(error=e))
 
     def _save_single_file_as(self, file_type: str):
         """Asks for path to save single file"""
@@ -4735,7 +4734,7 @@ class MainWindow(DockingMainWindow):
             filter_text = "Python Files (*.py);;All Files (*.*)"
             default_ext = ".py"
 
-        filename, _ = QFileDialog.getSaveFileName(self, f"Save {file_type.upper()} File", "", filter_text)
+        filename, _ = QFileDialog.getSaveFileName(self, S.dialogs.save_python_file_title.format(type=file_type.upper()), "", filter_text)
 
         if filename:
             # Ensure correct extension
@@ -4752,17 +4751,17 @@ class MainWindow(DockingMainWindow):
         
         current_widget = self._get_current_session_widget()
         if not current_widget:
-            QMessageBox.warning(self, "Warning", "No active session to export.")
+            QMessageBox.warning(self, S.dialogs.warning, S.dialogs.export_no_session)
             return
         
         blocks = current_widget.editor.get_blocks()
         if not blocks:
-            QMessageBox.warning(self, "Warning", "No code blocks to export.")
+            QMessageBox.warning(self, S.dialogs.warning, S.dialogs.export_no_blocks)
             return
         
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Export as Python Script",
+            S.dialogs.export_script_title,
             "",
             "Python Files (*.py);;All Files (*.*)"
         )
@@ -4779,15 +4778,15 @@ class MainWindow(DockingMainWindow):
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(script_content)
             
-            self.action_label.setText(f"Script exported: {filename}")
+            self.action_label.setText(S.status.script_exported.format(filename=filename))
             QMessageBox.information(
                 self,
-                "Export Complete",
-                f"Python script exported successfully to:\n{filename}"
+                S.dialogs.export_complete_title,
+                S.dialogs.export_complete_msg.format(filename=filename)
             )
         
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error exporting script: {e}")
+            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_exporting_script.format(error=e))
     
     def _generate_script_from_blocks(self, blocks, session_widget) -> str:
         """Generates complete Python code from the blocks"""
@@ -4950,8 +4949,8 @@ class MainWindow(DockingMainWindow):
         if has_running:
             reply = QMessageBox.question(
                 self,
-                "Execution in progress",
-                "There is code being executed. Do you want to cancel and close the application?",
+                S.dialogs.execution_in_progress_title,
+                S.dialogs.execution_in_progress_msg,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )

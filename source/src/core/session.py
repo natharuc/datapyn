@@ -15,6 +15,8 @@ import traceback
 import sys
 from io import StringIO
 
+from src.language import S
+
 
 class Session(QObject):
     """
@@ -34,11 +36,11 @@ class Session(QObject):
     execution_finished = pyqtSignal(bool, str)  # success, message
     variables_changed = pyqtSignal(dict)  # namespace
 
-    def __init__(self, session_id: str, title: str = "Script"):
+    def __init__(self, session_id: str, title: str = None):
         super().__init__()
 
         self.session_id = session_id
-        self.title = title
+        self.title = title or S.session.default_title
         self.created_at = datetime.now()
 
         # Connection reference (not the object itself)
@@ -50,7 +52,7 @@ class Session(QObject):
 
         # State
         self._is_executing = False
-        self._last_status = "Ready"
+        self._last_status = S.session.status_ready
         self._code = ""  # Compatibility
         self._blocks: list = []  # Lista de blocos [{language, code}]
 
@@ -103,7 +105,7 @@ class Session(QObject):
         self._connection_name = connection_name
         self._connector = connector
         self.connection_changed.emit(connection_name)
-        self.status_changed.emit(f"Connected to {connection_name}")
+        self.status_changed.emit(S.session.status_connected_to.format(name=connection_name))
 
     def connect(self, connection_name: str, password: str = "") -> bool:
         """
@@ -177,7 +179,7 @@ class Session(QObject):
         self._connection_name = None
         self._connector = None
         self.connection_changed.emit("")
-        self.status_changed.emit("Disconnected")
+        self.status_changed.emit(S.session.status_disconnected)
 
     # === NAMESPACE (VARIABLES) ===
 

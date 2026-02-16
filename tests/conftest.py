@@ -30,6 +30,10 @@ if source_path not in sys.path:
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
+# Inicializar sistema de idiomas para testes
+from src.language import init_language
+init_language("en-US")
+
 
 # ==================== CONFIGURAÇÃO MATPLOTLIB PARA TESTES ====================
 

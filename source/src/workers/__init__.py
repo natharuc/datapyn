@@ -12,6 +12,8 @@ from io import StringIO
 from typing import Any, Dict
 import pandas as pd
 
+from src.language import S
+
 
 class BaseWorker(QObject):
     """
@@ -56,7 +58,7 @@ class SqlExecutionWorker(BaseWorker):
             df = self.connector.execute_query(self.query)
             self.result_ready.emit(df)
         except Exception as e:
-            error_msg = f"SQL Error: {str(e)}"
+            error_msg = S.workers.error_sql.format(msg=str(e))
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -113,7 +115,7 @@ class DatabaseConnectionWorker(BaseWorker):
             )
             self.connection_success.emit()
         except Exception as e:
-            error_msg = f"Connection error: {str(e)}\n{traceback.format_exc()}"
+            error_msg = S.workers.error_connection.format(msg=f"{str(e)}\n{traceback.format_exc()}")
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -156,7 +158,7 @@ class MixedSyntaxExecutionWorker(BaseWorker):
             result = self.executor.parse_and_execute(self.code, self.namespace)
             self.execution_complete.emit(result)
         except Exception as e:
-            error_msg = f"Mixed Syntax Error:\n{traceback.format_exc()}"
+            error_msg = S.workers.error_mixed_syntax + f"\n{traceback.format_exc()}"
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -197,7 +199,7 @@ class DataFrameOperationWorker(BaseWorker):
             result = self.operation_func(*self.args, **self.kwargs)
             self.operation_complete.emit(result)
         except Exception as e:
-            error_msg = f"Operation error: {str(e)}\n{traceback.format_exc()}"
+            error_msg = S.workers.error_operation.format(msg=f"{str(e)}\n{traceback.format_exc()}")
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -227,7 +229,7 @@ class DatabaseSwitchWorker(BaseWorker):
             self.connector.change_database(self.database_name)
             self.switch_success.emit(self.database_name)
         except Exception as e:
-            error_msg = f"Database switch error: {str(e)}"
+            error_msg = S.workers.error_db_switch.format(msg=str(e))
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
@@ -280,9 +282,9 @@ class BlockConnectionWorker(BaseWorker):
             if connector.is_connected():
                 self.connection_ready.emit(connector)
             else:
-                self.error.emit("Failed to connect to database")
+                self.error.emit(S.workers.error_failed_to_connect)
         except Exception as e:
-            error_msg = f"Connection error: {str(e)}"
+            error_msg = S.workers.error_connection.format(msg=str(e))
             self.error.emit(error_msg)
         finally:
             self.finished.emit()

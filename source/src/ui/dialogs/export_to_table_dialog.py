@@ -31,6 +31,7 @@ import logging
 import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
+from src.language import S
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +242,7 @@ class ExportToTableDialog(QDialog):
         self._worker = None
         self._is_exporting = False
 
-        self.setWindowTitle("Export to Table")
+        self.setWindowTitle(S.export_to_table.title)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         self.setMinimumWidth(480)
         self.setFixedHeight(380)
@@ -256,7 +257,7 @@ class ExportToTableDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
 
         # DataFrame info
-        info_label = QLabel(f"{len(self.df):,} rows  x  {len(self.df.columns)} columns")
+        info_label = QLabel(S.export_to_table.info_row_col.format(rows=f"{len(self.df):,}", cols=len(self.df.columns)))
         info_label.setFont(QFont("Segoe UI", 9))
         info_label.setStyleSheet("color: #888; margin-bottom: 4px;")
         layout.addWidget(info_label)
@@ -268,12 +269,9 @@ class ExportToTableDialog(QDialog):
 
         # Table name
         self.table_name_edit = QLineEdit()
-        self.table_name_edit.setPlaceholderText("e.g.: my_table or #temp")
-        self.table_name_edit.setToolTip(
-            "Use # at the beginning to create a temporary table (SQL Server)\n"
-            "E.g.: #temp_data, my_table, schema.table"
-        )
-        form_layout.addRow("Table:", self.table_name_edit)
+        self.table_name_edit.setPlaceholderText(S.export_to_table.placeholder_table)
+        self.table_name_edit.setToolTip(S.export_to_table.tooltip_table)
+        form_layout.addRow(S.export_to_table.label_table, self.table_name_edit)
 
         # Destination connection
         self.connection_combo = QComboBox()
@@ -283,7 +281,7 @@ class ExportToTableDialog(QDialog):
             if connector and connector.is_connected():
                 db_type = getattr(connector, "db_type", "")
                 db_name = connector.get_current_database()
-                label = f"{name} ({db_type} - {db_name})" if db_name else f"{name} ({db_type})"
+                label = S.export_to_table.combo_connection_format.format(name=name, db_type=db_type, db_name=db_name) if db_name else f"{name} ({db_type})"
                 self.connection_combo.addItem(label, name)
 
         # Pre-select current connection
@@ -293,29 +291,29 @@ class ExportToTableDialog(QDialog):
                     self.connection_combo.setCurrentIndex(i)
                     break
 
-        form_layout.addRow("Connection:", self.connection_combo)
+        form_layout.addRow(S.export_to_table.label_connection, self.connection_combo)
 
         # If table exists
         self.if_exists_combo = QComboBox()
-        self.if_exists_combo.addItem("Replace (DROP + CREATE)", "replace")
-        self.if_exists_combo.addItem("Append (INSERT)", "append")
-        self.if_exists_combo.addItem("Fail (error if exists)", "fail")
+        self.if_exists_combo.addItem(S.export_to_table.option_replace, "replace")
+        self.if_exists_combo.addItem(S.export_to_table.option_append, "append")
+        self.if_exists_combo.addItem(S.export_to_table.option_fail, "fail")
         self.if_exists_combo.setCurrentIndex(0)
-        form_layout.addRow("If exists:", self.if_exists_combo)
+        form_layout.addRow(S.export_to_table.label_if_exists, self.if_exists_combo)
 
         # Chunk size
         self.chunk_spin = QSpinBox()
         self.chunk_spin.setMinimum(100)
         self.chunk_spin.setMaximum(100000)
         self.chunk_spin.setValue(1000)
-        self.chunk_spin.setSuffix(" rows")
+        self.chunk_spin.setSuffix(S.export_to_table.suffix_rows)
         self.chunk_spin.setToolTip("Number of rows per insert batch")
-        form_layout.addRow("Batch:", self.chunk_spin)
+        form_layout.addRow(S.export_to_table.label_batch, self.chunk_spin)
 
         layout.addLayout(form_layout)
 
         # Progress
-        self.progress_group = QGroupBox("Progress")
+        self.progress_group = QGroupBox(S.export_to_table.group_progress)
         progress_layout = QVBoxLayout(self.progress_group)
         progress_layout.setContentsMargins(8, 16, 8, 8)
 
@@ -326,7 +324,7 @@ class ExportToTableDialog(QDialog):
         self.progress_bar.setTextVisible(True)
         progress_layout.addWidget(self.progress_bar)
 
-        self.status_label = QLabel("Ready to export")
+        self.status_label = QLabel(S.export_to_table.status_ready)
         self.status_label.setFont(QFont("Segoe UI", 9))
         progress_layout.addWidget(self.status_label)
 
@@ -339,12 +337,12 @@ class ExportToTableDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel = QPushButton(S.export_to_table.btn_cancel)
         self.btn_cancel.setObjectName("btnCancel")
         self.btn_cancel.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_export = QPushButton("  Export")
+        self.btn_export = QPushButton(S.export_to_table.btn_export)
         self.btn_export.setIcon(qta.icon("mdi.database-export", color="white"))
         self.btn_export.setDefault(True)
         self.btn_export.clicked.connect(self._on_export)
@@ -381,12 +379,12 @@ class ExportToTableDialog(QDialog):
         """Validates fields before exporting"""
         table_name = self.table_name_edit.text().strip()
         if not table_name:
-            QMessageBox.warning(self, "Validation", "Enter the table name")
+            QMessageBox.warning(self, S.dialogs.warning, S.export_to_table.validation_table_required)
             self.table_name_edit.setFocus()
             return False
 
         if self.connection_combo.count() == 0:
-            QMessageBox.warning(self, "Validation", "No active connection available")
+            QMessageBox.warning(self, S.dialogs.warning, S.export_to_table.validation_connection_required)
             return False
 
         return True
@@ -406,7 +404,7 @@ class ExportToTableDialog(QDialog):
 
         connector = self.connections.get(conn_name)
         if not connector or not connector.engine:
-            QMessageBox.critical(self, "Error", f"Connection '{conn_name}' is not active")
+            QMessageBox.critical(self, S.dialogs.error, f"Connection '{conn_name}' is not active")
             return
 
         # Separate schema.table if applicable
@@ -424,12 +422,12 @@ class ExportToTableDialog(QDialog):
         self.connection_combo.setEnabled(False)
         self.if_exists_combo.setEnabled(False)
         self.chunk_spin.setEnabled(False)
-        self.btn_cancel.setText("Cancel Export")
+        self.btn_cancel.setText(S.export_to_table.btn_cancel_export)
 
         # Show progress
         self.progress_group.setVisible(True)
         self.progress_bar.setValue(0)
-        self.status_label.setText("Starting export...")
+        self.status_label.setText(S.export_to_table.status_starting)
 
         # Convert to Polars for fast export
         try:
@@ -444,14 +442,14 @@ class ExportToTableDialog(QDialog):
                         df_clean[col] = df_clean[col].astype(object)
                 df_polars = pl.from_pandas(df_clean)
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error converting DataFrame: {e}")
+                QMessageBox.critical(self, S.dialogs.error, f"Error converting DataFrame: {e}")
                 self._is_exporting = False
                 self.btn_export.setEnabled(True)
                 self.table_name_edit.setEnabled(True)
                 self.connection_combo.setEnabled(True)
                 self.if_exists_combo.setEnabled(True)
                 self.chunk_spin.setEnabled(True)
-                self.btn_cancel.setText("Cancel")
+                self.btn_cancel.setText(S.export_to_table.btn_cancel)
                 return
 
         # Create worker
@@ -501,11 +499,11 @@ class ExportToTableDialog(QDialog):
         if success:
             self.progress_bar.setValue(100)
             self.status_label.setText(message)
-            QMessageBox.information(self, "Export Complete", message)
+            QMessageBox.information(self, S.export_to_table.dialog_complete_title, message)
             self.accept()
         else:
             self.status_label.setText(f"Error: {message}")
-            QMessageBox.critical(self, "Export Error", message)
+            QMessageBox.critical(self, S.export_to_table.dialog_error_title, message)
 
             # Re-enable fields
             self.btn_export.setEnabled(True)
@@ -513,13 +511,13 @@ class ExportToTableDialog(QDialog):
             self.connection_combo.setEnabled(True)
             self.if_exists_combo.setEnabled(True)
             self.chunk_spin.setEnabled(True)
-            self.btn_cancel.setText("Cancel")
+            self.btn_cancel.setText(S.export_to_table.btn_cancel)
 
     def _on_cancel(self):
         """Cancels export or closes dialog"""
         if self._is_exporting and self._worker:
             self._worker.cancel()
-            self.status_label.setText("Cancelling...")
+            self.status_label.setText(S.export_to_table.status_cancelling)
         else:
             self.reject()
 

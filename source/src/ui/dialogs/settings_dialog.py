@@ -1,5 +1,5 @@
 """
-Dialog for configuring keyboard shortcuts
+Dialog for configuring application settings (language + keyboard shortcuts)
 """
 
 from PyQt6.QtWidgets import (
@@ -14,15 +14,19 @@ from PyQt6.QtWidgets import (
     QKeySequenceEdit,
     QMessageBox,
     QGroupBox,
+    QTabWidget,
+    QWidget,
+    QComboBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QSettings
 from PyQt6.QtGui import QFont, QKeySequence
 from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
+from src.language import S, get_available_languages
 
 
 class SettingsDialog(QDialog):
-    """Settings dialog"""
+    """Settings dialog with tabs for General and Shortcuts"""
 
     shortcuts_changed = pyqtSignal()  # Signal emitted when shortcuts are saved
 
@@ -30,12 +34,13 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.shortcut_manager = shortcut_manager
         self.theme_manager = theme_manager or ThemeManager()
+        self._original_language = S.language_code
         self._setup_ui()
         self._load_shortcuts()
 
     def _setup_ui(self):
-        """Sets up the UI"""
-        self.setWindowTitle("Settings - Shortcuts")
+        """Sets up the UI with tabs"""
+        self.setWindowTitle(S.settings.title)
         self.setModal(True)
         self.setMinimumSize(700, 500)
         self.resize(750, 550)
@@ -50,25 +55,210 @@ class SettingsDialog(QDialog):
         layout.setSpacing(15)
         layout.setContentsMargins(20, 20, 20, 20)
 
+        # Tab widget
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                background-color: #1e1e1e;
+            }
+            QTabBar::tab {
+                background-color: #2d2d30;
+                color: #cccccc;
+                padding: 8px 20px;
+                border: 1px solid #3e3e42;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background-color: #1e1e1e;
+                border-bottom: 2px solid #007acc;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #383838;
+            }
+        """)
+
+        # General tab
+        self._setup_general_tab()
+
+        # Shortcuts tab
+        self._setup_shortcuts_tab()
+
+        layout.addWidget(self.tabs)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+
+        btn_reset = QPushButton(S.settings.btn_restore_defaults)
+        btn_reset.setFixedHeight(32)
+        btn_reset.setStyleSheet("""
+            QPushButton {
+                background-color: #3e3e42;
+                color: white;
+                border: none;
+                padding: 6px 16px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #505050;
+            }
+        """)
+        btn_reset.clicked.connect(self._reset_defaults)
+        btn_layout.addWidget(btn_reset)
+
+        btn_layout.addStretch()
+
+        btn_cancel = QPushButton(S.settings.btn_cancel)
+        btn_cancel.setFixedHeight(32)
+        btn_cancel.setStyleSheet("""
+            QPushButton {
+                background-color: #3e3e42;
+                color: white;
+                border: none;
+                padding: 6px 20px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #505050;
+            }
+        """)
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(btn_cancel)
+
+        btn_save = QPushButton(S.settings.btn_save)
+        btn_save.setFixedHeight(32)
+        btn_save.setStyleSheet("""
+            QPushButton {
+                background-color: #007acc;
+                color: white;
+                border: none;
+                padding: 6px 20px;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #005a9e;
+            }
+        """)
+        btn_save.clicked.connect(self._save_all)
+        btn_layout.addWidget(btn_save)
+
+        layout.addLayout(btn_layout)
+
+    def _setup_general_tab(self):
+        """Sets up the General tab with language selector"""
+        general_widget = QWidget()
+        general_layout = QVBoxLayout(general_widget)
+        general_layout.setSpacing(20)
+        general_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Language section
+        lang_group = QGroupBox(S.settings.section_language)
+        lang_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 11px;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 20px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }
+        """)
+        lang_layout = QVBoxLayout(lang_group)
+        lang_layout.setSpacing(10)
+
+        # Language combo
+        lang_row = QHBoxLayout()
+        lang_label = QLabel(S.settings.label_language)
+        lang_label.setStyleSheet("color: #cccccc; font-size: 11px; font-weight: normal;")
+        lang_row.addWidget(lang_label)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.setFixedWidth(250)
+        self.lang_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #2d2d30;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }
+            QComboBox:hover {
+                border-color: #007acc;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2d2d30;
+                color: #cccccc;
+                selection-background-color: #094771;
+                border: 1px solid #3e3e42;
+            }
+        """)
+
+        # Load available languages
+        languages = get_available_languages()
+        current_idx = 0
+        for i, lang in enumerate(languages):
+            self.lang_combo.addItem(lang["name"], lang["code"])
+            if lang["code"] == S.language_code:
+                current_idx = i
+        self.lang_combo.setCurrentIndex(current_idx)
+
+        lang_row.addWidget(self.lang_combo)
+        lang_row.addStretch()
+        lang_layout.addLayout(lang_row)
+
+        # Restart hint
+        hint_label = QLabel(S.settings.language_restart_hint)
+        hint_label.setStyleSheet("color: #6e6e6e; font-size: 10px; font-style: italic; font-weight: normal;")
+        lang_layout.addWidget(hint_label)
+
+        general_layout.addWidget(lang_group)
+        general_layout.addStretch()
+
+        self.tabs.addTab(general_widget, S.settings.tab_general)
+
+    def _setup_shortcuts_tab(self):
+        """Sets up the Shortcuts tab"""
+        shortcuts_widget = QWidget()
+        shortcuts_layout = QVBoxLayout(shortcuts_widget)
+        shortcuts_layout.setSpacing(15)
+        shortcuts_layout.setContentsMargins(20, 20, 20, 20)
+
         # Header
         header_layout = QVBoxLayout()
         header_layout.setSpacing(5)
 
-        title = QLabel("Keyboard Shortcuts")
+        title = QLabel(S.settings.header_shortcuts)
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
         title.setFont(title_font)
         header_layout.addWidget(title)
 
-        subtitle = QLabel("Customize DataPyn shortcuts")
+        subtitle = QLabel(S.settings.subtitle_shortcuts)
         subtitle.setStyleSheet("color: #999999; font-size: 11px;")
         header_layout.addWidget(subtitle)
 
-        layout.addLayout(header_layout)
+        shortcuts_layout.addLayout(header_layout)
 
         # Instructions
-        instructions = QLabel("Tip: Double-click a shortcut to edit")
+        instructions = QLabel(S.settings.tip_shortcuts)
         instructions.setStyleSheet("""
             background-color: #2d2d30;
             color: #cccccc;
@@ -77,12 +267,12 @@ class SettingsDialog(QDialog):
             border-left: 3px solid #007acc;
             font-size: 10px;
         """)
-        layout.addWidget(instructions)
+        shortcuts_layout.addWidget(instructions)
 
         # Shortcuts table
         self.table = QTableWidget()
         self.table.setColumnCount(2)
-        self.table.setHorizontalHeaderLabels(["Action", "Shortcut"])
+        self.table.setHorizontalHeaderLabels([S.settings.header_action, S.settings.header_shortcut])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -113,67 +303,9 @@ class SettingsDialog(QDialog):
             }
         """)
 
-        layout.addWidget(self.table)
+        shortcuts_layout.addWidget(self.table)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(10)
-
-        btn_reset = QPushButton("Restore Defaults")
-        btn_reset.setFixedHeight(32)
-        btn_reset.setStyleSheet("""
-            QPushButton {
-                background-color: #3e3e42;
-                color: white;
-                border: none;
-                padding: 6px 16px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-            }
-        """)
-        btn_reset.clicked.connect(self._reset_defaults)
-        btn_layout.addWidget(btn_reset)
-
-        btn_layout.addStretch()
-
-        btn_cancel = QPushButton("Cancel")
-        btn_cancel.setFixedHeight(32)
-        btn_cancel.setStyleSheet("""
-            QPushButton {
-                background-color: #3e3e42;
-                color: white;
-                border: none;
-                padding: 6px 20px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-            }
-        """)
-        btn_cancel.clicked.connect(self.reject)
-        btn_layout.addWidget(btn_cancel)
-
-        btn_save = QPushButton("Save")
-        btn_save.setFixedHeight(32)
-        btn_save.setStyleSheet("""
-            QPushButton {
-                background-color: #007acc;
-                color: white;
-                border: none;
-                padding: 6px 20px;
-                border-radius: 3px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #005a9e;
-            }
-        """)
-        btn_save.clicked.connect(self._save_shortcuts)
-        btn_layout.addWidget(btn_save)
-
-        layout.addLayout(btn_layout)
+        self.tabs.addTab(shortcuts_widget, S.settings.tab_shortcuts)
 
     def _load_shortcuts(self):
         """Loads shortcuts into the table"""
@@ -241,7 +373,7 @@ class SettingsDialog(QDialog):
 
         # Create mini dialog to capture key
         key_dialog = QDialog(self)
-        key_dialog.setWindowTitle("Edit Shortcut")
+        key_dialog.setWindowTitle(S.settings.edit_shortcut_title)
         key_dialog.setModal(True)
         key_dialog.setFixedSize(400, 150)
 
@@ -249,7 +381,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        label = QLabel(f"Press the new key combination for '{action_name}':")
+        label = QLabel(S.settings.edit_shortcut_msg.format(action=action_name))
         layout.addWidget(label)
 
         key_edit = QKeySequenceEdit(QKeySequence(current_shortcut))
@@ -259,7 +391,7 @@ class SettingsDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
 
-        btn_cancel = QPushButton("Cancel")
+        btn_cancel = QPushButton(S.settings.btn_cancel)
         btn_cancel.setFixedHeight(28)
         btn_cancel.setStyleSheet("""
             QPushButton {
@@ -276,7 +408,7 @@ class SettingsDialog(QDialog):
         btn_cancel.clicked.connect(key_dialog.reject)
         btn_layout.addWidget(btn_cancel)
 
-        btn_ok = QPushButton("OK")
+        btn_ok = QPushButton(S.settings.btn_ok)
         btn_ok.setFixedHeight(28)
         btn_ok.setStyleSheet("""
             QPushButton {
@@ -305,16 +437,22 @@ class SettingsDialog(QDialog):
                         other_action_name = self.table.item(r, 0).text()
                         QMessageBox.warning(
                             self,
-                            "Shortcut Conflict",
-                            f"The shortcut '{new_sequence}' is already in use by action '{other_action_name}'.\n\n"
-                            f"Please choose another shortcut.",
+                            S.settings.conflict_title,
+                            S.settings.conflict_msg.format(
+                                shortcut=new_sequence, action=other_action_name
+                            ),
                         )
                         return
 
                 self.table.item(row, 1).setText(new_sequence)
 
-    def _save_shortcuts(self):
-        """Saves shortcuts"""
+    def _save_all(self):
+        """Saves all settings (language + shortcuts)"""
+        # Save language preference
+        selected_lang = self.lang_combo.currentData()
+        settings = QSettings("DataPyn", "DataPyn")
+        settings.setValue("language", selected_lang)
+
         # Save shortcuts
         for row in range(self.table.rowCount()):
             shortcut_item = self.table.item(row, 1)
@@ -325,15 +463,32 @@ class SettingsDialog(QDialog):
         # Emit signal for MainWindow to re-register shortcuts
         self.shortcuts_changed.emit()
 
-        QMessageBox.information(self, "Success", "Settings saved successfully!")
+        QMessageBox.information(self, S.settings.success_title, S.settings.success_msg)
+
+        # If language changed, prompt restart
+        if selected_lang != self._original_language:
+            reply = QMessageBox.question(
+                self,
+                S.dialogs.language_restart_title,
+                S.dialogs.language_restart_msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                import sys
+                import os
+                from PyQt6.QtWidgets import QApplication
+                QApplication.quit()
+                os.execl(sys.executable, sys.executable, *sys.argv)
+                return
+
         self.accept()
 
     def _reset_defaults(self):
         """Restores default shortcuts"""
         reply = QMessageBox.question(
             self,
-            "Confirm",
-            "Do you want to restore all shortcuts to default values?",
+            S.settings.confirm_restore_title,
+            S.settings.confirm_restore_msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 

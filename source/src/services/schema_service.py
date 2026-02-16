@@ -15,6 +15,8 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
+from src.language import S
+
 
 class SchemaWorker(QObject):
     """Worker that loads database schema in background thread"""
@@ -38,7 +40,7 @@ class SchemaWorker(QObject):
         Silences individual errors - returns partial schema if something fails.
         """
         try:
-            self.progress.emit("Loading database structure...")
+            self.progress.emit(S.schema_service.loading)
             schema = {"tables": [], "columns": {}, "database": "", "databases": []}
 
             if self._cancelled:

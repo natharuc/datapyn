@@ -30,6 +30,7 @@ from PyQt6.QtGui import QFont
 
 from src.core.theme_manager import ThemeManager
 from src.services.file_import_service import FileImportService
+from src.language import S
 
 
 # Common encodings
@@ -45,11 +46,11 @@ ENCODINGS = [
 
 # Common separators for CSV
 CSV_SEPARATORS = [
-    (";", "Semicolon (;)"),
-    (",", "Comma (,)"),
-    ("\\t", "Tab (\\t)"),
-    ("|", "Pipe (|)"),
-    (" ", "Space"),
+    (";", S.file_import.separator_semicolon),
+    (",", S.file_import.separator_comma),
+    ("\\t", S.file_import.separator_tab),
+    ("|", S.file_import.separator_pipe),
+    (" ", S.file_import.separator_space),
 ]
 
 
@@ -63,7 +64,7 @@ class FileImportDialog(QDialog):
         self._ext = os.path.splitext(file_path.lower())[1]
         self._result_code = None
 
-        self.setWindowTitle("Import File")
+        self.setWindowTitle(S.file_import.title)
         self.setMinimumWidth(480)
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -80,7 +81,7 @@ class FileImportDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
 
         # Title
-        title = QLabel("Import Data")
+        title = QLabel(S.file_import.header)
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
@@ -89,26 +90,26 @@ class FileImportDialog(QDialog):
 
         # Selected file
         file_name = os.path.basename(self.file_path)
-        file_label = QLabel(f"File: {file_name}")
+        file_label = QLabel(S.file_import.label_file.format(name=file_name))
         file_label.setStyleSheet("color: #808080; font-size: 11px;")
         layout.addWidget(file_label)
 
         # Group: General settings
-        general_group = QGroupBox("General")
+        general_group = QGroupBox(S.file_import.group_general)
         general_form = QFormLayout(general_group)
         general_form.setSpacing(8)
 
         # Variable name
         default_name = FileImportService._normalize_var_name(self.file_path)
         self.var_name_input = QLineEdit(default_name)
-        self.var_name_input.setPlaceholderText("DataFrame name")
-        general_form.addRow("Variable:", self.var_name_input)
+        self.var_name_input.setPlaceholderText(S.file_import.placeholder_variable)
+        general_form.addRow(S.file_import.label_variable, self.var_name_input)
 
         # Encoding
         self.encoding_combo = QComboBox()
         self.encoding_combo.addItems(ENCODINGS)
         self.encoding_combo.setCurrentText("utf-8")
-        general_form.addRow("Encoding:", self.encoding_combo)
+        general_form.addRow(S.file_import.label_encoding, self.encoding_combo)
 
         # Limit rows
         nrows_container = QWidget()
@@ -116,7 +117,7 @@ class FileImportDialog(QDialog):
         nrows_layout.setContentsMargins(0, 0, 0, 0)
         nrows_layout.setSpacing(8)
 
-        self.limit_rows_check = QCheckBox("Limit")
+        self.limit_rows_check = QCheckBox(S.file_import.checkbox_limit)
         self.limit_rows_check.setChecked(False)
         nrows_layout.addWidget(self.limit_rows_check)
 
@@ -125,12 +126,12 @@ class FileImportDialog(QDialog):
         self.nrows_spin.setMaximum(10_000_000)
         self.nrows_spin.setValue(1000)
         self.nrows_spin.setEnabled(False)
-        self.nrows_spin.setSuffix(" rows")
+        self.nrows_spin.setSuffix(S.file_import.suffix_rows)
         nrows_layout.addWidget(self.nrows_spin)
         nrows_layout.addStretch()
 
         self.limit_rows_check.toggled.connect(self.nrows_spin.setEnabled)
-        general_form.addRow("Rows:", nrows_container)
+        general_form.addRow(S.file_import.label_rows, nrows_container)
 
         layout.addWidget(general_group)
 
@@ -146,12 +147,12 @@ class FileImportDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        btn_cancel = QPushButton("Cancel")
+        btn_cancel = QPushButton(S.file_import.btn_cancel)
         btn_cancel.setObjectName("btnCancel")
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
 
-        btn_import = QPushButton("Import")
+        btn_import = QPushButton(S.file_import.btn_import)
         btn_import.setDefault(True)
         btn_import.clicked.connect(self._on_import)
         btn_layout.addWidget(btn_import)
@@ -160,7 +161,7 @@ class FileImportDialog(QDialog):
 
     def _setup_csv_options(self, layout):
         """CSV-specific options"""
-        csv_group = QGroupBox("CSV")
+        csv_group = QGroupBox(S.file_import.group_csv)
         csv_form = QFormLayout(csv_group)
         csv_form.setSpacing(8)
 
@@ -169,75 +170,75 @@ class FileImportDialog(QDialog):
         for sep_val, sep_label in CSV_SEPARATORS:
             self.separator_combo.addItem(sep_label, sep_val)
         self.separator_combo.setCurrentIndex(0)  # ; by default
-        csv_form.addRow("Separator:", self.separator_combo)
+        csv_form.addRow(S.file_import.label_separator, self.separator_combo)
 
         # Header (header row)
         self.header_combo = QComboBox()
-        self.header_combo.addItem("First row", 0)
-        self.header_combo.addItem("No header", None)
-        csv_form.addRow("Header:", self.header_combo)
+        self.header_combo.addItem(S.file_import.header_first_row, 0)
+        self.header_combo.addItem(S.file_import.header_no_header, None)
+        csv_form.addRow(S.file_import.label_header, self.header_combo)
 
         # Decimal
         self.decimal_combo = QComboBox()
-        self.decimal_combo.addItem("Period (.)", ".")
-        self.decimal_combo.addItem("Comma (,)", ",")
-        csv_form.addRow("Decimal:", self.decimal_combo)
+        self.decimal_combo.addItem(S.file_import.decimal_period, ".")
+        self.decimal_combo.addItem(S.file_import.decimal_comma, ",")
+        csv_form.addRow(S.file_import.label_decimal, self.decimal_combo)
 
         # Skip rows
         self.skip_rows_spin = QSpinBox()
         self.skip_rows_spin.setMinimum(0)
         self.skip_rows_spin.setMaximum(10000)
         self.skip_rows_spin.setValue(0)
-        csv_form.addRow("Skip rows:", self.skip_rows_spin)
+        csv_form.addRow(S.file_import.label_skip_rows, self.skip_rows_spin)
 
         layout.addWidget(csv_group)
 
     def _setup_xlsx_options(self, layout):
         """Excel-specific options"""
-        xlsx_group = QGroupBox("Excel")
+        xlsx_group = QGroupBox(S.file_import.group_excel)
         xlsx_form = QFormLayout(xlsx_group)
         xlsx_form.setSpacing(8)
 
         # Sheet name
         self.sheet_input = QLineEdit()
-        self.sheet_input.setPlaceholderText("0 (first sheet) or sheet name")
+        self.sheet_input.setPlaceholderText(S.file_import.placeholder_sheet)
         self.sheet_input.setText("0")
-        xlsx_form.addRow("Sheet:", self.sheet_input)
+        xlsx_form.addRow(S.file_import.label_sheet, self.sheet_input)
 
         # Header
         self.xlsx_header_combo = QComboBox()
-        self.xlsx_header_combo.addItem("First row", 0)
-        self.xlsx_header_combo.addItem("No header", None)
-        xlsx_form.addRow("Header:", self.xlsx_header_combo)
+        self.xlsx_header_combo.addItem(S.file_import.header_first_row, 0)
+        self.xlsx_header_combo.addItem(S.file_import.header_no_header, None)
+        xlsx_form.addRow(S.file_import.label_header, self.xlsx_header_combo)
 
         # Skip rows
         self.xlsx_skip_rows_spin = QSpinBox()
         self.xlsx_skip_rows_spin.setMinimum(0)
         self.xlsx_skip_rows_spin.setMaximum(10000)
         self.xlsx_skip_rows_spin.setValue(0)
-        xlsx_form.addRow("Skip rows:", self.xlsx_skip_rows_spin)
+        xlsx_form.addRow(S.file_import.label_skip_rows, self.xlsx_skip_rows_spin)
 
         layout.addWidget(xlsx_group)
 
     def _setup_json_options(self, layout):
         """JSON-specific options"""
-        json_group = QGroupBox("JSON")
+        json_group = QGroupBox(S.file_import.group_json)
         json_form = QFormLayout(json_group)
         json_form.setSpacing(8)
 
         # Orient
         self.orient_combo = QComboBox()
-        self.orient_combo.addItem("Auto-detect", "")
-        self.orient_combo.addItem("records", "records")
-        self.orient_combo.addItem("columns", "columns")
-        self.orient_combo.addItem("index", "index")
-        self.orient_combo.addItem("split", "split")
-        self.orient_combo.addItem("values", "values")
-        json_form.addRow("Orientation:", self.orient_combo)
+        self.orient_combo.addItem(S.file_import.orientation_auto, "")
+        self.orient_combo.addItem(S.file_import.orientation_records, "records")
+        self.orient_combo.addItem(S.file_import.orientation_columns, "columns")
+        self.orient_combo.addItem(S.file_import.orientation_index, "index")
+        self.orient_combo.addItem(S.file_import.orientation_split, "split")
+        self.orient_combo.addItem(S.file_import.orientation_values, "values")
+        json_form.addRow(S.file_import.label_orientation, self.orient_combo)
 
         # Lines (JSON Lines format)
-        self.json_lines_check = QCheckBox("JSON Lines (one line per record)")
-        json_form.addRow("Format:", self.json_lines_check)
+        self.json_lines_check = QCheckBox(S.file_import.checkbox_json_lines)
+        json_form.addRow(S.file_import.label_format, self.json_lines_check)
 
         layout.addWidget(json_group)
 

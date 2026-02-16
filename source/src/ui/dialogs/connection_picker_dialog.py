@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 
 from src.core.theme_manager import ThemeManager
+from src.language import S
 
 try:
     import qtawesome as qta
@@ -34,7 +35,7 @@ class ConnectionPickerDialog(QDialog):
         self.selected_connection = None
         self._selected_config = None
 
-        self.setWindowTitle("Select Connection")
+        self.setWindowTitle(S.connection_picker.title)
         self.resize(380, 420)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
 
@@ -55,14 +56,14 @@ class ConnectionPickerDialog(QDialog):
             icon_label = QLabel()
             icon_label.setPixmap(qta.icon("mdi.database-search", color="#64b5f6").pixmap(20, 20))
             header.addWidget(icon_label)
-        title = QLabel("SELECT A CONNECTION")
+        title = QLabel(S.connection_picker.header)
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
         # Instruction
-        hint = QLabel("Double-click to select")
+        hint = QLabel(S.connection_picker.hint)
         hint.setStyleSheet("color: #666; font-size: 11px; font-style: italic;")
         layout.addWidget(hint)
 
@@ -87,7 +88,7 @@ class ConnectionPickerDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(S.connection_picker.btn_cancel)
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 

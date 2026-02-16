@@ -1012,7 +1012,7 @@ class TestJSONDisplay:
         viewer = ResultsViewer()
 
         viewer.display_json({"a": 1, "b": 2, "c": 3}, "Config")
-        assert "3 chaves" in viewer.info_label.text()
+        assert "3 keys" in viewer.info_label.text()
 
     def test_display_json_list_info_label(self, qapp):
         """display_json com list mostra contagem de itens"""
@@ -1021,7 +1021,7 @@ class TestJSONDisplay:
         viewer = ResultsViewer()
 
         viewer.display_json([1, 2, 3, 4, 5], "Numeros")
-        assert "5 itens" in viewer.info_label.text()
+        assert "5 items" in viewer.info_label.text()
 
     def test_display_json_first_level_expanded(self, qapp):
         """display_json expande primeiro nivel automaticamente"""

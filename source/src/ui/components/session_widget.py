@@ -20,6 +20,7 @@ from datetime import datetime
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
 from src.editors import BlockEditor
+from src.language import S
 # from src.ui.components.bottom_tabs import BottomTabs  # Removed - using global panels
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,11 @@ class SessionConnectionWorker(QObject):
         try:
             success = self.session.connect(self.connection_name, self.password)
             if success:
-                self.finished.emit(True, f"✓ Connected to {self.connection_name}")
+                self.finished.emit(True, f"✓ {S.session_widget.connected_to.format(name=self.connection_name)}")
             else:
-                self.finished.emit(False, f"✗ Failed to connect to {self.connection_name}")
+                self.finished.emit(False, f"✗ {S.session_widget.connect_failed.format(name=self.connection_name)}")
         except Exception as e:
-            self.finished.emit(False, f"[ERROR] {str(e)}")
+            self.finished.emit(False, S.session_widget.connect_error.format(msg=str(e)))
 
 
 class SessionSqlWorker(QObject):
@@ -329,30 +330,30 @@ class SessionWidget(QWidget):
                         if connector.is_connected:
                             manager.connections[connection_name] = connector
                         else:
-                            self.append_output(f"[ERROR] Failed to connect to '{connection_name}'", error=True)
-                            self.status_changed.emit("Error: Connection failed")
+                            self.append_output(S.session_widget.block_connect_failed.format(name=connection_name), error=True)
+                            self.status_changed.emit(S.session_widget.status_conn_failed)
                             self._process_next_in_queue()
                             return
                     except Exception as e:
-                        self.append_output(f"[ERROR] Error connecting to '{connection_name}': {e}", error=True)
-                        self.status_changed.emit("Error: Connection failed")
+                        self.append_output(S.session_widget.block_connect_error.format(name=connection_name, error=e), error=True)
+                        self.status_changed.emit(S.session_widget.status_conn_failed)
                         self._process_next_in_queue()
                         return
                 else:
-                    self.append_output(f"[ERROR] Connection '{connection_name}' not found", error=True)
-                    self.status_changed.emit("Error: Connection unavailable")
+                    self.append_output(S.session_widget.conn_not_found.format(name=connection_name), error=True)
+                    self.status_changed.emit(S.session_widget.status_conn_unavailable)
                     self._process_next_in_queue()
                     return
             conn_label = connection_name
         else:
             # Use session default connection
             if not self.session.is_connected:
-                self.append_output("[ERROR] No active connection in this session", error=True)
-                self.status_changed.emit("Error: No connection")
+                self.append_output(S.session_widget.no_active_connection, error=True)
+                self.status_changed.emit(S.session_widget.status_no_connection)
                 self._process_next_in_queue()
                 return
             connector = self.session.connector
-            conn_label = "padrao"
+            conn_label = S.session_widget.default_connection_label
 
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
             self._execution_queue.append(("sql", query, None, block_name, connection_name))
@@ -361,7 +362,7 @@ class SessionWidget(QWidget):
         self._is_executing = True
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
         self.session.start_execution("sql")
-        self.status_changed.emit(f"Executando SQL ({conn_label})...")
+        self.status_changed.emit(S.session_widget.executing_sql.format(conn_label=conn_label))
 
         # Criar worker e thread
         self._sql_thread = QThread()
@@ -410,7 +411,7 @@ class SessionWidget(QWidget):
         if error:
             self.append_output(self._format_log("SQL", f"ERROR: {error}"), error=True)
             self.session.finish_execution(False, f"Error: {error[:50]}...")
-            self.status_changed.emit("SQL Error")
+            self.status_changed.emit(S.session_widget.status_sql_error)
             self._show_output()
         else:
             # Determine namespace prefix (isolated per block or global)
@@ -423,13 +424,13 @@ class SessionWidget(QWidget):
             if isinstance(df, list):
                 # Multiple DataFrames - create variables
                 total_rows = sum(len(d) for d in df)
-                self.append_output(self._format_log("SQL", f"{len(df)} consultas, {total_rows:,} linhas totais"))
+                self.append_output(self._format_log("SQL", S.session_widget.sql_multi_result.format(count=len(df), rows=f"{total_rows:,}")))
 
                 # Create variables: test, test1, test2, ...
                 for i, dataframe in enumerate(df):
                     var_name = var_base if i == 0 else f"{var_base}{i}"
                     self.session.set_variable(var_name, dataframe)
-                    self.append_output(self._format_log("SQL", f"{var_name}: {len(dataframe):,} linhas"))
+                    self.append_output(self._format_log("SQL", S.session_widget.sql_var_rows.format(var_name=var_name, rows=f"{len(dataframe):,}")))
 
                 # Display only last DataFrame in grid
                 last_df = df[-1]
@@ -437,16 +438,16 @@ class SessionWidget(QWidget):
                 self._set_results(last_df, last_var_name)
                 self.session.set_variable("_last_result", last_df)
 
-                self.session.finish_execution(True, f"SQL: {len(df)} consultas")
-                self.status_changed.emit(f"SQL: {len(df)} consultas")
+                self.session.finish_execution(True, S.session_widget.status_sql_multi.format(count=len(df)))
+                self.status_changed.emit(S.session_widget.status_sql_multi.format(count=len(df)))
             else:
                 # Single DataFrame
                 rows = len(df) if df is not None else 0
                 var_name = var_base
-                self.append_output(self._format_log("SQL", f"{rows:,} linhas -> {var_name}"))
+                self.append_output(self._format_log("SQL", S.session_widget.sql_single_result.format(rows=f"{rows:,}", var_name=var_name)))
                 self._set_results(df, var_name)
-                self.session.finish_execution(True, f"SQL: {rows:,} linhas")
-                self.status_changed.emit(f"SQL: {rows:,} linhas")
+                self.session.finish_execution(True, S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
+                self.status_changed.emit(S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
 
                 # Save in session namespace
                 self.session.set_variable(var_name, df)
@@ -477,7 +478,7 @@ class SessionWidget(QWidget):
         self._is_executing = True
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
         self.session.start_execution("python")
-        self.status_changed.emit("Executando Python...")
+        self.status_changed.emit(S.session_widget.executing_python)
         # Prepare namespace with df if exists
         namespace = self.session.namespace.copy()
         namespace["pd"] = pd
@@ -529,8 +530,8 @@ class SessionWidget(QWidget):
 
         if error:
             self.append_output(self._format_log("PYTHON", f"ERROR:\n{error}"), error=True)
-            self.session.finish_execution(False, "Python Error")
-            self.status_changed.emit("Python Error")
+            self.session.finish_execution(False, S.session_widget.status_python_error)
+            self.status_changed.emit(S.session_widget.status_python_error)
             self._show_output()
         else:
             has_dataframe_result = False
@@ -546,7 +547,7 @@ class SessionWidget(QWidget):
                 if isinstance(result, pd.DataFrame):
                     has_dataframe_result = True
                     self._set_results(result, "result")
-                    self.append_output(self._format_log("PYTHON", f"DataFrame: {len(result):,} linhas"))
+                    self.append_output(self._format_log("PYTHON", S.session_widget.python_df_result.format(rows=f"{len(result):,}")))
                 else:
                     self.append_output(self._format_log("PYTHON", f"{repr(result)}"))
                     has_output = True
@@ -562,22 +563,22 @@ class SessionWidget(QWidget):
             # - Output -> mostra output
             if has_figures:
                 if has_dataframe_result:
-                    self.status_changed.emit(f"Chart + data generated!")
+                    self.status_changed.emit(S.session_widget.status_chart_data)
                 else:
-                    self.status_changed.emit(f"Grafico exibido!")
+                    self.status_changed.emit(S.session_widget.status_chart_shown)
             elif has_dataframe_result:
-                self.status_changed.emit(f"DataFrame {len(result):,} linhas")
+                self.status_changed.emit(S.session_widget.status_df_rows.format(rows=f"{len(result):,}"))
             elif has_output:
                 self._show_output()
-                self.status_changed.emit("Python executado")
+                self.status_changed.emit(S.session_widget.status_python_done)
             else:
-                self.status_changed.emit("Python executado")
+                self.status_changed.emit(S.session_widget.status_python_done)
 
             # Update session namespace
             if updated_namespace:
                 self.session.update_namespace(updated_namespace)
 
-            self.session.finish_execution(True, "Python executado")
+            self.session.finish_execution(True, S.session_widget.status_python_done)
 
         # Process next in queue if exists
         self._is_executing = False
@@ -662,12 +663,12 @@ class SessionWidget(QWidget):
         # Marcar todos os blocos como nao executando (limpa visual)
         self.editor.mark_execution_finished()
 
-        self.append_output(self._format_log("CANCELLED", "Execution cancelled by user"), error=True)
+        self.append_output(self._format_log("CANCELLED", S.session_widget.cancelled_output.replace("[CANCELLED] ", "")), error=True)
         self._show_output()
-        self.status_changed.emit("Execucao cancelada")
+        self.status_changed.emit(S.session_widget.status_cancelled)
 
         # Terminar execucao na sessao
-        self.session.finish_execution(False, "Cancelado")
+        self.session.finish_execution(False, S.session_widget.execution_cancelled)
 
         # CRITICO: Resetar flag de cancelamento para nao bloquear proximas execucoes
         self._cancel_requested = False
@@ -841,7 +842,7 @@ class SessionWidget(QWidget):
                     # Executar o codigo automaticamente
                     self._on_execute_python(code)
         except Exception as e:
-            self.append_output(f"[ERROR] Failed to import file: {e}", error=True)
+            self.append_output(S.session_widget.file_import_error.format(error=e), error=True)
             self._show_output()
 
     def _on_block_select_connection(self, block):
@@ -867,7 +868,7 @@ class SessionWidget(QWidget):
                     color = config.get("color", "") if config else ""
                     block.set_connection_name(conn_name, db_type, color or None)
         except Exception as e:
-            print(f"Error opening connection dialog: {e}")
+            print(S.session_widget.conn_dialog_error.format(error=e))
 
     # === CONNECTION ===
 
@@ -899,7 +900,7 @@ class SessionWidget(QWidget):
             pass  # Thread was already deleted
 
         # Mostrar loading overlay
-        self._show_loading(f"Conectando a {connection_name}...")
+        self._show_loading(S.session_widget.loading_connecting.format(name=connection_name))
 
         # Criar worker e thread
         self._connection_thread = QThread()
@@ -944,7 +945,7 @@ class SessionWidget(QWidget):
                 self.connection_changed.emit(self.session.connection_name, db)
         else:
             self.append_output(message, error=True)
-            self.status_changed.emit("Connection error")
+            self.status_changed.emit(S.session_widget.status_conn_error)
 
     def _show_loading(self, message: str):
         """Show loading overlay"""

@@ -13,6 +13,8 @@ import subprocess
 import os
 import math
 
+from src.language import S
+
 
 class SessionTabBar(QTabBar):
     """Custom TabBar for sessions"""
@@ -82,37 +84,37 @@ class SessionTabBar(QTabBar):
 
         # 1. Open file location
         if file_path and os.path.exists(file_path):
-            open_location_action = QAction(qta.icon("mdi.folder-open"), "Open File Location", self)
+            open_location_action = QAction(qta.icon("mdi.folder-open"), S.session_tabs.ctx_open_file_location, self)
             open_location_action.triggered.connect(lambda: self._open_file_location(file_path))
             menu.addAction(open_location_action)
             menu.addSeparator()
 
         # 2. Close all
-        close_all_action = QAction(qta.icon("mdi.close-box-multiple"), "Close All", self)
+        close_all_action = QAction(qta.icon("mdi.close-box-multiple"), S.session_tabs.ctx_close_all, self)
         close_all_action.triggered.connect(lambda: self._close_all_tabs())
         menu.addAction(close_all_action)
 
         # 3. Close all others
-        close_others_action = QAction(qta.icon("mdi.close-box-outline"), "Close All Others", self)
+        close_others_action = QAction(qta.icon("mdi.close-box-outline"), S.session_tabs.ctx_close_all_others, self)
         close_others_action.triggered.connect(lambda: self._close_other_tabs(index))
         menu.addAction(close_others_action)
 
         menu.addSeparator()
 
         # 4. Rename
-        rename_action = QAction(qta.icon("mdi.pencil"), "Rename", self)
+        rename_action = QAction(qta.icon("mdi.pencil"), S.session_tabs.ctx_rename, self)
         rename_action.triggered.connect(lambda: self._rename_tab_inline(index))
         menu.addAction(rename_action)
 
         # 5. Duplicate
-        duplicate_action = QAction(qta.icon("mdi.content-copy"), "Duplicate", self)
+        duplicate_action = QAction(qta.icon("mdi.content-copy"), S.session_tabs.ctx_duplicate, self)
         duplicate_action.triggered.connect(lambda: self._duplicate_tab(index))
         menu.addAction(duplicate_action)
 
         menu.addSeparator()
 
         # 6. Close
-        close_action = QAction(qta.icon("mdi.close"), "Close", self)
+        close_action = QAction(qta.icon("mdi.close"), S.session_tabs.ctx_close, self)
         close_action.triggered.connect(lambda: self._close_tab(index))
         menu.addAction(close_action)
 

@@ -15,6 +15,8 @@ from typing import Dict, Any, Optional
 
 from .buttons import GhostButton
 
+from src.language import S
+
 try:
     import qtawesome as qta
 
@@ -65,13 +67,13 @@ class VariablesTableModel(QAbstractTableModel):
 
             # Preview of value
             if isinstance(value, pd.DataFrame):
-                preview = f"DataFrame ({len(value)} rows × {len(value.columns)} cols)"
+                preview = S.variables_panel.preview_dataframe.format(rows=len(value), cols=len(value.columns))
             elif isinstance(value, pd.Series):
-                preview = f"Series ({len(value)} items)"
+                preview = S.variables_panel.preview_series.format(n=len(value))
             elif isinstance(value, (list, tuple)):
-                preview = f"{type_name} [{len(value)} items]"
+                preview = S.variables_panel.preview_list_type.format(type=type_name, n=len(value))
             elif isinstance(value, dict):
-                preview = f"dict {{{len(value)} keys}}"
+                preview = S.variables_panel.preview_dict.format(n=len(value))
             elif isinstance(value, str):
                 preview = repr(value[:50]) + ("..." if len(value) > 50 else "")
             else:
@@ -144,7 +146,7 @@ class VariablesTableModel(QAbstractTableModel):
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            headers = ["Name", "Type", "Value"]
+            headers = [S.variables_panel.header_name, S.variables_panel.header_type, S.variables_panel.header_value]
             return headers[section] if section < len(headers) else ""
         return QVariant()
 
@@ -190,14 +192,14 @@ class VariablesPanel(QWidget):
         toolbar_layout.setSpacing(8)
 
         # Info label
-        self.info_label = QLabel("No variables")
+        self.info_label = QLabel(S.variables_panel.no_variables)
         self.info_label.setStyleSheet("color: #808080;")
         toolbar_layout.addWidget(self.info_label)
 
         toolbar_layout.addStretch()
 
         # Refresh button
-        self.btn_refresh = GhostButton("Refresh")
+        self.btn_refresh = GhostButton(S.variables_panel.btn_refresh)
         if HAS_QTAWESOME:
             self.btn_refresh.setIcon(qta.icon("fa5s.sync", color="#888888"))
         toolbar_layout.addWidget(self.btn_refresh)
@@ -274,11 +276,11 @@ class VariablesPanel(QWidget):
 
         count = self.model.rowCount()
         if count == 0:
-            self.info_label.setText("No variables")
+            self.info_label.setText(S.variables_panel.no_variables)
         elif count == 1:
-            self.info_label.setText("1 variable")
+            self.info_label.setText(S.variables_panel.one_variable)
         else:
-            self.info_label.setText(f"{count} variables")
+            self.info_label.setText(S.variables_panel.n_variables.format(n=count))
 
     def display_dataframe(self, df: Optional[pd.DataFrame], title: str = "Variables"):
         """Compatibility with ResultsViewer - accepts DataFrame of variables"""
@@ -297,7 +299,7 @@ class VariablesPanel(QWidget):
                 namespace[name] = value
 
         self.set_variables(namespace)
-        self.info_label.setText(f"{len(df)} variables")
+        self.info_label.setText(S.variables_panel.n_variables.format(n=len(df)))
 
     def set_data(self, df: Optional[pd.DataFrame]):
         """Compatibility with ResultsViewer - accepts DataFrame of variables"""
@@ -306,7 +308,7 @@ class VariablesPanel(QWidget):
     def clear(self):
         """Clear variables"""
         self.model.clear()
-        self.info_label.setText("No variables")
+        self.info_label.setText(S.variables_panel.no_variables)
 
     def _on_click(self, index: QModelIndex):
         """When variable is selected"""
@@ -364,23 +366,23 @@ class VariablesPanel(QWidget):
         type_name = type(value).__name__
 
         # Insert name in editor
-        act_insert = menu.addAction("Insert in editor")
+        act_insert = menu.addAction(S.variables_panel.ctx_insert_in_editor)
         act_insert.triggered.connect(lambda: self.insert_variable_name.emit(name))
 
         menu.addSeparator()
 
         # Copy name
-        act_copy_name = menu.addAction("Copy name")
+        act_copy_name = menu.addAction(S.variables_panel.ctx_copy_name)
         act_copy_name.triggered.connect(lambda: QApplication.clipboard().setText(name))
 
         # Copy value
-        act_copy_value = menu.addAction("Copy value")
+        act_copy_value = menu.addAction(S.variables_panel.ctx_copy_value)
         act_copy_value.triggered.connect(
             lambda: QApplication.clipboard().setText(self._get_copyable_value(value))
         )
 
         # Copy type
-        act_copy_type = menu.addAction("Copy type")
+        act_copy_type = menu.addAction(S.variables_panel.ctx_copy_type)
         act_copy_type.triggered.connect(
             lambda: QApplication.clipboard().setText(type_name)
         )
@@ -389,41 +391,41 @@ class VariablesPanel(QWidget):
 
         # Type-specific options
         if isinstance(value, pd.DataFrame):
-            act_shape = menu.addAction(f"Shape: {value.shape[0]} x {value.shape[1]}")
+            act_shape = menu.addAction(S.variables_panel.ctx_shape_info.format(rows=value.shape[0], cols=value.shape[1]))
             act_shape.setEnabled(False)
 
-            act_cols = menu.addAction("Copy columns")
+            act_cols = menu.addAction(S.variables_panel.ctx_copy_columns)
             act_cols.triggered.connect(
                 lambda: QApplication.clipboard().setText(", ".join(value.columns.tolist()))
             )
 
-            act_dtypes = menu.addAction("Copy dtypes")
+            act_dtypes = menu.addAction(S.variables_panel.ctx_copy_dtypes)
             act_dtypes.triggered.connect(
                 lambda: QApplication.clipboard().setText(str(value.dtypes))
             )
 
-            act_head = menu.addAction("Copy head(5)")
+            act_head = menu.addAction(S.variables_panel.ctx_copy_head)
             act_head.triggered.connect(
                 lambda: QApplication.clipboard().setText(value.head(5).to_string())
             )
 
-            act_csv = menu.addAction("Copy as CSV")
+            act_csv = menu.addAction(S.variables_panel.ctx_copy_as_csv)
             act_csv.triggered.connect(
                 lambda: QApplication.clipboard().setText(value.to_csv(index=False))
             )
 
         elif isinstance(value, (list, dict, tuple)):
-            act_len = menu.addAction(f"Size: {len(value)}")
+            act_len = menu.addAction(S.variables_panel.ctx_size_info.format(n=len(value)))
             act_len.setEnabled(False)
 
         elif isinstance(value, str):
-            act_len = menu.addAction(f"Size: {len(value)} chars")
+            act_len = menu.addAction(S.variables_panel.ctx_size_chars.format(n=len(value)))
             act_len.setEnabled(False)
 
         menu.addSeparator()
 
         # Delete variable
-        act_delete = menu.addAction("Remove variable")
+        act_delete = menu.addAction(S.variables_panel.ctx_remove_variable)
         act_delete.triggered.connect(lambda: self.delete_variable.emit(name))
 
         menu.exec(self.table_view.viewport().mapToGlobal(pos))
