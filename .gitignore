@@ -56,3 +56,5 @@ htmlcov/
 *.wixpdb
 heat.wxs
 *.msi
+test_results_latest.txt
+test_run_output.txt

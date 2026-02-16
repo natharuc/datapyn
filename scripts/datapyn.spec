@@ -26,6 +26,7 @@ hiddenimports = [
     'PyQt6.QtCore',
     'PyQt6.QtGui', 
     'PyQt6.QtWidgets',
+    'PyQt6.QtSvg',
     'PyQt6.Qsci',
     'pandas',
     'numpy',
@@ -55,8 +56,6 @@ language_datas = [(f, os.path.join('src', 'language'))
                   for f in glob.glob(os.path.join(language_dir, '*.json'))]
 
 datas = assets_datas + language_datas + [
-    # Monaco Editor - HTML + VS loader/workers
-    (os.path.join(ROOT_DIR, 'source', 'src', 'editors', 'monaco'), os.path.join('monaco')),
     # pyproject.toml para leitura de versao
     (os.path.join(ROOT_DIR, 'pyproject.toml'), '.'),
 ] + _mariadb_datas
@@ -70,103 +69,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        # Test frameworks and dev tools
-        'pytest',
-        'pytest_cov',
-        'pytest_qt',
-        'pytest_subtests',
-        'pytest_env',
-        'pytest_timeout',
-        '_pytest',
-        'py.test',
-        'unittest',
-        'unittest.mock',
-        'doctest',
-        # Build tools
-        'setuptools',
-        'pip',
-        'wheel',
-        # NOT 'distutils' - PyInstaller has a pre_safe_import_module hook
-        # that aliases distutils -> setuptools._distutils on Python 3.12+.
-        # Excluding it causes ValueError in the alias_module step.
-        # Documentation
-        'sphinx',
-        'pydoc',
-        # Development
-        'IPython',
-        'jupyter',
-        'notebook',
-        # Unused standard library modules
-        'tkinter',
-        'turtle',
-        'curses',
-        'pydoc_data',
-        'test',
-        'lib2to3',
-        'xmlrpc',
-        # Unused data science tools (not used in the app)
-        'scipy',
-        'sklearn',
-        'statsmodels',
-        'seaborn',
-        # Additional unused modules
-        'email',  # Se não usado
-        'ftplib',
-        'telnetlib',
-        'poplib',
-        'imaplib',
-        'smtplib',
-        'asynchat',
-        'asyncore',
-        # Compiler and internals
-        'compiler',
-        'pdb',
-        'bdb',
-        'cProfile',
-        'profile',
-        'pstats',
-        'timeit',
-        # Unused encodings (keep utf-8, latin1, ascii)
-        'encodings.cp037',
-        'encodings.cp424',
-        'encodings.cp437',
-        'encodings.cp500',
-        'encodings.cp720',
-        'encodings.cp737',
-        'encodings.cp775',
-        'encodings.cp850',
-        'encodings.cp852',
-        'encodings.cp855',
-        'encodings.cp856',
-        'encodings.cp857',
-        'encodings.cp858',
-        'encodings.cp860',
-        'encodings.cp861',
-        'encodings.cp862',
-        'encodings.cp863',
-        'encodings.cp864',
-        'encodings.cp865',
-        'encodings.cp866',
-        'encodings.cp869',
-        'encodings.cp874',
-        'encodings.cp875',
-        'encodings.cp932',
-        'encodings.cp949',
-        'encodings.cp950',
-        'encodings.cp1006',
-        'encodings.cp1026',
-        'encodings.cp1140',
-        'encodings.cp1250',
-        'encodings.cp1251',
-        'encodings.cp1252',
-        'encodings.cp1253',
-        'encodings.cp1254',
-        'encodings.cp1255',
-        'encodings.cp1256',
-        'encodings.cp1257',
-        'encodings.cp1258',
-    ],
+    excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -183,7 +86,7 @@ exe = EXE(
     name='DataPyn',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,  # Strip binaries to reduce size
+    strip=False,  # strip is a Unix tool, not available on Windows
     upx=True,
     upx_exclude=[
         # Exclude files that don't compress well or may cause issues
@@ -208,7 +111,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=True,  # Strip binaries in collection as well
+    strip=False,  # strip is a Unix tool, not available on Windows
     upx=True,
     upx_exclude=[
         # Exclude files that don't compress well or may cause issues
