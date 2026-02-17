@@ -278,15 +278,17 @@ class SqlAutoCompleteService:
         return self._keyword_completions() + self._table_completions()
 
     def _keyword_completions(self) -> List[Tuple[str, str, str]]:
-        """Return SQL keyword completions."""
+        """Return SQL keyword completions (both UPPER and lower case)."""
         result = []
         seen = set()
+        func_set = {f.upper() for f in SQL_FUNCTIONS}
         for kw in SQL_KEYWORDS:
             upper = kw.upper()
             if upper not in seen:
                 seen.add(upper)
-                cat = CAT_FUNCTION if upper in {f.upper() for f in SQL_FUNCTIONS} else CAT_KEYWORD
+                cat = CAT_FUNCTION if upper in func_set else CAT_KEYWORD
                 result.append((upper, cat, ""))
+                result.append((upper.lower(), cat, ""))
         return result
 
     def _table_completions(self) -> List[Tuple[str, str, str]]:

@@ -205,8 +205,11 @@ class TestCompletions:
         result = service.get_completions("", 0, 0)
         n = names(result)
         assert "SELECT" in n
+        assert "select" in n
         assert "FROM" in n
+        assert "from" in n
         assert "WHERE" in n
+        assert "where" in n
 
     def test_from_shows_tables(self, service):
         result = service.get_completions("SELECT * FROM ", 0, 14)
@@ -287,8 +290,9 @@ class TestCompletions:
     def test_default_shows_keywords_and_tables(self, service):
         result = service.get_completions("S", 0, 1)
         n = names(result)
-        # Keywords
+        # Keywords (both cases)
         assert "SELECT" in n
+        assert "select" in n
         # Tables
         assert "users" in n
 
@@ -437,6 +441,31 @@ class TestEdgeCases:
         # Should return the full text (graceful handling)
         assert isinstance(result, list)
 
+    def test_lowercase_from_suggests_mixed_case_table(self):
+        """Typing 'select * from pre' should suggest 'Premio' or 'PREMIO'."""
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "tables": [
+                {"name": "Premio", "schema": "dbo", "type": "TABLE"},
+                {"name": "Clientes", "schema": "dbo", "type": "TABLE"},
+            ],
+            "columns": {},
+        })
+        # User types lowercase: "select * from pre"
+        result = svc.get_completions("select * from pre", 0, 17)
+        n = names(result)
+        # Should include the table even though case differs
+        assert "Premio" in n
+
+    def test_lowercase_keywords_returned(self, service):
+        """Keywords should be available in both cases."""
+        result = service.get_completions("", 0, 0)
+        n = names(result)
+        assert "SELECT" in n
+        assert "select" in n
+        assert "INSERT" in n
+        assert "insert" in n
+
 
 # ==============================================================
 # Functions
@@ -449,6 +478,7 @@ class TestFunctions:
         result = service.get_completions("", 0, 0)
         func_names = [c[0] for c in result if c[1] == CAT_FUNCTION]
         assert "COUNT" in func_names
+        assert "count" in func_names
         assert "SUM" in func_names
         assert "AVG" in func_names
 
@@ -456,7 +486,9 @@ class TestFunctions:
         result = service.get_completions("", 0, 0)
         kw_names = [c[0] for c in result if c[1] == CAT_KEYWORD]
         assert "SELECT" in kw_names
+        assert "select" in kw_names
         assert "FROM" in kw_names
+        assert "from" in kw_names
 
 
 # ==============================================================
