@@ -109,6 +109,7 @@ class SessionWidget(QWidget):
     connection_drop_requested = pyqtSignal(str)  # connection_name
     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
     block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
+    execution_finished = pyqtSignal(str, str, bool)  # (title, message, success)
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -130,6 +131,13 @@ class SessionWidget(QWidget):
         self._is_executing: bool = False
         self._cancel_requested: bool = False  # Cancellation flag
         self._current_block_name: str = None  # Currently executing block name (for isolated namespace)
+
+        # Notification aggregation: accumulate results per queue run
+        self._queue_total_rows: int = 0
+        self._queue_blocks_done: int = 0
+        self._queue_had_error: bool = False
+        self._queue_last_error: str = ""
+        self._queue_last_type: str = ""  # "sql", "python", "cross"
 
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
@@ -214,6 +222,20 @@ class SessionWidget(QWidget):
             parent = parent.parent()
         return parent
 
+    def _get_own_panels(self):
+        """Get this session's own panels (results, output, variables).
+
+        Returns the panels that belong to THIS session, not the currently focused one.
+        This is critical to avoid results from one tab appearing in another.
+        """
+        try:
+            main_window = self._get_main_window()
+            if not main_window or not hasattr(main_window, "_session_panel_indices"):
+                return None
+            return main_window._session_panel_indices.get(self.session.session_id)
+        except (AttributeError, TypeError):
+            return None
+
     # === Delegation methods for global panels ===
 
     def _show_output(self):
@@ -223,45 +245,72 @@ class SessionWidget(QWidget):
             main_window.show_panel("output")
 
     def _set_results(self, data, name="result"):
-        """Define resultados no painel global"""
-        main_window = self._get_main_window()
-        if main_window and main_window.global_results_viewer:
-            main_window.global_results_viewer.display_dataframe(data, name)
-            main_window.show_panel("results")
+        """Define resultados no painel DESTA sessao"""
+        info = self._get_own_panels()
+        viewer = info["results"] if info else None
+        if not viewer:
+            # Fallback: usar viewer global (compatibilidade com testes/mocks)
+            main_window = self._get_main_window()
+            viewer = main_window.global_results_viewer if main_window else None
+        if viewer:
+            viewer.display_dataframe(data, name)
+            main_window = self._get_main_window()
+            if main_window:
+                main_window.show_panel("results")
 
     def _set_figures(self, figures: list, label: str = "Resultado"):
-        """Exibe rich outputs (imagens, HTML, JSON) no painel global de resultados"""
-        main_window = self._get_main_window()
-        if main_window and main_window.global_results_viewer:
-            main_window.global_results_viewer.display_rich_output(figures, label)
-            main_window.show_panel("results")
+        """Exibe rich outputs (imagens, HTML, JSON) no painel DESTA sessao"""
+        info = self._get_own_panels()
+        viewer = info["results"] if info else None
+        if not viewer:
+            main_window = self._get_main_window()
+            viewer = main_window.global_results_viewer if main_window else None
+        if viewer:
+            viewer.display_rich_output(figures, label)
+            main_window = self._get_main_window()
+            if main_window:
+                main_window.show_panel("results")
 
     def _log_error(self, text):
-        """Log error to global output"""
-        main_window = self._get_main_window()
-        if main_window and main_window.global_output_panel:
-            main_window.global_output_panel.error(text)
+        """Log error to this session's output"""
+        info = self._get_own_panels()
+        output = info["output"] if info else None
+        if not output:
+            main_window = self._get_main_window()
+            output = main_window.global_output_panel if main_window else None
+        if output:
+            output.error(text)
             self._show_output()
 
     def _log(self, text):
-        """Registra texto no output global"""
-        main_window = self._get_main_window()
-        if main_window and main_window.global_output_panel:
-            main_window.global_output_panel.log(text)
+        """Registra texto no output desta sessao"""
+        info = self._get_own_panels()
+        output = info["output"] if info else None
+        if not output:
+            main_window = self._get_main_window()
+            output = main_window.global_output_panel if main_window else None
+        if output:
+            output.log(text)
 
     def _clear_output(self):
-        """Limpa output global"""
-        main_window = self._get_main_window()
-        if main_window and main_window.global_output_panel:
-            main_window.global_output_panel.clear()
+        """Limpa output desta sessao"""
+        info = self._get_own_panels()
+        output = info["output"] if info else None
+        if not output:
+            main_window = self._get_main_window()
+            output = main_window.global_output_panel if main_window else None
+        if output:
+            output.clear()
 
     def _set_variables(self, variables_dict):
-        """Set variables in global panel"""
-        main_window = self._get_main_window()
-        if main_window and main_window.global_variables_panel:
-            main_window.global_variables_panel.set_variables(
-                variables_dict
-            )  # Fixed from refresh_variables to set_variables
+        """Set variables in this session's panel"""
+        info = self._get_own_panels()
+        panel = info["variables"] if info else None
+        if not panel:
+            main_window = self._get_main_window()
+            panel = main_window.global_variables_panel if main_window else None
+        if panel:
+            panel.set_variables(variables_dict)
 
     def _connect_signals(self):
         """Connect editor signals"""
@@ -369,6 +418,14 @@ class SessionWidget(QWidget):
 
         self._is_executing = True
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
+
+        # Reset notification counters for single-block execution
+        if self._queue_blocks_done == 0:
+            self._queue_total_rows = 0
+            self._queue_had_error = False
+            self._queue_last_error = ""
+            self._queue_last_type = ""
+
         self.session.start_execution("sql")
         self.status_changed.emit(S.session_widget.executing_sql.format(conn_label=conn_label))
 
@@ -428,6 +485,10 @@ class SessionWidget(QWidget):
             self.append_output(self._format_log("SQL", f"ERROR: {error}"), error=True)
             self.session.finish_execution(False, f"Error: {error[:50]}...")
             self.status_changed.emit(S.session_widget.status_sql_error)
+            self._queue_had_error = True
+            self._queue_last_error = error[:80]
+            self._queue_last_type = "sql"
+            self._queue_blocks_done += 1
             self._show_output()
         else:
             # Determine namespace prefix (isolated per block or global)
@@ -456,6 +517,9 @@ class SessionWidget(QWidget):
 
                 self.session.finish_execution(True, S.session_widget.status_sql_multi.format(count=len(df)))
                 self.status_changed.emit(S.session_widget.status_sql_multi.format(count=len(df)))
+                self._queue_total_rows += total_rows
+                self._queue_blocks_done += 1
+                self._queue_last_type = "sql"
             else:
                 # Single DataFrame
                 rows = len(df) if df is not None else 0
@@ -464,6 +528,9 @@ class SessionWidget(QWidget):
                 self._set_results(df, var_name)
                 self.session.finish_execution(True, S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
                 self.status_changed.emit(S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
+                self._queue_total_rows += rows
+                self._queue_blocks_done += 1
+                self._queue_last_type = "sql"
 
                 # Save in session namespace
                 self.session.set_variable(var_name, df)
@@ -510,6 +577,14 @@ class SessionWidget(QWidget):
 
         self._is_executing = True
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
+
+        # Reset notification counters for single-block execution
+        if self._queue_blocks_done == 0:
+            self._queue_total_rows = 0
+            self._queue_had_error = False
+            self._queue_last_error = ""
+            self._queue_last_type = ""
+
         self.session.start_execution("python")
         self.status_changed.emit(S.session_widget.executing_python)
         # Prepare namespace with df if exists
@@ -565,6 +640,10 @@ class SessionWidget(QWidget):
             self.append_output(self._format_log("PYTHON", f"ERROR:\n{error}"), error=True)
             self.session.finish_execution(False, S.session_widget.status_python_error)
             self.status_changed.emit(S.session_widget.status_python_error)
+            self._queue_had_error = True
+            self._queue_last_error = error[:80]
+            self._queue_last_type = "python"
+            self._queue_blocks_done += 1
             self._show_output()
         else:
             has_dataframe_result = False
@@ -612,6 +691,8 @@ class SessionWidget(QWidget):
                 self.session.update_namespace(updated_namespace)
 
             self.session.finish_execution(True, S.session_widget.status_python_done)
+            self._queue_blocks_done += 1
+            self._queue_last_type = "python"
 
         # Process next in queue if exists
         self._is_executing = False
@@ -622,6 +703,42 @@ class SessionWidget(QWidget):
     def _on_execute_cross_syntax(self, code: str):
         """Emite sinal para MainWindow processar cross-syntax"""
         self.execute_cross_syntax.emit(code)
+
+    # === EXECUTION NOTIFICATION ===
+
+    def _emit_queue_notification(self):
+        """Emit a single notification summarizing the entire queue execution."""
+        if self._queue_blocks_done == 0:
+            return
+
+        if self._queue_had_error:
+            title = S.notification.sql_query if self._queue_last_type == "sql" else S.notification.python
+            msg = S.notification.error.format(error=self._queue_last_error)
+            self.execution_finished.emit(title, msg, False)
+        else:
+            # Build a meaningful message based on what ran
+            if self._queue_last_type == "sql":
+                title = S.notification.sql_query
+                msg = S.notification.complete_rows.format(rows=f"{self._queue_total_rows:,}")
+            elif self._queue_last_type == "python":
+                title = S.notification.python
+                msg = S.notification.executed
+            else:
+                title = S.notification.cross_syntax
+                msg = S.notification.executed
+
+            # If multiple blocks ran, mention that
+            if self._queue_blocks_done > 1:
+                msg = f"{self._queue_blocks_done} blocks - {msg}"
+
+            self.execution_finished.emit(title, msg, True)
+
+        # Reset counters
+        self._queue_total_rows = 0
+        self._queue_blocks_done = 0
+        self._queue_had_error = False
+        self._queue_last_error = ""
+        self._queue_last_type = ""
 
     # === EXECUTION QUEUE ===
 
@@ -634,6 +751,13 @@ class SessionWidget(QWidget):
         """
         # Reset cancellation flag
         self._cancel_requested = False
+
+        # Reset notification tracking for this queue run
+        self._queue_total_rows = 0
+        self._queue_blocks_done = 0
+        self._queue_had_error = False
+        self._queue_last_error = ""
+        self._queue_last_type = ""
 
         # Add all to queue
         self._execution_queue.extend(queue)
@@ -716,6 +840,8 @@ class SessionWidget(QWidget):
         if not self._execution_queue:
             # Fila vazia, marca todos os blocos como finalizados
             self.editor.mark_execution_finished()
+            # Emit single notification for entire queue run
+            self._emit_queue_notification()
             return
 
         # Get next from queue
