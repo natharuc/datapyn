@@ -98,7 +98,7 @@ class PackageManagerService:
         Uses 'uv pip ...' if uv is available, otherwise 'python -m pip ...'.
         """
         if self._uv_executable:
-            return [self._uv_executable, "pip", "--python", self._python_executable] + pip_args
+            return [self._uv_executable, "pip"] + pip_args
         return [self._python_executable, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
 
     def list_installed(self) -> List[PackageInfo]:
