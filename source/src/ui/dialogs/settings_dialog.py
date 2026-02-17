@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QWidget,
     QComboBox,
+    QSpinBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSettings
 from PyQt6.QtGui import QFont, QKeySequence
@@ -229,6 +230,71 @@ class SettingsDialog(QDialog):
         lang_layout.addWidget(hint_label)
 
         general_layout.addWidget(lang_group)
+
+        # Display section - Grid row limit
+        display_group = QGroupBox(
+            S.settings.section_display if hasattr(S.settings, 'section_display') else "DISPLAY"
+        )
+        display_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 11px;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 20px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }
+        """)
+        display_layout = QVBoxLayout(display_group)
+        display_layout.setSpacing(10)
+
+        # Row limit
+        row_limit_row = QHBoxLayout()
+        row_limit_label = QLabel(
+            S.settings.label_grid_row_limit if hasattr(S.settings, 'label_grid_row_limit')
+            else "Default grid display limit (rows):"
+        )
+        row_limit_label.setStyleSheet("color: #cccccc; font-size: 11px; font-weight: normal;")
+        row_limit_row.addWidget(row_limit_label)
+
+        self.grid_row_limit_spin = QSpinBox()
+        self.grid_row_limit_spin.setRange(10, 1000000)
+        self.grid_row_limit_spin.setSingleStep(100)
+        settings = QSettings("DataPyn", "DataPyn")
+        self.grid_row_limit_spin.setValue(int(settings.value("grid/display_row_limit", 100)))
+        self.grid_row_limit_spin.setFixedWidth(120)
+        self.grid_row_limit_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #2d2d30;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }
+            QSpinBox:hover {
+                border-color: #007acc;
+            }
+        """)
+        row_limit_row.addWidget(self.grid_row_limit_spin)
+        row_limit_row.addStretch()
+        display_layout.addLayout(row_limit_row)
+
+        # Hint
+        display_hint = QLabel(
+            S.settings.grid_row_limit_hint if hasattr(S.settings, 'grid_row_limit_hint')
+            else "Only affects display. Exports always include all data."
+        )
+        display_hint.setStyleSheet("color: #6e6e6e; font-size: 10px; font-style: italic; font-weight: normal;")
+        display_layout.addWidget(display_hint)
+
+        general_layout.addWidget(display_group)
         general_layout.addStretch()
 
         self.tabs.addTab(general_widget, S.settings.tab_general)
@@ -452,6 +518,9 @@ class SettingsDialog(QDialog):
         selected_lang = self.lang_combo.currentData()
         settings = QSettings("DataPyn", "DataPyn")
         settings.setValue("language", selected_lang)
+
+        # Save grid display row limit
+        settings.setValue("grid/display_row_limit", self.grid_row_limit_spin.value())
 
         # Save shortcuts
         for row in range(self.table.rowCount()):

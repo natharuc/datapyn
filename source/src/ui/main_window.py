@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QThread, pyqtSignal, QObject, QSettings
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QFont, QColor
-from PyQt6.QtWidgets import QSystemTrayIcon
+from src.ui.components.toast_notification import ToastManager
 import sys
 import re
 import io
@@ -490,6 +490,9 @@ class MainWindow(DockingMainWindow):
 
         # Apply initial theme
         self._apply_app_theme()
+
+        # Setup in-app toast notifications
+        ToastManager.setup(self)
 
         # Timer to update status
         self.status_timer = QTimer()
@@ -2110,6 +2113,11 @@ class MainWindow(DockingMainWindow):
             new_widget.block_database_changed.connect(
                 lambda block, db_name: self._on_block_database_changed(block, db_name)
             )
+            new_widget.execution_finished.connect(
+                lambda title, msg, success, w=new_widget: self._on_execution_finished_notification(
+                    title, msg, success, w
+                )
+            )
 
             # Register widget
             self._session_widgets[session.session_id] = new_widget
@@ -3022,60 +3030,48 @@ class MainWindow(DockingMainWindow):
         self.session_tabs.set_tab_running(tab_index, is_running)
         return tab_index
 
+    def _on_execution_finished_notification(self, title: str, message: str, success: bool, widget):
+        """
+        Decide se deve enviar notificacao apos execucao terminar.
+
+        Regras:
+        - Nao notifica se o usuario esta focado na aba que executou
+          (janela ativa + aba visivel)
+        - Notifica se a janela esta minimizada ou se outra aba esta selecionada
+        """
+        tab_index = self.session_tabs.indexOf(widget)
+        current_tab = self.session_tabs.currentIndex()
+        is_active_window = self.isActiveWindow() and not self.isMinimized()
+
+        # Skip notification if user is looking at the executing tab
+        if is_active_window and current_tab == tab_index:
+            return
+
+        self._send_notification(title, message, success, tab_index)
+
     def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
         """
-        Envia notificacao nativa (Windows/Linux/macOS) via QSystemTrayIcon.
+        Envia notificacao in-app (toast) no canto inferior direito.
 
         Args:
             title: Titulo da notificacao
             message: Mensagem
-            success: Se True, notificacao de sucesso
+            success: Se True, notificacao de sucesso (verde), senao erro (vermelho)
             tab_index: Indice da aba que originou (foca nela ao clicar)
         """
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            return
-
-        # Nao envia notificacao se a janela estiver em foco
-        if self.isActiveWindow():
-            return
-
         try:
-            # Criar tray icon sob demanda (reutiliza se ja existe)
-            if not hasattr(self, "_tray_icon") or self._tray_icon is None:
-                self._tray_icon = QSystemTrayIcon(self)
-                icon = self.windowIcon()
-                if icon.isNull():
-                    icon = QIcon.fromTheme("application-x-executable")
-                self._tray_icon.setIcon(icon)
-                self._tray_icon.show()
+            on_click = None
+            if tab_index is not None:
+                on_click = lambda idx=tab_index: self._focus_window_and_tab(idx)
 
-            # Capture tab_index for closure
-            self._notification_tab = tab_index
-
-            # Connect click only once
-            try:
-                self._tray_icon.activated.disconnect()
-            except TypeError:
-                pass
-            self._tray_icon.activated.connect(self._on_tray_activated)
-
-            # Tipo do icone na notificacao
-            icon_type = (
-                QSystemTrayIcon.MessageIcon.Information
-                if success
-                else QSystemTrayIcon.MessageIcon.Warning
+            ToastManager.notify(
+                title=title,
+                message=message,
+                success=success,
+                on_click=on_click,
             )
-
-            self._tray_icon.showMessage(f"DataPyn - {title}", message, icon_type, 5000)
-
-        except Exception:
-            pass
-
-    def _on_tray_activated(self, reason):
-        """Callback quando usuario clica na notificacao do tray"""
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            tab = getattr(self, "_notification_tab", None)
-            self._focus_window_and_tab(tab)
+        except Exception as e:
+            logger.error(f"Error sending toast notification: {e}")
 
     def _focus_window_and_tab(self, tab_index: int = None):
         """Brings window to front, focuses, and selects the tab that notified"""
@@ -4069,6 +4065,11 @@ class MainWindow(DockingMainWindow):
         )
         widget.block_database_changed.connect(
             lambda block, db_name: self._on_block_database_changed(block, db_name)
+        )
+        widget.execution_finished.connect(
+            lambda title, msg, success, w=widget: self._on_execution_finished_notification(
+                title, msg, success, w
+            )
         )
 
         # Conectar sinal de modificacao do editor para rastreamento por hash

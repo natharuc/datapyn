@@ -23,8 +23,9 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
+    QSpinBox,
 )
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings
+from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer
 from PyQt6.QtGui import QColor, QImage, QPixmap, QFont
 import pandas as pd
 import json
@@ -226,6 +227,7 @@ class ResultsViewer(QWidget):
         self._setup_ui()
         self.current_df: Optional[pd.DataFrame] = None
         self._current_image_bytes: Optional[bytes] = None
+        self._display_limit: int = self._load_display_limit()
 
     def _setup_ui(self):
         """Configura a interface"""
@@ -274,6 +276,41 @@ class ResultsViewer(QWidget):
         self.toolbar.addSeparator()
         self.toolbar.addWidget(self.info_label)
 
+        # Spacer to push row limit to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(spacer.sizePolicy())
+        from PyQt6.QtWidgets import QSizePolicy
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.toolbar.addWidget(spacer)
+
+        # Row limit spinner
+        self.row_limit_label = QLabel(S.results.label_row_limit if hasattr(S.results, 'label_row_limit') else "Rows:")
+        self.row_limit_label.setStyleSheet("color: #999; font-size: 10px; padding: 0 4px;")
+        self.toolbar.addWidget(self.row_limit_label)
+
+        self.row_limit_spin = QSpinBox()
+        self.row_limit_spin.setRange(10, 1000000)
+        self.row_limit_spin.setSingleStep(100)
+        self.row_limit_spin.setValue(self._load_display_limit())
+        self.row_limit_spin.setFixedWidth(90)
+        self.row_limit_spin.setToolTip(
+            S.results.tooltip_row_limit if hasattr(S.results, 'tooltip_row_limit')
+            else "Max rows displayed in grid (exports use all data)"
+        )
+        self.row_limit_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #2d2d30;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                padding: 2px 6px;
+                font-size: 11px;
+            }
+            QSpinBox:hover { border-color: #007acc; }
+        """)
+        self.row_limit_spin.valueChanged.connect(self._on_row_limit_changed)
+        self.toolbar.addWidget(self.row_limit_spin)
+
         layout.addWidget(self.toolbar)
 
         # Save image button (hidden by default)
@@ -291,9 +328,9 @@ class ResultsViewer(QWidget):
         self.model = PandasModel(theme_manager=self.theme_manager)
         self.table_view.setModel(self.model)
 
-        # Ajustar colunas automaticamente pelo conteudo do cabecalho
+        # Cabecalho interativo - resize sera feito apos carregar dados (limitado)
         self.table_view.horizontalHeader().setSectionResizeMode(
-            self.table_view.horizontalHeader().ResizeMode.ResizeToContents
+            self.table_view.horizontalHeader().ResizeMode.Interactive
         )
         self.stack.addWidget(self.table_view)  # index 0
 
@@ -414,14 +451,34 @@ class ResultsViewer(QWidget):
         self.model.set_theme_manager(theme_manager)
 
     def display_dataframe(self, df: pd.DataFrame, var_name: str = "df"):
-        """Exibe um DataFrame na tabela"""
-        self.current_df = df
-        self.model.update_data(df)
+        """Exibe um DataFrame na tabela.
 
-        # Atualiza info
+        Armazena o DataFrame completo para exportacao, mas exibe apenas
+        ate o limite de linhas configurado para manter a interface fluida.
+        """
+        self.current_df = df
+
+        # Atualiza info com totais reais
         rows = len(df)
         cols = len(df.columns)
-        self.info_label.setText(S.results.info_df_dimensions.format(var_name=var_name, rows=f"{rows:,}", cols=cols))
+        limit = self.row_limit_spin.value()
+
+        # Alimentar modelo apenas com o slice limitado
+        display_df = df.head(limit) if rows > limit else df
+        self.model.update_data(display_df)
+
+        # Ajustar colunas pelo conteudo visivel (nao bloqueia com 100k linhas)
+        QTimer.singleShot(0, self._resize_columns)
+
+        # Info label mostra total real e quantas estao exibidas
+        if rows > limit:
+            info_text = S.results.info_df_dimensions.format(
+                var_name=var_name, rows=f"{rows:,}", cols=cols
+            )
+            showing = S.results.showing_limited.format(showing=f"{limit:,}") if hasattr(S.results, 'showing_limited') else f" (showing {limit:,})"
+            self.info_label.setText(info_text + showing)
+        else:
+            self.info_label.setText(S.results.info_df_dimensions.format(var_name=var_name, rows=f"{rows:,}", cols=cols))
 
         # Mostrar tabela e botoes de export
         self.stack.setCurrentIndex(0)
@@ -432,6 +489,35 @@ class ResultsViewer(QWidget):
         self.btn_export_table.setVisible(True)
         self.export_destination.setVisible(True)
         self.btn_save_image.setVisible(False)
+
+    def _resize_columns(self):
+        """Ajusta largura das colunas pelo conteudo visivel (deferido via QTimer)."""
+        self.table_view.resizeColumnsToContents()
+
+    def _on_row_limit_changed(self, value: int):
+        """Quando usuario muda o limite de linhas no spinner."""
+        # Reaplicar exibicao com novo limite
+        if self.current_df is not None:
+            self.display_dataframe(self.current_df, self._current_var_name())
+
+    def _current_var_name(self) -> str:
+        """Extrai nome da variavel do info_label atual."""
+        text = self.info_label.text()
+        if ":" in text:
+            return text.split(":")[0].strip()
+        return "df"
+
+    @staticmethod
+    def _load_display_limit() -> int:
+        """Carrega o limite de linhas exibidas do QSettings."""
+        settings = QSettings("DataPyn", "DataPyn")
+        return int(settings.value("grid/display_row_limit", 100))
+
+    @staticmethod
+    def _save_display_limit(value: int):
+        """Salva o limite de linhas exibidas no QSettings."""
+        settings = QSettings("DataPyn", "DataPyn")
+        settings.setValue("grid/display_row_limit", value)
 
     def display_image(self, image_bytes: bytes, label: str = None):
         """Exibe uma imagem (PNG bytes) no painel de resultados.

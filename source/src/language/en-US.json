@@ -288,7 +288,10 @@
     "error_save_image": "Error saving image:\n{error}",
     "export_table_no_data": "No data to export",
     "export_table_no_window": "Main window not found",
-    "export_table_no_connection": "No active connection available.\n\nConnect to a database first."
+    "export_table_no_connection": "No active connection available.\n\nConnect to a database first.",
+    "label_row_limit": "Rows:",
+    "tooltip_row_limit": "Max rows displayed in grid (exports use all data)",
+    "showing_limited": " (showing {showing})"
   },
 
   "csv_export": {
@@ -443,7 +446,10 @@
     "success_title": "Success",
     "success_msg": "Settings saved successfully!",
     "confirm_restore_title": "Confirm",
-    "confirm_restore_msg": "Do you want to restore all shortcuts to default values?"
+    "confirm_restore_msg": "Do you want to restore all shortcuts to default values?",
+    "section_display": "DISPLAY",
+    "label_grid_row_limit": "Default grid display limit (rows):",
+    "grid_row_limit_hint": "Only affects display. Exports always include all data."
   },
 
   "connections_manager": {

@@ -259,6 +259,9 @@
     "tooltip_export_dest": "Destino da exportacao",
     "tooltip_export_table": "Exportar dados para uma tabela do banco (to_sql)",
     "no_results": "Sem resultados",
+    "label_row_limit": "Linhas:",
+    "tooltip_row_limit": "Max linhas exibidas no grid (exportacoes usam todos os dados)",
+    "showing_limited": " (exibindo {showing})",
     "json_header_key": "Chave",
     "json_header_value": "Valor",
     "json_header_type": "Tipo",
@@ -443,7 +446,10 @@
     "success_title": "Sucesso",
     "success_msg": "Configuracoes salvas com sucesso!",
     "confirm_restore_title": "Confirmar",
-    "confirm_restore_msg": "Deseja restaurar todos os atalhos para os valores padrao?"
+    "confirm_restore_msg": "Deseja restaurar todos os atalhos para os valores padrao?",
+    "section_display": "EXIBICAO",
+    "label_grid_row_limit": "Limite de linhas no grid (padrao):",
+    "grid_row_limit_hint": "Apenas afeta a exibicao. Exportacoes sempre incluem todos os dados."
   },
 
   "connections_manager": {
