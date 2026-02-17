@@ -1,5 +1,5 @@
 """
-Package Manager Service - pip package management
+Package Manager Service - package management via uv
 
 Responsibilities:
 - List installed packages
@@ -13,6 +13,8 @@ import sys
 import shutil
 import json
 import logging
+import urllib.request
+import urllib.error
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
 
@@ -21,6 +23,16 @@ logger = logging.getLogger(__name__)
 # CREATE_NO_WINDOW exists only on Windows
 # On Linux uses 0 (no special flags)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _find_uv_executable() -> Optional[str]:
+    """
+    Return uv executable path if available.
+    """
+    uv = shutil.which("uv")
+    if uv:
+        return uv
+    return None
 
 
 def _find_python_executable() -> str:
@@ -70,20 +82,31 @@ class PackageOperationResult:
 
 class PackageManagerService:
     """
-    Service for Python package management via pip.
+    Service for Python package management via uv (with pip fallback).
 
-    Allows listing, searching, installing and uninstalling packages
-    using pip from current Python interpreter.
+    Allows listing, searching, installing and uninstalling packages.
+    Prefers uv for speed; falls back to pip if uv is not available.
     """
 
     def __init__(self):
+        self._uv_executable = _find_uv_executable()
         self._python_executable = _find_python_executable()
+
+    def _build_cmd(self, pip_args: List[str]) -> List[str]:
+        """
+        Build command list for pip operations.
+        Uses 'uv pip ...' if uv is available, otherwise 'python -m pip ...'.
+        """
+        if self._uv_executable:
+            return [self._uv_executable, "pip", "--python", self._python_executable] + pip_args
+        return [self._python_executable, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
 
     def list_installed(self) -> List[PackageInfo]:
         """List all installed packages"""
         try:
+            cmd = self._build_cmd(["list", "--format=json"])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "list", "--format=json", "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -101,49 +124,27 @@ class PackageManagerService:
 
     def search_pypi(self, query: str) -> List[PackageInfo]:
         """
-        Search packages on PyPI via pip index.
+        Search packages on PyPI via JSON API.
 
-        Since pip search was disabled, we use pip index versions
-        to check if a package exists, and complement with
-        basic information.
+        Uses the public PyPI JSON API to get package info.
         """
         if not query or len(query) < 2:
             return []
 
         try:
-            # Try to get package info directly
-            result = subprocess.run(
-                [
-                    self._python_executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    f"{query}==randominvalidversion",
-                    "--disable-pip-version-check",
-                    "--dry-run",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            # pip will list available versions in error
-            stderr = result.stderr
+            # Query PyPI JSON API directly
+            url = f"https://pypi.org/pypi/{query}/json"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
 
-            # Check if package exists
-            if "No matching distribution" in stderr and "randominvalidversion" not in stderr:
-                return []
+            info = data.get("info", {})
+            releases = data.get("releases", {})
 
-            # Extract versions from error output
-            versions = []
-            import re
+            # Get last 5 versions (sorted)
+            versions = sorted(releases.keys(), key=lambda v: releases[v][0]["upload_time"] if releases[v] else "", reverse=True)[:5] if releases else []
 
-            # Pattern: "from versions: 1.0.0, 1.1.0, ..."
-            match = re.search(r"from versions?:\s*(.+?)(?:\)|$)", stderr)
-            if match:
-                versions = [v.strip() for v in match.group(1).split(",")]
-
-            latest = versions[-1] if versions else ""
+            latest = info.get("version", "")
 
             # Check if installed
             installed_packages = {p.name.lower(): p for p in self.list_installed()}
@@ -151,14 +152,21 @@ class PackageManagerService:
 
             return [
                 PackageInfo(
-                    name=query,
+                    name=info.get("name", query),
                     version=installed.version if installed else "",
                     latest_version=latest,
                     installed=bool(installed),
-                    summary=f"Available versions: {', '.join(versions[-5:])}" if versions else "",
+                    summary=info.get("summary", ""),
+                    author=info.get("author", "") or info.get("author_email", ""),
                 )
             ]
 
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                logger.info(f"Package '{query}' not found on PyPI")
+                return []
+            logger.error(f"Error in PyPI search: {e}")
+            return []
         except Exception as e:
             logger.error(f"Error in PyPI search: {e}")
             return []
@@ -166,8 +174,9 @@ class PackageManagerService:
     def get_package_info(self, package_name: str) -> Optional[PackageInfo]:
         """Get detailed information of an installed package"""
         try:
+            cmd = self._build_cmd(["show", package_name])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "show", package_name, "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -194,11 +203,12 @@ class PackageManagerService:
             return None
 
     def install_package(self, package_name: str, version: str = "") -> PackageOperationResult:
-        """Install a package via pip"""
+        """Install a package via uv/pip"""
         target = f"{package_name}=={version}" if version else package_name
         try:
+            cmd = self._build_cmd(["install", target])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "install", target, "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -230,7 +240,7 @@ class PackageManagerService:
             return PackageOperationResult(success=False, package_name=package_name, operation="install", error=str(e))
 
     def uninstall_package(self, package_name: str) -> PackageOperationResult:
-        """Uninstall a package via pip"""
+        """Uninstall a package via uv/pip"""
         # Protect essential packages
         protected = {
             "pip",
@@ -251,8 +261,12 @@ class PackageManagerService:
             )
 
         try:
+            cmd = self._build_cmd(["uninstall", package_name])
+            # uv pip uninstall does not need -y flag
+            if not self._uv_executable:
+                cmd.insert(-1, "-y")  # pip needs -y before package name
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "uninstall", package_name, "-y", "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -279,16 +293,9 @@ class PackageManagerService:
     def update_package(self, package_name: str) -> PackageOperationResult:
         """Update a package to most recent version"""
         try:
+            cmd = self._build_cmd(["install", "--upgrade", package_name])
             result = subprocess.run(
-                [
-                    self._python_executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--upgrade",
-                    package_name,
-                    "--disable-pip-version-check",
-                ],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -315,8 +322,9 @@ class PackageManagerService:
     def check_package_exists(self, package_name: str) -> bool:
         """Quickly check if a package is installed"""
         try:
+            cmd = self._build_cmd(["show", package_name])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "show", package_name, "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=10,

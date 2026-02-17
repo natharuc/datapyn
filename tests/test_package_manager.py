@@ -139,7 +139,7 @@ class TestListInstalled:
 
 
 class TestSearchPyPI:
-    """Testes para PackageManagerService.search_pypi"""
+    """Testes para PackageManagerService.search_pypi (via PyPI JSON API)"""
 
     def test_search_empty_query(self):
         """Pesquisa com query vazia retorna vazio"""
@@ -151,31 +151,45 @@ class TestSearchPyPI:
         svc = PackageManagerService()
         assert svc.search_pypi("a") == []
 
-    @patch("src.services.package_manager_service.subprocess.run")
-    def test_search_found(self, mock_run):
-        """Pesquisa encontra pacote com versoes"""
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stderr=(
-                "ERROR: Could not find a version that satisfies "
-                "the requirement flask==randominvalidversion "
-                "(from versions: 2.0.0, 2.1.0, 3.0.0)\n"
-            ),
-            stdout="",
-        )
+    @patch("src.services.package_manager_service.urllib.request.urlopen")
+    def test_search_found(self, mock_urlopen):
+        """Pesquisa encontra pacote via PyPI JSON API"""
+        pypi_response = json.dumps({
+            "info": {"name": "flask", "version": "3.0.0", "summary": "Web framework", "author": "Pallets"},
+            "releases": {
+                "2.0.0": [{"upload_time": "2021-05-01"}],
+                "2.1.0": [{"upload_time": "2021-11-01"}],
+                "3.0.0": [{"upload_time": "2023-09-01"}],
+            },
+        }).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = pypi_response
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
         svc = PackageManagerService()
-        # Mock list_installed para evitar subprocess real
         svc.list_installed = MagicMock(return_value=[])
         results = svc.search_pypi("flask")
         assert len(results) == 1
         assert results[0].name == "flask"
         assert results[0].latest_version == "3.0.0"
         assert results[0].installed is False
+        assert results[0].summary == "Web framework"
 
-    @patch("src.services.package_manager_service.subprocess.run")
-    def test_search_installed_package(self, mock_run):
+    @patch("src.services.package_manager_service.urllib.request.urlopen")
+    def test_search_installed_package(self, mock_urlopen):
         """Pesquisa marca pacote como instalado se encontrado localmente"""
-        mock_run.return_value = MagicMock(returncode=1, stderr=("ERROR: (from versions: 1.0.0, 2.0.0)\n"), stdout="")
+        pypi_response = json.dumps({
+            "info": {"name": "flask", "version": "2.0.0", "summary": "", "author": ""},
+            "releases": {"1.0.0": [{"upload_time": "2020-01-01"}], "2.0.0": [{"upload_time": "2021-01-01"}]},
+        }).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = pypi_response
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
         svc = PackageManagerService()
         svc.list_installed = MagicMock(return_value=[PackageInfo(name="flask", version="1.0.0", installed=True)])
         results = svc.search_pypi("flask")
@@ -183,18 +197,25 @@ class TestSearchPyPI:
         assert results[0].installed is True
         assert results[0].version == "1.0.0"
 
-    @patch("src.services.package_manager_service.subprocess.run")
-    def test_search_not_found(self, mock_run):
-        """Pesquisa retorna vazio se pacote nao existe"""
-        mock_run.return_value = MagicMock(returncode=1, stderr="No matching distribution found for pacoteinexistente")
+    @patch("src.services.package_manager_service.urllib.request.urlopen")
+    def test_search_not_found(self, mock_urlopen):
+        """Pesquisa retorna vazio se pacote nao existe (HTTP 404)"""
+        import urllib.error
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://pypi.org/pypi/pacoteinexistente/json",
+            code=404,
+            msg="Not Found",
+            hdrs={},
+            fp=None,
+        )
         svc = PackageManagerService()
         results = svc.search_pypi("pacoteinexistente")
         assert results == []
 
-    @patch("src.services.package_manager_service.subprocess.run")
-    def test_search_exception(self, mock_run):
+    @patch("src.services.package_manager_service.urllib.request.urlopen")
+    def test_search_exception(self, mock_urlopen):
         """Pesquisa retorna vazio em caso de excecao"""
-        mock_run.side_effect = Exception("network error")
+        mock_urlopen.side_effect = Exception("network error")
         svc = PackageManagerService()
         results = svc.search_pypi("flask")
         assert results == []
@@ -280,7 +301,7 @@ class TestUninstallPackage:
         assert result.operation == "uninstall"
         args = mock_run.call_args[0][0]
         assert "uninstall" in args
-        assert "-y" in args
+        assert "flask" in args
 
     @patch("src.services.package_manager_service.subprocess.run")
     def test_uninstall_protected_pip(self, mock_run):
