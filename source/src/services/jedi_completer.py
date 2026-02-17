@@ -116,14 +116,19 @@ class JediCompleter(QObject):
 
     def _cleanup(self):
         """Cancel any running completion request."""
-        if self._thread is not None:
-            if self._thread.isRunning():
-                self._thread.quit()
-                if not self._thread.wait(500):
-                    self._thread.terminate()
-                    self._thread.wait(500)
-            self._thread.deleteLater()
+        thread = self._thread
+        if thread is not None:
             self._thread = None
+            try:
+                thread.finished.disconnect(self._on_thread_done)
+            except (TypeError, RuntimeError):
+                pass
+            if thread.isRunning():
+                thread.quit()
+                if not thread.wait(500):
+                    thread.terminate()
+                    thread.wait(500)
+            thread.deleteLater()
 
     def shutdown(self):
         """Explicit shutdown - call before destroying parent widget."""
