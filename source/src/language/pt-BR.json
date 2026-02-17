@@ -649,7 +649,13 @@
     "btn_add_source": "Adicionar",
     "btn_remove_source": "Remover",
     "add_source_title": "Adicionar Fonte de Pacotes",
-    "add_source_prompt": "URL do indice de pacotes (ex: https://meu-registro.exemplo.com/simple/):"
+    "add_source_prompt": "URL do indice de pacotes:",
+    "auth_section_title": "Autenticacao (opcional)",
+    "auth_section_description": "Para feeds privados (Azure DevOps, Artifactory, etc.), informe as credenciais abaixo. Elas serao embutidas na URL ao instalar pacotes.",
+    "auth_username_label": "Usuario:",
+    "auth_username_placeholder": "usuario ou email",
+    "auth_token_label": "Token / Senha:",
+    "auth_token_placeholder": "PAT, chave de API ou senha"
   },
 
   "update_dialog": {

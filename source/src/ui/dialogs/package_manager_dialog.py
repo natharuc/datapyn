@@ -24,7 +24,8 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QListWidget,
     QListWidgetItem,
-    QInputDialog,
+    QFormLayout,
+    QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
@@ -100,6 +101,105 @@ class _InstallWorker(QThread):
                 error=f"Unknown operation: {self.operation}",
             )
         self.finished.emit(result)
+
+
+class _AddSourceDialog(QDialog):
+    """Dialog for adding a package source with optional authentication."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(S.package_manager.add_source_title)
+        self.setMinimumWidth(500)
+
+        # Inherit theme from parent PackageManagerDialog
+        c = parent.theme_manager.get_colors() if parent and hasattr(parent, "theme_manager") else {}
+        bg = c.get("background", "#1e1e1e")
+        fg = c.get("foreground", "#d4d4d4")
+        border = c.get("border", "#3c3c3c")
+        accent = c.get("accent", "#0078d4")
+
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg};
+                color: {fg};
+            }}
+            QLabel {{
+                color: {fg};
+                font-size: 12px;
+            }}
+            QLineEdit {{
+                background-color: {bg};
+                color: {fg};
+                border: 1px solid {border};
+                border-radius: 3px;
+                padding: 6px 8px;
+                font-size: 12px;
+            }}
+            QLineEdit:focus {{
+                border-color: {accent};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # URL field
+        lbl_url = QLabel(S.package_manager.add_source_prompt)
+        layout.addWidget(lbl_url)
+        self.txt_url = QLineEdit()
+        self.txt_url.setPlaceholderText("https://pkgs.dev.azure.com/org/_packaging/feed/pypi/simple/")
+        layout.addWidget(self.txt_url)
+
+        # Auth section
+        auth_label = QLabel(S.package_manager.auth_section_title)
+        auth_font = QFont()
+        auth_font.setBold(True)
+        auth_label.setFont(auth_font)
+        layout.addWidget(auth_label)
+
+        auth_desc = QLabel(S.package_manager.auth_section_description)
+        auth_desc.setWordWrap(True)
+        auth_desc.setStyleSheet(f"color: {fg}; font-size: 10px; opacity: 0.7;")
+        layout.addWidget(auth_desc)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self.txt_username = QLineEdit()
+        self.txt_username.setPlaceholderText(S.package_manager.auth_username_placeholder)
+        form.addRow(S.package_manager.auth_username_label, self.txt_username)
+
+        self.txt_password = QLineEdit()
+        self.txt_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.txt_password.setPlaceholderText(S.package_manager.auth_token_placeholder)
+        form.addRow(S.package_manager.auth_token_label, self.txt_password)
+
+        layout.addLayout(form)
+
+        # Buttons
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        btn_box.setStyleSheet(f"""
+            QPushButton {{
+                padding: 6px 18px;
+                border-radius: 4px;
+                font-size: 11px;
+                min-width: 70px;
+            }}
+        """)
+        layout.addWidget(btn_box)
+
+    def get_source(self) -> dict:
+        """Return the source dict with url, username, password."""
+        return {
+            "url": self.txt_url.text().strip(),
+            "username": self.txt_username.text().strip(),
+            "password": self.txt_password.text(),
+        }
 
 
 class PackageManagerDialog(QDialog):
@@ -418,37 +518,43 @@ class PackageManagerDialog(QDialog):
         self.sources_frame.setVisible(checked)
 
     def _load_sources(self):
-        """Loads saved extra index URLs into the list widget."""
+        """Loads saved sources into the list widget."""
         self.sources_list.clear()
-        for url in self.service.get_extra_index_urls():
-            self.sources_list.addItem(url)
+        for source in self.service.get_sources():
+            url = source.get("url", "")
+            username = source.get("username", "")
+            has_auth = bool(username and source.get("password", ""))
+            display = url
+            if has_auth:
+                display = f"{url}  [{username}]"
+            item = QListWidgetItem(display)
+            item.setData(Qt.ItemDataRole.UserRole, source)
+            self.sources_list.addItem(item)
 
     def _add_source(self):
-        """Asks user for a new index URL and saves it."""
-        url, ok = QInputDialog.getText(
-            self,
-            S.package_manager.add_source_title,
-            S.package_manager.add_source_prompt,
-        )
-        if ok and url and url.strip():
-            url = url.strip()
-            # Avoid duplicates
-            existing = self.service.get_extra_index_urls()
-            if url in existing:
+        """Opens dialog to add a new package source with optional auth."""
+        dlg = _AddSourceDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            source = dlg.get_source()
+            if not source.get("url"):
                 return
-            existing.append(url)
-            self.service.set_extra_index_urls(existing)
+            existing = self.service.get_sources()
+            # Avoid duplicate URLs
+            if any(s.get("url") == source["url"] for s in existing):
+                return
+            existing.append(source)
+            self.service.set_sources(existing)
             self._load_sources()
 
     def _remove_source(self):
-        """Removes the selected index URL."""
+        """Removes the selected source."""
         item = self.sources_list.currentItem()
         if not item:
             return
-        url = item.text()
-        urls = self.service.get_extra_index_urls()
-        urls = [u for u in urls if u != url]
-        self.service.set_extra_index_urls(urls)
+        source = item.data(Qt.ItemDataRole.UserRole)
+        sources = self.service.get_sources()
+        sources = [s for s in sources if s.get("url") != source.get("url")]
+        self.service.set_sources(sources)
         self._load_sources()
 
     # === Actions ===

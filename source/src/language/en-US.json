@@ -649,7 +649,13 @@
     "btn_add_source": "Add",
     "btn_remove_source": "Remove",
     "add_source_title": "Add Package Source",
-    "add_source_prompt": "Package index URL (e.g. https://my-registry.example.com/simple/):"
+    "add_source_prompt": "Package index URL:",
+    "auth_section_title": "Authentication (optional)",
+    "auth_section_description": "For private feeds (Azure DevOps, Artifactory, etc.), provide the credentials below. They will be embedded in the URL when installing packages.",
+    "auth_username_label": "Username:",
+    "auth_username_placeholder": "username or email",
+    "auth_token_label": "Token / Password:",
+    "auth_token_placeholder": "PAT, API key or password"
   },
 
   "update_dialog": {

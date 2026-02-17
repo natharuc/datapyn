@@ -15,6 +15,7 @@ import json
 import logging
 import urllib.request
 import urllib.error
+import urllib.parse
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
 
@@ -97,22 +98,75 @@ class PackageManagerService:
         self._uv_executable = _find_uv_executable()
         self._python_executable = _find_python_executable()
 
-    # --- Extra index URL management ---
+    # --- Package sources management ---
 
-    def get_extra_index_urls(self) -> List[str]:
-        """Return list of extra index URLs configured by the user."""
-        settings = QSettings("DataPyn", "PackageManager")
-        urls = settings.value("extra_index_urls", [])
-        if isinstance(urls, str):
-            return [urls] if urls else []
-        return list(urls) if urls else []
+    def get_sources(self) -> List[Dict[str, str]]:
+        """
+        Return list of configured package sources.
 
-    def set_extra_index_urls(self, urls: List[str]):
-        """Persist the list of extra index URLs."""
+        Each source is a dict with keys: url, username, password.
+        Migrates from old plain-URL format if needed.
+        """
         settings = QSettings("DataPyn", "PackageManager")
-        # Filter out empty strings
-        clean = [u.strip() for u in urls if u.strip()]
-        settings.setValue("extra_index_urls", clean)
+        raw = settings.value("sources_v2", None)
+
+        if raw is not None:
+            if isinstance(raw, list):
+                return raw
+            return []
+
+        # Migrate from old format (plain URL list)
+        old_urls = settings.value("extra_index_urls", [])
+        if isinstance(old_urls, str):
+            old_urls = [old_urls] if old_urls else []
+        if old_urls:
+            sources = [{"url": u.strip(), "username": "", "password": ""} for u in old_urls if u.strip()]
+            self.set_sources(sources)
+            settings.remove("extra_index_urls")
+            return sources
+        return []
+
+    def set_sources(self, sources: List[Dict[str, str]]):
+        """Persist the list of package sources."""
+        settings = QSettings("DataPyn", "PackageManager")
+        clean = []
+        for s in sources:
+            url = s.get("url", "").strip()
+            if not url:
+                continue
+            clean.append({
+                "url": url,
+                "username": s.get("username", "").strip(),
+                "password": s.get("password", ""),
+            })
+        settings.setValue("sources_v2", clean)
+
+    @staticmethod
+    def build_authenticated_url(source: Dict[str, str]) -> str:
+        """
+        Build a URL with embedded credentials for pip/uv.
+
+        If username and password are provided, inserts them into the URL
+        as https://user:pass@host/path.
+        """
+        url = source.get("url", "")
+        username = source.get("username", "")
+        password = source.get("password", "")
+        if not username or not password:
+            return url
+        try:
+            parsed = urllib.parse.urlparse(url)
+            # Encode special characters in credentials
+            encoded_user = urllib.parse.quote(username, safe="")
+            encoded_pass = urllib.parse.quote(password, safe="")
+            netloc = f"{encoded_user}:{encoded_pass}@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            authenticated = parsed._replace(netloc=netloc)
+            return urllib.parse.urlunparse(authenticated)
+        except Exception:
+            logger.warning("Failed to build authenticated URL, using plain URL")
+            return url
 
     def _build_cmd(self, pip_args: List[str]) -> List[str]:
         """
@@ -125,9 +179,11 @@ class PackageManagerService:
         else:
             cmd = [self._python_executable, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
 
-        # Append extra index URLs
-        for url in self.get_extra_index_urls():
-            cmd.extend(["--extra-index-url", url])
+        # Append extra index URLs (with embedded credentials if configured)
+        for source in self.get_sources():
+            auth_url = self.build_authenticated_url(source)
+            if auth_url:
+                cmd.extend(["--extra-index-url", auth_url])
 
         return cmd
 
