@@ -112,7 +112,7 @@ class _AddSourceDialog(QDialog):
         self.setMinimumWidth(500)
 
         # Inherit theme from parent PackageManagerDialog
-        c = parent.theme_manager.get_colors() if parent and hasattr(parent, "theme_manager") else {}
+        c = parent.theme_manager.get_app_colors() if parent and hasattr(parent, "theme_manager") else {}
         bg = c.get("background", "#1e1e1e")
         fg = c.get("foreground", "#d4d4d4")
         border = c.get("border", "#3c3c3c")
