@@ -116,14 +116,17 @@ class JediCompleter(QObject):
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._on_finished)
         self._worker.finished.connect(self._thread.quit)
-        self._thread.finished.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._thread.deleteLater)
 
         self._thread.start()
 
     def _on_finished(self, results: list):
         """Forward results."""
         self.completions_ready.emit(results)
+        # Clean up thread/worker after completion
+        if self._thread is not None:
+            self._thread.deleteLater()
+        if self._worker is not None:
+            self._worker.deleteLater()
         self._thread = None
         self._worker = None
 
@@ -131,6 +134,13 @@ class JediCompleter(QObject):
         """Cancel any running completion request."""
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()
-            self._thread.wait(500)
+            self._thread.wait(1000)
+            if self._thread is not None and self._thread.isRunning():
+                self._thread.terminate()
+                self._thread.wait(500)
+        if self._thread is not None:
+            self._thread.deleteLater()
+        if self._worker is not None:
+            self._worker.deleteLater()
         self._thread = None
         self._worker = None

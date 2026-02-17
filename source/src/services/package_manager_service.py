@@ -272,8 +272,12 @@ class PackageManagerService:
         Probe configured extra sources via PEP 503 Simple API.
 
         Checks {source_url}/{package}/ for a valid response.
+        Uses HTTP Basic Auth header for authenticated sources.
         Returns PackageInfo with basic data if found in any source.
         """
+        import base64
+        import re
+
         sources = self.get_sources()
         if not sources:
             return []
@@ -281,19 +285,26 @@ class PackageManagerService:
         normalized = query.lower().replace("_", "-").replace(".", "-")
 
         for source in sources:
-            auth_url = self.build_authenticated_url(source)
-            if not auth_url:
+            source_url = source.get("url", "")
+            if not source_url:
                 continue
             try:
                 # PEP 503: /{package}/ lists available files
-                base = auth_url.rstrip("/")
+                base = source_url.rstrip("/")
                 probe_url = f"{base}/{normalized}/"
                 req = urllib.request.Request(probe_url, headers={"Accept": "text/html"})
+
+                # Add Basic Auth header if credentials available
+                username = source.get("username", "")
+                password = source.get("password", "")
+                if username and password:
+                    credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+                    req.add_header("Authorization", f"Basic {credentials}")
+
                 with urllib.request.urlopen(req, timeout=10) as response:
                     body = response.read().decode("utf-8", errors="replace")
 
                 # Extract version from filenames (e.g. mag_autatu-1.2.3.tar.gz)
-                import re
                 version_pattern = re.compile(
                     rf"{re.escape(normalized)}[_-](\d+(?:\.\d+)*)(?:[_.-])",
                     re.IGNORECASE,
@@ -301,25 +312,24 @@ class PackageManagerService:
                 versions = version_pattern.findall(body)
                 latest = max(versions, key=lambda v: [int(x) for x in v.split(".")], default="") if versions else ""
 
-                source_label = source.get("url", "private source")
                 return [
                     PackageInfo(
                         name=query,
                         version=installed.version if installed else "",
                         latest_version=latest,
                         installed=bool(installed),
-                        summary=f"Found on {source_label}",
+                        summary=f"Found on {source_url}",
                         author="",
                     )
                 ]
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    logger.debug(f"Package '{query}' not found on source {source.get('url', '')}")
+                    logger.debug(f"Package '{query}' not found on source {source_url}")
                     continue
-                logger.warning(f"Error probing source {source.get('url', '')}: {e}")
+                logger.warning(f"Error probing source {source_url}: {e}")
                 continue
             except Exception as e:
-                logger.warning(f"Error probing source {source.get('url', '')}: {e}")
+                logger.warning(f"Error probing source {source_url}: {e}")
                 continue
 
         return []
