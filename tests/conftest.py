@@ -125,6 +125,33 @@ def auto_close_dialogs(qtbot, monkeypatch):
     # monkeypatch restaura tudo automaticamente no teardown
 
 
+# ==================== LIMPEZA DE QSETTINGS PARA TESTES ====================
+
+
+@pytest.fixture(autouse=True)
+def clear_layout_settings():
+    """
+    Limpa QSettings de layout antes de cada teste para evitar que dados
+    salvos pela aplicacao real causem crash em restoreState durante testes.
+    """
+    from PyQt6.QtCore import QSettings
+
+    for group in ("DataPyn/MainWindow", "DataPyn/DockingLayout"):
+        org, app = group.split("/")
+        s = QSettings(org, app)
+        s.clear()
+        s.sync()
+
+    yield
+
+    # Limpar novamente no teardown para nao poluir outros testes
+    for group in ("DataPyn/MainWindow", "DataPyn/DockingLayout"):
+        org, app = group.split("/")
+        s = QSettings(org, app)
+        s.clear()
+        s.sync()
+
+
 # ==================== TESTES COM QSCINTILLA ====================
 # Removido sistema de parametrizacao - agora usa apenas QScintilla
 

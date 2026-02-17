@@ -446,6 +446,14 @@ class MainWindow(DockingMainWindow):
         # Agora chama super().__init__() que vai inicializar o docking system
         super().__init__()
 
+        # Disable parent's auto-save layout timer (we have our own)
+        if hasattr(self, 'auto_save_timer'):
+            self.auto_save_timer.stop()
+            try:
+                self.auto_save_timer.timeout.disconnect()
+            except Exception:
+                pass
+
         # Enables advanced nesting and special dock configurations
         self.setDockNestingEnabled(True)
         self.setCorner(Qt.Corner.TopLeftCorner, Qt.DockWidgetArea.LeftDockWidgetArea)
@@ -470,6 +478,10 @@ class MainWindow(DockingMainWindow):
         self._create_toolbar()
         self._create_statusbar()
         self._setup_shortcuts()
+
+        # Restore dock layout AFTER toolbar exists (restoreState affects toolbars)
+        self._restore_dock_layout()
+        self._setup_auto_save_layout()
 
         # Connect signals do SessionManager
         self.session_manager.session_focused.connect(self._on_session_focused)
@@ -838,15 +850,7 @@ class MainWindow(DockingMainWindow):
         # Object Explorer (lateral direita, abaixo de Variables)
         self._create_object_explorer_dock()
 
-        # Restore dock widget layout after creating all docks
-        # DESABILITADO: self._restore_dock_layout()
-        # ALWAYS USE DEFAULT LAYOUT for now
-        print("DEBUG: [SUPER SAFE MODE] Always applying default layout - save/restore completely disabled")
-        self._setup_default_layout()
-
-        # Configure layout auto-save when dock widgets change
-        # DESABILITADO: self._setup_auto_save_layout()
-        print("DEBUG: Auto-save disabled for safety")
+        # Layout restore deferred to after toolbar creation (see __init__)
 
     def _create_connections_dock(self):
         """Creates the connections side panel using ConnectionPanel"""
@@ -1326,206 +1330,198 @@ class MainWindow(DockingMainWindow):
 
     def _restore_default_layout(self):
         """Restores the default panel layout"""
-        # Mostra todos os docks na posicao padrao
-        self.results_dock.show()
-        self.output_dock.show()
-        self.variables_dock.show()
-        self.connections_dock.show()
-
-        # Redefine posicoes
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
-
-        # Object Explorer abaixo de Variables na direita
-        if hasattr(self, "object_explorer_dock"):
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
-            self.object_explorer_dock.hide()
-
-        # Tabifica Results e Output
-        self.tabifyDockWidget(self.results_dock, self.output_dock)
-        self.results_dock.raise_()
-
-        # Updates menu actions
-        if hasattr(self, "results_action"):
-            self.results_action.setChecked(True)
-        if hasattr(self, "output_action"):
-            self.output_action.setChecked(True)
-        if hasattr(self, "variables_action"):
-            self.variables_action.setChecked(True)
-        if hasattr(self, "connections_action"):
-            self.connections_action.setChecked(True)
-        if hasattr(self, "object_explorer_action"):
-            self.object_explorer_action.setChecked(False)
+        self._setup_default_layout()
+        self._sync_view_menu_checks()
 
     def _save_dock_layout(self):
-        """DISABLED - Does not save layout automatically for safety"""
-        print("DEBUG: [SUPER SAFE] Automatic save disabled for safety")
-        return
+        """Save current dock layout to QSettings."""
+        try:
+            # Ensure toolbar objectName is set (required for saveState)
+            if hasattr(self, 'main_toolbar'):
+                self.main_toolbar.setObjectName("MainToolbar")
+            settings = QSettings("DataPyn", "MainWindow")
+            settings.setValue("geometry", self.saveGeometry())
+            settings.setValue("windowState", self.saveState(3))  # version=3
+            settings.sync()
+        except Exception:
+            pass
 
     def _restore_dock_layout(self):
-        """Restores dock widget layout with robust validation"""
+        """Restores dock widget layout from QSettings."""
+        self._restoring_layout = True
         try:
             settings = QSettings("DataPyn", "MainWindow")
-
-            # Checks if should reset (if holding Shift on open)
-            modifiers = QApplication.keyboardModifiers()
-            if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                print("DEBUG: Shift pressed - resetting layout to default")
-                self._clear_saved_layout()
-                self._setup_default_layout()
-                return
-
-            # Restaura geometria da janela
             geometry = settings.value("geometry")
-            geometry_restored = False
-            if geometry and len(geometry) > 20:
-                success = self.restoreGeometry(geometry)
-                geometry_restored = success
-                print(f"DEBUG: Geometry restored - Success: {success}, Data: {len(geometry)} bytes")
-                if not success:
-                    print("DEBUG: Failed to restore geometry")
-            else:
-                print("DEBUG: Invalid or missing geometry - using default")
-
-            # Restores dock state
             window_state = settings.value("windowState")
-            state_restored = False
+
+            restored = False
+
+            if geometry and len(geometry) > 20:
+                self.restoreGeometry(geometry)
+
             if window_state and len(window_state) > 50:
-                success = self.restoreState(window_state)
-                state_restored = success
-                print(f"DEBUG: Dock state restored - Success: {success}, Data: {len(window_state)} bytes")
+                # Window is NOT visible at this point (show() is called later
+                # by the splash screen), so restoreState runs invisibly.
+                if self.restoreState(window_state, 3):  # version=3
+                    restored = True
+                # Re-ensure toolbar settings (restoreState may override them)
+                if hasattr(self, 'main_toolbar'):
+                    self.main_toolbar.setObjectName("MainToolbar")
+                    self.main_toolbar.setMovable(False)
+                    self.main_toolbar.setVisible(True)
 
-                if success:
-                    # Forces UI update after restore
-                    QApplication.processEvents()
-                    # Checks if layout is valid after restore
-                    QTimer.singleShot(500, self._validate_restored_layout)
-                else:
-                    print("DEBUG: Failed to restore dock state")
-                    state_restored = False
-            else:
-                print("DEBUG: Invalid or missing dock state - using default")
-
-            # If nothing was restored OR failed, use default
-            if not geometry_restored and not state_restored:
-                print("DEBUG: Nothing was restored or there were failures - applying default layout")
+            if not restored:
                 self._setup_default_layout()
 
-        except Exception as e:
-            print(f"DEBUG: Error restoring layout: {e} - using default layout")
+            # Ensure all non-hidden docks are properly docked (not floating)
+            for dock in [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]:
+                if dock.isFloating() and dock.isVisible():
+                    dock.setFloating(False)
+
+            # Sync view menu after a short delay (docks need to settle)
+            QTimer.singleShot(300, self._finish_layout_restore)
+
+        except Exception:
             self._setup_default_layout()
+            self._restoring_layout = False
+
+    def _finish_layout_restore(self):
+        """Called after layout restore settles - sync menu and allow auto-save."""
+        self._restoring_layout = False
+        self._sync_view_menu_checks()
 
     def _setup_auto_save_layout(self):
-        """DISABLED - Auto-save disabled for safety"""
-        print("DEBUG: [SUPER SAFE] Auto-save permanently disabled")
-        return
+        """Configure auto-save: save layout when dock visibility/position changes."""
+        self._layout_save_timer = QTimer()
+        self._layout_save_timer.setSingleShot(True)
+        self._layout_save_timer.setInterval(1000)
+        self._layout_save_timer.timeout.connect(self._save_dock_layout)
 
-    def _on_dock_changed(self):
-        """DISABLED - Does not react to dock changes for safety"""
-        print("DEBUG: [SUPER SAFE] Dock change ignored - save disabled")
+        # Connect dock visibility changes to schedule save
+        all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
+        if hasattr(self, "object_explorer_dock"):
+            all_docks.append(self.object_explorer_dock)
+        for dock in all_docks:
+            dock.visibilityChanged.connect(self._on_dock_changed)
+            dock.dockLocationChanged.connect(self._on_dock_changed)
+            dock.topLevelChanged.connect(self._on_dock_changed)
+
+    def _on_dock_changed(self, *args):
+        """Schedule layout save after dock state changes."""
+        if getattr(self, "_restoring_layout", False):
+            return
+        if hasattr(self, "_layout_save_timer"):
+            self._layout_save_timer.start()
 
     def _clear_saved_layout(self):
-        """Clears saved layout (for reset)"""
+        """Clears saved layout (for reset)."""
         try:
             settings = QSettings("DataPyn", "MainWindow")
             settings.remove("geometry")
             settings.remove("windowState")
             settings.sync()
-            print("DEBUG: Saved layout removed successfully")
-        except Exception as e:
-            print(f"DEBUG: Error clearing saved layout: {e}")
+        except Exception:
+            pass
 
     def _setup_default_layout(self):
-        """Configures simple and reliable default layout"""
-        print("DEBUG: [SUPER SAFE] Configuring SIMPLIFIED default layout")
-
+        """Configures the default dock layout."""
         try:
-            # Forces all visible and non-floating
             all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
             if hasattr(self, "object_explorer_dock"):
                 all_docks.append(self.object_explorer_dock)
+
+            # Reset: make all non-floating
             for dock in all_docks:
-                if dock:
-                    dock.setVisible(True)
-                    dock.setFloating(False)
+                dock.setFloating(False)
 
-            # Simple positions - without complex removal/re-addition
-            print("DEBUG: Aplicando layout super simples...")
+            # Position docks in their default areas
+            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
 
-            # Window at default size
-            self.setGeometry(100, 100, 1400, 900)
+            if hasattr(self, "object_explorer_dock"):
+                self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
+                self.object_explorer_dock.hide()
 
-            # Force show all
+            # Tabify Results and Output (bottom tabs)
+            self.tabifyDockWidget(self.results_dock, self.output_dock)
+            self.results_dock.raise_()
+
+            # Show main panels
             self.connections_dock.show()
             self.results_dock.show()
             self.output_dock.show()
             self.variables_dock.show()
 
-            print("DEBUG: SIMPLIFIED default layout applied")
+            # Window size
+            screen = QApplication.primaryScreen()
+            if screen:
+                available = screen.availableGeometry()
+                w = min(1400, int(available.width() * 0.8))
+                h = min(900, int(available.height() * 0.8))
+                x = available.x() + (available.width() - w) // 2
+                y = available.y() + (available.height() - h) // 2
+                self.setGeometry(x, y, w, h)
+            else:
+                self.setGeometry(100, 100, 1400, 900)
 
-        except Exception as e:
-            print(f"DEBUG: ERRO no layout simplificado: {e}")
-            # Fallback absoluto
+        except Exception:
+            # Fallback: just show docks
             try:
                 self.connections_dock.show()
                 self.results_dock.show()
                 self.output_dock.show()
                 self.variables_dock.show()
-            except:
+            except Exception:
                 pass
 
     def _is_layout_valid(self):
-        """Checks if the current layout is sane"""
+        """Checks if the current layout is sane."""
         try:
-            # Checks if all docks exist and are visible
-            required_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
-
-            for dock in required_docks:
-                if dock is None:
-                    print(f"DEBUG: Dock None encontrado")
-                    return False
-
-            # Verifica geometria da janela
             geom = self.geometry()
             if geom.width() < 400 or geom.height() < 300:
-                print(f"DEBUG: Window too small: {geom.width()}x{geom.height()}")
                 return False
-
             return True
-
-        except Exception as e:
-            print(f"DEBUG: Error validating layout: {e}")
+        except Exception:
             return False
 
     def _validate_restored_layout(self):
-        """Validates layout after restore and fixes if necessary"""
+        """Validates layout after restore and fixes if necessary."""
         if not self._is_layout_valid():
-            print("DEBUG: Restored layout is invalid - applying default")
-            self._clear_saved_layout()  # Remove o layout corrompido
+            self._clear_saved_layout()
             self._setup_default_layout()
 
     def _reset_layout_completely(self):
-        """Resets layout completely (clears settings and applies default)"""
+        """Resets layout completely (clears settings and applies default)."""
         reply = QMessageBox.question(
             self,
             S.dialogs.confirm_reset_title,
-            "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
+            S.dialogs.layout_reset_confirm_msg if hasattr(S.dialogs, 'layout_reset_confirm_msg') else "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            print("DEBUG: Resetting layout completely by user request")
             self._clear_saved_layout()
             self._setup_default_layout()
+            self._sync_view_menu_checks()
             QMessageBox.information(self, S.dialogs.layout_reset_title, S.dialogs.layout_reset_msg)
 
-    def closeEvent(self, event):
-        """DISABLED - Does not save layout on close for safety"""
-        print("DEBUG: [SUPER SAFE] Closing without saving layout (safe mode active)")
-        super().closeEvent(event)
+    def _sync_view_menu_checks(self):
+        """Sync View menu check states with actual dock visibility."""
+        dock_action_map = [
+            ("connections_dock", "connections_action"),
+            ("results_dock", "results_action"),
+            ("output_dock", "output_action"),
+            ("variables_dock", "variables_action"),
+            ("object_explorer_dock", "object_explorer_action"),
+        ]
+        for dock_attr, action_attr in dock_action_map:
+            dock = getattr(self, dock_attr, None)
+            action = getattr(self, action_attr, None)
+            if dock and action:
+                action.setChecked(dock.isVisible())
 
     def _quick_connect(self, connection_name: str):
         """
@@ -5130,6 +5126,13 @@ class MainWindow(DockingMainWindow):
 
         # Save sessions before closing
         self._save_sessions()
+
+        # Stop auto-save timer BEFORE saving to prevent it from overwriting
+        if hasattr(self, '_layout_save_timer'):
+            self._layout_save_timer.stop()
+
+        # Save dock layout before closing
+        self._save_dock_layout()
 
         # Cleanup all sessions
         for widget in self._session_widgets.values():

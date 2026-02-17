@@ -231,7 +231,7 @@ class ObjectExplorerPanel(QWidget):
                         if not has_match and filter_text not in db.lower():
                             continue
 
-                    display = f"{db}  ({S.object_explorer.db_connected.format(db='')})" if not filter_text else db
+                    display = f"{db} {S.object_explorer.db_connected.format(db='')}" if not filter_text else db
                     db_item = QTreeWidgetItem(self.tree, [display])
                     db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
 
