@@ -416,3 +416,106 @@ class TestObjectExplorerDrag:
 
         assert mime_data.hasFormat("application/x-database-name")
         assert mime_data.data("application/x-database-name").data().decode("utf-8") == "testdb"
+
+
+# ===== Database Selector Popup =====
+
+
+class TestDatabaseSelectorPopup:
+    """Testes para o seletor de banco com popup/menu"""
+
+    def test_panel_set_available_databases(self, qapp):
+        """set_available_databases deve armazenar a lista"""
+        panel = BlockDatabasePanel()
+        panel.set_available_databases(["db1", "db2", "db3"])
+        assert panel.get_available_databases() == ["db1", "db2", "db3"]
+
+    def test_panel_set_available_databases_none(self, qapp):
+        """set_available_databases(None) deve limpar a lista"""
+        panel = BlockDatabasePanel()
+        panel.set_available_databases(["db1"])
+        panel.set_available_databases(None)
+        assert panel.get_available_databases() == []
+
+    def test_panel_set_available_databases_empty(self, qapp):
+        """set_available_databases([]) deve limpar a lista"""
+        panel = BlockDatabasePanel()
+        panel.set_available_databases(["db1"])
+        panel.set_available_databases([])
+        assert panel.get_available_databases() == []
+
+    def test_panel_click_without_databases_emits_clicked(self, qapp):
+        """Click sem lista de bancos deve emitir database_clicked (fallback)"""
+        panel = BlockDatabasePanel()
+        clicked = []
+        panel.database_clicked.connect(lambda: clicked.append(True))
+
+        from PyQt6.QtGui import QMouseEvent
+        from PyQt6.QtCore import QEvent
+
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(10, 10),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        panel.mousePressEvent(event)
+        assert len(clicked) == 1
+
+    def test_panel_click_with_databases_shows_menu(self, qapp):
+        """Click com lista de bancos deve chamar _show_database_menu"""
+        panel = BlockDatabasePanel()
+        panel.set_available_databases(["db1", "db2"])
+
+        clicked = []
+        panel.database_clicked.connect(lambda: clicked.append(True))
+
+        with patch.object(panel, "_show_database_menu") as mock_menu:
+            from PyQt6.QtGui import QMouseEvent
+            from PyQt6.QtCore import QEvent
+
+            event = QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                QPointF(10, 10),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            panel.mousePressEvent(event)
+            mock_menu.assert_called_once()
+            # database_clicked NAO deve ser emitido quando tem databases
+            assert len(clicked) == 0
+
+    def test_panel_has_database_selected_signal(self, qapp):
+        """Panel deve ter sinal database_selected"""
+        panel = BlockDatabasePanel()
+        assert hasattr(panel, "database_selected")
+
+    def test_codeblock_set_available_databases(self, qapp):
+        """CodeBlock.set_available_databases deve delegar para db_panel"""
+        block = CodeBlock()
+        block.set_available_databases(["alpha", "beta"])
+        assert block.db_panel.get_available_databases() == ["alpha", "beta"]
+
+    def test_codeblock_database_selected_updates_state(self, qapp):
+        """Selecionar banco via menu deve atualizar _database_name e emitir"""
+        block = CodeBlock()
+        changes = []
+        block.database_changed.connect(lambda blk, db: changes.append((blk, db)))
+
+        # Simular selecao via sinal do panel
+        block.db_panel.database_selected.emit("analytics")
+
+        assert block._database_name == "analytics"
+        assert len(changes) == 1
+        assert changes[0][1] == "analytics"
+
+    def test_codeblock_database_selected_none_resets(self, qapp):
+        """Selecionar 'Default' (None/empty) deve resetar banco"""
+        block = CodeBlock()
+        block._database_name = "old_db"
+
+        block.db_panel.database_selected.emit("")
+
+        assert block._database_name is None

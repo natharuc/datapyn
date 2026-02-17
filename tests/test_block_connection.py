@@ -601,3 +601,217 @@ class TestQueueProcessing:
         with patch.object(widget, "_on_execute_python") as mock_exec:
             widget._process_next_in_queue()
             mock_exec.assert_called_once_with('print("hi")')
+
+
+# ===== Drag & Drop Create Block =====
+
+
+class TestDragDropCreateBlock:
+    """Testes para arrastar conexao/database e criar bloco SQL no editor"""
+
+    def _make_editor(self, qapp):
+        """Cria BlockEditor para testes"""
+        editor = BlockEditor()
+        return editor
+
+    def _make_mime(self, conn_name=None, db_name=None, db_type=None, color=None):
+        """Cria QMimeData com dados de conexao/database"""
+        mime = QMimeData()
+        if conn_name:
+            mime.setData("application/x-connection-name", conn_name.encode("utf-8"))
+        if db_name:
+            mime.setData("application/x-database-name", db_name.encode("utf-8"))
+        if db_type:
+            mime.setData("application/x-db-type", db_type.encode("utf-8"))
+        if color:
+            mime.setData("application/x-connection-color", color.encode("utf-8"))
+        return mime
+
+    def test_drag_enter_accepts_connection_name(self, qapp):
+        """dragEnterEvent deve aceitar mime com connection-name"""
+        editor = self._make_editor(qapp)
+        mime = self._make_mime(conn_name="ProdDB")
+        event = MagicMock(spec=QDragEnterEvent)
+        event.mimeData.return_value = mime
+        editor.dragEnterEvent(event)
+        event.acceptProposedAction.assert_called_once()
+
+    def test_drag_enter_accepts_database_name(self, qapp):
+        """dragEnterEvent deve aceitar mime com database-name"""
+        editor = self._make_editor(qapp)
+        mime = self._make_mime(db_name="mydb")
+        event = MagicMock(spec=QDragEnterEvent)
+        event.mimeData.return_value = mime
+        editor.dragEnterEvent(event)
+        event.acceptProposedAction.assert_called_once()
+
+    def test_drag_enter_rejects_unrelated_mime(self, qapp):
+        """dragEnterEvent NAO deve aceitar mime sem conexao/database/arquivo"""
+        editor = self._make_editor(qapp)
+        mime = QMimeData()
+        mime.setData("application/x-custom", b"nope")
+        event = MagicMock(spec=QDragEnterEvent)
+        event.mimeData.return_value = mime
+        editor.dragEnterEvent(event)
+        event.acceptProposedAction.assert_not_called()
+
+    def test_drop_connection_creates_sql_block(self, qapp):
+        """Drop com connection-name deve criar bloco SQL com conexao"""
+        editor = self._make_editor(qapp)
+        initial_count = len(editor._blocks)
+
+        mime = self._make_mime(conn_name="ProdDB", db_type="postgresql")
+        event = MagicMock(spec=QDropEvent)
+        event.mimeData.return_value = mime
+        editor.dropEvent(event)
+
+        assert len(editor._blocks) == initial_count + 1
+        new_block = editor._blocks[-1]
+        assert new_block.get_language() == "sql"
+        assert new_block.get_connection_name() == "ProdDB"
+        event.acceptProposedAction.assert_called_once()
+
+    def test_drop_connection_with_color(self, qapp):
+        """Drop com color deve configurar cor no panel do bloco"""
+        editor = self._make_editor(qapp)
+        mime = self._make_mime(conn_name="DevDB", db_type="mysql", color="#FF5500")
+        event = MagicMock(spec=QDropEvent)
+        event.mimeData.return_value = mime
+        editor.dropEvent(event)
+
+        new_block = editor._blocks[-1]
+        assert new_block.get_connection_name() == "DevDB"
+        # db_type is set on the connection panel
+        assert new_block.conn_panel._db_type == "mysql"
+
+    def test_drop_database_creates_sql_block_with_db(self, qapp):
+        """Drop com database-name + connection-name deve criar bloco com ambos"""
+        editor = self._make_editor(qapp)
+        mime = self._make_mime(conn_name="ProdDB", db_name="analytics")
+        event = MagicMock(spec=QDropEvent)
+        event.mimeData.return_value = mime
+        editor.dropEvent(event)
+
+        new_block = editor._blocks[-1]
+        assert new_block.get_language() == "sql"
+        assert new_block.get_connection_name() == "ProdDB"
+        # Database name should be set on the panel
+        assert new_block.get_database_name() == "analytics"
+
+    def test_drop_database_only_creates_block(self, qapp):
+        """Drop com apenas database-name (sem connection) deve criar bloco SQL"""
+        editor = self._make_editor(qapp)
+        mime = self._make_mime(db_name="testdb")
+        event = MagicMock(spec=QDropEvent)
+        event.mimeData.return_value = mime
+        editor.dropEvent(event)
+
+        new_block = editor._blocks[-1]
+        assert new_block.get_language() == "sql"
+        # No connection name set
+        assert new_block.get_connection_name() is None
+
+    def test_drop_emits_content_changed(self, qapp):
+        """Drop de conexao deve emitir content_changed"""
+        editor = self._make_editor(qapp)
+        signals = []
+        editor.content_changed.connect(lambda: signals.append("changed"))
+
+        mime = self._make_mime(conn_name="ProdDB")
+        event = MagicMock(spec=QDropEvent)
+        event.mimeData.return_value = mime
+        editor.dropEvent(event)
+
+        assert len(signals) >= 1
+
+    def test_drop_emits_connection_drop_requested(self, qapp):
+        """Drop com connection-name deve emitir connection_drop_requested"""
+        editor = self._make_editor(qapp)
+        signals = []
+        editor.connection_drop_requested.connect(lambda name: signals.append(name))
+
+        mime = self._make_mime(conn_name="ProdDB")
+        event = MagicMock(spec=QDropEvent)
+        event.mimeData.return_value = mime
+        editor.dropEvent(event)
+
+        assert signals == ["ProdDB"]
+
+    def test_drop_database_only_no_connection_drop_requested(self, qapp):
+        """Drop com apenas database-name NAO deve emitir connection_drop_requested"""
+        editor = self._make_editor(qapp)
+        signals = []
+        editor.connection_drop_requested.connect(lambda name: signals.append(name))
+
+        mime = self._make_mime(db_name="testdb")
+        event = MagicMock(spec=QDropEvent)
+        event.mimeData.return_value = mime
+        editor.dropEvent(event)
+
+        assert signals == []
+
+
+# ===== Object Explorer Drag =====
+
+
+class TestObjectExplorerDrag:
+    """Testes para verificar que Object Explorer inclui connection_name no drag"""
+
+    def test_object_explorer_drag_includes_connection(self, qapp):
+        """Drag de database deve incluir connection-name no mime"""
+        from src.ui.components.object_explorer_panel import ObjectExplorerPanel
+
+        panel = ObjectExplorerPanel()
+        panel._current_connection = "ProdDB"
+
+        # Simular item com UserRole data
+        from PyQt6.QtWidgets import QTreeWidgetItem
+        item = QTreeWidgetItem()
+        item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": "analytics"})
+        panel.tree.addTopLevelItem(item)
+        panel.tree.setCurrentItem(item)
+
+        # Interceptar QDrag para verificar mime data
+        captured_mime = {}
+
+        def fake_drag_exec(action):
+            return Qt.DropAction.IgnoreAction
+
+        with patch("src.ui.components.object_explorer_panel.QDrag") as MockDrag:
+            mock_drag_instance = MagicMock()
+            MockDrag.return_value = mock_drag_instance
+            mock_drag_instance.exec.side_effect = fake_drag_exec
+
+            panel._start_drag(Qt.DropAction.CopyAction)
+
+            # Verifica que setMimeData foi chamado
+            assert mock_drag_instance.setMimeData.called
+            mime_data = mock_drag_instance.setMimeData.call_args[0][0]
+            assert mime_data.hasFormat("application/x-database-name")
+            assert mime_data.hasFormat("application/x-connection-name")
+            assert bytes(mime_data.data("application/x-connection-name")).decode("utf-8") == "ProdDB"
+            assert bytes(mime_data.data("application/x-database-name")).decode("utf-8") == "analytics"
+
+    def test_object_explorer_drag_no_connection(self, qapp):
+        """Drag sem connection atual NAO deve incluir connection-name"""
+        from src.ui.components.object_explorer_panel import ObjectExplorerPanel
+
+        panel = ObjectExplorerPanel()
+        panel._current_connection = None
+
+        from PyQt6.QtWidgets import QTreeWidgetItem
+        item = QTreeWidgetItem()
+        item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": "testdb"})
+        panel.tree.addTopLevelItem(item)
+        panel.tree.setCurrentItem(item)
+
+        with patch("src.ui.components.object_explorer_panel.QDrag") as MockDrag:
+            mock_drag_instance = MagicMock()
+            MockDrag.return_value = mock_drag_instance
+            mock_drag_instance.exec.return_value = Qt.DropAction.IgnoreAction
+
+            panel._start_drag(Qt.DropAction.CopyAction)
+
+            mime_data = mock_drag_instance.setMimeData.call_args[0][0]
+            assert mime_data.hasFormat("application/x-database-name")
+            assert not mime_data.hasFormat("application/x-connection-name")

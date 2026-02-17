@@ -2075,6 +2075,9 @@ class MainWindow(DockingMainWindow):
             new_widget.block_connection_changed.connect(
                 lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
             )
+            new_widget.connection_drop_requested.connect(
+                lambda conn_name: self._quick_connect(conn_name)
+            )
             new_widget.block_database_changed.connect(
                 lambda block, db_name: self._on_block_database_changed(block, db_name)
             )
@@ -3785,6 +3788,50 @@ class MainWindow(DockingMainWindow):
                     # Usar o handler do SessionWidget (que abre o dialogo)
                     widget._on_file_dropped(file_path)
 
+    def _handle_empty_state_connection_drop(self, mime_data):
+        """Handle connection/database drop on empty state - creates new session with SQL block."""
+        conn_name = ""
+        db_type = ""
+        color = ""
+        db_name = ""
+
+        if mime_data.hasFormat("application/x-connection-name"):
+            conn_name = bytes(mime_data.data("application/x-connection-name")).decode("utf-8")
+        if mime_data.hasFormat("application/x-db-type"):
+            db_type = bytes(mime_data.data("application/x-db-type")).decode("utf-8")
+        if mime_data.hasFormat("application/x-connection-color"):
+            color = bytes(mime_data.data("application/x-connection-color")).decode("utf-8")
+        if mime_data.hasFormat("application/x-database-name"):
+            db_name = bytes(mime_data.data("application/x-database-name")).decode("utf-8")
+
+        # Connect session using _quick_connect (creates tab, connects, loads schema,
+        # updates Object Explorer, sets tab color)
+        if conn_name:
+            self._quick_connect(conn_name)
+        else:
+            self._new_session()
+
+        # Get the widget that was just created
+        widget = self._get_current_session_widget()
+        if not widget or not hasattr(widget, "editor"):
+            return
+
+        # Get the first block (created by _quick_connect/_new_session)
+        editor = widget.editor
+        if not editor._blocks:
+            return
+
+        block = editor._blocks[0]
+        block.set_language("sql")
+
+        if conn_name:
+            block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
+
+        if db_name:
+            block.set_database_name(db_name)
+
+        block.editor.setFocus()
+
     def _show_empty_state(self):
         """Shows empty state when there are no sessions, hiding panels"""
         if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
@@ -3805,7 +3852,7 @@ class MainWindow(DockingMainWindow):
         main_window_ref = self
 
         class DropEmptyStateWidget(QWidget):
-            """Empty state widget with drag-and-drop file support"""
+            """Empty state widget with drag-and-drop file and connection support"""
 
             def __init__(self, parent=None):
                 super().__init__(parent)
@@ -3813,6 +3860,12 @@ class MainWindow(DockingMainWindow):
 
             def dragEnterEvent(self, event: QDragEnterEvent):
                 mime_data = event.mimeData()
+                # Accept connection or database drag
+                if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
+                    "application/x-database-name"
+                ):
+                    event.acceptProposedAction()
+                    return
                 if mime_data.hasUrls():
                     for url in mime_data.urls():
                         file_path = url.toLocalFile()
@@ -3825,6 +3878,13 @@ class MainWindow(DockingMainWindow):
 
             def dropEvent(self, event: QDropEvent):
                 mime_data = event.mimeData()
+                # Handle connection or database drop
+                if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
+                    "application/x-database-name"
+                ):
+                    main_window_ref._handle_empty_state_connection_drop(mime_data)
+                    event.acceptProposedAction()
+                    return
                 if mime_data.hasUrls():
                     file_paths = []
                     for url in mime_data.urls():
@@ -3948,6 +4008,9 @@ class MainWindow(DockingMainWindow):
         )
         widget.block_connection_changed.connect(
             lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+        )
+        widget.connection_drop_requested.connect(
+            lambda conn_name: self._quick_connect(conn_name)
         )
         widget.block_database_changed.connect(
             lambda block, db_name: self._on_block_database_changed(block, db_name)
@@ -4179,9 +4242,20 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.set_tab_connection_color(i, color)
                 break
 
-        # === CARREGAR SCHEMA PARA AUTOCOMPLETE SQL ===
+        # === CARREGAR SCHEMA (INVALIDA CACHE + RELOAD) ===
         if session.connector:
+            self._schema_service.invalidate_cache(connection_name)
             self._schema_service.load_schema(session.connector, connection_name)
+
+        # === ATUALIZAR BLOCO FOCADO ===
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "editor"):
+            focused_block = current_widget.editor.get_focused_block()
+            if not focused_block:
+                focused_block = current_widget.editor.get_last_focused_block()
+            if focused_block and hasattr(focused_block, "db_panel"):
+                focused_block._database_name = current_db
+                focused_block.db_panel.set_database(current_db)
 
     def _reload_schema(self):
         """Reloads the SQL schema from the focused block connection (or session).
@@ -4252,6 +4326,7 @@ class MainWindow(DockingMainWindow):
         )
 
         # Enviar schema para blocos que usam esta conexao
+        all_databases = schema.get("databases", [])
         for widget in self._session_widgets.values():
             if not (hasattr(widget, "editor") and widget.editor):
                 continue
@@ -4271,9 +4346,13 @@ class MainWindow(DockingMainWindow):
                     # Block with custom connection: only apply if same connection
                     if block_conn == connection_name:
                         block.editor.set_sql_schema(schema)
+                        if hasattr(block, "set_available_databases"):
+                            block.set_available_databases(all_databases)
                 elif session_conn == connection_name:
                     # Block without custom connection: apply if session connection
                     block.editor.set_sql_schema(schema)
+                    if hasattr(block, "set_available_databases"):
+                        block.set_available_databases(all_databases)
 
         # Update Object Explorer for corresponding session
         if hasattr(self, "_session_explorers"):
@@ -4304,6 +4383,8 @@ class MainWindow(DockingMainWindow):
         if cached:
             if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
                 block.editor.set_sql_schema(cached)
+            if hasattr(block, "set_available_databases"):
+                block.set_available_databases(cached.get("databases", []))
             return
 
         # Precisa carregar schema - criar connector em background

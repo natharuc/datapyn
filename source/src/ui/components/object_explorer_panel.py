@@ -444,6 +444,13 @@ class ObjectExplorerPanel(QWidget):
         mime_data = QMimeData()
         mime_data.setData("application/x-database-name", name.encode("utf-8"))
 
+        # Include connection name so drop target knows which connection to use
+        if self._current_connection:
+            mime_data.setData(
+                "application/x-connection-name",
+                self._current_connection.encode("utf-8"),
+            )
+
         drag = QDrag(self.tree)
         drag.setMimeData(mime_data)
         drag.exec(Qt.DropAction.CopyAction)
