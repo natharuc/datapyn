@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.7.0 (2026-02-17)
+
+### Features
+
+- Isolamento de paineis por sessao, grid fluido com limitador de linhas
+  ([`3d7aa62`](https://github.com/natharuc/datapyn/commit/3d7aa626237a0d18148ede42ef079daaf6f4c5c7))
+
+
 ## v1.6.0 (2026-02-17)
 
 ### Bug Fixes
