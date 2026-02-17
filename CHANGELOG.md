@@ -2,6 +2,70 @@
 
 <!-- version list -->
 
+## v1.6.0 (2026-02-17)
+
+### Bug Fixes
+
+- Auth via Basic header em vez de URL, corrigir QThread jedi crash
+  ([`a6d9cb0`](https://github.com/natharuc/datapyn/commit/a6d9cb0903c6a14f8b90373f0751f30071608fe3))
+
+- Busca de pacotes exibia resultados falsos em sources privadas
+  ([`3d53334`](https://github.com/natharuc/datapyn/commit/3d53334627b5d2af45ebfaf04e69718d382ded66))
+
+- Corrigir get_colors -> get_app_colors em _AddSourceDialog
+  ([`03f70a6`](https://github.com/natharuc/datapyn/commit/03f70a62ee35b4b47f88762aff476210f1692677))
+
+- Drag-drop conexao nao muda conexao da aba existente
+  ([`03111f0`](https://github.com/natharuc/datapyn/commit/03111f0989b8b61f71c978e71701479de830bc34))
+
+- PackageManager usa uv em vez de pip
+  ([`e640ea6`](https://github.com/natharuc/datapyn/commit/e640ea64ed7940741c45ad6bbe7cb2ddc406b133))
+
+- Pesquisa de pacotes verifica PyPI + extra sources antes de exibir
+  ([`9d19d50`](https://github.com/natharuc/datapyn/commit/9d19d50efdd42ddeaa01e8f3f0dd82dd9d15ae29))
+
+- QThread crash no jedi autocomplete ao abrir bloco Python
+  ([`a042a50`](https://github.com/natharuc/datapyn/commit/a042a50f61f070c800ee1b99e225dddcea28f0fa))
+
+- Race condition no _cleanup do jedi_completer
+  ([`4f9ac49`](https://github.com/natharuc/datapyn/commit/4f9ac4975bcb5b05c8d388a25213c42a51442503))
+
+- Regex de file links nao casava com URLs PEP 503 com hash fragment
+  ([`1773bcc`](https://github.com/natharuc/datapyn/commit/1773bccadc4d349147cd4d726ccdfaca502b1f66))
+
+- Remover --python flag do uv pip (argumento invalido)
+  ([`b500d0d`](https://github.com/natharuc/datapyn/commit/b500d0d8984e60c149cd67fe272333d19a85fc76))
+
+- SQL autocomplete case-insensitive
+  ([`ef08b49`](https://github.com/natharuc/datapyn/commit/ef08b49a3089320b25abef79e9d22bbc11105798))
+
+- SQL autocomplete preserva case real de tabelas/colunas
+  ([`99b9ac0`](https://github.com/natharuc/datapyn/commit/99b9ac0e6fc9d99571e46377f8c188c87b0a1adf))
+
+- **ci**: Grep versao casava 2 linhas no pyproject.toml
+  ([`ee7f41a`](https://github.com/natharuc/datapyn/commit/ee7f41a3613af7aa491c13826148cd8cf7a1c8fd))
+
+### Features
+
+- Autenticacao para fontes privadas de pacotes (Azure DevOps, Artifactory)
+  ([`b7d40f7`](https://github.com/natharuc/datapyn/commit/b7d40f75a1c7e2ad66de35db9a9a6a656f46e1a1))
+
+- Drag-drop conexao cria bloco SQL, seletor de banco por bloco
+  ([`c344ee3`](https://github.com/natharuc/datapyn/commit/c344ee3ab55d2caea743dc5ae98afe3fd94dcf63))
+
+- Jedi autocomplete, package sources, database switch propagation
+  ([`f965d4d`](https://github.com/natharuc/datapyn/commit/f965d4dd9ef29d40da7a88ef807bba215e6a21f9))
+
+- Jedi autocomplete, package sources, database switch propagation
+  ([`0cf1388`](https://github.com/natharuc/datapyn/commit/0cf13881168608b7b9817eb058af026c0d76df5e))
+
+- Persistencia de layout dock widgets entre reinicializacoes
+  ([`ed295ca`](https://github.com/natharuc/datapyn/commit/ed295cadcf91be5fb9dd39cfdfe2e0199c43b32d))
+
+- SqlAutoCompleteService - autocomplete SQL contextual
+  ([`db3673e`](https://github.com/natharuc/datapyn/commit/db3673efae205b3a6352d3546e6abe20796b9985))
+
+
 ## v1.5.1 (2026-02-16)
 
 ### Refactoring
