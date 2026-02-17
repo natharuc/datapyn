@@ -70,10 +70,16 @@ jobs:
         id: dry_run_version
         if: github.event_name == 'workflow_dispatch'
         run: |
-          VERSION=$(grep '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
+          VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ -z "$VERSION" ] || [ "$VERSION" = "0.0.0" ]; then
+            echo "::error::Could not read valid version from pyproject.toml (got: '$VERSION')"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "released=true" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Manual release: version=$VERSION tag=v${VERSION}"
 
   build-windows-msi:
     needs: release
