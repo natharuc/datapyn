@@ -338,6 +338,12 @@ class CodeEditor(QWidget):
         if self.theme_manager:
             self._apply_theme_colors()
 
+    def closeEvent(self, event):
+        """Garante shutdown do jedi thread antes de fechar."""
+        if hasattr(self, '_jedi_completer') and self._jedi_completer:
+            self._jedi_completer.shutdown()
+        super().closeEvent(event)
+
     def _setup_container(self):
         """Monta layout: FindReplaceBar + QsciScintilla."""
         layout = QVBoxLayout(self)

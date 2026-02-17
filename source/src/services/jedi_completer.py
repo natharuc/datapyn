@@ -22,35 +22,33 @@ except ImportError:
     logger.warning("jedi not installed - intelligent Python autocomplete disabled")
 
 
-class JediCompletionWorker(QObject):
-    """Worker that runs jedi completions in a background thread."""
+class _JediThread(QThread):
+    """Thread subclass that runs jedi completions."""
 
-    finished = pyqtSignal(list)  # List of (name, type, description)
+    results_ready = pyqtSignal(list)
 
-    def __init__(self, source: str, line: int, column: int, namespace: dict = None):
-        super().__init__()
+    def __init__(self, source: str, line: int, column: int, parent=None):
+        super().__init__(parent)
         self.source = source
         self.line = line
         self.column = column
-        self.namespace = namespace or {}
 
     def run(self):
         """Execute jedi completion."""
         if not HAS_JEDI:
-            self.finished.emit([])
+            self.results_ready.emit([])
             return
 
         try:
-            # Create jedi script
             script = jedi.Script(self.source)
             completions = script.complete(self.line, self.column)
 
             results = []
             seen = set()
-            for c in completions[:150]:  # Limit to 150 for performance
+            for c in completions[:150]:
                 name = c.name
                 if name.startswith("__") and name.endswith("__"):
-                    continue  # Skip dunder methods
+                    continue
                 if name in seen:
                     continue
                 seen.add(name)
@@ -66,11 +64,11 @@ class JediCompletionWorker(QObject):
 
                 results.append((name, comp_type, description))
 
-            self.finished.emit(results)
+            self.results_ready.emit(results)
 
         except Exception as e:
             logger.debug(f"Jedi completion error: {e}")
-            self.finished.emit([])
+            self.results_ready.emit([])
 
 
 class JediCompleter(QObject):
@@ -78,9 +76,9 @@ class JediCompleter(QObject):
     Manages jedi-based autocompletion.
 
     Usage:
-        completer = JediCompleter()
+        completer = JediCompleter(parent)
         completer.completions_ready.connect(on_completions)
-        completer.request_completions(source, line, col, namespace)
+        completer.request_completions(source, line, col)
     """
 
     completions_ready = pyqtSignal(list)  # List of (name, type, description)
@@ -88,59 +86,45 @@ class JediCompleter(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._thread = None
-        self._worker = None
 
     def is_available(self) -> bool:
         """Check if jedi is installed."""
         return HAS_JEDI
 
     def request_completions(self, source: str, line: int, column: int, namespace: dict = None):
-        """Request completions asynchronously.
-
-        Args:
-            source: Full source code of the editor
-            line: 1-based line number
-            column: 0-based column offset
-            namespace: Optional dict of runtime variables
-        """
+        """Request completions asynchronously."""
         if not HAS_JEDI:
             return
 
-        # Cancel previous request
         self._cleanup()
 
-        self._thread = QThread()
-        self._worker = JediCompletionWorker(source, line, column, namespace)
-        self._worker.moveToThread(self._thread)
-
-        self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.finished.connect(self._thread.quit)
-
+        # QThread subclass with self as parent - Qt handles lifecycle
+        self._thread = _JediThread(source, line, column, parent=self)
+        self._thread.results_ready.connect(self._on_finished)
+        self._thread.finished.connect(self._on_thread_done)
         self._thread.start()
 
     def _on_finished(self, results: list):
         """Forward results."""
         self.completions_ready.emit(results)
-        # Clean up thread/worker after completion
+
+    def _on_thread_done(self):
+        """Clean up after thread finishes naturally."""
         if self._thread is not None:
             self._thread.deleteLater()
-        if self._worker is not None:
-            self._worker.deleteLater()
-        self._thread = None
-        self._worker = None
+            self._thread = None
 
     def _cleanup(self):
         """Cancel any running completion request."""
-        if self._thread is not None and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(1000)
-            if self._thread is not None and self._thread.isRunning():
-                self._thread.terminate()
-                self._thread.wait(500)
         if self._thread is not None:
+            if self._thread.isRunning():
+                self._thread.quit()
+                if not self._thread.wait(500):
+                    self._thread.terminate()
+                    self._thread.wait(500)
             self._thread.deleteLater()
-        if self._worker is not None:
-            self._worker.deleteLater()
-        self._thread = None
-        self._worker = None
+            self._thread = None
+
+    def shutdown(self):
+        """Explicit shutdown - call before destroying parent widget."""
+        self._cleanup()
