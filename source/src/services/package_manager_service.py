@@ -305,9 +305,9 @@ class PackageManagerService:
                     body = response.read().decode("utf-8", errors="replace")
 
                 # PEP 503: page must contain <a href> links to actual files
-                # (.tar.gz, .whl, .zip, .egg). Empty pages = package not found.
+                # (.tar.gz, .whl, .zip, .egg). URLs may have #hash fragments.
                 file_links = re.findall(
-                    r'<a\s+href=["\'][^"\']*\.(?:tar\.gz|whl|zip|egg)["\']',
+                    r'<a\s+href=["\'][^"\']*\.(?:tar\.gz|whl|zip|egg)(?:[#"\'\s>])',
                     body,
                     re.IGNORECASE,
                 )
