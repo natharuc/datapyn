@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QSizePolicy,
     QLineEdit,
+    QMenu,
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint
 from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
@@ -166,10 +167,12 @@ class BlockDatabasePanel(QFrame):
 
     database_clicked = pyqtSignal()  # User clicked on panel
     database_dropped = pyqtSignal(str)  # database_name (drag & drop from Object Explorer)
+    database_selected = pyqtSignal(str)  # database_name (selected from popup menu)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._database_name = None
+        self._available_databases: list = []
         self._setup_ui()
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -224,11 +227,74 @@ class BlockDatabasePanel(QFrame):
         """Return current database name (None = connection default)"""
         return self._database_name
 
+    def set_available_databases(self, databases: list):
+        """Set the list of databases available for selection."""
+        self._available_databases = list(databases) if databases else []
+
+    def get_available_databases(self) -> list:
+        """Return list of available databases."""
+        return self._available_databases
+
     def mousePressEvent(self, event):
-        """Click on panel"""
+        """Click on panel - show database selection popup."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.database_clicked.emit()
+            if self._available_databases:
+                self._show_database_menu()
+            else:
+                self.database_clicked.emit()
         super().mousePressEvent(event)
+
+    def _show_database_menu(self):
+        """Show popup menu with available databases."""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2d2d30;
+                border: 1px solid #3e3e42;
+                padding: 4px 0;
+            }
+            QMenu::item {
+                padding: 4px 24px 4px 8px;
+                color: #cccccc;
+                font-size: 12px;
+            }
+            QMenu::item:selected {
+                background-color: #094771;
+                color: #ffffff;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #3e3e42;
+                margin: 4px 8px;
+            }
+        """)
+
+        # Option to reset to connection default
+        default_action = menu.addAction(
+            qta.icon("mdi.database-outline", color="#888"),
+            S.block.db_default,
+        )
+        default_action.setData(None)
+        menu.addSeparator()
+
+        # Add each database
+        for db in sorted(self._available_databases):
+            icon_name = "mdi.database"
+            icon_color = "#569cd6"
+            if db == self._database_name:
+                icon_name = "mdi.database-check"
+                icon_color = "#4ec9b0"
+            action = menu.addAction(
+                qta.icon(icon_name, color=icon_color),
+                db,
+            )
+            action.setData(db)
+
+        chosen = menu.exec(self.mapToGlobal(self.rect().bottomLeft()))
+        if chosen is not None:
+            db_name = chosen.data()
+            self.set_database(db_name)
+            self.database_selected.emit(db_name or "")
 
     def dragEnterEvent(self, event):
         """Accept database drag from Object Explorer"""
@@ -550,6 +616,7 @@ class CodeBlock(QFrame):
         self.conn_panel.connection_dropped.connect(self._on_connection_dropped)
         self.db_panel.database_clicked.connect(self._on_database_panel_clicked)
         self.db_panel.database_dropped.connect(self._on_database_dropped)
+        self.db_panel.database_selected.connect(self._on_database_selected)
         self.run_btn.clicked.connect(lambda: self.execute_requested.emit(self))
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         self.cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self))
@@ -585,8 +652,13 @@ class CodeBlock(QFrame):
         self.connection_name_changed.emit(self, connection_name)
 
     def _on_database_panel_clicked(self):
-        """Database panel was clicked - emit signal"""
+        """Database panel was clicked - emit signal (fallback when no db list)"""
         self.database_changed.emit(self, self._database_name or "")
+
+    def _on_database_selected(self, database_name: str):
+        """Database was selected from popup menu."""
+        self._database_name = database_name or None
+        self.database_changed.emit(self, database_name or "")
 
     def _on_database_dropped(self, database_name: str):
         """Database was dragged from Object Explorer to panel"""
@@ -677,6 +749,10 @@ class CodeBlock(QFrame):
         self._database_name = database_name
         self.db_panel.set_database(database_name)
         self.database_changed.emit(self, database_name or "")
+
+    def set_available_databases(self, databases: list):
+        """Set list of databases available for this block's connection."""
+        self.db_panel.set_available_databases(databases)
 
     def is_focused(self) -> bool:
         return self._is_focused

@@ -106,6 +106,7 @@ class SessionWidget(QWidget):
     execute_cross_syntax = pyqtSignal(str)  # code
     status_changed = pyqtSignal(str)  # status message
     connection_changed = pyqtSignal(str, str)  # (connection_name, database)
+    connection_drop_requested = pyqtSignal(str)  # connection_name
     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
     block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
 
@@ -281,6 +282,9 @@ class SessionWidget(QWidget):
         # Block connection change (to reload autocomplete)
         self.editor.block_connection_changed.connect(self.block_connection_changed.emit)
 
+        # Connection drop on editor area (connect session + Object Explorer)
+        self.editor.connection_drop_requested.connect(self.connection_drop_requested.emit)
+
         # Block database change
         self.editor.block_database_changed.connect(self.block_database_changed.emit)
 
@@ -376,6 +380,14 @@ class SessionWidget(QWidget):
         # Store block_name to use in callback
         self._current_block_name = block_name
 
+        # Store db state before execution for change detection
+        self._current_connector = connector
+        self._current_connection_name = connection_name or self.session.connection_name
+        try:
+            self._db_before_execution = connector.get_current_database() if connector else ""
+        except Exception:
+            self._db_before_execution = ""
+
         # Register thread in session
         self.session.register_thread(self._sql_thread)
 
@@ -460,11 +472,28 @@ class SessionWidget(QWidget):
             # Clear block_name after use
             self._current_block_name = None
 
-            # Check if database changed (USE command)
-            if self.session.connector:
-                current_db = self.session.connector.get_current_database()
-                if self.session.connection_name:
-                    self.connection_changed.emit(self.session.connection_name, current_db)
+            # Check if database changed (e.g. USE command)
+            # Compares db before/after execution - only emits if actually changed
+            if hasattr(self, "_current_connector") and self._current_connector:
+                try:
+                    db_after = self._current_connector.get_current_database() or ""
+                except Exception:
+                    db_after = ""
+                db_before = getattr(self, "_db_before_execution", "")
+                conn_name = getattr(self, "_current_connection_name", "") or self.session.connection_name
+                if db_after and db_before and db_after != db_before and conn_name:
+                    self.connection_changed.emit(conn_name, db_after)
+                    # Update block db_panel if not from a per-block connection
+                    current_block = self.editor.get_focused_block()
+                    if not current_block:
+                        current_block = self.editor.get_last_focused_block()
+                    if current_block and hasattr(current_block, "db_panel"):
+                        current_block._database_name = db_after
+                        current_block.db_panel.set_database(db_after)
+                elif self.session.connector and self.session.connection_name:
+                    current_db = self.session.connector.get_current_database()
+                    if current_db:
+                        self.connection_changed.emit(self.session.connection_name, current_db)
 
         # Process next in queue if available
         self._is_executing = False

@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.Qsci import QsciScintilla, QsciLexerPython, QsciLexerSQL, QsciAPIs
 
 from src.language import S
+from src.services.jedi_completer import JediCompleter
+from src.services.sql_autocomplete_service import SqlAutoCompleteService
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +323,16 @@ class CodeEditor(QWidget):
         self._apis_timer = None  # Timer para rebuild_apis debounced
         self._current_lexer_lang = None  # Cache para evitar rebuild redundante
 
+        # Jedi completer para Python inteligente
+        self._jedi_completer = JediCompleter(self)
+        self._jedi_completer.completions_ready.connect(self._on_jedi_completions)
+        self._jedi_timer = None  # debounce para trigger jedi
+        self._global_imports = ""  # imports globais compartilhados entre blocos
+
+        # SQL autocomplete contextual
+        self._sql_completer = SqlAutoCompleteService()
+        self._sql_timer = None  # debounce para trigger sql autocomplete
+
         self._setup_container()
         self._setup_editor()
         self._setup_lexer()
@@ -330,6 +342,12 @@ class CodeEditor(QWidget):
         # Aplicar apenas cores do tema (lexer ja foi configurado acima)
         if self.theme_manager:
             self._apply_theme_colors()
+
+    def closeEvent(self, event):
+        """Garante shutdown do jedi thread antes de fechar."""
+        if hasattr(self, '_jedi_completer') and self._jedi_completer:
+            self._jedi_completer.shutdown()
+        super().closeEvent(event)
 
     def _setup_container(self):
         """Monta layout: FindReplaceBar + QsciScintilla."""
@@ -355,6 +373,7 @@ class CodeEditor(QWidget):
         self._sci.textChanged.connect(self._on_text_changed)
         self._sci.SCN_FOCUSIN.connect(self._on_focus_in)
         self._sci.SCN_FOCUSOUT.connect(self._on_focus_out)
+        self._sci.SCN_CHARADDED.connect(self._on_char_added)
 
     def _on_text_changed(self):
         """Emite ambos os sinais de texto alterado."""
@@ -368,6 +387,113 @@ class CodeEditor(QWidget):
     def _on_focus_out(self):
         self.SCN_FOCUSOUT.emit()
         self.focus_out.emit()
+
+    def _on_char_added(self, char_code: int):
+        """Triggered when a character is typed - requests context-aware completions."""
+        ch = chr(char_code) if char_code > 0 else ""
+
+        if self._language == "python":
+            # Trigger on '.' or after typing identifier chars (with threshold)
+            if ch == ".":
+                self._request_jedi_completion()
+            elif ch.isalnum() or ch == "_":
+                if self._jedi_timer is None:
+                    self._jedi_timer = QTimer(self)
+                    self._jedi_timer.setSingleShot(True)
+                    self._jedi_timer.timeout.connect(self._request_jedi_completion)
+                self._jedi_timer.start(300)
+
+        elif self._language in ("sql", "cross"):
+            # Trigger SQL contextual autocomplete
+            if ch == ".":
+                self._request_sql_completion()
+            elif ch.isalnum() or ch == "_":
+                if self._sql_timer is None:
+                    self._sql_timer = QTimer(self)
+                    self._sql_timer.setSingleShot(True)
+                    self._sql_timer.timeout.connect(self._request_sql_completion)
+                self._sql_timer.start(200)
+
+    def _request_jedi_completion(self):
+        """Request jedi completions at current cursor position."""
+        if not self._jedi_completer.is_available():
+            return
+
+        sci = self._sci
+        line_num, col = sci.getCursorPosition()
+
+        # Build source: global imports + current editor text
+        editor_text = sci.text()
+        source = self._global_imports + "\n" + editor_text if self._global_imports else editor_text
+
+        # Adjust line number (+1 for jedi's 1-based, +N for prepended imports)
+        import_lines = self._global_imports.count("\n") + 1 if self._global_imports else 0
+        jedi_line = line_num + 1 + import_lines  # jedi uses 1-based lines
+
+        self._jedi_completer.request_completions(source, jedi_line, col)
+
+    def _on_jedi_completions(self, completions: list):
+        """Handle jedi completions: populate QsciAPIs and show autocomplete."""
+        if not completions:
+            return
+
+        sci = self._sci
+        lexer = sci.lexer()
+        if not lexer:
+            return
+
+        apis = QsciAPIs(lexer)
+
+        # Add jedi completions
+        for name, comp_type, description in completions:
+            if comp_type:
+                apis.add(f"{name}  ({comp_type})")
+            else:
+                apis.add(name)
+
+        # Also add namespace variables
+        for name, type_name in self._python_namespace.items():
+            if type_name:
+                apis.add(f"{name}  ({type_name})")
+            else:
+                apis.add(name)
+
+        apis.prepare()
+        sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
+        sci.autoCompleteFromAPIs()
+
+    def _request_sql_completion(self):
+        """Request contextual SQL completions at current cursor position."""
+        sci = self._sci
+        line_num, col = sci.getCursorPosition()
+        text = sci.text()
+
+        completions = self._sql_completer.get_completions(text, line_num, col)
+        if not completions:
+            return
+
+        lexer = sci.lexer()
+        if not lexer:
+            return
+
+        apis = QsciAPIs(lexer)
+        for name, category, detail in completions:
+            if detail:
+                apis.add(f"{name}  ({detail})")
+            else:
+                apis.add(name)
+
+        apis.prepare()
+        sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
+        sci.autoCompleteFromAPIs()
+
+    def set_global_imports(self, imports_code: str):
+        """Set global imports context shared across blocks.
+
+        Args:
+            imports_code: String with import statements from all blocks.
+        """
+        self._global_imports = imports_code or ""
 
     def _setup_editor(self):
         """Configura as propriedades basicas do editor."""
@@ -551,31 +677,20 @@ class CodeEditor(QWidget):
                     apis.add(name)
 
         elif self._language in ("sql", "cross"):
-            # Keywords SQL
-            for kw in (
-                "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "BETWEEN",
-                "LIKE", "IS", "NULL", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER",
-                "FULL", "CROSS", "ON", "AS", "ORDER", "BY", "GROUP", "HAVING",
-                "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET",
-                "DELETE", "CREATE", "TABLE", "ALTER", "DROP", "INDEX", "VIEW",
-                "UNION", "ALL", "DISTINCT", "TOP", "CASE", "WHEN", "THEN",
-                "ELSE", "END", "EXISTS", "COUNT", "SUM", "AVG", "MIN", "MAX",
-                "CAST", "CONVERT", "COALESCE", "ISNULL", "NULLIF",
-                "GO", "USE", "EXEC", "DECLARE", "BEGIN", "COMMIT", "ROLLBACK",
-            ):
+            # Fallback: populate APIs with keywords + all schema items
+            # (contextual completions are handled by _request_sql_completion)
+            from src.services.sql_autocomplete_service import SQL_KEYWORDS
+            for kw in SQL_KEYWORDS:
                 apis.add(kw)
                 apis.add(kw.lower())
             has_entries = True
 
-            # Schema SQL customizado
             tables = self._sql_schema.get("tables", [])
             columns = self._sql_schema.get("columns", {})
 
             for table in tables:
-                # table pode ser dict {"name": ..., "schema": ...} ou string
                 tname = table["name"] if isinstance(table, dict) else str(table)
                 apis.add(tname)
-                # Colunas de cada tabela
                 for col in columns.get(tname, []):
                     cname = col["name"] if isinstance(col, dict) else str(col)
                     apis.add(f"{tname}.{cname}")
@@ -820,12 +935,14 @@ class CodeEditor(QWidget):
             schema: dict com {tables: [...], columns: {...}, database: ''}
         """
         self._sql_schema = schema if schema else {}
+        self._sql_completer.set_schema(self._sql_schema)
         if self._language in ("sql", "cross"):
             self._schedule_rebuild_apis()
 
     def clear_sql_schema(self) -> None:
         """Limpa schema SQL do autocomplete."""
         self._sql_schema = {}
+        self._sql_completer.set_schema({})
         if self._language in ("sql", "cross"):
             self._schedule_rebuild_apis()
 

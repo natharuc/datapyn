@@ -446,6 +446,14 @@ class MainWindow(DockingMainWindow):
         # Agora chama super().__init__() que vai inicializar o docking system
         super().__init__()
 
+        # Disable parent's auto-save layout timer (we have our own)
+        if hasattr(self, 'auto_save_timer'):
+            self.auto_save_timer.stop()
+            try:
+                self.auto_save_timer.timeout.disconnect()
+            except Exception:
+                pass
+
         # Enables advanced nesting and special dock configurations
         self.setDockNestingEnabled(True)
         self.setCorner(Qt.Corner.TopLeftCorner, Qt.DockWidgetArea.LeftDockWidgetArea)
@@ -470,6 +478,10 @@ class MainWindow(DockingMainWindow):
         self._create_toolbar()
         self._create_statusbar()
         self._setup_shortcuts()
+
+        # Restore dock layout AFTER toolbar exists (restoreState affects toolbars)
+        self._restore_dock_layout()
+        self._setup_auto_save_layout()
 
         # Connect signals do SessionManager
         self.session_manager.session_focused.connect(self._on_session_focused)
@@ -838,15 +850,7 @@ class MainWindow(DockingMainWindow):
         # Object Explorer (lateral direita, abaixo de Variables)
         self._create_object_explorer_dock()
 
-        # Restore dock widget layout after creating all docks
-        # DESABILITADO: self._restore_dock_layout()
-        # ALWAYS USE DEFAULT LAYOUT for now
-        print("DEBUG: [SUPER SAFE MODE] Always applying default layout - save/restore completely disabled")
-        self._setup_default_layout()
-
-        # Configure layout auto-save when dock widgets change
-        # DESABILITADO: self._setup_auto_save_layout()
-        print("DEBUG: Auto-save disabled for safety")
+        # Layout restore deferred to after toolbar creation (see __init__)
 
     def _create_connections_dock(self):
         """Creates the connections side panel using ConnectionPanel"""
@@ -1039,23 +1043,56 @@ class MainWindow(DockingMainWindow):
         thread.start()
 
     def _on_database_switch_success(self, database_name, connection_name, connector, widget):
-        """Callback when database switch completes successfully"""
+        """Callback when database switch completes successfully.
+
+        Propagates the database change to: connection panel, status bar,
+        tab color, schema cache, object explorer, and ALL blocks.
+        """
         self.statusBar().showMessage(S.status.database_changed.format(name=database_name), 5000)
 
+        # --- Schema reload ---
         self._schema_service.invalidate_cache(connection_name)
         self._schema_service.load_schema(connector, connection_name)
 
         if hasattr(widget, "connection_changed"):
             widget.connection_changed.emit(connection_name, database_name)
 
-        # Update focused block's database panel (direct update to avoid signal loop)
+        # --- Update connection panel ---
+        config = self.connection_manager.get_connection_config(connection_name)
+        if config:
+            host = config.get("host", "localhost")
+            db_type = config.get("db_type", "")
+            self.connection_panel.set_active_connection(
+                connection_name, host=host, database=database_name, db_type=db_type
+            )
+
+            # --- Tab color ---
+            color = config.get("color", "#007ACC") or "#007ACC"
+            for i in range(self.session_tabs.count()):
+                tab_widget = self.session_tabs.widget(i)
+                if isinstance(tab_widget, SessionWidget) and tab_widget == widget:
+                    self.session_tabs.set_tab_connection_color(i, color)
+                    break
+
+        # --- Highlight connection in list ---
+        for i in range(self.connections_list.count()):
+            item = self.connections_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == connection_name:
+                self.connections_list.setCurrentItem(item)
+                break
+
+        # --- Status bar ---
+        self.action_label.setText(S.status.connected_to.format(name=connection_name, db=database_name))
+
+        # --- Update ALL blocks' database panel (not just focused) ---
         if hasattr(widget, "editor"):
-            focused_block = widget.editor.get_focused_block()
-            if not focused_block:
-                focused_block = widget.editor.get_last_focused_block()
-            if focused_block and hasattr(focused_block, "db_panel"):
-                focused_block._database_name = database_name
-                focused_block.db_panel.set_database(database_name)
+            for block in widget.editor.get_blocks():
+                if hasattr(block, "db_panel"):
+                    # Only update blocks using the session connection (no custom connection)
+                    block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+                    if not block_conn:
+                        block._database_name = database_name
+                        block.db_panel.set_database(database_name)
 
     def _on_object_explorer_refresh(self):
         """Object Explorer refresh - reloads schema from active connection"""
@@ -1326,206 +1363,198 @@ class MainWindow(DockingMainWindow):
 
     def _restore_default_layout(self):
         """Restores the default panel layout"""
-        # Mostra todos os docks na posicao padrao
-        self.results_dock.show()
-        self.output_dock.show()
-        self.variables_dock.show()
-        self.connections_dock.show()
-
-        # Redefine posicoes
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
-
-        # Object Explorer abaixo de Variables na direita
-        if hasattr(self, "object_explorer_dock"):
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
-            self.object_explorer_dock.hide()
-
-        # Tabifica Results e Output
-        self.tabifyDockWidget(self.results_dock, self.output_dock)
-        self.results_dock.raise_()
-
-        # Updates menu actions
-        if hasattr(self, "results_action"):
-            self.results_action.setChecked(True)
-        if hasattr(self, "output_action"):
-            self.output_action.setChecked(True)
-        if hasattr(self, "variables_action"):
-            self.variables_action.setChecked(True)
-        if hasattr(self, "connections_action"):
-            self.connections_action.setChecked(True)
-        if hasattr(self, "object_explorer_action"):
-            self.object_explorer_action.setChecked(False)
+        self._setup_default_layout()
+        self._sync_view_menu_checks()
 
     def _save_dock_layout(self):
-        """DISABLED - Does not save layout automatically for safety"""
-        print("DEBUG: [SUPER SAFE] Automatic save disabled for safety")
-        return
+        """Save current dock layout to QSettings."""
+        try:
+            # Ensure toolbar objectName is set (required for saveState)
+            if hasattr(self, 'main_toolbar'):
+                self.main_toolbar.setObjectName("MainToolbar")
+            settings = QSettings("DataPyn", "MainWindow")
+            settings.setValue("geometry", self.saveGeometry())
+            settings.setValue("windowState", self.saveState(3))  # version=3
+            settings.sync()
+        except Exception:
+            pass
 
     def _restore_dock_layout(self):
-        """Restores dock widget layout with robust validation"""
+        """Restores dock widget layout from QSettings."""
+        self._restoring_layout = True
         try:
             settings = QSettings("DataPyn", "MainWindow")
-
-            # Checks if should reset (if holding Shift on open)
-            modifiers = QApplication.keyboardModifiers()
-            if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                print("DEBUG: Shift pressed - resetting layout to default")
-                self._clear_saved_layout()
-                self._setup_default_layout()
-                return
-
-            # Restaura geometria da janela
             geometry = settings.value("geometry")
-            geometry_restored = False
-            if geometry and len(geometry) > 20:
-                success = self.restoreGeometry(geometry)
-                geometry_restored = success
-                print(f"DEBUG: Geometry restored - Success: {success}, Data: {len(geometry)} bytes")
-                if not success:
-                    print("DEBUG: Failed to restore geometry")
-            else:
-                print("DEBUG: Invalid or missing geometry - using default")
-
-            # Restores dock state
             window_state = settings.value("windowState")
-            state_restored = False
+
+            restored = False
+
+            if geometry and len(geometry) > 20:
+                self.restoreGeometry(geometry)
+
             if window_state and len(window_state) > 50:
-                success = self.restoreState(window_state)
-                state_restored = success
-                print(f"DEBUG: Dock state restored - Success: {success}, Data: {len(window_state)} bytes")
+                # Window is NOT visible at this point (show() is called later
+                # by the splash screen), so restoreState runs invisibly.
+                if self.restoreState(window_state, 3):  # version=3
+                    restored = True
+                # Re-ensure toolbar settings (restoreState may override them)
+                if hasattr(self, 'main_toolbar'):
+                    self.main_toolbar.setObjectName("MainToolbar")
+                    self.main_toolbar.setMovable(False)
+                    self.main_toolbar.setVisible(True)
 
-                if success:
-                    # Forces UI update after restore
-                    QApplication.processEvents()
-                    # Checks if layout is valid after restore
-                    QTimer.singleShot(500, self._validate_restored_layout)
-                else:
-                    print("DEBUG: Failed to restore dock state")
-                    state_restored = False
-            else:
-                print("DEBUG: Invalid or missing dock state - using default")
-
-            # If nothing was restored OR failed, use default
-            if not geometry_restored and not state_restored:
-                print("DEBUG: Nothing was restored or there were failures - applying default layout")
+            if not restored:
                 self._setup_default_layout()
 
-        except Exception as e:
-            print(f"DEBUG: Error restoring layout: {e} - using default layout")
+            # Ensure all non-hidden docks are properly docked (not floating)
+            for dock in [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]:
+                if dock.isFloating() and dock.isVisible():
+                    dock.setFloating(False)
+
+            # Sync view menu after a short delay (docks need to settle)
+            QTimer.singleShot(300, self._finish_layout_restore)
+
+        except Exception:
             self._setup_default_layout()
+            self._restoring_layout = False
+
+    def _finish_layout_restore(self):
+        """Called after layout restore settles - sync menu and allow auto-save."""
+        self._restoring_layout = False
+        self._sync_view_menu_checks()
 
     def _setup_auto_save_layout(self):
-        """DISABLED - Auto-save disabled for safety"""
-        print("DEBUG: [SUPER SAFE] Auto-save permanently disabled")
-        return
+        """Configure auto-save: save layout when dock visibility/position changes."""
+        self._layout_save_timer = QTimer()
+        self._layout_save_timer.setSingleShot(True)
+        self._layout_save_timer.setInterval(1000)
+        self._layout_save_timer.timeout.connect(self._save_dock_layout)
 
-    def _on_dock_changed(self):
-        """DISABLED - Does not react to dock changes for safety"""
-        print("DEBUG: [SUPER SAFE] Dock change ignored - save disabled")
+        # Connect dock visibility changes to schedule save
+        all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
+        if hasattr(self, "object_explorer_dock"):
+            all_docks.append(self.object_explorer_dock)
+        for dock in all_docks:
+            dock.visibilityChanged.connect(self._on_dock_changed)
+            dock.dockLocationChanged.connect(self._on_dock_changed)
+            dock.topLevelChanged.connect(self._on_dock_changed)
+
+    def _on_dock_changed(self, *args):
+        """Schedule layout save after dock state changes."""
+        if getattr(self, "_restoring_layout", False):
+            return
+        if hasattr(self, "_layout_save_timer"):
+            self._layout_save_timer.start()
 
     def _clear_saved_layout(self):
-        """Clears saved layout (for reset)"""
+        """Clears saved layout (for reset)."""
         try:
             settings = QSettings("DataPyn", "MainWindow")
             settings.remove("geometry")
             settings.remove("windowState")
             settings.sync()
-            print("DEBUG: Saved layout removed successfully")
-        except Exception as e:
-            print(f"DEBUG: Error clearing saved layout: {e}")
+        except Exception:
+            pass
 
     def _setup_default_layout(self):
-        """Configures simple and reliable default layout"""
-        print("DEBUG: [SUPER SAFE] Configuring SIMPLIFIED default layout")
-
+        """Configures the default dock layout."""
         try:
-            # Forces all visible and non-floating
             all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
             if hasattr(self, "object_explorer_dock"):
                 all_docks.append(self.object_explorer_dock)
+
+            # Reset: make all non-floating
             for dock in all_docks:
-                if dock:
-                    dock.setVisible(True)
-                    dock.setFloating(False)
+                dock.setFloating(False)
 
-            # Simple positions - without complex removal/re-addition
-            print("DEBUG: Aplicando layout super simples...")
+            # Position docks in their default areas
+            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
 
-            # Window at default size
-            self.setGeometry(100, 100, 1400, 900)
+            if hasattr(self, "object_explorer_dock"):
+                self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
+                self.object_explorer_dock.hide()
 
-            # Force show all
+            # Tabify Results and Output (bottom tabs)
+            self.tabifyDockWidget(self.results_dock, self.output_dock)
+            self.results_dock.raise_()
+
+            # Show main panels
             self.connections_dock.show()
             self.results_dock.show()
             self.output_dock.show()
             self.variables_dock.show()
 
-            print("DEBUG: SIMPLIFIED default layout applied")
+            # Window size
+            screen = QApplication.primaryScreen()
+            if screen:
+                available = screen.availableGeometry()
+                w = min(1400, int(available.width() * 0.8))
+                h = min(900, int(available.height() * 0.8))
+                x = available.x() + (available.width() - w) // 2
+                y = available.y() + (available.height() - h) // 2
+                self.setGeometry(x, y, w, h)
+            else:
+                self.setGeometry(100, 100, 1400, 900)
 
-        except Exception as e:
-            print(f"DEBUG: ERRO no layout simplificado: {e}")
-            # Fallback absoluto
+        except Exception:
+            # Fallback: just show docks
             try:
                 self.connections_dock.show()
                 self.results_dock.show()
                 self.output_dock.show()
                 self.variables_dock.show()
-            except:
+            except Exception:
                 pass
 
     def _is_layout_valid(self):
-        """Checks if the current layout is sane"""
+        """Checks if the current layout is sane."""
         try:
-            # Checks if all docks exist and are visible
-            required_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
-
-            for dock in required_docks:
-                if dock is None:
-                    print(f"DEBUG: Dock None encontrado")
-                    return False
-
-            # Verifica geometria da janela
             geom = self.geometry()
             if geom.width() < 400 or geom.height() < 300:
-                print(f"DEBUG: Window too small: {geom.width()}x{geom.height()}")
                 return False
-
             return True
-
-        except Exception as e:
-            print(f"DEBUG: Error validating layout: {e}")
+        except Exception:
             return False
 
     def _validate_restored_layout(self):
-        """Validates layout after restore and fixes if necessary"""
+        """Validates layout after restore and fixes if necessary."""
         if not self._is_layout_valid():
-            print("DEBUG: Restored layout is invalid - applying default")
-            self._clear_saved_layout()  # Remove o layout corrompido
+            self._clear_saved_layout()
             self._setup_default_layout()
 
     def _reset_layout_completely(self):
-        """Resets layout completely (clears settings and applies default)"""
+        """Resets layout completely (clears settings and applies default)."""
         reply = QMessageBox.question(
             self,
             S.dialogs.confirm_reset_title,
-            "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
+            S.dialogs.layout_reset_confirm_msg if hasattr(S.dialogs, 'layout_reset_confirm_msg') else "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            print("DEBUG: Resetting layout completely by user request")
             self._clear_saved_layout()
             self._setup_default_layout()
+            self._sync_view_menu_checks()
             QMessageBox.information(self, S.dialogs.layout_reset_title, S.dialogs.layout_reset_msg)
 
-    def closeEvent(self, event):
-        """DISABLED - Does not save layout on close for safety"""
-        print("DEBUG: [SUPER SAFE] Closing without saving layout (safe mode active)")
-        super().closeEvent(event)
+    def _sync_view_menu_checks(self):
+        """Sync View menu check states with actual dock visibility."""
+        dock_action_map = [
+            ("connections_dock", "connections_action"),
+            ("results_dock", "results_action"),
+            ("output_dock", "output_action"),
+            ("variables_dock", "variables_action"),
+            ("object_explorer_dock", "object_explorer_action"),
+        ]
+        for dock_attr, action_attr in dock_action_map:
+            dock = getattr(self, dock_attr, None)
+            action = getattr(self, action_attr, None)
+            if dock and action:
+                action.setChecked(dock.isVisible())
 
     def _quick_connect(self, connection_name: str):
         """
@@ -2074,6 +2103,9 @@ class MainWindow(DockingMainWindow):
             )
             new_widget.block_connection_changed.connect(
                 lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+            )
+            new_widget.connection_drop_requested.connect(
+                lambda conn_name: self._quick_connect(conn_name)
             )
             new_widget.block_database_changed.connect(
                 lambda block, db_name: self._on_block_database_changed(block, db_name)
@@ -2663,6 +2695,7 @@ class MainWindow(DockingMainWindow):
         """Checks if the database changed after SQL execution (e.g. USE within batch).
 
         Se mudou, recarrega o Object Explorer com o novo banco.
+        Propaga a mudanca para: connection panel, status bar, tab color, todos os blocos.
         """
         if not db_before:
             return
@@ -2683,20 +2716,45 @@ class MainWindow(DockingMainWindow):
                 self._schema_service.invalidate_cache(connection_name)
                 self._schema_service.load_schema(connector, connection_name)
 
-                self._update_connection_status()
-
                 current_widget = self._get_current_session_widget()
                 if current_widget and hasattr(current_widget, "connection_changed"):
                     current_widget.connection_changed.emit(connection_name, db_after)
 
-                # Update focused block's database panel (direct update to avoid signal loop)
+                # --- Update connection panel with actual db_after ---
+                config = self.connection_manager.get_connection_config(connection_name)
+                if config:
+                    host = config.get("host", "localhost")
+                    db_type = config.get("db_type", "")
+                    self.connection_panel.set_active_connection(
+                        connection_name, host=host, database=db_after, db_type=db_type
+                    )
+
+                    # --- Tab color ---
+                    color = config.get("color", "#007ACC") or "#007ACC"
+                    for i in range(self.session_tabs.count()):
+                        tab_widget = self.session_tabs.widget(i)
+                        if isinstance(tab_widget, SessionWidget) and tab_widget == current_widget:
+                            self.session_tabs.set_tab_connection_color(i, color)
+                            break
+
+                # --- Highlight connection in list ---
+                for i in range(self.connections_list.count()):
+                    item = self.connections_list.item(i)
+                    if item.data(Qt.ItemDataRole.UserRole) == connection_name:
+                        self.connections_list.setCurrentItem(item)
+                        break
+
+                # --- Status bar ---
+                self.action_label.setText(S.status.connected_to.format(name=connection_name, db=db_after))
+
+                # --- Update ALL blocks' database panel ---
                 if current_widget and hasattr(current_widget, "editor"):
-                    focused_block = current_widget.editor.get_focused_block()
-                    if not focused_block:
-                        focused_block = current_widget.editor.get_last_focused_block()
-                    if focused_block and hasattr(focused_block, "db_panel"):
-                        focused_block._database_name = db_after
-                        focused_block.db_panel.set_database(db_after)
+                    for block in current_widget.editor.get_blocks():
+                        if hasattr(block, "db_panel"):
+                            block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+                            if not block_conn:
+                                block._database_name = db_after
+                                block.db_panel.set_database(db_after)
 
     def _execute_python(self, code: str):
         """Executes Python code in background"""
@@ -3785,6 +3843,50 @@ class MainWindow(DockingMainWindow):
                     # Usar o handler do SessionWidget (que abre o dialogo)
                     widget._on_file_dropped(file_path)
 
+    def _handle_empty_state_connection_drop(self, mime_data):
+        """Handle connection/database drop on empty state - creates new session with SQL block."""
+        conn_name = ""
+        db_type = ""
+        color = ""
+        db_name = ""
+
+        if mime_data.hasFormat("application/x-connection-name"):
+            conn_name = bytes(mime_data.data("application/x-connection-name")).decode("utf-8")
+        if mime_data.hasFormat("application/x-db-type"):
+            db_type = bytes(mime_data.data("application/x-db-type")).decode("utf-8")
+        if mime_data.hasFormat("application/x-connection-color"):
+            color = bytes(mime_data.data("application/x-connection-color")).decode("utf-8")
+        if mime_data.hasFormat("application/x-database-name"):
+            db_name = bytes(mime_data.data("application/x-database-name")).decode("utf-8")
+
+        # Connect session using _quick_connect (creates tab, connects, loads schema,
+        # updates Object Explorer, sets tab color)
+        if conn_name:
+            self._quick_connect(conn_name)
+        else:
+            self._new_session()
+
+        # Get the widget that was just created
+        widget = self._get_current_session_widget()
+        if not widget or not hasattr(widget, "editor"):
+            return
+
+        # Get the first block (created by _quick_connect/_new_session)
+        editor = widget.editor
+        if not editor._blocks:
+            return
+
+        block = editor._blocks[0]
+        block.set_language("sql")
+
+        if conn_name:
+            block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
+
+        if db_name:
+            block.set_database_name(db_name)
+
+        block.editor.setFocus()
+
     def _show_empty_state(self):
         """Shows empty state when there are no sessions, hiding panels"""
         if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
@@ -3805,7 +3907,7 @@ class MainWindow(DockingMainWindow):
         main_window_ref = self
 
         class DropEmptyStateWidget(QWidget):
-            """Empty state widget with drag-and-drop file support"""
+            """Empty state widget with drag-and-drop file and connection support"""
 
             def __init__(self, parent=None):
                 super().__init__(parent)
@@ -3813,6 +3915,12 @@ class MainWindow(DockingMainWindow):
 
             def dragEnterEvent(self, event: QDragEnterEvent):
                 mime_data = event.mimeData()
+                # Accept connection or database drag
+                if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
+                    "application/x-database-name"
+                ):
+                    event.acceptProposedAction()
+                    return
                 if mime_data.hasUrls():
                     for url in mime_data.urls():
                         file_path = url.toLocalFile()
@@ -3825,6 +3933,13 @@ class MainWindow(DockingMainWindow):
 
             def dropEvent(self, event: QDropEvent):
                 mime_data = event.mimeData()
+                # Handle connection or database drop
+                if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
+                    "application/x-database-name"
+                ):
+                    main_window_ref._handle_empty_state_connection_drop(mime_data)
+                    event.acceptProposedAction()
+                    return
                 if mime_data.hasUrls():
                     file_paths = []
                     for url in mime_data.urls():
@@ -3948,6 +4063,9 @@ class MainWindow(DockingMainWindow):
         )
         widget.block_connection_changed.connect(
             lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+        )
+        widget.connection_drop_requested.connect(
+            lambda conn_name: self._quick_connect(conn_name)
         )
         widget.block_database_changed.connect(
             lambda block, db_name: self._on_block_database_changed(block, db_name)
@@ -4179,9 +4297,20 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.set_tab_connection_color(i, color)
                 break
 
-        # === CARREGAR SCHEMA PARA AUTOCOMPLETE SQL ===
+        # === CARREGAR SCHEMA (INVALIDA CACHE + RELOAD) ===
         if session.connector:
+            self._schema_service.invalidate_cache(connection_name)
             self._schema_service.load_schema(session.connector, connection_name)
+
+        # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "editor"):
+            for block in current_widget.editor.get_blocks():
+                if hasattr(block, "db_panel"):
+                    block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+                    if not block_conn:
+                        block._database_name = current_db
+                        block.db_panel.set_database(current_db)
 
     def _reload_schema(self):
         """Reloads the SQL schema from the focused block connection (or session).
@@ -4252,6 +4381,7 @@ class MainWindow(DockingMainWindow):
         )
 
         # Enviar schema para blocos que usam esta conexao
+        all_databases = schema.get("databases", [])
         for widget in self._session_widgets.values():
             if not (hasattr(widget, "editor") and widget.editor):
                 continue
@@ -4271,9 +4401,13 @@ class MainWindow(DockingMainWindow):
                     # Block with custom connection: only apply if same connection
                     if block_conn == connection_name:
                         block.editor.set_sql_schema(schema)
+                        if hasattr(block, "set_available_databases"):
+                            block.set_available_databases(all_databases)
                 elif session_conn == connection_name:
                     # Block without custom connection: apply if session connection
                     block.editor.set_sql_schema(schema)
+                    if hasattr(block, "set_available_databases"):
+                        block.set_available_databases(all_databases)
 
         # Update Object Explorer for corresponding session
         if hasattr(self, "_session_explorers"):
@@ -4304,6 +4438,8 @@ class MainWindow(DockingMainWindow):
         if cached:
             if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
                 block.editor.set_sql_schema(cached)
+            if hasattr(block, "set_available_databases"):
+                block.set_available_databases(cached.get("databases", []))
             return
 
         # Precisa carregar schema - criar connector em background
@@ -4417,9 +4553,21 @@ class MainWindow(DockingMainWindow):
         # Enviar para todos os blocos Python da sessao ativa
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor") and current_widget.editor:
+            # Collect import lines from all blocks to share as global context
+            import_lines = []
+            for block in current_widget.editor.get_blocks():
+                if block.get_language() == "python":
+                    for line in block.get_code().splitlines():
+                        stripped = line.strip()
+                        if stripped.startswith("import ") or stripped.startswith("from "):
+                            import_lines.append(stripped)
+            global_imports = "\n".join(dict.fromkeys(import_lines))  # deduplicate preserving order
+
             for block in current_widget.editor.get_blocks():
                 if hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
                     block.editor.set_python_namespace(ns_types)
+                if hasattr(block, "editor") and hasattr(block.editor, "set_global_imports"):
+                    block.editor.set_global_imports(global_imports)
 
     def _compute_widget_content_hash(self, widget):
         """Calcula hash do conteudo atual do editor do widget"""
@@ -5049,6 +5197,13 @@ class MainWindow(DockingMainWindow):
 
         # Save sessions before closing
         self._save_sessions()
+
+        # Stop auto-save timer BEFORE saving to prevent it from overwriting
+        if hasattr(self, '_layout_save_timer'):
+            self._layout_save_timer.stop()
+
+        # Save dock layout before closing
+        self._save_dock_layout()
 
         # Cleanup all sessions
         for widget in self._session_widgets.values():

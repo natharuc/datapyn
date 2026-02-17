@@ -21,6 +21,11 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QApplication,
+    QGroupBox,
+    QListWidget,
+    QListWidgetItem,
+    QFormLayout,
+    QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
@@ -96,6 +101,124 @@ class _InstallWorker(QThread):
                 error=f"Unknown operation: {self.operation}",
             )
         self.finished.emit(result)
+
+
+class _AddSourceDialog(QDialog):
+    """Dialog for adding a package source with optional authentication."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(S.package_manager.add_source_title)
+        self.setMinimumWidth(500)
+
+        # Inherit theme from parent PackageManagerDialog
+        c = parent.theme_manager.get_app_colors() if parent and hasattr(parent, "theme_manager") else {}
+        bg = c.get("background", "#1e1e1e")
+        fg = c.get("foreground", "#d4d4d4")
+        border = c.get("border", "#3c3c3c")
+        accent = c.get("accent", "#0078d4")
+
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg};
+                color: {fg};
+            }}
+            QLabel {{
+                color: {fg};
+                font-size: 12px;
+            }}
+            QLineEdit {{
+                background-color: {bg};
+                color: {fg};
+                border: 1px solid {border};
+                border-radius: 3px;
+                padding: 6px 8px;
+                font-size: 12px;
+            }}
+            QLineEdit:focus {{
+                border-color: {accent};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # URL field
+        lbl_url = QLabel(S.package_manager.add_source_prompt)
+        layout.addWidget(lbl_url)
+        self.txt_url = QLineEdit()
+        self.txt_url.setPlaceholderText("https://pkgs.dev.azure.com/org/_packaging/feed/pypi/simple/")
+        layout.addWidget(self.txt_url)
+
+        # Auth section
+        auth_label = QLabel(S.package_manager.auth_section_title)
+        auth_font = QFont()
+        auth_font.setBold(True)
+        auth_label.setFont(auth_font)
+        layout.addWidget(auth_label)
+
+        auth_desc = QLabel(S.package_manager.auth_section_description)
+        auth_desc.setWordWrap(True)
+        auth_desc.setStyleSheet(f"color: {fg}; font-size: 10px; opacity: 0.7;")
+        layout.addWidget(auth_desc)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self.txt_username = QLineEdit()
+        self.txt_username.setPlaceholderText(S.package_manager.auth_username_placeholder)
+        form.addRow(S.package_manager.auth_username_label, self.txt_username)
+
+        self.txt_password = QLineEdit()
+        self.txt_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.txt_password.setPlaceholderText(S.package_manager.auth_token_placeholder)
+        form.addRow(S.package_manager.auth_token_label, self.txt_password)
+
+        layout.addLayout(form)
+
+        # Buttons
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self._validate_and_accept)
+        btn_box.rejected.connect(self.reject)
+        btn_box.setStyleSheet(f"""
+            QPushButton {{
+                padding: 6px 18px;
+                border-radius: 4px;
+                font-size: 11px;
+                min-width: 70px;
+            }}
+        """)
+        layout.addWidget(btn_box)
+
+    def _validate_and_accept(self):
+        """Validate fields before accepting."""
+        url = self.txt_url.text().strip()
+        if not url:
+            return
+        username = self.txt_username.text().strip()
+        if username and ("://" in username or username.startswith("http")):
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(
+                self,
+                S.package_manager.add_source_title,
+                S.package_manager.auth_username_invalid,
+            )
+            self.txt_username.setFocus()
+            self.txt_username.selectAll()
+            return
+        self.accept()
+
+    def get_source(self) -> dict:
+        """Return the source dict with url, username, password."""
+        return {
+            "url": self.txt_url.text().strip(),
+            "username": self.txt_username.text().strip(),
+            "password": self.txt_password.text(),
+        }
 
 
 class PackageManagerDialog(QDialog):
@@ -291,12 +414,167 @@ class PackageManagerDialog(QDialog):
         footer.addWidget(self.lbl_status)
         footer.addStretch()
 
+        self.btn_sources = QPushButton(S.package_manager.btn_sources)
+        if HAS_QTAWESOME:
+            self.btn_sources.setIcon(qta.icon("fa5s.cog", color=c["foreground"]))
+        self.btn_sources.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c["border"]};
+                color: {c["foreground"]};
+                border: none;
+                padding: 6px 14px;
+                border-radius: 4px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: #4a4a4a;
+            }}
+        """)
+        self.btn_sources.setCheckable(True)
+        self.btn_sources.clicked.connect(self._toggle_sources_panel)
+        footer.addWidget(self.btn_sources)
+
         btn_close = QPushButton(S.package_manager.btn_close)
         btn_close.setObjectName("btnCancel")
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
 
         layout.addLayout(footer)
+
+        # --- Sources panel (collapsible) ---
+        self.sources_frame = QFrame()
+        self.sources_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {c["border"]};
+                border: 1px solid {c["border"]};
+                border-radius: 4px;
+            }}
+        """)
+        self.sources_frame.setVisible(False)
+        sources_layout = QVBoxLayout(self.sources_frame)
+        sources_layout.setContentsMargins(12, 10, 12, 10)
+        sources_layout.setSpacing(8)
+
+        sources_title = QLabel(S.package_manager.sources_title)
+        sources_title_font = QFont()
+        sources_title_font.setBold(True)
+        sources_title.setFont(sources_title_font)
+        sources_layout.addWidget(sources_title)
+
+        sources_desc = QLabel(S.package_manager.sources_description)
+        sources_desc.setStyleSheet(f"color: {dim_color}; font-size: 10px; border: none;")
+        sources_desc.setWordWrap(True)
+        sources_layout.addWidget(sources_desc)
+
+        self.sources_list = QListWidget()
+        self.sources_list.setMaximumHeight(100)
+        self.sources_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {c["background"]};
+                color: {c["foreground"]};
+                border: 1px solid {c["border"]};
+                border-radius: 3px;
+                font-size: 11px;
+            }}
+            QListWidget::item {{
+                padding: 4px 8px;
+            }}
+            QListWidget::item:selected {{
+                background-color: #094771;
+            }}
+        """)
+        sources_layout.addWidget(self.sources_list)
+
+        sources_btn_row = QHBoxLayout()
+        sources_btn_row.setSpacing(6)
+
+        btn_add_source = QPushButton(S.package_manager.btn_add_source)
+        if HAS_QTAWESOME:
+            btn_add_source.setIcon(qta.icon("fa5s.plus", color="white"))
+        btn_add_source.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c["accent"]};
+                color: white;
+                border: none;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ opacity: 0.85; }}
+        """)
+        btn_add_source.clicked.connect(self._add_source)
+        sources_btn_row.addWidget(btn_add_source)
+
+        btn_remove_source = QPushButton(S.package_manager.btn_remove_source)
+        if HAS_QTAWESOME:
+            btn_remove_source.setIcon(qta.icon("fa5s.trash-alt", color="white"))
+        btn_remove_source.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #c5534d;
+                color: white;
+                border: none;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ background-color: #e06060; }}
+        """)
+        btn_remove_source.clicked.connect(self._remove_source)
+        sources_btn_row.addWidget(btn_remove_source)
+
+        sources_btn_row.addStretch()
+        sources_layout.addLayout(sources_btn_row)
+
+        layout.addWidget(self.sources_frame)
+
+        # Load saved sources
+        self._load_sources()
+
+    # === Sources management ===
+
+    def _toggle_sources_panel(self, checked: bool):
+        """Shows or hides the sources configuration panel."""
+        self.sources_frame.setVisible(checked)
+
+    def _load_sources(self):
+        """Loads saved sources into the list widget."""
+        self.sources_list.clear()
+        for source in self.service.get_sources():
+            url = source.get("url", "")
+            username = source.get("username", "")
+            has_auth = bool(username and source.get("password", ""))
+            display = url
+            if has_auth:
+                display = f"{url}  [{username}]"
+            item = QListWidgetItem(display)
+            item.setData(Qt.ItemDataRole.UserRole, source)
+            self.sources_list.addItem(item)
+
+    def _add_source(self):
+        """Opens dialog to add a new package source with optional auth."""
+        dlg = _AddSourceDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            source = dlg.get_source()
+            if not source.get("url"):
+                return
+            existing = self.service.get_sources()
+            # Avoid duplicate URLs
+            if any(s.get("url") == source["url"] for s in existing):
+                return
+            existing.append(source)
+            self.service.set_sources(existing)
+            self._load_sources()
+
+    def _remove_source(self):
+        """Removes the selected source."""
+        item = self.sources_list.currentItem()
+        if not item:
+            return
+        source = item.data(Qt.ItemDataRole.UserRole)
+        sources = self.service.get_sources()
+        sources = [s for s in sources if s.get("url") != source.get("url")]
+        self.service.set_sources(sources)
+        self._load_sources()
 
     # === Actions ===
 
@@ -338,8 +616,6 @@ class PackageManagerDialog(QDialog):
         if not results:
             self.lbl_info.setText(S.package_manager.pkg_not_found.format(query=query))
             self.table.setRowCount(0)
-            # Show option to install directly
-            self._show_direct_install_option(query)
             return
 
         self.lbl_info.setText(S.package_manager.search_results.format(query=query))

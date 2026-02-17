@@ -1,0 +1,722 @@
+From fb00b0763c132f79820dfcd3ca0ef0575c131bcd Mon Sep 17 00:00:00 2001
+From: Nathan Arruda <pollaris.ncamara@terceiros.mag.com.br>
+Date: Mon, 16 Feb 2026 21:39:54 -0300
+Subject: [PATCH] feat: drag-drop conexao/banco cria bloco SQL + conecta sessao
+
+- BlockEditor aceita drop de connection-name e database-name
+- Drop cria bloco SQL com conexao/banco pre-configurado
+- Object Explorer drag inclui connection_name no mime data
+- connection_drop_requested signal conecta sessao via _quick_connect
+- Empty state (tela inicial) aceita drop de conexao
+- Deteccao nativa de mudanca de banco apos execucao SQL
+- Removido dry-run do workflow release.yml
+
+Testes: 52 em test_block_connection.py (150 relacionados passando)
+---
+ .github/workflows/release.yml                 |  32 +--
+ source/src/editors/block_editor.py            |  57 +++-
+ source/src/language/en-US.json                |   2 +-
+ .../ui/components/object_explorer_panel.py    |   9 +-
+ source/src/ui/components/session_widget.py    |  52 +++-
+ source/src/ui/main_window.py                  |  78 +++++-
+ tests/test_block_connection.py                | 256 ++++++++++++++++++
+ 7 files changed, 453 insertions(+), 33 deletions(-)
+
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index c2b214b..d7100e5 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -8,12 +8,6 @@ on:
+     types:
+       - completed
+   workflow_dispatch:
+-    inputs:
+-      dry_run:
+-        description: "Dry run: build sem publicar (para testes)"
+-        required: true
+-        default: true
+-        type: boolean
+ 
+ # default: least privileged permissions across all jobs
+ permissions:
+@@ -39,9 +33,9 @@ jobs:
+       contents: write
+ 
+     outputs:
+-      released: ${{ steps.release.outputs.released || steps.dry_run_version.outputs.released }}
+-      tag: ${{ steps.release.outputs.tag || steps.dry_run_version.outputs.tag }}
+-      version: ${{ steps.release.outputs.version || steps.dry_run_version.outputs.version }}
++      released: ${{ steps.release.outputs.released || steps.manual_version.outputs.released }}
++      tag: ${{ steps.release.outputs.tag || steps.manual_version.outputs.tag }}
++      version: ${{ steps.release.outputs.version || steps.manual_version.outputs.version }}
+ 
+     steps:
+       - name: Install SSH Client and add private key to ssh-agent
+@@ -72,14 +66,16 @@ jobs:
+           git_committer_name: "github-actions"
+           git_committer_email: "actions@users.noreply.github.com"
+ 
+-      # On dry run, set fake outputs so the build jobs can execute
+-      - name: Dry Run | Set fake version outputs
+-        id: dry_run_version
++      # On manual dispatch, read version from pyproject.toml
++      - name: Manual | Read version from pyproject.toml
++        id: manual_version
+         if: github.event_name == 'workflow_dispatch'
+         run: |
++          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+           echo "released=true" >> "$GITHUB_OUTPUT"
+-          echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+-          echo "version=0.0.0-dryrun" >> "$GITHUB_OUTPUT"
++          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
++          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
++          echo "Using version from pyproject.toml: ${VERSION}"
+ 
+   build-windows-msi:
+     needs: release
+@@ -215,17 +211,9 @@ jobs:
+           Remove-Item -Path $certPath -Force -ErrorAction SilentlyContinue
+ 
+       - name: Publish | Upload MSI to GitHub Release
+-        if: "!(github.event.inputs.dry_run == 'true')"
+         uses: softprops/action-gh-release@v2
+         with:
+           tag_name: ${{ needs.release.outputs.tag }}
+           files: DataPyn-${{ needs.release.outputs.version }}-windows.msi
+         env:
+           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-
+-      - name: Dry Run | List generated artifacts
+-        if: github.event.inputs.dry_run == 'true'
+-        shell: pwsh
+-        run: |
+-          Write-Host "=== DRY RUN - MSI gerado com sucesso ==="
+-          Get-ChildItem -Path . -Filter *.msi | Format-Table Name, Length
+diff --git a/source/src/editors/block_editor.py b/source/src/editors/block_editor.py
+index f9b1204..ece0246 100644
+--- a/source/src/editors/block_editor.py
++++ b/source/src/editors/block_editor.py
+@@ -65,6 +65,9 @@ class BlockEditor(QWidget):
+     # Signal when block database changes
+     block_database_changed = pyqtSignal(object, str)  # CodeBlock, database_name
+ 
++    # Signal when connection is dropped on editor area (to connect session)
++    connection_drop_requested = pyqtSignal(str)  # connection_name
++
+     # Signal when data file is dropped (to show import dialog)
+     file_dropped = pyqtSignal(str)  # file_path
+ 
+@@ -632,7 +635,7 @@ class BlockEditor(QWidget):
+             self._dragging_block = block
+ 
+     def dragEnterEvent(self, event: QDragEnterEvent):
+-        """Accept drag of blocks and files"""
++        """Accept drag of blocks, files, connections, and databases"""
+         mime_data = event.mimeData()
+ 
+         # Accept block drag
+@@ -642,6 +645,13 @@ class BlockEditor(QWidget):
+                 event.acceptProposedAction()
+                 return
+ 
++        # Accept connection or database drag
++        if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
++            "application/x-database-name"
++        ):
++            event.acceptProposedAction()
++            return
++
+         # Accept file drag (CSV, JSON, XLSX, SQL, PY, DPW)
+         if mime_data.hasUrls():
+             urls = mime_data.urls()
+@@ -656,9 +666,17 @@ class BlockEditor(QWidget):
+         event.acceptProposedAction()
+ 
+     def dropEvent(self, event: QDropEvent):
+-        """When a block or file is dropped"""
++        """When a block, file, connection, or database is dropped"""
+         mime_data = event.mimeData()
+ 
++        # Process connection or database drop -> create SQL block
++        if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
++            "application/x-database-name"
++        ):
++            self._handle_connection_drop(mime_data)
++            event.acceptProposedAction()
++            return
++
+         # Process file drop
+         if mime_data.hasUrls():
+             urls = mime_data.urls()
+@@ -702,6 +720,41 @@ class BlockEditor(QWidget):
+         self._dragging_block = None
+         event.acceptProposedAction()
+ 
++    def _handle_connection_drop(self, mime_data):
++        """Handle drop of a connection or database from panels.
++
++        Creates a new SQL block pre-configured with the dropped connection
++        and optionally the database.
++        """
++        conn_name = ""
++        db_type = ""
++        color = ""
++        db_name = ""
++
++        if mime_data.hasFormat("application/x-connection-name"):
++            conn_name = bytes(mime_data.data("application/x-connection-name")).decode("utf-8")
++        if mime_data.hasFormat("application/x-db-type"):
++            db_type = bytes(mime_data.data("application/x-db-type")).decode("utf-8")
++        if mime_data.hasFormat("application/x-connection-color"):
++            color = bytes(mime_data.data("application/x-connection-color")).decode("utf-8")
++        if mime_data.hasFormat("application/x-database-name"):
++            db_name = bytes(mime_data.data("application/x-database-name")).decode("utf-8")
++
++        block = self.add_block(language="sql")
++
++        if conn_name:
++            block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
++
++        if db_name:
++            block.set_database_name(db_name)
++
++        block.editor.setFocus()
++        self.content_changed.emit()
++
++        # Request session-level connection (updates Object Explorer, tab color, etc.)
++        if conn_name:
++            self.connection_drop_requested.emit(conn_name)
++
+     def _find_drop_index(self, pos) -> int:
+         """Find index where block should be inserted"""
+         # Map position to scroll area
+diff --git a/source/src/language/en-US.json b/source/src/language/en-US.json
+index 28f2009..bfdbab2 100644
+--- a/source/src/language/en-US.json
++++ b/source/src/language/en-US.json
+@@ -311,7 +311,7 @@
+     "no_connection": "No connection",
+     "btn_refresh": "Refresh",
+     "placeholder_search": "Search tables and columns...",
+-    "db_connected": "{db} (connected)",
++    "db_connected": "{db} connected",
+     "info_dbs_tables": "{dbs} databases, {tables} tables",
+     "info_tables_cols": "{tables} tables, {cols} columns",
+     "view_suffix": "(view)",
+diff --git a/source/src/ui/components/object_explorer_panel.py b/source/src/ui/components/object_explorer_panel.py
+index a7568fe..a1ab6e3 100644
+--- a/source/src/ui/components/object_explorer_panel.py
++++ b/source/src/ui/components/object_explorer_panel.py
+@@ -231,7 +231,7 @@ class ObjectExplorerPanel(QWidget):
+                         if not has_match and filter_text not in db.lower():
+                             continue
+ 
+-                    display = f"{db}  ({S.object_explorer.db_connected.format(db='')})" if not filter_text else db
++                    display = f"{db} ({S.object_explorer.db_connected.format(db='')})" if not filter_text else db
+                     db_item = QTreeWidgetItem(self.tree, [display])
+                     db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
+ 
+@@ -444,6 +444,13 @@ class ObjectExplorerPanel(QWidget):
+         mime_data = QMimeData()
+         mime_data.setData("application/x-database-name", name.encode("utf-8"))
+ 
++        # Include connection name so drop target knows which connection to use
++        if self._current_connection:
++            mime_data.setData(
++                "application/x-connection-name",
++                self._current_connection.encode("utf-8"),
++            )
++
+         drag = QDrag(self.tree)
+         drag.setMimeData(mime_data)
+         drag.exec(Qt.DropAction.CopyAction)
+diff --git a/source/src/ui/components/session_widget.py b/source/src/ui/components/session_widget.py
+index 96a7080..528051c 100644
+--- a/source/src/ui/components/session_widget.py
++++ b/source/src/ui/components/session_widget.py
+@@ -106,6 +106,7 @@ class SessionWidget(QWidget):
+     execute_cross_syntax = pyqtSignal(str)  # code
+     status_changed = pyqtSignal(str)  # status message
+     connection_changed = pyqtSignal(str, str)  # (connection_name, database)
++    connection_drop_requested = pyqtSignal(str)  # connection_name
+     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
+     block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
+ 
+@@ -281,6 +282,9 @@ class SessionWidget(QWidget):
+         # Block connection change (to reload autocomplete)
+         self.editor.block_connection_changed.connect(self.block_connection_changed.emit)
+ 
++        # Connection drop on editor area (connect session + Object Explorer)
++        self.editor.connection_drop_requested.connect(self.connection_drop_requested.emit)
++
+         # Block database change
+         self.editor.block_database_changed.connect(self.block_database_changed.emit)
+ 
+@@ -376,6 +380,14 @@ class SessionWidget(QWidget):
+         # Store block_name to use in callback
+         self._current_block_name = block_name
+ 
++        # Store database state before execution to detect changes
++        self._current_connector = connector
++        self._current_connection_name = connection_name or self.session.connection_name
++        try:
++            self._db_before = connector.get_current_database() if connector else ""
++        except Exception:
++            self._db_before = ""
++
+         # Register thread in session
+         self.session.register_thread(self._sql_thread)
+ 
+@@ -460,16 +472,46 @@ class SessionWidget(QWidget):
+             # Clear block_name after use
+             self._current_block_name = None
+ 
+-            # Check if database changed (USE command)
+-            if self.session.connector:
+-                current_db = self.session.connector.get_current_database()
+-                if self.session.connection_name:
+-                    self.connection_changed.emit(self.session.connection_name, current_db)
++        # Check if database changed after execution (handles USE, or any command that switches db)
++        self._check_database_changed()
+ 
+         # Process next in queue if available
+         self._is_executing = False
+         self._process_next_in_queue()
+ 
++    def _check_database_changed(self):
++        """Compares current database with db_before execution.
++
++        If the database changed (e.g. via USE command), emits connection_changed
++        and updates the focused block's db_panel.
++        """
++        connector = getattr(self, "_current_connector", None)
++        conn_name = getattr(self, "_current_connection_name", None)
++        db_before = getattr(self, "_db_before", "")
++
++        if not connector or not conn_name:
++            return
++
++        try:
++            db_after = connector.get_current_database()
++        except Exception:
++            return
++
++        if not db_after or not db_before:
++            return
++
++        if db_after.lower() != db_before.lower():
++            # Database changed - update UI
++            self.connection_changed.emit(conn_name, db_after)
++
++            # Update focused block's db_panel
++            focused_block = self.editor.get_focused_block()
++            if not focused_block:
++                focused_block = self.editor.get_last_focused_block()
++            if focused_block and hasattr(focused_block, "db_panel"):
++                focused_block._database_name = db_after
++                focused_block.db_panel.set_database(db_after)
++
+     # === PYTHON EXECUTION ===
+ 
+     def _on_execute_python(self, code: str):
+diff --git a/source/src/ui/main_window.py b/source/src/ui/main_window.py
+index 6eceb9f..c3bc531 100644
+--- a/source/src/ui/main_window.py
++++ b/source/src/ui/main_window.py
+@@ -2075,6 +2075,9 @@ class MainWindow(DockingMainWindow):
+             new_widget.block_connection_changed.connect(
+                 lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+             )
++            new_widget.connection_drop_requested.connect(
++                lambda conn_name: self._quick_connect(conn_name)
++            )
+             new_widget.block_database_changed.connect(
+                 lambda block, db_name: self._on_block_database_changed(block, db_name)
+             )
+@@ -3785,6 +3788,50 @@ class MainWindow(DockingMainWindow):
+                     # Usar o handler do SessionWidget (que abre o dialogo)
+                     widget._on_file_dropped(file_path)
+ 
++    def _handle_empty_state_connection_drop(self, mime_data):
++        """Handle connection/database drop on empty state - creates new session with SQL block."""
++        conn_name = ""
++        db_type = ""
++        color = ""
++        db_name = ""
++
++        if mime_data.hasFormat("application/x-connection-name"):
++            conn_name = bytes(mime_data.data("application/x-connection-name")).decode("utf-8")
++        if mime_data.hasFormat("application/x-db-type"):
++            db_type = bytes(mime_data.data("application/x-db-type")).decode("utf-8")
++        if mime_data.hasFormat("application/x-connection-color"):
++            color = bytes(mime_data.data("application/x-connection-color")).decode("utf-8")
++        if mime_data.hasFormat("application/x-database-name"):
++            db_name = bytes(mime_data.data("application/x-database-name")).decode("utf-8")
++
++        # Connect session using _quick_connect (creates tab, connects, loads schema,
++        # updates Object Explorer, sets tab color)
++        if conn_name:
++            self._quick_connect(conn_name)
++        else:
++            self._new_session()
++
++        # Get the widget that was just created
++        widget = self._get_current_session_widget()
++        if not widget or not hasattr(widget, "editor"):
++            return
++
++        # Get the first block (created by _quick_connect/_new_session)
++        editor = widget.editor
++        if not editor._blocks:
++            return
++
++        block = editor._blocks[0]
++        block.set_language("sql")
++
++        if conn_name:
++            block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
++
++        if db_name:
++            block.set_database_name(db_name)
++
++        block.editor.setFocus()
++
+     def _show_empty_state(self):
+         """Shows empty state when there are no sessions, hiding panels"""
+         if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
+@@ -3805,7 +3852,7 @@ class MainWindow(DockingMainWindow):
+         main_window_ref = self
+ 
+         class DropEmptyStateWidget(QWidget):
+-            """Empty state widget with drag-and-drop file support"""
++            """Empty state widget with drag-and-drop file and connection support"""
+ 
+             def __init__(self, parent=None):
+                 super().__init__(parent)
+@@ -3813,6 +3860,12 @@ class MainWindow(DockingMainWindow):
+ 
+             def dragEnterEvent(self, event: QDragEnterEvent):
+                 mime_data = event.mimeData()
++                # Accept connection or database drag
++                if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
++                    "application/x-database-name"
++                ):
++                    event.acceptProposedAction()
++                    return
+                 if mime_data.hasUrls():
+                     for url in mime_data.urls():
+                         file_path = url.toLocalFile()
+@@ -3825,6 +3878,13 @@ class MainWindow(DockingMainWindow):
+ 
+             def dropEvent(self, event: QDropEvent):
+                 mime_data = event.mimeData()
++                # Handle connection or database drop
++                if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
++                    "application/x-database-name"
++                ):
++                    main_window_ref._handle_empty_state_connection_drop(mime_data)
++                    event.acceptProposedAction()
++                    return
+                 if mime_data.hasUrls():
+                     file_paths = []
+                     for url in mime_data.urls():
+@@ -3949,6 +4009,9 @@ class MainWindow(DockingMainWindow):
+         widget.block_connection_changed.connect(
+             lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+         )
++        widget.connection_drop_requested.connect(
++            lambda conn_name: self._quick_connect(conn_name)
++        )
+         widget.block_database_changed.connect(
+             lambda block, db_name: self._on_block_database_changed(block, db_name)
+         )
+@@ -4179,10 +4242,21 @@ class MainWindow(DockingMainWindow):
+                 self.session_tabs.set_tab_connection_color(i, color)
+                 break
+ 
+-        # === CARREGAR SCHEMA PARA AUTOCOMPLETE SQL ===
++        # === CARREGAR SCHEMA (INVALIDA CACHE + RELOAD) ===
+         if session.connector:
++            self._schema_service.invalidate_cache(connection_name)
+             self._schema_service.load_schema(session.connector, connection_name)
+ 
++        # === ATUALIZAR BLOCO FOCADO ===
++        current_widget = self._get_current_session_widget()
++        if current_widget and hasattr(current_widget, "editor"):
++            focused_block = current_widget.editor.get_focused_block()
++            if not focused_block:
++                focused_block = current_widget.editor.get_last_focused_block()
++            if focused_block and hasattr(focused_block, "db_panel"):
++                focused_block._database_name = current_db
++                focused_block.db_panel.set_database(current_db)
++
+     def _reload_schema(self):
+         """Reloads the SQL schema from the focused block connection (or session).
+ 
+diff --git a/tests/test_block_connection.py b/tests/test_block_connection.py
+index a7f157c..1f734c1 100644
+--- a/tests/test_block_connection.py
++++ b/tests/test_block_connection.py
+@@ -601,3 +601,259 @@ class TestQueueProcessing:
+         with patch.object(widget, "_on_execute_python") as mock_exec:
+             widget._process_next_in_queue()
+             mock_exec.assert_called_once_with('print("hi")')
++
++
++# ===== Drag & Drop para criar blocos =====
++
++
++class TestDragDropCreateBlock:
++    """Testes para drag & drop de conexao/banco na area vazia do editor cria novo bloco SQL"""
++
++    def test_drag_enter_accepts_connection_name(self, qapp):
++        """dragEnterEvent deve aceitar mime application/x-connection-name"""
++        editor = BlockEditor()
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-connection-name", b"TestConn")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dragEnterEvent(event)
++        event.acceptProposedAction.assert_called_once()
++
++    def test_drag_enter_accepts_database_name(self, qapp):
++        """dragEnterEvent deve aceitar mime application/x-database-name"""
++        editor = BlockEditor()
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-database-name", b"mydb")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dragEnterEvent(event)
++        event.acceptProposedAction.assert_called_once()
++
++    def test_drag_enter_rejects_unrelated_mime(self, qapp):
++        """dragEnterEvent nao deve aceitar mime irrelevante"""
++        editor = BlockEditor()
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-random-stuff", b"nope")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dragEnterEvent(event)
++        event.acceptProposedAction.assert_not_called()
++
++    def test_drop_connection_creates_sql_block(self, qapp):
++        """Drop de conexao no editor deve criar bloco SQL com conexao definida"""
++        editor = BlockEditor()
++        initial_count = len(editor._blocks)
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-connection-name", b"ProdConn")
++        mime_data.setData("application/x-db-type", b"mysql")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        assert len(editor._blocks) == initial_count + 1
++        new_block = editor._blocks[-1]
++        assert new_block.get_language() == "sql"
++        assert new_block.get_connection_name() == "ProdConn"
++        assert new_block.conn_panel._db_type == "mysql"
++        event.acceptProposedAction.assert_called_once()
++
++    def test_drop_connection_with_color(self, qapp):
++        """Drop de conexao com cor deve propagar para o bloco"""
++        editor = BlockEditor()
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-connection-name", b"ColorConn")
++        mime_data.setData("application/x-db-type", b"postgresql")
++        mime_data.setData("application/x-connection-color", b"#ff5500")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        new_block = editor._blocks[-1]
++        assert new_block.get_connection_name() == "ColorConn"
++        assert new_block.conn_panel._db_type == "postgresql"
++
++    def test_drop_database_creates_sql_block_with_db(self, qapp):
++        """Drop de banco (do Object Explorer) deve criar bloco SQL com banco definido"""
++        editor = BlockEditor()
++        initial_count = len(editor._blocks)
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-database-name", b"northwind")
++        mime_data.setData("application/x-connection-name", b"ServerConn")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        assert len(editor._blocks) == initial_count + 1
++        new_block = editor._blocks[-1]
++        assert new_block.get_language() == "sql"
++        assert new_block.get_connection_name() == "ServerConn"
++        assert new_block.get_database_name() == "northwind"
++        event.acceptProposedAction.assert_called_once()
++
++    def test_drop_database_only_creates_block(self, qapp):
++        """Drop somente de banco (sem conexao) deve criar bloco com banco"""
++        editor = BlockEditor()
++        initial_count = len(editor._blocks)
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-database-name", b"staging_db")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        assert len(editor._blocks) == initial_count + 1
++        new_block = editor._blocks[-1]
++        assert new_block.get_language() == "sql"
++        assert new_block.get_connection_name() is None
++        assert new_block.get_database_name() == "staging_db"
++
++    def test_drop_emits_content_changed(self, qapp):
++        """Drop de conexao deve emitir content_changed"""
++        editor = BlockEditor()
++        changed = []
++        editor.content_changed.connect(lambda: changed.append(True))
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-connection-name", b"TestConn")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        assert len(changed) >= 1
++
++    def test_drop_emits_block_connection_changed(self, qapp):
++        """Drop de conexao deve emitir block_connection_changed"""
++        editor = BlockEditor()
++        emitted = []
++        editor.block_connection_changed.connect(lambda b, n: emitted.append((b, n)))
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-connection-name", b"SigConn")
++        mime_data.setData("application/x-db-type", b"mysql")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        assert len(emitted) == 1
++        block, conn_name = emitted[0]
++        assert conn_name == "SigConn"
++        assert block is editor._blocks[-1]
++
++    def test_drop_emits_connection_drop_requested(self, qapp):
++        """Drop de conexao deve emitir connection_drop_requested para conectar sessao"""
++        editor = BlockEditor()
++        requested = []
++        editor.connection_drop_requested.connect(lambda name: requested.append(name))
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-connection-name", b"SessionConn")
++        mime_data.setData("application/x-db-type", b"postgresql")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        assert len(requested) == 1
++        assert requested[0] == "SessionConn"
++
++    def test_drop_database_only_no_connection_drop_requested(self, qapp):
++        """Drop somente de banco (sem conexao) nao deve emitir connection_drop_requested"""
++        editor = BlockEditor()
++        requested = []
++        editor.connection_drop_requested.connect(lambda name: requested.append(name))
++
++        mime_data = QMimeData()
++        mime_data.setData("application/x-database-name", b"mydb")
++
++        event = MagicMock()
++        event.mimeData.return_value = mime_data
++        editor.dropEvent(event)
++
++        assert len(requested) == 0
++
++
++class TestObjectExplorerDrag:
++    """Testes para drag do Object Explorer incluir connection_name"""
++
++    def test_object_explorer_drag_includes_connection(self, qapp):
++        """Object Explorer deve incluir connection_name no drag"""
++        from src.ui.components.object_explorer_panel import ObjectExplorerPanel
++
++        panel = ObjectExplorerPanel()
++        panel._current_connection = "MyServer"
++
++        # Simular item de banco de dados na tree
++        from PyQt6.QtWidgets import QTreeWidgetItem
++
++        item = QTreeWidgetItem(panel.tree, ["northwind"])
++        item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": "northwind"})
++        panel.tree.setCurrentItem(item)
++
++        # Capturar o QDrag que seria criado
++        from PyQt6.QtCore import QMimeData
++
++        captured_mime = []
++        original_exec = None
++
++        def fake_drag_init(self_drag, parent):
++            pass
++
++        def fake_set_mime(self_drag, mime):
++            captured_mime.append(mime)
++
++        def fake_exec(self_drag, action):
++            pass
++
++        with patch("src.ui.components.object_explorer_panel.QDrag") as MockDrag:
++            mock_drag = MagicMock()
++            MockDrag.return_value = mock_drag
++
++            panel._start_drag(Qt.DropAction.CopyAction)
++
++            # Verificar setMimeData foi chamado
++            assert mock_drag.setMimeData.called
++            mime_data = mock_drag.setMimeData.call_args[0][0]
++
++            assert mime_data.hasFormat("application/x-database-name")
++            assert bytes(mime_data.data("application/x-database-name")).decode("utf-8") == "northwind"
++
++            assert mime_data.hasFormat("application/x-connection-name")
++            assert bytes(mime_data.data("application/x-connection-name")).decode("utf-8") == "MyServer"
++
++    def test_object_explorer_drag_no_connection(self, qapp):
++        """Sem conexao ativa, drag nao deve incluir x-connection-name"""
++        from src.ui.components.object_explorer_panel import ObjectExplorerPanel
++
++        panel = ObjectExplorerPanel()
++        panel._current_connection = ""
++
++        from PyQt6.QtWidgets import QTreeWidgetItem
++
++        item = QTreeWidgetItem(panel.tree, ["testdb"])
++        item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": "testdb"})
++        panel.tree.setCurrentItem(item)
++
++        with patch("src.ui.components.object_explorer_panel.QDrag") as MockDrag:
++            mock_drag = MagicMock()
++            MockDrag.return_value = mock_drag
++
++            panel._start_drag(Qt.DropAction.CopyAction)
++
++            mime_data = mock_drag.setMimeData.call_args[0][0]
++            assert mime_data.hasFormat("application/x-database-name")
++            assert not mime_data.hasFormat("application/x-connection-name")
+-- 
+2.50.0.windows.1
+

@@ -1,5 +1,5 @@
 """
-Package Manager Service - pip package management
+Package Manager Service - package management via uv
 
 Responsibilities:
 - List installed packages
@@ -13,14 +13,29 @@ import sys
 import shutil
 import json
 import logging
+import urllib.request
+import urllib.error
+import urllib.parse
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
+
+from PyQt6.QtCore import QSettings
 
 logger = logging.getLogger(__name__)
 
 # CREATE_NO_WINDOW exists only on Windows
 # On Linux uses 0 (no special flags)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _find_uv_executable() -> Optional[str]:
+    """
+    Return uv executable path if available.
+    """
+    uv = shutil.which("uv")
+    if uv:
+        return uv
+    return None
 
 
 def _find_python_executable() -> str:
@@ -70,20 +85,114 @@ class PackageOperationResult:
 
 class PackageManagerService:
     """
-    Service for Python package management via pip.
+    Service for Python package management via uv (with pip fallback).
 
-    Allows listing, searching, installing and uninstalling packages
-    using pip from current Python interpreter.
+    Allows listing, searching, installing and uninstalling packages.
+    Prefers uv for speed; falls back to pip if uv is not available.
+    Supports extra index URLs (custom package sources).
     """
 
+    SETTINGS_KEY = "DataPyn/PackageManager"
+
     def __init__(self):
+        self._uv_executable = _find_uv_executable()
         self._python_executable = _find_python_executable()
+
+    # --- Package sources management ---
+
+    def get_sources(self) -> List[Dict[str, str]]:
+        """
+        Return list of configured package sources.
+
+        Each source is a dict with keys: url, username, password.
+        Migrates from old plain-URL format if needed.
+        """
+        settings = QSettings("DataPyn", "PackageManager")
+        raw = settings.value("sources_v2", None)
+
+        if raw is not None:
+            if isinstance(raw, list):
+                return raw
+            return []
+
+        # Migrate from old format (plain URL list)
+        old_urls = settings.value("extra_index_urls", [])
+        if isinstance(old_urls, str):
+            old_urls = [old_urls] if old_urls else []
+        if old_urls:
+            sources = [{"url": u.strip(), "username": "", "password": ""} for u in old_urls if u.strip()]
+            self.set_sources(sources)
+            settings.remove("extra_index_urls")
+            return sources
+        return []
+
+    def set_sources(self, sources: List[Dict[str, str]]):
+        """Persist the list of package sources."""
+        settings = QSettings("DataPyn", "PackageManager")
+        clean = []
+        for s in sources:
+            url = s.get("url", "").strip()
+            if not url:
+                continue
+            clean.append({
+                "url": url,
+                "username": s.get("username", "").strip(),
+                "password": s.get("password", ""),
+            })
+        settings.setValue("sources_v2", clean)
+
+    @staticmethod
+    def build_authenticated_url(source: Dict[str, str]) -> str:
+        """
+        Build a URL with embedded credentials for pip/uv.
+
+        If username and password are provided, inserts them into the URL
+        as https://user:pass@host/path.
+        """
+        url = source.get("url", "")
+        username = source.get("username", "")
+        password = source.get("password", "")
+        if not username or not password:
+            return url
+        try:
+            parsed = urllib.parse.urlparse(url)
+            # Encode special characters in credentials
+            encoded_user = urllib.parse.quote(username, safe="")
+            encoded_pass = urllib.parse.quote(password, safe="")
+            netloc = f"{encoded_user}:{encoded_pass}@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            authenticated = parsed._replace(netloc=netloc)
+            return urllib.parse.urlunparse(authenticated)
+        except Exception:
+            logger.warning("Failed to build authenticated URL, using plain URL")
+            return url
+
+    def _build_cmd(self, pip_args: List[str]) -> List[str]:
+        """
+        Build command list for pip operations.
+        Uses 'uv pip ...' if uv is available, otherwise 'python -m pip ...'.
+        Appends --extra-index-url for each configured custom source.
+        """
+        if self._uv_executable:
+            cmd = [self._uv_executable, "pip"] + pip_args
+        else:
+            cmd = [self._python_executable, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
+
+        # Append extra index URLs (with embedded credentials if configured)
+        for source in self.get_sources():
+            auth_url = self.build_authenticated_url(source)
+            if auth_url:
+                cmd.extend(["--extra-index-url", auth_url])
+
+        return cmd
 
     def list_installed(self) -> List[PackageInfo]:
         """List all installed packages"""
         try:
+            cmd = self._build_cmd(["list", "--format=json"])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "list", "--format=json", "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -101,73 +210,149 @@ class PackageManagerService:
 
     def search_pypi(self, query: str) -> List[PackageInfo]:
         """
-        Search packages on PyPI via pip index.
+        Search packages on PyPI and configured extra sources.
 
-        Since pip search was disabled, we use pip index versions
-        to check if a package exists, and complement with
-        basic information.
+        First tries the public PyPI JSON API. If not found (404),
+        probes each configured extra source via PEP 503 Simple API.
+        Returns empty list only when the package is not found in ANY source.
         """
         if not query or len(query) < 2:
             return []
 
+        # Check if installed
+        installed_packages = {p.name.lower(): p for p in self.list_installed()}
+        installed = installed_packages.get(query.lower())
+
+        # 1) Try PyPI first
+        result = self._search_on_pypi(query, installed)
+        if result:
+            return result
+
+        # 2) Try configured extra sources
+        result = self._search_on_extra_sources(query, installed)
+        if result:
+            return result
+
+        logger.info(f"Package '{query}' not found on PyPI or any configured source")
+        return []
+
+    def _search_on_pypi(self, query: str, installed: Optional[PackageInfo] = None) -> List[PackageInfo]:
+        """Search package on the public PyPI JSON API."""
         try:
-            # Try to get package info directly
-            result = subprocess.run(
-                [
-                    self._python_executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    f"{query}==randominvalidversion",
-                    "--disable-pip-version-check",
-                    "--dry-run",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            # pip will list available versions in error
-            stderr = result.stderr
+            url = f"https://pypi.org/pypi/{query}/json"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
 
-            # Check if package exists
-            if "No matching distribution" in stderr and "randominvalidversion" not in stderr:
-                return []
-
-            # Extract versions from error output
-            versions = []
-            import re
-
-            # Pattern: "from versions: 1.0.0, 1.1.0, ..."
-            match = re.search(r"from versions?:\s*(.+?)(?:\)|$)", stderr)
-            if match:
-                versions = [v.strip() for v in match.group(1).split(",")]
-
-            latest = versions[-1] if versions else ""
-
-            # Check if installed
-            installed_packages = {p.name.lower(): p for p in self.list_installed()}
-            installed = installed_packages.get(query.lower())
+            info = data.get("info", {})
+            latest = info.get("version", "")
 
             return [
                 PackageInfo(
-                    name=query,
+                    name=info.get("name", query),
                     version=installed.version if installed else "",
                     latest_version=latest,
                     installed=bool(installed),
-                    summary=f"Available versions: {', '.join(versions[-5:])}" if versions else "",
+                    summary=info.get("summary", ""),
+                    author=info.get("author", "") or info.get("author_email", ""),
                 )
             ]
-
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                logger.info(f"Package '{query}' not found on PyPI")
+                return []
+            logger.error(f"Error in PyPI search: {e}")
+            return []
         except Exception as e:
             logger.error(f"Error in PyPI search: {e}")
             return []
 
+    def _search_on_extra_sources(self, query: str, installed: Optional[PackageInfo] = None) -> List[PackageInfo]:
+        """
+        Probe configured extra sources via PEP 503 Simple API.
+
+        Checks {source_url}/{package}/ for a valid response.
+        Uses HTTP Basic Auth header for authenticated sources.
+        Returns PackageInfo with basic data if found in any source.
+        """
+        import base64
+        import re
+
+        sources = self.get_sources()
+        if not sources:
+            return []
+
+        normalized = query.lower().replace("_", "-").replace(".", "-")
+
+        for source in sources:
+            source_url = source.get("url", "")
+            if not source_url:
+                continue
+            try:
+                # PEP 503: /{package}/ lists available files
+                base = source_url.rstrip("/")
+                probe_url = f"{base}/{normalized}/"
+                req = urllib.request.Request(probe_url, headers={"Accept": "text/html"})
+
+                # Add Basic Auth header if credentials available
+                username = source.get("username", "")
+                password = source.get("password", "")
+                if username and password:
+                    credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+                    req.add_header("Authorization", f"Basic {credentials}")
+
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+
+                # PEP 503: page must contain <a href> links to actual files
+                # (.tar.gz, .whl, .zip, .egg). URLs may have #hash fragments.
+                file_links = re.findall(
+                    r'<a\s+href=["\'][^"\']*\.(?:tar\.gz|whl|zip|egg)(?:[#"\'\s>])',
+                    body,
+                    re.IGNORECASE,
+                )
+                if not file_links:
+                    logger.debug(f"Package '{query}' page on {source_url} has no download links")
+                    continue
+
+                # Extract version from filenames (e.g. mag_autatu-1.2.3.tar.gz)
+                # PEP 503: dashes, underscores and dots are interchangeable in names
+                name_re = re.escape(normalized).replace(r"\-", "[-_.]")
+                version_pattern = re.compile(
+                    rf"{name_re}[_-](\d+(?:\.\d+)*)(?:[_.-])",
+                    re.IGNORECASE,
+                )
+                versions = version_pattern.findall(body)
+                latest = max(versions, key=lambda v: [int(x) for x in v.split(".")], default="") if versions else ""
+
+                return [
+                    PackageInfo(
+                        name=query,
+                        version=installed.version if installed else "",
+                        latest_version=latest,
+                        installed=bool(installed),
+                        summary=f"Found on {source_url}",
+                        author="",
+                    )
+                ]
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    logger.debug(f"Package '{query}' not found on source {source_url}")
+                    continue
+                logger.warning(f"Error probing source {source_url}: {e}")
+                continue
+            except Exception as e:
+                logger.warning(f"Error probing source {source_url}: {e}")
+                continue
+
+        return []
+
     def get_package_info(self, package_name: str) -> Optional[PackageInfo]:
         """Get detailed information of an installed package"""
         try:
+            cmd = self._build_cmd(["show", package_name])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "show", package_name, "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -194,11 +379,12 @@ class PackageManagerService:
             return None
 
     def install_package(self, package_name: str, version: str = "") -> PackageOperationResult:
-        """Install a package via pip"""
+        """Install a package via uv/pip"""
         target = f"{package_name}=={version}" if version else package_name
         try:
+            cmd = self._build_cmd(["install", target])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "install", target, "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -230,7 +416,7 @@ class PackageManagerService:
             return PackageOperationResult(success=False, package_name=package_name, operation="install", error=str(e))
 
     def uninstall_package(self, package_name: str) -> PackageOperationResult:
-        """Uninstall a package via pip"""
+        """Uninstall a package via uv/pip"""
         # Protect essential packages
         protected = {
             "pip",
@@ -251,8 +437,12 @@ class PackageManagerService:
             )
 
         try:
+            cmd = self._build_cmd(["uninstall", package_name])
+            # uv pip uninstall does not need -y flag
+            if not self._uv_executable:
+                cmd.insert(-1, "-y")  # pip needs -y before package name
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "uninstall", package_name, "-y", "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -279,16 +469,9 @@ class PackageManagerService:
     def update_package(self, package_name: str) -> PackageOperationResult:
         """Update a package to most recent version"""
         try:
+            cmd = self._build_cmd(["install", "--upgrade", package_name])
             result = subprocess.run(
-                [
-                    self._python_executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--upgrade",
-                    package_name,
-                    "--disable-pip-version-check",
-                ],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -315,8 +498,9 @@ class PackageManagerService:
     def check_package_exists(self, package_name: str) -> bool:
         """Quickly check if a package is installed"""
         try:
+            cmd = self._build_cmd(["show", package_name])
             result = subprocess.run(
-                [self._python_executable, "-m", "pip", "show", package_name, "--disable-pip-version-check"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=10,

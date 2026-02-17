@@ -65,6 +65,9 @@ class BlockEditor(QWidget):
     # Signal when block database changes
     block_database_changed = pyqtSignal(object, str)  # CodeBlock, database_name
 
+    # Signal when connection is dropped on editor area (to connect session)
+    connection_drop_requested = pyqtSignal(str)  # connection_name
+
     # Signal when data file is dropped (to show import dialog)
     file_dropped = pyqtSignal(str)  # file_path
 
@@ -632,7 +635,7 @@ class BlockEditor(QWidget):
             self._dragging_block = block
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Accept drag of blocks and files"""
+        """Accept drag of blocks, files, connections, and databases"""
         mime_data = event.mimeData()
 
         # Accept block drag
@@ -641,6 +644,13 @@ class BlockEditor(QWidget):
             if text.startswith("block:"):
                 event.acceptProposedAction()
                 return
+
+        # Accept connection or database drag
+        if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
+            "application/x-database-name"
+        ):
+            event.acceptProposedAction()
+            return
 
         # Accept file drag (CSV, JSON, XLSX, SQL, PY, DPW)
         if mime_data.hasUrls():
@@ -656,8 +666,16 @@ class BlockEditor(QWidget):
         event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent):
-        """When a block or file is dropped"""
+        """When a block, file, connection, or database is dropped"""
         mime_data = event.mimeData()
+
+        # Process connection or database drop -> create SQL block
+        if mime_data.hasFormat("application/x-connection-name") or mime_data.hasFormat(
+            "application/x-database-name"
+        ):
+            self._handle_connection_drop(mime_data)
+            event.acceptProposedAction()
+            return
 
         # Process file drop
         if mime_data.hasUrls():
@@ -701,6 +719,37 @@ class BlockEditor(QWidget):
 
         self._dragging_block = None
         event.acceptProposedAction()
+
+    def _handle_connection_drop(self, mime_data):
+        """Handle drop of a connection or database from panels.
+
+        Creates a new SQL block pre-configured with the dropped connection
+        and optionally the database.
+        """
+        conn_name = ""
+        db_type = ""
+        color = ""
+        db_name = ""
+
+        if mime_data.hasFormat("application/x-connection-name"):
+            conn_name = bytes(mime_data.data("application/x-connection-name")).decode("utf-8")
+        if mime_data.hasFormat("application/x-db-type"):
+            db_type = bytes(mime_data.data("application/x-db-type")).decode("utf-8")
+        if mime_data.hasFormat("application/x-connection-color"):
+            color = bytes(mime_data.data("application/x-connection-color")).decode("utf-8")
+        if mime_data.hasFormat("application/x-database-name"):
+            db_name = bytes(mime_data.data("application/x-database-name")).decode("utf-8")
+
+        block = self.add_block(language="sql")
+
+        if conn_name:
+            block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
+
+        if db_name:
+            block.set_database_name(db_name)
+
+        block.editor.setFocus()
+        self.content_changed.emit()
 
     def _find_drop_index(self, pos) -> int:
         """Find index where block should be inserted"""

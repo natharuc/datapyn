@@ -8,12 +8,6 @@ on:
     types:
       - completed
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Dry run: build sem publicar (para testes)"
-        required: true
-        default: true
-        type: boolean
 
 # default: least privileged permissions across all jobs
 permissions:
@@ -72,14 +66,14 @@ jobs:
           git_committer_name: "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
 
-      # On dry run, set fake outputs so the build jobs can execute
-      - name: Dry Run | Set fake version outputs
+      - name: Manual | Read version from pyproject.toml
         id: dry_run_version
         if: github.event_name == 'workflow_dispatch'
         run: |
+          VERSION=$(grep '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
           echo "released=true" >> "$GITHUB_OUTPUT"
-          echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          echo "version=0.0.0-dryrun" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
   build-windows-msi:
     needs: release
@@ -215,7 +209,6 @@ jobs:
           Remove-Item -Path $certPath -Force -ErrorAction SilentlyContinue
 
       - name: Publish | Upload MSI to GitHub Release
-        if: "!(github.event.inputs.dry_run == 'true')"
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release.outputs.tag }}
@@ -223,9 +216,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Dry Run | List generated artifacts
-        if: github.event.inputs.dry_run == 'true'
-        shell: pwsh
-        run: |
-          Write-Host "=== DRY RUN - MSI gerado com sucesso ==="
-          Get-ChildItem -Path . -Filter *.msi | Format-Table Name, Length
