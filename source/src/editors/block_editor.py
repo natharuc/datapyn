@@ -751,10 +751,6 @@ class BlockEditor(QWidget):
         block.editor.setFocus()
         self.content_changed.emit()
 
-        # Request session-level connection (updates Object Explorer, tab color, etc.)
-        if conn_name:
-            self.connection_drop_requested.emit(conn_name)
-
     def _find_drop_index(self, pos) -> int:
         """Find index where block should be inserted"""
         # Map position to scroll area

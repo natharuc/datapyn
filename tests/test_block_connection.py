@@ -724,8 +724,9 @@ class TestDragDropCreateBlock:
 
         assert len(signals) >= 1
 
-    def test_drop_emits_connection_drop_requested(self, qapp):
-        """Drop com connection-name deve emitir connection_drop_requested"""
+    def test_drop_does_not_emit_connection_drop_requested(self, qapp):
+        """Drop com connection-name NAO deve emitir connection_drop_requested
+        (conexao da aba nao deve mudar, apenas o bloco recebe a conexao)"""
         editor = self._make_editor(qapp)
         signals = []
         editor.connection_drop_requested.connect(lambda name: signals.append(name))
@@ -735,7 +736,7 @@ class TestDragDropCreateBlock:
         event.mimeData.return_value = mime
         editor.dropEvent(event)
 
-        assert signals == ["ProdDB"]
+        assert signals == []
 
     def test_drop_database_only_no_connection_drop_requested(self, qapp):
         """Drop com apenas database-name NAO deve emitir connection_drop_requested"""
