@@ -642,7 +642,14 @@
     "dialog_success_title": "Success",
     "dialog_error_title": "Error",
     "dialog_error_msg": "Failed to {operation} '{name}':\n\n{error}",
-    "status_processing": "Processing..."
+    "status_processing": "Processing...",
+    "btn_sources": "Sources",
+    "sources_title": "Package Sources",
+    "sources_description": "Extra index URLs used when installing/searching packages. These are added as --extra-index-url flags.",
+    "btn_add_source": "Add",
+    "btn_remove_source": "Remove",
+    "add_source_title": "Add Package Source",
+    "add_source_prompt": "Package index URL (e.g. https://my-registry.example.com/simple/):"
   },
 
   "update_dialog": {

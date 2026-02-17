@@ -1043,23 +1043,56 @@ class MainWindow(DockingMainWindow):
         thread.start()
 
     def _on_database_switch_success(self, database_name, connection_name, connector, widget):
-        """Callback when database switch completes successfully"""
+        """Callback when database switch completes successfully.
+
+        Propagates the database change to: connection panel, status bar,
+        tab color, schema cache, object explorer, and ALL blocks.
+        """
         self.statusBar().showMessage(S.status.database_changed.format(name=database_name), 5000)
 
+        # --- Schema reload ---
         self._schema_service.invalidate_cache(connection_name)
         self._schema_service.load_schema(connector, connection_name)
 
         if hasattr(widget, "connection_changed"):
             widget.connection_changed.emit(connection_name, database_name)
 
-        # Update focused block's database panel (direct update to avoid signal loop)
+        # --- Update connection panel ---
+        config = self.connection_manager.get_connection_config(connection_name)
+        if config:
+            host = config.get("host", "localhost")
+            db_type = config.get("db_type", "")
+            self.connection_panel.set_active_connection(
+                connection_name, host=host, database=database_name, db_type=db_type
+            )
+
+            # --- Tab color ---
+            color = config.get("color", "#007ACC") or "#007ACC"
+            for i in range(self.session_tabs.count()):
+                tab_widget = self.session_tabs.widget(i)
+                if isinstance(tab_widget, SessionWidget) and tab_widget == widget:
+                    self.session_tabs.set_tab_connection_color(i, color)
+                    break
+
+        # --- Highlight connection in list ---
+        for i in range(self.connections_list.count()):
+            item = self.connections_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == connection_name:
+                self.connections_list.setCurrentItem(item)
+                break
+
+        # --- Status bar ---
+        self.action_label.setText(S.status.connected_to.format(name=connection_name, db=database_name))
+
+        # --- Update ALL blocks' database panel (not just focused) ---
         if hasattr(widget, "editor"):
-            focused_block = widget.editor.get_focused_block()
-            if not focused_block:
-                focused_block = widget.editor.get_last_focused_block()
-            if focused_block and hasattr(focused_block, "db_panel"):
-                focused_block._database_name = database_name
-                focused_block.db_panel.set_database(database_name)
+            for block in widget.editor.get_blocks():
+                if hasattr(block, "db_panel"):
+                    # Only update blocks using the session connection (no custom connection)
+                    block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+                    if not block_conn:
+                        block._database_name = database_name
+                        block.db_panel.set_database(database_name)
 
     def _on_object_explorer_refresh(self):
         """Object Explorer refresh - reloads schema from active connection"""
@@ -2662,6 +2695,7 @@ class MainWindow(DockingMainWindow):
         """Checks if the database changed after SQL execution (e.g. USE within batch).
 
         Se mudou, recarrega o Object Explorer com o novo banco.
+        Propaga a mudanca para: connection panel, status bar, tab color, todos os blocos.
         """
         if not db_before:
             return
@@ -2682,20 +2716,45 @@ class MainWindow(DockingMainWindow):
                 self._schema_service.invalidate_cache(connection_name)
                 self._schema_service.load_schema(connector, connection_name)
 
-                self._update_connection_status()
-
                 current_widget = self._get_current_session_widget()
                 if current_widget and hasattr(current_widget, "connection_changed"):
                     current_widget.connection_changed.emit(connection_name, db_after)
 
-                # Update focused block's database panel (direct update to avoid signal loop)
+                # --- Update connection panel with actual db_after ---
+                config = self.connection_manager.get_connection_config(connection_name)
+                if config:
+                    host = config.get("host", "localhost")
+                    db_type = config.get("db_type", "")
+                    self.connection_panel.set_active_connection(
+                        connection_name, host=host, database=db_after, db_type=db_type
+                    )
+
+                    # --- Tab color ---
+                    color = config.get("color", "#007ACC") or "#007ACC"
+                    for i in range(self.session_tabs.count()):
+                        tab_widget = self.session_tabs.widget(i)
+                        if isinstance(tab_widget, SessionWidget) and tab_widget == current_widget:
+                            self.session_tabs.set_tab_connection_color(i, color)
+                            break
+
+                # --- Highlight connection in list ---
+                for i in range(self.connections_list.count()):
+                    item = self.connections_list.item(i)
+                    if item.data(Qt.ItemDataRole.UserRole) == connection_name:
+                        self.connections_list.setCurrentItem(item)
+                        break
+
+                # --- Status bar ---
+                self.action_label.setText(S.status.connected_to.format(name=connection_name, db=db_after))
+
+                # --- Update ALL blocks' database panel ---
                 if current_widget and hasattr(current_widget, "editor"):
-                    focused_block = current_widget.editor.get_focused_block()
-                    if not focused_block:
-                        focused_block = current_widget.editor.get_last_focused_block()
-                    if focused_block and hasattr(focused_block, "db_panel"):
-                        focused_block._database_name = db_after
-                        focused_block.db_panel.set_database(db_after)
+                    for block in current_widget.editor.get_blocks():
+                        if hasattr(block, "db_panel"):
+                            block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+                            if not block_conn:
+                                block._database_name = db_after
+                                block.db_panel.set_database(db_after)
 
     def _execute_python(self, code: str):
         """Executes Python code in background"""
@@ -4243,15 +4302,15 @@ class MainWindow(DockingMainWindow):
             self._schema_service.invalidate_cache(connection_name)
             self._schema_service.load_schema(session.connector, connection_name)
 
-        # === ATUALIZAR BLOCO FOCADO ===
+        # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
-            focused_block = current_widget.editor.get_focused_block()
-            if not focused_block:
-                focused_block = current_widget.editor.get_last_focused_block()
-            if focused_block and hasattr(focused_block, "db_panel"):
-                focused_block._database_name = current_db
-                focused_block.db_panel.set_database(current_db)
+            for block in current_widget.editor.get_blocks():
+                if hasattr(block, "db_panel"):
+                    block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+                    if not block_conn:
+                        block._database_name = current_db
+                        block.db_panel.set_database(current_db)
 
     def _reload_schema(self):
         """Reloads the SQL schema from the focused block connection (or session).
@@ -4494,9 +4553,21 @@ class MainWindow(DockingMainWindow):
         # Enviar para todos os blocos Python da sessao ativa
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor") and current_widget.editor:
+            # Collect import lines from all blocks to share as global context
+            import_lines = []
+            for block in current_widget.editor.get_blocks():
+                if block.get_language() == "python":
+                    for line in block.get_code().splitlines():
+                        stripped = line.strip()
+                        if stripped.startswith("import ") or stripped.startswith("from "):
+                            import_lines.append(stripped)
+            global_imports = "\n".join(dict.fromkeys(import_lines))  # deduplicate preserving order
+
             for block in current_widget.editor.get_blocks():
                 if hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
                     block.editor.set_python_namespace(ns_types)
+                if hasattr(block, "editor") and hasattr(block.editor, "set_global_imports"):
+                    block.editor.set_global_imports(global_imports)
 
     def _compute_widget_content_hash(self, widget):
         """Calcula hash do conteudo atual do editor do widget"""

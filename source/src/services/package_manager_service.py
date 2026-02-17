@@ -18,6 +18,8 @@ import urllib.error
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
 
+from PyQt6.QtCore import QSettings
+
 logger = logging.getLogger(__name__)
 
 # CREATE_NO_WINDOW exists only on Windows
@@ -86,20 +88,48 @@ class PackageManagerService:
 
     Allows listing, searching, installing and uninstalling packages.
     Prefers uv for speed; falls back to pip if uv is not available.
+    Supports extra index URLs (custom package sources).
     """
+
+    SETTINGS_KEY = "DataPyn/PackageManager"
 
     def __init__(self):
         self._uv_executable = _find_uv_executable()
         self._python_executable = _find_python_executable()
 
+    # --- Extra index URL management ---
+
+    def get_extra_index_urls(self) -> List[str]:
+        """Return list of extra index URLs configured by the user."""
+        settings = QSettings("DataPyn", "PackageManager")
+        urls = settings.value("extra_index_urls", [])
+        if isinstance(urls, str):
+            return [urls] if urls else []
+        return list(urls) if urls else []
+
+    def set_extra_index_urls(self, urls: List[str]):
+        """Persist the list of extra index URLs."""
+        settings = QSettings("DataPyn", "PackageManager")
+        # Filter out empty strings
+        clean = [u.strip() for u in urls if u.strip()]
+        settings.setValue("extra_index_urls", clean)
+
     def _build_cmd(self, pip_args: List[str]) -> List[str]:
         """
         Build command list for pip operations.
         Uses 'uv pip ...' if uv is available, otherwise 'python -m pip ...'.
+        Appends --extra-index-url for each configured custom source.
         """
         if self._uv_executable:
-            return [self._uv_executable, "pip"] + pip_args
-        return [self._python_executable, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
+            cmd = [self._uv_executable, "pip"] + pip_args
+        else:
+            cmd = [self._python_executable, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
+
+        # Append extra index URLs
+        for url in self.get_extra_index_urls():
+            cmd.extend(["--extra-index-url", url])
+
+        return cmd
 
     def list_installed(self) -> List[PackageInfo]:
         """List all installed packages"""

@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.Qsci import QsciScintilla, QsciLexerPython, QsciLexerSQL, QsciAPIs
 
 from src.language import S
+from src.services.jedi_completer import JediCompleter
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +322,12 @@ class CodeEditor(QWidget):
         self._apis_timer = None  # Timer para rebuild_apis debounced
         self._current_lexer_lang = None  # Cache para evitar rebuild redundante
 
+        # Jedi completer para Python inteligente
+        self._jedi_completer = JediCompleter(self)
+        self._jedi_completer.completions_ready.connect(self._on_jedi_completions)
+        self._jedi_timer = None  # debounce para trigger jedi
+        self._global_imports = ""  # imports globais compartilhados entre blocos
+
         self._setup_container()
         self._setup_editor()
         self._setup_lexer()
@@ -355,6 +362,7 @@ class CodeEditor(QWidget):
         self._sci.textChanged.connect(self._on_text_changed)
         self._sci.SCN_FOCUSIN.connect(self._on_focus_in)
         self._sci.SCN_FOCUSOUT.connect(self._on_focus_out)
+        self._sci.SCN_CHARADDED.connect(self._on_char_added)
 
     def _on_text_changed(self):
         """Emite ambos os sinais de texto alterado."""
@@ -368,6 +376,80 @@ class CodeEditor(QWidget):
     def _on_focus_out(self):
         self.SCN_FOCUSOUT.emit()
         self.focus_out.emit()
+
+    def _on_char_added(self, char_code: int):
+        """Triggered when a character is typed - requests jedi completions for Python."""
+        if self._language != "python":
+            return
+
+        ch = chr(char_code) if char_code > 0 else ""
+
+        # Trigger on '.' or after typing identifier chars (with threshold)
+        if ch == ".":
+            self._request_jedi_completion()
+        elif ch.isalnum() or ch == "_":
+            # Use debounce to avoid spamming jedi on every keystroke
+            if self._jedi_timer is None:
+                self._jedi_timer = QTimer(self)
+                self._jedi_timer.setSingleShot(True)
+                self._jedi_timer.timeout.connect(self._request_jedi_completion)
+            self._jedi_timer.start(300)
+
+    def _request_jedi_completion(self):
+        """Request jedi completions at current cursor position."""
+        if not self._jedi_completer.is_available():
+            return
+
+        sci = self._sci
+        line_num, col = sci.getCursorPosition()
+
+        # Build source: global imports + current editor text
+        editor_text = sci.text()
+        source = self._global_imports + "\n" + editor_text if self._global_imports else editor_text
+
+        # Adjust line number (+1 for jedi's 1-based, +N for prepended imports)
+        import_lines = self._global_imports.count("\n") + 1 if self._global_imports else 0
+        jedi_line = line_num + 1 + import_lines  # jedi uses 1-based lines
+
+        self._jedi_completer.request_completions(source, jedi_line, col)
+
+    def _on_jedi_completions(self, completions: list):
+        """Handle jedi completions: populate QsciAPIs and show autocomplete."""
+        if not completions:
+            return
+
+        sci = self._sci
+        lexer = sci.lexer()
+        if not lexer:
+            return
+
+        apis = QsciAPIs(lexer)
+
+        # Add jedi completions
+        for name, comp_type, description in completions:
+            if comp_type:
+                apis.add(f"{name}  ({comp_type})")
+            else:
+                apis.add(name)
+
+        # Also add namespace variables
+        for name, type_name in self._python_namespace.items():
+            if type_name:
+                apis.add(f"{name}  ({type_name})")
+            else:
+                apis.add(name)
+
+        apis.prepare()
+        sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
+        sci.autoCompleteFromAPIs()
+
+    def set_global_imports(self, imports_code: str):
+        """Set global imports context shared across blocks.
+
+        Args:
+            imports_code: String with import statements from all blocks.
+        """
+        self._global_imports = imports_code or ""
 
     def _setup_editor(self):
         """Configura as propriedades basicas do editor."""

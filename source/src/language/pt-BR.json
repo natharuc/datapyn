@@ -642,7 +642,14 @@
     "dialog_success_title": "Sucesso",
     "dialog_error_title": "Erro",
     "dialog_error_msg": "Falha ao {operation} '{name}':\n\n{error}",
-    "status_processing": "Processando..."
+    "status_processing": "Processando...",
+    "btn_sources": "Fontes",
+    "sources_title": "Fontes de Pacotes",
+    "sources_description": "URLs de indice extras usadas ao instalar/pesquisar pacotes. Sao adicionadas como --extra-index-url.",
+    "btn_add_source": "Adicionar",
+    "btn_remove_source": "Remover",
+    "add_source_title": "Adicionar Fonte de Pacotes",
+    "add_source_prompt": "URL do indice de pacotes (ex: https://meu-registro.exemplo.com/simple/):"
   },
 
   "update_dialog": {

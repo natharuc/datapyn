@@ -21,6 +21,10 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QApplication,
+    QGroupBox,
+    QListWidget,
+    QListWidgetItem,
+    QInputDialog,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
@@ -291,12 +295,161 @@ class PackageManagerDialog(QDialog):
         footer.addWidget(self.lbl_status)
         footer.addStretch()
 
+        self.btn_sources = QPushButton(S.package_manager.btn_sources)
+        if HAS_QTAWESOME:
+            self.btn_sources.setIcon(qta.icon("fa5s.cog", color=c["foreground"]))
+        self.btn_sources.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c["border"]};
+                color: {c["foreground"]};
+                border: none;
+                padding: 6px 14px;
+                border-radius: 4px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: #4a4a4a;
+            }}
+        """)
+        self.btn_sources.setCheckable(True)
+        self.btn_sources.clicked.connect(self._toggle_sources_panel)
+        footer.addWidget(self.btn_sources)
+
         btn_close = QPushButton(S.package_manager.btn_close)
         btn_close.setObjectName("btnCancel")
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
 
         layout.addLayout(footer)
+
+        # --- Sources panel (collapsible) ---
+        self.sources_frame = QFrame()
+        self.sources_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {c["border"]};
+                border: 1px solid {c["border"]};
+                border-radius: 4px;
+            }}
+        """)
+        self.sources_frame.setVisible(False)
+        sources_layout = QVBoxLayout(self.sources_frame)
+        sources_layout.setContentsMargins(12, 10, 12, 10)
+        sources_layout.setSpacing(8)
+
+        sources_title = QLabel(S.package_manager.sources_title)
+        sources_title_font = QFont()
+        sources_title_font.setBold(True)
+        sources_title.setFont(sources_title_font)
+        sources_layout.addWidget(sources_title)
+
+        sources_desc = QLabel(S.package_manager.sources_description)
+        sources_desc.setStyleSheet(f"color: {dim_color}; font-size: 10px; border: none;")
+        sources_desc.setWordWrap(True)
+        sources_layout.addWidget(sources_desc)
+
+        self.sources_list = QListWidget()
+        self.sources_list.setMaximumHeight(100)
+        self.sources_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {c["background"]};
+                color: {c["foreground"]};
+                border: 1px solid {c["border"]};
+                border-radius: 3px;
+                font-size: 11px;
+            }}
+            QListWidget::item {{
+                padding: 4px 8px;
+            }}
+            QListWidget::item:selected {{
+                background-color: #094771;
+            }}
+        """)
+        sources_layout.addWidget(self.sources_list)
+
+        sources_btn_row = QHBoxLayout()
+        sources_btn_row.setSpacing(6)
+
+        btn_add_source = QPushButton(S.package_manager.btn_add_source)
+        if HAS_QTAWESOME:
+            btn_add_source.setIcon(qta.icon("fa5s.plus", color="white"))
+        btn_add_source.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c["accent"]};
+                color: white;
+                border: none;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ opacity: 0.85; }}
+        """)
+        btn_add_source.clicked.connect(self._add_source)
+        sources_btn_row.addWidget(btn_add_source)
+
+        btn_remove_source = QPushButton(S.package_manager.btn_remove_source)
+        if HAS_QTAWESOME:
+            btn_remove_source.setIcon(qta.icon("fa5s.trash-alt", color="white"))
+        btn_remove_source.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #c5534d;
+                color: white;
+                border: none;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ background-color: #e06060; }}
+        """)
+        btn_remove_source.clicked.connect(self._remove_source)
+        sources_btn_row.addWidget(btn_remove_source)
+
+        sources_btn_row.addStretch()
+        sources_layout.addLayout(sources_btn_row)
+
+        layout.addWidget(self.sources_frame)
+
+        # Load saved sources
+        self._load_sources()
+
+    # === Sources management ===
+
+    def _toggle_sources_panel(self, checked: bool):
+        """Shows or hides the sources configuration panel."""
+        self.sources_frame.setVisible(checked)
+
+    def _load_sources(self):
+        """Loads saved extra index URLs into the list widget."""
+        self.sources_list.clear()
+        for url in self.service.get_extra_index_urls():
+            self.sources_list.addItem(url)
+
+    def _add_source(self):
+        """Asks user for a new index URL and saves it."""
+        url, ok = QInputDialog.getText(
+            self,
+            S.package_manager.add_source_title,
+            S.package_manager.add_source_prompt,
+        )
+        if ok and url and url.strip():
+            url = url.strip()
+            # Avoid duplicates
+            existing = self.service.get_extra_index_urls()
+            if url in existing:
+                return
+            existing.append(url)
+            self.service.set_extra_index_urls(existing)
+            self._load_sources()
+
+    def _remove_source(self):
+        """Removes the selected index URL."""
+        item = self.sources_list.currentItem()
+        if not item:
+            return
+        url = item.text()
+        urls = self.service.get_extra_index_urls()
+        urls = [u for u in urls if u != url]
+        self.service.set_extra_index_urls(urls)
+        self._load_sources()
 
     # === Actions ===
 
