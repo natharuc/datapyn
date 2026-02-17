@@ -597,8 +597,6 @@ class PackageManagerDialog(QDialog):
         if not results:
             self.lbl_info.setText(S.package_manager.pkg_not_found.format(query=query))
             self.table.setRowCount(0)
-            # Show option to install directly
-            self._show_direct_install_option(query)
             return
 
         self.lbl_info.setText(S.package_manager.search_results.format(query=query))

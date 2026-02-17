@@ -767,8 +767,8 @@ class TestDialogWorkerCleanup:
             # Processar eventos pendentes
             qtbot.waitUntil(lambda: mock_load.called, timeout=2000)
 
-    def test_search_results_empty_shows_install_option(self, qtbot):
-        """Pesquisa sem resultado mostra opcao de instalar diretamente"""
+    def test_search_results_empty_shows_not_found_message(self, qtbot):
+        """Pesquisa sem resultado mostra mensagem de nao encontrado"""
         from src.ui.dialogs.package_manager_dialog import PackageManagerDialog
         from src.core.theme_manager import ThemeManager
 
@@ -779,9 +779,8 @@ class TestDialogWorkerCleanup:
 
             dialog._on_search_results([])
 
-            assert dialog.table.rowCount() == 1
+            assert dialog.table.rowCount() == 0
             assert "pacoteinexistente" in dialog.lbl_info.text()
-            assert "install" in dialog.lbl_info.text().lower()
 
 
 # ===========================================================================

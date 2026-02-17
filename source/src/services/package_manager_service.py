@@ -210,31 +210,42 @@ class PackageManagerService:
 
     def search_pypi(self, query: str) -> List[PackageInfo]:
         """
-        Search packages on PyPI via JSON API.
+        Search packages on PyPI and configured extra sources.
 
-        Uses the public PyPI JSON API to get package info.
+        First tries the public PyPI JSON API. If not found (404),
+        probes each configured extra source via PEP 503 Simple API.
+        Returns empty list only when the package is not found in ANY source.
         """
         if not query or len(query) < 2:
             return []
 
+        # Check if installed
+        installed_packages = {p.name.lower(): p for p in self.list_installed()}
+        installed = installed_packages.get(query.lower())
+
+        # 1) Try PyPI first
+        result = self._search_on_pypi(query, installed)
+        if result:
+            return result
+
+        # 2) Try configured extra sources
+        result = self._search_on_extra_sources(query, installed)
+        if result:
+            return result
+
+        logger.info(f"Package '{query}' not found on PyPI or any configured source")
+        return []
+
+    def _search_on_pypi(self, query: str, installed: Optional[PackageInfo] = None) -> List[PackageInfo]:
+        """Search package on the public PyPI JSON API."""
         try:
-            # Query PyPI JSON API directly
             url = f"https://pypi.org/pypi/{query}/json"
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
 
             info = data.get("info", {})
-            releases = data.get("releases", {})
-
-            # Get last 5 versions (sorted)
-            versions = sorted(releases.keys(), key=lambda v: releases[v][0]["upload_time"] if releases[v] else "", reverse=True)[:5] if releases else []
-
             latest = info.get("version", "")
-
-            # Check if installed
-            installed_packages = {p.name.lower(): p for p in self.list_installed()}
-            installed = installed_packages.get(query.lower())
 
             return [
                 PackageInfo(
@@ -246,7 +257,6 @@ class PackageManagerService:
                     author=info.get("author", "") or info.get("author_email", ""),
                 )
             ]
-
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 logger.info(f"Package '{query}' not found on PyPI")
@@ -256,6 +266,63 @@ class PackageManagerService:
         except Exception as e:
             logger.error(f"Error in PyPI search: {e}")
             return []
+
+    def _search_on_extra_sources(self, query: str, installed: Optional[PackageInfo] = None) -> List[PackageInfo]:
+        """
+        Probe configured extra sources via PEP 503 Simple API.
+
+        Checks {source_url}/{package}/ for a valid response.
+        Returns PackageInfo with basic data if found in any source.
+        """
+        sources = self.get_sources()
+        if not sources:
+            return []
+
+        normalized = query.lower().replace("_", "-").replace(".", "-")
+
+        for source in sources:
+            auth_url = self.build_authenticated_url(source)
+            if not auth_url:
+                continue
+            try:
+                # PEP 503: /{package}/ lists available files
+                base = auth_url.rstrip("/")
+                probe_url = f"{base}/{normalized}/"
+                req = urllib.request.Request(probe_url, headers={"Accept": "text/html"})
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+
+                # Extract version from filenames (e.g. mag_autatu-1.2.3.tar.gz)
+                import re
+                version_pattern = re.compile(
+                    rf"{re.escape(normalized)}[_-](\d+(?:\.\d+)*)(?:[_.-])",
+                    re.IGNORECASE,
+                )
+                versions = version_pattern.findall(body)
+                latest = max(versions, key=lambda v: [int(x) for x in v.split(".")], default="") if versions else ""
+
+                source_label = source.get("url", "private source")
+                return [
+                    PackageInfo(
+                        name=query,
+                        version=installed.version if installed else "",
+                        latest_version=latest,
+                        installed=bool(installed),
+                        summary=f"Found on {source_label}",
+                        author="",
+                    )
+                ]
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    logger.debug(f"Package '{query}' not found on source {source.get('url', '')}")
+                    continue
+                logger.warning(f"Error probing source {source.get('url', '')}: {e}")
+                continue
+            except Exception as e:
+                logger.warning(f"Error probing source {source.get('url', '')}: {e}")
+                continue
+
+        return []
 
     def get_package_info(self, package_name: str) -> Optional[PackageInfo]:
         """Get detailed information of an installed package"""
