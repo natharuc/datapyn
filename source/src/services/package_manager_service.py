@@ -304,9 +304,22 @@ class PackageManagerService:
                 with urllib.request.urlopen(req, timeout=10) as response:
                     body = response.read().decode("utf-8", errors="replace")
 
+                # PEP 503: page must contain <a href> links to actual files
+                # (.tar.gz, .whl, .zip, .egg). Empty pages = package not found.
+                file_links = re.findall(
+                    r'<a\s+href=["\'][^"\']*\.(?:tar\.gz|whl|zip|egg)["\']',
+                    body,
+                    re.IGNORECASE,
+                )
+                if not file_links:
+                    logger.debug(f"Package '{query}' page on {source_url} has no download links")
+                    continue
+
                 # Extract version from filenames (e.g. mag_autatu-1.2.3.tar.gz)
+                # PEP 503: dashes, underscores and dots are interchangeable in names
+                name_re = re.escape(normalized).replace(r"\-", "[-_.]")
                 version_pattern = re.compile(
-                    rf"{re.escape(normalized)}[_-](\d+(?:\.\d+)*)(?:[_.-])",
+                    rf"{name_re}[_-](\d+(?:\.\d+)*)(?:[_.-])",
                     re.IGNORECASE,
                 )
                 versions = version_pattern.findall(body)

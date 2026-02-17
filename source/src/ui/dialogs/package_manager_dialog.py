@@ -181,7 +181,7 @@ class _AddSourceDialog(QDialog):
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        btn_box.accepted.connect(self.accept)
+        btn_box.accepted.connect(self._validate_and_accept)
         btn_box.rejected.connect(self.reject)
         btn_box.setStyleSheet(f"""
             QPushButton {{
@@ -192,6 +192,25 @@ class _AddSourceDialog(QDialog):
             }}
         """)
         layout.addWidget(btn_box)
+
+    def _validate_and_accept(self):
+        """Validate fields before accepting."""
+        url = self.txt_url.text().strip()
+        if not url:
+            return
+        username = self.txt_username.text().strip()
+        if username and ("://" in username or username.startswith("http")):
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(
+                self,
+                S.package_manager.add_source_title,
+                S.package_manager.auth_username_invalid,
+            )
+            self.txt_username.setFocus()
+            self.txt_username.selectAll()
+            return
+        self.accept()
 
     def get_source(self) -> dict:
         """Return the source dict with url, username, password."""

@@ -655,7 +655,8 @@
     "auth_username_label": "Username:",
     "auth_username_placeholder": "username or email",
     "auth_token_label": "Token / Password:",
-    "auth_token_placeholder": "PAT, API key or password"
+    "auth_token_placeholder": "PAT, API key or password",
+    "auth_username_invalid": "The username field should contain a username or email, not a URL. Enter only the username for authentication."
   },
 
   "update_dialog": {

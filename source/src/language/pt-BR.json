@@ -655,7 +655,8 @@
     "auth_username_label": "Usuario:",
     "auth_username_placeholder": "usuario ou email",
     "auth_token_label": "Token / Senha:",
-    "auth_token_placeholder": "PAT, chave de API ou senha"
+    "auth_token_placeholder": "PAT, chave de API ou senha",
+    "auth_username_invalid": "O campo usuario deve conter um nome de usuario ou email, nao uma URL. Informe apenas o usuario para autenticacao."
   },
 
   "update_dialog": {

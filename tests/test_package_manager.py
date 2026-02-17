@@ -220,6 +220,60 @@ class TestSearchPyPI:
         results = svc.search_pypi("flask")
         assert results == []
 
+    @patch("src.services.package_manager_service.urllib.request.urlopen")
+    def test_extra_source_empty_page_not_found(self, mock_urlopen):
+        """Extra source retornando pagina sem links de download = pacote nao encontrado"""
+        import urllib.error
+
+        # PyPI returns 404
+        def side_effect(req, **kwargs):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "pypi.org" in url:
+                raise urllib.error.HTTPError(url=url, code=404, msg="Not Found", hdrs={}, fp=None)
+            # Azure DevOps returns 200 with empty page (no download links)
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b"<html><body></body></html>"
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        svc = PackageManagerService()
+        svc.list_installed = MagicMock(return_value=[])
+        svc.get_sources = MagicMock(return_value=[{"url": "https://feed.example.com/simple/", "username": "", "password": ""}])
+        results = svc.search_pypi("pacoteinexistente")
+        assert results == []
+
+    @patch("src.services.package_manager_service.urllib.request.urlopen")
+    def test_extra_source_with_files_found(self, mock_urlopen):
+        """Extra source retornando pagina com links de download = pacote encontrado"""
+        import urllib.error
+
+        def side_effect(req, **kwargs):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "pypi.org" in url:
+                raise urllib.error.HTTPError(url=url, code=404, msg="Not Found", hdrs={}, fp=None)
+            # Feed returns page with actual download links
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = (
+                b'<html><body>'
+                b'<a href="mag_autatu-1.0.0.tar.gz">mag_autatu-1.0.0.tar.gz</a>'
+                b'<a href="mag_autatu-1.1.0.tar.gz">mag_autatu-1.1.0.tar.gz</a>'
+                b'</body></html>'
+            )
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        svc = PackageManagerService()
+        svc.list_installed = MagicMock(return_value=[])
+        svc.get_sources = MagicMock(return_value=[{"url": "https://feed.example.com/simple/", "username": "", "password": ""}])
+        results = svc.search_pypi("mag-autatu")
+        assert len(results) == 1
+        assert results[0].name == "mag-autatu"
+        assert results[0].latest_version == "1.1.0"
+
 
 # ===========================================================================
 # PackageManagerService - install_package
