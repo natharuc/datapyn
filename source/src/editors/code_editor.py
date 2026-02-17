@@ -482,13 +482,6 @@ class CodeEditor(QWidget):
                 apis.add(f"{name}  ({detail})")
             else:
                 apis.add(name)
-            # Add lowercase variant for case-insensitive matching
-            name_lower = name.lower()
-            if name_lower != name:
-                if detail:
-                    apis.add(f"{name_lower}  ({detail})")
-                else:
-                    apis.add(name_lower)
 
         apis.prepare()
         sci.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)

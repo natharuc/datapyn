@@ -441,8 +441,13 @@ class TestEdgeCases:
         # Should return the full text (graceful handling)
         assert isinstance(result, list)
 
-    def test_lowercase_from_suggests_mixed_case_table(self):
-        """Typing 'select * from pre' should suggest 'Premio' or 'PREMIO'."""
+    def test_lowercase_from_suggests_real_case_table(self):
+        """Typing 'select * from pre' should suggest 'Premio' in real case.
+
+        The matching is case-insensitive (handled by QsciScintilla),
+        but the suggestion text must preserve the real case from the schema,
+        because some databases are case-sensitive.
+        """
         svc = SqlAutoCompleteService()
         svc.set_schema({
             "tables": [
@@ -451,11 +456,30 @@ class TestEdgeCases:
             ],
             "columns": {},
         })
-        # User types lowercase: "select * from pre"
         result = svc.get_completions("select * from pre", 0, 17)
         n = names(result)
-        # Should include the table even though case differs
+        # Must suggest real case: "Premio", NOT "premio"
         assert "Premio" in n
+        assert "premio" not in n
+
+    def test_table_columns_preserve_real_case(self):
+        """Columns must preserve real case from schema."""
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "tables": [{"name": "Premio", "schema": "dbo", "type": "TABLE"}],
+            "columns": {
+                "Premio": [
+                    {"name": "IdPremio", "type": "int"},
+                    {"name": "NomePremio", "type": "varchar"},
+                ],
+            },
+        })
+        result = svc.get_completions("SELECT Premio.", 0, 14)
+        n = names(result)
+        assert "IdPremio" in n
+        assert "NomePremio" in n
+        assert "idpremio" not in n
+        assert "nomepremio" not in n
 
     def test_lowercase_keywords_returned(self, service):
         """Keywords should be available in both cases."""
