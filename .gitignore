@@ -51,10 +51,22 @@ htmlcov/
 # DataPyn workspace files
 *.dpw
 
-# WiX Toolset intermediate files
+# WiX Toolset (ferramentas e arquivos intermediarios)
+.wix/
 *.wixobj
 *.wixpdb
 heat.wxs
+heat_noxslt.wxs
 *.msi
-test_results_latest.txt
-test_run_output.txt
+
+# Test output files
+test_*.txt
+_test_*.txt
+
+# Temporary/Script files
+_*.txt
+_*.py
+_*.ps1
+*.patch
+workflow_log.txt
+git_*.txt
