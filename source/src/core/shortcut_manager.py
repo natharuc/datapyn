@@ -52,18 +52,22 @@ class ShortcutManager:
         self.active_shortcuts: Dict[str, QShortcut] = {}
 
     def _load_shortcuts(self) -> Dict[str, str]:
-        """Loads shortcuts from configuration file"""
+        """Loads shortcuts from configuration file.
+
+        Merges saved shortcuts with defaults so that newly added
+        shortcuts are always available even when the user has an
+        existing configuration file.
+        """
+        merged = self.DEFAULT_SHORTCUTS.copy()
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    # Migrar formato antigo
-                    if "shortcuts" in data:
-                        return data["shortcuts"]
-                    return data
-            except:
+                    saved = data.get("shortcuts", data) if isinstance(data, dict) else {}
+                    merged.update(saved)
+            except Exception:
                 pass
-        return self.DEFAULT_SHORTCUTS.copy()
+        return merged
 
     def save_shortcuts(self):
         """Save shortcuts to config file"""

@@ -33,7 +33,7 @@ class BlockEditor(QWidget):
 
     Shortcuts:
     - F5: Runs focused block (selection if any, otherwise entire block)
-    - Shift+Enter: Runs focused block and advances to next
+    - Shift+Enter: Runs focused block and advances to next (configurable via Settings)
     - Ctrl+Enter: Runs all blocks
 
     Signals:
@@ -154,11 +154,6 @@ class BlockEditor(QWidget):
         # F5 - Run (focused block selection, or whole block, or all)
         if event.key() == Qt.Key.Key_F5 and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             self._execute_smart()
-            return
-
-        # Shift+Enter - Run focused block and advance
-        if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
-            self._execute_focused_and_advance()
             return
 
         # Ctrl+Enter - Run all blocks
