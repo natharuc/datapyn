@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.8.0 (2026-02-19)
+
+### Chores
+
+- Limpar pasta raiz do projeto
+  ([`e34f1d1`](https://github.com/natharuc/datapyn/commit/e34f1d175d3ff3a5dc3702578bbb02e131a9e7da))
+
+### Features
+
+- **database**: Adiciona suporte a LocalDB com autenticação automática
+  ([`edfe10f`](https://github.com/natharuc/datapyn/commit/edfe10fbeaa87d1b4b18861ed0b28d6229300277))
+
+
 ## v1.7.0 (2026-02-17)
 
 ### Features
