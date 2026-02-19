@@ -135,6 +135,8 @@ class SchemaWorker(QObject):
             return "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name"
         elif db_type == "postgresql":
             return "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+        elif db_type == "databricks":
+            return "SHOW CATALOGS"
         else:
             # MySQL, MariaDB
             return "SHOW DATABASES"
@@ -156,6 +158,14 @@ class SchemaWorker(QObject):
                 SELECT table_schema, table_name, table_type
                 FROM information_schema.tables
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY table_schema, table_name
+            """
+        elif db_type == "databricks":
+            # Databricks: Use information_schema from current catalog
+            return """
+                SELECT table_schema, table_name, table_type
+                FROM information_schema.tables
+                WHERE table_schema NOT IN ('information_schema')
                 ORDER BY table_schema, table_name
             """
         else:
@@ -189,6 +199,15 @@ class SchemaWorker(QObject):
                        ordinal_position
                 FROM information_schema.columns
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY table_name, ordinal_position
+            """
+        elif db_type == "databricks":
+            # Databricks: Use information_schema from current catalog
+            return """
+                SELECT table_name, column_name, data_type, is_nullable,
+                       ordinal_position
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('information_schema')
                 ORDER BY table_name, ordinal_position
             """
         else:

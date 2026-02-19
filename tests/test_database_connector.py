@@ -20,7 +20,7 @@ class TestDatabaseConnectorConnectionString:
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="sqlserver",
             host="localhost",
             port=1433,
@@ -41,7 +41,7 @@ class TestDatabaseConnectorConnectionString:
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="sqlserver", host="localhost", port=1433, database="testdb", username="user", password="pass"
         )
 
@@ -55,7 +55,7 @@ class TestDatabaseConnectorConnectionString:
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="mysql", host="localhost", port=3306, database="testdb", username="user", password="pass"
         )
 
@@ -68,15 +68,76 @@ class TestDatabaseConnectorConnectionString:
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="postgresql", host="localhost", port=5432, database="testdb", username="user", password="pass"
         )
 
         assert "postgresql+psycopg2" in result
         assert "localhost" in result
 
+    def test_databricks_connection_string(self):
+        """Deve construir string Databricks com token"""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, connect_args = connector._build_connection_string(
+            db_type="databricks",
+            host="my-workspace.cloud.databricks.com",
+            port=443,
+            database="my_catalog",
+            username="",
+            password="dapi12345abcdef",
+            http_path="/sql/1.0/warehouses/abc123",
+        )
+
+        assert "databricks://" in result
+        assert "token:" in result
+        assert "my-workspace.cloud.databricks.com" in result
+        assert "http_path" in result
+        assert "catalog=my_catalog" in result
+        assert connect_args == {}  # PAT auth does not need extra connect_args
+
+    def test_databricks_connection_string_without_http_path(self):
+        """Deve construir string Databricks sem http_path"""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, _ = connector._build_connection_string(
+            db_type="databricks",
+            host="my-workspace.cloud.databricks.com",
+            port=443,
+            database="",
+            username="",
+            password="dapi12345",
+        )
+
+        assert "databricks://" in result
+        assert "token:" in result
+        assert "http_path" not in result
+    
+    def test_databricks_oauth_connection_string(self):
+        """Deve construir string Databricks com OAuth quando sem token"""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, connect_args = connector._build_connection_string(
+            db_type="databricks",
+            host="my-workspace.cloud.databricks.com",
+            port=443,
+            database="my_catalog",
+            username="",
+            password="",  # Empty password triggers OAuth
+            http_path="/sql/1.0/warehouses/abc123",
+        )
+
+        assert "databricks://" in result
+        assert "token:" not in result  # No token in OAuth mode
+        assert "auth_type" in connect_args
+        assert connect_args["auth_type"] == "databricks-oauth"
+        assert "experimental_oauth_persistence" in connect_args
+
     def test_unsupported_database_raises_error(self):
-        """Banco não suportado deve lançar erro"""
+        """Banco nao suportado deve lancar erro"""
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
@@ -95,7 +156,7 @@ class TestDatabaseConnectorConnectionString:
         from urllib.parse import unquote
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="sqlserver",
             host="(localdb)\\MSSQLLocalDB",
             port=1433,  # porta deve ser ignorada
@@ -123,7 +184,7 @@ class TestDatabaseConnectorConnectionString:
         from urllib.parse import unquote
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="sqlserver",
             host="localhost",
             port=1433,
@@ -161,6 +222,7 @@ class TestDatabaseConnectorState:
         assert "sqlserver" in connector.SUPPORTED_DATABASES
         assert "mysql" in connector.SUPPORTED_DATABASES
         assert "postgresql" in connector.SUPPORTED_DATABASES
+        assert "databricks" in connector.SUPPORTED_DATABASES
 
 
 class TestDatabaseConnectorMocked:
@@ -220,7 +282,7 @@ class TestDatabaseConnectorEdgeCases:
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="mysql", host="localhost", port=3306, database="testdb", username="user", password="p@ss!w0rd#$%"
         )
 
@@ -233,7 +295,7 @@ class TestDatabaseConnectorEdgeCases:
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
-        result = connector._build_connection_string(
+        result, _ = connector._build_connection_string(
             db_type="sqlserver",
             host="localhost",
             port=1433,

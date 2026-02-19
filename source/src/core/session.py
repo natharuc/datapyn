@@ -150,6 +150,7 @@ class Session(QObject):
                 password=pwd,
                 use_windows_auth=config.get("use_windows_auth", False),
                 trust_server_certificate=config.get("trust_server_certificate", False),
+                http_path=config.get("http_path", ""),
             )
 
             if connector.is_connected:
@@ -294,6 +295,7 @@ class Session(QObject):
                             config.get("password", ""),
                             use_windows_auth=config.get("use_windows_auth", False),
                             trust_server_certificate=config.get("trust_server_certificate", False),
+                            http_path=config.get("http_path", ""),
                         )
                         if connector:
                             self._connector = connector

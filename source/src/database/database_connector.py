@@ -8,9 +8,62 @@ from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine
 import logging
 import pyodbc
+import json
+import os
+from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
+
+
+def _get_oauth_token_cache_path(host: str) -> Path:
+    """Get path for OAuth token cache file.
+    
+    Tokens are stored per-host in the user's app config directory.
+    """
+    # Use a safe filename derived from the host
+    safe_host = host.replace(".", "_").replace(":", "_").replace("/", "_")
+    config_dir = Path.home() / ".datapyn" / "oauth_cache"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / f"databricks_{safe_host}.json"
+
+
+class DatabricksOAuthTokenCache:
+    """Persists OAuth tokens to disk for Databricks connections.
+    
+    This allows OAuth to cache the token and only prompt for browser
+    authentication when the token expires.
+    """
+    
+    def __init__(self, file_path: Path):
+        self._file_path = file_path
+    
+    def persist(self, hostname: str, token):
+        """Save the OAuth token to disk."""
+        try:
+            data = {
+                "access_token": token.access_token,
+                "refresh_token": token.refresh_token,
+            }
+            self._file_path.write_text(json.dumps(data), encoding="utf-8")
+            logger.debug(f"OAuth token persisted to {self._file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to persist OAuth token: {e}")
+    
+    def read(self, hostname: str):
+        """Read the cached OAuth token from disk."""
+        try:
+            if self._file_path.exists():
+                data = json.loads(self._file_path.read_text(encoding="utf-8"))
+                # Import here to avoid import errors when databricks is not installed
+                from databricks.sql.experimental.oauth_persistence import OAuthToken
+                return OAuthToken(
+                    access_token=data.get("access_token", ""),
+                    refresh_token=data.get("refresh_token", ""),
+                )
+        except Exception as e:
+            logger.warning(f"Failed to read cached OAuth token: {e}")
+        return None
 
 
 class DatabaseConnector:
@@ -21,6 +74,7 @@ class DatabaseConnector:
         "mysql": "MySQL",
         "mariadb": "MariaDB",
         "postgresql": "PostgreSQL",
+        "databricks": "Databricks",
     }
 
     def __init__(self):
@@ -50,11 +104,11 @@ class DatabaseConnector:
             bool: True if connected successfully
         """
         try:
-            connection_string = self._build_connection_string(
+            connection_string, connect_args = self._build_connection_string(
                 db_type, host, port, database, username, password, **kwargs
             )
 
-            self.engine = create_engine(connection_string, pool_pre_ping=True)
+            self.engine = create_engine(connection_string, pool_pre_ping=True, connect_args=connect_args)
 
             # Register pool event to ensure every connection
             # pulled from pool uses correct database (solves problem
@@ -136,8 +190,12 @@ class DatabaseConnector:
 
     def _build_connection_string(
         self, db_type: str, host: str, port: int, database: str, username: str, password: str, **kwargs
-    ) -> str:
-        """Build connection string based on database type"""
+    ) -> tuple:
+        """Build connection string based on database type.
+        
+        Returns:
+            tuple: (connection_string, connect_args_dict)
+        """
         from urllib.parse import quote_plus
 
         if db_type == "sqlserver":
@@ -184,26 +242,62 @@ class DatabaseConnector:
             if trust_cert:
                 odbc_string += ";TrustServerCertificate=yes"
 
-            return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_string)}"
+            return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_string)}", {}
 
         elif db_type == "mysql":
             # URL encode username and password for special characters
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
-            return f"mysql+pymysql://{user_encoded}:{pass_encoded}@{host}:{port}/{database}?charset=utf8mb4"
+            return f"mysql+pymysql://{user_encoded}:{pass_encoded}@{host}:{port}/{database}?charset=utf8mb4", {}
 
         elif db_type == "mariadb":
             # URL encode username and password for special characters
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
-            return f"mariadb+mariadbconnector://{user_encoded}:{pass_encoded}@{host}:{port}/{database}"
+            return f"mariadb+mariadbconnector://{user_encoded}:{pass_encoded}@{host}:{port}/{database}", {}
 
         elif db_type == "postgresql":
             # URL encode username and password for special characters
             # Important for Azure PostgreSQL where user is "user@server"
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
-            return f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{host}:{port}/{database}"
+            return f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{host}:{port}/{database}", {}
+
+        elif db_type == "databricks":
+            # Databricks SQL Warehouse connection
+            # Uses databricks-sql-connector with SQLAlchemy dialect
+            http_path = kwargs.get("http_path", "")
+            access_token = password
+            connect_args = {}
+            
+            if access_token:
+                # Use PAT (Personal Access Token) - no OAuth browser flow
+                token_encoded = quote_plus(access_token)
+                # Format: databricks://token:<access_token>@<host>:443
+                # Using 'token' as username tells the driver to use PAT authentication
+                conn_str = f"databricks://token:{token_encoded}@{host}:{port}"
+            else:
+                # Use OAuth with token cache - will open browser only on first time or when token expires
+                # Empty username/password triggers OAuth flow
+                conn_str = f"databricks://@{host}:{port}"
+                
+                # Setup OAuth token persistence for caching
+                cache_path = _get_oauth_token_cache_path(host)
+                oauth_cache = DatabricksOAuthTokenCache(cache_path)
+                connect_args["auth_type"] = "databricks-oauth"
+                connect_args["experimental_oauth_persistence"] = oauth_cache
+                logger.info(f"Using OAuth with token cache at: {cache_path}")
+            
+            # Add query parameters
+            params = []
+            if http_path:
+                params.append(f"http_path={quote_plus(http_path)}")
+            if database:
+                params.append(f"catalog={quote_plus(database)}")
+                params.append("schema=default")
+            if params:
+                conn_str += "?" + "&".join(params)
+            return conn_str, connect_args
 
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
@@ -520,7 +614,7 @@ class DatabaseConnector:
         Change current database
 
         Args:
-            database: New database name
+            database: New database name (or catalog.schema for Databricks)
 
         Returns:
             bool: True if changed successfully
@@ -531,7 +625,14 @@ class DatabaseConnector:
         try:
             use_command = self._build_use_command(database)
             with self.engine.connect() as conn:
-                conn.execute(text(use_command))
+                # For Databricks, may have multiple commands separated by ;
+                if self.db_type == "databricks" and ";" in use_command:
+                    for cmd in use_command.split(";"):
+                        cmd = cmd.strip()
+                        if cmd:
+                            conn.execute(text(cmd))
+                else:
+                    conn.execute(text(use_command))
                 conn.commit()
 
             # Update internal params
@@ -547,7 +648,7 @@ class DatabaseConnector:
         """Build the USE command with correct syntax for the current database type.
 
         Args:
-            database: Database name
+            database: Database name (or catalog.schema for Databricks)
 
         Returns:
             str: USE command with correct quoting for the DB type
@@ -561,6 +662,23 @@ class DatabaseConnector:
             # (that requires a new connection). This changes the schema search path
             # within the current database, which is the closest equivalent.
             return f'SET search_path TO "{database}"'
+        elif self.db_type == "databricks":
+            # Databricks uses 3-level namespace: catalog.schema.table
+            # Support explicit CATALOG: or SCHEMA: prefix from UI
+            if database.startswith("CATALOG:"):
+                catalog_name = database[8:]  # Remove "CATALOG:" prefix
+                return f"USE CATALOG `{catalog_name}`"
+            elif database.startswith("SCHEMA:"):
+                schema_name = database[7:]  # Remove "SCHEMA:" prefix
+                return f"USE SCHEMA `{schema_name}`"
+            # If database contains a dot, it's catalog.schema format
+            elif "." in database:
+                parts = database.split(".", 1)
+                return f"USE CATALOG `{parts[0]}`; USE SCHEMA `{parts[1]}`"
+            else:
+                # Assume it's a schema name in the current catalog
+                # (most common use case when user types USE <name>)
+                return f"USE SCHEMA `{database}`"
         else:
             return f"USE {database}"
 

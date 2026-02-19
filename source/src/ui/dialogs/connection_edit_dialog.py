@@ -38,7 +38,7 @@ class ConnectionTestWorker(QThread):
 
     finished = pyqtSignal(bool, str)  # success, message
 
-    def __init__(self, db_type, host, port, database, username, password, use_windows_auth=False, trust_server_certificate=True):
+    def __init__(self, db_type, host, port, database, username, password, use_windows_auth=False, trust_server_certificate=True, http_path=""):
         super().__init__()
         self.db_type = db_type
         self.host = host
@@ -48,6 +48,7 @@ class ConnectionTestWorker(QThread):
         self.password = password
         self.use_windows_auth = use_windows_auth
         self.trust_server_certificate = trust_server_certificate
+        self.http_path = http_path
 
     def run(self):
         try:
@@ -57,6 +58,8 @@ class ConnectionTestWorker(QThread):
             if self.use_windows_auth:
                 kwargs["use_windows_auth"] = True
             kwargs["trust_server_certificate"] = self.trust_server_certificate
+            if self.http_path:
+                kwargs["http_path"] = self.http_path
 
             connector.connect(
                 db_type=self.db_type,
@@ -136,7 +139,7 @@ class ConnectionEditDialog(QDialog):
         basic_layout.addRow(S.connection_edit.label_name, self.txt_name)
 
         self.cmb_type = QComboBox()
-        self.cmb_type.addItems(["sqlserver", "mysql", "mariadb", "postgresql"])
+        self.cmb_type.addItems(["sqlserver", "mysql", "mariadb", "postgresql", "databricks"])
         self.cmb_type.currentTextChanged.connect(self._on_db_type_changed)
         basic_layout.addRow(S.connection_edit.label_db_type, self.cmb_type)
 
@@ -152,6 +155,12 @@ class ConnectionEditDialog(QDialog):
         self.txt_database = QLineEdit()
         self.txt_database.setPlaceholderText(S.connection_edit.placeholder_database)
         basic_layout.addRow(S.connection_edit.label_database, self.txt_database)
+
+        # HTTP Path (Databricks only)
+        self.txt_http_path = QLineEdit()
+        self.txt_http_path.setPlaceholderText("/sql/1.0/warehouses/xxx or /sql/protocolv1/o/xxx/xxx-xxx")
+        self.lbl_http_path = QLabel("HTTP Path:")
+        basic_layout.addRow(self.lbl_http_path, self.txt_http_path)
 
         layout.addWidget(basic_group)
 
@@ -182,12 +191,14 @@ class ConnectionEditDialog(QDialog):
 
         self.txt_username = QLineEdit()
         self.txt_username.setPlaceholderText(S.connection_edit.placeholder_username)
-        auth_layout.addRow(S.connection_edit.label_username, self.txt_username)
+        self.lbl_username = QLabel(S.connection_edit.label_username)
+        auth_layout.addRow(self.lbl_username, self.txt_username)
 
         self.txt_password = QLineEdit()
         self.txt_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.txt_password.setPlaceholderText(S.connection_edit.placeholder_password)
-        auth_layout.addRow(S.connection_edit.label_password, self.txt_password)
+        self.lbl_password = QLabel(S.connection_edit.label_password)
+        auth_layout.addRow(self.lbl_password, self.txt_password)
 
         self.chk_save_password = QCheckBox(S.connection_edit.checkbox_save_password)
         auth_layout.addRow(self.chk_save_password)
@@ -283,6 +294,9 @@ class ConnectionEditDialog(QDialog):
         self.spin_port.setValue(self.config.get("port", 1433))
         self.txt_database.setText(self.config.get("database", ""))
 
+        # Databricks-specific field
+        self.txt_http_path.setText(self.config.get("http_path", ""))
+
         use_windows_auth = self.config.get("use_windows_auth", False)
         self.chk_windows_auth.setChecked(use_windows_auth)
 
@@ -314,7 +328,7 @@ class ConnectionEditDialog(QDialog):
         db_type = self.cmb_type.currentText()
 
         # Adjust default port
-        default_ports = {"sqlserver": 1433, "mysql": 3306, "mariadb": 3306, "postgresql": 5432}
+        default_ports = {"sqlserver": 1433, "mysql": 3306, "mariadb": 3306, "postgresql": 5432, "databricks": 443}
         self.spin_port.setValue(default_ports.get(db_type, 1433))
 
         self._toggle_windows_auth_visibility()
@@ -328,11 +342,37 @@ class ConnectionEditDialog(QDialog):
 
     def _toggle_windows_auth_visibility(self):
         """Shows/hides Windows Auth and Trust Cert based on database type"""
-        is_sqlserver = self.cmb_type.currentText() == "sqlserver"
+        db_type = self.cmb_type.currentText()
+        is_sqlserver = db_type == "sqlserver"
+        is_databricks = db_type == "databricks"
+        
         self.chk_windows_auth.setVisible(is_sqlserver)
         self.chk_trust_cert.setVisible(is_sqlserver)
         if not is_sqlserver:
             self.chk_windows_auth.setChecked(False)
+        
+        # Databricks-specific fields
+        self.txt_http_path.setVisible(is_databricks)
+        self.lbl_http_path.setVisible(is_databricks)
+        
+        # For Databricks, adjust username/password labels for token auth
+        if is_databricks:
+            self.txt_username.setEnabled(False)
+            self.txt_username.setPlaceholderText("(not used - token auth)")
+            self.lbl_username.setVisible(False)
+            self.txt_username.setVisible(False)
+            self.lbl_password.setText("Access Token (optional):")
+            self.txt_password.setPlaceholderText("dapi... or leave empty for OAuth")
+            self.chk_save_password.setText("Save token")
+            self.chk_save_password.setChecked(True)  # Recommend saving token
+        else:
+            self.txt_username.setEnabled(not self.chk_windows_auth.isChecked())
+            self.txt_username.setPlaceholderText(S.connection_edit.placeholder_username)
+            self.lbl_username.setVisible(True)
+            self.txt_username.setVisible(True)
+            self.lbl_password.setText(S.connection_edit.label_password)
+            self.txt_password.setPlaceholderText(S.connection_edit.placeholder_password)
+            self.chk_save_password.setText(S.connection_edit.checkbox_save_password)
 
     def _choose_color(self):
         """Chooses color for the connection"""
@@ -376,6 +416,7 @@ class ConnectionEditDialog(QDialog):
 
         # Create and start worker
         self._test_cancelled = False
+        http_path = self.txt_http_path.text() if self.cmb_type.currentText() == "databricks" else ""
         self.test_worker = ConnectionTestWorker(
             db_type=self.cmb_type.currentText(),
             host=self.txt_host.text(),
@@ -385,6 +426,7 @@ class ConnectionEditDialog(QDialog):
             password=self.txt_password.text(),
             use_windows_auth=self.chk_windows_auth.isChecked(),
             trust_server_certificate=self.chk_trust_cert.isChecked(),
+            http_path=http_path,
         )
         self.test_worker.finished.connect(self._on_test_finished)
         self.test_worker.start()
@@ -438,6 +480,10 @@ class ConnectionEditDialog(QDialog):
             "color": self.selected_color,
             "save_password": self.chk_save_password.isChecked(),
         }
+
+        # Databricks-specific field
+        if self.cmb_type.currentText() == "databricks":
+            config["http_path"] = self.txt_http_path.text().strip()
 
         if self.chk_save_password.isChecked():
             config["password"] = self.txt_password.text()

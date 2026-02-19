@@ -2244,6 +2244,7 @@ class MainWindow(DockingMainWindow):
                 config.get("use_windows_auth", False),
                 config.get("color", ""),
                 config.get("trust_server_certificate", True),
+                config.get("http_path", ""),
             )
 
             self._update_connection_status()
@@ -2288,6 +2289,7 @@ class MainWindow(DockingMainWindow):
                 new_config.get("use_windows_auth", False),
                 new_config.get("color", ""),
                 new_config.get("trust_server_certificate", True),
+                new_config.get("http_path", ""),
             )
 
             self._update_connection_status()
@@ -2496,9 +2498,18 @@ class MainWindow(DockingMainWindow):
 
         # Detect USE database command (runs synchronously since it's fast)
         # Supports: USE db, USE [db], USE `db`, USE db;
-        use_match = re.match(r"^\s*USE\s+[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$", query, re.IGNORECASE)
+        # For Databricks also: USE CATALOG x, USE SCHEMA x
+        use_match = re.match(r"^\s*USE\s+(?:CATALOG\s+|SCHEMA\s+)?[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$", query, re.IGNORECASE)
         if use_match:
             database_name = use_match.group(1)
+            # For Databricks, preserve CATALOG/SCHEMA prefix for proper handling
+            if connector.db_type == "databricks":
+                catalog_match = re.match(r"^\s*USE\s+CATALOG\s+", query, re.IGNORECASE)
+                schema_match = re.match(r"^\s*USE\s+SCHEMA\s+", query, re.IGNORECASE)
+                if catalog_match:
+                    database_name = f"CATALOG:{database_name}"
+                elif schema_match:
+                    database_name = f"SCHEMA:{database_name}"
             try:
                 self._start_execution_timer("SQL")
                 self.action_label.setText(S.status.sql_switching_database.format(name=database_name))
@@ -4762,6 +4773,7 @@ class MainWindow(DockingMainWindow):
                 password,
                 use_windows_auth=config.get("use_windows_auth", False),
                 trust_server_certificate=config.get("trust_server_certificate", False),
+                http_path=config.get("http_path", ""),
             )
 
             self.connection_manager.mark_connection_used(connection_name)
@@ -5086,6 +5098,12 @@ class MainWindow(DockingMainWindow):
                         lines.append("# SQL Server connection string")
                         lines.append("# Requer: pip install pyodbc")
                         lines.append("connection_string = f'mssql+pyodbc://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server'")
+                    elif db_type == 'databricks':
+                        http_path = config.get('http_path', '')
+                        lines.append("# Databricks SQL Warehouse connection string")
+                        lines.append("# Requer: pip install databricks-sql-connector")
+                        lines.append(f"DB_HTTP_PATH = '{http_path}'")
+                        lines.append("connection_string = f'databricks://token:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}?http_path={DB_HTTP_PATH}&catalog={DB_NAME}&schema=default'")
                     else:
                         lines.append(f"# {db_type} connection string")
                         lines.append("connection_string = ''  # Configure the appropriate connection string")

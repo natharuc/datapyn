@@ -35,6 +35,7 @@ DB_TYPE_ICONS = {
     "postgresql": {"icon": "mdi.database-cog", "color": "#336791"},  # PostgreSQL - azul
     "postgres": {"icon": "mdi.database-cog", "color": "#336791"},  # Alias
     "sqlite": {"icon": "mdi.file-document-outline", "color": "#003B57"},  # SQLite - azul escuro
+    "databricks": {"icon": "mdi.cloud-braces", "color": "#FF3621"},  # Databricks - vermelho/laranja
 }
 
 
@@ -52,6 +53,8 @@ def _normalize_db_type(db_type: str) -> str:
         return "mysql"
     elif "sqlite" in db_type_lower:
         return "sqlite"
+    elif "databricks" in db_type_lower:
+        return "databricks"
 
     return db_type_lower
 
