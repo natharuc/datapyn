@@ -149,12 +149,24 @@ class DatabaseConnector:
             use_windows_auth = kwargs.get("use_windows_auth", False)
             trust_cert = kwargs.get("trust_server_certificate", False)
 
+            # Detect LocalDB - uses named pipes, not TCP/IP
+            is_localdb = "(localdb)" in host.lower()
+
+            if is_localdb:
+                # LocalDB format: SERVER=(localdb)\InstanceName (no port)
+                # LocalDB always uses Windows Authentication
+                server_part = f"SERVER={host}"
+                use_windows_auth = True
+            else:
+                # Standard SQL Server format: SERVER=host,port
+                server_part = f"SERVER={host},{port}"
+
             # Use direct ODBC connection string
             if use_windows_auth:
                 # Windows Authentication
                 odbc_string = (
                     f"DRIVER={{{driver}}};"
-                    f"SERVER={host},{port};"
+                    f"{server_part};"
                     f"DATABASE={database};"
                     f"Trusted_Connection=yes"
                 )
@@ -162,7 +174,7 @@ class DatabaseConnector:
                 # SQL Server Authentication
                 odbc_string = (
                     f"DRIVER={{{driver}}};"
-                    f"SERVER={host},{port};"
+                    f"{server_part};"
                     f"DATABASE={database};"
                     f"UID={username};"
                     f"PWD={password}"
