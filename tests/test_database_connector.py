@@ -88,6 +88,56 @@ class TestDatabaseConnectorConnectionString:
 
         assert "Unsupported database type" in str(exc_info.value)
 
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_sqlserver_localdb_connection_string(self, _mock_drivers):
+        """Deve construir string LocalDB sem porta e com Windows Auth automatico"""
+        from database.database_connector import DatabaseConnector
+        from urllib.parse import unquote
+
+        connector = DatabaseConnector()
+        result = connector._build_connection_string(
+            db_type="sqlserver",
+            host="(localdb)\\MSSQLLocalDB",
+            port=1433,  # porta deve ser ignorada
+            database="testdb",
+            username="user",  # deve ser ignorado - LocalDB usa Windows Auth
+            password="pass",
+            use_windows_auth=False,  # deve ser forcado para True
+        )
+
+        decoded = unquote(result)
+        assert "mssql+pyodbc" in result
+        # LocalDB nao usa porta - formato SERVER=(localdb)\Instance
+        assert "SERVER=(localdb)\\MSSQLLocalDB" in decoded
+        assert ",1433" not in decoded  # porta NAO deve aparecer
+        # LocalDB sempre usa Windows Auth
+        assert "Trusted_Connection=yes" in decoded
+        # Nao deve ter credenciais SQL Auth
+        assert "UID=" not in decoded
+        assert "PWD=" not in decoded
+
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_sqlserver_standard_connection_still_uses_port(self, _mock_drivers):
+        """Conexao SQL Server padrao deve continuar usando porta"""
+        from database.database_connector import DatabaseConnector
+        from urllib.parse import unquote
+
+        connector = DatabaseConnector()
+        result = connector._build_connection_string(
+            db_type="sqlserver",
+            host="localhost",
+            port=1433,
+            database="testdb",
+            username="user",
+            password="pass",
+            use_windows_auth=False,
+        )
+
+        decoded = unquote(result)
+        assert "SERVER=localhost,1433" in decoded
+        assert "UID=user" in decoded
+        assert "PWD=pass" in decoded
+
 
 class TestDatabaseConnectorState:
     """Testes de estado do conector"""
