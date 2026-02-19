@@ -382,6 +382,7 @@ class SettingsDialog(QDialog):
             # Execution
             "execute_sql": "Run Current Block",
             "execute_all": "Run All Blocks",
+            "execute_block_advance": "Run Block & Advance",
             "clear_results": "Clear Results",
             # File
             "open_file": "Open File",

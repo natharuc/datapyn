@@ -702,14 +702,6 @@ class CodeEditor(QWidget):
 
     def _setup_shortcuts(self):
         """Configura atalhos de teclado."""
-        # Ctrl+Enter - Executar
-        shortcut_ctrl_enter = QShortcut(QKeySequence("Ctrl+Return"), self._sci)
-        shortcut_ctrl_enter.activated.connect(self.execute_requested.emit)
-
-        # Shift+Enter - Executar
-        shortcut_shift_enter = QShortcut(QKeySequence("Shift+Return"), self._sci)
-        shortcut_shift_enter.activated.connect(self.execute_requested.emit)
-
         # Ctrl+/ - Comentar/descomentar
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self._sci)
         shortcut_comment.activated.connect(self.toggle_comment)

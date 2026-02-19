@@ -42,16 +42,16 @@ def main_window(app):
 
 
 def test_shortcut_execute_sql_without_selection(main_window):
-    """Testa F5 - Executar bloco atual (sem seleção executa todos)"""
-    # Pegar sessão atual
+    """Testa F5 - Executar bloco atual (sem selecao executa bloco focado)"""
+    # Pegar sessao atual
     session = main_window.session_manager.focused_session
     assert session is not None
 
-    # Pegar editor da sessão atual
+    # Pegar editor da sessao atual
     editor = main_window._get_current_editor()
     assert isinstance(editor, BlockEditor)
 
-    # Adicionar código em múltiplos blocos
+    # Adicionar codigo em multiplos blocos
     editor.clear_blocks()
     block1 = editor.add_block(language="PYTHON")
     block1.set_code("x = 10")
@@ -59,15 +59,14 @@ def test_shortcut_execute_sql_without_selection(main_window):
     block2 = editor.add_block(language="PYTHON")
     block2.set_code("y = 20")
 
-    # Focar no primeiro bloco (sem seleção)
+    # Focar no primeiro bloco (sem selecao)
     block1.focus_editor()
 
     # Pressionar F5
     QTest.keyClick(main_window, Qt.Key.Key_F5)
     QApplication.processEvents()
 
-    # Verificar que executou (sem seleção, deve executar todos)
-    # O comportamento esperado é executar todos os blocos
+    # Verificar que executou (sem selecao, deve executar apenas o bloco focado)
     assert True  # Se chegou aqui sem erro, funcionou
 
 
@@ -165,9 +164,10 @@ def test_all_shortcuts_registered(main_window):
     shortcut_manager = main_window.shortcut_manager
 
     required_shortcuts = [
-        # Execução
+        # Execucao
         "execute_sql",
         "execute_all",
+        "execute_block_advance",
         "clear_results",
         # Arquivo
         "open_file",

@@ -16,6 +16,7 @@ class ShortcutManager:
         # Execution
         "execute_sql": "F5",
         "execute_all": "Ctrl+F5",
+        "execute_block_advance": "Shift+Return",
         "clear_results": "Ctrl+Shift+C",
         # Arquivo
         "open_file": "Ctrl+O",
