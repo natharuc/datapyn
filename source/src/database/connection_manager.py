@@ -55,6 +55,7 @@ class ConnectionManager:
         use_windows_auth: bool = False,
         color: str = "",
         trust_server_certificate: bool = False,
+        http_path: str = "",
     ):
         """Save a connection configuration"""
         config = {
@@ -70,6 +71,10 @@ class ConnectionManager:
             "created_at": datetime.now().isoformat(),
             "last_used": None,
         }
+
+        # Databricks-specific field
+        if db_type == "databricks" and http_path:
+            config["http_path"] = http_path
 
         if save_password and password:
             # TODO: Implement secure password storage (keyring)
@@ -101,6 +106,7 @@ class ConnectionManager:
         use_windows_auth: bool = False,
         color: str = "",
         trust_server_certificate: bool = False,
+        http_path: str = "",
     ):
         """Update an existing connection configuration"""
         if old_name in self.saved_configs.get("connections", {}):
@@ -126,6 +132,7 @@ class ConnectionManager:
                 use_windows_auth,
                 color,
                 trust_server_certificate,
+                http_path,
             )
 
             # Restore creation date

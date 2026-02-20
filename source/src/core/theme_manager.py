@@ -316,7 +316,7 @@ class ThemeManager:
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
                 padding: 8px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QLineEdit:focus {{
                 border-color: {c["accent"]};
@@ -331,7 +331,7 @@ class ThemeManager:
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
                 padding: 8px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QComboBox:hover {{
                 border-color: {c["accent"]};
@@ -370,7 +370,7 @@ class ThemeManager:
                 color: white;
                 border: none;
                 padding: 8px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
@@ -414,7 +414,7 @@ class ThemeManager:
                 color: {c["accent"]};
                 font-weight: bold;
                 border: 1px solid {c["border"]};
-                border-radius: 4px;
+                border-radius: 0px;
                 margin-top: 10px;
                 padding-top: 10px;
             }}
@@ -445,7 +445,7 @@ class ThemeManager:
             }}
             QScrollBar::handle:vertical {{
                 background-color: {c["border"]};
-                border-radius: 6px;
+                border-radius: 0px;
                 min-height: 20px;
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{

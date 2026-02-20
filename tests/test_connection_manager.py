@@ -185,3 +185,19 @@ class TestConnectionManagerEdgeCases:
 
         config = connection_manager.get_connection_config("Windows Auth")
         assert config["use_windows_auth"] is True
+
+    def test_databricks_http_path(self, connection_manager):
+        """Deve salvar http_path para conexões Databricks"""
+        connection_manager.save_connection_config(
+            name="Databricks Warehouse",
+            db_type="databricks",
+            host="my-workspace.cloud.databricks.com",
+            port=443,
+            database="my_catalog",
+            http_path="/sql/1.0/warehouses/abc123",
+        )
+
+        config = connection_manager.get_connection_config("Databricks Warehouse")
+        assert config["db_type"] == "databricks"
+        assert config["http_path"] == "/sql/1.0/warehouses/abc123"
+        assert config["port"] == 443

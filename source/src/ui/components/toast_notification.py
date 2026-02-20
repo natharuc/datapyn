@@ -108,7 +108,7 @@ class ToastNotification(QWidget):
             ToastNotification {{
                 background-color: {bg};
                 border: 1px solid {border_color};
-                border-radius: 8px;
+                border-radius: 0px;
             }}
             ToastNotification:hover {{
                 background-color: {bg_hover};
@@ -154,7 +154,7 @@ class ToastNotification(QWidget):
                 color: rgba(255,255,255,180);
                 background: transparent;
                 border: none;
-                border-radius: 10px;
+                border-radius: 0px;
             }
             QPushButton:hover {
                 color: white;

@@ -35,6 +35,7 @@ DB_TYPE_ICONS = {
     "postgresql": {"icon": "mdi.database-cog", "color": "#336791"},  # PostgreSQL - azul
     "postgres": {"icon": "mdi.database-cog", "color": "#336791"},  # Alias
     "sqlite": {"icon": "mdi.file-document-outline", "color": "#003B57"},  # SQLite - azul escuro
+    "databricks": {"icon": "mdi.cloud-braces", "color": "#FF3621"},  # Databricks - vermelho/laranja
 }
 
 
@@ -52,6 +53,8 @@ def _normalize_db_type(db_type: str) -> str:
         return "mysql"
     elif "sqlite" in db_type_lower:
         return "sqlite"
+    elif "databricks" in db_type_lower:
+        return "databricks"
 
     return db_type_lower
 
@@ -162,13 +165,13 @@ class ConnectionItemWidget(QWidget):
 
         # Connection name (main line)
         self.name_label = QLabel(name)
-        self.name_label.setStyleSheet("font-size: 13px; font-weight: 500;")
+        self.name_label.setStyleSheet("font-size: 13px; font-weight: 500; color: #e8e8e8;")
         text_layout.addWidget(self.name_label)
 
         # Group (secondary line - smaller and gray)
         if group:
             self.group_label = QLabel(group)
-            self.group_label.setStyleSheet("font-size: 10px;")
+            self.group_label.setStyleSheet("font-size: 10px; color: #9d9d9d;")
             text_layout.addWidget(self.group_label)
 
         layout.addWidget(text_container)
@@ -273,20 +276,20 @@ class ActiveConnectionWidget(QFrame):
         icon_label.setPixmap(qta.icon("mdi.connection", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connection_panel.section_active)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet("font-weight: 500; font-size: 11px; color: #9d9d9d;")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
         # Name
         self.name_label = QLabel(S.connection_panel.label_none)
-        self.name_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.name_label.setStyleSheet("font-size: 14px; font-weight: 500; color: #e8e8e8;")
         layout.addWidget(self.name_label)
 
         # Info
         self.info_label = QLabel("")
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #888; font-size: 12px;")
+        self.info_label.setStyleSheet("color: #9d9d9d; font-size: 12px;")
         layout.addWidget(self.info_label)
 
         # Button
@@ -344,7 +347,7 @@ class ConnectionsList(QFrame):
         icon_label.setPixmap(qta.icon("mdi.database-cog", color="#64b5f6").pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connection_panel.section_saved)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet("font-weight: 500; font-size: 11px; color: #9d9d9d;")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)

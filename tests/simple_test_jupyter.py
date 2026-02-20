@@ -113,7 +113,7 @@ def test_parse_notebook():
     try:
         cells = parse_ipynb_file(temp_path)
         
-        print(f"✓ Numero de celulas parseadas: {len(cells)}")
+        print(f"Numero de celulas parseadas: {len(cells)}")
         assert len(cells) == 4, f"Deveria ter 4 celulas (ignora vazias), tem {len(cells)}"
         
         print("\nDetalhes das celulas:")
@@ -125,22 +125,22 @@ def test_parse_notebook():
         assert cells[0]["language"] == "python"
         assert cells[0]["cell_type"] == "code"
         assert "import pandas" in cells[0]["code"]
-        print("\n✓ Primeira celula verificada (imports)")
+        print("\nPrimeira celula verificada (imports)")
         
         # Verificar segunda celula
         assert cells[1]["language"] == "python"
         assert "DataFrame" in cells[1]["code"]
-        print("✓ Segunda celula verificada (DataFrame)")
+        print("Segunda celula verificada (DataFrame)")
         
         # Verificar terceira celula (markdown)
         assert cells[2]["cell_type"] == "markdown"
         assert "Titulo" in cells[2]["code"]
-        print("✓ Terceira celula verificada (markdown)")
+        print("Terceira celula verificada (markdown)")
         
         # Verificar quarta celula (a vazia foi pulada)
         assert cells[3]["cell_type"] == "code"
         assert "sum()" in cells[3]["code"]
-        print("✓ Quarta celula verificada (sum)")
+        print("Quarta celula verificada (sum)")
         
     finally:
         if os.path.exists(temp_path):
@@ -165,7 +165,7 @@ def test_parse_invalid():
             assert False, "Deveria lancar ValueError"
         except ValueError as e:
             error_msg = str(e)[:80]
-            print(f"✓ ValueError lancado: {error_msg}...")
+            print(f"ValueError lancado: {error_msg}...")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -197,11 +197,11 @@ def test_empty_cells():
     
     try:
         cells = parse_ipynb_file(temp_path)
-        print(f"✓ Celulas nao-vazias: {len(cells)} (esperado: 2)")
+        print(f"Celulas nao-vazias: {len(cells)} (esperado: 2)")
         assert len(cells) == 2, f"Deveria ter 2 celulas, tem {len(cells)}"
         assert "hello" in cells[0]["code"]
         assert "world" in cells[1]["code"]
-        print("✓ Celulas vazias ignoradas corretamente")
+        print("Celulas vazias ignoradas corretamente")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -233,7 +233,7 @@ def test_source_as_string():
         assert len(cells) == 1
         assert "hello" in cells[0]["code"]
         assert "world" in cells[0]["code"]
-        print("✓ Source string parseado corretamente")
+        print("Source string parseado corretamente")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -253,18 +253,18 @@ def main():
         test_source_as_string()
         
         print("=" * 60)
-        print("✓✓✓ TODOS OS TESTES PASSARAM! ✓✓✓")
+        print("✓✓TODOS OS TESTES PASSARAM! ✓✓✓")
         print("=" * 60)
         return 0
         
     except AssertionError as e:
         print("\n" + "=" * 60)
-        print(f"✗✗✗ TESTE FALHOU: {e}")
+        print(f"TESTE FALHOU: {e}")
         print("=" * 60)
         return 1
     except Exception as e:
         print("\n" + "=" * 60)
-        print(f"✗✗✗ ERRO: {e}")
+        print(f"ERRO: {e}")
         import traceback
         traceback.print_exc()
         print("=" * 60)

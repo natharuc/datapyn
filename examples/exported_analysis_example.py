@@ -102,7 +102,7 @@ plt.xlabel('Valor Total (R$)')
 plt.title('Top 10 Produtos por Faturamento - Últimos 30 Dias')
 plt.tight_layout()
 plt.savefig('top_produtos.png')
-print('\n✓ Gráfico salvo: top_produtos.png')
+print('\nGráfico salvo: top_produtos.png')
 
 # ========================================
 # Fim do Script

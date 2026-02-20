@@ -359,14 +359,14 @@ class ExportToTableDialog(QDialog):
             QProgressBar {{
                 background-color: {colors["border"]};
                 border: 1px solid {colors["border"]};
-                border-radius: 3px;
+                border-radius: 0px;
                 text-align: center;
                 color: {colors["foreground"]};
                 min-height: 20px;
             }}
             QProgressBar::chunk {{
                 background-color: {colors["accent"]};
-                border-radius: 2px;
+                border-radius: 0px;
             }}
             QPushButton:disabled {{
                 background-color: {colors["border"]};

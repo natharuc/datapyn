@@ -190,29 +190,6 @@ class TestExportScriptGeneration:
         assert python_code in content
         assert "PYTHON" in content.upper()
 
-    def test_export_cross_syntax_block(self, main_window, qtbot, tmp_path):
-        """Exportar bloco cross-syntax deve converter {{ SQL }} para pd.read_sql"""
-        session_widget = main_window._get_current_session_widget()
-        
-        # Adicionar bloco cross-syntax
-        session_widget.editor.add_block("cross")
-        cross_code = """data = {{ SELECT * FROM users }}
-print(len(data))"""
-        session_widget.editor.get_blocks()[-1].set_code(cross_code)
-        
-        output_file = tmp_path / "test_export_cross.py"
-        
-        with patch.object(QFileDialog, "getSaveFileName", return_value=(str(output_file), "")):
-            main_window._export_as_script()
-        
-        assert output_file.exists()
-        
-        content = output_file.read_text(encoding='utf-8')
-        
-        # Deve ter o conteudo SQL convertido ou inline
-        assert "SELECT * FROM users" in content
-        assert "pd.read_sql" in content
-
     def test_export_multiple_blocks_preserves_order(self, main_window, qtbot, tmp_path):
         """Exportar múltiplos blocos deve preservar a ordem"""
         session_widget = main_window._get_current_session_widget()

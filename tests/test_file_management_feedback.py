@@ -186,14 +186,22 @@ class TestSaveFileFeedback:
         QApplication.processEvents()
         QTest.qWait(200)
 
-        main_window._original_file_path = None
-        main_window._original_file_type = "workspace"
-        main_window._save_intelligently()
-        QApplication.processEvents()
+        # Create a temp .dpw file path for workspace save
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".dpw", delete=False, encoding="utf-8") as f:
+            temp_dpw_path = f.name
 
-        action_text = main_window.main_statusbar.action_label.text()
-        # i18n: accepts both Portuguese and English
-        assert "salvo" in action_text.lower() or "saved" in action_text.lower()
+        try:
+            main_window._original_file_path = temp_dpw_path
+            main_window._original_file_type = "workspace"
+            main_window._save_intelligently()
+            QApplication.processEvents()
+
+            action_text = main_window.main_statusbar.action_label.text()
+            # i18n: accepts both Portuguese and English
+            assert "salvo" in action_text.lower() or "saved" in action_text.lower()
+        finally:
+            if os.path.exists(temp_dpw_path):
+                os.remove(temp_dpw_path)
 
     def test_open_file_shows_path_in_statusbar(self, main_window, temp_sql_file):
         """Verifica que abrir arquivo exibe caminho na statusbar"""

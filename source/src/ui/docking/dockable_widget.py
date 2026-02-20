@@ -124,7 +124,7 @@ class DockableWidget(QWidget):
             }
             QPushButton:hover {
                 background-color: #404040;
-                border-radius: 2px;
+                border-radius: 0px;
             }
             QPushButton:pressed {
                 background-color: #505050;
@@ -271,7 +271,7 @@ class DragDropTabWidget(QTabWidget):
                 subcontrol-position: right;
                 margin: 2px;
                 padding: 2px;
-                border-radius: 2px;
+                border-radius: 0px;
             }
             QTabBar::close-button:hover {
                 background-color: rgba(255, 255, 255, 0.1);

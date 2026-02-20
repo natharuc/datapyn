@@ -312,6 +312,7 @@
 
   "object_explorer": {
     "no_connection": "Sem conexao",
+    "loading": "Carregando schema...",
     "btn_refresh": "Atualizar",
     "placeholder_search": "Buscar tabelas e colunas...",
     "db_connected": "{db} (conectado)",

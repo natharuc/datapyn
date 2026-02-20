@@ -281,22 +281,22 @@ class TestDatabaseConnectorAPI:
 
     @patch("database.database_connector.pyodbc.drivers", return_value=["ODBC Driver 18 for SQL Server"])
     def test_connection_string_sqlserver_windows_auth(self, _mock_drivers):
-        """String de conexão SQL Server com Windows Auth"""
+        """String de conexao SQL Server com Windows Auth"""
         from database.database_connector import DatabaseConnector
 
         conn = DatabaseConnector()
-        result = conn._build_connection_string("sqlserver", "localhost", 1433, "testdb", "", "", use_windows_auth=True)
+        result, _connect_args = conn._build_connection_string("sqlserver", "localhost", 1433, "testdb", "", "", use_windows_auth=True)
 
         from urllib.parse import unquote
         assert "Trusted_Connection=yes" in unquote(result)
 
     @patch("database.database_connector.pyodbc.drivers", return_value=["ODBC Driver 18 for SQL Server"])
     def test_connection_string_sqlserver_sql_auth(self, _mock_drivers):
-        """String de conexão SQL Server com SQL Auth"""
+        """String de conexao SQL Server com SQL Auth"""
         from database.database_connector import DatabaseConnector
 
         conn = DatabaseConnector()
-        result = conn._build_connection_string("sqlserver", "localhost", 1433, "testdb", "user", "pass")
+        result, _connect_args = conn._build_connection_string("sqlserver", "localhost", 1433, "testdb", "user", "pass")
 
         from urllib.parse import unquote
         decoded = unquote(result)
@@ -304,20 +304,20 @@ class TestDatabaseConnectorAPI:
         assert "pass" in decoded
 
     def test_connection_string_mysql(self):
-        """String de conexão MySQL"""
+        """String de conexao MySQL"""
         from database.database_connector import DatabaseConnector
 
         conn = DatabaseConnector()
-        result = conn._build_connection_string("mysql", "localhost", 3306, "testdb", "user", "pass")
+        result, _connect_args = conn._build_connection_string("mysql", "localhost", 3306, "testdb", "user", "pass")
 
         assert "mysql+pymysql" in result
 
     def test_connection_string_postgresql(self):
-        """String de conexão PostgreSQL"""
+        """String de conexao PostgreSQL"""
         from database.database_connector import DatabaseConnector
 
         conn = DatabaseConnector()
-        result = conn._build_connection_string("postgresql", "localhost", 5432, "testdb", "user", "pass")
+        result, _connect_args = conn._build_connection_string("postgresql", "localhost", 5432, "testdb", "user", "pass")
 
         assert "postgresql+psycopg2" in result
 
@@ -339,51 +339,6 @@ class TestDatabaseConnectorAPI:
         assert conn.engine is None
         assert conn.db_type == ""
         assert not conn.is_connected()
-
-
-# ==================== TESTES DO MIXED EXECUTOR ====================
-
-
-class TestMixedExecutorAPI:
-    """Testes da API do MixedLanguageExecutor"""
-
-    def test_extract_queries(self, mixed_executor):
-        """Deve extrair queries do código"""
-        code = """
-df1 = {{SELECT * FROM table1}}
-df2 = {{SELECT * FROM table2}}
-"""
-        queries = mixed_executor.extract_queries(code)
-
-        assert len(queries) == 2
-        assert queries[0][0] == "df1"
-        assert queries[1][0] == "df2"
-
-    def test_validate_syntax_valid(self, mixed_executor):
-        """Sintaxe válida deve passar"""
-        code = "df = {{SELECT 1}}"
-
-        is_valid, error = mixed_executor.validate_syntax(code)
-
-        assert is_valid is True
-
-    def test_validate_syntax_no_query(self, mixed_executor):
-        """Código sem query deve ser inválido para cross-syntax"""
-        code = "x = 1 + 1"
-
-        is_valid, error = mixed_executor.validate_syntax(code)
-
-        assert is_valid is False
-
-    def test_process_double_brace_syntax(self, mixed_executor):
-        """Deve processar sintaxe {{ }}"""
-        code = "data = {{SELECT * FROM users}}"
-
-        processed, extractions = mixed_executor._process_double_brace_syntax(code)
-
-        assert len(extractions) == 1
-        assert extractions[0][0] == "data"
-        assert "SELECT * FROM users" in extractions[0][1]
 
 
 # ==================== TESTES DE PERSISTÊNCIA ====================

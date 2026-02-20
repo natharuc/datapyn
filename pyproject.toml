@@ -16,6 +16,8 @@ dependencies = [
     "PyMySQL>=1.1.0",
     "psycopg2-binary>=2.9.0",
     "mariadb>=1.1.0",
+    "databricks-sql-connector>=3.0.0",
+    "databricks-sqlalchemy>=1.0.0",
     # Data Processing
     "pandas>=2.0.0",
     "polars>=1.0.0",

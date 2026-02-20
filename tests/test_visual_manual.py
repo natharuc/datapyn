@@ -76,8 +76,8 @@ class VisualTester:
         blocks = editor.get_blocks()
         assert len(blocks) >= 1, "Deve ter pelo menos 1 bloco"
 
-        self.log(f"  ✓ Blocos encontrados: {len(blocks)}")
-        self.log(f"  ✓ Linguagem do primeiro bloco: {blocks[0].get_language()}")
+        self.log(f"  Blocos encontrados: {len(blocks)}")
+        self.log(f"  Linguagem do primeiro bloco: {blocks[0].get_language()}")
 
         self.wait(500)
 
@@ -104,7 +104,7 @@ class VisualTester:
 
         # Verifica
         assert first_block.get_language() == "sql", f"Esperado sql, obteve {first_block.get_language()}"
-        self.log(f"  ✓ Linguagem confirmada: {first_block.get_language()}")
+        self.log(f"  Linguagem confirmada: {first_block.get_language()}")
 
         self.wait(500)
 
@@ -148,7 +148,7 @@ class VisualTester:
         lang_after = new_block.get_language()
         self.log(f"  → Linguagem DEPOIS de mudar: '{lang_after}'")
         assert lang_after == "cross", f"Esperado 'cross', obteve '{lang_after}'"
-        self.log(f"  ✓ Linguagem confirmada: {lang_after}")
+        self.log(f"  Linguagem confirmada: {lang_after}")
 
         self.wait(500)
 
@@ -172,7 +172,7 @@ class VisualTester:
 
         # Verifica
         assert python_block.get_language() == "python"
-        self.log(f"  ✓ Linguagem confirmada: {python_block.get_language()}")
+        self.log(f"  Linguagem confirmada: {python_block.get_language()}")
 
         # Mostra resumo dos blocos
         self.log("  → Resumo final dos blocos:")
@@ -235,11 +235,11 @@ class VisualTester:
         for lang, code in executed:
             if "{{" in code and "}}" in code:
                 assert lang == "cross", f"Cross-syntax deveria ser 'cross' mas foi '{lang}'"
-                self.log(f"  ✓ Cross-syntax corretamente identificado como '{lang}'")
+                self.log(f"  Cross-syntax corretamente identificado como '{lang}'")
 
         self.wait(2000)  # Espera execução
 
-        self.log("  ✓ Execução concluída!")
+        self.log("  Execução concluída!")
 
 
 def main():
