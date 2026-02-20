@@ -440,6 +440,25 @@ class TestWindowEvents:
             main_window.closeEvent(event)
             mock_save.assert_called()
 
+    def test_close_event_asks_confirmation(self, main_window, qtbot):
+        """Fechar janela deve exibir diálogo de confirmacao"""
+        from PyQt6.QtGui import QCloseEvent
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as mock_question:
+            event = QCloseEvent()
+            with patch.object(main_window, "_save_sessions"):
+                main_window.closeEvent(event)
+            mock_question.assert_called()
+
+    def test_close_event_cancel_keeps_window_open(self, main_window, qtbot):
+        """Cancelar confirmacao de fechamento deve manter janela aberta"""
+        from PyQt6.QtGui import QCloseEvent
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+            event = QCloseEvent()
+            main_window.closeEvent(event)
+            assert not event.isAccepted()
+
     def test_show_restores_geometry(self, main_window, qtbot):
         """Show deve restaurar geometria"""
         # Já foi chamado no fixture, verificar que não deu erro
