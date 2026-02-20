@@ -42,12 +42,12 @@ class BlockEditor(QWidget):
     """
 
     # Execution signals
-    execute_sql = pyqtSignal(str, object, object)  # query, block_name, connection_name
+    execute_sql = pyqtSignal(str, object, object, object)  # query, block_name, connection_name, database_name
     execute_python = pyqtSignal(str)  # code
     execute_cross_syntax = pyqtSignal(str)  # code
 
     # Signal to run multiple blocks in sequence
-    # Emits list of tuples: [(language, code, block), ...]
+    # Emits list of tuples: [(language, code, block, block_name, connection_name, database_name), ...]
     execute_queue = pyqtSignal(list)
 
     # Cancellation signal
@@ -208,7 +208,8 @@ class BlockEditor(QWidget):
         if language == "sql":
             block_name = block.get_block_name()
             connection_name = block.get_connection_name()
-            self.execute_sql.emit(code, block_name, connection_name)
+            database_name = block.get_database_name()
+            self.execute_sql.emit(code, block_name, connection_name, database_name)
         elif language == "python":
             self.execute_python.emit(code)
         elif language == "cross":
@@ -228,8 +229,8 @@ class BlockEditor(QWidget):
         for index, block in enumerate(self._blocks):
             code = block.get_code().strip()
             if code:
-                # Tuple: (language, code, block, block_name, connection_name)
-                queue.append((block.get_language(), code, block, block.get_block_name(), block.get_connection_name()))
+                # Tuple: (language, code, block, block_name, connection_name, database_name)
+                queue.append((block.get_language(), code, block, block.get_block_name(), block.get_connection_name(), block.get_database_name()))
                 self._execution_queue_blocks.append(block)
                 block.set_waiting(True)  # Mark as waiting
 

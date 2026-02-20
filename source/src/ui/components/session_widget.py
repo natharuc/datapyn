@@ -127,7 +127,7 @@ class SessionWidget(QWidget):
         self._connection_color: str = "#007ACC"  # Default: primary blue
 
         # Execution queue for multiple blocks
-        self._execution_queue: list = []  # List of (language, code, block, block_name, connection_name)
+        self._execution_queue: list = []  # List of (language, code, block, block_name, connection_name, database_name)
         self._is_executing: bool = False
         self._cancel_requested: bool = False  # Cancellation flag
         self._current_block_name: str = None  # Currently executing block name (for isolated namespace)
@@ -352,13 +352,14 @@ class SessionWidget(QWidget):
 
     # === SQL EXECUTION ===
 
-    def _on_execute_sql(self, query: str, block_name: str = None, connection_name: str = None):
+    def _on_execute_sql(self, query: str, block_name: str = None, connection_name: str = None, database_name: str = None):
         """Execute SQL in background
 
         Args:
             query: SQL query
             block_name: Block name (DataFrame variable name)
             connection_name: Custom connection name (None = use session default)
+            database_name: Custom database name (None = use connection default)
         """
         # Determine which connection to use
         if connection_name:
@@ -412,8 +413,17 @@ class SessionWidget(QWidget):
             connector = self.session.connector
             conn_label = S.session_widget.default_connection_label
 
+        # Apply custom database if specified (before executing)
+        if database_name:
+            try:
+                connector.change_database(database_name)
+            except Exception as e:
+                self.append_output(S.session_widget.block_connect_error.format(name=database_name, error=e), error=True)
+                self._process_next_in_queue()
+                return
+
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
-            self._execution_queue.append(("sql", query, None, block_name, connection_name))
+            self._execution_queue.append(("sql", query, None, block_name, connection_name, database_name))
             return
 
         self._is_executing = True
@@ -850,15 +860,22 @@ class SessionWidget(QWidget):
         # Supports formats:
         # Old: (language, code)
         # Medium: (language, code, block)
-        # New: (language, code, block, block_name, connection_name)
-        if len(item) >= 5:
+        # Legacy: (language, code, block, block_name, connection_name)
+        # Current: (language, code, block, block_name, connection_name, database_name)
+        if len(item) >= 6:
+            language, code, block, block_name, connection_name, database_name = item[:6]
+            if block:
+                self.editor.mark_block_started(block)
+        elif len(item) == 5:
             language, code, block, block_name, connection_name = item[:5]
+            database_name = None
             if block:
                 self.editor.mark_block_started(block)
         elif len(item) == 3:
             language, code, block = item
             block_name = None
             connection_name = None
+            database_name = None
             if block:
                 self.editor.mark_block_started(block)
         else:
@@ -866,10 +883,11 @@ class SessionWidget(QWidget):
             block = None
             block_name = None
             connection_name = None
+            database_name = None
 
         # Execute according to language
         if language == "sql":
-            self._on_execute_sql(code, block_name=block_name, connection_name=connection_name)
+            self._on_execute_sql(code, block_name=block_name, connection_name=connection_name, database_name=database_name)
         elif language == "python":
             self._on_execute_python(code)
         elif language == "cross":
