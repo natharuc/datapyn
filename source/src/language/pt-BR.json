@@ -170,6 +170,8 @@
     "export_complete_title": "Exportacao Concluida",
     "export_complete_msg": "Script Python exportado com sucesso para:\n{filename}",
     "export_script_title": "Exportar como Script Python",
+    "close_confirm_title": "Confirmacao",
+    "close_confirm_msg": "Tem certeza que deseja fechar o Datapyn?",
     "execution_in_progress_title": "Execucao em andamento",
     "execution_in_progress_msg": "Ha codigo sendo executado. Deseja cancelar e fechar o aplicativo?",
     "language_restart_title": "Reinicializacao Necessaria",
