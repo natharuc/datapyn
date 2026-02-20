@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.10.0 (2026-02-20)
+
+### Features
+
+- **dependencies**: Add new libraries for Databricks and SQL compatibility
+  ([`e82432d`](https://github.com/natharuc/datapyn/commit/e82432d77b4e732dfba1ba185479cfc24409bb46))
+
+
 ## v1.9.0 (2026-02-20)
 
 ### Bug Fixes
