@@ -12,6 +12,7 @@ Each tool maps to a DataPyn operation:
 - get_context: Gets current editor context (active code, language, etc.)
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Optional, Callable
 
@@ -416,7 +417,6 @@ class MCPToolRegistry:
                 })
             context["blocks"] = blocks_info
 
-        import json
         return {"content": [{"type": "text", "text": json.dumps(context, indent=2)}]}
 
     # === Helper methods ===

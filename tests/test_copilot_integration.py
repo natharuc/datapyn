@@ -7,6 +7,13 @@ import json
 from unittest.mock import MagicMock, patch
 from PyQt6.QtCore import QSettings
 
+# Shared test data
+MOCK_SCHEMA = {
+    "database": "testdb",
+    "tables": [{"name": "users"}],
+    "columns": {"users": [{"name": "id"}, {"name": "email"}]},
+}
+
 
 # ==================== MCPToolRegistry Tests ====================
 
@@ -168,13 +175,8 @@ class TestMCPToolRegistry:
 
     def test_read_schema_cached(self):
         """read_schema should return cached schema data."""
-        mock_schema = {
-            "database": "testdb",
-            "tables": [{"name": "users"}],
-            "columns": {"users": [{"name": "id"}, {"name": "email"}]},
-        }
         mock_schema_service = MagicMock()
-        mock_schema_service.get_cached_schema.return_value = mock_schema
+        mock_schema_service.get_cached_schema.return_value = MOCK_SCHEMA
 
         mock_session = MagicMock()
         mock_session.connection_name = "my_conn"
