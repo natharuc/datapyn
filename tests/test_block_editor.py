@@ -465,9 +465,37 @@ class TestBlockEditorKeyboardShortcuts:
         return editor
 
     def test_f5_executes(self, editor, qtbot):
-        """F5 deve executar (emite fila quando não há seleção)"""
+        """F5 deve executar apenas o bloco focado (nao todos)"""
         editor.get_blocks()[0].set_language("python")
         editor.get_blocks()[0].set_code("x = 1")
+
+        # Focus the block
+        editor._focused_block = editor.get_blocks()[0]
+
+        python_received = []
+        editor.execute_python.connect(lambda code: python_received.append(code))
+
+        # Simula F5
+        from PyQt6.QtGui import QKeyEvent
+
+        event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_F5, Qt.KeyboardModifier.NoModifier)
+        editor.keyPressEvent(event)
+
+        # F5 sem selecao executa apenas o bloco focado
+        assert len(python_received) == 1
+        assert python_received[0] == "x = 1"
+
+    def test_f5_executes_only_focused_block(self, editor, qtbot):
+        """F5 deve executar apenas o bloco focado, nao todos os blocos"""
+        editor.get_blocks()[0].set_language("python")
+        editor.get_blocks()[0].set_code("x = 1")
+        editor.add_block(language="python", code="y = 2")
+
+        # Focus on second block
+        editor._focused_block = editor.get_blocks()[1]
+
+        python_received = []
+        editor.execute_python.connect(lambda code: python_received.append(code))
 
         queue_received = []
         editor.execute_queue.connect(lambda q: queue_received.extend(q))
@@ -478,10 +506,30 @@ class TestBlockEditorKeyboardShortcuts:
         event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_F5, Qt.KeyboardModifier.NoModifier)
         editor.keyPressEvent(event)
 
-        # F5 sem seleção executa todos os blocos via fila
-        assert len(queue_received) == 1
-        assert queue_received[0][0] == "python"
-        assert queue_received[0][1] == "x = 1"
+        # Deve executar apenas o bloco focado (segundo), nao todos
+        assert len(python_received) == 1
+        assert python_received[0] == "y = 2"
+        assert len(queue_received) == 0  # Nao deve emitir execute_queue
+
+    def test_run_button_executes_only_that_block(self, editor, qtbot):
+        """Botao de executar do bloco deve executar apenas aquele bloco"""
+        editor.get_blocks()[0].set_language("python")
+        editor.get_blocks()[0].set_code("x = 1")
+        block2 = editor.add_block(language="python", code="y = 2")
+
+        python_received = []
+        editor.execute_python.connect(lambda code: python_received.append(code))
+
+        queue_received = []
+        editor.execute_queue.connect(lambda q: queue_received.extend(q))
+
+        # Simula clique no botao de executar do bloco 2
+        editor._on_block_execute_requested(block2)
+
+        # Deve executar apenas o bloco 2
+        assert len(python_received) == 1
+        assert python_received[0] == "y = 2"
+        assert len(queue_received) == 0  # Nao deve emitir execute_queue
 
 
 class TestRealWorldScenarios:

@@ -1843,9 +1843,9 @@ class MainWindow(DockingMainWindow):
         if not editor:
             return
 
-        # Uses same logic as BlockEditor: F5 executes selection or all blocks
-        if hasattr(editor, "_execute_smart"):
-            editor._execute_smart()
+        # Toolbar run button executes only the focused block
+        if hasattr(editor, "execute_focused_block"):
+            editor.execute_focused_block()
         elif hasattr(editor, "get_selected_or_all_text"):
             # Fallback para editor antigo
             code = editor.get_selected_or_all_text()
@@ -1932,6 +1932,7 @@ class MainWindow(DockingMainWindow):
             # Execution
             "execute_sql": self._execute_current_block,
             "execute_all": self._execute_all_blocks,
+            "execute_block_advance": self._execute_and_advance,
             "clear_results": self._clear_results,
             # File
             "open_file": self._open_file,
@@ -1971,6 +1972,14 @@ class MainWindow(DockingMainWindow):
         from src.editors.code_editor import CodeEditor
         CodeEditor.set_app_shortcuts(app_keys)
 
+        # Informar editores sobre atalhos configuraveis do editor (QScintilla)
+        editor_shortcuts = {
+            action: self.shortcut_manager.get_shortcut(action)
+            for action in self.shortcut_manager.get_all_shortcuts()
+            if action.startswith("editor_")
+        }
+        CodeEditor.set_editor_shortcuts(editor_shortcuts)
+
     def _reload_shortcuts(self):
         """Re-registers all shortcuts (called when user changes settings)"""
         from PyQt6.QtGui import QShortcut, QKeySequence
@@ -1987,6 +1996,7 @@ class MainWindow(DockingMainWindow):
             # Execution
             "execute_sql": self._execute_current_block,
             "execute_all": self._execute_all_blocks,
+            "execute_block_advance": self._execute_and_advance,
             "clear_results": self._clear_results,
             # File
             "open_file": self._open_file,
@@ -2025,6 +2035,22 @@ class MainWindow(DockingMainWindow):
         # Update editors
         from src.editors.code_editor import CodeEditor
         CodeEditor.set_app_shortcuts(app_keys)
+
+        # Atualizar atalhos configuraveis do editor (QScintilla)
+        editor_shortcuts = {
+            action: self.shortcut_manager.get_shortcut(action)
+            for action in self.shortcut_manager.get_all_shortcuts()
+            if action.startswith("editor_")
+        }
+        CodeEditor.set_editor_shortcuts(editor_shortcuts)
+
+        # Re-aplicar keybindings nos editores ja existentes
+        for i in range(self.session_tabs.count()):
+            widget = self.session_tabs.widget(i)
+            if isinstance(widget, SessionWidget):
+                for block in widget.editor.get_blocks():
+                    if isinstance(block.editor, CodeEditor):
+                        block.editor._apply_editor_keybindings()
 
     # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
 
@@ -2400,11 +2426,11 @@ class MainWindow(DockingMainWindow):
         if not editor:
             return
 
-        # If it's a BlockEditor, uses smart execution (same logic as button)
+        # If it's a BlockEditor, executes only the focused block
         from src.editors.block_editor import BlockEditor
 
         if isinstance(editor, BlockEditor):
-            editor._execute_smart()
+            editor.execute_focused_block()
         else:
             # Legacy editor - executes as Python by default
             code = editor.get_selected_or_all_text().strip()
@@ -2426,6 +2452,17 @@ class MainWindow(DockingMainWindow):
             code = editor.get_selected_or_all_text().strip()
             if code:
                 self._execute_python(code)
+
+    def _execute_and_advance(self):
+        """Executes focused block and advances to next"""
+        editor = self._get_current_editor()
+        if not editor:
+            return
+
+        from src.editors.block_editor import BlockEditor
+
+        if isinstance(editor, BlockEditor):
+            editor._execute_focused_and_advance()
 
     def _force_execute_sql(self):
         """Forces execution of current block as SQL"""

@@ -16,6 +16,7 @@ class ShortcutManager:
         # Execution
         "execute_sql": "F5",
         "execute_all": "Ctrl+F5",
+        "execute_block_advance": "Shift+Return",
         "clear_results": "Ctrl+Shift+C",
         # Arquivo
         "open_file": "Ctrl+O",
@@ -38,6 +39,14 @@ class ShortcutManager:
         "reload_schema": "Ctrl+Shift+T",
         # Ferramentas
         "settings": "Ctrl+,",
+        # Editor (atalhos internos do QScintilla)
+        "editor_newline": "",
+        "editor_duplicate_line": "Ctrl+D",
+        "editor_cut_line": "Ctrl+L",
+        "editor_transpose_line": "",
+        "editor_lowercase": "Ctrl+U",
+        "editor_uppercase": "Ctrl+Shift+U",
+        "editor_delete_line": "Ctrl+Shift+K",
     }
 
     def __init__(self, config_path: str = None):
@@ -51,18 +60,22 @@ class ShortcutManager:
         self.active_shortcuts: Dict[str, QShortcut] = {}
 
     def _load_shortcuts(self) -> Dict[str, str]:
-        """Loads shortcuts from configuration file"""
+        """Loads shortcuts from configuration file.
+
+        Merges saved shortcuts with defaults so that newly added
+        shortcuts are always available even when the user has an
+        existing configuration file.
+        """
+        merged = self.DEFAULT_SHORTCUTS.copy()
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    # Migrar formato antigo
-                    if "shortcuts" in data:
-                        return data["shortcuts"]
-                    return data
-            except:
+                    saved = data.get("shortcuts", data) if isinstance(data, dict) else {}
+                    merged.update(saved)
+            except Exception:
                 pass
-        return self.DEFAULT_SHORTCUTS.copy()
+        return merged
 
     def save_shortcuts(self):
         """Save shortcuts to config file"""
