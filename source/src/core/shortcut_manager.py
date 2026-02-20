@@ -6,7 +6,10 @@ from typing import Dict, Callable
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QWidget
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class ShortcutManager:
@@ -107,3 +110,30 @@ class ShortcutManager:
     def get_all_shortcuts(self) -> Dict[str, str]:
         """Retorna todos os atalhos configurados"""
         return self.shortcuts.copy()
+
+    def detect_duplicates(self) -> Dict[str, list]:
+        """Detect duplicate shortcuts and log them.
+        
+        Returns:
+            Dict mapping shortcut key to list of action names using it
+        """
+        shortcut_to_actions: Dict[str, list] = {}
+        for action, shortcut in self.shortcuts.items():
+            if not shortcut:
+                continue
+            # Normalize the shortcut for comparison
+            normalized = QKeySequence(shortcut).toString()
+            if normalized not in shortcut_to_actions:
+                shortcut_to_actions[normalized] = []
+            shortcut_to_actions[normalized].append(action)
+        
+        # Filter to only duplicates
+        duplicates = {k: v for k, v in shortcut_to_actions.items() if len(v) > 1}
+        
+        if duplicates:
+            for shortcut, actions in duplicates.items():
+                logger.warning(
+                    f"Duplicate shortcut detected: {shortcut} is used by: {', '.join(actions)}"
+                )
+        
+        return duplicates

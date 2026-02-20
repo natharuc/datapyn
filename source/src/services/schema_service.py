@@ -74,13 +74,19 @@ class SchemaWorker(QObject):
             try:
                 tables_query = self._get_tables_query()
                 df = self.connector.execute_query(tables_query)
+                db_type = getattr(self.connector, "db_type", "").lower()
                 if df is not None and len(df) > 0:
                     for _, row in df.iterrows():
                         if self._cancelled:
                             return
+                        table_name = str(row.get("table_name", row.iloc[0]))
+                        table_schema = str(row.get("table_schema", "")) if "table_schema" in df.columns else ""
+                        # For Databricks, use schema.table_name as the name to match columns
+                        if db_type == "databricks" and table_schema:
+                            table_name = f"{table_schema}.{table_name}"
                         table_info = {
-                            "name": str(row.get("table_name", row.iloc[0])),
-                            "schema": str(row.get("table_schema", "")) if "table_schema" in df.columns else "",
+                            "name": table_name,
+                            "schema": table_schema,
                             "type": str(row.get("table_type", "TABLE")) if "table_type" in df.columns else "TABLE",
                         }
                         schema["tables"].append(table_info)
@@ -95,10 +101,16 @@ class SchemaWorker(QObject):
                 columns_query = self._get_columns_query()
                 df = self.connector.execute_query(columns_query)
                 if df is not None and len(df) > 0:
+                    db_type = getattr(self.connector, "db_type", "").lower()
                     for _, row in df.iterrows():
                         if self._cancelled:
                             return
                         table_name = str(row.get("table_name", row.iloc[0]))
+                        # For Databricks, use schema.table_name to avoid column mixing
+                        if db_type == "databricks" and "table_schema" in df.columns:
+                            table_schema = str(row.get("table_schema", ""))
+                            if table_schema:
+                                table_name = f"{table_schema}.{table_name}"
                         col_info = {
                             "name": str(row.get("column_name", row.iloc[1])),
                             "type": str(row.get("data_type", "")) if "data_type" in df.columns else "",
@@ -135,6 +147,8 @@ class SchemaWorker(QObject):
             return "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name"
         elif db_type == "postgresql":
             return "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+        elif db_type == "databricks":
+            return "SHOW CATALOGS"
         else:
             # MySQL, MariaDB
             return "SHOW DATABASES"
@@ -156,6 +170,14 @@ class SchemaWorker(QObject):
                 SELECT table_schema, table_name, table_type
                 FROM information_schema.tables
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY table_schema, table_name
+            """
+        elif db_type == "databricks":
+            # Databricks: Use information_schema from current catalog
+            return """
+                SELECT table_schema, table_name, table_type
+                FROM information_schema.tables
+                WHERE table_schema NOT IN ('information_schema')
                 ORDER BY table_schema, table_name
             """
         else:
@@ -190,6 +212,16 @@ class SchemaWorker(QObject):
                 FROM information_schema.columns
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
                 ORDER BY table_name, ordinal_position
+            """
+        elif db_type == "databricks":
+            # Databricks: Use information_schema from current catalog
+            # Include table_schema to differentiate same-named tables in different schemas
+            return """
+                SELECT table_schema, table_name, column_name, data_type, is_nullable,
+                       ordinal_position
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('information_schema')
+                ORDER BY table_schema, table_name, ordinal_position
             """
         else:
             # MySQL, MariaDB

@@ -48,7 +48,6 @@ class EditorHeader(QWidget):
         colors = {
             "sql": "#569cd6",
             "python": "#4ec9b0",
-            "cross": "#9cdcfe",
         }
         color = colors.get(mode.lower(), "#cccccc")
 

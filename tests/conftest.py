@@ -232,18 +232,6 @@ def sample_dataframe():
     return pd.DataFrame({"id": [1, 2, 3], "nome": ["Alice", "Bob", "Carol"]})
 
 
-# ==================== FIXTURES DE MIXED EXECUTOR ====================
-
-
-@pytest.fixture
-def mixed_executor(mock_db_connector, results_manager):
-    """MixedLanguageExecutor configurado"""
-    from core.mixed_executor import MixedLanguageExecutor
-
-    executor = MixedLanguageExecutor(mock_db_connector, results_manager)
-    return executor
-
-
 # ==================== HELPER FUNCTIONS ====================
 
 

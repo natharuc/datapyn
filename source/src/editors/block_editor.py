@@ -44,7 +44,6 @@ class BlockEditor(QWidget):
     # Execution signals
     execute_sql = pyqtSignal(str, object, object, object)  # query, block_name, connection_name, database_name
     execute_python = pyqtSignal(str)  # code
-    execute_cross_syntax = pyqtSignal(str)  # code
 
     # Signal to run multiple blocks in sequence
     # Emits list of tuples: [(language, code, block, block_name, connection_name, database_name), ...]
@@ -133,7 +132,7 @@ class BlockEditor(QWidget):
             QPushButton {
                 background: transparent;
                 border: 1px solid #555;
-                border-radius: 12px;
+                border-radius: 0px;
             }
             QPushButton:hover {
                 background: #333;
@@ -212,8 +211,6 @@ class BlockEditor(QWidget):
             self.execute_sql.emit(code, block_name, connection_name, database_name)
         elif language == "python":
             self.execute_python.emit(code)
-        elif language == "cross":
-            self.execute_cross_syntax.emit(code)
 
         # Note: caller needs to call mark_execution_finished afterwards
 

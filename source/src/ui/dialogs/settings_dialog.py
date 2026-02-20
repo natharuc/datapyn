@@ -61,7 +61,7 @@ class SettingsDialog(QDialog):
         self.tabs.setStyleSheet("""
             QTabWidget::pane {
                 border: 1px solid #3e3e42;
-                border-radius: 4px;
+                border-radius: 0px;
                 background-color: #1e1e1e;
             }
             QTabBar::tab {
@@ -103,7 +103,7 @@ class SettingsDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 6px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
             }
             QPushButton:hover {
                 background-color: #505050;
@@ -122,7 +122,7 @@ class SettingsDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 6px 20px;
-                border-radius: 3px;
+                border-radius: 0px;
             }
             QPushButton:hover {
                 background-color: #505050;
@@ -139,7 +139,7 @@ class SettingsDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 6px 20px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -166,7 +166,7 @@ class SettingsDialog(QDialog):
                 font-size: 11px;
                 color: #cccccc;
                 border: 1px solid #3e3e42;
-                border-radius: 4px;
+                border-radius: 0px;
                 margin-top: 12px;
                 padding-top: 20px;
             }
@@ -192,7 +192,7 @@ class SettingsDialog(QDialog):
                 background-color: #2d2d30;
                 color: #cccccc;
                 border: 1px solid #3e3e42;
-                border-radius: 3px;
+                border-radius: 0px;
                 padding: 6px 10px;
                 font-size: 11px;
             }
@@ -241,7 +241,7 @@ class SettingsDialog(QDialog):
                 font-size: 11px;
                 color: #cccccc;
                 border: 1px solid #3e3e42;
-                border-radius: 4px;
+                border-radius: 0px;
                 margin-top: 12px;
                 padding-top: 20px;
             }
@@ -274,7 +274,7 @@ class SettingsDialog(QDialog):
                 background-color: #2d2d30;
                 color: #cccccc;
                 border: 1px solid #3e3e42;
-                border-radius: 3px;
+                border-radius: 0px;
                 padding: 6px 10px;
                 font-size: 11px;
             }
@@ -329,7 +329,7 @@ class SettingsDialog(QDialog):
             background-color: #2d2d30;
             color: #cccccc;
             padding: 10px;
-            border-radius: 4px;
+            border-radius: 0px;
             border-left: 3px solid #007acc;
             font-size: 10px;
         """)
@@ -474,7 +474,7 @@ class SettingsDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 4px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
             }
             QPushButton:hover {
                 background-color: #505050;
@@ -491,7 +491,7 @@ class SettingsDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 4px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-weight: bold;
             }
             QPushButton:hover {

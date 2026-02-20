@@ -49,7 +49,7 @@ class MainToolbar(QToolBar):
                 border: none;
                 padding: 5px 10px;
                 font-size: 12px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QPushButton:hover {{
                 background-color: #37373d;

@@ -291,6 +291,8 @@ class ConnectionsManagerDialog(QDialog):
                     icon_color = "#00758f"
                 elif db_type == "postgresql":
                     icon_color = "#336791"
+                elif db_type == "databricks":
+                    icon_color = "#ff3621"
 
                 item.setIcon(0, qta.icon("mdi.database", color=icon_color))
 
@@ -358,6 +360,8 @@ class ConnectionsManagerDialog(QDialog):
             target_group,  # New group
             config.get("use_windows_auth", False),
             config.get("color", ""),
+            config.get("trust_server_certificate", False),
+            config.get("http_path", ""),
         )
 
         # Reloads the tree
@@ -584,6 +588,8 @@ class ConnectionsManagerDialog(QDialog):
                 config.get("group", ""),
                 config.get("use_windows_auth", False),
                 config.get("color", ""),
+                config.get("trust_server_certificate", False),
+                config.get("http_path", ""),
             )
 
             self._load_connections()
@@ -631,6 +637,8 @@ class ConnectionsManagerDialog(QDialog):
                 new_config.get("group", ""),
                 new_config.get("use_windows_auth", False),
                 new_config.get("color", ""),
+                new_config.get("trust_server_certificate", False),
+                new_config.get("http_path", ""),
             )
 
             self.selected_connection = new_name
@@ -667,6 +675,8 @@ class ConnectionsManagerDialog(QDialog):
                 config.get("group", ""),
                 config.get("use_windows_auth", False),
                 config.get("color", ""),
+                config.get("trust_server_certificate", False),
+                config.get("http_path", ""),
             )
 
             self._load_connections()

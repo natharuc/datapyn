@@ -65,8 +65,9 @@ class OutputPanel(QWidget):
 
         toolbar.setStyleSheet("""
             QWidget {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #3e3e42;
+                background-color: #222225;
+                border: none;
+                border-bottom: 1px solid #28282c;
             }
         """)
         layout.addWidget(toolbar)
@@ -83,14 +84,16 @@ class OutputPanel(QWidget):
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
-            colors = {"background": "#1e1e1e", "foreground": "#d4d4d4"}
+            colors = {"background": "#1a1a1c", "foreground": "#e0e0e4"}
 
         self.text_edit.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {colors["background"]};
                 color: {colors["foreground"]};
                 border: none;
-                padding: 8px;
+                padding: 12px;
+                font-size: 13px;
+                line-height: 1.5;
             }}
         """)
 

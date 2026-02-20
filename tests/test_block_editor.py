@@ -46,11 +46,6 @@ class TestCodeBlock:
         block.set_language("sql")
         assert block.get_language() == "sql"
 
-    def test_set_language_cross(self, block):
-        """Deve permitir mudar para Cross-Syntax"""
-        block.set_language("cross")
-        assert block.get_language() == "cross"
-
     def test_set_code(self, block):
         """Deve permitir definir código"""
         block.set_code("print('hello')")
@@ -199,17 +194,6 @@ class TestBlockEditor:
 
         assert blocker.args[0] == "print(1)"
 
-    def test_execute_cross_signal(self, editor, qtbot):
-        """Deve emitir sinal Cross quando bloco é Cross"""
-        blocks = editor.get_blocks()
-        blocks[0].set_language("cross")
-        blocks[0].set_code("df = {{SELECT 1}}")
-
-        with qtbot.waitSignal(editor.execute_cross_syntax, timeout=1000) as blocker:
-            editor._execute_block(blocks[0])
-
-        assert blocker.args[0] == "df = {{SELECT 1}}"
-
     def test_change_language_then_execute(self, editor, qtbot):
         """Mudar linguagem e executar deve usar a nova linguagem"""
         blocks = editor.get_blocks()
@@ -238,9 +222,6 @@ class TestBlockEditor:
         # Bloco 2: Python
         block2 = editor.add_block(language="python", code="print(1)")
 
-        # Bloco 3: Cross
-        block3 = editor.add_block(language="cross", code="df = {{SELECT 2}}")
-
         # Executar bloco SQL
         with qtbot.waitSignal(editor.execute_sql, timeout=1000):
             editor._execute_block(blocks[0])
@@ -249,46 +230,36 @@ class TestBlockEditor:
         with qtbot.waitSignal(editor.execute_python, timeout=1000):
             editor._execute_block(block2)
 
-        # Executar bloco Cross
-        with qtbot.waitSignal(editor.execute_cross_syntax, timeout=1000):
-            editor._execute_block(block3)
-
     def test_serialization_multiple_blocks(self, editor):
         """Deve serializar múltiplos blocos"""
         editor.get_blocks()[0].set_language("sql")
         editor.get_blocks()[0].set_code("SELECT 1")
         editor.add_block(language="python", code="x = 1")
-        editor.add_block(language="cross", code="y = {{SELECT 2}}")
 
         data = editor.to_list()
 
-        assert len(data) == 3
+        assert len(data) == 2
         # Verificar campos principais (height pode variar)
         assert data[0]["language"] == "sql"
         assert data[0]["code"] == "SELECT 1"
         assert data[1]["language"] == "python"
         assert data[1]["code"] == "x = 1"
-        assert data[2]["language"] == "cross"
-        assert data[2]["code"] == "y = {{SELECT 2}}"
 
     def test_deserialization_multiple_blocks(self, editor):
         """Deve deserializar múltiplos blocos"""
         data = [
             {"language": "sql", "code": "SELECT 1"},
             {"language": "python", "code": "x = 1"},
-            {"language": "cross", "code": "y = {{SELECT 2}}"},
         ]
 
         editor.from_list(data)
 
         blocks = editor.get_blocks()
-        assert len(blocks) == 3
+        assert len(blocks) == 2
         assert blocks[0].get_language() == "sql"
         assert blocks[0].get_code() == "SELECT 1"
         assert blocks[1].get_language() == "python"
         assert blocks[1].get_code() == "x = 1"
-        assert blocks[2].get_language() == "cross"
-        assert blocks[2].get_code() == "y = {{SELECT 2}}"
 
 
 class TestBlockEditorExecution:
@@ -407,15 +378,12 @@ class TestSessionWidgetWithBlocks:
         """Deve funcionar mudar linguagem múltiplas vezes"""
         blocks = widget.editor.get_blocks()
 
-        # Python -> SQL -> Cross -> Python
+        # Python -> SQL -> Python
         blocks[0].set_language("python")
         assert blocks[0].get_language() == "python"
 
         blocks[0].set_language("sql")
         assert blocks[0].get_language() == "sql"
-
-        blocks[0].set_language("cross")
-        assert blocks[0].get_language() == "cross"
 
         blocks[0].set_language("python")
         assert blocks[0].get_language() == "python"
@@ -550,11 +518,11 @@ class TestRealWorldScenarios:
         return widget
 
     def test_scenario_data_analysis_workflow(self, widget, qtbot):
-        """Cenário: Fluxo de análise de dados
+        """Cenario: Fluxo de analise de dados
 
         1. Carrega dados via SQL
         2. Processa com Python
-        3. Usa Cross-Syntax para mais dados
+        3. Mais processamento Python
         """
         editor = widget.editor
 
@@ -566,23 +534,19 @@ class TestRealWorldScenarios:
         # Bloco 2: Python para processar
         block2 = editor.add_block(language="python", code="df_filtered = df[df.ativo == 1]")
 
-        # Bloco 3: Cross-syntax para mais dados
-        block3 = editor.add_block(language="cross", code="vendas = {{SELECT * FROM vendas}}")
-
-        # Bloco 4: Python para análise final
-        block4 = editor.add_block(language="python", code="resultado = df_filtered.merge(vendas)")
+        # Bloco 3: Python para analise final
+        block3 = editor.add_block(language="python", code="resultado = df_filtered.describe()")
 
         # Verifica estrutura
         all_blocks = editor.get_blocks()
-        assert len(all_blocks) == 4
+        assert len(all_blocks) == 3
         assert all_blocks[0].get_language() == "sql"
         assert all_blocks[1].get_language() == "python"
-        assert all_blocks[2].get_language() == "cross"
-        assert all_blocks[3].get_language() == "python"
+        assert all_blocks[2].get_language() == "python"
 
         # Serializa e verifica
         data = editor.to_list()
-        assert len(data) == 4
+        assert len(data) == 3
 
     def test_scenario_change_mind_about_language(self, widget, qtbot):
         """Cenário: Usuário muda de ideia sobre linguagem
@@ -623,7 +587,7 @@ class TestRealWorldScenarios:
         assert sql_executed == []
 
     def test_scenario_mixed_execution(self, widget, qtbot):
-        """Cenário: Execução mista de blocos
+        """Cenario: Execucao mista de blocos
 
         Cria 4 blocos de linguagens diferentes e executa todos
         """
@@ -635,7 +599,7 @@ class TestRealWorldScenarios:
 
         editor.add_block(language="sql", code="SELECT 1 as num")
         editor.add_block(language="python", code="b = 2")
-        editor.add_block(language="cross", code="c = {{SELECT 3}}")
+        editor.add_block(language="sql", code="SELECT 3 as num")
 
         # Rastreador de fila
         queue_received = []
@@ -652,8 +616,8 @@ class TestRealWorldScenarios:
         assert queue_received[1][1] == "SELECT 1 as num"
         assert queue_received[2][0] == "python"
         assert queue_received[2][1] == "b = 2"
-        assert queue_received[3][0] == "cross"
-        assert queue_received[3][1] == "c = {{SELECT 3}}"
+        assert queue_received[3][0] == "sql"
+        assert queue_received[3][1] == "SELECT 3 as num"
 
     def test_scenario_session_persistence(self, session, theme_manager, qtbot):
         """Cenário: Persistência de sessão
@@ -738,16 +702,15 @@ class TestEdgeCases:
         assert editor.get_block_count() == 21  # 1 inicial + 20 adicionados
 
     def test_rapid_language_changes(self, editor):
-        """Deve suportar mudanças rápidas de linguagem"""
+        """Deve suportar mudancas rapidas de linguagem"""
         block = editor.get_blocks()[0]
 
         for _ in range(10):
             block.set_language("python")
             block.set_language("sql")
-            block.set_language("cross")
 
-        # Última deve ser cross
-        assert block.get_language() == "cross"
+        # Ultima deve ser sql
+        assert block.get_language() == "sql"
 
     def test_special_characters_in_code(self, editor, qtbot):
         """Deve suportar caracteres especiais"""

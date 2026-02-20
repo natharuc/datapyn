@@ -15,6 +15,38 @@ from typing import List, Optional, Tuple
 from PyQt6.QtCore import QObject, pyqtSignal
 
 
+def _read_file_with_encoding_fallback(filepath: str) -> str:
+    """
+    Read file content with encoding fallback.
+    
+    Tries utf-8 first, then detects encoding with chardet,
+    finally falls back to latin-1 (which never fails).
+    """
+    # Try utf-8 first (most common)
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        pass
+    
+    # Try to detect encoding with chardet if available
+    try:
+        import chardet
+        with open(filepath, "rb") as f:
+            raw_data = f.read()
+        detected = chardet.detect(raw_data)
+        encoding = detected.get("encoding", "latin-1") or "latin-1"
+        return raw_data.decode(encoding)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    
+    # Fallback to latin-1 (never fails, but may produce garbage for some encodings)
+    with open(filepath, "r", encoding="latin-1") as f:
+        return f.read()
+
+
 class FileImportService(QObject):
     """
     Servico centralizado para importacao de arquivos.
@@ -70,8 +102,7 @@ class FileImportService(QObject):
     @staticmethod
     def read_file_content(file_path: str) -> str:
         """Le o conteudo de um arquivo texto."""
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
+        return _read_file_with_encoding_fallback(file_path)
 
     @staticmethod
     def classify_file_list(file_paths: List[str]) -> Tuple[List[str], List[str], List[str]]:
@@ -158,8 +189,8 @@ class FileImportService(QObject):
         import json
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                notebook = json.load(f)
+            content = _read_file_with_encoding_fallback(file_path)
+            notebook = json.loads(content)
         except json.JSONDecodeError as e:
             raise ValueError(f"Arquivo .ipynb invalido: {e}")
         except Exception as e:

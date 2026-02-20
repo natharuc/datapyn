@@ -29,39 +29,46 @@ class SessionTabBar(QTabBar):
         self._setup_context_menu()
 
     def _setup_style(self):
-        """Configure style"""
-        self.setStyleSheet("""
-            QTabBar {
-                background-color: #252526;
-            }
-            QTabBar::tab {
-                background-color: #2d2d30;
-                color: #999999;
-                padding: 6px 16px;
-                padding-right: 28px;
+        """Configure style - modern, clean, web-like"""
+        from src.design_system.tokens import get_colors, RADIUS
+        colors = get_colors()
+        
+        self.setStyleSheet(f"""
+            QTabBar {{
+                background-color: {colors.bg_secondary};
+                border: none;
+            }}
+            QTabBar::tab {{
+                background-color: transparent;
+                color: {colors.text_secondary};
+                padding: 10px 20px;
+                padding-right: 32px;
                 border: none;
                 border-bottom: 2px solid transparent;
-                margin-right: 1px;
-                min-width: 80px;
-            }
-            QTabBar::tab:selected {
-                background-color: #1e1e1e;
-                color: #ffffff;
-                border-bottom: 2px solid #3369FF;
-            }
-            QTabBar::tab:hover:!selected {
-                background-color: #37373d;
-                color: #cccccc;
-            }
-            QTabBar::close-button {
+                margin-right: 2px;
+                min-width: 90px;
+                font-size: 13px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {colors.bg_primary};
+                color: {colors.text_inverse};
+                border-bottom: 2px solid {colors.interactive_primary};
+                border-top-left-radius: {RADIUS.radius_sm}px;
+                border-top-right-radius: {RADIUS.radius_sm}px;
+            }}
+            QTabBar::tab:hover:!selected {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+            }}
+            QTabBar::close-button {{
                 subcontrol-position: right;
-                margin-right: 4px;
+                margin-right: 6px;
                 padding: 0px;
-            }
-            QTabBar::close-button:hover {
-                background-color: rgba(231, 76, 60, 0.9);
-                border-radius: 3px;
-            }
+            }}
+            QTabBar::close-button:hover {{
+                background-color: rgba(220, 80, 80, 0.85);
+                border-radius: {RADIUS.radius_sm}px;
+            }}
         """)
 
     def _setup_context_menu(self):
@@ -254,8 +261,8 @@ class SessionTabs(QTabWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Execution state by tab index
-        self._running_tabs: Dict[int, bool] = {}
+        # Execution state by widget id (not index, to survive tab reordering)
+        self._running_widgets: Dict[int, bool] = {}
         self._spinner_angle = 0
         self._spinner_timer = QTimer(self)
         self._spinner_timer.timeout.connect(self._tick_spinner)
@@ -280,30 +287,30 @@ class SessionTabs(QTabWidget):
         from PyQt6.QtWidgets import QToolButton
         from PyQt6.QtCore import Qt
 
-        # Create compact and elegant custom button with X icon
+        # Create compact and subtle custom button with X icon
         close_btn = QToolButton()
-        close_btn.setIcon(qta.icon("mdi.close", color="#999999", scale_factor=0.7))
-        close_btn.setFixedSize(20, 20)
+        close_btn.setIcon(qta.icon("mdi.close", color="#777777", scale_factor=0.55))
+        close_btn.setFixedSize(16, 16)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet("""
             QToolButton {
                 background: transparent;
                 border: none;
-                margin-right: 0px;
+                margin: 0px;
                 border-radius: 0px;
             }
             QToolButton:hover {
-                background-color: rgba(231, 76, 60, 0.8);
+                background-color: rgba(231, 76, 60, 0.7);
             }
         """)
 
-        # Atualizar icone no hover para branco
+        # Update icon on hover to white
         def on_hover_enter(event):
-            close_btn.setIcon(qta.icon("mdi.close", color="#ffffff", scale_factor=0.7))
+            close_btn.setIcon(qta.icon("mdi.close", color="#ffffff", scale_factor=0.55))
             QToolButton.enterEvent(close_btn, event)
 
         def on_hover_leave(event):
-            close_btn.setIcon(qta.icon("mdi.close", color="#999999", scale_factor=0.7))
+            close_btn.setIcon(qta.icon("mdi.close", color="#777777", scale_factor=0.55))
             QToolButton.leaveEvent(close_btn, event)
 
         close_btn.enterEvent = on_hover_enter
@@ -325,16 +332,19 @@ class SessionTabs(QTabWidget):
         self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, close_btn)
 
     def _setup_style(self):
-        """Configure style"""
-        self.setStyleSheet("""
-            QTabWidget::pane {
+        """Configure style - modern, clean"""
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
+        self.setStyleSheet(f"""
+            QTabWidget::pane {{
                 border: none;
-                border-top: 1px solid #3e3e42;
-                background-color: #1e1e1e;
-            }
-            QTabWidget::tab-bar {
+                border-top: 1px solid {colors.border_muted};
+                background-color: {colors.bg_primary};
+            }}
+            QTabWidget::tab-bar {{
                 alignment: left;
-            }
+            }}
         """)
 
     def _connect_signals(self):
@@ -385,16 +395,21 @@ class SessionTabs(QTabWidget):
 
     def set_tab_running(self, index: int, is_running: bool):
         """Indicate if session is running with animated spinner."""
+        widget = self.widget(index)
+        if widget is None:
+            return
+        widget_id = id(widget)
+
         if is_running:
-            self._running_tabs[index] = True
+            self._running_widgets[widget_id] = True
             # Iniciar timer de animacao se necessario
             if not self._spinner_timer.isActive():
                 self._spinner_angle = 0
                 self._spinner_timer.start(80)  # ~12 FPS
         else:
-            self._running_tabs.pop(index, None)
+            self._running_widgets.pop(widget_id, None)
             # Parar timer se nenhuma aba esta rodando
-            if not self._running_tabs:
+            if not self._running_widgets:
                 self._spinner_timer.stop()
             # Limpar icone
             self.setTabIcon(index, QIcon())
@@ -403,9 +418,11 @@ class SessionTabs(QTabWidget):
         """Advance spinner animation and update icons."""
         self._spinner_angle = (self._spinner_angle + 30) % 360
         icon = self._make_spinner_icon()
-        for idx in list(self._running_tabs):
-            if idx < self.count():
-                self.setTabIcon(idx, icon)
+        # Update only tabs whose widgets are in _running_widgets
+        for i in range(self.count()):
+            widget = self.widget(i)
+            if widget and id(widget) in self._running_widgets:
+                self.setTabIcon(i, icon)
 
     def _make_spinner_icon(self) -> QIcon:
         """Cria icone de spinner circular com o angulo atual."""

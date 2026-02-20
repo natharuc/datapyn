@@ -1,17 +1,16 @@
 """
 Testes de Usabilidade Abrangentes para DataPyn
 
-Testa TODOS os fluxos de usuário possíveis:
-- Execução de SQL
-- Execução de Python
-- Execução Cross-Syntax
-- Menus e ações
-- Abas e sessões
+Testa TODOS os fluxos de usuario possiveis:
+- Execucao de SQL
+- Execucao de Python
+- Menus e acoes
+- Abas e sessoes
 - Themes
 - Atalhos de teclado
 - Status bar
 - Output e logs
-- Resultados e variáveis
+- Resultados e variaveis
 """
 
 import pytest
@@ -232,53 +231,6 @@ class TestPythonExecution:
         if main_window.python_output:
             output_text = main_window.python_output.toPlainText()
             assert "Hello World" in output_text
-
-
-# === TESTES DE CROSS-SYNTAX ===
-
-
-class TestCrossSyntaxExecution:
-    """Testa execução cross-syntax {{ SQL }}"""
-
-    def test_cross_syntax_without_connection(self, main_window, qtbot):
-        """Cross-syntax sem conexão deve retornar sem executar"""
-        main_window.session_manager.focused_session.clear_connection()
-
-        code = """
-data = {{ SELECT 1 as valor }}
-print(data)
-"""
-        # Mock do diálogo de aviso
-        with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Ok):
-            main_window._execute_cross_syntax(code)
-
-        # Passou se não deu erro
-
-    def test_cross_syntax_finished_with_result(self, main_window, qtbot):
-        """Cross-syntax com resultado deve exibir"""
-        mock_thread = Mock()
-        mock_thread.quit = Mock()
-        mock_thread.wait = Mock()
-
-        result = {"result": pd.DataFrame({"x": [1]}), "output": "test output", "queries_executed": 1}
-
-        # O método espera tab_index como int
-        # Usar 0 diretamente como primeira aba
-        tab_index = 0
-
-        # Verificar nome correto do método e passar tab_index como int
-        if hasattr(main_window, "_on_cross_finished"):
-            try:
-                main_window._on_cross_finished(result, None, mock_thread, tab_index, "test code")
-            except Exception:
-                pass  # Pode falhar por outros motivos, mas não é AttributeError
-        elif hasattr(main_window, "_on_cross_syntax_finished"):
-            try:
-                main_window._on_cross_syntax_finished(result, None, mock_thread, tab_index, "test code")
-            except Exception:
-                pass
-
-        # Passou se não deu AttributeError
 
 
 # === TESTES DE LOGGING ===
@@ -622,9 +574,9 @@ class TestHelperMethods:
 
         main_window._mark_tab_running(True, 0)
 
-        # Spinner ativo: aba deve ter icone (nao nulo)
+        # Spinner ativo: aba deve ter icone (nao nulo) ou widget em _running_widgets
         icon = main_window.session_tabs.tabIcon(0)
-        has_spinner = not icon.isNull() or 0 in main_window.session_tabs._running_tabs
+        has_spinner = not icon.isNull() or len(main_window.session_tabs._running_widgets) > 0
 
         main_window._mark_tab_running(False, 0)
         final_text = main_window.session_tabs.tabText(0)

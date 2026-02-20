@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QApplication,
+    QPushButton,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt6.QtGui import QFont, QColor, QAction, QDrag
@@ -81,40 +82,56 @@ class ObjectExplorerPanel(QWidget):
 
         toolbar_layout.addStretch()
 
-        # Refresh button
-        self.btn_refresh = GhostButton(S.object_explorer.btn_refresh)
+        # Refresh button - icon-only, compact
+        self.btn_refresh = QPushButton()
+        self.btn_refresh.setFixedSize(24, 24)
+        self.btn_refresh.setToolTip(S.object_explorer.btn_refresh)
+        self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         if HAS_QTAWESOME:
-            self.btn_refresh.setIcon(qta.icon("fa5s.sync", color="#888888"))
+            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#9d9d9d"))
+        self.btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                border-radius: 0px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+        """)
         toolbar_layout.addWidget(self.btn_refresh)
 
-        toolbar.setStyleSheet("""
-            QWidget {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #3e3e42;
-            }
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
+        toolbar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors_tk.bg_secondary};
+                border-bottom: 1px solid {colors_tk.border_default};
+            }}
         """)
         layout.addWidget(toolbar)
 
         # Search field
+        from src.design_system.tokens import RADIUS
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(S.object_explorer.placeholder_search)
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #3c3c3c;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 3px;
-                padding: 5px 8px;
+        self.search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {colors_tk.bg_tertiary};
+                color: {colors_tk.text_primary};
+                border: 1px solid {colors_tk.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 6px 10px;
                 margin: 4px 8px;
                 font-size: 12px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #007acc;
-            }
-            QLineEdit::placeholder {
-                color: #666666;
-            }
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {colors_tk.interactive_primary};
+            }}
+            QLineEdit::placeholder {{
+                color: {colors_tk.text_tertiary};
+            }}
         """)
         self.search_input.textChanged.connect(self._on_search_changed)
         layout.addWidget(self.search_input)
@@ -138,7 +155,44 @@ class ObjectExplorerPanel(QWidget):
         # Override startDrag to provide database mime data
         self.tree.startDrag = self._start_drag
 
-        layout.addWidget(self.tree)
+        layout.addWidget(self.tree, 1)  # stretch=1 so tree fills available space
+        
+        # Loading container (fills space when tree is hidden)
+        self._loading_container = QWidget()
+        loading_layout = QVBoxLayout(self._loading_container)
+        loading_layout.setContentsMargins(0, 0, 0, 0)
+        loading_layout.addStretch(1)
+        
+        # Spinner + Text row
+        spinner_row = QHBoxLayout()
+        spinner_row.addStretch(1)
+        
+        # Spinner widget (animated)
+        if HAS_QTAWESOME:
+            self._spinner_widget = qta.IconWidget()
+            self._spinner_widget.setFixedSize(24, 24)
+            spinner_row.addWidget(self._spinner_widget)
+        else:
+            self._spinner_widget = None
+        
+        self._loading_label = QLabel()
+        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self._loading_label.setStyleSheet("""
+            QLabel {
+                color: #888;
+                font-size: 12px;
+                padding-left: 8px;
+                background: transparent;
+            }
+        """)
+        spinner_row.addWidget(self._loading_label)
+        spinner_row.addStretch(1)
+        
+        loading_layout.addLayout(spinner_row)
+        loading_layout.addStretch(1)
+        
+        self._loading_container.hide()
+        layout.addWidget(self._loading_container, 1)  # stretch=1 to fill space
 
     def _apply_theme(self):
         """Apply theme to tree widget"""
@@ -174,6 +228,28 @@ class ObjectExplorerPanel(QWidget):
         self.theme_manager = theme_manager
         self._apply_theme()
 
+    def set_loading(self, loading: bool, message: str = ""):
+        """Show or hide loading state.
+        
+        Args:
+            loading: True to show loading, False to hide
+            message: Optional message to display (default: "Loading...")
+        """
+        if loading:
+            if HAS_QTAWESOME and self._spinner_widget:
+                # Create animated spinner icon and set it
+                spin_icon = qta.icon("fa5s.spinner", animation=qta.Spin(self._spinner_widget), color="#888")
+                self._spinner_widget.setIcon(spin_icon)
+                self._spinner_widget.show()
+            self._loading_label.setText(message or "Loading...")
+            self._loading_container.show()
+            self.tree.hide()
+        else:
+            self._loading_container.hide()
+            if self._spinner_widget:
+                self._spinner_widget.hide()
+            self.tree.show()
+
     def set_schema(self, schema: dict, connection_name: str = ""):
         """Set the schema to be displayed in the tree.
 
@@ -183,6 +259,7 @@ class ObjectExplorerPanel(QWidget):
                     (format from SchemaService)
             connection_name: connection name
         """
+        self.set_loading(False)  # Hide loading when schema arrives
         self._current_schema = schema
         self._current_connection = connection_name
         if schema:

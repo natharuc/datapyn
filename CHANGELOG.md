@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.9.0 (2026-02-20)
+
+### Bug Fixes
+
+- Remove cross-syntax tests (feature removed)
+  ([`2ef311b`](https://github.com/natharuc/datapyn/commit/2ef311bd3424fe3fa90c20b05de332e0b3e93be2))
+
+- UX improvements and bug fixes
+  ([`0e03bfc`](https://github.com/natharuc/datapyn/commit/0e03bfc41732131c09ed78ddd31b631513388439))
+
+### Features
+
+- Databricks connector finalizado
+  ([`3bbf6ea`](https://github.com/natharuc/datapyn/commit/3bbf6ea82acd1ab5ba2626a6b7ec177f72a73f47))
+
+- **ui**: Modernizacao visual - design mais limpo e web-like
+  ([`480078b`](https://github.com/natharuc/datapyn/commit/480078bdcf28aba7aa699738eb695eb234d10083))
+
+
 ## v1.8.1 (2026-02-20)
 
 ### Bug Fixes
