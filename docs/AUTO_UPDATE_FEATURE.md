@@ -37,7 +37,7 @@ Se o usuário escolher atualizar:
 ### Habilitar/Desabilitar Auto-Update
 Acesse **Ferramentas → Ativar Auto-Update** no menu principal para ativar ou desativar a verificação automática.
 
-- ✓ Marcado: Auto-update ativado (padrão)
+- Marcado: Auto-update ativado (padrão)
 - ☐ Desmarcado: Verificação automática desabilitada (ainda pode verificar manualmente)
 
 ## Segurança

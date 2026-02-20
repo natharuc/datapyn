@@ -408,6 +408,7 @@ class MainWindow(DockingMainWindow):
         self.connection_manager = ConnectionManager()  # Only for managing saved configs
         self.results_manager = ResultsManager()
         self.shortcut_manager = ShortcutManager()
+        self.shortcut_manager.detect_duplicates()  # Log any duplicate shortcuts
         self.workspace_manager = WorkspaceManager()
         self.theme_manager = ThemeManager()
         self.theme_manager.set_editor_theme("monokai")  # Specific theme for code editors
@@ -1053,9 +1054,9 @@ class MainWindow(DockingMainWindow):
         """
         self.statusBar().showMessage(S.status.database_changed.format(name=database_name), 5000)
 
-        # --- Schema reload ---
+        # --- Schema reload (invalidate since database changed) ---
         self._schema_service.invalidate_cache(connection_name)
-        self._load_schema_with_loading(connector, connection_name)
+        # Note: connection_changed signal will trigger _on_session_connection_changed which loads schema
 
         if hasattr(widget, "connection_changed"):
             widget.connection_changed.emit(connection_name, database_name)
@@ -1113,8 +1114,20 @@ class MainWindow(DockingMainWindow):
     
     def _load_schema_with_loading(self, connector, connection_name: str):
         """Load schema and show loading indicator in Object Explorer."""
-        if self._active_object_explorer:
-            self._active_object_explorer.set_loading(True, S.object_explorer.loading)
+        # Get or CREATE the explorer for the current session (important: _get_session_explorer creates if needed)
+        sid = self._get_active_session_id()
+        if sid:
+            explorer = self._get_session_explorer(sid)
+            explorer.set_loading(True, S.object_explorer.loading)
+            self._switch_session_explorer(sid)
+        
+        # Show Object Explorer dock if hidden (so user sees the loading)
+        if hasattr(self, 'object_explorer_dock') and not self.object_explorer_dock.isVisible():
+            self.object_explorer_dock.show()
+            # Update menu checkmark
+            if hasattr(self, 'object_explorer_action'):
+                self.object_explorer_action.setChecked(True)
+        
         self._schema_service.load_schema(connector, connection_name)
 
     def _setup_dockable_panels(self):
@@ -2150,6 +2163,9 @@ class MainWindow(DockingMainWindow):
                     title, msg, success, w
                 )
             )
+            new_widget.execution_cancelled.connect(
+                lambda w=new_widget: self._on_execution_cancelled(w)
+            )
 
             # Register widget
             self._session_widgets[session.session_id] = new_widget
@@ -2565,23 +2581,15 @@ class MainWindow(DockingMainWindow):
                 # Reload Object Explorer for the new database
                 connection_name = getattr(session, "connection_name", "") or ""
                 if connection_name:
+                    # Invalidate cache since database changed via USE command
                     self._schema_service.invalidate_cache(connection_name)
-                    self._load_schema_with_loading(connector, connection_name)
-
-                    # Emit connection change signal to update UI
+                    # Signal triggers _on_session_connection_changed which handles:
+                    # - Schema reload
+                    # - Connection panel update
+                    # - Block database panels update
                     current_widget = self._get_current_session_widget()
                     if current_widget and hasattr(current_widget, "connection_changed"):
                         current_widget.connection_changed.emit(connection_name, database_name)
-
-                # Update focused block's database panel (direct update to avoid signal loop)
-                current_widget = self._get_current_session_widget()
-                if current_widget and hasattr(current_widget, "editor"):
-                    focused_block = current_widget.editor.get_focused_block()
-                    if not focused_block:
-                        focused_block = current_widget.editor.get_last_focused_block()
-                    if focused_block and hasattr(focused_block, "db_panel"):
-                        focused_block._database_name = database_name
-                        focused_block.db_panel.set_database(database_name)
 
                 self._log_info(S.status.database_changed.format(name=database_name))
                 self.action_label.setText(S.status.sql_database.format(name=database_name))
@@ -2758,7 +2766,10 @@ class MainWindow(DockingMainWindow):
 
         Se mudou, recarrega o Object Explorer com o novo banco.
         Propaga a mudanca para: connection panel, status bar, tab color, todos os blocos.
+        
+        NOTE: This only triggers reload if the database actually changed.
         """
+        # Skip if no db_before captured
         if not db_before:
             return
 
@@ -2772,51 +2783,26 @@ class MainWindow(DockingMainWindow):
         except Exception:
             return
 
-        if db_after and db_after.lower() != db_before.lower():
-            connection_name = getattr(session, "connection_name", "") or ""
-            if connection_name:
-                self._schema_service.invalidate_cache(connection_name)
-                self._load_schema_with_loading(connector, connection_name)
+        # Skip if db_after is empty or if they are the same (case-insensitive)
+        if not db_after:
+            return
+        if db_after.lower() == db_before.lower():
+            return
 
-                current_widget = self._get_current_session_widget()
-                if current_widget and hasattr(current_widget, "connection_changed"):
-                    current_widget.connection_changed.emit(connection_name, db_after)
-
-                # --- Update connection panel with actual db_after ---
-                config = self.connection_manager.get_connection_config(connection_name)
-                if config:
-                    host = config.get("host", "localhost")
-                    db_type = config.get("db_type", "")
-                    self.connection_panel.set_active_connection(
-                        connection_name, host=host, database=db_after, db_type=db_type
-                    )
-
-                    # --- Tab color ---
-                    color = config.get("color", "#007ACC") or "#007ACC"
-                    for i in range(self.session_tabs.count()):
-                        tab_widget = self.session_tabs.widget(i)
-                        if isinstance(tab_widget, SessionWidget) and tab_widget == current_widget:
-                            self.session_tabs.set_tab_connection_color(i, color)
-                            break
-
-                # --- Highlight connection in list ---
-                for i in range(self.connections_list.count()):
-                    item = self.connections_list.item(i)
-                    if item.data(Qt.ItemDataRole.UserRole) == connection_name:
-                        self.connections_list.setCurrentItem(item)
-                        break
-
-                # --- Status bar ---
-                self.action_label.setText(S.status.connected_to.format(name=connection_name, db=db_after))
-
-                # --- Update ALL blocks' database panel ---
-                if current_widget and hasattr(current_widget, "editor"):
-                    for block in current_widget.editor.get_blocks():
-                        if hasattr(block, "db_panel"):
-                            block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-                            if not block_conn:
-                                block._database_name = db_after
-                                block.db_panel.set_database(db_after)
+        # Database actually changed - reload schema
+        connection_name = getattr(session, "connection_name", "") or ""
+        if connection_name:
+            # Invalidate cache since database changed
+            self._schema_service.invalidate_cache(connection_name)
+            # Signal triggers _on_session_connection_changed which handles:
+            # - Schema reload
+            # - Connection panel update
+            # - Tab color update
+            # - Block database panels update
+            # - Status bar update
+            current_widget = self._get_current_session_widget()
+            if current_widget and hasattr(current_widget, "connection_changed"):
+                current_widget.connection_changed.emit(connection_name, db_after)
 
     def _execute_python(self, code: str):
         """Executes Python code in background"""
@@ -3083,6 +3069,17 @@ class MainWindow(DockingMainWindow):
 
         self.session_tabs.set_tab_running(tab_index, is_running)
         return tab_index
+
+    def _on_execution_cancelled(self, widget):
+        """
+        Handle execution cancellation from a SessionWidget.
+        
+        Clears the tab running indicator for the widget that cancelled.
+        """
+        tab_index = self.session_tabs.indexOf(widget)
+        if tab_index >= 0:
+            self._mark_tab_running(False, tab_index)
+            self._stop_execution_timer()
 
     def _on_execution_finished_notification(self, title: str, message: str, success: bool, widget):
         """
@@ -4125,6 +4122,9 @@ class MainWindow(DockingMainWindow):
                 title, msg, success, w
             )
         )
+        widget.execution_cancelled.connect(
+            lambda w=widget: self._on_execution_cancelled(w)
+        )
 
         # Conectar sinal de modificacao do editor para rastreamento por hash
         widget.editor.content_changed.connect(lambda w=widget: self._on_editor_modified(w))
@@ -4352,9 +4352,10 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.set_tab_connection_color(i, color)
                 break
 
-        # === CARREGAR SCHEMA (INVALIDA CACHE + RELOAD) ===
+        # === CARREGAR SCHEMA ===
+        # This is the central place for schema loading when connection changes.
+        # Invalidate cache only if database changed, otherwise load from cache.
         if session.connector:
-            self._schema_service.invalidate_cache(connection_name)
             self._load_schema_with_loading(session.connector, connection_name)
 
         # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===

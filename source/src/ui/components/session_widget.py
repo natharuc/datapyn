@@ -41,9 +41,9 @@ class SessionConnectionWorker(QObject):
         try:
             success = self.session.connect(self.connection_name, self.password)
             if success:
-                self.finished.emit(True, f"✓ {S.session_widget.connected_to.format(name=self.connection_name)}")
+                self.finished.emit(True, f"{S.session_widget.connected_to.format(name=self.connection_name)}")
             else:
-                self.finished.emit(False, f"✗ {S.session_widget.connect_failed.format(name=self.connection_name)}")
+                self.finished.emit(False, f"{S.session_widget.connect_failed.format(name=self.connection_name)}")
         except Exception as e:
             self.finished.emit(False, S.session_widget.connect_error.format(msg=str(e)))
 
@@ -110,6 +110,7 @@ class SessionWidget(QWidget):
     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
     block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
     execution_finished = pyqtSignal(str, str, bool)  # (title, message, success)
+    execution_cancelled = pyqtSignal()  # Emitted when execution is cancelled
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -460,23 +461,28 @@ class SessionWidget(QWidget):
         """Callback when SQL finishes"""
         # If cancelled, ignore result (UI already cleaned by cancel)
         if error == "__CANCELLED__" or self._cancel_requested:
-            # Silent thread cleanup
+            # Async thread cleanup - don't wait synchronously
             if self._sql_thread:
+                thread = self._sql_thread
+                self._sql_thread = None
                 try:
-                    self._sql_thread.quit()
-                    self._sql_thread.wait(500)
-                    self.session.unregister_thread(self._sql_thread)
+                    self.session.unregister_thread(thread)
                 except Exception:
                     pass
-                self._sql_thread = None
+                thread.quit()
+                thread.deleteLater()
             return
 
-        # Stop thread
+        # Async thread cleanup - don't wait synchronously
         if self._sql_thread:
-            self._sql_thread.quit()
-            self._sql_thread.wait()
-            self.session.unregister_thread(self._sql_thread)
+            thread = self._sql_thread
             self._sql_thread = None
+            try:
+                self.session.unregister_thread(thread)
+            except Exception:
+                pass
+            thread.quit()
+            thread.deleteLater()
 
         # Marcar bloco atual como finalizado
         current_block = self.editor.get_current_executing_block()
@@ -627,11 +633,16 @@ class SessionWidget(QWidget):
         """Callback when Python finishes"""
         figures = figures or []
 
+        # Async thread cleanup - don't wait synchronously
         if self._python_thread:
-            self._python_thread.quit()
-            self._python_thread.wait()
-            self.session.unregister_thread(self._python_thread)
+            thread = self._python_thread
             self._python_thread = None
+            try:
+                self.session.unregister_thread(thread)
+            except Exception:
+                pass
+            thread.quit()
+            thread.deleteLater()
 
         # Marcar bloco atual como finalizado
         current_block = self.editor.get_current_executing_block()
@@ -768,53 +779,34 @@ class SessionWidget(QWidget):
             self._process_next_in_queue()
 
     def _on_cancel_execution(self):
-        """Cancel current execution and clear queue"""
+        """Cancel current execution and clear queue.
+        
+        Non-blocking: sends cancellation signal and returns immediately.
+        Actual cleanup happens when worker emits finished signal.
+        """
         self._cancel_requested = True
         self._execution_queue.clear()
 
         # Cancel SQL query in database (real cancellation)
         if self._sql_thread and self._sql_thread.isRunning():
-            # Try to cancel query in database before stopping thread
+            # Try to cancel query in database - this is non-blocking
             if hasattr(self, "_sql_worker") and self._sql_worker:
                 connector = getattr(self._sql_worker, "connector", None)
                 if connector and hasattr(connector, "cancel_query"):
-                    connector.cancel_query()
-
-            # Aguardar a thread finalizar (o cancel_query deve liberar o cursor)
-            # Nao usar quit() aqui - o worker.run() e bloqueante e nao usa event loop.
-            # O cancel_query() interrompe o cursor, fazendo run() retornar com erro,
-            # que emite finished, que chama _on_sql_finished para cleanup.
-            # Dar tempo para o fluxo natural acontecer.
-            if not self._sql_thread.wait(5000):
-                # Timeout: a thread ainda nao parou
-                logger.warning("SQL thread nao parou em 5s, tentando quit+wait")
-                self._sql_thread.quit()
-                if not self._sql_thread.wait(3000):
-                    logger.warning("SQL thread nao respondeu, terminando forcadamente")
-                    self._sql_thread.terminate()
-                    self._sql_thread.wait(2000)
-
-            # Limpar referencia da thread
-            if self._sql_thread:
-                try:
-                    self.session.unregister_thread(self._sql_thread)
-                except Exception:
-                    pass
-            self._sql_thread = None
-            self._sql_worker = None
+                    try:
+                        connector.cancel_query()
+                    except Exception as e:
+                        logger.warning(f"Error cancelling SQL query: {e}")
+            
+            # Don't wait synchronously - let the finished signal handle cleanup
+            # The cancel_query() will interrupt the cursor, causing worker.run() to return
+            # with error, which emits finished signal, triggering _on_sql_finished for cleanup.
 
         if self._python_thread and self._python_thread.isRunning():
-            self._python_thread.quit()
-            self._python_thread.wait(1000)
+            # For Python, we can only request quit - the thread will finish when it can
+            self._python_thread.requestInterruption()
 
-            if self._python_thread:
-                try:
-                    self.session.unregister_thread(self._python_thread)
-                except Exception:
-                    pass
-            self._python_thread = None
-
-        # CRITICO: Resetar estado de execucao e UI do bloco
+        # CRITICO: Resetar estado de execucao e UI do bloco imediatamente
         self._is_executing = False
         self._current_block_name = None
 
@@ -827,6 +819,9 @@ class SessionWidget(QWidget):
 
         # Terminar execucao na sessao
         self.session.finish_execution(False, S.session_widget.execution_cancelled)
+
+        # Emit cancellation signal so MainWindow can clear tab running state
+        self.execution_cancelled.emit()
 
         # CRITICO: Resetar flag de cancelamento para nao bloquear proximas execucoes
         self._cancel_requested = False
@@ -1051,11 +1046,13 @@ class SessionWidget(QWidget):
         if config:
             self._connection_color = config.get("color", "#007ACC") or "#007ACC"
 
-        # Cancel previous connection if still running
+        # Cancel previous connection if still running (async cleanup)
         try:
             if self._connection_thread and self._connection_thread.isRunning():
-                self._connection_thread.quit()
-                self._connection_thread.wait(500)  # Wait up to 500ms
+                old_thread = self._connection_thread
+                self._connection_thread = None
+                old_thread.quit()
+                old_thread.deleteLater()
         except RuntimeError:
             pass  # Thread was already deleted
 

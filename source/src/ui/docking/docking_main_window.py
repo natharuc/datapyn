@@ -64,8 +64,8 @@ class DockingMainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("&View")
 
         # Action to reset layout
+        # Note: Child classes (MainWindow) may define their own reset action with shortcut
         reset_action = QAction("&Reset Layout", self)
-        reset_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
         reset_action.triggered.connect(self.reset_layout)
         view_menu.addAction(reset_action)
 

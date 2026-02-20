@@ -350,7 +350,7 @@ class VisualTester:
         blocks = widget.editor.get_blocks()
         assert len(blocks) >= 1
 
-        self.log(f"  ✓ {len(blocks)} bloco(s) encontrado(s)")
+        self.log(f"  {len(blocks)} bloco(s) encontrado(s)")
         self.wait()
 
     def test_02_create_blocks(self):
@@ -371,7 +371,7 @@ class VisualTester:
         self.wait(300)
 
         assert len(editor.get_blocks()) == 3
-        self.log(f"  ✓ {len(editor.get_blocks())} blocos criados")
+        self.log(f"  {len(editor.get_blocks())} blocos criados")
         self.wait()
 
     def test_03_change_languages(self):
@@ -391,7 +391,7 @@ class VisualTester:
         assert blocks[1].get_language() == "cross"
         assert blocks[2].get_language() == "python"
 
-        self.log("  ✓ SQL, Cross, Python configurados")
+        self.log("  SQL, Cross, Python configurados")
         self.wait()
 
     def test_04_write_code(self):
@@ -407,7 +407,7 @@ class VisualTester:
 
         self.wait(300)
 
-        self.log("  ✓ Código escrito em todos os blocos")
+        self.log("  Código escrito em todos os blocos")
         for i, block in enumerate(blocks):
             self.log(f"     [{i + 1}] {block.get_language().upper()}: {block.get_code()[:40]}...")
         self.wait()
@@ -427,14 +427,14 @@ class VisualTester:
         editor.execute_all_blocks()
         self.wait(500)
 
-        self.log(f"  ✓ {len(executed)} blocos executados")
+        self.log(f"  {len(executed)} blocos executados")
 
         # Verifica que cross foi identificado corretamente
         for lang, code in executed:
             if "{{" in code:
                 assert lang == "cross", f"Cross deveria ser 'cross', não '{lang}'"
 
-        self.log("  ✓ Linguagens identificadas corretamente!")
+        self.log("  Linguagens identificadas corretamente!")
         self.wait(1000)
 
 

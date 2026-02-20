@@ -138,21 +138,44 @@ class ObjectExplorerPanel(QWidget):
         # Override startDrag to provide database mime data
         self.tree.startDrag = self._start_drag
 
-        layout.addWidget(self.tree)
+        layout.addWidget(self.tree, 1)  # stretch=1 so tree fills available space
         
-        # Loading overlay
+        # Loading container (fills space when tree is hidden)
+        self._loading_container = QWidget()
+        loading_layout = QVBoxLayout(self._loading_container)
+        loading_layout.setContentsMargins(0, 0, 0, 0)
+        loading_layout.addStretch(1)
+        
+        # Spinner + Text row
+        spinner_row = QHBoxLayout()
+        spinner_row.addStretch(1)
+        
+        # Spinner widget (animated)
+        if HAS_QTAWESOME:
+            self._spinner_widget = qta.IconWidget()
+            self._spinner_widget.setFixedSize(24, 24)
+            spinner_row.addWidget(self._spinner_widget)
+        else:
+            self._spinner_widget = None
+        
         self._loading_label = QLabel()
-        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self._loading_label.setStyleSheet("""
             QLabel {
                 color: #888;
                 font-size: 12px;
-                padding: 20px;
+                padding-left: 8px;
                 background: transparent;
             }
         """)
-        self._loading_label.hide()
-        layout.addWidget(self._loading_label)
+        spinner_row.addWidget(self._loading_label)
+        spinner_row.addStretch(1)
+        
+        loading_layout.addLayout(spinner_row)
+        loading_layout.addStretch(1)
+        
+        self._loading_container.hide()
+        layout.addWidget(self._loading_container, 1)  # stretch=1 to fill space
 
     def _apply_theme(self):
         """Apply theme to tree widget"""
@@ -196,15 +219,18 @@ class ObjectExplorerPanel(QWidget):
             message: Optional message to display (default: "Loading...")
         """
         if loading:
-            if HAS_QTAWESOME:
-                # Create animated spinner icon
-                spin_icon = qta.icon("fa5s.spinner", animation=qta.Spin(self._loading_label), color="#888")
-                self._loading_label.setPixmap(spin_icon.pixmap(24, 24))
+            if HAS_QTAWESOME and self._spinner_widget:
+                # Create animated spinner icon and set it
+                spin_icon = qta.icon("fa5s.spinner", animation=qta.Spin(self._spinner_widget), color="#888")
+                self._spinner_widget.setIcon(spin_icon)
+                self._spinner_widget.show()
             self._loading_label.setText(message or "Loading...")
-            self._loading_label.show()
+            self._loading_container.show()
             self.tree.hide()
         else:
-            self._loading_label.hide()
+            self._loading_container.hide()
+            if self._spinner_widget:
+                self._spinner_widget.hide()
             self.tree.show()
 
     def set_schema(self, schema: dict, connection_name: str = ""):

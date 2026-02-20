@@ -22,7 +22,7 @@ def test_basic_functionality():
     print("=" * 60)
     
     result = ".ipynb" in FileImportService.CODE_EXTENSIONS
-    print(f"✓ .ipynb em CODE_EXTENSIONS: {result}")
+    print(f".ipynb em CODE_EXTENSIONS: {result}")
     assert result, ".ipynb deveria estar em CODE_EXTENSIONS"
     print()
 
@@ -34,7 +34,7 @@ def test_classify_file():
     print("=" * 60)
     
     result = FileImportService.classify_file("test.ipynb")
-    print(f"✓ Classificacao de 'test.ipynb': {result}")
+    print(f"Classificacao de 'test.ipynb': {result}")
     assert result == "code", "Deveria classificar como 'code'"
     print()
 
@@ -46,7 +46,7 @@ def test_detect_language():
     print("=" * 60)
     
     result = FileImportService.detect_language("test.ipynb")
-    print(f"✓ Linguagem de 'test.ipynb': {result}")
+    print(f"Linguagem de 'test.ipynb': {result}")
     assert result == "python", "Deveria detectar como 'python'"
     print()
 
@@ -107,7 +107,7 @@ def test_parse_notebook():
     try:
         cells = FileImportService.parse_ipynb_file(temp_path)
         
-        print(f"✓ Numero de celulas parseadas: {len(cells)}")
+        print(f"Numero de celulas parseadas: {len(cells)}")
         assert len(cells) == 4, f"Deveria ter 4 celulas (ignora vazias), tem {len(cells)}"
         
         print("\nDetalhes das celulas:")
@@ -121,22 +121,22 @@ def test_parse_notebook():
         assert cells[0]["language"] == "python"
         assert cells[0]["cell_type"] == "code"
         assert "import pandas" in cells[0]["code"]
-        print("\n✓ Primeira celula verificada corretamente")
+        print("\nPrimeira celula verificada corretamente")
         
         # Verificar segunda celula
         assert cells[1]["language"] == "python"
         assert "DataFrame" in cells[1]["code"]
-        print("✓ Segunda celula verificada corretamente")
+        print("Segunda celula verificada corretamente")
         
         # Verificar terceira celula (markdown)
         assert cells[2]["cell_type"] == "markdown"
         assert "Titulo" in cells[2]["code"]
-        print("✓ Terceira celula (markdown) verificada corretamente")
+        print("Terceira celula (markdown) verificada corretamente")
         
         # Verificar quarta celula (a vazia foi pulada)
         assert cells[3]["cell_type"] == "code"
         assert "sum()" in cells[3]["code"]
-        print("✓ Quarta celula verificada corretamente")
+        print("Quarta celula verificada corretamente")
         
     finally:
         if os.path.exists(temp_path):
@@ -161,7 +161,7 @@ def test_parse_invalid_notebook():
             FileImportService.parse_ipynb_file(temp_path)
             assert False, "Deveria lancar ValueError"
         except ValueError as e:
-            print(f"✓ ValueError lancado corretamente: {str(e)[:60]}...")
+            print(f"ValueError lancado corretamente: {str(e)[:60]}...")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -193,11 +193,11 @@ def test_parse_empty_cells():
     
     try:
         cells = FileImportService.parse_ipynb_file(temp_path)
-        print(f"✓ Celulas nao-vazias encontradas: {len(cells)}")
+        print(f"Celulas nao-vazias encontradas: {len(cells)}")
         assert len(cells) == 2, f"Deveria ter 2 celulas, tem {len(cells)}"
         assert "hello" in cells[0]["code"]
         assert "world" in cells[1]["code"]
-        print("✓ Celulas vazias foram ignoradas corretamente")
+        print("Celulas vazias foram ignoradas corretamente")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -220,18 +220,18 @@ def main():
         test_parse_empty_cells()
         
         print("=" * 60)
-        print("✓✓✓ TODOS OS TESTES PASSARAM! ✓✓✓")
+        print("✓✓TODOS OS TESTES PASSARAM! ✓✓✓")
         print("=" * 60)
         return 0
         
     except AssertionError as e:
         print("\n" + "=" * 60)
-        print(f"✗✗✗ TESTE FALHOU: {e}")
+        print(f"TESTE FALHOU: {e}")
         print("=" * 60)
         return 1
     except Exception as e:
         print("\n" + "=" * 60)
-        print(f"✗✗✗ ERRO INESPERADO: {e}")
+        print(f"ERRO INESPERADO: {e}")
         import traceback
         traceback.print_exc()
         print("=" * 60)
