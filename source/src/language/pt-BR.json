@@ -63,6 +63,7 @@
     "connected_to": "Conectado: {name} ({db})",
     "switching_database": "Trocando banco de dados para: {name}...",
     "database_changed": "Banco de dados alterado para: {name}",
+    "error_switching_database": "Erro ao trocar banco de dados: {error}",
     "connecting_to": "Conectando a {name}...",
     "connecting_to_new_tab": "Conectando a {name} (nova aba)...",
     "running_mode_elapsed": "Executando {mode} {elapsed}s",

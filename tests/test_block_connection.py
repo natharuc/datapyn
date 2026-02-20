@@ -560,7 +560,7 @@ class TestQueueProcessing:
     """Testes para processamento de fila com conexao per-block"""
 
     def test_process_queue_5_tuple(self, qapp):
-        """_process_next_in_queue deve suportar tuplas de 5 elementos"""
+        """_process_next_in_queue deve suportar tuplas de 5 elementos (legado)"""
         from src.core.session import Session
 
         session = Session("test")
@@ -572,7 +572,22 @@ class TestQueueProcessing:
 
         with patch.object(widget, "_on_execute_sql") as mock_exec:
             widget._process_next_in_queue()
-            mock_exec.assert_called_once_with("SELECT 1", block_name="bloco1", connection_name="CustomConn")
+            mock_exec.assert_called_once_with("SELECT 1", block_name="bloco1", connection_name="CustomConn", database_name=None)
+
+    def test_process_queue_6_tuple(self, qapp):
+        """_process_next_in_queue deve suportar tuplas de 6 elementos (atual)"""
+        from src.core.session import Session
+
+        session = Session("test")
+        widget = SessionWidget(session)
+
+        mock_block = MagicMock()
+
+        widget._execution_queue = [("sql", "SELECT 1", mock_block, "bloco1", "CustomConn", "mydb")]
+
+        with patch.object(widget, "_on_execute_sql") as mock_exec:
+            widget._process_next_in_queue()
+            mock_exec.assert_called_once_with("SELECT 1", block_name="bloco1", connection_name="CustomConn", database_name="mydb")
 
     def test_process_queue_3_tuple(self, qapp):
         """_process_next_in_queue deve suportar tuplas de 3 elementos (legado)"""
@@ -587,7 +602,7 @@ class TestQueueProcessing:
 
         with patch.object(widget, "_on_execute_sql") as mock_exec:
             widget._process_next_in_queue()
-            mock_exec.assert_called_once_with("SELECT 1", block_name=None, connection_name=None)
+            mock_exec.assert_called_once_with("SELECT 1", block_name=None, connection_name=None, database_name=None)
 
     def test_process_queue_2_tuple(self, qapp):
         """_process_next_in_queue deve suportar tuplas de 2 elementos (legado)"""

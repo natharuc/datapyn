@@ -286,6 +286,68 @@ class TestBlockEditorDatabaseSignal:
         assert emitted[0][0] is block
         assert emitted[0][1] == "propagated_db"
 
+    def test_execute_sql_signal_includes_database_name(self, qapp):
+        """execute_sql signal deve incluir database_name quando definido"""
+        editor = BlockEditor()
+
+        block = editor._blocks[0]
+        block.set_language("sql")
+        block.set_code("SELECT 1")
+        block.set_database_name("custom_db")
+
+        # Capturar signal
+        emitted = []
+        editor.execute_sql.connect(lambda q, bn, cn, dn: emitted.append((q, bn, cn, dn)))
+
+        editor._execute_block(block)
+
+        assert len(emitted) == 1
+        query, block_name, connection_name, database_name = emitted[0]
+        assert query == "SELECT 1"
+        assert block_name == block.get_block_name()
+        assert connection_name is None  # padrao
+        assert database_name == "custom_db"
+
+    def test_execute_sql_signal_database_name_none_by_default(self, qapp):
+        """execute_sql signal deve emitir database_name=None quando nao definido"""
+        editor = BlockEditor()
+
+        block = editor._blocks[0]
+        block.set_language("sql")
+        block.set_code("SELECT 1")
+        # Nao definir database_name
+
+        emitted = []
+        editor.execute_sql.connect(lambda q, bn, cn, dn: emitted.append((q, bn, cn, dn)))
+
+        editor._execute_block(block)
+
+        assert len(emitted) == 1
+        _, _, _, database_name = emitted[0]
+        assert database_name is None
+
+    def test_execute_queue_includes_database_name(self, qapp):
+        """execute_queue deve incluir database_name na tupla"""
+        editor = BlockEditor()
+
+        block1 = editor._blocks[0]
+        block1.set_language("sql")
+        block1.set_code("SELECT 1")
+        block1.set_database_name("db1")
+
+        block2 = editor.add_block(language="sql", code="SELECT 2")
+        block2.set_database_name("db2")
+
+        queue = []
+        editor.execute_queue.connect(lambda q: queue.extend(q))
+
+        editor.execute_all_blocks()
+
+        assert len(queue) == 2
+        # Formato: (language, code, block, block_name, connection_name, database_name)
+        assert queue[0][5] == "db1"
+        assert queue[1][5] == "db2"
+
 
 # ===== USE Command Syntax =====
 
