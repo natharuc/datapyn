@@ -141,29 +141,29 @@ class Shadow:
 # =============================================================================
 
 DARK_COLORS = ColorPalette(
-    # Backgrounds
-    bg_primary="#1e1e1e",
-    bg_secondary="#252526",
-    bg_tertiary="#2d2d30",
-    bg_elevated="#323232",
-    bg_overlay="rgba(0, 0, 0, 0.7)",
-    # Borders
-    border_default="#3e3e42",
-    border_muted="#2d2d30",
-    border_strong="#555555",
-    # Text
-    text_primary="#cccccc",
-    text_secondary="#999999",
-    text_tertiary="#6e6e6e",
-    text_disabled="#5a5a5a",
+    # Backgrounds - softer, warmer grays
+    bg_primary="#1a1a1c",
+    bg_secondary="#222225",
+    bg_tertiary="#2a2a2e",
+    bg_elevated="#323238",
+    bg_overlay="rgba(0, 0, 0, 0.6)",
+    # Borders - much subtler, almost invisible
+    border_default="#333338",
+    border_muted="#28282c",
+    border_strong="#444448",
+    # Text - softer contrast
+    text_primary="#e0e0e4",
+    text_secondary="#a0a0a8",
+    text_tertiary="#707078",
+    text_disabled="#58585e",
     text_inverse="#ffffff",
-    # Interactive
-    interactive_primary="#3369FF",
-    interactive_primary_hover="#4d7fff",
-    interactive_primary_active="#2952cc",
-    interactive_secondary="#3c3c3c",
-    interactive_secondary_hover="#4a4a4a",
-    interactive_secondary_active="#333333",
+    # Interactive - vibrant but not harsh
+    interactive_primary="#4b7bec",
+    interactive_primary_hover="#6c95f0",
+    interactive_primary_active="#3867d6",
+    interactive_secondary="#38383e",
+    interactive_secondary_hover="#48484e",
+    interactive_secondary_active="#303035",
     # Semantic
     success="#2e7d32",
     success_hover="#388e3c",
@@ -271,9 +271,9 @@ SPACING = Spacing(
 
 RADIUS = Radius(
     radius_none=0,
-    radius_sm=3,
-    radius_md=6,
-    radius_lg=8,
+    radius_sm=6,
+    radius_md=10,
+    radius_lg=14,
     radius_full=9999,
 )
 

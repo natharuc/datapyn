@@ -6,7 +6,7 @@ Includes context menu and double-click to insert into editor.
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableView, QHeaderView,
-    QLabel, QAbstractItemView, QMenu, QApplication, QMessageBox,
+    QLabel, QAbstractItemView, QMenu, QApplication, QMessageBox, QPushButton,
 )
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QAction
@@ -193,22 +193,37 @@ class VariablesPanel(QWidget):
 
         # Info label
         self.info_label = QLabel(S.variables_panel.no_variables)
-        self.info_label.setStyleSheet("color: #808080;")
+        self.info_label.setStyleSheet("color: #9d9d9d;")
         toolbar_layout.addWidget(self.info_label)
 
         toolbar_layout.addStretch()
 
-        # Refresh button
-        self.btn_refresh = GhostButton(S.variables_panel.btn_refresh)
+        # Refresh button - icon-only, compact
+        self.btn_refresh = QPushButton()
+        self.btn_refresh.setFixedSize(24, 24)
+        self.btn_refresh.setToolTip(S.variables_panel.btn_refresh)
+        self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         if HAS_QTAWESOME:
-            self.btn_refresh.setIcon(qta.icon("fa5s.sync", color="#888888"))
+            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#9d9d9d"))
+        self.btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                border-radius: 0px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+        """)
         toolbar_layout.addWidget(self.btn_refresh)
 
-        toolbar.setStyleSheet("""
-            QWidget {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #3e3e42;
-            }
+        from src.design_system.tokens import get_colors, RADIUS
+        colors_tk = get_colors()
+        toolbar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors_tk.bg_secondary};
+                border-bottom: 1px solid {colors_tk.border_default};
+            }}
         """)
         layout.addWidget(toolbar)
 
@@ -238,29 +253,46 @@ class VariablesPanel(QWidget):
         layout.addWidget(self.table_view)
 
     def _apply_theme(self):
-        """Aplica tema"""
+        """Aplica tema - design moderno e limpo"""
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
-            colors = {"background": "#1e1e1e", "foreground": "#cccccc", "border": "#3e3e42"}
+            colors = {"background": "#1a1a1c", "foreground": "#e8e8e8", "border": "#333338", "accent": "#4b7bec"}
+
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
 
         self.table_view.setStyleSheet(f"""
             QTableView {{
                 background-color: {colors["background"]};
                 color: {colors["foreground"]};
                 border: none;
-                gridline-color: {colors["border"]};
+                gridline-color: transparent;
+                selection-background-color: {colors.get("accent", "#4b7bec")};
+                font-size: 13px;
+            }}
+            QTableView::item {{
+                padding: 8px 12px;
+                border-bottom: 1px solid {colors["border"]};
             }}
             QTableView::item:selected {{
-                background-color: #094771;
+                background-color: {colors.get("accent", "#4b7bec")};
+                color: white;
+            }}
+            QTableView::item:hover {{
+                background-color: rgba(75, 123, 236, 0.15);
             }}
             QHeaderView::section {{
-                background-color: #2d2d30;
-                color: #cccccc;
-                padding: 6px;
+                background-color: {colors_tk.bg_secondary};
+                color: {colors_tk.text_secondary};
+                padding: 10px 12px;
                 border: none;
-                border-bottom: 1px solid {colors["border"]};
-                font-weight: bold;
+                border-bottom: 2px solid {colors["border"]};
+                font-weight: 500;
+                font-size: 12px;
+            }}
+            QHeaderView::section:hover {{
+                background-color: {colors["border"]};
             }}
         """)
 
@@ -339,29 +371,31 @@ class VariablesPanel(QWidget):
 
         menu = QMenu(self)
 
-        # Apply style to menu
-        if self.theme_manager:
-            colors = self.theme_manager.get_app_colors()
-            menu.setStyleSheet(f"""
-                QMenu {{
-                    background-color: {colors["background"]};
-                    color: {colors["foreground"]};
-                    border: 1px solid {colors["border"]};
-                    padding: 4px;
-                }}
-                QMenu::item {{
-                    padding: 6px 24px 6px 12px;
-                }}
-                QMenu::item:selected {{
-                    background-color: {colors["accent"]};
-                    color: white;
-                }}
-                QMenu::separator {{
-                    height: 1px;
-                    background-color: {colors["border"]};
-                    margin: 4px 8px;
-                }}
-            """)
+        # Apply style to menu - modern design
+        from src.design_system.tokens import get_colors, RADIUS
+        colors_tk = get_colors()
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {colors_tk.bg_elevated};
+                color: {colors_tk.text_primary};
+                border: 1px solid {colors_tk.border_default};
+                border-radius: {RADIUS.radius_md}px;
+                padding: 6px;
+            }}
+            QMenu::item {{
+                padding: 8px 24px 8px 12px;
+                border-radius: {RADIUS.radius_sm}px;
+            }}
+            QMenu::item:selected {{
+                background-color: {colors_tk.interactive_primary};
+                color: white;
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background-color: {colors_tk.border_default};
+                margin: 6px 8px;
+            }}
+        """)
 
         type_name = type(value).__name__
 

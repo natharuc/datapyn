@@ -131,7 +131,7 @@ class _AddSourceDialog(QDialog):
                 background-color: {bg};
                 color: {fg};
                 border: 1px solid {border};
-                border-radius: 3px;
+                border-radius: 0px;
                 padding: 6px 8px;
                 font-size: 12px;
             }}
@@ -186,7 +186,7 @@ class _AddSourceDialog(QDialog):
         btn_box.setStyleSheet(f"""
             QPushButton {{
                 padding: 6px 18px;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-size: 11px;
                 min-width: 70px;
             }}
@@ -279,7 +279,7 @@ class PackageManagerDialog(QDialog):
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
                 padding: 10px 12px;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-size: 12px;
             }}
             QLineEdit:focus {{
@@ -298,7 +298,7 @@ class PackageManagerDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 10px 20px;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-weight: bold;
                 font-size: 12px;
             }}
@@ -323,7 +323,7 @@ class PackageManagerDialog(QDialog):
                 color: {c["foreground"]};
                 border: none;
                 padding: 10px 16px;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-weight: bold;
                 font-size: 12px;
             }}
@@ -342,7 +342,7 @@ class PackageManagerDialog(QDialog):
             background-color: {c["border"]};
             color: {c["foreground"]};
             padding: 8px 12px;
-            border-radius: 4px;
+            border-radius: 0px;
             border-left: 3px solid {c["accent"]};
             font-size: 11px;
         """)
@@ -395,11 +395,11 @@ class PackageManagerDialog(QDialog):
             QProgressBar {{
                 background-color: {c["border"]};
                 border: none;
-                border-radius: 1px;
+                border-radius: 0px;
             }}
             QProgressBar::chunk {{
                 background-color: {c["accent"]};
-                border-radius: 1px;
+                border-radius: 0px;
             }}
         """)
         self.progress.hide()
@@ -423,7 +423,7 @@ class PackageManagerDialog(QDialog):
                 color: {c["foreground"]};
                 border: none;
                 padding: 6px 14px;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-size: 11px;
             }}
             QPushButton:hover {{
@@ -447,7 +447,7 @@ class PackageManagerDialog(QDialog):
             QFrame {{
                 background-color: {c["border"]};
                 border: 1px solid {c["border"]};
-                border-radius: 4px;
+                border-radius: 0px;
             }}
         """)
         self.sources_frame.setVisible(False)
@@ -473,7 +473,7 @@ class PackageManagerDialog(QDialog):
                 background-color: {c["background"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
-                border-radius: 3px;
+                border-radius: 0px;
                 font-size: 11px;
             }}
             QListWidget::item {{
@@ -497,7 +497,7 @@ class PackageManagerDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 4px 12px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-size: 10px;
             }}
             QPushButton:hover {{ opacity: 0.85; }}
@@ -514,7 +514,7 @@ class PackageManagerDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 4px 12px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-size: 10px;
             }}
             QPushButton:hover {{ background-color: #e06060; }}
@@ -650,7 +650,7 @@ class PackageManagerDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 4px 14px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-size: 10px;
                 font-weight: bold;
             }}
@@ -732,7 +732,7 @@ class PackageManagerDialog(QDialog):
                             color: white;
                             border: none;
                             padding: 4px 10px;
-                            border-radius: 3px;
+                            border-radius: 0px;
                             font-size: 10px;
                         }}
                         QPushButton:hover {{ background-color: #388e3c; }}
@@ -754,7 +754,7 @@ class PackageManagerDialog(QDialog):
                         color: white;
                         border: none;
                         padding: 4px 10px;
-                        border-radius: 3px;
+                        border-radius: 0px;
                         font-size: 10px;
                     }}
                     QPushButton:hover {{ background-color: #e06060; }}
@@ -776,7 +776,7 @@ class PackageManagerDialog(QDialog):
                         color: white;
                         border: none;
                         padding: 4px 14px;
-                        border-radius: 3px;
+                        border-radius: 0px;
                         font-size: 10px;
                         font-weight: bold;
                     }}

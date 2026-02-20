@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QApplication,
+    QPushButton,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt6.QtGui import QFont, QColor, QAction, QDrag
@@ -81,40 +82,56 @@ class ObjectExplorerPanel(QWidget):
 
         toolbar_layout.addStretch()
 
-        # Refresh button
-        self.btn_refresh = GhostButton(S.object_explorer.btn_refresh)
+        # Refresh button - icon-only, compact
+        self.btn_refresh = QPushButton()
+        self.btn_refresh.setFixedSize(24, 24)
+        self.btn_refresh.setToolTip(S.object_explorer.btn_refresh)
+        self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         if HAS_QTAWESOME:
-            self.btn_refresh.setIcon(qta.icon("fa5s.sync", color="#888888"))
+            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#9d9d9d"))
+        self.btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                border-radius: 0px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+        """)
         toolbar_layout.addWidget(self.btn_refresh)
 
-        toolbar.setStyleSheet("""
-            QWidget {
-                background-color: #2d2d30;
-                border-bottom: 1px solid #3e3e42;
-            }
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
+        toolbar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors_tk.bg_secondary};
+                border-bottom: 1px solid {colors_tk.border_default};
+            }}
         """)
         layout.addWidget(toolbar)
 
         # Search field
+        from src.design_system.tokens import RADIUS
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(S.object_explorer.placeholder_search)
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #3c3c3c;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 3px;
-                padding: 5px 8px;
+        self.search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {colors_tk.bg_tertiary};
+                color: {colors_tk.text_primary};
+                border: 1px solid {colors_tk.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 6px 10px;
                 margin: 4px 8px;
                 font-size: 12px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #007acc;
-            }
-            QLineEdit::placeholder {
-                color: #666666;
-            }
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {colors_tk.interactive_primary};
+            }}
+            QLineEdit::placeholder {{
+                color: {colors_tk.text_tertiary};
+            }}
         """)
         self.search_input.textChanged.connect(self._on_search_changed)
         layout.addWidget(self.search_input)

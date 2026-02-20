@@ -28,7 +28,7 @@ def _get_line_edit_style():
             background-color: {colors.interactive_secondary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_strong};
-            border-radius: 3px;
+            border-radius: 0px;
             padding: 6px 10px;
             selection-background-color: {colors.interactive_primary_active};
         }}
@@ -52,7 +52,7 @@ def _get_text_edit_style():
             background-color: {colors.bg_primary};
             color: {colors.editor_fg};
             border: 1px solid {colors.border_default};
-            border-radius: 3px;
+            border-radius: 0px;
             padding: 8px;
             selection-background-color: {colors.interactive_primary_active};
         }}
@@ -69,7 +69,7 @@ def _get_spinbox_style():
             background-color: {colors.interactive_secondary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_strong};
-            border-radius: 3px;
+            border-radius: 0px;
             padding: 4px 8px;
         }}
         QSpinBox:focus {{
@@ -109,7 +109,7 @@ def _get_combobox_style():
             background-color: {colors.interactive_secondary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_strong};
-            border-radius: 3px;
+            border-radius: 0px;
             padding: 6px 10px;
             min-width: 100px;
         }}
@@ -148,7 +148,7 @@ def _get_checkbox_style():
             width: 18px;
             height: 18px;
             border: 1px solid {colors.border_strong};
-            border-radius: 3px;
+            border-radius: 0px;
             background-color: {colors.interactive_secondary};
         }}
         QCheckBox::indicator:checked {{

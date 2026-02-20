@@ -253,11 +253,15 @@ class ResultsViewer(QWidget):
         self.toolbar.addWidget(self.export_destination)
         self.toolbar.addSeparator()
 
-        # Toolbar buttons
+        # Toolbar buttons with icons
         self.btn_export_csv = QPushButton(S.results.btn_csv)
+        self.btn_export_csv.setIcon(qta.icon("mdi.file-delimited-outline", color="#9d9d9d"))
         self.btn_export_excel = QPushButton(S.results.btn_excel)
+        self.btn_export_excel.setIcon(qta.icon("mdi.file-excel-outline", color="#4caf50"))
         self.btn_export_json = QPushButton(S.results.btn_json)
+        self.btn_export_json.setIcon(qta.icon("mdi.code-json", color="#ffc107"))
         self.btn_copy = QPushButton(S.results.btn_copy_all)
+        self.btn_copy.setIcon(qta.icon("mdi.content-copy", color="#9d9d9d"))
 
         self.toolbar.addWidget(self.btn_export_csv)
         self.toolbar.addWidget(self.btn_export_excel)
@@ -302,7 +306,7 @@ class ResultsViewer(QWidget):
                 background-color: #2d2d30;
                 color: #cccccc;
                 border: 1px solid #3e3e42;
-                border-radius: 3px;
+                border-radius: 0px;
                 padding: 2px 6px;
                 font-size: 11px;
             }
@@ -394,52 +398,73 @@ class ResultsViewer(QWidget):
         self.btn_export_table.clicked.connect(self._export_to_table)
 
     def _apply_toolbar_style(self):
-        """Aplica estilo na toolbar baseado no tema"""
+        """Aplica estilo na toolbar baseado no tema - moderno e limpo"""
         colors = self.theme_manager.get_app_colors()
+        from src.design_system.tokens import RADIUS
         self.toolbar.setStyleSheet(f"""
             QToolBar {{
-                background-color: {colors["border"]};
+                background-color: {colors["background"]};
+                border: none;
                 border-bottom: 1px solid {colors["border"]};
-                spacing: 5px;
-                padding: 5px;
+                spacing: 6px;
+                padding: 8px 12px;
             }}
             QPushButton {{
-                background-color: {colors["accent"]};
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 3px;
+                background-color: transparent;
+                color: {colors["foreground"]};
+                border: 1px solid {colors["border"]};
+                padding: 6px 12px;
+                border-radius: {RADIUS.radius_sm}px;
+                font-size: 12px;
             }}
             QPushButton:hover {{
                 background-color: {colors["accent"]};
+                color: white;
+                border-color: {colors["accent"]};
             }}
             QLabel {{
                 color: {colors["foreground"]};
-                padding: 5px;
+                padding: 4px 8px;
+                font-size: 12px;
             }}
         """)
 
     def _apply_table_style(self):
-        """Aplica estilo na tabela baseado no tema"""
+        """Aplica estilo na tabela baseado no tema - moderno e limpo"""
         table_colors = self.theme_manager.get_table_colors()
         colors = self.theme_manager.get_app_colors()
+        from src.design_system.tokens import RADIUS
         self.table_view.setStyleSheet(f"""
             QTableView {{
                 background-color: {colors["background"]};
                 color: {colors["foreground"]};
                 border: none;
-                gridline-color: {colors["border"]};
+                gridline-color: transparent;
+                selection-background-color: {colors["accent"]};
+                font-size: 13px;
+            }}
+            QTableView::item {{
+                padding: 8px 12px;
+                border-bottom: 1px solid {colors["border"]};
             }}
             QTableView::item:selected {{
                 background-color: {colors["accent"]};
+                color: white;
+            }}
+            QTableView::item:hover {{
+                background-color: rgba(75, 123, 236, 0.15);
             }}
             QHeaderView::section {{
                 background-color: {table_colors["header_bg"]};
                 color: {table_colors["header_text"]};
-                padding: 5px;
-                border: 1px solid {colors["border"]};
-                font-weight: bold;
-                text-transform: none;
+                padding: 10px 12px;
+                border: none;
+                border-bottom: 2px solid {colors["border"]};
+                font-weight: 500;
+                font-size: 12px;
+            }}
+            QHeaderView::section:hover {{
+                background-color: {colors["border"]};
             }}
         """)
 
@@ -694,7 +719,7 @@ class ResultsViewer(QWidget):
             pre, code {{
                 background-color: {colors["border"]};
                 padding: 4px 8px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-family: Consolas, monospace;
             }}
         </style>

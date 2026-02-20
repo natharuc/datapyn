@@ -1096,19 +1096,21 @@ class SessionWidget(QWidget):
             self.status_changed.emit(S.session_widget.status_conn_error)
 
     def _show_loading(self, message: str):
-        """Show loading overlay"""
+        """Show loading overlay - subtle and modern"""
         if self._loading_overlay:
-            self._loading_overlay.setText(message)
-            # Apply style with dynamic color
+            # Add spinner icon before message
+            spinner_text = f"  {message}"
+            self._loading_overlay.setText(spinner_text)
+            # Apply subtle style
             self._loading_overlay.setStyleSheet(f"""
                 QLabel {{
-                    background-color: rgba(30, 30, 30, 230);
+                    background-color: rgba(26, 26, 28, 200);
                     color: {self._connection_color};
-                    font-size: 16px;
-                    font-weight: bold;
-                    border: 3px solid {self._connection_color};
-                    border-radius: 10px;
-                    padding: 30px 50px;
+                    font-size: 14px;
+                    font-weight: 500;
+                    border: 1px solid {self._connection_color};
+                    border-radius: 0px;
+                    padding: 20px 40px;
                 }}
             """)
             # Adjust size and position

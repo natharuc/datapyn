@@ -46,7 +46,7 @@ def _get_styles():
                 color: {colors.text_inverse};
                 border: none;
                 padding: 6px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
                 font-weight: 500;
             }}
             QPushButton:hover {{
@@ -66,7 +66,7 @@ def _get_styles():
                 color: {colors.text_primary};
                 border: 1px solid {colors.border_strong};
                 padding: 6px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QPushButton:hover {{
                 background-color: {colors.interactive_secondary_hover};
@@ -87,7 +87,7 @@ def _get_styles():
                 color: {colors.text_inverse};
                 border: none;
                 padding: 6px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QPushButton:hover {{
                 background-color: {colors.danger_hover};
@@ -106,7 +106,7 @@ def _get_styles():
                 color: {colors.text_inverse};
                 border: none;
                 padding: 6px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QPushButton:hover {{
                 background-color: {colors.success_hover};
@@ -125,7 +125,7 @@ def _get_styles():
                 color: {colors.text_primary};
                 border: none;
                 padding: 6px 16px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QPushButton:hover {{
                 background-color: {colors.bg_tertiary};
@@ -140,7 +140,7 @@ def _get_styles():
                 color: {colors.text_primary};
                 border: none;
                 padding: 5px 12px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QPushButton:hover {{
                 background-color: {colors.bg_elevated};
@@ -231,7 +231,7 @@ class IconButton(QToolButton):
                 background-color: transparent;
                 border: none;
                 padding: 4px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QToolButton:hover {{
                 background-color: #3e3e42;

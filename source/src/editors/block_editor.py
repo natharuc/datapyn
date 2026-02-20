@@ -132,7 +132,7 @@ class BlockEditor(QWidget):
             QPushButton {
                 background: transparent;
                 border: 1px solid #555;
-                border-radius: 12px;
+                border-radius: 0px;
             }
             QPushButton:hover {
                 background: #333;

@@ -42,7 +42,7 @@ class FindReplaceBar(QWidget):
             background: #3c3c3c;
             color: #ccc;
             border: 1px solid #3e3e42;
-            border-radius: 3px;
+            border-radius: 0px;
             padding: 3px 6px;
             font-size: 12px;
             min-width: 180px;
@@ -57,7 +57,7 @@ class FindReplaceBar(QWidget):
             background: transparent;
             color: #ccc;
             border: 1px solid #3e3e42;
-            border-radius: 3px;
+            border-radius: 0px;
             padding: 3px 8px;
             font-size: 12px;
             min-width: 24px;

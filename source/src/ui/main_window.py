@@ -105,7 +105,7 @@ from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.object_explorer_panel import ObjectExplorerPanel
 from src.ui.docking import DockingMainWindow
-from src.design_system.tokens import get_colors, DARK_COLORS
+from src.design_system.tokens import get_colors, DARK_COLORS, RADIUS
 
 # Services
 from src.services import AutoUpdateService
@@ -758,15 +758,21 @@ class MainWindow(DockingMainWindow):
         # Carregar cores do design system
         colors = get_colors()
 
-        # Tema escuro
+        # Tema escuro - moderno e limpo
         self.setStyleSheet(f"""
             QMainWindow {{
                 background-color: {colors.bg_primary};
             }}
             QMenuBar {{
-                background-color: {colors.bg_tertiary};
+                background-color: {colors.bg_secondary};
                 color: {colors.text_primary};
-                border-bottom: 1px solid {colors.border_default};
+                border: none;
+                padding: 2px 0;
+            }}
+            QMenuBar::item {{
+                padding: 6px 12px;
+                border-radius: {RADIUS.radius_sm}px;
+                margin: 2px;
             }}
             QMenuBar::item:selected {{
                 background-color: {colors.bg_elevated};
@@ -774,65 +780,109 @@ class MainWindow(DockingMainWindow):
             QMenu {{
                 background-color: {colors.bg_tertiary};
                 color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                padding: 5px 0px;
+                border: 1px solid {colors.border_muted};
+                border-radius: {RADIUS.radius_md}px;
+                padding: 6px;
             }}
             QMenu::item {{
-                padding: 6px 40px 6px 30px;
-                min-width: 180px;
+                padding: 8px 32px 8px 32px;
+                border-radius: {RADIUS.radius_sm}px;
+                margin: 2px 4px;
             }}
             QMenu::item:selected {{
-                background-color: {colors.interactive_primary_active};
+                background-color: {colors.interactive_primary};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {colors.border_muted};
+                margin: 6px 12px;
             }}
             QMenu::icon {{
-                padding-left: 8px;
-                width: 16px;
-                height: 16px;
+                padding-left: 12px;
+                margin-right: 8px;
+                width: 14px;
+                height: 14px;
             }}
             QToolBar {{
-                background-color: {colors.bg_tertiary};
-                border-bottom: 1px solid {colors.border_default};
-                spacing: 5px;
+                background-color: {colors.bg_secondary};
+                border: none;
+                spacing: 4px;
+                padding: 4px;
             }}
             QStatusBar {{
                 background-color: {colors.interactive_primary};
                 color: {colors.text_inverse};
-            }}
-            QTabWidget::pane {{
-                border: 1px solid {colors.border_default};
-                background-color: {colors.bg_primary};
-            }}
-            QTabBar::tab {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                padding: 8px 20px;
-                border: 1px solid {colors.border_default};
-                border-bottom: none;
-            }}
-            QTabBar::tab:selected {{
-                background-color: {colors.bg_primary};
-                color: {colors.text_inverse};
-            }}
-            QTabBar::tab:hover {{
-                background-color: {colors.bg_elevated};
+                border: none;
             }}
             QSplitter::handle {{
-                background-color: {colors.border_default};
+                background-color: {colors.border_muted};
+                width: 1px;
+                height: 1px;
             }}
             QPushButton {{
                 background-color: {colors.interactive_primary};
                 color: {colors.text_inverse};
                 border: none;
-                padding: 5px 15px;
-                border-radius: 3px;
+                padding: 8px 16px;
+                border-radius: {RADIUS.radius_sm}px;
+                font-weight: 500;
             }}
             QPushButton:hover {{
                 background-color: {colors.interactive_primary_hover};
             }}
+            QPushButton:pressed {{
+                background-color: {colors.interactive_primary_active};
+            }}
             QTextEdit {{
                 background-color: {colors.bg_primary};
                 color: {colors.editor_fg};
-                border: 1px solid {colors.border_default};
+                border: 1px solid {colors.border_muted};
+                border-radius: {RADIUS.radius_sm}px;
+                selection-background-color: {colors.editor_selection};
+            }}
+            QLineEdit {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_muted};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 6px 10px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {colors.interactive_primary};
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                border-radius: 0px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(150, 150, 150, 0.35);
+                border-radius: 0px;
+                min-height: 24px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(150, 150, 150, 0.55);
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0;
+            }}
+            QScrollBar:horizontal {{
+                background: transparent;
+                height: 8px;
+                border-radius: 0px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: rgba(150, 150, 150, 0.35);
+                border-radius: 0px;
+                min-width: 24px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: rgba(150, 150, 150, 0.55);
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0;
             }}
         """)
 
@@ -870,6 +920,8 @@ class MainWindow(DockingMainWindow):
     def _create_connections_dock(self):
         """Creates the connections side panel using ConnectionPanel"""
         # Usar o componente ConnectionPanel
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
         self.connection_panel = ConnectionPanel(
             connection_manager=self.connection_manager, theme_manager=self.theme_manager
         )
@@ -887,16 +939,19 @@ class MainWindow(DockingMainWindow):
         self.connections_dock.setObjectName("ConnectionsDock")  # Para saveState/restoreState
         self.connections_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.connections_dock.setWidget(self.connection_panel)
-        self.connections_dock.setStyleSheet("""
-            QDockWidget {
-                background-color: #252526;
-                color: #cccccc;
-            }
-            QDockWidget::title {
-                background-color: #2d2d30;
-                padding: 8px;
-                font-weight: bold;
-            }
+        self.connections_dock.setStyleSheet(f"""
+            QDockWidget {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_primary};
+                border: none;
+            }}
+            QDockWidget::title {{
+                background-color: {colors.bg_tertiary};
+                padding: 10px 12px;
+                font-weight: 500;
+                font-size: 12px;
+                border: none;
+            }}
         """)
 
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
@@ -930,6 +985,8 @@ class MainWindow(DockingMainWindow):
         Usa QStackedWidget para que cada sessao tenha seu proprio Object Explorer.
         """
         from PyQt6.QtWidgets import QStackedWidget
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
 
         self._object_explorer_stack = QStackedWidget()
         # Mapeamento session_id -> ObjectExplorerPanel
@@ -940,16 +997,19 @@ class MainWindow(DockingMainWindow):
         self.object_explorer_dock.setObjectName("ObjectExplorerDock")
         self.object_explorer_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.object_explorer_dock.setWidget(self._object_explorer_stack)
-        self.object_explorer_dock.setStyleSheet("""
-            QDockWidget {
-                background-color: #252526;
-                color: #cccccc;
-            }
-            QDockWidget::title {
-                background-color: #2d2d30;
-                padding: 8px;
-                font-weight: bold;
-            }
+        self.object_explorer_dock.setStyleSheet(f"""
+            QDockWidget {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_primary};
+                border: none;
+            }}
+            QDockWidget::title {{
+                background-color: {colors.bg_tertiary};
+                padding: 10px 12px;
+                font-weight: 500;
+                font-size: 12px;
+                border: none;
+            }}
         """)
 
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
@@ -1158,17 +1218,21 @@ class MainWindow(DockingMainWindow):
         # Mapeamento session_id -> indice no stack
         self._session_panel_indices: dict = {}
 
-        # Dock styling compartilhado
-        dock_style_bottom = """
-            QDockWidget {
-                background-color: #252526;
-                color: #cccccc;
-            }
-            QDockWidget::title {
-                background-color: #2d2d30;
-                padding: 8px;
-                font-weight: bold;
-            }
+        # Dock styling compartilhado - moderno e limpo
+        colors = get_colors()
+        dock_style_bottom = f"""
+            QDockWidget {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_primary};
+                border: none;
+            }}
+            QDockWidget::title {{
+                background-color: {colors.bg_tertiary};
+                padding: 10px 12px;
+                font-weight: 500;
+                font-size: 12px;
+                border: none;
+            }}
         """
 
         # Results Panel
@@ -1908,7 +1972,7 @@ class MainWindow(DockingMainWindow):
                 padding: 4px 12px;
                 background: rgba(255, 215, 0, 0.15);
                 border-left: 3px solid #FFD700;
-                border-radius: 2px;
+                border-radius: 0px;
             }
         """)
         self._update_execution_time()
@@ -3420,7 +3484,7 @@ class MainWindow(DockingMainWindow):
                 color: {colors["foreground"]};
                 border: none;
                 padding: 6px 12px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QPushButton:hover {{
                 background-color: {colors["accent"]};
@@ -3456,7 +3520,7 @@ class MainWindow(DockingMainWindow):
             }}
             QTabBar::close-button:hover {{
                 background-color: #ff6b6b;
-                border-radius: 2px;
+                border-radius: 0px;
             }}
             QTextEdit {{
                 background-color: {colors["background"]};
@@ -3470,7 +3534,7 @@ class MainWindow(DockingMainWindow):
                 color: {colors["accent"]};
                 font-weight: bold;
                 border: 1px solid {colors["border"]};
-                border-radius: 4px;
+                border-radius: 0px;
                 margin-top: 10px;
                 padding-top: 10px;
             }}
@@ -3993,7 +4057,7 @@ class MainWindow(DockingMainWindow):
                 padding: 12px 40px;
                 font-size: 16px;
                 font-weight: bold;
-                border-radius: 4px;
+                border-radius: 0px;
                 margin-top: 30px;
             }}
             QPushButton:hover {{
