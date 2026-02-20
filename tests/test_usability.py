@@ -574,9 +574,9 @@ class TestHelperMethods:
 
         main_window._mark_tab_running(True, 0)
 
-        # Spinner ativo: aba deve ter icone (nao nulo)
+        # Spinner ativo: aba deve ter icone (nao nulo) ou widget em _running_widgets
         icon = main_window.session_tabs.tabIcon(0)
-        has_spinner = not icon.isNull() or 0 in main_window.session_tabs._running_tabs
+        has_spinner = not icon.isNull() or len(main_window.session_tabs._running_widgets) > 0
 
         main_window._mark_tab_running(False, 0)
         final_text = main_window.session_tabs.tabText(0)

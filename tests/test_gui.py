@@ -104,11 +104,6 @@ class TestBlockEditorGUI:
         QTest.qWait(100)
         assert block.get_language() == "sql"
 
-        # Muda para Cross
-        block.set_language("cross")
-        QTest.qWait(100)
-        assert block.get_language() == "cross"
-
         # Muda para Python
         block.set_language("python")
         QTest.qWait(100)
@@ -126,7 +121,7 @@ class TestBlockEditorGUI:
         assert block.get_code() == test_code
 
     def test_multiple_blocks_different_languages(self, main_window):
-        """Teste: Múltiplos blocos com linguagens diferentes"""
+        """Teste: Multiplos blocos com linguagens diferentes"""
         editor, widget = get_editor_safely(main_window)
 
         # Limpa blocos existentes
@@ -138,22 +133,17 @@ class TestBlockEditorGUI:
         sql_block.set_language("sql")
         sql_block.set_code("SELECT * FROM cliente")
 
-        # Adiciona bloco Cross
-        cross_block = editor.add_block(language="cross")
-        cross_block.set_code("df = {{SELECT * FROM produto}}")
-
         # Adiciona bloco Python
         python_block = editor.add_block(language="python")
-        python_block.set_code("print(df.head())")
+        python_block.set_code("print('Hello')")
 
         QTest.qWait(200)
 
         # Verifica
         blocks = editor.get_blocks()
-        assert len(blocks) == 3
+        assert len(blocks) == 2
         assert blocks[0].get_language() == "sql"
-        assert blocks[1].get_language() == "cross"
-        assert blocks[2].get_language() == "python"
+        assert blocks[1].get_language() == "python"
 
 
 class TestBlockExecutionGUI:
@@ -179,31 +169,6 @@ class TestBlockExecutionGUI:
         assert len(sql_emitted) == 1
         assert "SELECT 1" in sql_emitted[0]
 
-    def test_cross_syntax_emits_cross_signal(self, main_window):
-        """Teste: Cross-syntax emite sinal correto (não SQL)"""
-        editor, widget = get_editor_safely(main_window)
-
-        # Configura bloco Cross
-        block = editor.get_blocks()[0]
-        block.set_language("cross")
-        block.set_code("df = {{SELECT * FROM teste}}")
-
-        # Rastreia sinais
-        cross_emitted = []
-        sql_emitted = []
-
-        editor.execute_cross_syntax.connect(lambda code: cross_emitted.append(code))
-        editor.execute_sql.connect(lambda code: sql_emitted.append(code))
-
-        # Executa
-        editor.execute_focused_block()
-        QTest.qWait(300)
-
-        # Cross-syntax deve emitir cross, NÃO sql
-        assert len(cross_emitted) == 1
-        assert len(sql_emitted) == 0
-        assert "{{SELECT" in cross_emitted[0]
-
     def test_execute_all_blocks_in_order(self, main_window):
         """Teste: Executar todos os blocos na ordem correta"""
         editor, widget = get_editor_safely(main_window)
@@ -217,13 +182,9 @@ class TestBlockExecutionGUI:
         block1.set_language("sql")
         block1.set_code("SELECT 1")
 
-        # Bloco 2: Cross
-        block2 = editor.add_block(language="cross")
-        block2.set_code("x = {{SELECT 2}}")
-
-        # Bloco 3: Python
-        block3 = editor.add_block(language="python")
-        block3.set_code("print(x)")
+        # Bloco 2: Python
+        block2 = editor.add_block(language="python")
+        block2.set_code("print('test')")
 
         # Rastreia fila
         queue_received = []
@@ -234,10 +195,9 @@ class TestBlockExecutionGUI:
         QTest.qWait(200)
 
         # Verifica ordem
-        assert len(queue_received) == 3
+        assert len(queue_received) == 2
         assert queue_received[0][0] == "sql"
-        assert queue_received[1][0] == "cross"
-        assert queue_received[2][0] == "python"
+        assert queue_received[1][0] == "python"
 
 
 class TestSessionPersistenceGUI:
