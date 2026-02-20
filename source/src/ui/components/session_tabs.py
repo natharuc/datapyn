@@ -254,8 +254,8 @@ class SessionTabs(QTabWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Execution state by tab index
-        self._running_tabs: Dict[int, bool] = {}
+        # Execution state by widget id (not index, to survive tab reordering)
+        self._running_widgets: Dict[int, bool] = {}
         self._spinner_angle = 0
         self._spinner_timer = QTimer(self)
         self._spinner_timer.timeout.connect(self._tick_spinner)
@@ -385,16 +385,21 @@ class SessionTabs(QTabWidget):
 
     def set_tab_running(self, index: int, is_running: bool):
         """Indicate if session is running with animated spinner."""
+        widget = self.widget(index)
+        if widget is None:
+            return
+        widget_id = id(widget)
+
         if is_running:
-            self._running_tabs[index] = True
+            self._running_widgets[widget_id] = True
             # Iniciar timer de animacao se necessario
             if not self._spinner_timer.isActive():
                 self._spinner_angle = 0
                 self._spinner_timer.start(80)  # ~12 FPS
         else:
-            self._running_tabs.pop(index, None)
+            self._running_widgets.pop(widget_id, None)
             # Parar timer se nenhuma aba esta rodando
-            if not self._running_tabs:
+            if not self._running_widgets:
                 self._spinner_timer.stop()
             # Limpar icone
             self.setTabIcon(index, QIcon())
@@ -403,9 +408,11 @@ class SessionTabs(QTabWidget):
         """Advance spinner animation and update icons."""
         self._spinner_angle = (self._spinner_angle + 30) % 360
         icon = self._make_spinner_icon()
-        for idx in list(self._running_tabs):
-            if idx < self.count():
-                self.setTabIcon(idx, icon)
+        # Update only tabs whose widgets are in _running_widgets
+        for i in range(self.count()):
+            widget = self.widget(i)
+            if widget and id(widget) in self._running_widgets:
+                self.setTabIcon(i, icon)
 
     def _make_spinner_icon(self) -> QIcon:
         """Cria icone de spinner circular com o angulo atual."""

@@ -103,12 +103,12 @@ class SessionWidget(QWidget):
     # Signals for MainWindow
     execute_sql = pyqtSignal(str)  # query
     execute_python = pyqtSignal(str)  # code
-    execute_cross_syntax = pyqtSignal(str)  # code
     status_changed = pyqtSignal(str)  # status message
     connection_changed = pyqtSignal(str, str)  # (connection_name, database)
     connection_drop_requested = pyqtSignal(str)  # connection_name
     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
     block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
+    execution_started = pyqtSignal()  # Emitted when execution starts (for running indicator)
     execution_finished = pyqtSignal(str, str, bool)  # (title, message, success)
     execution_cancelled = pyqtSignal()  # Emitted when execution is cancelled
 
@@ -318,7 +318,6 @@ class SessionWidget(QWidget):
         # BlockEditor emits signals with correct language
         self.editor.execute_sql.connect(self._on_execute_sql)
         self.editor.execute_python.connect(self._on_execute_python)
-        self.editor.execute_cross_syntax.connect(self._on_execute_cross_syntax)
 
         # Execution queue (multiple blocks)
         self.editor.execute_queue.connect(self._on_execute_queue)
@@ -430,6 +429,7 @@ class SessionWidget(QWidget):
 
         self.session.start_execution("sql")
         self.status_changed.emit(S.session_widget.executing_sql.format(conn_label=conn_label))
+        self.execution_started.emit()  # Notify main_window to show running indicator
 
         # Criar worker e thread
         self._sql_thread = QThread()
@@ -594,6 +594,8 @@ class SessionWidget(QWidget):
 
         self.session.start_execution("python")
         self.status_changed.emit(S.session_widget.executing_python)
+        self.execution_started.emit()  # Notify main_window to show running indicator
+        
         # Prepare namespace with df if exists
         namespace = self.session.namespace.copy()
         namespace["pd"] = pd
@@ -710,12 +712,6 @@ class SessionWidget(QWidget):
         self._is_executing = False
         self._process_next_in_queue()
 
-    # === CROSS-SYNTAX EXECUTION ===
-
-    def _on_execute_cross_syntax(self, code: str):
-        """Emite sinal para MainWindow processar cross-syntax"""
-        self.execute_cross_syntax.emit(code)
-
     # === EXECUTION NOTIFICATION ===
 
     def _emit_queue_notification(self):
@@ -732,11 +728,8 @@ class SessionWidget(QWidget):
             if self._queue_last_type == "sql":
                 title = S.notification.sql_query
                 msg = S.notification.complete_rows.format(rows=f"{self._queue_total_rows:,}")
-            elif self._queue_last_type == "python":
-                title = S.notification.python
-                msg = S.notification.executed
             else:
-                title = S.notification.cross_syntax
+                title = S.notification.python
                 msg = S.notification.executed
 
             # If multiple blocks ran, mention that
@@ -868,10 +861,8 @@ class SessionWidget(QWidget):
             self._on_execute_sql(code, block_name=block_name, connection_name=connection_name)
         elif language == "python":
             self._on_execute_python(code)
-        elif language == "cross":
-            self._on_execute_cross_syntax(code)
-            # Cross-syntax is synchronous (processed by MainWindow)
-            # So we continue to the next
+        else:
+            # Unknown language, continue to next
             self._process_next_in_queue()
 
     # === OUTPUT/LOG ===

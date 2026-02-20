@@ -14,7 +14,6 @@ class UnifiedEditor(QsciScintilla):
 
     execute_sql = pyqtSignal(str)  # SQL code
     execute_python = pyqtSignal(str)  # Python code
-    execute_cross_syntax = pyqtSignal(str)  # code with mixed syntax
 
     # Shared ThemeManager reference
     _theme_manager = None
@@ -163,29 +162,11 @@ class UnifiedEditor(QsciScintilla):
                 self.execute_python.emit(text)
             return  # Don't propagate event
 
-        # Ctrl+Shift+Enter - Run Cross-Syntax
-        if event.key() == Qt.Key.Key_Return and event.modifiers() == (
-            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
-        ):
-            text = self.get_selected_or_all_text()
-            if text.strip():
-                self.execute_cross_syntax.emit(text)
-            return  # Don't propagate event
-
         # F5 - Run SQL
         if event.key() == Qt.Key.Key_F5 and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             text = self.get_selected_or_all_text()
             if text.strip():
                 self.execute_sql.emit(text)
-            return  # Don't propagate event
-
-        # Ctrl+Shift+F5 - Run Cross-Syntax
-        if event.key() == Qt.Key.Key_F5 and event.modifiers() == (
-            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
-        ):
-            text = self.get_selected_or_all_text()
-            if text.strip():
-                self.execute_cross_syntax.emit(text)
             return  # Don't propagate event
 
         # Propagate other events normally

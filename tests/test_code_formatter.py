@@ -180,13 +180,6 @@ class TestFormatCode:
         assert error is None
         assert "SELECT" in result
 
-    def test_cross_uses_sql(self):
-        """Cross-syntax usa formatador SQL."""
-        code = "select * from users"
-        result, error = format_code(code, "cross")
-        assert error is None
-        assert "SELECT" in result
-
     def test_case_insensitive_language(self):
         """Linguagem eh case-insensitive."""
         code = "x=1\n"

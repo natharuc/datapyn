@@ -53,10 +53,41 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _read_file_with_encoding_fallback(filepath: str) -> str:
+    """
+    Read file content with encoding fallback.
+    
+    Tries utf-8 first, then detects encoding with chardet,
+    finally falls back to latin-1 (which never fails).
+    """
+    # Try utf-8 first (most common)
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        pass
+    
+    # Try to detect encoding with chardet if available
+    try:
+        import chardet
+        with open(filepath, "rb") as f:
+            raw_data = f.read()
+        detected = chardet.detect(raw_data)
+        encoding = detected.get("encoding", "latin-1") or "latin-1"
+        return raw_data.decode(encoding)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    
+    # Fallback to latin-1 (never fails, but may produce garbage for some encodings)
+    with open(filepath, "r", encoding="latin-1") as f:
+        return f.read()
+
+
 from src.editors import UnifiedEditor
 from src.database import ConnectionManager
 from src.core import ResultsManager, ShortcutManager, WorkspaceManager, ThemeManager, SessionManager
-from src.core.mixed_executor import MixedLanguageExecutor
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.ui.dialogs.settings_dialog import SettingsDialog
@@ -370,25 +401,6 @@ class PythonWorker(QObject):
         return result, extra_outputs
 
 
-class CrossSyntaxWorker(QObject):
-    """Worker for executing Cross-Syntax in background"""
-
-    finished = pyqtSignal(dict, str)  # (result_dict, error)
-
-    def __init__(self, executor, code, namespace):
-        super().__init__()
-        self.executor = executor
-        self.code = code
-        self.namespace = namespace
-
-    def run(self):
-        try:
-            result = self.executor.parse_and_execute(self.code, self.namespace)
-            self.finished.emit(result, "")
-        except Exception as e:
-            self.finished.emit({}, traceback.format_exc())
-
-
 class MainWindow(DockingMainWindow):
     """Janela principal da IDE"""
 
@@ -413,7 +425,6 @@ class MainWindow(DockingMainWindow):
         self.theme_manager = ThemeManager()
         self.theme_manager.set_editor_theme("monokai")  # Specific theme for code editors
         self.session_manager = SessionManager()  # New: Session manager
-        self.mixed_executor = MixedLanguageExecutor(None, self.results_manager)
 
         # Auto-update service
         self._current_version = self._get_current_version()
@@ -1865,11 +1876,6 @@ class MainWindow(DockingMainWindow):
         # Toolbar run button executes only the focused block
         if hasattr(editor, "execute_focused_block"):
             editor.execute_focused_block()
-        elif hasattr(editor, "get_selected_or_all_text"):
-            # Fallback para editor antigo
-            code = editor.get_selected_or_all_text()
-            if code.strip():
-                self._execute_cross_syntax(code)
 
     def _create_statusbar(self):
         """Creates the status bar using MainStatusBar"""
@@ -2144,7 +2150,6 @@ class MainWindow(DockingMainWindow):
                     pass
 
             # Connect signals do widget
-            new_widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
             new_widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
             new_widget.connection_changed.connect(
                 lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db)
@@ -2518,22 +2523,6 @@ class MainWindow(DockingMainWindow):
         if code and code.strip():
             self._execute_python(code.strip())
 
-    def _force_execute_cross(self):
-        """Forces execution of current block as Cross-Syntax"""
-        editor = self._get_current_editor()
-        if not editor:
-            return
-
-        from src.editors.block_editor import BlockEditor
-
-        if isinstance(editor, BlockEditor):
-            code = editor.get_focused_block_code()
-        else:
-            code = editor.get_selected_or_all_text()
-
-        if code and code.strip():
-            self._execute_cross_syntax(code.strip())
-
     def _execute_sql(self, query: str):
         """Executes SQL query in background"""
         query = query.strip()
@@ -2678,6 +2667,16 @@ class MainWindow(DockingMainWindow):
             self.show_panel("results")
             rows = len(result)
             self._log_info(f"[{execution_type}] {additional_info or S.log.df_displayed.format(type=execution_type, rows=f'{rows:,}')}")
+            return True
+
+        elif isinstance(result, pd.Series):
+            # SERIES -> Convert to DataFrame and show in GRID
+            df = result.to_frame(name=result.name or "value")
+            if results_panel:
+                results_panel.display_dataframe(df, f"{execution_type} Result")
+            self.show_panel("results")
+            rows = len(df)
+            self._log_info(f"[{execution_type}] Series displayed ({rows:,} rows)")
             return True
 
         elif isinstance(result, (list, tuple)) and len(result) > 0:
@@ -2915,141 +2914,6 @@ class MainWindow(DockingMainWindow):
             self.action_label.setText(S.status.python_executed)
             self._send_notification(S.notification.python, S.notification.executed, success=True, tab_index=tab_index)
 
-    def _execute_cross_syntax(self, code: str):
-        """Executes cross syntax {{ SQL }} code in background"""
-        code = code.strip()
-        if not code:
-            # Get from current tab if empty
-            editor = self._get_current_editor()
-            if editor:
-                code = editor.get_selected_or_all_text().strip()
-            if not code:
-                return
-
-        self._start_execution_timer("Cross")
-        self.action_label.setText(S.status.cross_running)
-
-        # Mark tab as running
-        running_tab_index = self._mark_tab_running(True)
-
-        # Validate syntax first (synchronous, it's fast)
-        is_valid, error = self.mixed_executor.validate_syntax(code)
-        if not is_valid:
-            self._stop_execution_timer()
-            self._mark_tab_running(False, running_tab_index)
-            self._show_error_output(f"[Cross-Syntax] Syntax error: {error}")
-            self.action_label.setText(S.status.cross_syntax_error)
-            return
-
-        # Use current session connection
-        session = self.session_manager.focused_session
-        if not session or not session.is_connected:
-            self._stop_execution_timer()
-            self._mark_tab_running(False, running_tab_index)
-            QMessageBox.warning(
-                self, S.dialogs.warning, S.dialogs.cross_no_connection_msg
-            )
-            self.action_label.setText(S.status.cross_no_connection)
-            return
-
-        # Keep reference to session that started execution
-        executing_session = session
-
-        self.mixed_executor.db_connector = session.connector
-
-        # Create thread and worker - use namespace of the executing session
-        thread = QThread()
-        worker = CrossSyntaxWorker(self.mixed_executor, code, session.namespace)
-        worker.moveToThread(thread)
-
-        # Connect signals - pass the session that started
-        thread.started.connect(worker.run)
-        worker.finished.connect(
-            lambda result, err: self._on_cross_finished(result, err, code, thread, running_tab_index, executing_session)
-        )
-
-        # Safe cleanup: only delete when thread actually stops
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._remove_worker_thread(thread))
-
-        # Keep reference
-        self._worker_threads.append((thread, worker))
-
-        # Start
-        thread.start()
-
-    def _on_cross_finished(self, result, error, code, thread, tab_index, session):
-        """Callback quando Cross-Syntax termina
-
-        Args:
-            result: Execution result
-            error: Error if any
-            code: Executed code
-            thread: Thread used
-            tab_index: Tab index
-            session: Session that STARTED the execution (not the currently focused one)
-        """
-        self._stop_execution_timer()
-
-        # Remove running mark
-        self._mark_tab_running(False, tab_index)
-
-        # Stop thread (finished signal handles cleanup)
-        thread.quit()
-
-        # Mark blocks as not executing
-        widget = self._get_current_session_widget()
-        if widget and hasattr(widget.editor, "mark_execution_finished"):
-            widget.editor.mark_execution_finished()
-
-        # FORCE: If there is an error, ALWAYS show output first
-        if error:
-            self._show_error_output(f"[Cross-Syntax] Error: {error}")
-            self.action_label.setText(S.status.cross_execution_error)
-            self._send_notification(S.notification.cross_syntax, S.notification.error.format(error=str(error)[:50]), success=False, tab_index=tab_index)
-            return
-
-        # Show output first (if any)
-        if result and result.get("output"):
-            self._log(result["output"].strip())
-
-        # Show executed queries in log
-        if result and result.get("queries_executed"):
-            # Display created variables
-            queries = self.mixed_executor.extract_queries(code)
-            for var_name, sql in queries:
-                # Search in namespace of the session that executed
-                var_value = session.namespace.get(var_name)
-                if var_value is not None:
-                    if isinstance(var_value, pd.DataFrame):
-                        rows = len(var_value)
-                        self._log_info(S.log.cross_variable_created.format(name=var_name, rows=f"{rows:,}"))
-                    else:
-                        self._log_info(S.log.cross_variable_created_no_rows.format(name=var_name))
-
-        # ONLY if there is no error, use centralized method
-        success = self._handle_execution_result(
-            result=result.get("result") if result else None,
-            error=None,  # Ensure error is None here
-            execution_type="Cross-Syntax",
-        )
-
-        if success:
-            # Updates variables - from the session that executed, if still focused
-            if session == self.session_manager.focused_session:
-                self._update_variables_view()
-                # Update Python autocomplete with updated namespace
-                self._push_python_namespace(session.namespace)
-
-            self.action_label.setText(S.status.cross_executed)
-
-            # Success notification
-            queries_count = result.get("queries_executed", 0) if result else 0
-            self._send_notification(
-                S.notification.cross_syntax, S.notification.complete_queries.format(count=queries_count), success=True, tab_index=tab_index
-            )
-
     def _mark_tab_running(self, is_running: bool, tab_index: int = None) -> int:
         """
         Marca/desmarca aba como rodando (com spinner animado).
@@ -3075,6 +2939,27 @@ class MainWindow(DockingMainWindow):
         Handle execution cancellation from a SessionWidget.
         
         Clears the tab running indicator for the widget that cancelled.
+        """
+        tab_index = self.session_tabs.indexOf(widget)
+        if tab_index >= 0:
+            self._mark_tab_running(False, tab_index)
+            self._stop_execution_timer()
+
+    def _on_execution_started(self, widget):
+        """
+        Handle execution start from a SessionWidget.
+        
+        Sets the tab running indicator for the widget that started executing.
+        """
+        tab_index = self.session_tabs.indexOf(widget)
+        if tab_index >= 0:
+            self._mark_tab_running(True, tab_index)
+
+    def _on_execution_finished_cleanup(self, widget):
+        """
+        Handle execution finish cleanup from a SessionWidget.
+        
+        Clears the tab running indicator for the widget that finished.
         """
         tab_index = self.session_tabs.indexOf(widget)
         if tab_index >= 0:
@@ -3213,16 +3098,23 @@ class MainWindow(DockingMainWindow):
             S.dialogs.open_file_filter,
         )
         if filename:
-            # Check if it is workspace
-            if filename.endswith(".dpw"):
-                self._open_workspace(filename)
-            else:
-                # Create NEW tab for file
-                self._open_code_file(filename)
+            # All files (including .dpw) open as single tab
+            self._open_code_file(filename)
 
     def _open_code_file(self, filename: str):
         """Opens code file in new tab with complete panels"""
         try:
+            # Capture connection from current tab BEFORE creating new one
+            previous_connection = None
+            previous_color = None
+            current_widget = self._get_current_session_widget()
+            if current_widget and hasattr(current_widget, "session"):
+                previous_connection = current_widget.session.connection_name
+                if previous_connection:
+                    config = self.connection_manager.get_connection_config(previous_connection)
+                    if config:
+                        previous_color = config.get("color", "#007ACC") or "#007ACC"
+
             # 1. Read file content (or cells if notebook)
             is_notebook = filename.endswith(".ipynb")
             cells = None
@@ -3235,16 +3127,14 @@ class MainWindow(DockingMainWindow):
                 try:
                     cells = FileImportService.parse_ipynb_file(filename)
                     # Keep original content as JSON
-                    with open(filename, "r", encoding="utf-8") as f:
-                        content = f.read()
+                    content = _read_file_with_encoding_fallback(filename)
                 except ValueError as e:
                     from PyQt6.QtWidgets import QMessageBox
 
                     QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_opening_notebook.format(error=e))
                     return
             else:
-                with open(filename, "r", encoding="utf-8") as f:
-                    content = f.read()
+                content = _read_file_with_encoding_fallback(filename)
 
             # 2. Detect language and configure context
             if filename.endswith(".py"):
@@ -3281,7 +3171,23 @@ class MainWindow(DockingMainWindow):
             self._original_file_path = filename
 
             # 6. Configurar conteudo
-            if is_notebook and cells:
+            is_dpw = filename.endswith(".dpw")
+            
+            if is_dpw:
+                # .dpw file: multi-block JSON format
+                import json
+                try:
+                    dpw_data = json.loads(content)
+                    blocks_data = dpw_data.get("blocks", [])
+                    if blocks_data:
+                        widget.editor.from_list(blocks_data)
+                except json.JSONDecodeError:
+                    # Fallback: treat as single SQL block
+                    blocks = widget.editor.get_blocks()
+                    if blocks:
+                        blocks[0].set_language("sql")
+                        blocks[0].set_code(content)
+            elif is_notebook and cells:
                 # Notebook: criar um bloco por celula
                 blocks = widget.editor.get_blocks()
                 for i, cell in enumerate(cells):
@@ -3330,6 +3236,13 @@ class MainWindow(DockingMainWindow):
             # 10. Switch panels to new session
             self._switch_session_panels(session.session_id)
 
+            # 11. Inherit connection from previous tab (deferred for UI responsiveness)
+            if previous_connection:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(150, lambda: self._connect_session_background(
+                    widget, session, previous_connection, previous_color
+                ))
+
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
 
@@ -3355,9 +3268,7 @@ class MainWindow(DockingMainWindow):
         )
         if filename:
             if filename.endswith(".dpw"):
-                self._save_workspace_to_file(filename)
-                self.main_statusbar.show_save_feedback(S.status.workspace_saved.format(path=filename))
-                self.main_statusbar.set_file_info(filename)
+                self._save_tab_as_dpw(filename)
             elif filename.endswith(".sql"):
                 self._original_file_path = filename
                 self._original_file_type = "sql"
@@ -3380,9 +3291,7 @@ class MainWindow(DockingMainWindow):
                     self._save_single_file(filename, "python")
                 else:
                     filename += ".dpw"
-                    self._save_workspace_to_file(filename)
-                    self.main_statusbar.show_save_feedback(S.status.workspace_saved.format(path=filename))
-                    self.main_statusbar.set_file_info(filename)
+                    self._save_tab_as_dpw(filename)
 
             self._update_window_title()
 
@@ -3828,9 +3737,14 @@ class MainWindow(DockingMainWindow):
         try:
             # Capture active session connection BEFORE creating new one
             previous_connection = None
+            previous_color = None
             current_widget = self._get_current_session_widget()
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
+                if previous_connection:
+                    config = self.connection_manager.get_connection_config(previous_connection)
+                    if config:
+                        previous_color = config.get("color", "#007ACC") or "#007ACC"
 
             # If in empty state, remove the placeholder
             self._hide_empty_state()
@@ -3838,25 +3752,61 @@ class MainWindow(DockingMainWindow):
             session = self.session_manager.create_session()
             widget = self._create_session_widget(session)
 
-            # Inherit connection from previous tab
-            if previous_connection:
-                try:
-                    connected = session.connect(previous_connection)
-                    if connected:
-                        # Apply tab color
-                        config = self.connection_manager.get_connection_config(previous_connection)
-                        if config:
-                            color = config.get("color", "#007ACC") or "#007ACC"
-                            idx = self.session_tabs.indexOf(widget)
-                            if idx >= 0:
-                                self.session_tabs.set_tab_connection_color(idx, color)
-                except Exception as e:
-                    print(f"[WARNING] Could not inherit connection: {e}")
-
-            # Update window title (context may have changed)
+            # Update window title immediately (context may have changed)
             self._update_window_title()
+
+            # Defer connection to background with delay to ensure UI renders first
+            if previous_connection:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(150, lambda: self._connect_session_background(
+                    widget, session, previous_connection, previous_color
+                ))
         finally:
             self._creating_session = False
+
+    def _connect_session_background(self, widget, session, connection_name, color):
+        """Connect session in a true background thread to avoid UI freeze."""
+        from PyQt6.QtCore import QThread, pyqtSignal, QObject
+
+        class ConnectionWorker(QObject):
+            finished = pyqtSignal(bool)
+
+            def __init__(self, session, connection_name):
+                super().__init__()
+                self._session = session
+                self._connection_name = connection_name
+
+            def run(self):
+                try:
+                    result = self._session.connect(self._connection_name)
+                    self.finished.emit(result)
+                except Exception as e:
+                    print(f"[WARNING] Background connection failed: {e}")
+                    self.finished.emit(False)
+
+        def on_connected(success):
+            if success and color:
+                idx = self.session_tabs.indexOf(widget)
+                if idx >= 0:
+                    self.session_tabs.set_tab_connection_color(idx, color)
+            # Cleanup thread
+            thread.quit()
+            thread.wait()
+            thread.deleteLater()
+            worker.deleteLater()
+
+        # Create and start background thread
+        thread = QThread()
+        worker = ConnectionWorker(session, connection_name)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(on_connected)
+        thread.start()
+
+        # Store reference to prevent garbage collection
+        if not hasattr(self, "_connection_threads"):
+            self._connection_threads = []
+        self._connection_threads.append((thread, worker))
 
     def _handle_empty_state_drop(self, file_paths):
         """Handles file drop on empty state screen"""
@@ -4103,7 +4053,6 @@ class MainWindow(DockingMainWindow):
         widget._is_modified = False
 
         # Connect signals do widget
-        widget.execute_cross_syntax.connect(lambda code: self._execute_cross_syntax_for_session(session, code))
         widget.status_changed.connect(lambda msg: self._on_session_status_changed(session, msg))
         widget.connection_changed.connect(
             lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db)
@@ -4117,10 +4066,16 @@ class MainWindow(DockingMainWindow):
         widget.block_database_changed.connect(
             lambda block, db_name: self._on_block_database_changed(block, db_name)
         )
+        widget.execution_started.connect(
+            lambda w=widget: self._on_execution_started(w)
+        )
         widget.execution_finished.connect(
             lambda title, msg, success, w=widget: self._on_execution_finished_notification(
                 title, msg, success, w
             )
+        )
+        widget.execution_finished.connect(
+            lambda title, msg, success, w=widget: self._on_execution_finished_cleanup(w)
         )
         widget.execution_cancelled.connect(
             lambda w=widget: self._on_execution_cancelled(w)
@@ -4170,6 +4125,21 @@ class MainWindow(DockingMainWindow):
         widget = self.session_tabs.widget(index)
         if not isinstance(widget, SessionWidget):
             return
+
+        # Check if execution is running - ask user to confirm cancellation
+        if getattr(widget, "_is_executing", False):
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                "Cancel Execution?",
+                "A script is running in this tab. Do you want to cancel it and close the tab?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            # User confirmed - cancel execution first
+            widget._on_cancel_execution()
 
         # Guard para evitar criar sessao ao fechar
         self._closing_session = True
@@ -4829,12 +4799,6 @@ class MainWindow(DockingMainWindow):
             # Does not fail silently - shows in statusbar
             self.action_label.setText(S.status.reconnection_failed.format(name=connection_name))
 
-    def _execute_cross_syntax_for_session(self, session, code: str):
-        """Executes cross-syntax for a specific session"""
-        # TODO: Implement cross-syntax per session
-        # For now, uses the global method
-        self._execute_cross_syntax(code)
-
     # =========================================================================
     # Sistema de Gerenciamento Inteligente de Arquivos
     # =========================================================================
@@ -4846,47 +4810,32 @@ class MainWindow(DockingMainWindow):
         Returns:
             'sql'       - um bloco SQL apenas
             'python'    - um bloco Python apenas
-            'workspace' - multiple blocks or .dpw file
+            'workspace' - multiple blocks or .dpw file origin
         """
-        # If has multiple sessions = always workspace
-        if len(self._session_widgets) > 1:
-            return "workspace"
-
-        # If original file is already workspace
-        if self._original_file_type == "workspace":
-            return "workspace"
-
-        # If there are no sessions but there is an original sql/py file, use file type
         current_widget = self._get_current_session_widget()
         if not current_widget:
+            # No current widget - use original type or fallback
             if self._original_file_type in ["sql", "python"]:
                 return self._original_file_type
             return "workspace"
 
         blocks = current_widget.editor.get_blocks()
 
-        # Se tem mais de 1 bloco = workspace
+        # Se tem mais de 1 bloco = workspace (.dpw)
         if len(blocks) > 1:
             return "workspace"
 
-        # Se tem 1 bloco apenas, usar tipo do arquivo original ou tipo do bloco
+        # Se originalmente era workspace (aberto de .dpw), manter como workspace
+        if self._original_file_type == "workspace":
+            return "workspace"
+
+        # Se tem 1 bloco apenas, usar linguagem do bloco
         if len(blocks) == 1:
             block_language = blocks[0].get_language()
-            if self._original_file_type in ["sql", "python"]:
-                # If block is compatible with original file
-                if (self._original_file_type == "sql" and block_language == "sql") or (
-                    self._original_file_type == "python" and block_language == "python"
-                ):
-                    return self._original_file_type
-            else:
-                # Novo arquivo, usar linguagem do bloco
-                if block_language in ["sql", "python"]:
-                    return block_language
+            if block_language in ["sql", "python"]:
+                return block_language
 
-        # Fallback: se tem arquivo original sql/py, usar ele
-        if self._original_file_type in ["sql", "python"]:
-            return self._original_file_type
-
+        # Fallback
         return "workspace"
 
     def _update_window_title(self):
@@ -4930,32 +4879,95 @@ class MainWindow(DockingMainWindow):
         context = self._detect_file_context()
 
         if context in ["sql", "python"]:
-            # Contexto de arquivo unico - salvar no arquivo original
+            # Contexto de arquivo unico
+            expected_ext = ".sql" if context == "sql" else ".py"
+            
+            # Check if original file matches the expected extension
             if self._original_file_path:
-                self._save_single_file(self._original_file_path, context)
+                import os
+                current_ext = os.path.splitext(self._original_file_path)[1].lower()
+                
+                if current_ext == expected_ext:
+                    # File type matches block type - save directly
+                    self._save_single_file(self._original_file_path, context)
+                else:
+                    # Block type changed - ask for new file location
+                    self._save_single_file_as(context)
             else:
                 # Pedir caminho para arquivo unico
                 self._save_single_file_as(context)
         else:
-            # Contexto workspace - usar workspace_manager diretamente
-            window_geometry = {
-                "x": self.geometry().x(),
-                "y": self.geometry().y(),
-                "width": self.geometry().width(),
-                "height": self.geometry().height(),
-                "maximized": self.isMaximized(),
+            # Contexto workspace (multiple blocks) - save as .dpw
+            if self._original_file_path and self._original_file_path.endswith(".dpw"):
+                self._save_tab_as_dpw(self._original_file_path)
+            else:
+                # Pedir caminho para .dpw
+                self._save_tab_as_dpw_dialog()
+
+    def _save_tab_as_dpw(self, file_path: str):
+        """Saves current tab's blocks to a .dpw file"""
+        import json
+        
+        try:
+            current_widget = self._get_current_session_widget()
+            if not current_widget:
+                return
+            
+            blocks_data = current_widget.editor.to_list()
+            
+            dpw_content = {
+                "version": "1.0",
+                "blocks": blocks_data
             }
+            
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(dpw_content, f, indent=2, ensure_ascii=False)
+            
+            # Update file_path on widget and session
+            current_widget.file_path = file_path
+            current_widget._original_file_type = "workspace"
+            current_widget.session.file_path = file_path
+            current_widget.session.original_file_type = "workspace"
+            
+            # Update global file context
+            self._original_file_path = file_path
+            self._original_file_type = "workspace"
+            
+            # Update content hash
+            current_widget._content_hash = self._compute_widget_content_hash(current_widget)
+            current_widget._is_modified = False
+            
+            # Update tab name
+            import os
+            filename = os.path.basename(file_path)
+            index = self.session_tabs.indexOf(current_widget)
+            if index >= 0:
+                self.session_tabs.setTabText(index, filename)
+                current_widget.session.title = filename
+            
+            self.main_statusbar.show_save_feedback(S.status.file_saved.format(path=file_path))
+            self.main_statusbar.set_file_info(file_path)
+            self._update_window_title()
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_saving_file.format(error=e))
 
-            dock_visible = self.connections_dock.isVisible() if hasattr(self, "connections_dock") else True
-
-            self.workspace_manager.save_workspace(
-                tabs=[],
-                active_tab=0,
-                active_connection=None,
-                window_geometry=window_geometry,
-                splitter_sizes=[],
-                dock_visible=dock_visible,
-            )
+    def _save_tab_as_dpw_dialog(self):
+        """Asks for path to save tab as .dpw"""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            S.dialogs.save_as_title,
+            "",
+            "DataPyn Workspace (*.dpw);;All Files (*.*)"
+        )
+        
+        if filename:
+            if not filename.endswith(".dpw"):
+                filename += ".dpw"
+            self._save_tab_as_dpw(filename)
 
             # Feedback visual para o usuario
             save_path = str(self.workspace_manager.current_file_path or self.workspace_manager.config_path)
@@ -5091,26 +5103,22 @@ class MainWindow(DockingMainWindow):
         
         imports_needed = set()
         has_sql = False
-        has_cross = False
         
         for block in blocks:
             lang = block.get_language()
             if lang == 'sql':
                 has_sql = True
-            elif lang == 'cross':
-                has_cross = True
-                has_sql = True
         
         imports_needed.add('import pandas as pd')
         
-        if has_sql or has_cross:
+        if has_sql:
             imports_needed.add('from sqlalchemy import create_engine')
             # Note: pyodbc is only added for SQL Server connections below
         
         lines.extend(sorted(imports_needed))
         lines.append('')
         
-        if has_sql or has_cross:
+        if has_sql:
             lines.append('# Database Connection Configuration')
             lines.append('# IMPORTANT: Adjust the credentials below according to your configuration')
             
@@ -5184,11 +5192,6 @@ class MainWindow(DockingMainWindow):
                 lines.append('""", engine)')
                 lines.append(f'print(f"Query executed: {{len({var_name})}} rows returned")')
             
-            elif lang == 'cross':
-                lines.append('# Cross-syntax: SQL + Python')
-                processed_code = self._convert_cross_syntax_to_python(code, i)
-                lines.append(processed_code)
-            
             elif lang == 'python':
                 lines.append('# Python code')
                 lines.append(code)
@@ -5198,38 +5201,6 @@ class MainWindow(DockingMainWindow):
         lines.append('# ========================================')
         lines.append('# End of Script')
         lines.append('# ========================================')
-        
-        return '\n'.join(lines)
-    
-    def _convert_cross_syntax_to_python(self, code: str, block_index: int) -> str:
-        """Converts cross syntax (var = {{ SQL }}) to pure Python"""
-        import re
-        
-        # Match pattern: variable_name = {{ SQL query }}
-        # Captures: group(1) = variable_name, group(2) = SQL query
-        pattern = r"(\w+)\s*=\s*\{\{\s*(.+?)\s*\}\}"
-        
-        lines = []
-        last_end = 0
-        
-        for match in re.finditer(pattern, code, re.DOTALL):
-            before_match = code[last_end:match.start()]
-            if before_match.strip():
-                lines.append(before_match.rstrip())
-            
-            var_name = match.group(1)
-            sql = match.group(2).strip()
-            
-            lines.append(f'# SQL query assigned to variable {var_name}')
-            lines.append(f'{var_name} = pd.read_sql("""')
-            lines.append(sql)
-            lines.append('""", engine)')
-            
-            last_end = match.end()
-        
-        after_match = code[last_end:]
-        if after_match.strip():
-            lines.append(after_match.rstrip())
         
         return '\n'.join(lines)
 

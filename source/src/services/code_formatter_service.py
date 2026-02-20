@@ -118,7 +118,7 @@ def format_code(code: str, language: str) -> tuple[str, str | None]:
 
     if language == "python":
         return format_python(code)
-    elif language in ("sql", "cross"):
+    elif language == "sql":
         return format_sql(code)
     else:
         return code, f"Formatter not available for '{language}'"

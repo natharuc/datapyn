@@ -1,56 +1,10 @@
 """
-Testes de integração do fluxo completo
+Testes de integracao do fluxo completo
 """
 
 import pytest
 from unittest.mock import MagicMock, patch
 import pandas as pd
-
-
-class TestCrossSyntaxFlow:
-    """Testes de integração do fluxo cross-syntax"""
-
-    def test_complete_cross_syntax_execution(self, mixed_executor, mock_db_connector, sample_dataframe):
-        """Fluxo completo: código com {{ SQL }} deve criar variáveis"""
-        # Setup
-        mock_db_connector.is_connected.return_value = True
-        mock_db_connector.execute_query.return_value = sample_dataframe
-
-        # Código com sintaxe cross
-        code = """
-clientes = {{SELECT * FROM cliente}}
-total = len(clientes)
-print(f"Total: {total}")
-"""
-        namespace = {}
-
-        # Execute
-        result = mixed_executor.parse_and_execute(code, namespace)
-
-        # Verify
-        assert "clientes" in namespace
-        assert isinstance(namespace["clientes"], pd.DataFrame)
-        assert namespace["total"] == 3
-        assert "Total: 3" in result["output"]
-
-    def test_multiple_queries_in_one_execution(self, mixed_executor, mock_db_connector, sample_dataframe):
-        """Múltiplas queries em uma execução"""
-        mock_db_connector.is_connected.return_value = True
-        mock_db_connector.execute_query.return_value = sample_dataframe
-
-        code = """
-df1 = {{SELECT * FROM tabela1}}
-df2 = {{SELECT * FROM tabela2}}
-df3 = {{SELECT * FROM tabela3}}
-"""
-        namespace = {}
-
-        result = mixed_executor.parse_and_execute(code, namespace)
-
-        assert "df1" in namespace
-        assert "df2" in namespace
-        assert "df3" in namespace
-        assert result["queries_executed"] == 3
 
 
 class TestWorkspaceFlow:

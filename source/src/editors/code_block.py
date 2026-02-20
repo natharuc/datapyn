@@ -351,7 +351,7 @@ class CodeBlock(QFrame):
     connection_name_changed = pyqtSignal(object, str)  # self, connection_name - when block connection changes
     database_changed = pyqtSignal(object, str)  # self, database_name - when block database changes
 
-    LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00", "cross": "#6B4C9A"}
+    LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00"}
 
     def __init__(self, theme_manager: ThemeManager = None, parent=None, default_language="sql"):
         super().__init__(parent)
@@ -443,11 +443,8 @@ class CodeBlock(QFrame):
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("Python", "python")
         self.lang_combo.addItem("SQL", "sql")
-        self.lang_combo.addItem("Cross-Syntax", "cross")
         if self._default_language == "sql":
             self.lang_combo.setCurrentIndex(1)
-        elif self._default_language == "cross":
-            self.lang_combo.setCurrentIndex(2)
         else:
             self.lang_combo.setCurrentIndex(0)
         self.lang_combo.setFixedWidth(110)

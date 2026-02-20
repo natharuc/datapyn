@@ -321,7 +321,7 @@ class CodeEditor(QWidget):
     Editor de codigo baseado em QScintilla com Find/Replace nativo.
 
     - Python = lexer Python
-    - SQL e Cross-Syntax = lexer SQL
+    - SQL = lexer SQL
     - Tema dark sempre aplicado
     - Ctrl+F = Find, Ctrl+H = Find & Replace
     - Autocomplete SQL (schema) e Python (namespace)
@@ -478,7 +478,7 @@ class CodeEditor(QWidget):
                     self._jedi_timer.timeout.connect(self._request_jedi_completion)
                 self._jedi_timer.start(300)
 
-        elif self._language in ("sql", "cross"):
+        elif self._language == "sql":
             # Trigger SQL contextual autocomplete
             if ch == ".":
                 self._request_sql_completion()
@@ -639,7 +639,7 @@ class CodeEditor(QWidget):
             return
         self._current_lexer_lang = self._language
 
-        if self._language == "sql" or self._language == "cross":
+        if self._language == "sql":
             self._setup_sql_lexer()
         else:
             self._setup_python_lexer()
@@ -751,7 +751,7 @@ class CodeEditor(QWidget):
                 else:
                     apis.add(name)
 
-        elif self._language in ("sql", "cross"):
+        elif self._language == "sql":
             # Fallback: populate APIs with keywords + all schema items
             # (contextual completions are handled by _request_sql_completion)
             from src.services.sql_autocomplete_service import SQL_KEYWORDS
@@ -999,7 +999,7 @@ class CodeEditor(QWidget):
     def set_language(self, language: str) -> None:
         """Define a linguagem e atualiza o lexer."""
         language = language.lower()
-        if language in ("python", "sql", "cross") and language != self._language:
+        if language in ("python", "sql") and language != self._language:
             self._language = language
             self._setup_lexer()
 
@@ -1082,14 +1082,14 @@ class CodeEditor(QWidget):
         """
         self._sql_schema = schema if schema else {}
         self._sql_completer.set_schema(self._sql_schema)
-        if self._language in ("sql", "cross"):
+        if self._language == "sql":
             self._schedule_rebuild_apis()
 
     def clear_sql_schema(self) -> None:
         """Limpa schema SQL do autocomplete."""
         self._sql_schema = {}
         self._sql_completer.set_schema({})
-        if self._language in ("sql", "cross"):
+        if self._language == "sql":
             self._schedule_rebuild_apis()
 
     def set_python_namespace(self, namespace: dict) -> None:
