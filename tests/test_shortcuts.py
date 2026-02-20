@@ -30,15 +30,35 @@ def main_window(app):
     window.show()
     QTest.qWaitForWindowExposed(window)
 
-    # Garantir que há uma sessão inicial com editor válido
+    # Aguardar criacao completa da sessao inicial (carregamento diferido)
     QApplication.processEvents()
-    QTest.qWait(500)  # Aguardar criação completa da sessão inicial
+    for _ in range(20):
+        QTest.qWait(100)
+        QApplication.processEvents()
+        if window._get_current_editor() is not None:
+            break
 
-    # Verificar que o editor existe
+    # Se nao havia sessao, criar uma via _new_session
     editor = window._get_current_editor()
-    assert editor is not None, "Editor inicial não foi criado"
+    if editor is None:
+        window._new_session()
+        QApplication.processEvents()
+        for _ in range(10):
+            QTest.qWait(100)
+            QApplication.processEvents()
+            if window._get_current_editor() is not None:
+                break
+        editor = window._get_current_editor()
 
-    return window
+    assert editor is not None, "Editor inicial nao foi criado"
+
+    yield window
+
+    # Cleanup para evitar crash ao criar multiplas MainWindows
+    window.close()
+    QApplication.processEvents()
+    window.deleteLater()
+    QApplication.processEvents()
 
 
 def test_shortcut_execute_sql_without_selection(main_window):
@@ -193,17 +213,73 @@ def test_all_shortcuts_registered(main_window):
 
 
 def test_no_ambiguous_shortcuts(main_window):
-    """Verifica que não há atalhos duplicados/ambíguos"""
+    """Verifica que nao ha atalhos duplicados/ambiguos"""
     shortcut_manager = main_window.shortcut_manager
     all_shortcuts = shortcut_manager.get_all_shortcuts()
 
-    # Contar valores (teclas)
-    shortcuts_values = list(all_shortcuts.values())
+    # Contar valores (teclas) - ignorar atalhos vazios (desabilitados)
+    shortcuts_values = [v for v in all_shortcuts.values() if v]
 
-    # Verificar se não há duplicatas
+    # Verificar se nao ha duplicatas
     for shortcut_key in shortcuts_values:
         count = shortcuts_values.count(shortcut_key)
-        assert count == 1, f"Atalho '{shortcut_key}' está duplicado!"
+        assert count == 1, f"Atalho '{shortcut_key}' esta duplicado!"
+
+
+def test_shift_enter_does_not_insert_newline(main_window):
+    """Shift+Enter nao deve inserir nova linha no editor (liberado para execute_block_advance)"""
+    from src.editors.code_editor import CodeEditor
+
+    editor = main_window._get_current_editor()
+    assert editor is not None
+
+    # Forcar Shift+Return como atalho do app (independente de config do usuario)
+    CodeEditor.set_app_shortcuts(
+        set(CodeEditor._app_shortcut_sequences) | {"Shift+Return"}
+    )
+    assert "Shift+Return" in CodeEditor._app_shortcut_sequences
+
+    # Limpar e adicionar bloco com codigo
+    editor.clear_blocks()
+    block = editor.add_block(language="PYTHON")
+    block.set_code("x = 1")
+    block.focus_editor()
+    QApplication.processEvents()
+    QTest.qWait(100)
+
+    # Verificar que o event filter esta instalado
+    assert hasattr(block.editor, '_key_filter'), "Event filter nao foi instalado no CodeEditor"
+
+    # Contar linhas antes
+    text_before = block.get_code()
+
+    # Pressionar Shift+Enter no editor (QScintilla)
+    sci = block.editor._sci
+    QTest.keyClick(sci, Qt.Key.Key_Return, Qt.KeyboardModifier.ShiftModifier)
+    QApplication.processEvents()
+    QTest.qWait(100)
+
+    # O texto nao deve ter mudado (Shift+Enter nao deve inserir newline)
+    text_after = block.get_code()
+    assert text_after == text_before, (
+        f"Shift+Enter inseriu nova linha no editor! Antes: {text_before!r}, Depois: {text_after!r}"
+    )
+
+
+def test_editor_shortcuts_configurable(main_window):
+    """Atalhos do editor (QScintilla) devem aparecer nas configuracoes"""
+    shortcut_manager = main_window.shortcut_manager
+    all_shortcuts = shortcut_manager.get_all_shortcuts()
+
+    editor_shortcuts = [k for k in all_shortcuts if k.startswith("editor_")]
+    assert len(editor_shortcuts) >= 5, (
+        f"Deveria ter pelo menos 5 atalhos de editor, encontrou {len(editor_shortcuts)}: {editor_shortcuts}"
+    )
+
+    # editor_newline deve estar vazio por padrao (liberado para o app)
+    assert shortcut_manager.get_shortcut("editor_newline") == "", (
+        "editor_newline deveria estar vazio por padrao"
+    )
 
 
 if __name__ == "__main__":

@@ -1972,6 +1972,14 @@ class MainWindow(DockingMainWindow):
         from src.editors.code_editor import CodeEditor
         CodeEditor.set_app_shortcuts(app_keys)
 
+        # Informar editores sobre atalhos configuraveis do editor (QScintilla)
+        editor_shortcuts = {
+            action: self.shortcut_manager.get_shortcut(action)
+            for action in self.shortcut_manager.get_all_shortcuts()
+            if action.startswith("editor_")
+        }
+        CodeEditor.set_editor_shortcuts(editor_shortcuts)
+
     def _reload_shortcuts(self):
         """Re-registers all shortcuts (called when user changes settings)"""
         from PyQt6.QtGui import QShortcut, QKeySequence
@@ -2027,6 +2035,22 @@ class MainWindow(DockingMainWindow):
         # Update editors
         from src.editors.code_editor import CodeEditor
         CodeEditor.set_app_shortcuts(app_keys)
+
+        # Atualizar atalhos configuraveis do editor (QScintilla)
+        editor_shortcuts = {
+            action: self.shortcut_manager.get_shortcut(action)
+            for action in self.shortcut_manager.get_all_shortcuts()
+            if action.startswith("editor_")
+        }
+        CodeEditor.set_editor_shortcuts(editor_shortcuts)
+
+        # Re-aplicar keybindings nos editores ja existentes
+        for i in range(self.session_tabs.count()):
+            widget = self.session_tabs.widget(i)
+            if isinstance(widget, SessionWidget):
+                for block in widget.editor.get_blocks():
+                    if isinstance(block.editor, CodeEditor):
+                        block.editor._apply_editor_keybindings()
 
     # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
 

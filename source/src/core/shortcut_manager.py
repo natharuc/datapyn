@@ -39,6 +39,14 @@ class ShortcutManager:
         "reload_schema": "Ctrl+Shift+T",
         # Ferramentas
         "settings": "Ctrl+,",
+        # Editor (atalhos internos do QScintilla)
+        "editor_newline": "",
+        "editor_duplicate_line": "Ctrl+D",
+        "editor_cut_line": "Ctrl+L",
+        "editor_transpose_line": "",
+        "editor_lowercase": "Ctrl+U",
+        "editor_uppercase": "Ctrl+Shift+U",
+        "editor_delete_line": "Ctrl+Shift+K",
     }
 
     def __init__(self, config_path: str = None):

@@ -402,6 +402,14 @@ class SettingsDialog(QDialog):
             "reload_schema": "Reload SQL Schema",
             # Tools
             "settings": "Settings",
+            # Editor (QScintilla)
+            "editor_newline": "[Editor] Newline (Shift+Enter)",
+            "editor_duplicate_line": "[Editor] Duplicate Line/Selection",
+            "editor_cut_line": "[Editor] Cut Line",
+            "editor_transpose_line": "[Editor] Transpose Lines",
+            "editor_lowercase": "[Editor] Lowercase",
+            "editor_uppercase": "[Editor] Uppercase",
+            "editor_delete_line": "[Editor] Delete Line",
         }
 
         # Show ALL shortcuts
