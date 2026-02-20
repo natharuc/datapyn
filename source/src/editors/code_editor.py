@@ -5,7 +5,7 @@ Implementa a interface ICodeEditor seguindo o principio de Inversao de Dependenc
 Inclui barra de Find/Replace integrada (Ctrl+F / Ctrl+H).
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent, QObject
 from PyQt6.QtGui import QFont, QColor, QKeySequence, QShortcut, QKeyEvent
 from PyQt6.QtWidgets import (
     QWidget,
@@ -280,6 +280,39 @@ class FindReplaceBar(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# _ScintillaKeyFilter - Filtro de eventos para QScintilla
+# ---------------------------------------------------------------------------
+
+class _ScintillaKeyFilter(QObject):
+    """Filtro de eventos instalado no QScintilla para controlar atalhos.
+
+    Intercepta ShortcutOverride e KeyPress. Se a combinacao de teclas
+    pertence aos atalhos do aplicativo (ex: Shift+Return para
+    execute_block_advance), o evento e filtrado para que o QShortcut
+    global do MainWindow possa trata-lo.
+
+    Usa installEventFilter (nivel C++) em vez de monkey-patch do event(),
+    garantindo que funcione tanto com eventos reais quanto com QTest.
+    """
+
+    def __init__(self, editor: "CodeEditor"):
+        super().__init__(editor)
+        self._editor = editor
+
+    def eventFilter(self, obj, evt):
+        if evt.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
+            key = evt.key()
+            if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
+                           Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+                mods = evt.modifiers()
+                seq = QKeySequence(mods.value | key)
+                if seq.toString() in CodeEditor._app_shortcut_sequences:
+                    # Atalho do app - filtrar para que QShortcut global trate
+                    return True
+        return False
+
+
+# ---------------------------------------------------------------------------
 # CodeEditor - Editor QScintilla com Find/Replace integrado
 # ---------------------------------------------------------------------------
 
@@ -297,6 +330,48 @@ class CodeEditor(QWidget):
     # Atalhos da aplicacao que o editor NAO deve consumir.
     # Preenchido pelo MainWindow via set_app_shortcuts().
     _app_shortcut_sequences: set = set()
+
+    # Mapeamento de atalhos do editor (QScintilla) configuraveis.
+    # Preenchido pelo MainWindow via set_editor_shortcuts().
+    _editor_shortcut_config: dict = {}
+
+    # Mapa de acoes do editor para comandos Scintilla.
+    # Cada entrada: action -> (default_scintilla_key, scintilla_command)
+    # Formato do scintilla_key: keyCode + (modifiers << 16)
+    # Modifiers: SCMOD_SHIFT=1, SCMOD_CTRL=2, SCMOD_ALT=4
+    _SCINTILLA_BINDINGS = {
+        "editor_newline": {
+            "default_keys": [(13 + (1 << 16),)],  # Shift+Return
+            "command": 2329,  # SCI_NEWLINE
+        },
+        "editor_duplicate_line": {
+            "default_keys": [(ord("D") + (2 << 16),)],  # Ctrl+D
+            "command": 2469,  # SCI_SELECTIONDUPLICATE
+        },
+        "editor_cut_line": {
+            "default_keys": [(ord("L") + (2 << 16),)],  # Ctrl+L
+            "command": 2337,  # SCI_LINECUT
+        },
+        "editor_transpose_line": {
+            "default_keys": [(ord("T") + (2 << 16),)],  # Ctrl+T
+            "command": 2339,  # SCI_LINETRANSPOSE
+        },
+        "editor_lowercase": {
+            "default_keys": [(ord("U") + (2 << 16),)],  # Ctrl+U
+            "command": 2340,  # SCI_LOWERCASE
+        },
+        "editor_uppercase": {
+            "default_keys": [(ord("U") + (2 << 16) + (1 << 16),)],  # Ctrl+Shift+U
+            "command": 2341,  # SCI_UPPERCASE
+        },
+        "editor_delete_line": {
+            "default_keys": [
+                (ord("K") + (2 << 16) + (1 << 16),),  # Ctrl+Shift+K
+                (ord("L") + (2 << 16) + (1 << 16),),  # Ctrl+Shift+L (Scintilla default)
+            ],
+            "command": 2338,  # SCI_LINEDELETE
+        },
+    }
 
     # Signals da interface
     text_changed = pyqtSignal()
@@ -702,42 +777,102 @@ class CodeEditor(QWidget):
 
     def _setup_shortcuts(self):
         """Configura atalhos de teclado."""
-        # Ctrl+Enter - Executar
-        shortcut_ctrl_enter = QShortcut(QKeySequence("Ctrl+Return"), self._sci)
-        shortcut_ctrl_enter.activated.connect(self.execute_requested.emit)
-
-        # Shift+Enter - Executar
-        shortcut_shift_enter = QShortcut(QKeySequence("Shift+Return"), self._sci)
-        shortcut_shift_enter.activated.connect(self.execute_requested.emit)
-
         # Ctrl+/ - Comentar/descomentar
         shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self._sci)
         shortcut_comment.activated.connect(self.toggle_comment)
 
-        # Override do event() no QScintilla para controlar prioridade de atalhos.
+        # Instalar filtro de eventos no QScintilla para controlar prioridade
+        # de atalhos.
         #
-        # Qt processa atalhos via ShortcutOverride ANTES do keyPressEvent.
-        # Se QScintilla aceita o ShortcutOverride, o QShortcut do app nunca dispara.
+        # Usa installEventFilter (C++ level) em vez de monkey-patch do event(),
+        # garantindo que funcione tanto com eventos reais quanto com QTest.
         #
-        # Logica: se a tecla esta configurada no app -> rejeita ShortcutOverride
-        #         -> Qt encontra o QShortcut (ApplicationShortcut) e executa a acao.
-        #         Se NAO esta configurada -> QScintilla trata normalmente.
-        _original_event = self._sci.event
+        # Intercepta ShortcutOverride E KeyPress para teclas do app:
+        # - ShortcutOverride: impede QScintilla de "roubar" o atalho do app.
+        # - KeyPress: impede QScintilla de executar o comando interno
+        #   (ex: Shift+Return -> SCI_NEWLINE) antes do QShortcut do app.
+        self._key_filter = _ScintillaKeyFilter(self)
+        self._sci.installEventFilter(self._key_filter)
 
-        def _custom_event(evt):
-            if evt.type() == QEvent.Type.ShortcutOverride:
-                key = evt.key()
-                if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
-                               Qt.Key.Key_Alt, Qt.Key.Key_Meta):
-                    mods = evt.modifiers()
-                    seq = QKeySequence(mods.value | key)
-                    if seq.toString() in self._app_shortcut_sequences:
-                        # Atalho do app - NAO aceitar, deixar QShortcut tratar
-                        evt.ignore()
-                        return False
-            return _original_event(evt)
+        # Aplicar keybindings do editor (limpar defaults e reatribuir do config)
+        self._apply_editor_keybindings()
 
-        self._sci.event = _custom_event
+    @staticmethod
+    def _qt_key_to_scintilla(key_sequence_str: str):
+        """Converte string de atalho Qt para codigo Scintilla (keyDef).
+
+        Args:
+            key_sequence_str: Ex: "Shift+Return", "Ctrl+D", "Ctrl+Shift+U"
+
+        Returns:
+            int com keyCode + (modifiers << 16) no formato Scintilla,
+            ou None se nao for possivel converter.
+        """
+        if not key_sequence_str:
+            return None
+
+        # Mapa de nomes de tecla Qt -> codigo Scintilla (SCK_*)
+        key_map = {
+            "Return": 13, "Enter": 13,
+            "Tab": 9, "Backspace": 8, "Escape": 7,
+            "Delete": 308, "Del": 308,
+            "Insert": 309, "Ins": 309,
+            "Home": 304, "End": 305,
+            "PgUp": 306, "PgDown": 307,
+            "Up": 301, "Down": 300,
+            "Left": 302, "Right": 303,
+        }
+
+        parts = key_sequence_str.replace(" ", "").split("+")
+        scmod = 0  # SCMOD_NORM
+        key_code = None
+
+        for part in parts:
+            p = part.lower()
+            if p in ("ctrl", "control"):
+                scmod |= 2  # SCMOD_CTRL
+            elif p in ("shift",):
+                scmod |= 1  # SCMOD_SHIFT
+            elif p in ("alt",):
+                scmod |= 4  # SCMOD_ALT
+            elif p in ("meta", "super"):
+                scmod |= 8  # SCMOD_SUPER
+            else:
+                # Tecla principal
+                if part in key_map:
+                    key_code = key_map[part]
+                elif len(part) == 1 and part.isalpha():
+                    key_code = ord(part.upper())
+                else:
+                    return None  # Tecla nao mapeavel
+
+        if key_code is None:
+            return None
+
+        return key_code + (scmod << 16)
+
+    def _apply_editor_keybindings(self):
+        """Limpa keybindings internos do QScintilla e reatribui do config.
+
+        Para cada acao em _SCINTILLA_BINDINGS:
+        1. Remove as teclas default do Scintilla (SCI_CLEARCMDKEY)
+        2. Se o usuario configurou uma tecla, atribui (SCI_ASSIGNCMDKEY)
+        """
+        sci = self._sci
+        SCI_CLEARCMDKEY = 2181
+        SCI_ASSIGNCMDKEY = 2180
+
+        for action, binding in self._SCINTILLA_BINDINGS.items():
+            # 1. Limpar todas as teclas default para esta acao
+            for (default_key,) in binding["default_keys"]:
+                sci.SendScintilla(SCI_CLEARCMDKEY, default_key)
+
+            # 2. Se usuario configurou uma tecla, reatribuir
+            user_key_str = self._editor_shortcut_config.get(action, "")
+            if user_key_str:
+                sci_key = self._qt_key_to_scintilla(user_key_str)
+                if sci_key is not None:
+                    sci.SendScintilla(SCI_ASSIGNCMDKEY, sci_key, binding["command"])
 
     @classmethod
     def set_app_shortcuts(cls, shortcut_keys: set):
@@ -755,6 +890,17 @@ class CodeEditor(QWidget):
         for k in shortcut_keys:
             normalized.add(QKeySequence(k).toString())
         cls._app_shortcut_sequences = normalized
+
+    @classmethod
+    def set_editor_shortcuts(cls, editor_shortcuts: dict):
+        """Define mapeamento de atalhos do editor a partir do ShortcutManager.
+
+        Args:
+            editor_shortcuts: Dict com action -> key_sequence para acoes
+                              que comecam com 'editor_'. Ex:
+                              {'editor_newline': 'Shift+Return', ...}
+        """
+        cls._editor_shortcut_config = editor_shortcuts.copy()
 
     # === Find / Replace ===
 

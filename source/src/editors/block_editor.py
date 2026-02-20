@@ -32,8 +32,8 @@ class BlockEditor(QWidget):
     Each block has its own language (Python, SQL, Cross-Syntax).
 
     Shortcuts:
-    - F5: Runs focused block or all if nothing selected
-    - Shift+Enter: Runs focused block and advances to next
+    - F5: Runs focused block (selection if any, otherwise entire block)
+    - Shift+Enter: Runs focused block and advances to next (configurable via Settings)
     - Ctrl+Enter: Runs all blocks
 
     Signals:
@@ -156,11 +156,6 @@ class BlockEditor(QWidget):
             self._execute_smart()
             return
 
-        # Shift+Enter - Run focused block and advance
-        if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
-            self._execute_focused_and_advance()
-            return
-
         # Ctrl+Enter - Run all blocks
         if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.execute_all_blocks()
@@ -172,7 +167,7 @@ class BlockEditor(QWidget):
         """
         Run intelligently:
         - If there's a selection in focused block: runs selection with block's language
-        - If no selection: runs all blocks
+        - If no selection: runs focused block
         """
         if self._focused_block and self._focused_block.has_selection():
             # Run selection
@@ -180,8 +175,8 @@ class BlockEditor(QWidget):
             lang = self._focused_block.get_language()
             self._execute_code(code, lang, self._focused_block)
         else:
-            # Run all blocks
-            self.execute_all_blocks()
+            # Run focused block
+            self._execute_block(self._focused_block or (self._blocks[0] if self._blocks else None))
 
     def _execute_focused_and_advance(self):
         """Run focused block and move focus to next"""
@@ -324,7 +319,7 @@ class BlockEditor(QWidget):
             block.set_code(code)
 
         # Connect signals
-        # execute_requested uses same F5 logic: selection or all
+        # execute_requested runs only that block
         block.execute_requested.connect(lambda b: self._on_block_execute_requested(b))
         block.remove_requested.connect(self.remove_block)
         block.cancel_requested.connect(lambda b: self.cancel_all_executions())
@@ -611,11 +606,11 @@ class BlockEditor(QWidget):
 
     def _on_block_execute_requested(self, block: CodeBlock):
         """
-        Handler when a block requests execution (F5 or ▶ button).
+        Handler when a block requests execution (F5 or run button).
 
         Logic:
         - If there's a selection in block: run only selection
-        - If no selection: run all blocks
+        - If no selection: run only this block
         """
         if block.has_selection():
             # Run only selection from this block
@@ -623,8 +618,8 @@ class BlockEditor(QWidget):
             lang = block.get_language()
             self._execute_code(code, lang, block)
         else:
-            # Run all blocks
-            self.execute_all_blocks()
+            # Run only this block
+            self._execute_block(block)
 
     # === Drag and Drop ===
 

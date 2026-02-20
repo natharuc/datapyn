@@ -107,3 +107,50 @@ class TestShortcutManagerEdgeCases:
 
         # Deve ter defaults
         assert new_manager.get_shortcut("execute_sql") == "F5"
+
+    def test_new_defaults_merged_with_existing_config(self, shortcut_manager, temp_dir):
+        """Novos atalhos padrao devem ser adicionados a configs existentes"""
+        from core.shortcut_manager import ShortcutManager
+
+        # Simular config antiga que nao tem execute_block_advance
+        old_config = {
+            "shortcuts": {
+                "execute_sql": "F5",
+                "execute_all": "Ctrl+F5",
+                "save_file": "Ctrl+S",
+            }
+        }
+        shortcut_manager.config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(shortcut_manager.config_path, "w") as f:
+            json.dump(old_config, f)
+
+        # Criar novo manager (carrega config antiga + merge com defaults)
+        new_manager = ShortcutManager(str(shortcut_manager.config_path))
+
+        # Atalhos salvos devem ser preservados
+        assert new_manager.get_shortcut("execute_sql") == "F5"
+        assert new_manager.get_shortcut("save_file") == "Ctrl+S"
+
+        # Novos atalhos padrao devem estar disponiveis
+        assert new_manager.get_shortcut("execute_block_advance") == "Shift+Return"
+
+    def test_user_customized_shortcuts_preserved_on_merge(self, shortcut_manager, temp_dir):
+        """Atalhos customizados pelo usuario nao devem ser sobrescritos"""
+        from core.shortcut_manager import ShortcutManager
+
+        # Simular config onde usuario mudou execute_sql de F5 para F6
+        old_config = {
+            "shortcuts": {
+                "execute_sql": "F6",
+                "execute_all": "Ctrl+Shift+F5",
+            }
+        }
+        shortcut_manager.config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(shortcut_manager.config_path, "w") as f:
+            json.dump(old_config, f)
+
+        new_manager = ShortcutManager(str(shortcut_manager.config_path))
+
+        # Customizacao do usuario deve prevalecer sobre defaults
+        assert new_manager.get_shortcut("execute_sql") == "F6"
+        assert new_manager.get_shortcut("execute_all") == "Ctrl+Shift+F5"
