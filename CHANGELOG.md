@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.8.1 (2026-02-20)
+
+### Bug Fixes
+
+- Consertar shift enter impossivel de bindar nos atalhos.
+  ([`4d82a2c`](https://github.com/natharuc/datapyn/commit/4d82a2cb50bf0e3362bde93648f4fe9ba76a6de6))
+
+
 ## v1.8.0 (2026-02-19)
 
 ### Chores
