@@ -104,11 +104,13 @@ from src.ui.components.statusbar import MainStatusBar
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.object_explorer_panel import ObjectExplorerPanel
+from src.ui.components.copilot_chat_panel import CopilotChatPanel
 from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS, RADIUS
 
 # Services
 from src.services import AutoUpdateService
+from src.services.copilot import MCPServer, CopilotClient
 from src.language import S
 
 # Constantes
@@ -445,6 +447,10 @@ class MainWindow(DockingMainWindow):
         self._schema_service = SchemaService()
         self._schema_service.schema_loaded.connect(self._on_schema_loaded)
 
+        # Copilot integration (MCP server + client)
+        self._mcp_server = MCPServer()
+        self._copilot_client = CopilotClient()
+
         # Intelligent file management system
         self._original_file_path = None  # Original opened file path (sql/py/dpw)
         self._original_file_type = None  # Tipo: 'sql', 'python', 'workspace'
@@ -517,6 +523,9 @@ class MainWindow(DockingMainWindow):
 
         # Update initial window title
         self._update_window_title()
+
+        # Initialize MCP server with main window reference
+        self._mcp_server.set_main_window(self)
 
     # === DELEGATION PROPERTIES FOR CURRENT SESSION ===
 
@@ -1265,6 +1274,24 @@ class MainWindow(DockingMainWindow):
         self.variables_dock.setMinimumWidth(200)
         self.variables_dock.setMinimumHeight(180)
 
+        # Copilot Chat Panel
+        self._copilot_chat_panel = CopilotChatPanel(
+            copilot_client=self._copilot_client,
+            mcp_server=self._mcp_server,
+            theme_manager=self.theme_manager,
+        )
+        self._copilot_chat_panel.set_copilot_client(self._copilot_client)
+        self._copilot_chat_panel.set_mcp_server(self._mcp_server)
+
+        self.copilot_dock = QDockWidget(S.dock.copilot, self)
+        self.copilot_dock.setObjectName("CopilotDock")
+        self.copilot_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.copilot_dock.setWidget(self._copilot_chat_panel)
+        self.copilot_dock.setStyleSheet(dock_style_bottom)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
+        self.copilot_dock.setMinimumWidth(280)
+        self.copilot_dock.setMinimumHeight(200)
+
         # Tabifica Results e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
 
@@ -1389,6 +1416,7 @@ class MainWindow(DockingMainWindow):
             "output": self.output_dock,
             "variables": self.variables_dock,
             "object_explorer": getattr(self, "object_explorer_dock", None),
+            "copilot": getattr(self, "copilot_dock", None),
         }
         dock = dock_map.get(name)
         if dock is None:
@@ -1433,6 +1461,8 @@ class MainWindow(DockingMainWindow):
             self.variables_dock.hide()
         elif name == "object_explorer" and hasattr(self, "object_explorer_dock"):
             self.object_explorer_dock.hide()
+        elif name == "copilot" and hasattr(self, "copilot_dock"):
+            self.copilot_dock.hide()
 
     def _refresh_connections_list(self):
         """Updates the saved connections list"""
@@ -1531,6 +1561,8 @@ class MainWindow(DockingMainWindow):
         all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
         if hasattr(self, "object_explorer_dock"):
             all_docks.append(self.object_explorer_dock)
+        if hasattr(self, "copilot_dock"):
+            all_docks.append(self.copilot_dock)
         for dock in all_docks:
             dock.visibilityChanged.connect(self._on_dock_changed)
             dock.dockLocationChanged.connect(self._on_dock_changed)
@@ -1559,6 +1591,8 @@ class MainWindow(DockingMainWindow):
             all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
             if hasattr(self, "object_explorer_dock"):
                 all_docks.append(self.object_explorer_dock)
+            if hasattr(self, "copilot_dock"):
+                all_docks.append(self.copilot_dock)
 
             # Reset: make all non-floating
             for dock in all_docks:
@@ -1573,6 +1607,10 @@ class MainWindow(DockingMainWindow):
             if hasattr(self, "object_explorer_dock"):
                 self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
                 self.object_explorer_dock.hide()
+
+            if hasattr(self, "copilot_dock"):
+                self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
+                self.copilot_dock.hide()
 
             # Tabify Results and Output (bottom tabs)
             self.tabifyDockWidget(self.results_dock, self.output_dock)
@@ -1646,6 +1684,7 @@ class MainWindow(DockingMainWindow):
             ("output_dock", "output_action"),
             ("variables_dock", "variables_action"),
             ("object_explorer_dock", "object_explorer_action"),
+            ("copilot_dock", "copilot_action"),
         ]
         for dock_attr, action_attr in dock_action_map:
             dock = getattr(self, dock_attr, None)
@@ -1862,6 +1901,16 @@ class MainWindow(DockingMainWindow):
         )
         panels_menu.addAction(object_explorer_action)
         self.object_explorer_action = object_explorer_action
+
+        # Copilot Chat toggle
+        copilot_action = QAction(S.copilot.dock_title, self)
+        copilot_action.setCheckable(True)
+        copilot_action.setChecked(False)
+        copilot_action.triggered.connect(
+            lambda checked: self._toggle_panel_visibility("copilot", checked)
+        )
+        panels_menu.addAction(copilot_action)
+        self.copilot_action = copilot_action
 
         view_menu.addSeparator()
 
@@ -5404,5 +5453,9 @@ class MainWindow(DockingMainWindow):
         # Limpar schema service
         if hasattr(self, "_schema_service"):
             self._schema_service.cleanup()
+
+        # Cleanup Copilot client
+        if hasattr(self, "_copilot_client"):
+            self._copilot_client.cleanup()
 
         event.accept()

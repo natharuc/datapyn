@@ -49,7 +49,8 @@
     "results": "Results",
     "output": "Output",
     "variables": "Variables",
-    "object_explorer": "Object Explorer"
+    "object_explorer": "Object Explorer",
+    "copilot": "Copilot Chat"
   },
 
   "status": {
@@ -728,5 +729,22 @@
     "menu_view": "&View",
     "menu_reset_layout": "&Reset Layout",
     "menu_panels": "&Panels"
+  },
+
+  "copilot": {
+    "title": "Copilot",
+    "input_placeholder": "Ask Copilot... (Enter to send, Shift+Enter for new line)",
+    "send_tooltip": "Send message",
+    "mode_tooltip": "Select interaction mode",
+    "model_tooltip": "Select AI model",
+    "sign_in": "Sign In",
+    "sign_out": "Sign Out",
+    "signing_in": "Signing in...",
+    "welcome_message": "Welcome to GitHub Copilot.\nSign in with your GitHub account to start chatting.\nCopilot can help with SQL queries, Python code, and data analysis.",
+    "not_authenticated": "Please sign in with GitHub to use Copilot.",
+    "auth_instructions": "To authenticate, enter the code **{code}** at:\n{url}\n\n(Code copied to clipboard)",
+    "auth_success": "Authenticated successfully! You can now chat with Copilot.",
+    "auth_failed": "Authentication failed: {error}",
+    "dock_title": "Copilot Chat"
   }
 }
