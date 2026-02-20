@@ -558,6 +558,10 @@ class BlockEditor(QWidget):
             if "connection_name" in data:
                 block.set_connection_name(data["connection_name"], data.get("db_type"))
 
+            # Restore custom database if exists
+            if "database_name" in data and data["database_name"]:
+                block.set_database_name(data["database_name"])
+
     # === Compatibility with UnifiedEditor ===
 
     def clear(self):

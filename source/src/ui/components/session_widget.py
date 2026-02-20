@@ -567,10 +567,8 @@ class SessionWidget(QWidget):
                     if current_block and hasattr(current_block, "db_panel"):
                         current_block._database_name = db_after
                         current_block.db_panel.set_database(db_after)
-                elif self.session.connector and self.session.connection_name:
-                    current_db = self.session.connector.get_current_database()
-                    if current_db:
-                        self.connection_changed.emit(self.session.connection_name, current_db)
+                # Note: Do NOT emit connection_changed if database didn't change
+                # This avoids unnecessary schema reloads which cause performance issues
 
         # Process next in queue if available
         self._is_executing = False

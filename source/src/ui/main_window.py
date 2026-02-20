@@ -4335,10 +4335,20 @@ class MainWindow(DockingMainWindow):
                 self.session_tabs.set_tab_connection_color(i, color)
                 break
 
-        # === CARREGAR SCHEMA (INVALIDA CACHE + RELOAD) ===
+        # === CARREGAR SCHEMA (APENAS SE BANCO MUDOU) ===
         if session.connector:
-            self._schema_service.invalidate_cache(connection_name)
-            self._schema_service.load_schema(session.connector, connection_name)
+            # Check if database actually changed to avoid unnecessary reloads
+            cached = self._schema_service.get_cached_schema(connection_name)
+            cached_db = cached.get("database", "") if cached else ""
+
+            if not cached or cached_db != current_db:
+                # Database changed or no cache - need to reload
+                self._schema_service.invalidate_cache(connection_name)
+                self._schema_service.load_schema(session.connector, connection_name)
+            else:
+                # Schema already in cache and database didn't change
+                # Still need to apply to blocks and update Object Explorer
+                self._on_schema_loaded(cached, connection_name)
 
         # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
         current_widget = self._get_current_session_widget()
@@ -4463,24 +4473,42 @@ class MainWindow(DockingMainWindow):
                             self._switch_session_explorer(sid)
                             self.object_explorer_dock.show()
 
+        # Check if any block was waiting for this schema (per-block connection)
+        if hasattr(self, "_pending_block_schemas"):
+            pending_block = self._pending_block_schemas.pop(connection_name, None)
+            if pending_block:
+                self._apply_schema_to_block(pending_block, schema)
+
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback when an individual block connection changes.
 
         Loads schema from new connection and applies to block (in background).
+        This works independently of the session connection - the block can have
+        its own connection even if the session is not connected.
         """
         if not connection_name:
             return
 
-        # Verificar cache primeiro
+        # Check cache first - if available, apply immediately
         cached = self._schema_service.get_cached_schema(connection_name)
         if cached:
-            if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
-                block.editor.set_sql_schema(cached)
-            if hasattr(block, "set_available_databases"):
-                block.set_available_databases(cached.get("databases", []))
+            self._apply_schema_to_block(block, cached)
             return
 
-        # Precisa carregar schema - criar connector em background
+        # Need to load schema in background
+        self._load_schema_for_block(block, connection_name)
+
+    def _apply_schema_to_block(self, block, schema: dict):
+        """Apply schema to a specific block's editor."""
+        if not block:
+            return
+        if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
+            block.editor.set_sql_schema(schema)
+        if hasattr(block, "set_available_databases"):
+            block.set_available_databases(schema.get("databases", []))
+
+    def _load_schema_for_block(self, block, connection_name: str):
+        """Load schema in background and apply to specific block when ready."""
         try:
             from src.database.connection_manager import ConnectionManager
             from src.workers import BlockConnectionWorker
@@ -4488,7 +4516,12 @@ class MainWindow(DockingMainWindow):
             manager = ConnectionManager()
             config = manager.get_connection_config(connection_name)
             if not config:
+                self._log_info(f"Connection config not found: {connection_name}")
                 return
+
+            self.statusBar().showMessage(
+                f"Loading schema for {connection_name}...", 5000
+            )
 
             thread = QThread()
             worker = BlockConnectionWorker(
@@ -4503,12 +4536,19 @@ class MainWindow(DockingMainWindow):
             )
             worker.moveToThread(thread)
 
+            # When connection is ready, load schema (also in background via SchemaService)
+            def on_connection_ready(connector):
+                # SchemaService.load_schema already runs in background
+                self._schema_service.load_schema(connector, connection_name)
+                # Store block reference to apply schema when loaded
+                if not hasattr(self, "_pending_block_schemas"):
+                    self._pending_block_schemas = {}
+                self._pending_block_schemas[connection_name] = block
+
             thread.started.connect(worker.run)
-            worker.connection_ready.connect(
-                lambda connector: self._schema_service.load_schema(connector, connection_name)
-            )
+            worker.connection_ready.connect(on_connection_ready)
             worker.error.connect(
-                lambda msg: self._log_info(f"Error loading schema for block ({connection_name}): {msg}")
+                lambda msg: self._log_info(f"Error connecting for block schema ({connection_name}): {msg}")
             )
             worker.finished.connect(thread.quit)
             thread.finished.connect(worker.deleteLater)
@@ -4523,32 +4563,91 @@ class MainWindow(DockingMainWindow):
     def _on_block_database_changed(self, block, database_name: str):
         """Callback when a block's database is changed.
 
-        Switches the database of the block's connection (or session connection).
+        Switches the database of the block's connection (or session connection)
+        and reloads schema for the new database to update IntelliSense.
         """
         if not database_name:
             return
 
         current_widget = self._get_current_session_widget()
-        if not current_widget or not hasattr(current_widget, "session"):
-            return
-
-        session = current_widget.session
+        session = current_widget.session if current_widget and hasattr(current_widget, "session") else None
 
         # Determine which connector to use (block-specific or session)
         block_conn_name = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+
         if block_conn_name:
-            # Block has its own connection - not switching session connector
+            # Block has its own connection - need to switch database and reload schema
+            # Do this in background to avoid blocking UI
+            self._switch_block_database_background(block, block_conn_name, database_name)
+            return
+
+        # Block uses session connection
+        if not session:
+            self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
 
         connector = getattr(session, "connector", None)
-        connection_name = getattr(session, "connection_name", "") or ""
-
         if not connector or not connector.is_connected():
             self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
 
-        # Switch database in background
+        # Switch database in background (uses Object Explorer method which handles
+        # schema reload, UI updates, etc.)
         self._on_object_explorer_database_switch(database_name)
+
+    def _switch_block_database_background(self, block, connection_name: str, database_name: str):
+        """Switch database for a block with custom connection (in background)."""
+        from src.database.connection_manager import ConnectionManager
+        from src.workers import BlockConnectionWorker
+
+        manager = ConnectionManager()
+        config = manager.get_connection_config(connection_name)
+        if not config:
+            self._log_info(f"Connection config not found: {connection_name}")
+            return
+
+        self.statusBar().showMessage(
+            f"Switching to database {database_name}...", 5000
+        )
+
+        # Create connection with the NEW database
+        thread = QThread()
+        worker = BlockConnectionWorker(
+            db_type=config["db_type"],
+            host=config["host"],
+            port=config["port"],
+            database=database_name,  # Use the new database!
+            username=config.get("username", ""),
+            password=config.get("password", ""),
+            use_windows_auth=config.get("use_windows_auth", False),
+            trust_server_certificate=config.get("trust_server_certificate", False),
+        )
+        worker.moveToThread(thread)
+
+        def on_connection_ready(connector):
+            # Invalidate old cache and load new schema
+            self._schema_service.invalidate_cache(connection_name)
+            self._schema_service.load_schema(connector, connection_name)
+            # Store block reference to apply schema when loaded
+            if not hasattr(self, "_pending_block_schemas"):
+                self._pending_block_schemas = {}
+            self._pending_block_schemas[connection_name] = block
+            self.statusBar().showMessage(
+                S.status.database_changed.format(name=database_name), 3000
+            )
+
+        thread.started.connect(worker.run)
+        worker.connection_ready.connect(on_connection_ready)
+        worker.error.connect(
+            lambda msg: self.statusBar().showMessage(f"Error: {msg[:50]}", 5000)
+        )
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        self._worker_threads.append((thread, worker))
+        thread.start()
 
     def _on_insert_variable_in_editor(self, var_name: str):
         """Inserts variable name in the focused editor of the active session"""
@@ -5017,50 +5116,50 @@ class MainWindow(DockingMainWindow):
     def _export_as_script(self):
         """Exports the current analysis as a complete Python script"""
         from PyQt6.QtWidgets import QFileDialog
-        
+
         current_widget = self._get_current_session_widget()
         if not current_widget:
             QMessageBox.warning(self, S.dialogs.warning, S.dialogs.export_no_session)
             return
-        
+
         blocks = current_widget.editor.get_blocks()
         if not blocks:
             QMessageBox.warning(self, S.dialogs.warning, S.dialogs.export_no_blocks)
             return
-        
+
         filename, _ = QFileDialog.getSaveFileName(
             self,
             S.dialogs.export_script_title,
             "",
             "Python Files (*.py);;All Files (*.*)"
         )
-        
+
         if not filename:
             return
-        
+
         if not filename.endswith('.py'):
             filename += '.py'
-        
+
         try:
             script_content = self._generate_script_from_blocks(blocks, current_widget)
-            
+
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(script_content)
-            
+
             self.action_label.setText(S.status.script_exported.format(filename=filename))
             QMessageBox.information(
                 self,
                 S.dialogs.export_complete_title,
                 S.dialogs.export_complete_msg.format(filename=filename)
             )
-        
+
         except Exception as e:
             QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_exporting_script.format(error=e))
-    
+
     def _generate_script_from_blocks(self, blocks, session_widget) -> str:
         """Generates complete Python code from the blocks"""
         lines = []
-        
+
         lines.append('"""')
         lines.append('Python Script Exported from DataPyn')
         lines.append('')
@@ -5069,11 +5168,11 @@ class MainWindow(DockingMainWindow):
             lines.append(f'Connection: {session_widget.session.connection_name}')
         lines.append('"""')
         lines.append('')
-        
+
         imports_needed = set()
         has_sql = False
         has_cross = False
-        
+
         for block in blocks:
             lang = block.get_language()
             if lang == 'sql':
@@ -5081,20 +5180,20 @@ class MainWindow(DockingMainWindow):
             elif lang == 'cross':
                 has_cross = True
                 has_sql = True
-        
+
         imports_needed.add('import pandas as pd')
-        
+
         if has_sql or has_cross:
             imports_needed.add('from sqlalchemy import create_engine')
             # Note: pyodbc is only added for SQL Server connections below
-        
+
         lines.extend(sorted(imports_needed))
         lines.append('')
-        
+
         if has_sql or has_cross:
             lines.append('# Database Connection Configuration')
             lines.append('# IMPORTANT: Adjust the credentials below according to your configuration')
-            
+
             if session_widget.session.connection_name:
                 conn_name = session_widget.session.connection_name
                 config = self.connection_manager.get_connection_config(conn_name)
@@ -5104,7 +5203,7 @@ class MainWindow(DockingMainWindow):
                     port = config.get('port', 3306)
                     database = config.get('database', 'database')
                     username = config.get('username', 'user')
-                    
+
                     lines.append(f"# Database type: {db_type}")
                     lines.append(f"DB_HOST = '{host}'")
                     lines.append(f"DB_PORT = {port}")
@@ -5112,7 +5211,7 @@ class MainWindow(DockingMainWindow):
                     lines.append(f"DB_USER = '{username}'")
                     lines.append("DB_PASSWORD = ''  # Enter password here")
                     lines.append('')
-                    
+
                     if db_type == 'mysql':
                         lines.append("# MySQL connection string")
                         lines.append("connection_string = f'mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'")
@@ -5126,7 +5225,7 @@ class MainWindow(DockingMainWindow):
                     else:
                         lines.append(f"# {db_type} connection string")
                         lines.append("connection_string = ''  # Configure the appropriate connection string")
-                    
+
                     lines.append('')
                     lines.append('# Create connection engine')
                     lines.append('engine = create_engine(connection_string)')
@@ -5135,22 +5234,22 @@ class MainWindow(DockingMainWindow):
                 lines.append("connection_string = ''  # Configure your connection string")
                 lines.append('engine = create_engine(connection_string)')
                 lines.append('')
-        
+
         lines.append('# ========================================')
         lines.append('# Code Blocks')
         lines.append('# ========================================')
         lines.append('')
-        
+
         for i, block in enumerate(blocks, 1):
             lang = block.get_language()
             code = block.get_code().strip()
             block_name = block.get_block_name()
-            
+
             if not code:
                 continue
-            
+
             lines.append(f'# --- Block {i}: {lang.upper()}' + (f' ({block_name})' if block_name else '') + ' ---')
-            
+
             if lang == 'sql':
                 lines.append('# SQL Query executed via pandas')
                 var_name = block_name if block_name else f'df_block_{i}'
@@ -5158,54 +5257,58 @@ class MainWindow(DockingMainWindow):
                 lines.append(code)
                 lines.append('""", engine)')
                 lines.append(f'print(f"Query executed: {{len({var_name})}} rows returned")')
-            
+
             elif lang == 'cross':
                 lines.append('# Cross-syntax: SQL + Python')
                 processed_code = self._convert_cross_syntax_to_python(code, i)
                 lines.append(processed_code)
-            
+
             elif lang == 'python':
                 lines.append('# Python code')
                 lines.append(code)
-            
+
             lines.append('')
-        
+
         lines.append('# ========================================')
         lines.append('# End of Script')
         lines.append('# ========================================')
-        
+
         return '\n'.join(lines)
-    
+
     def _convert_cross_syntax_to_python(self, code: str, block_index: int) -> str:
         """Converts cross syntax (var = {{ SQL }}) to pure Python"""
         import re
-        
+
         # Match pattern: variable_name = {{ SQL query }}
         # Captures: group(1) = variable_name, group(2) = SQL query
         pattern = r"(\w+)\s*=\s*\{\{\s*(.+?)\s*\}\}"
-        
+
         lines = []
         last_end = 0
-        
+
         for match in re.finditer(pattern, code, re.DOTALL):
             before_match = code[last_end:match.start()]
             if before_match.strip():
                 lines.append(before_match.rstrip())
-            
+
             var_name = match.group(1)
             sql = match.group(2).strip()
-            
+
+
             lines.append(f'# SQL query assigned to variable {var_name}')
             lines.append(f'{var_name} = pd.read_sql("""')
             lines.append(sql)
             lines.append('""", engine)')
-            
+
+
             last_end = match.end()
-        
+
+
         after_match = code[last_end:]
         if after_match.strip():
             lines.append(after_match.rstrip())
-        
+
+
         return '\n'.join(lines)
 
     def closeEvent(self, event):

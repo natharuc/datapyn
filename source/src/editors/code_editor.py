@@ -752,8 +752,9 @@ class CodeEditor(QWidget):
                     apis.add(name)
 
         elif self._language in ("sql", "cross"):
-            # Fallback: populate APIs with keywords + all schema items
-            # (contextual completions are handled by _request_sql_completion)
+            # Fallback: populate APIs with keywords + table names only
+            # (contextual completions including columns are handled by _request_sql_completion)
+            # We don't add all columns here to avoid slowdown with large schemas
             from src.services.sql_autocomplete_service import SQL_KEYWORDS
             for kw in SQL_KEYWORDS:
                 apis.add(kw)
@@ -761,15 +762,10 @@ class CodeEditor(QWidget):
             has_entries = True
 
             tables = self._sql_schema.get("tables", [])
-            columns = self._sql_schema.get("columns", {})
-
+            # Only add table names - columns are handled by contextual autocomplete
             for table in tables:
                 tname = table["name"] if isinstance(table, dict) else str(table)
                 apis.add(tname)
-                for col in columns.get(tname, []):
-                    cname = col["name"] if isinstance(col, dict) else str(col)
-                    apis.add(f"{tname}.{cname}")
-                    apis.add(cname)
 
         if has_entries:
             apis.prepare()
@@ -1082,6 +1078,8 @@ class CodeEditor(QWidget):
         """
         self._sql_schema = schema if schema else {}
         self._sql_completer.set_schema(self._sql_schema)
+        # Always rebuild APIs if current language is SQL/Cross
+        # (schema may be set before language change, rebuild will happen on language change)
         if self._language in ("sql", "cross"):
             self._schedule_rebuild_apis()
 
