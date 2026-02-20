@@ -336,6 +336,10 @@ class DatabaseConnector:
             if self.db_type == "sqlserver":
                 return self._execute_mssql_batch(query_clean)
 
+            # For Databricks, use specific method with cursor access for cancellation
+            if self.db_type == "databricks":
+                return self._execute_databricks_query(query_clean)
+
             # For other databases, use legacy logic
             return self._execute_generic_query(query_clean)
 
@@ -346,7 +350,7 @@ class DatabaseConnector:
     def cancel_query(self):
         """Cancel running query.
 
-        Works for SQL Server (pyodbc) and PostgreSQL (psycopg2).
+        Works for SQL Server (pyodbc), PostgreSQL (psycopg2), and Databricks.
         For MySQL/MariaDB, interrupts via flag.
         """
         self._cancelled = True
@@ -366,6 +370,14 @@ class DatabaseConnector:
                 if raw_conn is not None and hasattr(raw_conn, "cancel"):
                     raw_conn.cancel()
                     logger.info("PostgreSQL query cancelled via connection.cancel()")
+            elif self.db_type == "databricks":
+                # Databricks: cancel() on cursor sends cancel to server
+                cursor = self._active_cursor
+                if cursor is not None and hasattr(cursor, "cancel"):
+                    cursor.cancel()
+                    logger.info("Databricks query cancelled via cursor.cancel()")
+                else:
+                    logger.warning("Cancel requested but Databricks cursor not available")
             else:
                 # MySQL/MariaDB: no native cancel in driver,
                 # but _cancelled flag will interrupt processing
@@ -516,6 +528,72 @@ class DatabaseConnector:
                 except:
                     pass
 
+            if raw_conn:
+                try:
+                    raw_conn.close()
+                except:
+                    pass
+
+    def _execute_databricks_query(self, query: str) -> pd.DataFrame:
+        """Execute Databricks query with cursor access for cancellation.
+        
+        Uses raw connection to expose cursor for cancel support.
+        """
+        self._cancelled = False
+        cursor = None
+        raw_conn = None
+        
+        try:
+            # Get raw DBAPI connection from SQLAlchemy engine
+            raw_conn = self.engine.raw_connection()
+            self._active_raw_conn = raw_conn
+            cursor = raw_conn.cursor()
+            self._active_cursor = cursor  # Expose cursor for cancellation
+            
+            # Execute query
+            cursor.execute(query)
+            
+            # Check if cancelled
+            if self._cancelled:
+                return pd.DataFrame({"Result": ["Query cancelled"]})
+            
+            # Try to fetch results
+            try:
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                if columns:
+                    rows = cursor.fetchall()
+                    df = pd.DataFrame(rows, columns=columns)
+                    logger.info(f"Databricks query executed: {len(df)} rows returned")
+                    return df
+                else:
+                    # No results (DDL/DML command)
+                    rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else -1
+                    if rows_affected >= 0:
+                        msg = f"Command executed successfully. {rows_affected} row(s) affected."
+                    else:
+                        msg = "Command executed successfully."
+                    return pd.DataFrame({"Result": [msg]})
+            except Exception as fetch_err:
+                # Query was cancelled or had no results
+                if self._cancelled:
+                    return pd.DataFrame({"Result": ["Query cancelled"]})
+                raise
+                
+        except Exception as e:
+            if self._cancelled:
+                logger.info("Databricks query cancelled by user")
+                return pd.DataFrame({"Result": ["Query cancelled"]})
+            logger.error(f"Error executing Databricks query: {str(e)}")
+            raise
+            
+        finally:
+            self._active_raw_conn = None
+            self._active_cursor = None
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
             if raw_conn:
                 try:
                     raw_conn.close()

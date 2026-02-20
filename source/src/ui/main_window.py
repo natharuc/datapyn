@@ -1055,7 +1055,7 @@ class MainWindow(DockingMainWindow):
 
         # --- Schema reload ---
         self._schema_service.invalidate_cache(connection_name)
-        self._schema_service.load_schema(connector, connection_name)
+        self._load_schema_with_loading(connector, connection_name)
 
         if hasattr(widget, "connection_changed"):
             widget.connection_changed.emit(connection_name, database_name)
@@ -1109,7 +1109,13 @@ class MainWindow(DockingMainWindow):
 
         if connector and connector.is_connected():
             self._schema_service.invalidate_cache(connection_name)
-            self._schema_service.load_schema(connector, connection_name)
+            self._load_schema_with_loading(connector, connection_name)
+    
+    def _load_schema_with_loading(self, connector, connection_name: str):
+        """Load schema and show loading indicator in Object Explorer."""
+        if self._active_object_explorer:
+            self._active_object_explorer.set_loading(True, S.object_explorer.loading)
+        self._schema_service.load_schema(connector, connection_name)
 
     def _setup_dockable_panels(self):
         """Configures dockable panels (Results, Output, Variables) using QDockWidget.
@@ -2560,7 +2566,7 @@ class MainWindow(DockingMainWindow):
                 connection_name = getattr(session, "connection_name", "") or ""
                 if connection_name:
                     self._schema_service.invalidate_cache(connection_name)
-                    self._schema_service.load_schema(connector, connection_name)
+                    self._load_schema_with_loading(connector, connection_name)
 
                     # Emit connection change signal to update UI
                     current_widget = self._get_current_session_widget()
@@ -2770,7 +2776,7 @@ class MainWindow(DockingMainWindow):
             connection_name = getattr(session, "connection_name", "") or ""
             if connection_name:
                 self._schema_service.invalidate_cache(connection_name)
-                self._schema_service.load_schema(connector, connection_name)
+                self._load_schema_with_loading(connector, connection_name)
 
                 current_widget = self._get_current_session_widget()
                 if current_widget and hasattr(current_widget, "connection_changed"):
@@ -4349,7 +4355,7 @@ class MainWindow(DockingMainWindow):
         # === CARREGAR SCHEMA (INVALIDA CACHE + RELOAD) ===
         if session.connector:
             self._schema_service.invalidate_cache(connection_name)
-            self._schema_service.load_schema(session.connector, connection_name)
+            self._load_schema_with_loading(session.connector, connection_name)
 
         # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
         current_widget = self._get_current_session_widget()
@@ -4397,14 +4403,14 @@ class MainWindow(DockingMainWindow):
         self.statusBar().showMessage(S.status.reloading_schema.format(name=connection_name), 5000)
 
         if connector and connector.is_connected():
-            self._schema_service.load_schema(connector, connection_name)
+            self._load_schema_with_loading(connector, connection_name)
         else:
             # Need to get connector from ConnectionManager
             from src.database.connection_manager import ConnectionManager
             manager = ConnectionManager()
             conn = manager.connections.get(connection_name)
             if conn and conn.is_connected():
-                self._schema_service.load_schema(conn, connection_name)
+                self._load_schema_with_loading(conn, connection_name)
             else:
                 self.statusBar().showMessage(S.status.connection_not_active.format(name=connection_name), 3000)
 

@@ -139,6 +139,20 @@ class ObjectExplorerPanel(QWidget):
         self.tree.startDrag = self._start_drag
 
         layout.addWidget(self.tree)
+        
+        # Loading overlay
+        self._loading_label = QLabel()
+        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._loading_label.setStyleSheet("""
+            QLabel {
+                color: #888;
+                font-size: 12px;
+                padding: 20px;
+                background: transparent;
+            }
+        """)
+        self._loading_label.hide()
+        layout.addWidget(self._loading_label)
 
     def _apply_theme(self):
         """Apply theme to tree widget"""
@@ -174,6 +188,25 @@ class ObjectExplorerPanel(QWidget):
         self.theme_manager = theme_manager
         self._apply_theme()
 
+    def set_loading(self, loading: bool, message: str = ""):
+        """Show or hide loading state.
+        
+        Args:
+            loading: True to show loading, False to hide
+            message: Optional message to display (default: "Loading...")
+        """
+        if loading:
+            if HAS_QTAWESOME:
+                # Create animated spinner icon
+                spin_icon = qta.icon("fa5s.spinner", animation=qta.Spin(self._loading_label), color="#888")
+                self._loading_label.setPixmap(spin_icon.pixmap(24, 24))
+            self._loading_label.setText(message or "Loading...")
+            self._loading_label.show()
+            self.tree.hide()
+        else:
+            self._loading_label.hide()
+            self.tree.show()
+
     def set_schema(self, schema: dict, connection_name: str = ""):
         """Set the schema to be displayed in the tree.
 
@@ -183,6 +216,7 @@ class ObjectExplorerPanel(QWidget):
                     (format from SchemaService)
             connection_name: connection name
         """
+        self.set_loading(False)  # Hide loading when schema arrives
         self._current_schema = schema
         self._current_connection = connection_name
         if schema:

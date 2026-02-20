@@ -512,7 +512,12 @@ class CodeBlock(QFrame):
         self.db_panel.setMaximumWidth(180)
         control_layout.addWidget(self.db_panel)
 
-        # Status
+        # Status with spinner
+        self._spinner_label = QLabel()
+        self._spinner_label.setFixedSize(16, 16)
+        self._spinner_label.hide()
+        control_layout.addWidget(self._spinner_label)
+        
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("""
             QLabel {
@@ -793,8 +798,13 @@ class CodeBlock(QFrame):
                     border-radius: 3px;
                 }
             """)
+            # Show animated spinner
+            spin_icon = qta.icon("fa5s.spinner", animation=qta.Spin(self._spinner_label), color="#f39c12")
+            self._spinner_label.setPixmap(spin_icon.pixmap(16, 16))
+            self._spinner_label.show()
             self.cancel_btn.show()
         else:
+            self._spinner_label.hide()
             self._update_style()  # Restore play icon with language color
             self.cancel_btn.hide()
             if self._execution_start_time > 0:
