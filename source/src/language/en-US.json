@@ -743,8 +743,14 @@
     "welcome_message": "Welcome to GitHub Copilot.\nSign in with your GitHub account to start chatting.\nCopilot can help with SQL queries, Python code, and data analysis.",
     "not_authenticated": "Please sign in with GitHub to use Copilot.",
     "auth_instructions": "To authenticate, enter the code **{code}** at:\n{url}\n\n(Code copied to clipboard)",
+    "auth_code_instructions": "Enter this code on GitHub to authenticate:",
+    "copy_code": "Copy Code",
+    "code_copied": "Copied!",
+    "waiting_auth": "Waiting for authentication...",
     "auth_success": "Authenticated successfully! You can now chat with Copilot.",
     "auth_failed": "Authentication failed: {error}",
+    "unapproved_client": "GitHub Copilot API requires an approved client. DataPyn cannot directly access Copilot. Consider using the MCP integration with VS Code or JetBrains.",
+    "copilot_login_required": "Please authenticate using the Copilot CLI:\nRun in terminal: copilot login",
     "dock_title": "Copilot Chat"
   }
 }
