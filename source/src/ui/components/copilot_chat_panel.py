@@ -112,6 +112,7 @@ class ChatMessageWidget(QFrame):
         content_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )
+        content_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         content_label.setStyleSheet(f"""
             QLabel {{
                 color: {colors.text_primary};
@@ -177,11 +178,14 @@ class ChatMessageWidget(QFrame):
 
         # Main widget should have transparent background
         self.setStyleSheet("ChatMessageWidget { background: transparent; border: none; }")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     def append_content(self, text: str):
         """Append text to the message content (for streaming)."""
         self.content += text
         self._content_label.setText(self.content)
+        self._content_label.adjustSize()
+        self.adjustSize()
 
 
 class ThinkingIndicatorWidget(QFrame):
