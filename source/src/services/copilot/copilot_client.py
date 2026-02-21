@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, QSettings
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, QSettings, Qt
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,17 @@ GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
 GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
 COPILOT_CHAT_URL = "https://api.githubcopilot.com/chat/completions"
+COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
 
-# GitHub Copilot OAuth client ID (public, used by VS Code)
+# GitHub Copilot OAuth client ID (public, used by VS Code Copilot extension)
 COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 
-COPILOT_MODELS = [
+# Alternative client IDs if needed
+# VS Code Insiders: "01ab8ac9400c4e429b23"
+# GitHub CLI: "178c6fc778ccc68e1d6a"
+
+# Fallback models if API is unavailable
+DEFAULT_COPILOT_MODELS = [
     {"id": "gpt-4o", "name": "GPT-4o"},
     {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
     {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet"},
@@ -190,12 +196,10 @@ class ChatWorker(QObject):
 
             if resp.status_code == 401:
                 self.error.emit("Authentication expired. Please sign in again.")
-                self.finished.emit()
                 return
 
             if resp.status_code != 200:
                 self.error.emit(f"Copilot API error: HTTP {resp.status_code}")
-                self.finished.emit()
                 return
 
             full_response = ""
@@ -249,6 +253,7 @@ class CopilotTokenWorker(QObject):
         try:
             import requests
 
+            logger.debug(f"Requesting Copilot token from {COPILOT_TOKEN_URL}")
             resp = requests.get(
                 COPILOT_TOKEN_URL,
                 headers={
@@ -260,27 +265,101 @@ class CopilotTokenWorker(QObject):
                 },
                 timeout=15,
             )
-            if resp.status_code == 403:
-                self.error.emit(
-                    "Copilot access denied (HTTP 403). "
-                    "Please verify your GitHub Copilot subscription is active at "
-                    "https://github.com/settings/copilot"
-                )
-                self.finished.emit()
+            logger.debug(f"Copilot token response: {resp.status_code}")
+            if resp.status_code == 401 or resp.status_code == 403:
+                # Check if it's the "unapproved client" error
+                error_msg = ""
+                try:
+                    data = resp.json()
+                    if "error_details" in data:
+                        error_msg = data.get("error_details", {}).get("message", "")
+                except Exception:
+                    pass
+
+                if "approved clients" in error_msg.lower() or resp.status_code == 403:
+                    logger.error(f"Copilot API rejected client: {error_msg}")
+                    self.error.emit(
+                        "GitHub Copilot API requires an approved client. "
+                        "DataPyn cannot directly access Copilot. "
+                        "Consider using the MCP integration with VS Code or JetBrains."
+                    )
+                else:
+                    logger.error(f"Token request failed: {resp.status_code} - {resp.text[:200] if resp.text else 'no body'}")
+                    self.error.emit(f"GitHub token expired or invalid. Please sign in again. (HTTP {resp.status_code})")
                 return
             if resp.status_code != 200:
+                logger.error(f"Token request failed: {resp.status_code}")
                 self.error.emit(f"Failed to get Copilot token: HTTP {resp.status_code}")
-                self.finished.emit()
                 return
 
             data = resp.json()
             token = data.get("token", "")
             if token:
+                logger.info("Copilot token obtained successfully")
                 self.token_ready.emit(token)
             else:
+                logger.error("No token in response")
                 self.error.emit("No Copilot token in response. Is Copilot enabled for your account?")
         except Exception as e:
+            logger.exception("Error getting Copilot token")
             self.error.emit(str(e))
+        finally:
+            self.finished.emit()
+
+
+class ModelsWorker(QObject):
+    """Worker to fetch available models from Copilot API."""
+
+    models_ready = pyqtSignal(list)  # list of model dicts
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, copilot_token: str):
+        super().__init__()
+        self.copilot_token = copilot_token
+
+    def run(self):
+        try:
+            import requests
+
+            resp = requests.get(
+                COPILOT_MODELS_URL,
+                headers={
+                    "Authorization": f"Bearer {self.copilot_token}",
+                    "Accept": "application/json",
+                    "Editor-Version": "DataPyn/1.0.0",
+                    "Copilot-Integration-Id": "datapyn-ide",
+                },
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"Failed to fetch models: HTTP {resp.status_code}")
+                self.models_ready.emit(DEFAULT_COPILOT_MODELS)
+                return
+
+            data = resp.json()
+            models_list = data.get("models", data.get("data", []))
+
+            if not models_list:
+                self.models_ready.emit(DEFAULT_COPILOT_MODELS)
+                return
+
+            # Parse models from API response
+            parsed_models = []
+            for m in models_list:
+                model_id = m.get("id", m.get("name", ""))
+                model_name = m.get("name", m.get("id", ""))
+                if model_id:
+                    parsed_models.append({"id": model_id, "name": model_name})
+
+            if parsed_models:
+                self.models_ready.emit(parsed_models)
+            else:
+                self.models_ready.emit(DEFAULT_COPILOT_MODELS)
+
+        except Exception as e:
+            logger.warning(f"Error fetching models: {e}")
+            self.models_ready.emit(DEFAULT_COPILOT_MODELS)
         finally:
             self.finished.emit()
 
@@ -295,6 +374,7 @@ class CopilotClient(QObject):
         auth_required(str, str): user_code, verification_uri - user needs to authenticate
         authenticated(str): username - authentication successful
         auth_failed(str): error message
+        models_updated(list): list of available models
         chat_response_chunk(str): streaming text chunk
         chat_response_complete(str): full response text
         chat_error(str): error message
@@ -303,6 +383,7 @@ class CopilotClient(QObject):
     auth_required = pyqtSignal(str, str)  # user_code, verification_uri
     authenticated = pyqtSignal(str)  # username or status
     auth_failed = pyqtSignal(str)
+    models_updated = pyqtSignal(list)  # list of model dicts
     chat_response_chunk = pyqtSignal(str)
     chat_response_complete = pyqtSignal(str)
     chat_error = pyqtSignal(str)
@@ -312,8 +393,15 @@ class CopilotClient(QObject):
         self._github_token: str = ""
         self._copilot_token: str = ""
         self._model: str = "gpt-4o"
+        self._available_models: List[Dict[str, str]] = DEFAULT_COPILOT_MODELS.copy()
         self._active_threads: list = []
         self._settings = QSettings("DataPyn", "CopilotAuth")
+
+        # Strong references to prevent garbage collection during auth
+        self._poll_worker = None
+        self._poll_thread = None
+        self._token_worker = None
+        self._token_thread = None
 
         # Try to restore token from settings
         self._github_token = self._settings.value("github_token", "", type=str)
@@ -323,6 +411,10 @@ class CopilotClient(QObject):
         return bool(self._github_token)
 
     @property
+    def has_copilot_token(self) -> bool:
+        return bool(self._copilot_token)
+
+    @property
     def model(self) -> str:
         return self._model
 
@@ -330,12 +422,36 @@ class CopilotClient(QObject):
     def model(self, value: str):
         self._model = value
 
-    @staticmethod
-    def available_models() -> List[Dict[str, str]]:
-        return COPILOT_MODELS
+    def available_models(self) -> List[Dict[str, str]]:
+        """Return list of available models for the user."""
+        return self._available_models
+
+    def refresh_token_if_needed(self) -> None:
+        """Refresh Copilot token if we have a GitHub token but no Copilot token."""
+        if self._github_token and not self._copilot_token:
+            self._refresh_copilot_token()
+
+    def validate_saved_token(self) -> None:
+        """
+        Validate saved GitHub token asynchronously.
+        If valid, gets Copilot token. If invalid, clears saved token silently.
+        """
+        if self._github_token and not self._copilot_token:
+            self._refresh_copilot_token()
+
+    def clear_invalid_token(self) -> None:
+        """Clear tokens without emitting auth_failed signal."""
+        self._github_token = ""
+        self._copilot_token = ""
+        self._settings.remove("github_token")
 
     def start_auth(self) -> None:
         """Start the GitHub Device Flow authentication."""
+        # Clear any existing tokens to start fresh
+        self._github_token = ""
+        self._copilot_token = ""
+        self._settings.remove("github_token")
+
         worker = AuthWorker()
         worker.set_phase("device_code")
         thread = QThread()
@@ -354,17 +470,27 @@ class CopilotClient(QObject):
         """Device code received - notify UI and start polling."""
         self.auth_required.emit(user_code, verification_uri)
 
-        # Start polling for token
+        # Start polling for token in a separate thread
+        self._start_polling(device_code)
+
+    def _start_polling(self, device_code: str) -> None:
+        """Start polling for token in background."""
         worker = AuthWorker()
         worker.set_phase("poll", device_code=device_code)
         thread = QThread()
+
+        # Store references to prevent garbage collection
+        self._poll_worker = worker
+        self._poll_thread = thread
+
         worker.moveToThread(thread)
 
+        # Use QueuedConnection to ensure signals are processed in the main thread
         thread.started.connect(worker.run)
-        worker.auth_success.connect(self._on_github_token)
-        worker.auth_error.connect(self._on_auth_error)
+        worker.auth_success.connect(self._on_github_token, Qt.ConnectionType.QueuedConnection)
+        worker.auth_error.connect(self._on_auth_error, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(lambda: self._cleanup_thread(thread, worker))
+        worker.finished.connect(self._cleanup_poll_thread, Qt.ConnectionType.QueuedConnection)
 
         self._active_threads.append((thread, worker))
         thread.start()
@@ -373,8 +499,7 @@ class CopilotClient(QObject):
         """GitHub token received."""
         self._github_token = token
         self._settings.setValue("github_token", token)
-        self.authenticated.emit("GitHub")
-        # Exchange for Copilot token
+        # Exchange for Copilot token (authenticated will be emitted when ready)
         self._refresh_copilot_token()
 
     def _refresh_copilot_token(self) -> None:
@@ -384,13 +509,18 @@ class CopilotClient(QObject):
 
         worker = CopilotTokenWorker(self._github_token)
         thread = QThread()
+
+        # Store reference to prevent garbage collection
+        self._token_worker = worker
+        self._token_thread = thread
+
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
-        worker.token_ready.connect(self._on_copilot_token)
-        worker.error.connect(self._on_auth_error)
+        worker.token_ready.connect(self._on_copilot_token, Qt.ConnectionType.QueuedConnection)
+        worker.error.connect(self._on_auth_error, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(lambda: self._cleanup_thread(thread, worker))
+        worker.finished.connect(self._cleanup_token_thread, Qt.ConnectionType.QueuedConnection)
 
         self._active_threads.append((thread, worker))
         thread.start()
@@ -398,9 +528,39 @@ class CopilotClient(QObject):
     def _on_copilot_token(self, token: str) -> None:
         """Copilot API token received."""
         self._copilot_token = token
+        self.authenticated.emit("Copilot ready")
+        # Fetch available models
+        self._fetch_available_models()
+
+    def _fetch_available_models(self) -> None:
+        """Fetch available models from Copilot API."""
+        if not self._copilot_token:
+            return
+
+        worker = ModelsWorker(self._copilot_token)
+        thread = QThread()
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.models_ready.connect(self._on_models_ready)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(lambda: self._cleanup_thread(thread, worker))
+
+        self._active_threads.append((thread, worker))
+        thread.start()
+
+    def _on_models_ready(self, models: List[Dict[str, str]]) -> None:
+        """Models list received from API."""
+        self._available_models = models
+        self.models_updated.emit(models)
 
     def _on_auth_error(self, error: str) -> None:
         """Authentication error."""
+        # If token expired, clear it to force re-authentication
+        if "expired" in error.lower() or "invalid" in error.lower() or "403" in error:
+            self._github_token = ""
+            self._copilot_token = ""
+            self._settings.remove("github_token")
         self.auth_failed.emit(error)
 
     def send_chat(self, messages: List[Dict[str, str]]) -> None:
@@ -437,6 +597,36 @@ class CopilotClient(QObject):
         self._github_token = ""
         self._copilot_token = ""
         self._settings.remove("github_token")
+
+    def _cleanup_poll_thread(self) -> None:
+        """Clean up polling thread and worker."""
+        try:
+            if self._poll_thread and self._poll_worker:
+                self._active_threads = [
+                    (t, w) for t, w in self._active_threads if t is not self._poll_thread
+                ]
+                self._poll_worker.deleteLater()
+                self._poll_thread.deleteLater()
+        except RuntimeError:
+            pass
+        finally:
+            self._poll_worker = None
+            self._poll_thread = None
+
+    def _cleanup_token_thread(self) -> None:
+        """Clean up token exchange thread and worker."""
+        try:
+            if self._token_thread and self._token_worker:
+                self._active_threads = [
+                    (t, w) for t, w in self._active_threads if t is not self._token_thread
+                ]
+                self._token_worker.deleteLater()
+                self._token_thread.deleteLater()
+        except RuntimeError:
+            pass
+        finally:
+            self._token_worker = None
+            self._token_thread = None
 
     def _cleanup_thread(self, thread, worker) -> None:
         """Remove finished thread from active list."""
