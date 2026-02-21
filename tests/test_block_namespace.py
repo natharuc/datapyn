@@ -94,12 +94,3 @@ class TestBlockNamespace:
         assert item2[3] == block2.get_block_name()  # block_name
         assert item2[4] == "CustomConn"  # connection_name customizada
         assert item2[5] is None  # database_name (padrao)
-
-
-class TestBlockNamespaceIntegration:
-    """Testes de integracao para namespace isolado"""
-
-    @pytest.mark.skip(reason="Requer mock complexo de QThread e sinais - testar manualmente")
-    def test_sql_block_creates_isolated_namespace(self, qapp, mock_connector):
-        """Blocos SQL devem criar b1_df, b2_df ao inves de sobrepor df"""
-        pass
