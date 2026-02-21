@@ -2061,6 +2061,10 @@ class MainWindow(DockingMainWindow):
         from src.editors.code_editor import CodeEditor
         CodeEditor.set_app_shortcuts(app_keys)
 
+        # Informar editores sobre o atalho de toggle_comment
+        toggle_comment_shortcut = self.shortcut_manager.get_shortcut("toggle_comment")
+        CodeEditor.set_toggle_comment_shortcut(toggle_comment_shortcut)
+
         # Informar editores sobre atalhos configuraveis do editor (QScintilla)
         editor_shortcuts = {
             action: self.shortcut_manager.get_shortcut(action)
@@ -2124,6 +2128,10 @@ class MainWindow(DockingMainWindow):
         # Update editors
         from src.editors.code_editor import CodeEditor
         CodeEditor.set_app_shortcuts(app_keys)
+
+        # Atualizar atalho de toggle_comment
+        toggle_comment_shortcut = self.shortcut_manager.get_shortcut("toggle_comment")
+        CodeEditor.set_toggle_comment_shortcut(toggle_comment_shortcut)
 
         # Atualizar atalhos configuraveis do editor (QScintilla)
         editor_shortcuts = {

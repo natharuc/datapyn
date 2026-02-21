@@ -402,6 +402,9 @@ class SettingsDialog(QDialog):
             "reload_schema": "Reload SQL Schema",
             # Tools
             "settings": "Settings",
+            # Editing (additional)
+            "format_code": "Format Code",
+            "toggle_comment": "Toggle Comment",
             # Editor (QScintilla)
             "editor_newline": "[Editor] Newline (Shift+Enter)",
             "editor_duplicate_line": "[Editor] Duplicate Line/Selection",

@@ -291,6 +291,9 @@ class _ScintillaKeyFilter(QObject):
     execute_block_advance), o evento e filtrado para que o QShortcut
     global do MainWindow possa trata-lo.
 
+    Tambem intercepta o atalho configurado para toggle_comment, pois QShortcut
+    nao funciona bem com certas teclas em todos os layouts de teclado.
+
     Usa installEventFilter (nivel C++) em vez de monkey-patch do event(),
     garantindo que funcione tanto com eventos reais quanto com QTest.
     """
@@ -299,16 +302,59 @@ class _ScintillaKeyFilter(QObject):
         super().__init__(editor)
         self._editor = editor
 
+    def _matches_toggle_comment(self, evt) -> bool:
+        """Verifica se o evento corresponde ao atalho de toggle_comment."""
+        shortcut = CodeEditor._toggle_comment_shortcut
+        if not shortcut:
+            return False
+
+        # Criar QKeySequence do atalho configurado
+        configured_seq = QKeySequence(shortcut)
+        if configured_seq.isEmpty():
+            return False
+
+        # Criar QKeySequence do evento
+        key = evt.key()
+        mods = evt.modifiers()
+        event_seq = QKeySequence(mods.value | key)
+
+        # Comparar as sequencias normalizadas
+        return configured_seq.toString() == event_seq.toString()
+
     def eventFilter(self, obj, evt):
-        if evt.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
+        if evt.type() == QEvent.Type.KeyPress:
             key = evt.key()
+            mods = evt.modifiers()
+
+            # Verificar se corresponde ao atalho de toggle_comment
+            if self._matches_toggle_comment(evt):
+                self._editor.toggle_comment()
+                return True
+
+            # Verificar atalhos do app
             if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
                            Qt.Key.Key_Alt, Qt.Key.Key_Meta):
-                mods = evt.modifiers()
                 seq = QKeySequence(mods.value | key)
                 if seq.toString() in CodeEditor._app_shortcut_sequences:
                     # Atalho do app - filtrar para que QShortcut global trate
                     return True
+
+        elif evt.type() == QEvent.Type.ShortcutOverride:
+            key = evt.key()
+            mods = evt.modifiers()
+
+            # Aceitar override para toggle_comment
+            if self._matches_toggle_comment(evt):
+                evt.accept()
+                return True
+
+            # Verificar atalhos do app
+            if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
+                           Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+                seq = QKeySequence(mods.value | key)
+                if seq.toString() in CodeEditor._app_shortcut_sequences:
+                    return True
+
         return False
 
 
@@ -334,6 +380,10 @@ class CodeEditor(QWidget):
     # Mapeamento de atalhos do editor (QScintilla) configuraveis.
     # Preenchido pelo MainWindow via set_editor_shortcuts().
     _editor_shortcut_config: dict = {}
+
+    # Atalho configurado para toggle_comment (default: Ctrl+/)
+    # Preenchido pelo MainWindow via set_toggle_comment_shortcut().
+    _toggle_comment_shortcut: str = "Ctrl+/"
 
     # Mapa de acoes do editor para comandos Scintilla.
     # Cada entrada: action -> (default_scintilla_key, scintilla_command)
@@ -773,9 +823,8 @@ class CodeEditor(QWidget):
 
     def _setup_shortcuts(self):
         """Configura atalhos de teclado."""
-        # Ctrl+/ - Comentar/descomentar
-        shortcut_comment = QShortcut(QKeySequence("Ctrl+/"), self._sci)
-        shortcut_comment.activated.connect(self.toggle_comment)
+        # Nota: Ctrl+/ e Ctrl+; para comentar sao tratados pelo _ScintillaKeyFilter
+        # pois QShortcut nao funciona bem com essas teclas em todos os layouts.
 
         # Instalar filtro de eventos no QScintilla para controlar prioridade
         # de atalhos.
@@ -897,6 +946,15 @@ class CodeEditor(QWidget):
                               {'editor_newline': 'Shift+Return', ...}
         """
         cls._editor_shortcut_config = editor_shortcuts.copy()
+
+    @classmethod
+    def set_toggle_comment_shortcut(cls, shortcut: str):
+        """Define o atalho para toggle_comment.
+
+        Args:
+            shortcut: Key sequence como 'Ctrl+;' ou 'Ctrl+/'
+        """
+        cls._toggle_comment_shortcut = shortcut if shortcut else "Ctrl+;"
 
     # === Find / Replace ===
 

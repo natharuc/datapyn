@@ -42,6 +42,8 @@ class ShortcutManager:
         "reload_schema": "Ctrl+Shift+T",
         # Ferramentas
         "settings": "Ctrl+,",
+        # Comentar/descomentar
+        "toggle_comment": "Ctrl+/",
         # Editor (atalhos internos do QScintilla)
         "editor_newline": "",
         "editor_duplicate_line": "Ctrl+D",
