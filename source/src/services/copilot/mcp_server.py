@@ -38,7 +38,7 @@ class MCPServer(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._tool_registry = MCPToolRegistry()
+        self._tool_registry = MCPToolRegistry(parent=self)
         self._initialized = False
 
     @property

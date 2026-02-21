@@ -89,6 +89,18 @@ class BlockEditor(QWidget):
         # Create first empty block
         self.add_block()
 
+    # === Public Properties ===
+
+    @property
+    def blocks(self) -> List["CodeBlock"]:
+        """Get list of all code blocks."""
+        return self._blocks
+
+    @property
+    def focused_block(self) -> Optional["CodeBlock"]:
+        """Get the currently focused block, or None."""
+        return self._focused_block
+
     def _setup_ui(self):
         """Setup the UI"""
         main_layout = QVBoxLayout(self)

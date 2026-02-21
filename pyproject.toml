@@ -37,6 +37,8 @@ dependencies = [
     # Charts
     "matplotlib>=3.7.0",
     "jedi>=0.19.2",
+    # GitHub Copilot SDK (requires Copilot CLI installed separately)
+    "github-copilot-sdk>=0.1.0",
 ]
 
 [tool.uv]

@@ -156,6 +156,66 @@ print(relatorio)
 # To export: right-click on "Results" tab > Export
 
 
+# Example 11: Sales report by customer
+# -------------------------------------
+relatorio_clientes = query("""
+    SELECT
+        c.id                          AS cliente_id,
+        c.nome                        AS cliente,
+        c.email,
+        COUNT(v.id)                   AS qtd_pedidos,
+        SUM(v.valor)                  AS valor_total,
+        AVG(v.valor)                  AS ticket_medio,
+        MIN(v.data)                   AS primeira_compra,
+        MAX(v.data)                   AS ultima_compra
+    FROM clientes c
+    LEFT JOIN vendas v ON v.cliente_id = c.id
+    GROUP BY c.id, c.nome, c.email
+    ORDER BY valor_total DESC
+""")
+
+# Percent share per customer
+total_geral = relatorio_clientes["valor_total"].sum()
+relatorio_clientes["participacao_pct"] = (
+    relatorio_clientes["valor_total"] / total_geral * 100
+).round(2)
+
+# Customer ranking (dense rank)
+relatorio_clientes["ranking"] = (
+    relatorio_clientes["valor_total"]
+    .rank(method="dense", ascending=False)
+    .astype(int)
+)
+
+print("\n=== RELATORIO DE VENDAS POR CLIENTE ===")
+print(f"Total de clientes: {len(relatorio_clientes)}")
+print(f"Faturamento total: R$ {total_geral:,.2f}")
+print()
+
+# Top 10 customers
+top10 = relatorio_clientes.head(10)
+for _, row in top10.iterrows():
+    print(
+        f"#{row['ranking']:>3} {row['cliente']:<30} "
+        f"Pedidos: {int(row['qtd_pedidos']):>4}  "
+        f"Total: R$ {row['valor_total']:>12,.2f}  "
+        f"Ticket Medio: R$ {row['ticket_medio']:>10,.2f}  "
+        f"Participacao: {row['participacao_pct']:>5.2f}%"
+    )
+
+print()
+
+# Customers with no purchases
+sem_compras = relatorio_clientes[relatorio_clientes["qtd_pedidos"] == 0]
+print(f"Clientes sem compras: {len(sem_compras)}")
+
+# Summary stats
+print("\n--- Resumo ---")
+print(f"Maior comprador:    {relatorio_clientes.iloc[0]['cliente']}")
+print(f"Ticket medio geral: R$ {relatorio_clientes['ticket_medio'].mean():,.2f}")
+print(f"Clientes ativos:    {(relatorio_clientes['qtd_pedidos'] > 0).sum()}")
+
+
 # ============================================================
 # TIPS
 # ============================================================

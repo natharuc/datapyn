@@ -22,10 +22,17 @@ from PyQt6.QtWidgets import (
     QFrame,
     QSizePolicy,
     QApplication,
+    QMenu,
+    QWidgetAction,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl
-from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QTimer, QSettings, QByteArray
+from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter
+from PyQt6.QtSvg import QSvgRenderer
+import json
 import logging
+import os
+import re
+from datetime import datetime
 
 from src.language import S
 from src.design_system.tokens import get_colors, RADIUS
@@ -40,36 +47,66 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _load_copilot_icon(color: str, size: int = 20) -> QIcon:
+    """Load Copilot SVG icon with custom color."""
+    try:
+        # Get path relative to this file (ui/components -> ui -> src -> assets/icons)
+        components_dir = os.path.dirname(os.path.abspath(__file__))
+        ui_dir = os.path.dirname(components_dir)
+        src_dir = os.path.dirname(ui_dir)
+        svg_path = os.path.join(src_dir, "assets", "icons", "copilot_icon.svg")
+
+        with open(svg_path, "r", encoding="utf-8") as f:
+            svg_content = f.read()
+
+        # Replace all fill colors
+        svg_content = re.sub(r"fill\s*:\s*#[0-9a-fA-F]{3,6}", f"fill:{color}", svg_content)
+        svg_content = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg_content)
+
+        svg_bytes = QByteArray(svg_content.encode("utf-8"))
+        renderer = QSvgRenderer(svg_bytes)
+
+        if not renderer.isValid():
+            return None
+
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+
+        return QIcon(pixmap)
+    except Exception as e:
+        logger.error(f"Failed to load Copilot icon: {e}")
+        return None
+
+
 class ChatMessageWidget(QFrame):
-    """A single chat message bubble."""
+    """A single chat message bubble with proper alignment (user right, assistant left)."""
 
     def __init__(self, role: str, content: str, parent=None):
         super().__init__(parent)
         self.role = role
         self.content = content
+        self._timestamp = datetime.now()
         self._setup_ui()
 
     def _setup_ui(self):
         colors = get_colors()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(4)
 
-        # Role label
-        role_label = QLabel("You" if self.role == "user" else "Copilot")
-        role_font = QFont()
-        role_font.setBold(True)
-        role_font.setPointSize(10)
-        role_label.setFont(role_font)
+        # Outer layout to handle alignment
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        outer_layout.setSpacing(0)
 
-        if self.role == "user":
-            role_label.setStyleSheet(f"color: {colors.interactive_primary}; background: transparent;")
-        else:
-            role_label.setStyleSheet(f"color: {colors.success}; background: transparent;")
+        # Create the bubble frame
+        bubble = QFrame()
+        bubble_layout = QVBoxLayout(bubble)
+        bubble_layout.setContentsMargins(12, 8, 12, 8)
+        bubble_layout.setSpacing(4)
 
-        layout.addWidget(role_label)
-
-        # Content label
+        # Content label (no role label - cleaner look)
         content_label = QLabel(self.content)
         content_label.setWordWrap(True)
         content_label.setTextInteractionFlags(
@@ -80,30 +117,373 @@ class ChatMessageWidget(QFrame):
                 color: {colors.text_primary};
                 background: transparent;
                 font-size: 13px;
-                line-height: 1.5;
             }}
         """)
-        layout.addWidget(content_label)
+        bubble_layout.addWidget(content_label)
         self._content_label = content_label
 
-        # Style the bubble
-        if self.role == "user":
-            bg = colors.bg_tertiary
-        else:
-            bg = colors.bg_secondary
-
-        self.setStyleSheet(f"""
-            ChatMessageWidget {{
-                background-color: {bg};
-                border-radius: {RADIUS.radius_md}px;
-                border: 1px solid {colors.border_muted};
+        # Timestamp label
+        time_str = self._timestamp.strftime("%H:%M")
+        time_label = QLabel(time_str)
+        time_label.setStyleSheet(f"""
+            QLabel {{
+                color: {colors.text_tertiary};
+                background: transparent;
+                font-size: 10px;
             }}
         """)
+        bubble_layout.addWidget(time_label)
+        self._time_label = time_label
+
+        # Style the bubble based on role
+        if self.role == "user":
+            # User messages: right aligned, primary color accent
+            outer_layout.addStretch()
+            outer_layout.addWidget(bubble)
+            bubble.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {colors.interactive_primary};
+                    border-radius: {RADIUS.radius_md}px;
+                }}
+            """)
+            content_label.setStyleSheet(f"""
+                QLabel {{
+                    color: white;
+                    background: transparent;
+                    font-size: 13px;
+                }}
+            """)
+            time_label.setStyleSheet(f"""
+                QLabel {{
+                    color: rgba(255, 255, 255, 0.6);
+                    background: transparent;
+                    font-size: 10px;
+                }}
+            """)
+            time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            bubble.setMaximumWidth(400)
+        else:
+            # Assistant messages: left aligned, secondary background
+            outer_layout.addWidget(bubble)
+            outer_layout.addStretch()
+            bubble.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {colors.bg_secondary};
+                    border-radius: {RADIUS.radius_md}px;
+                    border: none;
+                }}
+            """)
+            bubble.setMaximumWidth(500)
+
+        # Main widget should have transparent background
+        self.setStyleSheet("ChatMessageWidget { background: transparent; border: none; }")
 
     def append_content(self, text: str):
         """Append text to the message content (for streaming)."""
         self.content += text
         self._content_label.setText(self.content)
+
+
+class ThinkingIndicatorWidget(QFrame):
+    """Animated thinking indicator widget - left aligned like assistant messages."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dot_count = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._animate)
+        self._setup_ui()
+        self._timer.start(400)  # Animation speed
+
+    def _setup_ui(self):
+        colors = get_colors()
+
+        # Outer layout for left alignment
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        outer_layout.setSpacing(0)
+
+        # Bubble frame
+        bubble = QFrame()
+        bubble_layout = QHBoxLayout(bubble)
+        bubble_layout.setContentsMargins(12, 8, 12, 8)
+        bubble_layout.setSpacing(4)
+
+        # Thinking text with animated dots
+        self._thinking_label = QLabel("thinking")
+        self._thinking_label.setStyleSheet(f"""
+            QLabel {{
+                color: {colors.text_tertiary};
+                font-size: 13px;
+                font-style: italic;
+                background: transparent;
+            }}
+        """)
+        bubble_layout.addWidget(self._thinking_label)
+
+        # Style the bubble
+        bubble.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors.bg_secondary};
+                border-radius: {RADIUS.radius_md}px;
+                border: 1px solid {colors.border_muted};
+            }}
+        """)
+
+        outer_layout.addWidget(bubble)
+        outer_layout.addStretch()
+
+        self.setStyleSheet("ThinkingIndicatorWidget { background: transparent; }")
+
+    def _animate(self):
+        """Animate the dots."""
+        self._dot_count = (self._dot_count + 1) % 4
+        dots = "." * self._dot_count
+        self._thinking_label.setText(f"thinking{dots}")
+
+    def stop(self):
+        """Stop the animation."""
+        self._timer.stop()
+
+
+class ThinkingContentWidget(QFrame):
+    """Collapsible widget to show Copilot's reasoning/thinking text."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._content = ""
+        self._expanded = False
+        self._setup_ui()
+
+    def _setup_ui(self):
+        colors = get_colors()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
+
+        # Header row with toggle button
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(4)
+
+        # Disclosure triangle
+        self._toggle_btn = QPushButton("\u25B6")  # Right triangle (collapsed)
+        self._toggle_btn.setFixedSize(20, 20)
+        self._toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                border: none;
+                background: transparent;
+                color: {colors.text_tertiary};
+                font-size: 10px;
+            }}
+            QPushButton:hover {{
+                color: {colors.text_secondary};
+            }}
+        """)
+        self._toggle_btn.clicked.connect(self._toggle)
+        header_layout.addWidget(self._toggle_btn)
+
+        # Label
+        self._header_label = QLabel("Thinking...")
+        self._header_label.setStyleSheet(f"""
+            QLabel {{
+                color: {colors.text_tertiary};
+                font-size: 11px;
+                font-style: italic;
+                background: transparent;
+            }}
+        """)
+        header_layout.addWidget(self._header_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # Collapsible content
+        self._content_label = QLabel()
+        self._content_label.setWordWrap(True)
+        self._content_label.setStyleSheet(f"""
+            QLabel {{
+                color: {colors.text_tertiary};
+                background: rgba(128, 128, 128, 0.1);
+                border: 1px solid {colors.border_muted};
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 11px;
+            }}
+        """)
+        self._content_label.hide()
+        layout.addWidget(self._content_label)
+
+        self.setStyleSheet("ThinkingContentWidget { background: transparent; }")
+
+    def _toggle(self):
+        self._expanded = not self._expanded
+        self._content_label.setVisible(self._expanded)
+        self._toggle_btn.setText("\u25BC" if self._expanded else "\u25B6")
+
+    def append_content(self, text: str):
+        """Append thinking text."""
+        self._content += text
+        self._content_label.setText(self._content)
+        # Update header with preview
+        preview = self._content[:50].replace("\n", " ")
+        if len(self._content) > 50:
+            preview += "..."
+        self._header_label.setText(f"Thinking: {preview}")
+
+    def set_complete(self):
+        """Mark thinking as complete."""
+        self._header_label.setText(f"Thought ({len(self._content)} chars)")
+
+
+class ToolCallWidget(QFrame):
+    """Collapsible widget showing all tool calls in a single unified widget."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._actions: list = []  # [{name, widget, status}]
+        self._expanded = False
+        self._setup_ui()
+
+    def _setup_ui(self):
+        colors = get_colors()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
+
+        # Header row - "Pensando..." with toggle
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(4)
+
+        # Disclosure triangle
+        self._toggle_btn = QPushButton("\u25B6")
+        self._toggle_btn.setFixedSize(20, 20)
+        self._toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                border: none;
+                background: transparent;
+                color: {colors.text_tertiary};
+                font-size: 10px;
+            }}
+            QPushButton:hover {{
+                color: {colors.text_secondary};
+            }}
+        """)
+        self._toggle_btn.clicked.connect(self._toggle)
+        header_layout.addWidget(self._toggle_btn)
+
+        # Animated dots label
+        self._header_label = QLabel("Pensando...")
+        self._header_label.setStyleSheet(f"""
+            QLabel {{
+                color: {colors.text_tertiary};
+                font-size: 11px;
+                font-style: italic;
+                background: transparent;
+            }}
+        """)
+        header_layout.addWidget(self._header_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # Scrollable actions list (hidden by default)
+        self._scroll = QScrollArea()
+        self._scroll.setMaximumHeight(150)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+        """)
+        self._scroll.hide()
+
+        self._actions_container = QWidget()
+        self._actions_layout = QVBoxLayout(self._actions_container)
+        self._actions_layout.setContentsMargins(20, 4, 4, 4)
+        self._actions_layout.setSpacing(2)
+        self._scroll.setWidget(self._actions_container)
+        layout.addWidget(self._scroll)
+
+        self.setStyleSheet("ToolCallWidget { background: transparent; }")
+
+        # Animation timer for dots
+        self._dot_count = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._animate_dots)
+        self._timer.start(400)
+
+    def _animate_dots(self):
+        """Animate the dots in 'Pensando...' header."""
+        if not self._actions:  # Only animate when no actions yet
+            return
+        self._dot_count = (self._dot_count + 1) % 4
+        dots = "." * self._dot_count
+        pending = sum(1 for a in self._actions if a.get("status") == "running")
+        if pending > 0:
+            self._header_label.setText(S.copilot.actions_running.format(count=len(self._actions)))
+
+    def _toggle(self):
+        self._expanded = not self._expanded
+        self._scroll.setVisible(self._expanded)
+        self._toggle_btn.setText("\u25BC" if self._expanded else "\u25B6")
+
+    def add_action(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
+        """Add a new action to the list."""
+        colors = get_colors()
+        
+        # Create row for this action
+        row = QFrame()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 2, 0, 2)
+        row_layout.setSpacing(4)
+        
+        # Tool name
+        name_label = QLabel(f"<span style='color:#569cd6;font-family:Consolas;'>{tool_name}</span>")
+        row_layout.addWidget(name_label)
+        
+        # Status
+        status_label = QLabel(S.copilot.action_running)
+        status_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic;")
+        row_layout.addWidget(status_label)
+        row_layout.addStretch()
+        
+        self._actions_layout.addWidget(row)
+        self._actions.append({
+            "name": tool_name,
+            "id": tool_call_id,
+            "status": "running",
+            "row": row,
+            "status_label": status_label,
+        })
+        
+        # Update header
+        self._header_label.setText(S.copilot.actions_running.format(count=len(self._actions)))
+
+    def update_action(self, tool_name: str, result: str, is_error: bool = False):
+        """Update action status to done/error."""
+        for action in self._actions:
+            if action["name"] == tool_name and action["status"] == "running":
+                if is_error:
+                    action["status_label"].setText(S.copilot.action_error)
+                    action["status_label"].setStyleSheet("color: #f14c4c; font-size: 10px;")
+                else:
+                    action["status_label"].setText(S.copilot.action_ok)
+                    action["status_label"].setStyleSheet("color: #4ec9b0; font-size: 10px;")
+                action["status"] = "done" if not is_error else "error"
+                break
+        
+        # Check if all done
+        pending = sum(1 for a in self._actions if a.get("status") == "running")
+        if pending == 0:
+            self._header_label.setText(S.copilot.actions_complete.format(count=len(self._actions)))
+            self._timer.stop()
+
+    def set_complete(self):
+        """Mark all actions as complete."""
+        self._header_label.setText(S.copilot.actions_complete.format(count=len(self._actions)))
+        self._timer.stop()
 
 
 class ChatInputWidget(QTextEdit):
@@ -138,10 +518,12 @@ class CopilotChatPanel(QWidget):
     Signals:
         message_sent(str): User sent a message.
         tool_call_requested(str, dict): Tool call requested by Copilot.
+        thinking_started(): Copilot started processing.
     """
 
     message_sent = pyqtSignal(str)
     tool_call_requested = pyqtSignal(str, dict)
+    thinking_started = pyqtSignal()
 
     def __init__(self, copilot_client=None, mcp_server=None, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -150,8 +532,16 @@ class CopilotChatPanel(QWidget):
         self.theme_manager = theme_manager
         self._messages: list = []  # Chat history [{role, content}]
         self._current_assistant_widget = None
+        self._thinking_indicator = None  # Animated thinking indicator
+        self._current_thinking_widget = None  # Collapsible thinking content
+        self._current_actions_widget = None  # Unified widget for all tool calls
+        self._active_tool_calls: dict = {}  # tool_name -> widget reference
+        self._settings = QSettings("DataPyn", "CopilotChat")
+        self._current_session_id = None
         self._setup_ui()
         self._connect_signals()
+        # Restore last session on startup
+        QTimer.singleShot(100, self._restore_last_session)
 
     def set_copilot_client(self, client):
         """Set or update the Copilot client."""
@@ -163,6 +553,16 @@ class CopilotChatPanel(QWidget):
                 self._copilot_client.auth_required.disconnect(self._on_auth_required)
                 self._copilot_client.authenticated.disconnect(self._on_authenticated)
                 self._copilot_client.auth_failed.disconnect(self._on_auth_failed)
+                if hasattr(self._copilot_client, 'tool_called'):
+                    self._copilot_client.tool_called.disconnect(self._on_tool_called)
+                if hasattr(self._copilot_client, 'tool_result'):
+                    self._copilot_client.tool_result.disconnect(self._on_tool_result)
+                if hasattr(self._copilot_client, 'thinking'):
+                    self._copilot_client.thinking.disconnect(self._on_thinking)
+                if hasattr(self._copilot_client, 'models_changed'):
+                    self._copilot_client.models_changed.disconnect(self._on_models_changed)
+                if hasattr(self._copilot_client, 'auth_started'):
+                    self._copilot_client.auth_started.disconnect(self._on_auth_started)
             except (TypeError, RuntimeError):
                 pass
 
@@ -174,11 +574,29 @@ class CopilotChatPanel(QWidget):
             client.auth_required.connect(self._on_auth_required)
             client.authenticated.connect(self._on_authenticated)
             client.auth_failed.connect(self._on_auth_failed)
+            if hasattr(client, 'tool_called'):
+                client.tool_called.connect(self._on_tool_called)
+            if hasattr(client, 'tool_result'):
+                client.tool_result.connect(self._on_tool_result)
+            if hasattr(client, 'thinking'):
+                client.thinking.connect(self._on_thinking)
+            if hasattr(client, 'models_changed'):
+                client.models_changed.connect(self._on_models_changed)
+            if hasattr(client, 'auth_started'):
+                client.auth_started.connect(self._on_auth_started)
+            # Pass tool registry from MCP server to client
+            if self._mcp_server and hasattr(client, 'set_tool_registry'):
+                client.set_tool_registry(self._mcp_server.tool_registry)
             self._update_auth_state()
+            # Update model list from client if available
+            self._update_models_from_client()
 
     def set_mcp_server(self, server):
         """Set or update the MCP server reference."""
         self._mcp_server = server
+        # Update tool registry in client if available
+        if server and self._copilot_client and hasattr(self._copilot_client, 'set_tool_registry'):
+            self._copilot_client.set_tool_registry(server.tool_registry)
 
     def _setup_ui(self):
         """Build the chat panel UI."""
@@ -194,6 +612,12 @@ class CopilotChatPanel(QWidget):
         header_layout.setSpacing(8)
 
         # Copilot icon + title
+        copilot_icon = _load_copilot_icon(colors.text_primary, size=20)
+        if copilot_icon:
+            icon_label = QLabel()
+            icon_label.setPixmap(copilot_icon.pixmap(20, 20))
+            header_layout.addWidget(icon_label)
+
         title_label = QLabel(S.copilot.title)
         title_font = QFont()
         title_font.setBold(True)
@@ -204,32 +628,52 @@ class CopilotChatPanel(QWidget):
 
         header_layout.addStretch()
 
-        # Mode selector
-        self._mode_combo = QComboBox()
-        self._mode_combo.addItems(["Chat", "Edit", "Agent"])
-        self._mode_combo.setFixedWidth(80)
-        self._mode_combo.setToolTip(S.copilot.mode_tooltip)
-        header_layout.addWidget(self._mode_combo)
+        # New chat button
+        self._new_chat_btn = QPushButton()
+        self._new_chat_btn.setFixedSize(28, 28)
+        self._new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_chat_btn.setToolTip("New Chat")
+        if HAS_QTAWESOME:
+            self._new_chat_btn.setIcon(qta.icon("mdi.plus", color=colors.text_primary))
+        else:
+            self._new_chat_btn.setText("+")
+        self._new_chat_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: 1px solid {colors.border_muted};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_tertiary};
+            }}
+        """)
+        header_layout.addWidget(self._new_chat_btn)
 
-        # Model selector
-        self._model_combo = QComboBox()
-        for model in [
-            {"id": "gpt-4o", "name": "GPT-4o"},
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
-            {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet"},
-            {"id": "o3-mini", "name": "o3-mini"},
-        ]:
-            self._model_combo.addItem(model["name"], model["id"])
-        self._model_combo.setFixedWidth(140)
-        self._model_combo.setToolTip(S.copilot.model_tooltip)
-        header_layout.addWidget(self._model_combo)
+        # Sessions button (history)
+        self._sessions_btn = QPushButton()
+        self._sessions_btn.setFixedSize(28, 28)
+        self._sessions_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sessions_btn.setToolTip("Chat History")
+        if HAS_QTAWESOME:
+            self._sessions_btn.setIcon(qta.icon("mdi.history", color=colors.text_primary))
+        else:
+            self._sessions_btn.setText("H")
+        self._sessions_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: 1px solid {colors.border_muted};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_tertiary};
+            }}
+        """)
+        header_layout.addWidget(self._sessions_btn)
 
-        # Auth button
+        # Auth button (no icon, just text showing username or sign-in)
         self._auth_btn = QPushButton(S.copilot.sign_in)
         self._auth_btn.setFixedWidth(90)
         self._auth_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        if HAS_QTAWESOME:
-            self._auth_btn.setIcon(qta.icon("mdi.github", color=colors.text_primary))
         header_layout.addWidget(self._auth_btn)
 
         header.setStyleSheet(f"""
@@ -277,6 +721,49 @@ class CopilotChatPanel(QWidget):
         """)
         # Insert before the stretch
         self._messages_layout.insertWidget(0, self._welcome_label)
+
+        # === Config bar (Model selector only - always uses Agent mode) ===
+        config_bar = QWidget()
+        config_layout = QHBoxLayout(config_bar)
+        config_layout.setContentsMargins(8, 4, 8, 4)
+        config_layout.setSpacing(8)
+
+        # Mode is always Agent (hidden) - tools only work in agent mode
+        self._mode_combo = None  # Removed - always agent mode
+
+        # Model selector
+        self._model_combo = QComboBox()
+        for model in [
+            {"id": "gpt-4o", "name": "GPT-4o"},
+            {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
+            {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet"},
+            {"id": "o3-mini", "name": "o3-mini"},
+        ]:
+            self._model_combo.addItem(model["name"], model["id"])
+        self._model_combo.setFixedWidth(140)
+        self._model_combo.setToolTip(S.copilot.model_tooltip)
+        config_layout.addWidget(self._model_combo)
+
+        # Usage label (shows premium requests percentage)
+        self._usage_label = QLabel(S.copilot.usage_loading)
+        self._usage_label.setStyleSheet(f"""
+            QLabel {{
+                color: {colors.text_tertiary};
+                font-size: 11px;
+                padding: 0 8px;
+            }}
+        """)
+        config_layout.addWidget(self._usage_label)
+
+        config_layout.addStretch()
+
+        config_bar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors.bg_secondary};
+                border-top: 1px solid {colors.border_muted};
+            }}
+        """)
+        layout.addWidget(config_bar)
 
         # === Input area ===
         input_container = QWidget()
@@ -350,7 +837,7 @@ class CopilotChatPanel(QWidget):
                 selection-background-color: {colors.interactive_primary};
             }}
         """
-        self._mode_combo.setStyleSheet(combo_style)
+        # Mode combo was removed - always agent mode
         self._model_combo.setStyleSheet(combo_style)
 
         self._auth_btn.setStyleSheet(f"""
@@ -373,6 +860,120 @@ class CopilotChatPanel(QWidget):
         self._input.submit_requested.connect(self._on_send)
         self._auth_btn.clicked.connect(self._on_auth_clicked)
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self._new_chat_btn.clicked.connect(self._on_new_chat)
+        self._sessions_btn.clicked.connect(self._on_sessions_clicked)
+
+    def _on_new_chat(self):
+        """Start a new chat session."""
+        self._save_current_session()
+        self.clear_chat()
+
+    def _on_sessions_clicked(self):
+        """Show sessions menu."""
+        colors = get_colors()
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {colors.bg_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 12px;
+                color: {colors.text_primary};
+            }}
+            QMenu::item:selected {{
+                background-color: {colors.bg_tertiary};
+            }}
+        """)
+
+        sessions = self._get_sessions_list()
+        if not sessions:
+            action = menu.addAction(S.copilot.no_sessions)
+            action.setEnabled(False)
+        else:
+            for session in sessions[:10]:  # Show last 10
+                name = session.get("name", "Untitled")[:35]
+                session_id = session.get("id", "")
+
+                # Create a widget action with session name and delete button
+                widget = QWidget()
+                layout = QHBoxLayout(widget)
+                layout.setContentsMargins(8, 4, 4, 4)
+                layout.setSpacing(4)
+
+                label = QLabel(name)
+                label.setStyleSheet(f"color: {colors.text_primary}; font-size: 12px;")
+                label.setCursor(Qt.CursorShape.PointingHandCursor)
+                layout.addWidget(label, 1)
+
+                delete_btn = QPushButton()
+                if HAS_QTAWESOME:
+                    delete_btn.setIcon(qta.icon("mdi.delete-outline", color=colors.text_tertiary))
+                else:
+                    delete_btn.setText("x")
+                delete_btn.setFixedSize(20, 20)
+                delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                delete_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent;
+                        border: none;
+                        border-radius: 2px;
+                    }}
+                    QPushButton:hover {{
+                        background: {colors.bg_tertiary};
+                    }}
+                """)
+                delete_btn.clicked.connect(lambda checked, sid=session_id, m=menu: self._delete_session(sid, m))
+                layout.addWidget(delete_btn)
+
+                action = QWidgetAction(menu)
+                action.setDefaultWidget(widget)
+                # Connect label click to restore session
+                def make_click_handler(sid, m):
+                    def handler(event):
+                        self._restore_session(sid)
+                        m.close()
+                    return handler
+                label.mousePressEvent = make_click_handler(session_id, menu)
+                menu.addAction(action)
+
+            menu.addSeparator()
+
+            # Delete all option
+            if sessions:
+                clear_action = menu.addAction(S.copilot.clear_all)
+                clear_action.triggered.connect(self._clear_all_sessions)
+
+        menu.exec(self._sessions_btn.mapToGlobal(self._sessions_btn.rect().bottomLeft()))
+
+    def _delete_session(self, session_id: str, menu: QMenu):
+        """Delete a specific session."""
+        sessions = self._get_sessions_list()
+        sessions = [s for s in sessions if s.get("id") != session_id]
+        self._settings.setValue("sessions", json.dumps(sessions))
+
+        # If deleting current session, clear it
+        if self._current_session_id == session_id:
+            self._current_session_id = ""
+            self._settings.setValue("last_session_id", "")
+
+        menu.close()
+
+    def _clear_all_sessions(self):
+        """Clear all saved sessions."""
+        self._settings.setValue("sessions", "[]")
+        self._settings.setValue("last_session_id", "")
+
+    def _set_loading(self, loading: bool):
+        """Set loading state - disable input while waiting for response."""
+        self._send_btn.setEnabled(not loading)
+        self._input.setEnabled(not loading)
+        if loading:
+            self._send_btn.setToolTip("Waiting for Copilot response...")
+        else:
+            self._send_btn.setToolTip(S.copilot.send_tooltip)
 
     def _on_send(self):
         """Handle send button or Enter key."""
@@ -388,6 +989,9 @@ class CopilotChatPanel(QWidget):
         # Add user message
         self._add_message("user", text)
 
+        # Show loading state
+        self._set_loading(True)
+
         # Build system prompt with context
         system_prompt = self._build_system_prompt()
 
@@ -398,26 +1002,154 @@ class CopilotChatPanel(QWidget):
 
         # Send to Copilot
         if self._copilot_client:
+            # Clear any previous assistant widget to ensure fresh response
+            self._current_assistant_widget = None
+            # Add animated thinking indicator
+            self._show_thinking_indicator()
+            self.thinking_started.emit()
             self._copilot_client.send_chat(api_messages)
         else:
+            self._set_loading(False)
             self._add_message("assistant", S.copilot.not_authenticated)
 
         self.message_sent.emit(text)
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt with current editor context."""
+        """Build system prompt with current editor context and available tools."""
         parts = [
-            "You are GitHub Copilot integrated with DataPyn, a Python IDE for SQL and data analysis.",
-            "You can help with SQL queries, Python code, data analysis, and database operations.",
+            "You are an AI coding assistant in DataPyn, a Python/SQL data analysis IDE.",
+            "",
+            "## PLANNING FIRST - THINK BEFORE ACTING:",
+            "Before creating ANY block, PLAN your approach:",
+            "1. Use 'think' tool to reason about what you need to do",
+            "2. Determine how many blocks you need (SQL for data, Python for visualization/processing)",
+            "3. Plan the data flow: which columns, which tables, which operations",
+            "4. THEN create blocks ONE AT A TIME",
+            "",
+            "Example planning for 'sales chart by group':",
+            "- think: 'User wants a chart. I need: 1) SQL to get sales+group data, 2) Python to create chart'",
+            "- Create SQL block with proper GROUP BY",
+            "- Create Python block using block1 for matplotlib chart",
+            "- Done. NO deleting, NO recreating.",
+            "",
+            "## NEVER DELETE BLOCKS:",
+            "- If you made a mistake, use 'edit_current_block' to FIX it",
+            "- NEVER use delete_block unless the user explicitly asks",
+            "- Creating and deleting repeatedly is BAD UX",
+            "",
+            "## HOW DATAPYN WORKS:",
+            "DataPyn organizes code in TABS (sessions) containing multiple BLOCKS.",
+            "- Each TAB is like a script/notebook",
+            "- Each BLOCK can be SQL or Python",
+            "- SQL blocks return DataFrames accessible as `block1`, `block2`, etc.",
+            "- Python blocks can use results from previous blocks",
+            "- You can execute individual blocks OR run ALL blocks in sequence",
+            "",
+            "## BLOCK VARIABLE NAMING:",
+            "- SQL block results are automatically stored as `block1`, `block2`, etc.",
+            "- In Python blocks, you can access previous SQL results: `block1.head()`, `block2['column']`",
+            "",
+            "## EXAMPLE - Multi-block analysis workflow:",
+            "```",
+            "### Block 1 (SQL) - Query products",
+            "SELECT name, value FROM produto ORDER BY value DESC",
+            "",
+            "### Block 2 (Python) - Visualize top 10",
+            "import matplotlib.pyplot as plt",
+            "top_10 = block1.head(10)  # block1 = result from SQL above",
+            "plt.barh(top_10['name'], top_10['value'])",
+            "plt.title('Top 10 most expensive products')",
+            "plt.show()",
+            "```",
+            "When user runs 'Execute All', both blocks run in sequence and show the chart.",
+            "",
+            "## WORKFLOW - ALWAYS FOLLOW THIS ORDER:",
+            "1. Use 'think' to plan your approach",
+            "2. Use 'get_focused_code' to see what the user is working on",
+            "3. THEN decide: edit existing block OR create new one",
+            "4. EXECUTE with 'execute_focused' or use 'write_and_run' (creates+executes)",
+            "",
+            "## CRITICAL RULES:",
+            "1. THINK FIRST: Always use 'think' tool before taking action.",
+            "2. ONE BLOCK PER TOOL CALL: Create/edit ONE block at a time.",
+            "3. EDIT vs CREATE: If user has a focused block, use 'edit_current_block'. Only 'create_block' when starting fresh.",
+            "4. COMPLETE CODE: Put ENTIRE code in ONE block. Never split logic across multiple tool calls.",
+            "5. NO DELETE: Never delete blocks unless explicitly asked.",
+            "6. For multi-block workflows: create blocks one by one, then user can 'Execute All'.",
+            "",
+            "## SUPPORTED LANGUAGES:",
+            "- **SQL**: Database queries -> result stored as DataFrame (block1, block2...)",
+            "- **Python**: Data analysis, pandas, matplotlib, numpy, scikit-learn, etc.",
+            "",
+            "## MAIN TOOLS:",
+            "- **think**: ALWAYS use first to plan your approach and reason about the task",
+            "- **get_focused_code**: Check what the user is working on",
+            "- **edit_current_block**: EDIT the user's current/focused block (preferred)",
+            "- **write_and_run**: Create ONE new block, write code, execute in one step",
+            "- **create_block**: Create a new block without executing (for multi-block setup)",
+            "- **run_all_blocks**: Execute ALL blocks in current tab in sequence",
+            "- **fix_and_run**: Fix errors in focused block and re-execute",
+            "",
+            "## WHEN TO USE WHAT:",
+            "- ANY request -> FIRST use 'think' to plan",
+            "- User says 'edit/fix/change this' -> get_focused_code THEN edit_current_block",
+            "- User asks for NEW code -> write_and_run (creates ONE block)",
+            "- User wants multi-step analysis -> create_block multiple times, then run_all_blocks",
+            "- User has error -> fix_and_run",
+            "",
+            "## RULES:",
+            "- ONLY use tools listed below. 'view', 'grep', 'read_file' DO NOT EXIST.",
+            "- Respond in the user's language.",
+            "",
         ]
+
+        # Add available tools information with descriptions - VERY EXPLICIT
+        if self._mcp_server:
+            try:
+                tools = self._mcp_server.tool_registry.list_tools()
+                
+                # Highlight the main tools
+                parts.append("## PREFERRED TOOLS:")
+                parts.append("  - **edit_current_block**: BEST for editing user's current block")
+                parts.append("  - **write_and_run**: Creates ONE new block with complete code and executes")
+                parts.append("  - **fix_and_run**: Fixes code and re-executes")
+                parts.append("  - **get_focused_code**: Gets the code from the current block")
+                parts.append("")
+                
+                parts.append("## ALL AVAILABLE TOOLS:")
+                tool_info = []
+                for t in tools:
+                    name = t.get("name", "")
+                    desc = t.get("description", "")
+                    tool_info.append(f"  - {name}: {desc}")
+                parts.extend(tool_info)
+                parts.append("")
+                parts.append(f"Total: {len(tools)} tools available")
+                parts.append("")
+            except Exception as e:
+                logger.debug(f"Error listing tools: {e}")
 
         # Add context from MCP if available
         if self._mcp_server:
-            context_result = self._mcp_server.tool_registry.execute("get_context", {})
-            if "content" in context_result:
-                context_text = context_result["content"][0].get("text", "")
-                if context_text:
-                    parts.append(f"\nCurrent editor context:\n{context_text}")
+            # Get editor context (blocks, session info)
+            try:
+                context_result = self._mcp_server.tool_registry.execute("get_context", {})
+                if "content" in context_result:
+                    context_text = context_result["content"][0].get("text", "")
+                    if context_text and context_text != "{}":
+                        parts.append(f"## Current Editor Context:\n```json\n{context_text}\n```")
+            except Exception as e:
+                logger.debug(f"Error getting editor context: {e}")
+
+            # Get database schema if connected
+            try:
+                schema_result = self._mcp_server.tool_registry.execute("read_schema", {})
+                if "content" in schema_result:
+                    schema_text = schema_result["content"][0].get("text", "")
+                    if schema_text and "No schema" not in schema_text:
+                        parts.append(f"## Database Schema:\n{schema_text}")
+            except Exception as e:
+                logger.debug(f"Error getting schema: {e}")
 
         return "\n".join(parts)
 
@@ -430,27 +1162,57 @@ class CopilotChatPanel(QWidget):
         count = self._messages_layout.count()
         self._messages_layout.insertWidget(count - 1, widget)
 
-        if role == "assistant":
-            self._current_assistant_widget = widget
+        # NOTE: Do NOT set _current_assistant_widget here!
+        # That is only for streaming responses, handled in _on_response_chunk
 
         # Scroll to bottom
         self._scroll_to_bottom()
 
     def _scroll_to_bottom(self):
-        """Scroll the messages area to the bottom."""
+        """Scroll the messages area to the bottom with delay for layout update."""
+        # Delay scroll to allow layout to update first
+        QTimer.singleShot(50, self._do_scroll_to_bottom)
+
+    def _do_scroll_to_bottom(self):
+        """Actually perform the scroll."""
         scrollbar = self._scroll_area.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
     def _on_response_chunk(self, chunk: str):
         """Handle streaming response chunk."""
+        # Hide thinking indicator on first chunk
+        self._hide_thinking_indicator()
+        
         if self._current_assistant_widget:
             self._current_assistant_widget.append_content(chunk)
             self._scroll_to_bottom()
         else:
-            self._add_message("assistant", chunk)
+            # Create new assistant message widget for streaming
+            self._messages.append({"role": "assistant", "content": chunk})
+            widget = ChatMessageWidget("assistant", chunk)
+            count = self._messages_layout.count()
+            self._messages_layout.insertWidget(count - 1, widget)
+            self._current_assistant_widget = widget
+            self._scroll_to_bottom()
 
     def _on_response_complete(self, full_text: str):
         """Handle complete response."""
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        
+        # Mark thinking widget as complete
+        if self._current_thinking_widget:
+            self._current_thinking_widget.set_complete()
+            self._current_thinking_widget = None
+        
+        # Mark actions widget as complete
+        if self._current_actions_widget:
+            self._current_actions_widget.set_complete()
+            self._current_actions_widget = None
+        
+        # Clear active tool calls tracking
+        self._active_tool_calls.clear()
+        
         if not self._current_assistant_widget:
             self._add_message("assistant", full_text)
         else:
@@ -458,17 +1220,146 @@ class CopilotChatPanel(QWidget):
             if self._messages and self._messages[-1]["role"] == "assistant":
                 self._messages[-1]["content"] = full_text
         self._current_assistant_widget = None
+        self._scroll_to_bottom()
+        # Auto-save session after each exchange
+        self._save_current_session()
 
     def _on_chat_error(self, error: str):
         """Handle chat error."""
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        
+        # Mark thinking widget as complete on error too
+        if self._current_thinking_widget:
+            self._current_thinking_widget.set_complete()
+            self._current_thinking_widget = None
+        
+        # Mark actions widget as complete on error
+        if self._current_actions_widget:
+            self._current_actions_widget.set_complete()
+            self._current_actions_widget = None
+        
+        # Clear active tool calls tracking
+        self._active_tool_calls.clear()
+        
         self._add_message("assistant", f"Error: {error}")
         self._current_assistant_widget = None
+
+    def _show_thinking_indicator(self):
+        """Show the animated thinking indicator."""
+        self._hide_thinking_indicator()  # Remove any existing
+        self._thinking_indicator = ThinkingIndicatorWidget()
+        count = self._messages_layout.count()
+        self._messages_layout.insertWidget(count - 1, self._thinking_indicator)
+        self._scroll_to_bottom()
+
+    def _hide_thinking_indicator(self):
+        """Hide and remove the thinking indicator."""
+        if self._thinking_indicator:
+            self._thinking_indicator.stop()
+            idx = self._messages_layout.indexOf(self._thinking_indicator)
+            if idx >= 0:
+                self._messages_layout.takeAt(idx)
+            self._thinking_indicator.deleteLater()
+            self._thinking_indicator = None
+
+    def _on_tool_called(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
+        """Handle tool call from Copilot - add to unified actions widget."""
+        logger.info(f"Tool called: {tool_name}({arguments})")
+        
+        # Use single unified widget for all tool calls
+        if not hasattr(self, '_current_actions_widget') or self._current_actions_widget is None:
+            self._current_actions_widget = ToolCallWidget()
+            count = self._messages_layout.count()
+            self._messages_layout.insertWidget(count - 1, self._current_actions_widget)
+        
+        # Add action to the widget
+        self._current_actions_widget.add_action(tool_name, arguments, tool_call_id)
+        
+        # Track by name for later result update
+        self._active_tool_calls[tool_name] = self._current_actions_widget
+        
+        # Auto-scroll to show tool call
+        QTimer.singleShot(50, self._scroll_to_bottom)
+        
+        # Emit signal for external listeners (output panel)
+        self.tool_call_requested.emit(tool_name, arguments)
+
+    def _on_tool_result(self, tool_name: str, result: str):
+        """Handle tool execution result - update the actions widget."""
+        logger.info(f"Tool result: {tool_name} -> {result[:100]}...")
+        
+        # Update the unified widget
+        if hasattr(self, '_current_actions_widget') and self._current_actions_widget:
+            is_error = "error" in result.lower()[:50]
+            self._current_actions_widget.update_action(tool_name, result, is_error)
+
+    def _on_thinking(self, text: str):
+        """Handle reasoning/thinking text from Copilot - show in collapsible widget."""
+        if not text.strip():
+            return
+        
+        logger.debug(f"Thinking: {text[:50]}...")
+        
+        # Create or update thinking widget
+        if not self._current_thinking_widget:
+            self._current_thinking_widget = ThinkingContentWidget()
+            count = self._messages_layout.count()
+            self._messages_layout.insertWidget(count - 1, self._current_thinking_widget)
+        
+        self._current_thinking_widget.append_content(text)
+
+    def _on_models_changed(self, models: list):
+        """Handle dynamic model list update from SDK."""
+        if not models:
+            return
+        current_model = self._model_combo.currentData()
+        self._model_combo.clear()
+        for model in models:
+            model_id = model.get("id", "")
+            model_name = model.get("name", model_id)
+            self._model_combo.addItem(model_name, model_id)
+        # Restore selection if possible
+        if current_model:
+            idx = self._model_combo.findData(current_model)
+            if idx >= 0:
+                self._model_combo.setCurrentIndex(idx)
 
     def _on_auth_clicked(self):
         """Handle auth button click."""
         if self._copilot_client and self._copilot_client.is_authenticated:
-            self._copilot_client.sign_out()
-            self._update_auth_state()
+            # Show menu with options
+            colors = get_colors()
+            menu = QMenu(self)
+            menu.setStyleSheet(f"""
+                QMenu {{
+                    background-color: {colors.bg_secondary};
+                    border: 1px solid {colors.border_default};
+                    border-radius: 4px;
+                    padding: 4px;
+                }}
+                QMenu::item {{
+                    padding: 6px 12px;
+                    color: {colors.text_primary};
+                }}
+                QMenu::item:selected {{
+                    background-color: {colors.bg_tertiary};
+                }}
+            """)
+
+            # Show subscription
+            subscription_action = menu.addAction(S.copilot.show_subscription)
+            subscription_action.triggered.connect(
+                lambda: QDesktopServices.openUrl(QUrl("https://github.com/settings/copilot"))
+            )
+
+            menu.addSeparator()
+
+            # Logout
+            logout_action = menu.addAction(S.copilot.logout)
+            logout_action.triggered.connect(self._do_logout)
+
+            menu.exec(self._auth_btn.mapToGlobal(self._auth_btn.rect().bottomLeft()))
             return
 
         if self._copilot_client:
@@ -476,8 +1367,16 @@ class CopilotChatPanel(QWidget):
             self._auth_btn.setText(S.copilot.signing_in)
             self._auth_btn.setEnabled(False)
 
+    def _do_logout(self):
+        """Perform logout."""
+        if self._copilot_client:
+            self._copilot_client.sign_out()
+            self._update_auth_state()
+            self._usage_label.setText(S.copilot.usage_loading)
+
     def _on_auth_required(self, user_code: str, verification_uri: str):
-        """Show the device code to the user."""
+        """Show authentication instructions to the user."""
+        # Device code flow - show code and open browser
         self._add_message(
             "assistant",
             S.copilot.auth_instructions.format(code=user_code, url=verification_uri),
@@ -487,10 +1386,18 @@ class CopilotChatPanel(QWidget):
         # Open browser
         QDesktopServices.openUrl(QUrl(verification_uri))
 
+    def _on_auth_started(self, message: str):
+        """Authentication process started - show info to user."""
+        self._add_message("assistant", message)
+        self._auth_btn.setText(S.copilot.signing_in)
+        self._auth_btn.setEnabled(False)
+
     def _on_authenticated(self, info: str):
         """Authentication succeeded."""
         self._update_auth_state()
         self._add_message("assistant", S.copilot.auth_success)
+        # Save auth state for auto-auth next time
+        self._settings.setValue("was_authenticated", True)
 
     def _on_auth_failed(self, error: str):
         """Authentication failed."""
@@ -501,11 +1408,41 @@ class CopilotChatPanel(QWidget):
     def _update_auth_state(self):
         """Update UI based on authentication state."""
         if self._copilot_client and self._copilot_client.is_authenticated:
-            self._auth_btn.setText(S.copilot.sign_out)
+            # Get username from client
+            username = getattr(self._copilot_client, "_username", None)
+            if username:
+                self._auth_btn.setText(f"@{username}")
+                self._auth_btn.setToolTip(S.copilot.click_to_sign_out)
+            else:
+                self._auth_btn.setText(S.copilot.connected)
+                self._auth_btn.setToolTip(S.copilot.click_to_sign_out)
             self._auth_btn.setEnabled(True)
         else:
             self._auth_btn.setText(S.copilot.sign_in)
+            self._auth_btn.setToolTip(S.copilot.sign_in_tooltip)
             self._auth_btn.setEnabled(True)
+
+    def _update_models_from_client(self):
+        """Update model combo box from client's available models."""
+        if not self._copilot_client:
+            return
+
+        try:
+            models = self._copilot_client.available_models()
+            if models and len(models) > 0:
+                current_model = self._model_combo.currentData()
+                self._model_combo.clear()
+                for model in models:
+                    model_id = model.get("id", "")
+                    model_name = model.get("name", model_id)
+                    self._model_combo.addItem(model_name, model_id)
+                # Restore selection if possible
+                if current_model:
+                    idx = self._model_combo.findData(current_model)
+                    if idx >= 0:
+                        self._model_combo.setCurrentIndex(idx)
+        except Exception as e:
+            logger.debug(f"Could not update models from client: {e}")
 
     def _on_model_changed(self, index: int):
         """Handle model selection change."""
@@ -528,3 +1465,128 @@ class CopilotChatPanel(QWidget):
                 widget.deleteLater()
         self._welcome_label.show()
         self._current_assistant_widget = None
+        self._current_session_id = None
+
+    # === Session Persistence ===
+
+    def _get_sessions_list(self) -> list:
+        """Get list of saved chat sessions."""
+        sessions_json = self._settings.value("sessions", "[]")
+        try:
+            return json.loads(sessions_json)
+        except Exception:
+            return []
+
+    def _save_sessions_list(self, sessions: list):
+        """Save list of chat sessions."""
+        self._settings.setValue("sessions", json.dumps(sessions))
+
+    def _save_current_session(self):
+        """Save the current chat session."""
+        if not self._messages:
+            return
+
+        import uuid
+        from datetime import datetime
+
+        session_id = self._current_session_id or str(uuid.uuid4())[:8]
+        self._current_session_id = session_id
+
+        # Generate session name from first user message or timestamp
+        session_name = datetime.now().strftime("%d/%m %H:%M")
+        for msg in self._messages:
+            if msg["role"] == "user":
+                session_name = msg["content"][:40] + ("..." if len(msg["content"]) > 40 else "")
+                break
+
+        sessions = self._get_sessions_list()
+
+        # Update existing or add new
+        existing_idx = None
+        for i, s in enumerate(sessions):
+            if s.get("id") == session_id:
+                existing_idx = i
+                break
+
+        session_data = {
+            "id": session_id,
+            "name": session_name,
+            "timestamp": datetime.now().isoformat(),
+            "messages": self._messages.copy(),
+        }
+
+        if existing_idx is not None:
+            sessions[existing_idx] = session_data
+        else:
+            # Insert at beginning (most recent)
+            sessions.insert(0, session_data)
+
+        # Keep only last 20 sessions
+        sessions = sessions[:20]
+        self._save_sessions_list(sessions)
+
+        # Save as last session
+        self._settings.setValue("last_session_id", session_id)
+
+    def _restore_last_session(self):
+        """Restore the last chat session on startup."""
+        last_id = self._settings.value("last_session_id", "")
+        if last_id:
+            self._restore_session(last_id)
+        # Also try auto-auth if previously authenticated
+        QTimer.singleShot(500, self._try_auto_auth)
+
+    def _restore_session(self, session_id: str):
+        """Restore a specific chat session."""
+        sessions = self._get_sessions_list()
+        for session in sessions:
+            if session.get("id") == session_id:
+                self.clear_chat()
+                self._current_session_id = session_id
+                messages = session.get("messages", [])
+                for msg in messages:
+                    self._add_message(msg["role"], msg["content"])
+                if messages:
+                    self._welcome_label.hide()
+                return True
+        return False
+
+    def _delete_session(self, session_id: str):
+        """Delete a saved chat session."""
+        sessions = self._get_sessions_list()
+        sessions = [s for s in sessions if s.get("id") != session_id]
+        self._save_sessions_list(sessions)
+        if self._current_session_id == session_id:
+            self.clear_chat()
+
+    def _try_auto_auth(self):
+        """Try to automatically authenticate if previously logged in."""
+        # Check if we were previously authenticated
+        # QSettings.value() can return various types - normalize to string
+        saved_value = self._settings.value("was_authenticated", False)
+        was_authenticated = saved_value in (True, "true", "True", 1, "1")
+        logger.info(f"Auto-auth check: saved_value={saved_value!r}, was_authenticated={was_authenticated}")
+        
+        if was_authenticated and self._copilot_client:
+            if hasattr(self._copilot_client, "is_authenticated") and not self._copilot_client.is_authenticated:
+                logger.info("Attempting auto-authentication...")
+                if hasattr(self._copilot_client, "start_auth"):
+                    try:
+                        self._copilot_client.start_auth()
+                    except Exception as e:
+                        logger.debug(f"Auto-auth failed: {e}")
+
+    def _on_authenticated_save(self):
+        """Save authentication state when authenticated."""
+        self._settings.setValue("was_authenticated", "true")
+
+    def new_chat_session(self):
+        """Start a new chat session."""
+        # Save current session first
+        self._save_current_session()
+        self.clear_chat()
+        self._current_session_id = None
+
+    def get_saved_sessions(self) -> list:
+        """Get list of saved sessions for UI display."""
+        return self._get_sessions_list()

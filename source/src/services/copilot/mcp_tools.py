@@ -16,6 +16,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Callable
 
+from PyQt6.QtCore import QObject
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,12 +48,15 @@ class MCPTool:
         }
 
 
-class MCPToolRegistry:
+class MCPToolRegistry(QObject):
     """
     Registry of all MCP tools available for Copilot.
 
     Tools operate on a reference to the main window to access
     sessions, blocks, connections, and schema.
+
+    This class is thread-safe: execute() can be called from any thread
+    and will execute on the main thread.
 
     Usage:
         registry = MCPToolRegistry()
@@ -59,7 +64,8 @@ class MCPToolRegistry:
         result = registry.execute("create_tab", {"title": "My Tab"})
     """
 
-    def __init__(self):
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._tools: Dict[str, MCPTool] = {}
         self._main_window = None
         self._register_tools()
@@ -70,6 +76,19 @@ class MCPToolRegistry:
 
     def _register_tools(self) -> None:
         """Register all available tools."""
+        # THINK tool - most important, should be used first
+        self._register(MCPTool(
+            name="think",
+            description="Use this tool to PLAN and REASON about your approach BEFORE taking any action. Think step by step about: 1) What the user wants 2) How many blocks you need 3) The data flow (what SQL queries, what Python processing). This helps you avoid creating/deleting blocks repeatedly.",
+            parameters={
+                "thought": {
+                    "type": "string",
+                    "description": "Your reasoning about how to approach the task. Be specific: mention tables, columns, SQL queries, Python libraries you'll use.",
+                },
+            },
+            handler=self._think,
+        ))
+
         self._register(MCPTool(
             name="create_tab",
             description="Create a new editor tab (session) in DataPyn.",
@@ -84,16 +103,16 @@ class MCPToolRegistry:
 
         self._register(MCPTool(
             name="create_block",
-            description="Create a new code block in the current session.",
+            description="CREATE a new code block and WRITE code into it. SQL blocks store results as 'block1', 'block2', etc. (DataFrames). Python blocks can access these: `block1.head()`, `block2['column'].mean()`. Use this to build multi-block analysis workflows.",
             parameters={
                 "language": {
                     "type": "string",
-                    "description": "Block language: python, sql, or cross.",
+                    "description": "Block language: 'python' for data analysis/pandas/matplotlib, 'sql' for database queries.",
                     "enum": ["python", "sql", "cross"],
                 },
                 "code": {
                     "type": "string",
-                    "description": "Initial code content for the block.",
+                    "description": "The actual code to write in the block. SQL queries or Python code with imports.",
                 },
             },
             handler=self._create_block,
@@ -101,15 +120,15 @@ class MCPToolRegistry:
 
         self._register(MCPTool(
             name="edit_block",
-            description="Edit the code content of the currently focused block.",
+            description="MODIFY/REWRITE the code in an existing block. Use this to fix errors, improve code, or completely replace the content. The new code you provide will replace the current code in the block.",
             parameters={
                 "code": {
                     "type": "string",
-                    "description": "New code content for the block.",
+                    "description": "The new code to write in the block. This REPLACES all existing code.",
                 },
                 "block_index": {
                     "type": "integer",
-                    "description": "Index of the block to edit (0-based). If not provided, edits the focused block.",
+                    "description": "Index of the block to edit (0-based). Use get_context to see block indices.",
                 },
             },
             handler=self._edit_block,
@@ -162,11 +181,11 @@ class MCPToolRegistry:
 
         self._register(MCPTool(
             name="open_connection",
-            description="Open (activate) an existing saved connection by name.",
+            description="Open a saved connection in a NEW TAB. Creates a fresh tab and connects to the specified database. Use this when user wants to start working with a different database without losing current work.",
             parameters={
                 "connection_name": {
                     "type": "string",
-                    "description": "Name of the saved connection to open.",
+                    "description": "Name of the saved connection to open in new tab.",
                 },
             },
             handler=self._open_connection,
@@ -186,9 +205,287 @@ class MCPToolRegistry:
 
         self._register(MCPTool(
             name="get_context",
-            description="Get the current editor context: active session, blocks, code, language, connection.",
+            description="GET CURRENT STATE: all blocks with their code, languages, indices, current connection, available tables. Use this first to understand what code exists and what block indices to use.",
             parameters={},
             handler=self._get_context,
+        ))
+
+        self._register(MCPTool(
+            name="execute_block",
+            description="RUN/EXECUTE a code block and GET THE RESULT. This actually runs the Python or SQL code and returns the output (printed text, dataframes, query results, errors). Use after create_block or edit_block to see results.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block to execute (0-based). Block 0 is the first block.",
+                },
+            },
+            handler=self._execute_block,
+        ))
+
+        self._register(MCPTool(
+            name="run_current_block",
+            description="RUN the currently focused block and GET THE RESULT. Same as execute_block but for the active block.",
+            parameters={},
+            handler=self._run_current_block,
+        ))
+
+        self._register(MCPTool(
+            name="list_connections",
+            description="List all saved database connections.",
+            parameters={},
+            handler=self._list_connections,
+        ))
+
+        self._register(MCPTool(
+            name="get_variables",
+            description="Get all Python variables available in the current session's namespace.",
+            parameters={},
+            handler=self._get_variables,
+        ))
+
+        self._register(MCPTool(
+            name="set_block_language",
+            description="Change the language of a block.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block (0-based).",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "New language: python, sql, or cross.",
+                    "enum": ["python", "sql", "cross"],
+                },
+            },
+            handler=self._set_block_language,
+        ))
+
+        self._register(MCPTool(
+            name="delete_block",
+            description="Delete a block by index.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block to delete (0-based).",
+                },
+            },
+            handler=self._delete_block,
+        ))
+
+        self._register(MCPTool(
+            name="get_block_result",
+            description="GET the output/result from a previously executed block. Use to check what a block printed, returned, or if it had errors.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block (0-based).",
+                },
+            },
+            handler=self._get_block_result,
+        ))
+
+        # Most useful tool - does everything in one call
+        self._register(MCPTool(
+            name="write_and_run",
+            description="CREATE a new block, WRITE code, and EXECUTE immediately. For SQL: result is stored as 'block1', 'block2', etc. (DataFrame). For Python: can access previous block results. Use for single-block tasks or when adding to multi-block workflow.",
+            parameters={
+                "language": {
+                    "type": "string",
+                    "description": "'python' for data analysis/pandas/matplotlib, 'sql' for database queries.",
+                    "enum": ["python", "sql", "cross"],
+                },
+                "code": {
+                    "type": "string",
+                    "description": "Complete executable code. Python: include imports, use print() for output, access block1/block2 for previous SQL results. SQL: write the query.",
+                },
+            },
+            handler=self._write_and_run,
+        ))
+
+        # === Focused Block Tools ===
+        self._register(MCPTool(
+            name="get_focused_code",
+            description="GET the code from the currently focused block. Use this to see what code the user is working on right now.",
+            parameters={},
+            handler=self._get_focused_code,
+        ))
+
+        self._register(MCPTool(
+            name="edit_focused_code",
+            description="EDIT/REPLACE the code in the currently focused block. Use to fix errors, improve code, or rewrite what the user is working on.",
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "The new code to write. This REPLACES all existing code in the focused block.",
+                },
+            },
+            handler=self._edit_focused_code,
+        ))
+
+        # Alias for edit_focused_code - more intuitive name
+        self._register(MCPTool(
+            name="edit_current_block",
+            description="EDIT the current/focused block. Use this to modify the user's existing code instead of creating a new block. Preferred when user wants to change existing code.",
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "The new code to write. This REPLACES all existing code in the current block.",
+                },
+            },
+            handler=self._edit_focused_code,
+        ))
+
+        self._register(MCPTool(
+            name="execute_focused",
+            description="EXECUTE the currently focused block and return the result.",
+            parameters={},
+            handler=self._execute_focused,
+        ))
+
+        self._register(MCPTool(
+            name="get_focused_result",
+            description="GET the execution result/output from the currently focused block.",
+            parameters={},
+            handler=self._get_focused_result,
+        ))
+
+        # === Selection Tools ===
+        self._register(MCPTool(
+            name="get_selection",
+            description="GET the currently selected text in the focused block. Returns empty if nothing is selected.",
+            parameters={},
+            handler=self._get_selection,
+        ))
+
+        self._register(MCPTool(
+            name="replace_selection",
+            description="REPLACE the selected text with new code. If nothing is selected, inserts at cursor position.",
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "The code to insert/replace.",
+                },
+            },
+            handler=self._replace_selection,
+        ))
+
+        self._register(MCPTool(
+            name="insert_at_cursor",
+            description="INSERT code at the current cursor position in the focused block.",
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "The code to insert.",
+                },
+            },
+            handler=self._insert_at_cursor,
+        ))
+
+        # === Batch/Multi-block Tools ===
+        self._register(MCPTool(
+            name="get_all_code",
+            description="GET all blocks with their code, language, and index. Use to understand the full session.",
+            parameters={},
+            handler=self._get_all_code,
+        ))
+
+        self._register(MCPTool(
+            name="run_all_blocks",
+            description="EXECUTE all blocks in the current tab/session in sequence (block1, block2, ...). Use this after creating multiple blocks to run the complete analysis workflow. SQL blocks store results as block1, block2 etc. that Python blocks can then use.",
+            parameters={},
+            handler=self._run_all_blocks,
+        ))
+
+        self._register(MCPTool(
+            name="fix_and_run",
+            description="FIX errors in the focused block and re-execute. Provide the corrected code.",
+            parameters={
+                "fixed_code": {
+                    "type": "string",
+                    "description": "The corrected code to replace the current code.",
+                },
+            },
+            handler=self._fix_and_run,
+        ))
+
+        self._register(MCPTool(
+            name="append_code",
+            description="APPEND code to the end of the focused block (adds after existing code).",
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "The code to append.",
+                },
+            },
+            handler=self._append_code,
+        ))
+
+        self._register(MCPTool(
+            name="move_focus",
+            description="MOVE focus to a specific block by index.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block to focus (0-based).",
+                },
+            },
+            handler=self._move_focus,
+        ))
+
+        # === Database Intelligence Tools ===
+        self._register(MCPTool(
+            name="get_database_schema",
+            description="GET the complete database schema (all tables and columns) from the currently connected database. Use this to understand available tables before writing queries. Returns tables with their columns and types.",
+            parameters={},
+            handler=self._get_database_schema,
+        ))
+
+        self._register(MCPTool(
+            name="list_tables",
+            description="LIST all tables in the connected database. Quick way to see what tables exist.",
+            parameters={},
+            handler=self._list_tables,
+        ))
+
+        self._register(MCPTool(
+            name="describe_table",
+            description="DESCRIBE a specific table: columns, types, and sample data. Use to understand table structure before writing queries.",
+            parameters={
+                "table_name": {
+                    "type": "string",
+                    "description": "Name of the table to describe.",
+                },
+            },
+            handler=self._describe_table,
+        ))
+
+        self._register(MCPTool(
+            name="run_silent_query",
+            description="RUN a SQL query silently (without creating a visible block). Returns query results directly. Use for data exploration, counts, or when you need data to answer a question but don't need to show code to user.",
+            parameters={
+                "query": {
+                    "type": "string",
+                    "description": "SQL query to execute.",
+                },
+            },
+            handler=self._run_silent_query,
+        ))
+
+        self._register(MCPTool(
+            name="sample_data",
+            description="GET sample rows from a table. Quick preview of what data looks like.",
+            parameters={
+                "table_name": {
+                    "type": "string",
+                    "description": "Name of the table to sample.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of rows to return (default: 5).",
+                    "optional": True,
+                },
+            },
+            handler=self._sample_data,
         ))
 
     def _register(self, tool: MCPTool) -> None:
@@ -199,9 +496,36 @@ class MCPToolRegistry:
         """Return list of all tool schemas for MCP protocol."""
         return [tool.to_schema() for tool in self._tools.values()]
 
+    def list_tools_openai(self) -> List[Dict[str, Any]]:
+        """
+        Return list of tools in OpenAI function calling format.
+        This is the format expected by the Copilot SDK.
+        """
+        tools = []
+        for tool in self._tools.values():
+            # Build required list from parameters
+            required = [
+                name for name, props in tool.parameters.items()
+                if not props.get("optional", False)
+            ]
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": tool.parameters,
+                        "required": required,
+                    },
+                },
+            })
+        return tools
+
     def execute(self, tool_name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Execute a tool by name with the given arguments.
+        Thread-safe: can be called from any thread.
 
         Returns:
             Dict with "content" (list of text results) or "error" key.
@@ -213,8 +537,20 @@ class MCPToolRegistry:
         if not self._main_window:
             return {"error": "Main window not available. Cannot execute tools."}
 
+        # Execute directly - the SDK may call from async context
+        # For GUI-safe execution, tools should use QMetaObject.invokeMethod internally
+        return self._execute_directly(tool_name, arguments or {})
+
+    def _execute_directly(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute tool directly."""
+        tool = self._tools.get(tool_name)
+        if not tool:
+            return {"error": f"Unknown tool: {tool_name}"}
+
         try:
-            result = tool.handler(arguments or {})
+            logger.info(f"Executing tool '{tool_name}' with args: {arguments}")
+            result = tool.handler(arguments)
+            logger.info(f"Tool '{tool_name}' result: {result}")
             return result
         except Exception as e:
             logger.error(f"Error executing tool '{tool_name}': {e}")
@@ -222,17 +558,42 @@ class MCPToolRegistry:
 
     # === Tool Implementations ===
 
+    def _think(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a thinking/reasoning step - helps Copilot plan before acting.
+        
+        This tool doesn't perform any action, it just returns the thought
+        back to Copilot so it can reason through its approach.
+        """
+        thought = args.get("thought", "")
+        if not thought:
+            return {"error": "No thought provided. Use this tool to reason about your approach."}
+        
+        logger.info(f"think: {thought}")
+        
+        # Return the thought back - this helps Copilot "think out loud"
+        # The thought is shown in the UI via the ToolCallWidget
+        return {
+            "content": [{
+                "type": "text", 
+                "text": f"Thought recorded. Now proceed with your plan:\n{thought}"
+            }]
+        }
+
     def _create_tab(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new tab/session."""
         title = args.get("title")
         mw = self._main_window
+        
+        logger.info(f"create_tab called: title={title}, mw={mw}")
 
         if hasattr(mw, "session_manager") and mw.session_manager:
             session = mw.session_manager.create_session(title=title)
+            logger.info(f"create_tab: Created session id={session.session_id}, title={session.title}")
             return {
                 "content": [{"type": "text", "text": f"Tab created: '{session.title}' (id: {session.session_id})"}]
             }
 
+        logger.error("create_tab: Session manager not available")
         return {"error": "Session manager not available."}
 
     def _create_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -240,20 +601,27 @@ class MCPToolRegistry:
         language = args.get("language", "python")
         code = args.get("code", "")
         mw = self._main_window
+        
+        logger.info(f"create_block called: language={language}, code_len={len(code)}")
 
         session_widget = self._get_active_session_widget()
         if not session_widget:
+            logger.error("create_block: No active session widget")
             return {"error": "No active session. Create a tab first."}
 
-        block_editor = session_widget.block_editor
+        block_editor = self._get_block_editor(session_widget)
         if not block_editor:
+            logger.error(f"create_block: No editor on session_widget {type(session_widget)}")
             return {"error": "Block editor not available."}
 
+        logger.info(f"create_block: Adding block with language={language}")
         block = block_editor.add_block(language=language)
         if code and block:
             block.set_code(code)
+            logger.info(f"create_block: Set code on block")
 
         block_count = len(block_editor.blocks)
+        logger.info(f"create_block: Success, total blocks={block_count}")
         return {
             "content": [{"type": "text", "text": f"Block created (language: {language}, index: {block_count - 1})"}]
         }
@@ -268,7 +636,7 @@ class MCPToolRegistry:
         if not session_widget:
             return {"error": "No active session."}
 
-        block_editor = session_widget.block_editor
+        block_editor = self._get_block_editor(session_widget)
         if not block_editor:
             return {"error": "Block editor not available."}
 
@@ -351,12 +719,29 @@ class MCPToolRegistry:
         }
 
     def _open_connection(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Open an existing saved connection."""
+        """Open a saved connection in a NEW TAB."""
         connection_name = args.get("connection_name", "")
         if not connection_name:
             return {"error": "connection_name is required."}
 
-        return self._connect_database({"connection_name": connection_name})
+        mw = self._main_window
+        conn_manager = getattr(mw, "connection_manager", None)
+        if not conn_manager:
+            return {"error": "Connection manager not available."}
+
+        config = conn_manager.get_connection_config(connection_name)
+        if not config:
+            saved = list(conn_manager.saved_configs.get("connections", {}).keys())
+            return {"error": f"Connection '{connection_name}' not found. Available: {saved}"}
+
+        # Use _connect_new_tab which always creates a new tab
+        if hasattr(mw, "_connect_new_tab"):
+            mw._connect_new_tab(connection_name)
+            return {
+                "content": [{"type": "text", "text": f"New tab created and connecting to '{connection_name}'."}]
+            }
+
+        return {"error": "MainWindow does not support _connect_new_tab."}
 
     def _read_schema(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Read the loaded database schema."""
@@ -396,26 +781,86 @@ class MCPToolRegistry:
         """Get the current editor context."""
         mw = self._main_window
         context = {}
+        
+        logger.info(f"_get_context: main_window={mw}")
 
         session = self._get_active_session()
         if session:
             context["session_id"] = session.session_id
             context["session_title"] = session.title
             context["connection_name"] = session.connection_name or ""
-            context["is_connected"] = session.is_connected
+            # is_connected is a property, call it to get bool value
+            try:
+                context["is_connected"] = bool(session.is_connected)
+            except Exception:
+                context["is_connected"] = False
 
         session_widget = self._get_active_session_widget()
-        if session_widget and hasattr(session_widget, "block_editor"):
-            block_editor = session_widget.block_editor
-            blocks_info = []
-            for i, block in enumerate(block_editor.blocks):
-                blocks_info.append({
-                    "index": i,
-                    "language": block.language,
-                    "code": block.get_code(),
-                    "is_focused": block == block_editor.focused_block,
-                })
-            context["blocks"] = blocks_info
+        logger.info(f"_get_context: session_widget={session_widget}, type={type(session_widget)}")
+        
+        if session_widget:
+            block_editor = self._get_block_editor(session_widget)
+            logger.info(f"_get_context: block_editor={block_editor}")
+            
+            if block_editor:
+                blocks_info = []
+                blocks = getattr(block_editor, "blocks", [])
+                logger.info(f"_get_context: {len(blocks)} blocks found")
+                
+                for i, block in enumerate(blocks):
+                    try:
+                        # Use get_language() method, not language attribute
+                        lang = block.get_language() if hasattr(block, "get_language") else "unknown"
+                        code = block.get_code() if hasattr(block, "get_code") else ""
+                        is_focused = block == block_editor.focused_block
+                        blocks_info.append({
+                            "index": i,
+                            "language": lang,
+                            "code": code[:100] + "..." if len(code) > 100 else code,
+                            "is_focused": is_focused,
+                        })
+                    except Exception as e:
+                        logger.warning(f"Error getting block {i} info: {e}")
+                        blocks_info.append({
+                            "index": i,
+                            "language": "unknown",
+                            "code": "",
+                            "is_focused": False,
+                        })
+                context["blocks"] = blocks_info
+            else:
+                logger.warning("_get_context: No block_editor on session_widget!")
+                context["blocks"] = []
+                context["debug"] = f"No block_editor. widget attrs: {dir(session_widget)[:10]}"
+        else:
+            logger.warning("_get_context: No session_widget!")
+
+        # Add schema from ObjectExplorer if available
+        if session:
+            try:
+                session_explorers = getattr(mw, "_session_explorers", None)
+                if isinstance(session_explorers, dict):
+                    explorer = session_explorers.get(session.session_id)
+                    if explorer and hasattr(explorer, "_current_schema"):
+                        schema = explorer._current_schema
+                        if isinstance(schema, dict):
+                            context["database"] = schema.get("database", "")
+                            tables = schema.get("tables", [])
+                            if isinstance(tables, list):
+                                context["tables"] = [t.get("name", "") for t in tables if isinstance(t, dict)]
+                                # Include column info for each table (helpful for queries)
+                                tables_with_cols = {}
+                                columns = schema.get("columns", {})
+                                if isinstance(columns, dict):
+                                    for table in tables:
+                                        if isinstance(table, dict):
+                                            tname = table.get("name", "")
+                                            tcols = columns.get(tname, [])
+                                            if isinstance(tcols, list):
+                                                tables_with_cols[tname] = [c.get("name", "") for c in tcols if isinstance(c, dict)]
+                                context["table_columns"] = tables_with_cols
+            except Exception as e:
+                logger.debug(f"Error getting schema from ObjectExplorer: {e}")
 
         return {"content": [{"type": "text", "text": json.dumps(context, indent=2)}]}
 
@@ -433,6 +878,884 @@ class MCPToolRegistry:
         mw = self._main_window
         if hasattr(mw, "session_tabs") and mw.session_tabs:
             idx = mw.session_tabs.currentIndex()
-            if idx >= 0:
-                return mw.session_tabs.widget(idx)
+            widget = mw.session_tabs.widget(idx) if idx >= 0 else None
+            logger.info(f"_get_active_session_widget: idx={idx}, widget={widget}, type={type(widget)}")
+            return widget
+        logger.warning(f"_get_active_session_widget: No session_tabs on mw={mw}")
         return None
+    
+    def _get_block_editor(self, session_widget) -> Optional[Any]:
+        """Get the BlockEditor from a session widget.
+        
+        SessionWidget uses 'editor' attribute (which is a BlockEditor).
+        Some test mocks might use 'block_editor'.
+        """
+        if not session_widget:
+            return None
+        
+        # Check if widget has 'editor' attribute and it looks like a BlockEditor
+        # (must have add_block method or blocks attribute)
+        editor = getattr(session_widget, "editor", None)
+        if editor and hasattr(editor, "add_block"):
+            logger.info(f"_get_block_editor: Found 'editor' attr with add_block")
+            return editor
+        
+        # Fallback for test mocks that use 'block_editor'
+        editor = getattr(session_widget, "block_editor", None)
+        if editor and hasattr(editor, "add_block"):
+            logger.info(f"_get_block_editor: Found 'block_editor' attr (fallback)")
+            return editor
+        
+        logger.warning(f"_get_block_editor: No valid editor found on {type(session_widget)}")
+        return None
+
+    def _execute_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a block by index."""
+        block_index = args.get("block_index")
+        if block_index is None:
+            return {"error": "block_index is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
+
+        target_block = blocks[block_index]
+
+        # Execute the block
+        if hasattr(block_editor, "execute_block"):
+            try:
+                block_editor.execute_block(target_block)
+                return {
+                    "content": [{"type": "text", "text": f"Block {block_index} execution started."}]
+                }
+            except Exception as e:
+                return {"error": f"Execution failed: {e}"}
+
+        return {"error": "Block editor does not support execute_block."}
+
+    def _run_current_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the currently focused block."""
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        focused_block = block_editor.focused_block
+        if not focused_block:
+            blocks = block_editor.blocks
+            if blocks:
+                focused_block = blocks[-1]
+            else:
+                return {"error": "No blocks to execute."}
+
+        if hasattr(block_editor, "execute_block"):
+            try:
+                block_editor.execute_block(focused_block)
+                return {
+                    "content": [{"type": "text", "text": "Current block execution started."}]
+                }
+            except Exception as e:
+                return {"error": f"Execution failed: {e}"}
+
+        return {"error": "Block editor does not support execute_block."}
+
+    def _list_connections(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """List all saved database connections."""
+        mw = self._main_window
+        conn_manager = getattr(mw, "connection_manager", None)
+        if not conn_manager:
+            return {"error": "Connection manager not available."}
+
+        saved_configs = conn_manager.saved_configs.get("connections", {})
+        if not saved_configs:
+            return {"content": [{"type": "text", "text": "No saved connections."}]}
+
+        connections = []
+        for name, config in saved_configs.items():
+            db_type = config.get("db_type", "unknown")
+            host = config.get("host", "")
+            database = config.get("database", "")
+            connections.append(f"- {name} ({db_type}): {host}/{database}")
+
+        text = "Saved connections:\n" + "\n".join(connections)
+        return {"content": [{"type": "text", "text": text}]}
+
+    def _get_variables(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get Python variables from the session namespace."""
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        namespace = getattr(session_widget, "namespace", None)
+        if namespace is None and hasattr(session_widget, "_namespace"):
+            namespace = session_widget._namespace
+
+        if not namespace:
+            return {"content": [{"type": "text", "text": "No namespace available."}]}
+
+        # Filter out private/internal variables and modules
+        variables = {}
+        for name, value in namespace.items():
+            if name.startswith("_"):
+                continue
+            if isinstance(value, type) or callable(value):
+                continue
+            try:
+                type_name = type(value).__name__
+                # For DataFrames, include shape
+                if hasattr(value, "shape"):
+                    variables[name] = f"{type_name} {value.shape}"
+                elif hasattr(value, "__len__"):
+                    variables[name] = f"{type_name} (len={len(value)})"
+                else:
+                    variables[name] = type_name
+            except Exception:
+                variables[name] = "?"
+
+        if not variables:
+            return {"content": [{"type": "text", "text": "No user variables defined."}]}
+
+        lines = [f"- {name}: {vtype}" for name, vtype in variables.items()]
+        text = "Session variables:\n" + "\n".join(lines)
+        return {"content": [{"type": "text", "text": text}]}
+
+    def _set_block_language(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Change the language of a block."""
+        block_index = args.get("block_index")
+        language = args.get("language", "python")
+
+        if block_index is None:
+            return {"error": "block_index is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range."}
+
+        target_block = blocks[block_index]
+        if hasattr(target_block, "set_language"):
+            target_block.set_language(language)
+            return {
+                "content": [{"type": "text", "text": f"Block {block_index} language changed to {language}."}]
+            }
+
+        return {"error": "Block does not support set_language."}
+
+    def _delete_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Delete a block by index."""
+        block_index = args.get("block_index")
+        if block_index is None:
+            return {"error": "block_index is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range."}
+
+        if hasattr(block_editor, "remove_block"):
+            target_block = blocks[block_index]
+            block_editor.remove_block(target_block)
+            return {
+                "content": [{"type": "text", "text": f"Block {block_index} deleted."}]
+            }
+
+        return {"error": "Block editor does not support remove_block."}
+
+    def _get_block_result(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the last execution result of a block."""
+        block_index = args.get("block_index")
+        if block_index is None:
+            return {"error": "block_index is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range."}
+
+        target_block = blocks[block_index]
+
+        # Try to get the result from the block's result panel
+        result_text = ""
+        if hasattr(target_block, "result_panel"):
+            result_panel = target_block.result_panel
+            if hasattr(result_panel, "get_text"):
+                result_text = result_panel.get_text()
+            elif hasattr(result_panel, "toPlainText"):
+                result_text = result_panel.toPlainText()
+
+        if not result_text:
+            result_text = "(no result available)"
+
+        return {"content": [{"type": "text", "text": result_text}]}
+
+    def _write_and_run(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a block, write code, and execute it - all in one step."""
+        language = args.get("language", "python")
+        code = args.get("code", "")
+        
+        logger.info(f"write_and_run called: language={language}, code_len={len(code)}")
+
+        if not code:
+            return {"error": "code is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            logger.error("write_and_run: No active session widget")
+            return {"error": "No active session. Create a tab first."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            logger.error(f"write_and_run: No block_editor on {type(session_widget)}")
+            return {"error": "Block editor not available."}
+
+        # 1. Create the block
+        logger.info("write_and_run: Creating block...")
+        block = block_editor.add_block(language=language)
+        if not block:
+            logger.error("write_and_run: add_block returned None")
+            return {"error": "Failed to create block."}
+
+        # 2. Write the code
+        logger.info("write_and_run: Setting code...")
+        block.set_code(code)
+        block_index = len(block_editor.blocks) - 1
+        logger.info(f"write_and_run: Block {block_index} created with {len(code)} chars")
+
+        # 3. Execute the block
+        if hasattr(block_editor, "execute_block"):
+            try:
+                logger.info(f"write_and_run: Executing block {block_index}...")
+                block_editor.execute_block(block)
+                logger.info(f"write_and_run: Execution started for block {block_index}")
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Block {block_index} created ({language}) and execution started.\nCode:\n```{language}\n{code}\n```\nUse get_block_result({block_index}) to see the output after execution completes."
+                    }]
+                }
+            except Exception as e:
+                logger.exception(f"write_and_run: Execution failed: {e}")
+                return {"error": f"Block created but execution failed: {e}"}
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Block {block_index} created with code but could not execute automatically."
+            }]
+        }
+
+    # === Focused Block Tool Implementations ===
+
+    def _get_focused_block(self):
+        """Helper to get the currently focused block.
+        
+        Uses get_last_focused_block() to handle the case where user
+        clicked on Copilot chat panel (focus moved away from editor).
+        
+        Returns:
+            Tuple of (block, block_editor, error_string)
+            If error_string is set, block and block_editor may be None.
+        """
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            logger.warning("_get_focused_block: No active session widget")
+            return None, None, "No active session."
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            logger.warning("_get_focused_block: No block editor available")
+            return None, None, "Block editor not available."
+
+        # Use get_last_focused_block() - preserves focus even when user clicks on chat
+        if hasattr(block_editor, "get_last_focused_block"):
+            focused_block = block_editor.get_last_focused_block()
+            logger.info(f"_get_focused_block: get_last_focused_block() returned {focused_block}")
+        else:
+            # Fallback to property
+            focused_block = block_editor.focused_block
+            logger.info(f"_get_focused_block: focused_block property = {focused_block}")
+        
+        if not focused_block:
+            # Fallback: use last block in session
+            blocks = block_editor.blocks
+            logger.info(f"_get_focused_block: No focused block, {len(blocks)} blocks available")
+            if blocks:
+                focused_block = blocks[-1]
+                logger.info(f"_get_focused_block: Using last block as fallback")
+            else:
+                return None, block_editor, "No blocks in session."
+
+        return focused_block, block_editor, None
+
+    def _get_focused_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get code from the currently focused block."""
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        code = ""
+        if hasattr(block, "get_code"):
+            code = block.get_code()
+        elif hasattr(block, "code"):
+            code = block.code
+
+        language = getattr(block, "language", "python")
+        block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Block {block_index} ({language}):\n```{language}\n{code}\n```"
+            }]
+        }
+
+    def _edit_focused_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit/replace code in the currently focused block."""
+        code = args.get("code", "")
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        block.set_code(code)
+        block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Block {block_index} updated with {len(code)} characters."
+            }]
+        }
+
+    def _execute_focused(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the currently focused block."""
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
+
+        if hasattr(block_editor, "execute_block"):
+            try:
+                block_editor.execute_block(block)
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Block {block_index} execution started."
+                    }]
+                }
+            except Exception as e:
+                return {"error": f"Execution failed: {e}"}
+
+        return {"error": "Cannot execute block."}
+
+    def _get_focused_result(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the result from the currently focused block."""
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        result_text = ""
+        if hasattr(block, "result_panel"):
+            result_panel = block.result_panel
+            if hasattr(result_panel, "get_text"):
+                result_text = result_panel.get_text()
+            elif hasattr(result_panel, "toPlainText"):
+                result_text = result_panel.toPlainText()
+
+        if not result_text:
+            result_text = "(no result available)"
+
+        return {"content": [{"type": "text", "text": result_text}]}
+
+    # === Selection Tool Implementations ===
+
+    def _get_selection(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the currently selected text."""
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        selected_text = ""
+        if hasattr(block, "editor"):
+            editor = block.editor
+            if hasattr(editor, "selectedText"):
+                selected_text = editor.selectedText()
+            elif hasattr(editor, "textCursor"):
+                cursor = editor.textCursor()
+                selected_text = cursor.selectedText()
+
+        if not selected_text:
+            return {"content": [{"type": "text", "text": "(no text selected)"}]}
+
+        return {"content": [{"type": "text", "text": selected_text}]}
+
+    def _replace_selection(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace the selected text with new code."""
+        code = args.get("code", "")
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        if hasattr(block, "editor"):
+            editor = block.editor
+            if hasattr(editor, "replaceSelectedText"):
+                editor.replaceSelectedText(code)
+                return {"content": [{"type": "text", "text": f"Replaced selection with {len(code)} characters."}]}
+            elif hasattr(editor, "textCursor"):
+                cursor = editor.textCursor()
+                cursor.insertText(code)
+                return {"content": [{"type": "text", "text": f"Inserted {len(code)} characters."}]}
+
+        return {"error": "Cannot replace selection in this editor."}
+
+    def _insert_at_cursor(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Insert code at the current cursor position."""
+        code = args.get("code", "")
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        if hasattr(block, "editor"):
+            editor = block.editor
+            if hasattr(editor, "insert"):
+                editor.insert(code)
+                return {"content": [{"type": "text", "text": f"Inserted {len(code)} characters at cursor."}]}
+            elif hasattr(editor, "insertPlainText"):
+                editor.insertPlainText(code)
+                return {"content": [{"type": "text", "text": f"Inserted {len(code)} characters at cursor."}]}
+
+        return {"error": "Cannot insert text in this editor."}
+
+    # === Batch/Multi-block Tool Implementations ===
+
+    def _get_all_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get all blocks with their code."""
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks:
+            return {"content": [{"type": "text", "text": "No blocks in session."}]}
+
+        parts = []
+        for i, block in enumerate(blocks):
+            language = getattr(block, "language", "python")
+            code = ""
+            if hasattr(block, "get_code"):
+                code = block.get_code()
+            elif hasattr(block, "code"):
+                code = block.code
+            parts.append(f"## Block {i} ({language}):\n```{language}\n{code}\n```")
+
+        return {"content": [{"type": "text", "text": "\n\n".join(parts)}]}
+
+    def _run_all_blocks(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute all blocks in sequence."""
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks:
+            return {"error": "No blocks to execute."}
+
+        if not hasattr(block_editor, "execute_block"):
+            return {"error": "Block editor does not support execute_block."}
+
+        executed = 0
+        for block in blocks:
+            try:
+                block_editor.execute_block(block)
+                executed += 1
+            except Exception as e:
+                logger.error(f"Error executing block: {e}")
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Started execution of {executed} blocks."
+            }]
+        }
+
+    def _fix_and_run(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Fix code in the focused block and re-execute."""
+        fixed_code = args.get("fixed_code", "")
+        if not fixed_code:
+            return {"error": "fixed_code is required."}
+
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        # Update the code
+        block.set_code(fixed_code)
+        block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
+
+        # Execute
+        if hasattr(block_editor, "execute_block"):
+            try:
+                block_editor.execute_block(block)
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Block {block_index} fixed and execution started."
+                    }]
+                }
+            except Exception as e:
+                return {"error": f"Code updated but execution failed: {e}"}
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Block {block_index} fixed but could not execute."
+            }]
+        }
+
+    def _append_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Append code to the end of the focused block."""
+        code = args.get("code", "")
+        if not code:
+            return {"error": "code is required."}
+
+        block, block_editor, error = self._get_focused_block()
+        if error:
+            return {"error": error}
+
+        # Get current code
+        current_code = ""
+        if hasattr(block, "get_code"):
+            current_code = block.get_code()
+        elif hasattr(block, "code"):
+            current_code = block.code
+
+        # Append new code
+        new_code = current_code + "\n" + code if current_code else code
+        block.set_code(new_code)
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Appended {len(code)} characters to block."
+            }]
+        }
+
+    def _move_focus(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Move focus to a specific block."""
+        block_index = args.get("block_index")
+        if block_index is None:
+            return {"error": "block_index is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
+
+        target_block = blocks[block_index]
+
+        # Try to focus the block
+        if hasattr(block_editor, "focus_block"):
+            block_editor.focus_block(target_block)
+        elif hasattr(target_block, "setFocus"):
+            target_block.setFocus()
+        elif hasattr(target_block, "editor") and hasattr(target_block.editor, "setFocus"):
+            target_block.editor.setFocus()
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Focused block {block_index}."
+            }]
+        }
+
+    # === Database Intelligence Tool Implementations ===
+
+    def _get_connector(self):
+        """Get the database connector for the current session."""
+        session = self._get_active_session()
+        if not session or not session.connection_name:
+            return None, "No database connection in current session."
+
+        mw = self._main_window
+        conn_manager = getattr(mw, "_connection_manager", None)
+        if not conn_manager:
+            # Try to import and get
+            try:
+                from ...database import ConnectionManager
+                conn_manager = ConnectionManager()
+            except Exception as e:
+                return None, f"Cannot access connection manager: {e}"
+
+        connector = conn_manager.get_connection(session.connection_name)
+        if not connector:
+            return None, f"Connection '{session.connection_name}' not found."
+
+        if not connector.is_connected:
+            return None, f"Connection '{session.connection_name}' is not connected."
+
+        return connector, None
+
+    def _get_database_schema(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the complete database schema from cache or live."""
+        mw = self._main_window
+        session = self._get_active_session()
+
+        if not session or not session.connection_name:
+            return {"error": "No database connection. Connect to a database first."}
+
+        connection_name = session.connection_name
+
+        # Try to get from schema service (cached)
+        schema_service = getattr(mw, "_schema_service", None)
+        if schema_service:
+            cached = schema_service.get_cached_schema(connection_name)
+            if cached:
+                schema_info = []
+                schema_info.append(f"Database: {cached.get('database', 'unknown')}")
+                schema_info.append(f"Connection: {connection_name}")
+                schema_info.append("")
+
+                tables = cached.get("tables", [])
+                columns_map = cached.get("columns", {})
+
+                for table in tables:
+                    table_name = table.get("name", "")
+                    schema_name = table.get("schema", "")
+                    full_name = f"{schema_name}.{table_name}" if schema_name else table_name
+
+                    cols = columns_map.get(table_name, [])
+                    col_info = []
+                    for col in cols:
+                        col_name = col.get("name", "")
+                        col_type = col.get("type", "")
+                        nullable = "NULL" if col.get("nullable", True) else "NOT NULL"
+                        col_info.append(f"    - {col_name}: {col_type} {nullable}")
+
+                    schema_info.append(f"TABLE {full_name}:")
+                    if col_info:
+                        schema_info.extend(col_info)
+                    else:
+                        schema_info.append("    (no columns loaded)")
+                    schema_info.append("")
+
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "\n".join(schema_info)
+                    }]
+                }
+
+        return {"error": f"No schema loaded for '{connection_name}'. Wait for schema to load after connecting."}
+
+    def _list_tables(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """List all tables in the connected database."""
+        mw = self._main_window
+        session = self._get_active_session()
+
+        if not session or not session.connection_name:
+            return {"error": "No database connection."}
+
+        connection_name = session.connection_name
+        schema_service = getattr(mw, "_schema_service", None)
+
+        if schema_service:
+            cached = schema_service.get_cached_schema(connection_name)
+            if cached:
+                tables = cached.get("tables", [])
+                table_names = [t.get("name", "") for t in tables]
+
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Tables ({len(table_names)}):\n" + "\n".join(f"  - {t}" for t in table_names)
+                    }]
+                }
+
+        return {"error": "No schema loaded. Connect to database first."}
+
+    def _describe_table(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Describe a specific table's structure."""
+        table_name = args.get("table_name", "")
+        if not table_name:
+            return {"error": "table_name is required."}
+
+        mw = self._main_window
+        session = self._get_active_session()
+
+        if not session or not session.connection_name:
+            return {"error": "No database connection."}
+
+        connection_name = session.connection_name
+        schema_service = getattr(mw, "_schema_service", None)
+
+        if schema_service:
+            cached = schema_service.get_cached_schema(connection_name)
+            if cached:
+                columns_map = cached.get("columns", {})
+                cols = columns_map.get(table_name, [])
+
+                if not cols:
+                    # Try case-insensitive match
+                    for key in columns_map.keys():
+                        if key.lower() == table_name.lower():
+                            cols = columns_map[key]
+                            table_name = key
+                            break
+
+                if cols:
+                    col_info = []
+                    for col in cols:
+                        col_name = col.get("name", "")
+                        col_type = col.get("type", "")
+                        nullable = "NULL" if col.get("nullable", True) else "NOT NULL"
+                        col_info.append(f"  {col_name}: {col_type} {nullable}")
+
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"Table: {table_name}\nColumns:\n" + "\n".join(col_info)
+                        }]
+                    }
+                else:
+                    return {"error": f"Table '{table_name}' not found in schema."}
+
+        return {"error": "No schema loaded."}
+
+    def _run_silent_query(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a SQL query without creating a visible block."""
+        query = args.get("query", "")
+        if not query:
+            return {"error": "query is required."}
+
+        connector, error = self._get_connector()
+        if error:
+            return {"error": error}
+
+        try:
+            result = connector.execute_query(query)
+
+            # Format result
+            if isinstance(result, list):
+                # Multiple results
+                output = []
+                for i, df in enumerate(result):
+                    if df is not None and not df.empty:
+                        output.append(f"Result {i + 1}:\n{df.to_string(max_rows=20, max_cols=10)}")
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "\n\n".join(output) if output else "Query executed. No results."
+                    }]
+                }
+            elif result is not None and hasattr(result, 'empty'):
+                # Single DataFrame
+                if result.empty:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"Query executed. {len(result)} rows returned (empty result)."
+                        }]
+                    }
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Rows: {len(result)}\n\n{result.to_string(max_rows=30, max_cols=15)}"
+                    }]
+                }
+            else:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Query executed successfully."
+                    }]
+                }
+
+        except Exception as e:
+            return {"error": f"Query error: {str(e)}"}
+
+    def _sample_data(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get sample rows from a table."""
+        table_name = args.get("table_name", "")
+        limit = args.get("limit", 5)
+
+        if not table_name:
+            return {"error": "table_name is required."}
+
+        connector, error = self._get_connector()
+        if error:
+            return {"error": error}
+
+        try:
+            # Build sample query based on db type
+            db_type = getattr(connector, "db_type", "").lower()
+            if db_type in ("sqlserver", "mssql"):
+                query = f"SELECT TOP {limit} * FROM {table_name}"
+            else:
+                query = f"SELECT * FROM {table_name} LIMIT {limit}"
+
+            result = connector.execute_query(query)
+
+            if result is not None and hasattr(result, 'empty') and not result.empty:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Sample from {table_name} ({len(result)} rows):\n\n{result.to_string()}"
+                    }]
+                }
+            else:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Table {table_name} appears to be empty."
+                    }]
+                }
+
+        except Exception as e:
+            return {"error": f"Error sampling table: {str(e)}"}

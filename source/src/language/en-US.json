@@ -745,6 +745,20 @@
     "auth_instructions": "To authenticate, enter the code **{code}** at:\n{url}\n\n(Code copied to clipboard)",
     "auth_success": "Authenticated successfully! You can now chat with Copilot.",
     "auth_failed": "Authentication failed: {error}",
-    "dock_title": "Copilot Chat"
+    "dock_title": "Copilot Chat",
+    "actions_running": "Running... ({count} actions)",
+    "actions_complete": "Complete ({count} actions)",
+    "action_running": "running...",
+    "action_ok": "ok",
+    "action_error": "error",
+    "click_to_sign_out": "Click to sign out",
+    "connected": "Connected",
+    "sign_in_tooltip": "Sign in with GitHub Copilot",
+    "show_subscription": "Show Copilot subscription",
+    "logout": "Logout",
+    "no_sessions": "No saved sessions",
+    "clear_all": "Clear all sessions",
+    "usage_loading": "...",
+    "usage_format": "{used}/{total} premium"
   }
 }

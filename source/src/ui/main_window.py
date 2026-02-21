@@ -105,6 +105,7 @@ from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.object_explorer_panel import ObjectExplorerPanel
 from src.ui.components.copilot_chat_panel import CopilotChatPanel
+from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS, RADIUS
 
@@ -1292,8 +1293,23 @@ class MainWindow(DockingMainWindow):
         self.copilot_dock.setMinimumWidth(280)
         self.copilot_dock.setMinimumHeight(200)
 
+        # Copilot Output Panel (shows tool calls, results, debug info)
+        self._copilot_output_panel = CopilotOutputPanel(theme_manager=self.theme_manager)
+        self.copilot_output_dock = QDockWidget("Copilot Output", self)
+        self.copilot_output_dock.setObjectName("CopilotOutputDock")
+        self.copilot_output_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.copilot_output_dock.setWidget(self._copilot_output_panel)
+        self.copilot_output_dock.setStyleSheet(dock_style_bottom)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.copilot_output_dock)
+        self.copilot_output_dock.setMinimumWidth(200)
+        self.copilot_output_dock.setMinimumHeight(150)
+
+        # Connect Copilot signals to output panel
+        self._connect_copilot_to_output()
+
         # Tabifica Results e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
+        self.tabifyDockWidget(self.output_dock, self.copilot_output_dock)
 
         # Results fica como aba ativa
         self.results_dock.raise_()
@@ -1979,6 +1995,71 @@ class MainWindow(DockingMainWindow):
         self.main_toolbar.new_connection_clicked.connect(self._new_connection)
         self.main_toolbar.new_tab_clicked.connect(self._new_session)
         self.main_toolbar.run_clicked.connect(self._execute_from_toolbar)
+        self.main_toolbar.copilot_clicked.connect(self._toggle_copilot_dock)
+
+    def _toggle_copilot_dock(self):
+        """Toggle Copilot dock visibility and focus."""
+        if hasattr(self, "copilot_dock"):
+            if self.copilot_dock.isVisible():
+                self.copilot_dock.hide()
+            else:
+                self.copilot_dock.show()
+                self.copilot_dock.raise_()
+                # Focus input field
+                if hasattr(self, "_copilot_chat_panel"):
+                    input_field = getattr(self._copilot_chat_panel, "_input", None)
+                    if input_field:
+                        input_field.setFocus()
+
+    def _connect_copilot_to_output(self):
+        """Connect Copilot client signals to output panel."""
+        if not hasattr(self, "_copilot_client") or not self._copilot_client:
+            return
+        if not hasattr(self, "_copilot_output_panel") or not self._copilot_output_panel:
+            return
+
+        client = self._copilot_client
+        output = self._copilot_output_panel
+
+        # Auth signals
+        client.authenticated.connect(
+            lambda user: output.log_auth_status(f"Authenticated as {user}", success=True)
+        )
+        client.auth_failed.connect(
+            lambda err: output.log_auth_status(f"Auth failed: {err}", success=False)
+        )
+        client.auth_required.connect(
+            lambda code, uri: output.log_auth_status(f"Auth required: {code}", success=False)
+        )
+        if hasattr(client, "auth_started"):
+            client.auth_started.connect(
+                lambda msg: output.log_auth_status(msg, success=True)
+            )
+
+        # Chat signals
+        client.chat_response_chunk.connect(lambda _: None)  # Ignore chunks in output
+        client.chat_response_complete.connect(lambda _: output.log_response_complete())
+        client.chat_error.connect(lambda err: output.log_error(err))
+
+        # Tool call signal (name, args, tool_call_id)
+        if hasattr(client, "tool_called"):
+            client.tool_called.connect(
+                lambda name, args, _id="": output.log_tool_call(name, args)
+            )
+
+        # Tool result signal
+        if hasattr(client, "tool_result"):
+            client.tool_result.connect(
+                lambda name, result: output.log_tool_result(name, result)
+            )
+
+        # Thinking signal
+        if hasattr(client, "thinking"):
+            client.thinking.connect(lambda _: None)  # Just ignore for now
+
+        # Connect chat panel thinking signal
+        if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
+            self._copilot_chat_panel.thinking_started.connect(output.log_thinking)
 
     def _execute_from_toolbar(self):
         """Executes code from the current editor via toolbar button"""

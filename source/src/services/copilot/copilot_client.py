@@ -254,9 +254,20 @@ class CopilotTokenWorker(QObject):
                 headers={
                     "Authorization": f"token {self.github_token}",
                     "Accept": "application/json",
+                    "Editor-Version": "vscode/1.95.0",
+                    "Editor-Plugin-Version": "copilot/1.245.0",
+                    "User-Agent": "GitHubCopilotChat/0.22.0",
                 },
                 timeout=15,
             )
+            if resp.status_code == 403:
+                self.error.emit(
+                    "Copilot access denied (HTTP 403). "
+                    "Please verify your GitHub Copilot subscription is active at "
+                    "https://github.com/settings/copilot"
+                )
+                self.finished.emit()
+                return
             if resp.status_code != 200:
                 self.error.emit(f"Failed to get Copilot token: HTTP {resp.status_code}")
                 self.finished.emit()

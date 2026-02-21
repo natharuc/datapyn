@@ -89,12 +89,12 @@ class TestMCPToolRegistry:
     def test_create_block_success(self):
         """create_block should add a block to the block editor."""
         mock_block = MagicMock()
-        mock_editor = MagicMock()
+        mock_editor = MagicMock(spec=["add_block", "blocks"])
         mock_editor.add_block.return_value = mock_block
         mock_editor.blocks = [mock_block]
 
-        mock_widget = MagicMock()
-        mock_widget.block_editor = mock_editor
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
 
         mock_mw = MagicMock()
         mock_mw.session_tabs.currentIndex.return_value = 0
@@ -111,11 +111,11 @@ class TestMCPToolRegistry:
     def test_edit_block_with_index(self):
         """edit_block should update the specified block's code."""
         mock_block = MagicMock()
-        mock_editor = MagicMock()
+        mock_editor = MagicMock(spec=["add_block", "blocks"])
         mock_editor.blocks = [mock_block]
 
-        mock_widget = MagicMock()
-        mock_widget.block_editor = mock_editor
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
 
         mock_mw = MagicMock()
         mock_mw.session_tabs.currentIndex.return_value = 0
@@ -220,15 +220,15 @@ class TestMCPToolRegistry:
         mock_session.is_connected = True
 
         mock_block = MagicMock()
-        mock_block.language = "python"
+        mock_block.get_language.return_value = "python"
         mock_block.get_code.return_value = "x = 1"
 
-        mock_editor = MagicMock()
+        mock_editor = MagicMock(spec=["add_block", "blocks", "focused_block"])
         mock_editor.blocks = [mock_block]
         mock_editor.focused_block = mock_block
 
-        mock_widget = MagicMock()
-        mock_widget.block_editor = mock_editor
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
 
         mock_mw = MagicMock()
         mock_mw.session_manager.focused_session = mock_session
@@ -412,12 +412,13 @@ class TestCopilotChatPanel:
         qtbot.addWidget(panel)
         assert panel._model_combo.count() >= 4
 
-    def test_panel_has_mode_combo(self, qtbot):
-        """Panel should have mode selection combo."""
+    def test_panel_mode_is_agent_only(self, qtbot):
+        """Panel should always use agent mode (mode_combo removed)."""
         from src.ui.components.copilot_chat_panel import CopilotChatPanel
         panel = CopilotChatPanel()
         qtbot.addWidget(panel)
-        assert panel._mode_combo.count() == 3
+        # Mode combo was removed - always agent mode for tool support
+        assert panel._mode_combo is None
 
     def test_panel_has_auth_button(self, qtbot):
         """Panel should have auth button."""

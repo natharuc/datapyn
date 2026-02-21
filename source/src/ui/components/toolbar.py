@@ -2,8 +2,13 @@
 Toolbar principal da aplicacao
 """
 
+import os
+import re
+
 from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy
-from PyQt6.QtCore import pyqtSignal, QSize
+from PyQt6.QtCore import pyqtSignal, QSize, Qt, QByteArray
+from PyQt6.QtGui import QIcon, QPixmap, QPainter
+from PyQt6.QtSvg import QSvgRenderer
 import qtawesome as qta
 
 from src.language import S
@@ -13,12 +18,47 @@ _ICON_COLOR = "#b0b0b0"
 _ICON_HOVER = "#ffffff"
 
 
+def _load_copilot_icon(color: str, size: int = 20) -> QIcon:
+    """Load Copilot SVG icon with custom color."""
+    try:
+        # Get path relative to this file (ui/components -> ui -> src -> assets/icons)
+        components_dir = os.path.dirname(os.path.abspath(__file__))
+        ui_dir = os.path.dirname(components_dir)
+        src_dir = os.path.dirname(ui_dir)
+        svg_path = os.path.join(src_dir, "assets", "icons", "copilot_icon.svg")
+
+        with open(svg_path, "r", encoding="utf-8") as f:
+            svg_content = f.read()
+
+        # Replace all fill colors
+        svg_content = re.sub(r"fill\s*:\s*#[0-9a-fA-F]{3,6}", f"fill:{color}", svg_content)
+        svg_content = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg_content)
+
+        svg_bytes = QByteArray(svg_content.encode("utf-8"))
+        renderer = QSvgRenderer(svg_bytes)
+
+        if not renderer.isValid():
+            return None
+
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+
+        return QIcon(pixmap)
+    except Exception:
+        return None
+
+
 class MainToolbar(QToolBar):
     """Main toolbar"""
 
     new_connection_clicked = pyqtSignal()
     new_tab_clicked = pyqtSignal()
     run_clicked = pyqtSignal()
+    copilot_clicked = pyqtSignal()
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__("Main", parent)
@@ -88,6 +128,31 @@ class MainToolbar(QToolBar):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
+
+        # Copilot button (right side) - icon only
+        self.btn_copilot = QPushButton()
+        copilot_icon = _load_copilot_icon("#9cdcfe", size=18)
+        if copilot_icon:
+            self.btn_copilot.setIcon(copilot_icon)
+        else:
+            self.btn_copilot.setIcon(qta.icon("mdi.robot", color="#9cdcfe"))
+        self.btn_copilot.setIconSize(QSize(18, 18))
+        self.btn_copilot.setToolTip("Copilot")
+        self.btn_copilot.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(86, 156, 214, 0.1);
+                padding: 6px;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(86, 156, 214, 0.25);
+            }}
+            QPushButton:pressed {{
+                background-color: rgba(86, 156, 214, 0.35);
+            }}
+        """)
+        self.btn_copilot.clicked.connect(self.copilot_clicked.emit)
+        self.addWidget(self.btn_copilot)
 
     def apply_theme(self):
         pass
