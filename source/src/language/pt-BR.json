@@ -765,6 +765,7 @@
     "no_sessions": "Nenhuma sessao salva",
     "clear_all": "Apagar todas as sessoes",
     "usage_loading": "...",
-    "usage_format": "{used}/{total} premium"
+    "usage_format": "{used}/{total} premium",
+    "stop_tooltip": "Parar geracao"
   }
 }

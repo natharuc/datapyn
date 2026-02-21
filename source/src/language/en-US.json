@@ -765,6 +765,7 @@
     "no_sessions": "No saved sessions",
     "clear_all": "Clear all sessions",
     "usage_loading": "...",
-    "usage_format": "{used}/{total} premium"
+    "usage_format": "{used}/{total} premium",
+    "stop_tooltip": "Stop generation"
   }
 }

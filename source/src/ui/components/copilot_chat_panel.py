@@ -808,6 +808,29 @@ class CopilotChatPanel(QWidget):
         """)
         input_layout.addWidget(self._send_btn, 0, Qt.AlignmentFlag.AlignBottom)
 
+        # Stop button (hidden by default, shown when loading)
+        self._stop_btn = QPushButton()
+        self._stop_btn.setFixedSize(36, 36)
+        self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_btn.setToolTip(S.copilot.stop_tooltip)
+        if HAS_QTAWESOME:
+            self._stop_btn.setIcon(qta.icon("mdi.stop", color=colors.text_primary))
+        self._stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.danger};
+                border: none;
+                border-radius: {RADIUS.radius_md}px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.danger_hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.danger_active};
+            }}
+        """)
+        self._stop_btn.hide()  # Hidden by default
+        input_layout.addWidget(self._stop_btn, 0, Qt.AlignmentFlag.AlignBottom)
+
         input_container.setStyleSheet(f"""
             QWidget {{
                 background-color: {colors.bg_secondary};
@@ -857,6 +880,7 @@ class CopilotChatPanel(QWidget):
     def _connect_signals(self):
         """Connect internal signals."""
         self._send_btn.clicked.connect(self._on_send)
+        self._stop_btn.clicked.connect(self._on_stop)
         self._input.submit_requested.connect(self._on_send)
         self._auth_btn.clicked.connect(self._on_auth_clicked)
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
@@ -972,8 +996,26 @@ class CopilotChatPanel(QWidget):
         self._input.setEnabled(not loading)
         if loading:
             self._send_btn.setToolTip("Waiting for Copilot response...")
+            self._send_btn.hide()
+            self._stop_btn.show()
         else:
             self._send_btn.setToolTip(S.copilot.send_tooltip)
+            self._stop_btn.hide()
+            self._send_btn.show()
+
+    def _on_stop(self):
+        """Handle stop button - cancel current operation."""
+        if self._copilot_client:
+            self._copilot_client.cancel()
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        # Mark any widgets as complete
+        if hasattr(self, '_current_thinking_widget') and self._current_thinking_widget:
+            self._current_thinking_widget.set_complete()
+            self._current_thinking_widget = None
+        if hasattr(self, '_current_actions_widget') and self._current_actions_widget:
+            self._current_actions_widget.set_complete()
+            self._current_actions_widget = None
 
     def _on_send(self):
         """Handle send button or Enter key."""

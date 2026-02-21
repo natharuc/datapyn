@@ -488,6 +488,41 @@ class MCPToolRegistry(QObject):
             handler=self._sample_data,
         ))
 
+        # === Results & Notifications ===
+        self._register(MCPTool(
+            name="get_execution_results",
+            description="GET the complete execution results: output text (print statements, logs), DataFrame in the results grid (first 50 rows as preview), and any errors. Use this AFTER executing a block to verify it worked and see the data.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block to get results from (0-based). If omitted, gets results from the last executed block.",
+                    "optional": True,
+                },
+            },
+            handler=self._get_execution_results,
+        ))
+
+        self._register(MCPTool(
+            name="notify_user",
+            description="SHOW a notification to get the user's attention. Use when: task is complete, need user input, or found something important. Shows a toast popup in the corner of the screen.",
+            parameters={
+                "title": {
+                    "type": "string",
+                    "description": "Short title for the notification (e.g., 'Analysis Complete', 'Action Required').",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The notification message with details.",
+                },
+                "success": {
+                    "type": "boolean",
+                    "description": "True for success (green), False for error/warning (red). Default: True.",
+                    "optional": True,
+                },
+            },
+            handler=self._notify_user,
+        ))
+
     def _register(self, tool: MCPTool) -> None:
         """Register a tool."""
         self._tools[tool.name] = tool
@@ -1759,3 +1794,83 @@ class MCPToolRegistry(QObject):
 
         except Exception as e:
             return {"error": f"Error sampling table: {str(e)}"}
+
+    def _get_execution_results(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get execution results: output text, DataFrame preview, and errors."""
+        mw = self._main_window
+        if not mw:
+            return {"error": "Main window not available"}
+
+        parts = []
+
+        # Get output panel text
+        output_panel = getattr(mw, "global_output_panel", None)
+        if output_panel and hasattr(output_panel, "get_text"):
+            output_text = output_panel.get_text()
+            if output_text and output_text.strip():
+                # Limit output to last 5000 chars to avoid token overflow
+                if len(output_text) > 5000:
+                    output_text = "... (truncated)\n" + output_text[-5000:]
+                parts.append(f"## Output:\n```\n{output_text}\n```")
+            else:
+                parts.append("## Output:\n(empty)")
+
+        # Get results viewer DataFrame
+        results_viewer = getattr(mw, "global_results_viewer", None)
+        if results_viewer:
+            current_df = getattr(results_viewer, "current_df", None)
+            if current_df is not None and hasattr(current_df, "empty") and not current_df.empty:
+                # Show preview (first 50 rows)
+                preview_rows = 50
+                rows_total = len(current_df)
+                cols_total = len(current_df.columns)
+                preview_df = current_df.head(preview_rows)
+                parts.append(f"## Results Grid ({rows_total} rows x {cols_total} columns):")
+                parts.append(f"```\n{preview_df.to_string()}\n```")
+                if rows_total > preview_rows:
+                    parts.append(f"(showing first {preview_rows} of {rows_total} rows)")
+            else:
+                parts.append("## Results Grid:\n(no data)")
+
+        if not parts:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "No execution results available. Make sure to run a block first."
+                }]
+            }
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": "\n\n".join(parts)
+            }]
+        }
+
+    def _notify_user(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Show a notification to the user."""
+        title = args.get("title", "Notification")
+        message = args.get("message", "")
+        success = args.get("success", True)
+
+        if not message:
+            return {"error": "Message is required"}
+
+        mw = self._main_window
+        if not mw:
+            return {"error": "Main window not available"}
+
+        # Use the toast notification system
+        if hasattr(mw, "_send_notification"):
+            mw._send_notification(title, message, success)
+        else:
+            logger.warning("MainWindow does not have _send_notification method")
+            return {"error": "Notification system not available"}
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Notification sent: {title}"
+            }]
+        }
+
