@@ -103,7 +103,7 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="create_block",
-            description="CREATE a new code block and WRITE code into it. SQL blocks store results as 'block1', 'block2', etc. (DataFrames). Python blocks can access these: `block1.head()`, `block2['column'].mean()`. Use this to build multi-block analysis workflows.",
+            description="CREATE a new code block and WRITE code into it. IMPORTANT: The block NAME becomes the DataFrame variable name. Example: block named 'vendas' with SQL creates DataFrame `vendas` that Python can use.",
             parameters={
                 "language": {
                     "type": "string",
@@ -113,6 +113,11 @@ class MCPToolRegistry(QObject):
                 "code": {
                     "type": "string",
                     "description": "The actual code to write in the block. SQL queries or Python code with imports.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "REQUIRED: Semantic name for the block (e.g., 'vendas', 'clientes', 'grafico'). This becomes the DataFrame variable name for SQL blocks. Use snake_case, no spaces.",
+                    "optional": True,
                 },
             },
             handler=self._create_block,
@@ -287,7 +292,7 @@ class MCPToolRegistry(QObject):
         # Most useful tool - does everything in one call
         self._register(MCPTool(
             name="write_and_run",
-            description="CREATE a new block, WRITE code, and EXECUTE immediately. For SQL: result is stored as 'block1', 'block2', etc. (DataFrame). For Python: can access previous block results. Use for single-block tasks or when adding to multi-block workflow.",
+            description="CREATE a new block, WRITE code, and EXECUTE immediately. IMPORTANT: The block NAME becomes the DataFrame variable. Example: name='vendas' with SQL query creates `vendas` DataFrame accessible in Python blocks.",
             parameters={
                 "language": {
                     "type": "string",
@@ -296,10 +301,33 @@ class MCPToolRegistry(QObject):
                 },
                 "code": {
                     "type": "string",
-                    "description": "Complete executable code. Python: include imports, use print() for output, access block1/block2 for previous SQL results. SQL: write the query.",
+                    "description": "Complete executable code. Python: include imports, use print() for output. SQL: write the query.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "REQUIRED: Semantic name for the block (e.g., 'vendas', 'clientes', 'grafico'). For SQL blocks, this becomes the DataFrame variable name. Use snake_case, no spaces.",
+                    "optional": True,
                 },
             },
             handler=self._write_and_run,
+        ))
+
+        # Rename block tool
+        self._register(MCPTool(
+            name="rename_block",
+            description="RENAME a block. The name determines the DataFrame variable name for SQL blocks. Example: renaming to 'vendas' means the SQL result becomes `vendas` DataFrame.",
+            parameters={
+                "name": {
+                    "type": "string",
+                    "description": "New name for the block (e.g., 'vendas', 'clientes'). Use snake_case, no spaces.",
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block to rename (0-based). If omitted, renames the focused block.",
+                    "optional": True,
+                },
+            },
+            handler=self._rename_block,
         ))
 
         # === Focused Block Tools ===
@@ -635,9 +663,10 @@ class MCPToolRegistry(QObject):
         """Create a new code block in the current session."""
         language = args.get("language", "python")
         code = args.get("code", "")
+        name = args.get("name", "")
         mw = self._main_window
         
-        logger.info(f"create_block called: language={language}, code_len={len(code)}")
+        logger.info(f"create_block called: language={language}, code_len={len(code)}, name={name}")
 
         session_widget = self._get_active_session_widget()
         if not session_widget:
@@ -654,11 +683,22 @@ class MCPToolRegistry(QObject):
         if code and block:
             block.set_code(code)
             logger.info(f"create_block: Set code on block")
+        
+        # Set block name if provided
+        if name and block:
+            block.set_block_name(name)
+            logger.info(f"create_block: Set block name to '{name}'")
 
         block_count = len(block_editor.blocks)
-        logger.info(f"create_block: Success, total blocks={block_count}")
+        block_index = block_count - 1
+        actual_name = block.get_block_name() if block else f"block{block_index + 1}"
+        logger.info(f"create_block: Success, total blocks={block_count}, name={actual_name}")
+        
+        msg_parts = [f"Block created (language: {language}, index: {block_index}, name: '{actual_name}')"]
+        if language == "sql":
+            msg_parts.append(f"When executed, the result will be stored as DataFrame `{actual_name}`.")
         return {
-            "content": [{"type": "text", "text": f"Block created (language: {language}, index: {block_count - 1})"}]
+            "content": [{"type": "text", "text": " ".join(msg_parts)}]
         }
 
     def _edit_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -694,6 +734,47 @@ class MCPToolRegistry(QObject):
             return {"content": [{"type": "text", "text": f"Block updated with {len(code)} characters."}]}
 
         return {"error": "No block found to edit."}
+
+    def _rename_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Rename a block. The name determines the DataFrame variable name for SQL blocks."""
+        name = args.get("name", "")
+        block_index = args.get("block_index")
+
+        if not name:
+            return {"error": "name is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks:
+            return {"error": "No blocks in the current session."}
+
+        if block_index is not None:
+            if 0 <= block_index < len(blocks):
+                target_block = blocks[block_index]
+            else:
+                return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
+        else:
+            target_block = block_editor.focused_block
+            if not target_block and blocks:
+                target_block = blocks[-1]
+
+        if target_block:
+            old_name = target_block.get_block_name()
+            target_block.set_block_name(name)
+            language = target_block.language
+            msg = f"Block renamed from '{old_name}' to '{name}'."
+            if language == "sql":
+                msg += f" When executed, result will be stored as DataFrame `{name}`."
+            return {"content": [{"type": "text", "text": msg}]}
+
+        return {"error": "No block found to rename."}
 
     def _connect_database(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Connect the current session to a database."""
@@ -1159,8 +1240,9 @@ class MCPToolRegistry(QObject):
         """Create a block, write code, and execute it - all in one step."""
         language = args.get("language", "python")
         code = args.get("code", "")
+        name = args.get("name", "")
         
-        logger.info(f"write_and_run called: language={language}, code_len={len(code)}")
+        logger.info(f"write_and_run called: language={language}, code_len={len(code)}, name={name}")
 
         if not code:
             return {"error": "code is required."}
@@ -1182,22 +1264,36 @@ class MCPToolRegistry(QObject):
             logger.error("write_and_run: add_block returned None")
             return {"error": "Failed to create block."}
 
-        # 2. Write the code
+        # 2. Set block name if provided
+        if name:
+            block.set_block_name(name)
+            logger.info(f"write_and_run: Set block name to '{name}'")
+
+        # 3. Write the code
         logger.info("write_and_run: Setting code...")
         block.set_code(code)
         block_index = len(block_editor.blocks) - 1
-        logger.info(f"write_and_run: Block {block_index} created with {len(code)} chars")
+        actual_name = block.get_block_name()
+        logger.info(f"write_and_run: Block {block_index} ('{actual_name}') created with {len(code)} chars")
 
-        # 3. Execute the block
+        # 4. Execute the block
         if hasattr(block_editor, "execute_block"):
             try:
                 logger.info(f"write_and_run: Executing block {block_index}...")
                 block_editor.execute_block(block)
                 logger.info(f"write_and_run: Execution started for block {block_index}")
+                
+                # Build response message
+                msg_parts = [f"Block '{actual_name}' (index {block_index}, {language}) created and execution started."]
+                if language == "sql":
+                    msg_parts.append(f"Result will be stored as DataFrame `{actual_name}`.")
+                msg_parts.append(f"\nCode:\n```{language}\n{code}\n```")
+                msg_parts.append("Use get_execution_results() to see the output after execution completes.")
+                
                 return {
                     "content": [{
                         "type": "text",
-                        "text": f"Block {block_index} created ({language}) and execution started.\nCode:\n```{language}\n{code}\n```\nUse get_block_result({block_index}) to see the output after execution completes."
+                        "text": "\n".join(msg_parts)
                     }]
                 }
             except Exception as e:
