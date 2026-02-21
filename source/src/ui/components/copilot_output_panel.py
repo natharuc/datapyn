@@ -8,6 +8,7 @@ Shows what Copilot is doing in real-time.
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCursor, QColor
+from PyQt6 import sip
 from datetime import datetime
 import html as html_module
 import json
@@ -105,6 +106,9 @@ class CopilotOutputPanel(QWidget):
 
     def _append_html(self, html: str):
         """Append HTML content and scroll to bottom."""
+        # Guard against deleted C++ object
+        if sip.isdeleted(self.text_edit):
+            return
         cursor = self.text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertHtml(html + "<br>")
