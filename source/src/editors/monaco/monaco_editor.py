@@ -419,6 +419,7 @@ class MonacoEditor(QWidget):
     
     def set_sql_schema(self, schema: dict) -> None:
         """Set SQL schema for autocompletion."""
+        logger.info(f"[MONACO] set_sql_schema called with {len(schema.get('tables', []))} tables")
         self._sql_schema = schema
         # Register SQL completions in Monaco
         self.update_sql_completions(schema)

@@ -145,6 +145,9 @@
                 // Register inline completion provider for ghost text
                 registerInlineCompletionProvider();
                 
+                // Register standard (non-AI) completion providers
+                registerStandardCompletionProviders();
+                
                 // Setup event listeners
                 setupEventListeners();
                 
@@ -539,27 +542,9 @@
         let keywordCompletions = [];
         let columnsByTable = {}; // { tableName: [columns] }
         
-        function registerCompletions(completions) {
-            // completions: [{ label, kind, insertText, detail, category, table }]
-            allCompletions = completions;
-            
-            // Separate by category for faster filtering
-            tableCompletions = completions.filter(c => c.category === 'table');
-            columnCompletions = completions.filter(c => c.category === 'column');
-            keywordCompletions = completions.filter(c => c.kind === 'keyword');
-            
-            // Build table->columns map
-            columnsByTable = {};
-            columnCompletions.forEach(c => {
-                if (c.table) {
-                    if (!columnsByTable[c.table]) {
-                        columnsByTable[c.table] = [];
-                    }
-                    columnsByTable[c.table].push(c);
-                }
-            });
-            
-            monaco.languages.registerCompletionItemProvider(currentLanguage, {
+        // Register completion providers ONCE (called after Monaco is loaded)
+        function registerStandardCompletionProviders() {
+            monaco.languages.registerCompletionItemProvider('sql', {
                 provideCompletionItems: function(model, position) {
                     const word = model.getWordUntilPosition(position);
                     const range = {
@@ -578,7 +563,9 @@
                     });
                     
                     // Filter completions based on context
-                    let filtered = filterCompletionsByContext(textBeforeCursor, currentLanguage);
+                    let filtered = filterCompletionsByContext(textBeforeCursor, 'sql');
+                    
+                    console.log('[MONACO] provideCompletionItems SQL: textBefore=', textBeforeCursor.slice(-50), 'allCompletions=', allCompletions.length, 'filtered=', filtered.length);
                     
                     return {
                         suggestions: filtered.map(c => ({
@@ -589,6 +576,65 @@
                             range: range
                         }))
                     };
+                }
+            });
+            
+            monaco.languages.registerCompletionItemProvider('python', {
+                provideCompletionItems: function(model, position) {
+                    const word = model.getWordUntilPosition(position);
+                    const range = {
+                        startLineNumber: position.lineNumber,
+                        endLineNumber: position.lineNumber,
+                        startColumn: word.startColumn,
+                        endColumn: word.endColumn
+                    };
+                    
+                    const textBeforeCursor = model.getValueInRange({
+                        startLineNumber: 1,
+                        startColumn: 1,
+                        endLineNumber: position.lineNumber,
+                        endColumn: position.column
+                    });
+                    
+                    let filtered = filterCompletionsByContext(textBeforeCursor, 'python');
+                    
+                    console.log('[MONACO] provideCompletionItems Python: allCompletions=', allCompletions.length, 'filtered=', filtered.length);
+                    
+                    return {
+                        suggestions: filtered.map(c => ({
+                            label: c.label,
+                            kind: getCompletionKind(c.kind),
+                            insertText: c.insertText || c.label,
+                            detail: c.detail || '',
+                            range: range
+                        }))
+                    };
+                }
+            });
+        }
+        
+        function registerCompletions(completions) {
+            // completions: [{ label, kind, insertText, detail, category, table }]
+            console.log('[MONACO] registerCompletions called with', completions.length, 'items');
+            console.log('[MONACO] Current language:', currentLanguage);
+            
+            allCompletions = completions;
+            
+            // Separate by category for faster filtering
+            tableCompletions = completions.filter(c => c.category === 'table');
+            columnCompletions = completions.filter(c => c.category === 'column');
+            keywordCompletions = completions.filter(c => c.kind === 'keyword');
+            
+            console.log('[MONACO] Filtered:', tableCompletions.length, 'tables,', columnCompletions.length, 'columns,', keywordCompletions.length, 'keywords');
+            
+            // Build table->columns map
+            columnsByTable = {};
+            columnCompletions.forEach(c => {
+                if (c.table) {
+                    if (!columnsByTable[c.table]) {
+                        columnsByTable[c.table] = [];
+                    }
+                    columnsByTable[c.table].push(c);
                 }
             });
         }
