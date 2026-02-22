@@ -102,7 +102,7 @@ class ChatMessageWidget(QFrame):
 
         # Create the bubble frame
         bubble = QFrame()
-        bubble.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        bubble.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         bubble_layout = QVBoxLayout(bubble)
         bubble_layout.setContentsMargins(12, 8, 12, 8)
         bubble_layout.setSpacing(4)
@@ -113,8 +113,9 @@ class ChatMessageWidget(QFrame):
         content_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )
-        # Use Preferred width to allow shrinking, Minimum height to fit content
-        content_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        # Expanding width to fill bubble, Minimum height for content
+        content_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        content_label.setMinimumWidth(50)  # Prevent complete collapse
         content_label.setStyleSheet(f"""
             QLabel {{
                 color: {colors.text_primary};
@@ -164,8 +165,9 @@ class ChatMessageWidget(QFrame):
                 }}
             """)
             time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-            # Max 80% of typical chat width
-            bubble.setMaximumWidth(320)
+            # Spacer takes ~15% on left, bubble takes rest
+            outer_layout.setStretch(0, 15)  # stretch spacer
+            outer_layout.setStretch(1, 85)  # bubble
         else:
             # Assistant messages: left aligned, secondary background
             outer_layout.addWidget(bubble)
@@ -177,12 +179,13 @@ class ChatMessageWidget(QFrame):
                     border: none;
                 }}
             """)
-            # Max 85% of typical chat width
-            bubble.setMaximumWidth(380)
+            # Bubble takes ~85%, spacer takes ~15%
+            outer_layout.setStretch(0, 85)  # bubble
+            outer_layout.setStretch(1, 15)  # stretch spacer
 
-        # Main widget: fill width but don't request more than needed
+        # Main widget fills available width
         self.setStyleSheet("ChatMessageWidget { background: transparent; border: none; }")
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     def append_content(self, text: str):
         """Append text to the message content (for streaming)."""
@@ -699,7 +702,8 @@ class CopilotChatPanel(QWidget):
         self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self._messages_container = QWidget()
-        self._messages_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        # Expanding width to fill viewport, Minimum height to fit content
+        self._messages_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self._messages_layout = QVBoxLayout(self._messages_container)
         self._messages_layout.setContentsMargins(8, 8, 8, 8)
         self._messages_layout.setSpacing(8)
@@ -720,7 +724,8 @@ class CopilotChatPanel(QWidget):
         # === Welcome message (shown when empty) ===
         self._welcome_label = QLabel(S.copilot.welcome_message)
         self._welcome_label.setWordWrap(True)
-        self._welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._welcome_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self._welcome_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._welcome_label.setStyleSheet(f"""
             QLabel {{
                 color: {colors.text_tertiary};
@@ -729,8 +734,8 @@ class CopilotChatPanel(QWidget):
                 background: transparent;
             }}
         """)
-        # Insert before the stretch
-        self._messages_layout.insertWidget(0, self._welcome_label)
+        # Insert before the stretch, centered horizontally
+        self._messages_layout.insertWidget(0, self._welcome_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # === Config bar (Model selector only - always uses Agent mode) ===
         config_bar = QWidget()
