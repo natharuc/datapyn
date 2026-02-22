@@ -3,7 +3,7 @@ Copilot Chat Panel - Chat interface for GitHub Copilot integration.
 
 This panel functions as a dockable block in DataPyn, similar to
 Variables, Object Explorer, etc. It provides:
-- Chat message display
+- Chat message display (WebView-based)
 - Message input area
 - Model selection
 - Mode selection (chat/edit/agent)
@@ -18,16 +18,18 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QComboBox,
-    QScrollArea,
     QFrame,
     QSizePolicy,
     QApplication,
     QMenu,
     QWidgetAction,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QTimer, QSettings, QByteArray
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject
 from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter
 from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebChannel import QWebChannel
+from pathlib import Path
 import json
 import logging
 import os
@@ -80,6 +82,26 @@ def _load_copilot_icon(color: str, size: int = 20) -> QIcon:
     except Exception as e:
         logger.error(f"Failed to load Copilot icon: {e}")
         return None
+
+
+class ChatBridge(QObject):
+    """
+    Bridge class for QWebChannel communication between Python and chat HTML.
+    
+    JavaScript calls Python slots via bridge.methodName()
+    Python calls JavaScript via web_view.page().runJavaScript()
+    """
+    
+    # Signals emitted when JS calls our slots
+    web_view_ready = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    
+    @pyqtSlot()
+    def onWebViewReady(self):
+        """Called when the WebView chat is fully loaded."""
+        self.web_view_ready.emit()
 
 
 class ChatMessageWidget(QFrame):
@@ -542,11 +564,10 @@ class CopilotChatPanel(QWidget):
         self._mcp_server = mcp_server
         self.theme_manager = theme_manager
         self._messages: list = []  # Chat history [{role, content}]
-        self._current_assistant_widget = None
-        self._thinking_indicator = None  # Animated thinking indicator
-        self._current_thinking_widget = None  # Collapsible thinking content
-        self._current_actions_widget = None  # Unified widget for all tool calls
-        self._active_tool_calls: dict = {}  # tool_name -> widget reference
+        self._current_stream_id = None  # Tracks current streaming message
+        self._current_thinking_widget = None  # Legacy - not used with WebView
+        self._current_actions_widget = None  # Legacy - not used with WebView
+        self._active_tool_calls: dict = {}  # tool_name -> reference
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._current_session_id = None
         self._setup_ui()
@@ -695,47 +716,9 @@ class CopilotChatPanel(QWidget):
         """)
         layout.addWidget(header)
 
-        # === Messages area ===
-        self._scroll_area = QScrollArea()
-        self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        self._messages_container = QWidget()
-        # Expanding width to fill viewport, Minimum height to fit content
-        self._messages_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self._messages_layout = QVBoxLayout(self._messages_container)
-        self._messages_layout.setContentsMargins(8, 8, 8, 8)
-        self._messages_layout.setSpacing(8)
-        self._messages_layout.addStretch()
-
-        self._scroll_area.setWidget(self._messages_container)
-        self._scroll_area.setStyleSheet(f"""
-            QScrollArea {{
-                background-color: {colors.bg_primary};
-                border: none;
-            }}
-            QScrollArea > QWidget > QWidget {{
-                background-color: {colors.bg_primary};
-            }}
-        """)
-        layout.addWidget(self._scroll_area, 1)
-
-        # === Welcome message (shown when empty) ===
-        self._welcome_label = QLabel(S.copilot.welcome_message)
-        self._welcome_label.setWordWrap(True)
-        self._welcome_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        self._welcome_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._welcome_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_tertiary};
-                font-size: 13px;
-                padding: 40px 20px;
-                background: transparent;
-            }}
-        """)
-        # Insert before the stretch, centered horizontally
-        self._messages_layout.insertWidget(0, self._welcome_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        # === Messages area (WebView-based) ===
+        self._setup_chat_webview()
+        layout.addWidget(self._chat_webview, 1)
 
         # === Config bar (Model selector only - always uses Agent mode) ===
         config_bar = QWidget()
@@ -892,6 +875,72 @@ class CopilotChatPanel(QWidget):
             }}
         """)
 
+    def _setup_chat_webview(self):
+        """Setup the WebView-based chat messages area."""
+        from PyQt6.QtWebEngineCore import QWebEngineSettings
+        
+        # Create WebView
+        self._chat_webview = QWebEngineView()
+        self._chat_webview.setMinimumSize(200, 100)
+        self._chat_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        
+        # Enable JavaScript
+        settings = self._chat_webview.page().settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        
+        # Setup QWebChannel for Python <-> JS communication
+        self._chat_channel = QWebChannel(self._chat_webview.page())
+        self._chat_bridge = ChatBridge(self)
+        self._chat_channel.registerObject("bridge", self._chat_bridge)
+        self._chat_webview.page().setWebChannel(self._chat_channel)
+        
+        # Connect bridge signals
+        self._chat_bridge.web_view_ready.connect(self._on_webview_ready)
+        
+        # Track WebView ready state
+        self._webview_ready = False
+        self._pending_webview_ops = []
+        
+        # Load the HTML template
+        template_path = Path(__file__).parent / "chat_template.html"
+        if template_path.exists():
+            self._chat_webview.setUrl(QUrl.fromLocalFile(str(template_path)))
+        else:
+            logger.error(f"Chat template not found: {template_path}")
+            # Fallback minimal HTML
+            self._chat_webview.setHtml("""
+                <!DOCTYPE html>
+                <html>
+                <body style="background:#1e1e1e;color:#ccc;font-family:sans-serif;padding:20px;">
+                    <p>Chat template not found. Please check installation.</p>
+                </body>
+                </html>
+            """)
+    
+    def _on_webview_ready(self):
+        """Called when chat WebView is ready."""
+        self._webview_ready = True
+        
+        # Set welcome text from translation
+        welcome_title = "GitHub Copilot"
+        welcome_msg = S.copilot.welcome_message if hasattr(S.copilot, 'welcome_message') else "Sign in to start chatting."
+        self._run_chat_js(f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(welcome_msg)})")
+        
+        # Execute pending operations
+        for op in self._pending_webview_ops:
+            self._run_chat_js(op)
+        self._pending_webview_ops.clear()
+        
+        logger.debug("Chat WebView ready")
+    
+    def _run_chat_js(self, code: str):
+        """Run JavaScript in the chat WebView."""
+        if self._webview_ready:
+            self._chat_webview.page().runJavaScript(code)
+        else:
+            self._pending_webview_ops.append(code)
+
     def _connect_signals(self):
         """Connect internal signals."""
         self._send_btn.clicked.connect(self._on_send)
@@ -1040,8 +1089,7 @@ class CopilotChatPanel(QWidget):
 
         self._input.clear()
 
-        # Hide welcome message
-        self._welcome_label.hide()
+        # Hide welcome message (done automatically in _add_message via WebView)
 
         # Add user message
         self._add_message("user", text)
@@ -1216,70 +1264,65 @@ class CopilotChatPanel(QWidget):
         """Add a message to the chat."""
         self._messages.append({"role": role, "content": content})
 
-        widget = ChatMessageWidget(role, content)
-        # Insert before the stretch at the end
-        count = self._messages_layout.count()
-        self._messages_layout.insertWidget(count - 1, widget)
-
-        # NOTE: Do NOT set _current_assistant_widget here!
-        # That is only for streaming responses, handled in _on_response_chunk
-
-        # Scroll to bottom
-        self._scroll_to_bottom()
+        # Generate unique ID for this message
+        msg_id = f"msg_{len(self._messages)}_{id(content) % 10000}"
+        
+        # Add message via WebView JS
+        role_js = "error" if role == "assistant" and content.startswith("Error:") else role
+        content_escaped = json.dumps(content)
+        self._run_chat_js(f"addMessage({json.dumps(role_js)}, {content_escaped}, {json.dumps(msg_id)})")
+        
+        # Hide welcome on first message
+        self._run_chat_js("hideWelcome()")
 
     def _scroll_to_bottom(self):
-        """Scroll the messages area to the bottom with delay for layout update."""
-        # Delay scroll to allow layout to update first
-        QTimer.singleShot(50, self._do_scroll_to_bottom)
-
-    def _do_scroll_to_bottom(self):
-        """Actually perform the scroll."""
-        scrollbar = self._scroll_area.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        """Scroll the messages area to the bottom via WebView."""
+        self._run_chat_js("scrollToBottom()")
 
     def _on_response_chunk(self, chunk: str):
         """Handle streaming response chunk."""
         # Hide thinking indicator on first chunk
         self._hide_thinking_indicator()
         
-        if self._current_assistant_widget:
-            self._current_assistant_widget.append_content(chunk)
-            self._scroll_to_bottom()
+        if self._current_stream_id:
+            # Stream to existing message
+            chunk_escaped = json.dumps(chunk)
+            self._run_chat_js(f"streamChunk({chunk_escaped})")
         else:
-            # Create new assistant message widget for streaming
+            # Start a new streaming message
             self._messages.append({"role": "assistant", "content": chunk})
-            widget = ChatMessageWidget("assistant", chunk)
-            count = self._messages_layout.count()
-            self._messages_layout.insertWidget(count - 1, widget)
-            self._current_assistant_widget = widget
-            self._scroll_to_bottom()
+            self._current_stream_id = f"stream_{len(self._messages)}"
+            self._run_chat_js("startStreaming()")
+            chunk_escaped = json.dumps(chunk)
+            self._run_chat_js(f"streamChunk({chunk_escaped})")
 
     def _on_response_complete(self, full_text: str):
         """Handle complete response."""
         self._set_loading(False)
         self._hide_thinking_indicator()
         
-        # Mark thinking widget as complete
+        # End streaming in WebView
+        self._run_chat_js("endStreaming()")
+        
+        # Mark thinking widget as complete (legacy - not used with WebView)
         if self._current_thinking_widget:
-            self._current_thinking_widget.set_complete()
             self._current_thinking_widget = None
         
-        # Mark actions widget as complete
+        # Mark actions widget as complete (legacy - not used with WebView)
         if self._current_actions_widget:
-            self._current_actions_widget.set_complete()
             self._current_actions_widget = None
         
         # Clear active tool calls tracking
         self._active_tool_calls.clear()
         
-        if not self._current_assistant_widget:
+        if not self._current_stream_id:
             self._add_message("assistant", full_text)
         else:
             # Update the last message content in history
             if self._messages and self._messages[-1]["role"] == "assistant":
                 self._messages[-1]["content"] = full_text
-        self._current_assistant_widget = None
-        self._scroll_to_bottom()
+        self._current_stream_id = None
+        
         # Auto-save session after each exchange
         self._save_current_session()
 
@@ -1288,85 +1331,54 @@ class CopilotChatPanel(QWidget):
         self._set_loading(False)
         self._hide_thinking_indicator()
         
-        # Mark thinking widget as complete on error too
-        if self._current_thinking_widget:
-            self._current_thinking_widget.set_complete()
-            self._current_thinking_widget = None
+        # End any streaming
+        self._run_chat_js("endStreaming()")
+        self._current_stream_id = None
         
-        # Mark actions widget as complete on error
-        if self._current_actions_widget:
-            self._current_actions_widget.set_complete()
-            self._current_actions_widget = None
+        # Mark widgets as complete (legacy)
+        self._current_thinking_widget = None
+        self._current_actions_widget = None
         
         # Clear active tool calls tracking
         self._active_tool_calls.clear()
         
         self._add_message("assistant", f"Error: {error}")
-        self._current_assistant_widget = None
 
     def _show_thinking_indicator(self):
-        """Show the animated thinking indicator."""
-        self._hide_thinking_indicator()  # Remove any existing
-        self._thinking_indicator = ThinkingIndicatorWidget()
-        count = self._messages_layout.count()
-        self._messages_layout.insertWidget(count - 1, self._thinking_indicator)
-        self._scroll_to_bottom()
+        """Show the animated thinking indicator via WebView."""
+        self._run_chat_js("showThinking()")
 
     def _hide_thinking_indicator(self):
-        """Hide and remove the thinking indicator."""
-        if self._thinking_indicator:
-            self._thinking_indicator.stop()
-            idx = self._messages_layout.indexOf(self._thinking_indicator)
-            if idx >= 0:
-                self._messages_layout.takeAt(idx)
-            self._thinking_indicator.deleteLater()
-            self._thinking_indicator = None
+        """Hide the thinking indicator via WebView."""
+        self._run_chat_js("hideThinking()")
 
     def _on_tool_called(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
-        """Handle tool call from Copilot - add to unified actions widget."""
+        """Handle tool call from Copilot - show in WebView."""
         logger.info(f"Tool called: {tool_name}({arguments})")
         
-        # Use single unified widget for all tool calls
-        if not hasattr(self, '_current_actions_widget') or self._current_actions_widget is None:
-            self._current_actions_widget = ToolCallWidget()
-            count = self._messages_layout.count()
-            self._messages_layout.insertWidget(count - 1, self._current_actions_widget)
-        
-        # Add action to the widget
-        self._current_actions_widget.add_action(tool_name, arguments, tool_call_id)
+        # Show tool use in WebView
+        tool_name_escaped = json.dumps(tool_name)
+        self._run_chat_js(f"addToolUse({tool_name_escaped})")
         
         # Track by name for later result update
-        self._active_tool_calls[tool_name] = self._current_actions_widget
-        
-        # Auto-scroll to show tool call
-        QTimer.singleShot(50, self._scroll_to_bottom)
+        self._active_tool_calls[tool_name] = True
         
         # Emit signal for external listeners (output panel)
         self.tool_call_requested.emit(tool_name, arguments)
 
     def _on_tool_result(self, tool_name: str, result: str):
-        """Handle tool execution result - update the actions widget."""
+        """Handle tool execution result."""
         logger.info(f"Tool result: {tool_name} -> {result[:100]}...")
-        
-        # Update the unified widget
-        if hasattr(self, '_current_actions_widget') and self._current_actions_widget:
-            is_error = "error" in result.lower()[:50]
-            self._current_actions_widget.update_action(tool_name, result, is_error)
+        # Tool results are implicitly handled - the assistant message will follow
 
     def _on_thinking(self, text: str):
-        """Handle reasoning/thinking text from Copilot - show in collapsible widget."""
+        """Handle reasoning/thinking text from Copilot."""
         if not text.strip():
             return
         
         logger.debug(f"Thinking: {text[:50]}...")
-        
-        # Create or update thinking widget
-        if not self._current_thinking_widget:
-            self._current_thinking_widget = ThinkingContentWidget()
-            count = self._messages_layout.count()
-            self._messages_layout.insertWidget(count - 1, self._current_thinking_widget)
-        
-        self._current_thinking_widget.append_content(text)
+        # Thinking is handled via showThinking/hideThinking in WebView
+        # The actual thinking text is not displayed in WebView (keeping it simple)
 
     def _on_models_changed(self, models: list):
         """Handle dynamic model list update from SDK."""
@@ -1516,14 +1528,9 @@ class CopilotChatPanel(QWidget):
     def clear_chat(self):
         """Clear all messages."""
         self._messages.clear()
-        # Remove all message widgets
-        while self._messages_layout.count() > 1:  # Keep the stretch
-            item = self._messages_layout.takeAt(0)
-            widget = item.widget()
-            if widget and widget != self._welcome_label:
-                widget.deleteLater()
-        self._welcome_label.show()
-        self._current_assistant_widget = None
+        # Clear messages in WebView
+        self._run_chat_js("clearMessages()")
+        self._current_stream_id = None
         self._current_session_id = None
 
     # === Session Persistence ===
@@ -1605,8 +1612,7 @@ class CopilotChatPanel(QWidget):
                 messages = session.get("messages", [])
                 for msg in messages:
                     self._add_message(msg["role"], msg["content"])
-                if messages:
-                    self._welcome_label.hide()
+                # Welcome is auto-hidden when messages are added
                 return True
         return False
 

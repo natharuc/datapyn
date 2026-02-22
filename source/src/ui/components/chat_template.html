@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <style>
+        :root {
+            --bg-primary: #1e1e1e;
+            --bg-secondary: #252526;
+            --bg-tertiary: #2d2d30;
+            --text-primary: #cccccc;
+            --text-secondary: #9d9d9d;
+            --text-tertiary: #6d6d6d;
+            --border-default: #3c3c3c;
+            --accent-primary: #0078d4;
+            --accent-hover: #1e90ff;
+            --user-bubble: #0078d4;
+            --assistant-bubble: #2d2d30;
+            --error-bg: #442222;
+            --error-border: #ff4444;
+            --radius: 8px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        #chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #messages::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #messages::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+
+        #messages::-webkit-scrollbar-thumb {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        #messages::-webkit-scrollbar-thumb:hover {
+            background: var(--text-tertiary);
+        }
+
+        /* Welcome message */
+        #welcome {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            text-align: center;
+            color: var(--text-tertiary);
+            padding: 40px 20px;
+        }
+
+        #welcome.hidden {
+            display: none;
+        }
+
+        #welcome h2 {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+
+        #welcome p {
+            font-size: 13px;
+            max-width: 280px;
+        }
+
+        /* Message bubbles */
+        .message {
+            display: flex;
+            flex-direction: column;
+            max-width: 85%;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            align-self: flex-end;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+        }
+
+        .message.error {
+            align-self: flex-start;
+        }
+
+        .bubble {
+            padding: 10px 14px;
+            border-radius: var(--radius);
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            hyphens: auto;
+        }
+
+        .message.user .bubble {
+            background-color: var(--user-bubble);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .bubble {
+            background-color: var(--assistant-bubble);
+            border: 1px solid var(--border-default);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.error .bubble {
+            background-color: var(--error-bg);
+            border: 1px solid var(--error-border);
+            color: #ff6b6b;
+        }
+
+        .timestamp {
+            font-size: 10px;
+            color: var(--text-tertiary);
+            margin-top: 4px;
+            padding: 0 4px;
+        }
+
+        .message.user .timestamp {
+            text-align: right;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        /* Markdown content */
+        .bubble p {
+            margin: 0 0 8px 0;
+        }
+
+        .bubble p:last-child {
+            margin-bottom: 0;
+        }
+
+        .bubble code {
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+            font-size: 12px;
+        }
+
+        .bubble pre {
+            background-color: #1a1a1a;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 8px 0;
+            overflow-x: auto;
+            border: 1px solid var(--border-default);
+        }
+
+        .bubble pre code {
+            background: none;
+            padding: 0;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .bubble ul, .bubble ol {
+            margin: 8px 0;
+            padding-left: 20px;
+        }
+
+        .bubble li {
+            margin: 4px 0;
+        }
+
+        .bubble a {
+            color: var(--accent-hover);
+            text-decoration: none;
+        }
+
+        .bubble a:hover {
+            text-decoration: underline;
+        }
+
+        .bubble blockquote {
+            border-left: 3px solid var(--accent-primary);
+            padding-left: 12px;
+            margin: 8px 0;
+            color: var(--text-secondary);
+        }
+
+        .bubble table {
+            border-collapse: collapse;
+            margin: 8px 0;
+            width: 100%;
+        }
+
+        .bubble th, .bubble td {
+            border: 1px solid var(--border-default);
+            padding: 6px 10px;
+            text-align: left;
+        }
+
+        .bubble th {
+            background-color: var(--bg-tertiary);
+        }
+
+        /* Thinking indicator */
+        .thinking {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 10px 14px;
+            background-color: var(--assistant-bubble);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius);
+            align-self: flex-start;
+        }
+
+        .thinking.hidden {
+            display: none;
+        }
+
+        .thinking-text {
+            color: var(--text-tertiary);
+            font-style: italic;
+        }
+
+        .thinking-dots {
+            display: flex;
+            gap: 3px;
+        }
+
+        .thinking-dots span {
+            width: 4px;
+            height: 4px;
+            background-color: var(--text-tertiary);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out;
+        }
+
+        .thinking-dots span:nth-child(1) { animation-delay: 0s; }
+        .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Tool use indicator */
+        .tool-use {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background-color: var(--bg-tertiary);
+            border-left: 3px solid var(--accent-primary);
+            border-radius: 0 var(--radius) var(--radius) 0;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin: 4px 0;
+        }
+
+        .tool-use-icon {
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="messages">
+            <div id="welcome">
+                <h2>Welcome to GitHub Copilot</h2>
+                <p>Sign in with your GitHub account to start chatting. Copilot can help with SQL queries, Python code, and data analysis.</p>
+            </div>
+            <div id="thinking" class="thinking hidden">
+                <span class="thinking-text">thinking</span>
+                <div class="thinking-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var pyBridge = null;
+        var currentStreamingId = null;
+
+        // Initialize QWebChannel
+        function initWebChannel() {
+            if (typeof QWebChannel === 'undefined') {
+                setTimeout(initWebChannel, 50);
+                return;
+            }
+            new QWebChannel(qt.webChannelTransport, function(channel) {
+                pyBridge = channel.objects.bridge;
+                if (pyBridge && pyBridge.onWebViewReady) {
+                    pyBridge.onWebViewReady();
+                }
+            });
+        }
+        initWebChannel();
+
+        // Configure marked for markdown rendering
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    try {
+                        return hljs.highlight(code, { language: lang }).value;
+                    } catch (e) {}
+                }
+                return hljs.highlightAuto(code).value;
+            },
+            breaks: true,
+            gfm: true
+        });
+
+        function getTimestamp() {
+            const now = new Date();
+            return now.getHours().toString().padStart(2, '0') + ':' + 
+                   now.getMinutes().toString().padStart(2, '0');
+        }
+
+        function hideWelcome() {
+            document.getElementById('welcome').classList.add('hidden');
+        }
+
+        function showWelcome() {
+            document.getElementById('welcome').classList.remove('hidden');
+        }
+
+        function setWelcomeText(title, message) {
+            const welcome = document.getElementById('welcome');
+            welcome.querySelector('h2').textContent = title;
+            welcome.querySelector('p').textContent = message;
+        }
+
+        function addMessage(role, content, id) {
+            hideWelcome();
+            
+            const messages = document.getElementById('messages');
+            const thinking = document.getElementById('thinking');
+            
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message ' + role;
+            if (id) msgDiv.id = 'msg-' + id;
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            
+            // Render markdown for assistant messages
+            if (role === 'assistant' || role === 'error') {
+                bubble.innerHTML = marked.parse(content);
+            } else {
+                bubble.textContent = content;
+            }
+            
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = getTimestamp();
+            
+            msgDiv.appendChild(bubble);
+            msgDiv.appendChild(timestamp);
+            
+            // Insert before thinking indicator
+            messages.insertBefore(msgDiv, thinking);
+            
+            scrollToBottom();
+            return msgDiv.id || null;
+        }
+
+        function appendToMessage(id, content) {
+            const msgDiv = document.getElementById('msg-' + id);
+            if (msgDiv) {
+                const bubble = msgDiv.querySelector('.bubble');
+                const currentText = bubble.getAttribute('data-raw') || '';
+                const newText = currentText + content;
+                bubble.setAttribute('data-raw', newText);
+                bubble.innerHTML = marked.parse(newText);
+                scrollToBottom();
+            }
+        }
+
+        function startStreaming() {
+            currentStreamingId = 'stream-' + Date.now();
+            hideWelcome();
+            
+            const messages = document.getElementById('messages');
+            const thinking = document.getElementById('thinking');
+            
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message assistant';
+            msgDiv.id = 'msg-' + currentStreamingId;
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            bubble.setAttribute('data-raw', '');
+            
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = getTimestamp();
+            
+            msgDiv.appendChild(bubble);
+            msgDiv.appendChild(timestamp);
+            
+            messages.insertBefore(msgDiv, thinking);
+            
+            return currentStreamingId;
+        }
+
+        function streamChunk(content) {
+            if (currentStreamingId) {
+                appendToMessage(currentStreamingId, content);
+            }
+        }
+
+        function endStreaming() {
+            currentStreamingId = null;
+        }
+
+        function showThinking() {
+            document.getElementById('thinking').classList.remove('hidden');
+            scrollToBottom();
+        }
+
+        function hideThinking() {
+            document.getElementById('thinking').classList.add('hidden');
+        }
+
+        function addToolUse(toolName) {
+            const messages = document.getElementById('messages');
+            const thinking = document.getElementById('thinking');
+            
+            const toolDiv = document.createElement('div');
+            toolDiv.className = 'tool-use';
+            toolDiv.innerHTML = '<span class="tool-use-icon">&#9881;</span><span>Using: ' + toolName + '</span>';
+            
+            messages.insertBefore(toolDiv, thinking);
+            scrollToBottom();
+        }
+
+        function clearMessages() {
+            const messages = document.getElementById('messages');
+            const welcome = document.getElementById('welcome');
+            const thinking = document.getElementById('thinking');
+            
+            // Remove all children except welcome and thinking
+            while (messages.firstChild) {
+                messages.removeChild(messages.firstChild);
+            }
+            
+            messages.appendChild(welcome);
+            messages.appendChild(thinking);
+            
+            showWelcome();
+            hideThinking();
+        }
+
+        function scrollToBottom() {
+            const messages = document.getElementById('messages');
+            setTimeout(function() {
+                messages.scrollTop = messages.scrollHeight;
+            }, 10);
+        }
+
+        function setTheme(colors) {
+            const root = document.documentElement;
+            if (colors.bg_primary) root.style.setProperty('--bg-primary', colors.bg_primary);
+            if (colors.bg_secondary) root.style.setProperty('--bg-secondary', colors.bg_secondary);
+            if (colors.bg_tertiary) root.style.setProperty('--bg-tertiary', colors.bg_tertiary);
+            if (colors.text_primary) root.style.setProperty('--text-primary', colors.text_primary);
+            if (colors.text_secondary) root.style.setProperty('--text-secondary', colors.text_secondary);
+            if (colors.text_tertiary) root.style.setProperty('--text-tertiary', colors.text_tertiary);
+            if (colors.border_default) root.style.setProperty('--border-default', colors.border_default);
+            if (colors.accent_primary) root.style.setProperty('--accent-primary', colors.accent_primary);
+            if (colors.user_bubble) root.style.setProperty('--user-bubble', colors.user_bubble);
+            if (colors.assistant_bubble) root.style.setProperty('--assistant-bubble', colors.assistant_bubble);
+        }
+
+        // Expose functions to Python
+        window.addMessage = addMessage;
+        window.appendToMessage = appendToMessage;
+        window.startStreaming = startStreaming;
+        window.streamChunk = streamChunk;
+        window.endStreaming = endStreaming;
+        window.showThinking = showThinking;
+        window.hideThinking = hideThinking;
+        window.addToolUse = addToolUse;
+        window.clearMessages = clearMessages;
+        window.setWelcomeText = setWelcomeText;
+        window.showWelcome = showWelcome;
+        window.hideWelcome = hideWelcome;
+        window.setTheme = setTheme;
+        window.scrollToBottom = scrollToBottom;
+    </script>
+</body>
+</html>
