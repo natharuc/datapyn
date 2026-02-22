@@ -448,8 +448,8 @@ class MainWindow(DockingMainWindow):
         self._schema_service.schema_loaded.connect(self._on_schema_loaded)
 
         # Copilot integration (MCP server + client)
-        self._mcp_server = MCPServer()
-        self._copilot_client = CopilotClient()
+        self._mcp_server = MCPServer() if MCPServer else None
+        self._copilot_client = CopilotClient() if CopilotClient else None
         
         # LSP server manager for fast inline completions
         from src.services.copilot import CopilotServerManager, is_copilot_server_available
@@ -531,7 +531,8 @@ class MainWindow(DockingMainWindow):
         self._update_window_title()
 
         # Initialize MCP server with main window reference
-        self._mcp_server.set_main_window(self)
+        if self._mcp_server:
+            self._mcp_server.set_main_window(self)
 
     # === DELEGATION PROPERTIES FOR CURRENT SESSION ===
 
@@ -5753,7 +5754,7 @@ class MainWindow(DockingMainWindow):
             self._schema_service.cleanup()
 
         # Cleanup Copilot client
-        if hasattr(self, "_copilot_client"):
+        if hasattr(self, "_copilot_client") and self._copilot_client:
             self._copilot_client.cleanup()
 
         # Cleanup docking manager timers
