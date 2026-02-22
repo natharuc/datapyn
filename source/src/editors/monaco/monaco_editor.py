@@ -130,15 +130,38 @@ class MonacoEditor(QWidget):
     
     def _load_editor(self):
         """Load the Monaco editor HTML template."""
-        template_path = Path(__file__).parent / "monaco_template.html"
+        template_path = self._get_template_path()
         
-        if template_path.exists():
+        if template_path and template_path.exists():
             # Load from local file - LocalContentCanAccessRemoteUrls enabled in _setup_ui
+            logger.debug(f"[MONACO] Loading template from: {template_path}")
             self._web_view.setUrl(QUrl.fromLocalFile(str(template_path)))
         else:
             # Fallback: load from string
+            logger.warning(f"[MONACO] Template not found, using fallback HTML. Tried: {template_path}")
             html = self._get_fallback_html()
             self._web_view.setHtml(html, QUrl("https://unpkg.com/"))
+    
+    def _get_template_path(self) -> Optional[Path]:
+        """Get the path to monaco_template.html, handling PyInstaller packaging."""
+        import sys
+        
+        # Check if running in PyInstaller bundle
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            # Running in PyInstaller bundle - look in _MEIPASS
+            base_path = Path(sys._MEIPASS)
+            template_path = base_path / "src" / "editors" / "monaco" / "monaco_template.html"
+            if template_path.exists():
+                return template_path
+            # Also try relative to executable
+            exe_path = Path(sys.executable).parent
+            template_path = exe_path / "src" / "editors" / "monaco" / "monaco_template.html"
+            if template_path.exists():
+                return template_path
+        
+        # Development mode - use relative path from __file__
+        template_path = Path(__file__).parent / "monaco_template.html"
+        return template_path
     
     def _get_fallback_html(self) -> str:
         """Return minimal fallback HTML if template not found."""
