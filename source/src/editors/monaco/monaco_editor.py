@@ -32,9 +32,12 @@ class MonacoPage(QWebEnginePage):
     
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         """Override to capture JS console.log messages."""
-        # Log all Monaco-related messages for debugging
-        if "[Monaco]" in message or "completion" in message.lower():
-            logger.info(f"[JS L{lineNumber}] {message}")
+        # Log Monaco messages at debug level to reduce spam
+        # Only log errors at info level
+        if level == self.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            logger.error(f"[JS L{lineNumber}] {message}")
+        elif "[Monaco]" in message or "completion" in message.lower():
+            logger.debug(f"[JS L{lineNumber}] {message}")
 
 
 class MonacoEditor(QWidget):
@@ -209,12 +212,12 @@ class MonacoEditor(QWidget):
     def _run_js_when_ready(self, script: str, callback=None):
         """Execute JS when ready, or queue if not ready yet."""
         if self._is_ready:
-            # Log completion-related JS calls
+            # Log completion-related JS calls at debug level (less spam)
             if "receiveCompletion" in script:
-                logger.info(f"[MONACO] Running JS: {script[:80]}...")
+                logger.debug(f"[MONACO] Running JS: {script[:80]}...")
             self._run_js(script, callback)
         else:
-            logger.info(f"[MONACO] Queueing JS (not ready): {script[:40]}...")
+            logger.debug(f"[MONACO] Queueing JS (not ready): {script[:40]}...")
             self._pending_operations.append(
                 (lambda s=script, cb=callback: self._run_js(s, cb), ())
             )
@@ -472,10 +475,10 @@ class MonacoEditor(QWidget):
         Args:
             text: The completion text to show as ghost text
         """
-        logger.info(f"[MONACO] provide_completion called: {len(text) if text else 0} chars, is_ready={self._is_ready}")
+        logger.debug(f"[MONACO] provide_completion called: {len(text) if text else 0} chars, is_ready={self._is_ready}")
         if not text:
-            logger.info("[MONACO] provide_completion: empty text, skipping")
+            logger.debug("[MONACO] provide_completion: empty text, skipping")
             return
         escaped = json.dumps(text)
-        logger.info(f"[MONACO] Calling receiveCompletion with {len(escaped)} escaped chars")
+        logger.debug(f"[MONACO] Calling receiveCompletion with {len(escaped)} escaped chars")
         self._run_js_when_ready(f"receiveCompletion({escaped})")
