@@ -21,6 +21,7 @@ import os
 import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
+from src.state.app_state import ApplicationState
 from src.editors.code_block import CodeBlock
 from src.language import S
 
@@ -332,6 +333,25 @@ class BlockEditor(QWidget):
     def get_current_executing_block(self) -> Optional[CodeBlock]:
         """Return currently executing block"""
         return self._current_executing_block
+
+    # === Autocomplete Management ===
+    
+    def update_python_completions_all(self):
+        """Update Python completions for all Python blocks with current namespace."""
+        app_state = ApplicationState.instance()
+        namespace = app_state.get_namespace()
+        
+        for block in self._blocks:
+            if block.get_language() == "python" and hasattr(block.editor, "set_python_namespace"):
+                block.editor.set_python_namespace(namespace)
+    
+    def set_database_context(self, context: str):
+        """Set database context for SQL completions (Monaco)."""
+        self._database_context = context
+        # Propagate to existing blocks
+        for block in self._blocks:
+            if hasattr(block, "set_database_context"):
+                block.set_database_context(context)
 
     # === Block Management ===
 
