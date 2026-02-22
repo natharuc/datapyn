@@ -351,12 +351,31 @@
         .tool-group-list {
             max-height: 0;
             overflow: hidden;
-            transition: max-height 0.3s ease;
+            transition: max-height 0.3s ease, padding 0.3s ease;
             background-color: rgba(0, 0, 0, 0.15);
         }
 
         .tool-group.expanded .tool-group-list {
-            max-height: 500px;
+            max-height: 200px;
+            overflow-y: auto;
+            padding-bottom: 4px;
+        }
+
+        .tool-group.expanded .tool-group-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .tool-group.expanded .tool-group-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .tool-group.expanded .tool-group-list::-webkit-scrollbar-thumb {
+            background: var(--border-default);
+            border-radius: 3px;
+        }
+
+        .tool-group.expanded .tool-group-list::-webkit-scrollbar-thumb:hover {
+            background: var(--text-tertiary);
         }
 
         .tool-item {
