@@ -342,6 +342,9 @@ class CopilotWorker(QObject):
         """Async chat implementation."""
         import asyncio
         
+        # Reset cancellation flag at start of each chat
+        self._cancelled = False
+        
         SDKClient, SDKTool, EventType, import_err = _try_import_sdk()
         if SDKClient is None:
             self.error.emit(f"Copilot SDK not available: {import_err}")

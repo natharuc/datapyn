@@ -23,6 +23,7 @@ from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
 import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
+from src.state.app_state import ApplicationState
 from src.editors.editor_config import get_code_editor_class
 from src.language import S
 
@@ -378,6 +379,10 @@ class CodeBlock(QFrame):
         self.editor.set_language(self._default_language)
         self._update_style()
         self._update_connection_panel_visibility()  # Update connection panel visibility (after language)
+        
+        # Initialize completions based on language
+        if self._default_language == "python":
+            self._update_python_completions()
 
     def _setup_ui(self):
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Plain)
@@ -680,6 +685,12 @@ class CodeBlock(QFrame):
         text = self.get_code()
         self._completion_service.open_document(uri, language, text)
     
+    def _update_python_completions(self):
+        """Update Python completions with current namespace."""
+        app_state = ApplicationState.instance()
+        namespace = app_state.get_namespace()
+        self.set_python_namespace(namespace)
+    
     def _get_extension(self) -> str:
         """Get file extension for current language."""
         lang = self.get_language()
@@ -748,6 +759,10 @@ class CodeBlock(QFrame):
         
         # Update document info for LSP with new language
         self._update_document_info()
+        
+        # Update Python completions if switching to Python
+        if lang == "python":
+            self._update_python_completions()
         
         self.language_changed.emit(self, lang)
 

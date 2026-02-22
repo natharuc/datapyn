@@ -21,6 +21,7 @@ import os
 import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
+from src.state.app_state import ApplicationState
 from src.editors.code_block import CodeBlock
 from src.language import S
 
@@ -86,6 +87,7 @@ class BlockEditor(QWidget):
         self._copilot_client = None  # Copilot client for inline completions
         self._lsp_client = None  # LSP client for inline completions
         self._database_context = ""  # Database schema context for SQL completions
+        self._sql_schema = {}  # Cached SQL schema for completions
 
         self._setup_ui()
 
@@ -333,6 +335,50 @@ class BlockEditor(QWidget):
         """Return currently executing block"""
         return self._current_executing_block
 
+    # === Autocomplete Management ===
+    
+    def update_python_completions_all(self):
+        """Update Python completions for all Python blocks with current namespace."""
+        app_state = ApplicationState.instance()
+        namespace = app_state.get_namespace()
+        
+        for block in self._blocks:
+            if block.get_language() == "python" and hasattr(block.editor, "set_python_namespace"):
+                block.editor.set_python_namespace(namespace)
+    
+    def set_database_context(self, context: str):
+        """Set database context for SQL completions (Monaco)."""
+        self._database_context = context
+        # Propagate to existing blocks
+        for block in self._blocks:
+            if hasattr(block, "set_database_context"):
+                block.set_database_context(context)
+    
+    def set_sql_schema(self, schema: dict):
+        """Set SQL schema for autocomplete in all SQL blocks.
+        
+        Args:
+            schema: Dict with tables, columns, database info from SchemaService
+        """
+        self._sql_schema = schema
+        # Propagate to existing SQL blocks
+        for block in self._blocks:
+            if block.get_language() == "sql" and hasattr(block.editor, "set_sql_schema"):
+                block.editor.set_sql_schema(schema)
+    
+    def _on_block_language_changed(self, block: CodeBlock, language: str):
+        """Handle block language change - update completions."""
+        if language == "sql" and self._sql_schema:
+            # Block switched to SQL - apply cached schema
+            if hasattr(block.editor, "set_sql_schema"):
+                block.editor.set_sql_schema(self._sql_schema)
+        elif language == "python":
+            # Block switched to Python - apply namespace
+            app_state = ApplicationState.instance()
+            namespace = app_state.get_namespace()
+            if hasattr(block.editor, "set_python_namespace"):
+                block.editor.set_python_namespace(namespace)
+
     # === Block Management ===
 
     def add_block(self, language: str = None, code: str = "", after_block: CodeBlock = None) -> CodeBlock:
@@ -369,6 +415,10 @@ class BlockEditor(QWidget):
         # Pass database context for SQL completions (Monaco)
         if self._database_context:
             block.set_database_context(self._database_context)
+        
+        # Pass SQL schema for completions (Monaco)
+        if self._sql_schema and language == "sql" and hasattr(block.editor, "set_sql_schema"):
+            block.editor.set_sql_schema(self._sql_schema)
 
         # Connect signals
         # execute_requested runs only that block
@@ -382,6 +432,7 @@ class BlockEditor(QWidget):
         block.database_changed.connect(self.block_database_changed.emit)
         block.completion_log.connect(self.completion_log.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
+        block.language_changed.connect(lambda b, lang: self._on_block_language_changed(b, lang))
 
         # Determine position
         if after_block and after_block in self._blocks:

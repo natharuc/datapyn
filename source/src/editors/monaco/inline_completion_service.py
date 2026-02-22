@@ -91,12 +91,14 @@ class InlineCompletionService(QObject):
         self._pending_request = None
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.setInterval(300)  # 300ms debounce (fast)
+        self._debounce_timer.setInterval(500)  # 500ms debounce (prevent flooding)
         self._debounce_timer.timeout.connect(self._execute_pending_request)
         
         # Request tracking
         self._current_request_id = 0
         self._active_request_id = 0
+        self._is_processing = False  # Block concurrent requests
+        self._last_request_prefix = ""  # Deduplicate identical requests
         
         # Document state for LSP
         self._document_uri = ""
@@ -301,6 +303,7 @@ class InlineCompletionService(QObject):
     @pyqtSlot(str)
     def _on_lsp_completion(self, completion: str) -> None:
         """Handle completion from LSP client."""
+        self._is_processing = False  # Release lock
         if completion:
             preview = completion[:60].replace('\n', ' ')
             self._log(f"LSP completion: {preview}...", "info")
@@ -311,6 +314,7 @@ class InlineCompletionService(QObject):
     @pyqtSlot(str)
     def _on_copilot_completion(self, completion: str) -> None:
         """Handle completion from Copilot."""
+        self._is_processing = False  # Release lock
         if completion:
             preview = completion[:60].replace('\n', ' ')
             self._log(f"Chat API completion: {preview}...", "info")
@@ -347,6 +351,16 @@ class InlineCompletionService(QObject):
         if last_line.strip() == "":
             self.completion_ready.emit("")
             return
+        
+        # THROTTLE: Skip if already processing a request
+        if self._is_processing:
+            return
+        
+        # DEDUPLICATE: Skip if same prefix as last request
+        if prefix == self._last_request_prefix:
+            return
+        
+        self._last_request_prefix = prefix
         
         # Cancel any pending request
         self._current_request_id += 1
@@ -386,6 +400,9 @@ class InlineCompletionService(QObject):
         self._pending_request = None
         self._active_request_id = request["id"]
         
+        # Mark as processing to block concurrent requests
+        self._is_processing = True
+        
         last_line = request["prefix"].split('\n')[-1][:40]
         self._log(f"Completion request: '{last_line}' ({request['language']})", "info")
         
@@ -400,6 +417,7 @@ class InlineCompletionService(QObject):
         if local_completion:
             preview = local_completion[:40].replace('\\n', ' ')
             self._log(f"Local completion: {preview}...", "info")
+            self._is_processing = False  # Release lock for local completions
             if request["id"] == self._active_request_id:
                 self.completion_ready.emit(local_completion)
             return
@@ -460,6 +478,7 @@ class InlineCompletionService(QObject):
             f"SDK: {sdk_status} (auth={sdk_auth})",
             "info"  # Changed from debug so users see this
         )
+        self._is_processing = False  # Release lock when no service available
         if request["id"] == self._active_request_id:
             self.completion_ready.emit("")
     

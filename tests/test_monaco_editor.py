@@ -188,7 +188,7 @@ class TestInlineCompletionService:
         service = InlineCompletionService()
         
         assert service._debounce_timer.isSingleShot()
-        assert service._debounce_timer.interval() == 300  # 300ms (fast for Copilot)
+        assert service._debounce_timer.interval() == 500  # 500ms (more aggressive throttling)
     
     def test_service_cancel_request(self):
         """cancel_request should stop pending requests."""

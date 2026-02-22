@@ -145,6 +145,9 @@
                 // Register inline completion provider for ghost text
                 registerInlineCompletionProvider();
                 
+                // Register standard (non-AI) completion providers
+                registerStandardCompletionProviders();
+                
                 // Setup event listeners
                 setupEventListeners();
                 
@@ -532,9 +535,16 @@
         }
         
         // Register standard completions (non-Copilot)
-        function registerCompletions(completions) {
-            // completions: [{ label, kind, insertText, detail }]
-            monaco.languages.registerCompletionItemProvider(currentLanguage, {
+        // Store completions by category for context-aware filtering
+        let allCompletions = [];
+        let tableCompletions = [];
+        let columnCompletions = [];
+        let keywordCompletions = [];
+        let columnsByTable = {}; // { tableName: [columns] }
+        
+        // Register completion providers ONCE (called after Monaco is loaded)
+        function registerStandardCompletionProviders() {
+            monaco.languages.registerCompletionItemProvider('sql', {
                 provideCompletionItems: function(model, position) {
                     const word = model.getWordUntilPosition(position);
                     const range = {
@@ -544,8 +554,21 @@
                         endColumn: word.endColumn
                     };
                     
+                    // Get text before cursor for context analysis
+                    const textBeforeCursor = model.getValueInRange({
+                        startLineNumber: 1,
+                        startColumn: 1,
+                        endLineNumber: position.lineNumber,
+                        endColumn: position.column
+                    });
+                    
+                    // Filter completions based on context
+                    let filtered = filterCompletionsByContext(textBeforeCursor, 'sql');
+                    
+                    console.log('[MONACO] provideCompletionItems SQL: textBefore=', textBeforeCursor.slice(-50), 'allCompletions=', allCompletions.length, 'filtered=', filtered.length);
+                    
                     return {
-                        suggestions: completions.map(c => ({
+                        suggestions: filtered.map(c => ({
                             label: c.label,
                             kind: getCompletionKind(c.kind),
                             insertText: c.insertText || c.label,
@@ -555,6 +578,124 @@
                     };
                 }
             });
+            
+            monaco.languages.registerCompletionItemProvider('python', {
+                provideCompletionItems: function(model, position) {
+                    const word = model.getWordUntilPosition(position);
+                    const range = {
+                        startLineNumber: position.lineNumber,
+                        endLineNumber: position.lineNumber,
+                        startColumn: word.startColumn,
+                        endColumn: word.endColumn
+                    };
+                    
+                    const textBeforeCursor = model.getValueInRange({
+                        startLineNumber: 1,
+                        startColumn: 1,
+                        endLineNumber: position.lineNumber,
+                        endColumn: position.column
+                    });
+                    
+                    let filtered = filterCompletionsByContext(textBeforeCursor, 'python');
+                    
+                    console.log('[MONACO] provideCompletionItems Python: allCompletions=', allCompletions.length, 'filtered=', filtered.length);
+                    
+                    return {
+                        suggestions: filtered.map(c => ({
+                            label: c.label,
+                            kind: getCompletionKind(c.kind),
+                            insertText: c.insertText || c.label,
+                            detail: c.detail || '',
+                            range: range
+                        }))
+                    };
+                }
+            });
+        }
+        
+        function registerCompletions(completions) {
+            // completions: [{ label, kind, insertText, detail, category, table }]
+            console.log('[MONACO] registerCompletions called with', completions.length, 'items');
+            console.log('[MONACO] Current language:', currentLanguage);
+            
+            allCompletions = completions;
+            
+            // Separate by category for faster filtering
+            tableCompletions = completions.filter(c => c.category === 'table');
+            columnCompletions = completions.filter(c => c.category === 'column');
+            keywordCompletions = completions.filter(c => c.kind === 'keyword');
+            
+            console.log('[MONACO] Filtered:', tableCompletions.length, 'tables,', columnCompletions.length, 'columns,', keywordCompletions.length, 'keywords');
+            
+            // Build table->columns map
+            columnsByTable = {};
+            columnCompletions.forEach(c => {
+                if (c.table) {
+                    if (!columnsByTable[c.table]) {
+                        columnsByTable[c.table] = [];
+                    }
+                    columnsByTable[c.table].push(c);
+                }
+            });
+        }
+        
+        function filterCompletionsByContext(textBefore, language) {
+            if (language === 'sql') {
+                return filterSqlCompletions(textBefore);
+            } else if (language === 'python') {
+                // Python: show all (variables, keywords, packages)
+                return allCompletions;
+            }
+            return allCompletions;
+        }
+        
+        function filterSqlCompletions(textBefore) {
+            const upperText = textBefore.toUpperCase();
+            const lines = textBefore.split('\n');
+            const currentLine = lines[lines.length - 1];
+            
+            // Check for "table." pattern - suggest columns of that table
+            const dotMatch = currentLine.match(/(\w+)\.$/);
+            if (dotMatch) {
+                const tableName = dotMatch[1];
+                const columns = columnsByTable[tableName] || columnsByTable[tableName.toLowerCase()];
+                if (columns && columns.length > 0) {
+                    return columns;
+                }
+            }
+            
+            // Remove comments and strings for cleaner analysis
+            let cleaned = upperText.replace(/--[^\n]*/g, ' ').replace(/'[^']*'/g, "''");
+            
+            // Find last keyword to determine context
+            const tableKeywords = ['FROM', 'JOIN', 'INTO', 'UPDATE', 'TABLE'];
+            const columnKeywords = ['SELECT', 'WHERE', 'ON', 'ORDER BY', 'GROUP BY', 'HAVING', 'SET'];
+            
+            let lastTableKwPos = -1;
+            let lastColumnKwPos = -1;
+            
+            tableKeywords.forEach(kw => {
+                const pos = cleaned.lastIndexOf(kw);
+                if (pos > lastTableKwPos) lastTableKwPos = pos;
+            });
+            
+            columnKeywords.forEach(kw => {
+                const pos = cleaned.lastIndexOf(kw);
+                if (pos > lastColumnKwPos) lastColumnKwPos = pos;
+            });
+            
+            // After FROM/JOIN/etc -> suggest tables only
+            if (lastTableKwPos > lastColumnKwPos && lastTableKwPos > cleaned.length - 100) {
+                return tableCompletions;
+            }
+            
+            // After SELECT/WHERE/etc -> suggest columns + keywords
+            if (lastColumnKwPos > lastTableKwPos && lastColumnKwPos > cleaned.length - 100) {
+                return [...columnCompletions, ...keywordCompletions];
+            }
+            
+            // Default: suggest keywords + tables
+            return [...keywordCompletions, ...tableCompletions];
         }
         
         function getCompletionKind(kind) {

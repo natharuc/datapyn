@@ -32,9 +32,12 @@ class MonacoPage(QWebEnginePage):
     
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         """Override to capture JS console.log messages."""
-        # Log all Monaco-related messages for debugging
-        if "[Monaco]" in message or "completion" in message.lower():
-            logger.info(f"[JS L{lineNumber}] {message}")
+        # Log Monaco messages at debug level to reduce spam
+        # Only log errors at info level
+        if level == self.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            logger.error(f"[JS L{lineNumber}] {message}")
+        elif "[Monaco]" in message or "completion" in message.lower():
+            logger.debug(f"[JS L{lineNumber}] {message}")
 
 
 class MonacoEditor(QWidget):
@@ -209,12 +212,12 @@ class MonacoEditor(QWidget):
     def _run_js_when_ready(self, script: str, callback=None):
         """Execute JS when ready, or queue if not ready yet."""
         if self._is_ready:
-            # Log completion-related JS calls
+            # Log completion-related JS calls at debug level (less spam)
             if "receiveCompletion" in script:
-                logger.info(f"[MONACO] Running JS: {script[:80]}...")
+                logger.debug(f"[MONACO] Running JS: {script[:80]}...")
             self._run_js(script, callback)
         else:
-            logger.info(f"[MONACO] Queueing JS (not ready): {script[:40]}...")
+            logger.debug(f"[MONACO] Queueing JS (not ready): {script[:40]}...")
             self._pending_operations.append(
                 (lambda s=script, cb=callback: self._run_js(s, cb), ())
             )
@@ -416,13 +419,16 @@ class MonacoEditor(QWidget):
     
     def set_sql_schema(self, schema: dict) -> None:
         """Set SQL schema for autocompletion."""
+        logger.info(f"[MONACO] set_sql_schema called with {len(schema.get('tables', []))} tables")
         self._sql_schema = schema
-        # TODO: Register SQL completions in Monaco
+        # Register SQL completions in Monaco
+        self.update_sql_completions(schema)
     
     def set_python_namespace(self, namespace: dict) -> None:
         """Set Python namespace for autocompletion."""
         self._python_namespace = namespace
-        # TODO: Register Python completions in Monaco
+        # Register Python completions in Monaco
+        self.update_python_completions(namespace)
     
     def set_global_imports(self, imports_code: str) -> None:
         """Set global imports for Jedi completion."""
@@ -472,10 +478,167 @@ class MonacoEditor(QWidget):
         Args:
             text: The completion text to show as ghost text
         """
-        logger.info(f"[MONACO] provide_completion called: {len(text) if text else 0} chars, is_ready={self._is_ready}")
+        logger.debug(f"[MONACO] provide_completion called: {len(text) if text else 0} chars, is_ready={self._is_ready}")
         if not text:
-            logger.info("[MONACO] provide_completion: empty text, skipping")
+            logger.debug("[MONACO] provide_completion: empty text, skipping")
             return
         escaped = json.dumps(text)
-        logger.info(f"[MONACO] Calling receiveCompletion with {len(escaped)} escaped chars")
+        logger.debug(f"[MONACO] Calling receiveCompletion with {len(escaped)} escaped chars")
         self._run_js_when_ready(f"receiveCompletion({escaped})")
+    
+    def register_completions(self, completions: list) -> None:
+        """
+        Register standard completions (non-Copilot autocomplete).
+        
+        Args:
+            completions: List of completion items, each with:
+                - label: Display text
+                - kind: Type (keyword, function, variable, class, table, etc)
+                - insertText: Text to insert (optional, defaults to label)
+                - detail: Additional info (optional)
+        """
+        if not completions:
+            return
+        completions_json = json.dumps(completions)
+        self._run_js_when_ready(f"registerCompletions({completions_json})")
+    
+    def update_sql_completions(self, schema: Optional[dict]) -> None:
+        """
+        Update SQL autocomplete with database schema (context-aware).
+        
+        Args:
+            schema: dict with keys:
+                - tables: list of table dicts {"name": ..., "schema": ..., "type": ...}
+                - columns: dict of {table_name: [{"name": ..., "type": ...}]}
+                - database: current database name
+        """
+        if not schema:
+            return
+        
+        completions = []
+        
+        # Add tables with category
+        tables = schema.get("tables", [])
+        for table in tables:
+            # Handle both dict format (from SchemaService) and legacy string format
+            if isinstance(table, dict):
+                table_name = table.get("name", "")
+                table_schema = table.get("schema", "")
+                table_type = table.get("type", "TABLE")
+                detail = f"{table_schema}.{table_name}" if table_schema else table_name
+                if table_type == "VIEW":
+                    detail = f"view: {detail}"
+                else:
+                    detail = f"table: {detail}"
+            else:
+                table_name = str(table)
+                detail = "table"
+            
+            if table_name:
+                completions.append({
+                    "label": table_name,
+                    "kind": "property",
+                    "insertText": table_name,
+                    "detail": detail,
+                    "category": "table"
+                })
+        
+        # Add columns with table reference for context filtering
+        columns = schema.get("columns", {})
+        for table_name, column_list in columns.items():
+            for column in column_list:
+                # Handle both dict format (from SchemaService) and legacy string format
+                if isinstance(column, dict):
+                    column_name = column.get("name", "")
+                    column_type = column.get("type", "")
+                    detail = f"{table_name}.{column_name} ({column_type})" if column_type else f"{table_name}.{column_name}"
+                else:
+                    column_name = str(column)
+                    detail = f"{table_name}.{column_name}"
+                
+                if column_name:
+                    completions.append({
+                        "label": column_name,
+                        "kind": "field",
+                        "insertText": column_name,
+                        "detail": detail,
+                        "category": "column",
+                        "table": table_name
+                    })
+        
+        # Add common SQL keywords
+        sql_keywords = [
+            "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "BETWEEN",
+            "LIKE", "IS", "NULL", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER",
+            "ON", "AS", "ORDER BY", "GROUP BY", "HAVING", "LIMIT", "DISTINCT",
+            "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE",
+            "TABLE", "DROP", "ALTER", "COUNT", "SUM", "AVG", "MIN", "MAX",
+            "CAST", "CASE", "WHEN", "THEN", "ELSE", "END"
+        ]
+        for kw in sql_keywords:
+            completions.append({
+                "label": kw,
+                "kind": "keyword",
+                "insertText": kw,
+                "detail": "SQL keyword"
+            })
+        
+        logger.info(f"[MONACO] Registering {len(completions)} contextual SQL completions ({len(tables)} tables, {sum(len(cols) for cols in columns.values())} columns)")
+        self.register_completions(completions)
+    
+    def update_python_completions(self, variables: Optional[dict]) -> None:
+        """
+        Update Python autocomplete with namespace variables.
+        
+        Args:
+            variables: dict of {var_name: var_type_or_value}
+        """
+        if not variables:
+            return
+        
+        completions = []
+        
+        # Add variables from namespace
+        for var_name, var_info in variables.items():
+            # Skip private/internal variables
+            if var_name.startswith("_"):
+                continue
+            
+            var_type = type(var_info).__name__ if not isinstance(var_info, str) else var_info
+            completions.append({
+                "label": var_name,
+                "kind": "variable",
+                "insertText": var_name,
+                "detail": var_type
+            })
+        
+        # Add common Python keywords/builtins
+        python_keywords = [
+            "def", "class", "if", "elif", "else", "for", "while", "break",
+            "continue", "return", "import", "from", "as", "try", "except",
+            "finally", "with", "lambda", "yield", "assert", "pass", "raise",
+            "True", "False", "None", "and", "or", "not", "in", "is"
+        ]
+        for kw in python_keywords:
+            completions.append({
+                "label": kw,
+                "kind": "keyword",
+                "insertText": kw,
+                "detail": "Python keyword"
+            })
+        
+        # Add common imports/packages
+        common_packages = [
+            "pandas", "pd", "numpy", "np", "datetime", "json", "re", "os",
+            "sys", "math", "random", "collections", "itertools"
+        ]
+        for pkg in common_packages:
+            completions.append({
+                "label": pkg,
+                "kind": "module",
+                "insertText": pkg,
+                "detail": "module"
+            })
+        
+        logger.info(f"[MONACO] Registering {len(completions)} Python completions ({len(variables)} variables)")
+        self.register_completions(completions)
