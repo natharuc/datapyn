@@ -11,6 +11,7 @@ Tool execution is thread-safe via QMetaObject.invokeMethod.
 import json
 import logging
 import os
+import sys
 import time
 import threading
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
     from .mcp_tools import MCPToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# Hide console window on Windows
+_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 # Default models - will be updated from SDK at runtime
 DEFAULT_MODELS = [
@@ -351,6 +355,7 @@ class CopilotWorker(QObject):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                creationflags=_CREATE_NO_WINDOW,
             )
             
             # Wait for process to complete (user authenticates in browser)
@@ -1338,6 +1343,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
                 capture_output=True,
                 text=True,
                 timeout=10,
+                creationflags=_CREATE_NO_WINDOW,
             )
             if result.returncode == 0:
                 return result.stdout.strip()

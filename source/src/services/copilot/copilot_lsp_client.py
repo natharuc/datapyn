@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -17,6 +18,9 @@ from typing import Any, Callable, Dict, List, Optional
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer
 
 logger = logging.getLogger(__name__)
+
+# Hide console window on Windows
+_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 class CopilotLSPClient(QObject):
@@ -105,6 +109,7 @@ class CopilotLSPClient(QObject):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,  # Unbuffered
+                creationflags=_CREATE_NO_WINDOW,
             )
             
             # Start reader thread

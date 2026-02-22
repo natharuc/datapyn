@@ -11,6 +11,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Hide console window on Windows
+_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
 
 def format_python(code: str, line_length: int = 88) -> tuple[str, str | None]:
     """Format Python code using ruff format.
@@ -43,6 +46,7 @@ def format_python(code: str, line_length: int = 88) -> tuple[str, str | None]:
             capture_output=True,
             text=True,
             timeout=10,
+            creationflags=_CREATE_NO_WINDOW,
         )
 
         if result.returncode == 0:
