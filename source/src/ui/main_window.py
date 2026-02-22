@@ -4741,21 +4741,29 @@ class MainWindow(DockingMainWindow):
             if hasattr(widget, "session") and widget.session:
                 session_conn = getattr(widget.session, "connection_name", "") or ""
 
+            # If this is the session's connection, cache schema in BlockEditor
+            # BlockEditor will apply to all SQL blocks and handle language changes
+            if session_conn == connection_name:
+                if hasattr(widget.editor, "set_sql_schema"):
+                    widget.editor.set_sql_schema(schema)
+            
+            # Also handle per-block custom connections
             for block in widget.editor.get_blocks():
-                if not (hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema")):
+                # Only apply SQL schema to SQL blocks
+                block_lang = block.get_language() if hasattr(block, "get_language") else ""
+                if block_lang != "sql":
                     continue
 
                 block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
 
-                if block_conn:
-                    # Block with custom connection: only apply if same connection
-                    if block_conn == connection_name:
+                # Block with custom connection: only apply if same connection
+                if block_conn and block_conn == connection_name:
+                    if hasattr(block.editor, "set_sql_schema"):
                         block.editor.set_sql_schema(schema)
-                        if hasattr(block, "set_available_databases"):
-                            block.set_available_databases(all_databases)
-                elif session_conn == connection_name:
-                    # Block without custom connection: apply if session connection
-                    block.editor.set_sql_schema(schema)
+                    if hasattr(block, "set_available_databases"):
+                        block.set_available_databases(all_databases)
+                elif not block_conn and session_conn == connection_name:
+                    # Block without custom connection uses session - set available databases
                     if hasattr(block, "set_available_databases"):
                         block.set_available_databases(all_databases)
         
@@ -5079,6 +5087,11 @@ class MainWindow(DockingMainWindow):
             blocks_code_context = "\n\n".join(blocks_code_context_parts)
 
             for block in current_widget.editor.get_blocks():
+                # Only pass Python namespace to Python blocks
+                block_lang = block.get_language() if hasattr(block, "get_language") else ""
+                if block_lang != "python":
+                    continue
+                    
                 # Pass namespace to completion service via block
                 if hasattr(block, "set_python_namespace"):
                     block.set_python_namespace(ns_types)

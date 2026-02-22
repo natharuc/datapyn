@@ -508,8 +508,8 @@ class MonacoEditor(QWidget):
         
         Args:
             schema: dict with keys:
-                - tables: list of table names
-                - columns: dict of {table_name: [column_names]}
+                - tables: list of table dicts {"name": ..., "schema": ..., "type": ...}
+                - columns: dict of {table_name: [{"name": ..., "type": ...}]}
                 - database: current database name
         """
         if not schema:
@@ -520,26 +520,51 @@ class MonacoEditor(QWidget):
         # Add tables with category
         tables = schema.get("tables", [])
         for table in tables:
-            completions.append({
-                "label": table,
-                "kind": "property",
-                "insertText": table,
-                "detail": "table",
-                "category": "table"
-            })
+            # Handle both dict format (from SchemaService) and legacy string format
+            if isinstance(table, dict):
+                table_name = table.get("name", "")
+                table_schema = table.get("schema", "")
+                table_type = table.get("type", "TABLE")
+                detail = f"{table_schema}.{table_name}" if table_schema else table_name
+                if table_type == "VIEW":
+                    detail = f"view: {detail}"
+                else:
+                    detail = f"table: {detail}"
+            else:
+                table_name = str(table)
+                detail = "table"
+            
+            if table_name:
+                completions.append({
+                    "label": table_name,
+                    "kind": "property",
+                    "insertText": table_name,
+                    "detail": detail,
+                    "category": "table"
+                })
         
         # Add columns with table reference for context filtering
         columns = schema.get("columns", {})
         for table_name, column_list in columns.items():
             for column in column_list:
-                completions.append({
-                    "label": column,
-                    "kind": "field",
-                    "insertText": column,
-                    "detail": f"{table_name}.{column}",
-                    "category": "column",
-                    "table": table_name
-                })
+                # Handle both dict format (from SchemaService) and legacy string format
+                if isinstance(column, dict):
+                    column_name = column.get("name", "")
+                    column_type = column.get("type", "")
+                    detail = f"{table_name}.{column_name} ({column_type})" if column_type else f"{table_name}.{column_name}"
+                else:
+                    column_name = str(column)
+                    detail = f"{table_name}.{column_name}"
+                
+                if column_name:
+                    completions.append({
+                        "label": column_name,
+                        "kind": "field",
+                        "insertText": column_name,
+                        "detail": detail,
+                        "category": "column",
+                        "table": table_name
+                    })
         
         # Add common SQL keywords
         sql_keywords = [
