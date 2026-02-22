@@ -1304,6 +1304,9 @@ class CopilotChatPanel(QWidget):
         # End streaming in WebView
         self._run_chat_js("endStreaming()")
         
+        # End tool group (mark as complete)
+        self._run_chat_js("endToolGroup()")
+        
         # Mark thinking widget as complete (legacy - not used with WebView)
         if self._current_thinking_widget:
             self._current_thinking_widget = None
@@ -1334,6 +1337,9 @@ class CopilotChatPanel(QWidget):
         # End any streaming
         self._run_chat_js("endStreaming()")
         self._current_stream_id = None
+        
+        # End tool group (mark as complete)
+        self._run_chat_js("endToolGroup()")
         
         # Mark widgets as complete (legacy)
         self._current_thinking_widget = None
@@ -1369,7 +1375,11 @@ class CopilotChatPanel(QWidget):
     def _on_tool_result(self, tool_name: str, result: str):
         """Handle tool execution result."""
         logger.info(f"Tool result: {tool_name} -> {result[:100]}...")
-        # Tool results are implicitly handled - the assistant message will follow
+        
+        # Update tool status in WebView
+        is_error = "error" in result.lower()[:100]
+        tool_name_escaped = json.dumps(tool_name)
+        self._run_chat_js(f"updateToolStatus({tool_name_escaped}, 'done', {str(is_error).lower()})")
 
     def _on_thinking(self, text: str):
         """Handle reasoning/thinking text from Copilot."""

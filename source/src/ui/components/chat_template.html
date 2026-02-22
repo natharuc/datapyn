@@ -283,22 +283,115 @@
             40% { transform: scale(1); opacity: 1; }
         }
 
-        /* Tool use indicator */
-        .tool-use {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
+        /* Tool use group - collapsible */
+        .tool-group {
             background-color: var(--bg-tertiary);
             border-left: 3px solid var(--accent-primary);
             border-radius: 0 var(--radius) var(--radius) 0;
+            margin: 8px 0;
             font-size: 12px;
             color: var(--text-secondary);
-            margin: 4px 0;
+            overflow: hidden;
         }
 
-        .tool-use-icon {
+        .tool-group-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.15s ease;
+        }
+
+        .tool-group-header:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .tool-group-toggle {
+            font-size: 10px;
+            color: var(--text-tertiary);
+            transition: transform 0.2s ease;
+            width: 12px;
+            text-align: center;
+        }
+
+        .tool-group.expanded .tool-group-toggle {
+            transform: rotate(90deg);
+        }
+
+        .tool-group-icon {
             font-size: 14px;
+            animation: spin 2s linear infinite;
+        }
+
+        .tool-group.complete .tool-group-icon {
+            animation: none;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .tool-group-title {
+            flex: 1;
+            font-style: italic;
+        }
+
+        .tool-group-count {
+            background-color: var(--accent-primary);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 500;
+        }
+
+        .tool-group-list {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            background-color: rgba(0, 0, 0, 0.15);
+        }
+
+        .tool-group.expanded .tool-group-list {
+            max-height: 500px;
+        }
+
+        .tool-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px 6px 32px;
+            border-top: 1px solid var(--border-default);
+        }
+
+        .tool-item:first-child {
+            border-top: none;
+        }
+
+        .tool-item-name {
+            color: #569cd6;
+            font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+        }
+
+        .tool-item-status {
+            margin-left: auto;
+            font-size: 10px;
+        }
+
+        .tool-item-status.running {
+            color: var(--text-tertiary);
+            font-style: italic;
+        }
+
+        .tool-item-status.done {
+            color: #4ec9b0;
+        }
+
+        .tool-item-status.error {
+            color: #f14c4c;
         }
     </style>
 </head>
@@ -465,16 +558,115 @@
             document.getElementById('thinking').classList.add('hidden');
         }
 
-        function addToolUse(toolName) {
+        // Tool group management
+        var currentToolGroup = null;
+        var toolCount = 0;
+
+        function startToolGroup() {
+            // Create a new tool group if none exists
+            if (currentToolGroup) return;
+            
+            hideWelcome();
             const messages = document.getElementById('messages');
             const thinking = document.getElementById('thinking');
             
-            const toolDiv = document.createElement('div');
-            toolDiv.className = 'tool-use';
-            toolDiv.innerHTML = '<span class="tool-use-icon">&#9881;</span><span>Using: ' + toolName + '</span>';
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'tool-group';
+            groupDiv.id = 'tool-group-' + Date.now();
             
-            messages.insertBefore(toolDiv, thinking);
+            groupDiv.innerHTML = `
+                <div class="tool-group-header" onclick="toggleToolGroup('${groupDiv.id}')">
+                    <span class="tool-group-toggle">&#9654;</span>
+                    <span class="tool-group-icon">&#9881;</span>
+                    <span class="tool-group-title">Processando...</span>
+                    <span class="tool-group-count">0</span>
+                </div>
+                <div class="tool-group-list"></div>
+            `;
+            
+            messages.insertBefore(groupDiv, thinking);
+            currentToolGroup = groupDiv;
+            toolCount = 0;
             scrollToBottom();
+        }
+
+        function addToolUse(toolName) {
+            // Auto-create group if needed
+            if (!currentToolGroup) {
+                startToolGroup();
+            }
+            
+            toolCount++;
+            
+            // Update header count
+            const countSpan = currentToolGroup.querySelector('.tool-group-count');
+            countSpan.textContent = toolCount;
+            
+            // Update title
+            const titleSpan = currentToolGroup.querySelector('.tool-group-title');
+            if (toolCount === 1) {
+                titleSpan.textContent = 'Usando 1 ferramenta...';
+            } else {
+                titleSpan.textContent = 'Usando ' + toolCount + ' ferramentas...';
+            }
+            
+            // Add tool item to list
+            const list = currentToolGroup.querySelector('.tool-group-list');
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'tool-item';
+            itemDiv.setAttribute('data-tool', toolName);
+            itemDiv.innerHTML = `
+                <span class="tool-item-name">${toolName}</span>
+                <span class="tool-item-status running">executando...</span>
+            `;
+            list.appendChild(itemDiv);
+            
+            scrollToBottom();
+        }
+
+        function updateToolStatus(toolName, status, isError) {
+            if (!currentToolGroup) return;
+            
+            const items = currentToolGroup.querySelectorAll('.tool-item');
+            for (let item of items) {
+                if (item.getAttribute('data-tool') === toolName) {
+                    const statusSpan = item.querySelector('.tool-item-status');
+                    statusSpan.classList.remove('running');
+                    if (isError) {
+                        statusSpan.classList.add('error');
+                        statusSpan.textContent = 'erro';
+                    } else {
+                        statusSpan.classList.add('done');
+                        statusSpan.textContent = 'ok';
+                    }
+                    break;
+                }
+            }
+        }
+
+        function endToolGroup() {
+            if (!currentToolGroup) return;
+            
+            // Mark group as complete
+            currentToolGroup.classList.add('complete');
+            
+            // Update title to final state
+            const titleSpan = currentToolGroup.querySelector('.tool-group-title');
+            if (toolCount === 1) {
+                titleSpan.textContent = 'Usou 1 ferramenta';
+            } else {
+                titleSpan.textContent = 'Usou ' + toolCount + ' ferramentas';
+            }
+            
+            currentToolGroup = null;
+            toolCount = 0;
+        }
+
+        function toggleToolGroup(groupId) {
+            const group = document.getElementById(groupId);
+            if (group) {
+                group.classList.toggle('expanded');
+            }
         }
 
         function clearMessages() {
@@ -489,6 +681,10 @@
             
             messages.appendChild(welcome);
             messages.appendChild(thinking);
+            
+            // Reset tool group state
+            currentToolGroup = null;
+            toolCount = 0;
             
             showWelcome();
             hideThinking();
@@ -523,7 +719,11 @@
         window.endStreaming = endStreaming;
         window.showThinking = showThinking;
         window.hideThinking = hideThinking;
+        window.startToolGroup = startToolGroup;
         window.addToolUse = addToolUse;
+        window.updateToolStatus = updateToolStatus;
+        window.endToolGroup = endToolGroup;
+        window.toggleToolGroup = toggleToolGroup;
         window.clearMessages = clearMessages;
         window.setWelcomeText = setWelcomeText;
         window.showWelcome = showWelcome;
