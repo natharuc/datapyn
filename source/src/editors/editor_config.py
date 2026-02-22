@@ -5,7 +5,11 @@ Monaco Editor is the sole editor backend.
 Provides ghost text for inline completions from Copilot.
 """
 
-from .monaco import MonacoEditor
+# Monaco may fail to import in headless/CI environments
+try:
+    from .monaco import MonacoEditor
+except ImportError:
+    MonacoEditor = None
 
 
 def init_editor_backend() -> None:
@@ -30,7 +34,7 @@ def get_code_editor_class():
     Returns the editor class.
 
     Returns:
-        MonacoEditor
+        MonacoEditor (or None if unavailable in headless environment)
     """
     return MonacoEditor
 
