@@ -10,6 +10,7 @@ Tool execution is thread-safe via QMetaObject.invokeMethod.
 
 import json
 import logging
+import os
 import time
 import threading
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -29,6 +30,73 @@ DEFAULT_MODELS = [
     {"id": "gpt-4o", "name": "GPT-4o"},
     {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
 ]
+
+
+def _get_sdk_options():
+    """Get SDK client options, handling PyInstaller bundles and system installs.
+    
+    Priority:
+    1. PyInstaller bundled CLI (if running as frozen app)
+    2. System-installed CLI (via gh copilot or standalone)
+    3. None (let SDK use its bundled CLI if available)
+    """
+    import sys
+    import shutil
+    from pathlib import Path
+    
+    # 1. If running as PyInstaller bundle, try bundled CLI first
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        cli_path = Path(sys._MEIPASS) / 'copilot' / 'bin' / 'copilot.exe'
+        if cli_path.exists():
+            logger.info(f"Using bundled Copilot CLI: {cli_path}")
+            return {"cli_path": str(cli_path)}
+        else:
+            logger.debug(f"Bundled Copilot CLI not found: {cli_path}")
+    
+    # 2. Try to find system-installed CLI
+    # Check common locations for copilot CLI
+    system_paths = []
+    
+    # Windows locations
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        app_data = os.environ.get("APPDATA", "")
+        user_profile = os.environ.get("USERPROFILE", "")
+        
+        system_paths.extend([
+            # GitHub CLI extension
+            Path(local_app_data) / "GitHub CLI" / "copilot" / "copilot.exe",
+            Path(app_data) / "GitHub CLI" / "copilot" / "copilot.exe",
+            # Standalone install
+            Path(local_app_data) / "Programs" / "copilot" / "copilot.exe",
+            Path(user_profile) / ".copilot" / "bin" / "copilot.exe",
+            # Scoop
+            Path(user_profile) / "scoop" / "shims" / "copilot.exe",
+        ])
+    else:
+        # Linux/macOS
+        home = Path.home()
+        system_paths.extend([
+            home / ".copilot" / "bin" / "copilot",
+            home / ".local" / "bin" / "copilot",
+            Path("/usr/local/bin/copilot"),
+        ])
+    
+    # Check known paths
+    for path in system_paths:
+        if path.exists():
+            logger.info(f"Using system Copilot CLI: {path}")
+            return {"cli_path": str(path)}
+    
+    # Check PATH
+    copilot_in_path = shutil.which("copilot")
+    if copilot_in_path:
+        logger.info(f"Using Copilot CLI from PATH: {copilot_in_path}")
+        return {"cli_path": copilot_in_path}
+    
+    # 3. No explicit path - let SDK use its bundled CLI
+    logger.debug("No system Copilot CLI found, SDK will use bundled CLI")
+    return None
 
 
 def _try_import_sdk():
@@ -233,7 +301,7 @@ class CopilotWorker(QObject):
                 return
 
             # Create client and start (async)
-            self._sdk_client = SDKClient()
+            self._sdk_client = SDKClient(_get_sdk_options())
             self._loop.run_until_complete(self._sdk_client.start())
 
             # List models to verify auth (async)
@@ -293,7 +361,7 @@ class CopilotWorker(QObject):
                 # Now verify with SDK (async)
                 SDKClient, _, _, _ = _try_import_sdk()
                 if SDKClient:
-                    self._sdk_client = SDKClient()
+                    self._sdk_client = SDKClient(_get_sdk_options())
                     self._loop.run_until_complete(self._sdk_client.start())
                     try:
                         models = self._loop.run_until_complete(self._sdk_client.list_models())
@@ -352,7 +420,7 @@ class CopilotWorker(QObject):
 
         # Initialize client if needed
         if not self._sdk_client:
-            self._sdk_client = SDKClient()
+            self._sdk_client = SDKClient(_get_sdk_options())
             await self._sdk_client.start()
             logger.info("Copilot SDK client started")
 
@@ -605,7 +673,7 @@ class CopilotWorker(QObject):
         
         # Initialize client
         if not self._sdk_client:
-            self._sdk_client = SDKClient()
+            self._sdk_client = SDKClient(_get_sdk_options())
             await self._sdk_client.start()
             logger.info("Copilot SDK client started (pre-init)")
         
@@ -646,7 +714,7 @@ class CopilotWorker(QObject):
         # Initialize client if needed
         if not self._sdk_client:
             logger.info("[COPILOT-WORKER] Creating new SDK client...")
-            self._sdk_client = SDKClient()
+            self._sdk_client = SDKClient(_get_sdk_options())
             await self._sdk_client.start()
             logger.info("[COPILOT-WORKER] SDK client started")
         

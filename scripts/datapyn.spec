@@ -55,7 +55,34 @@ language_dir = os.path.join(ROOT_DIR, 'source', 'src', 'language')
 language_datas = [(f, os.path.join('src', 'language'))
                   for f in glob.glob(os.path.join(language_dir, '*.json'))]
 
-datas = assets_datas + language_datas + [
+# Monaco Editor HTML templates
+monaco_dir = os.path.join(ROOT_DIR, 'source', 'src', 'editors', 'monaco')
+monaco_datas = [(f, os.path.join('src', 'editors', 'monaco'))
+                for f in glob.glob(os.path.join(monaco_dir, '*.html'))]
+
+# Copilot chat templates (in ui/components directory)
+chat_templates_dir = os.path.join(ROOT_DIR, 'source', 'src', 'ui', 'components')
+chat_datas = [(f, os.path.join('src', 'ui', 'components'))
+              for f in glob.glob(os.path.join(chat_templates_dir, 'chat_template*.html'))]
+
+# Copilot SDK CLI binary (copilot.exe for Windows)
+# The SDK requires the CLI to be available at runtime
+import site
+_site_packages = None
+for sp in site.getsitepackages():
+    if os.path.isdir(os.path.join(sp, 'copilot', 'bin')):
+        _site_packages = sp
+        break
+if not _site_packages:
+    # Fallback to venv site-packages
+    _site_packages = os.path.join(ROOT_DIR, '.venv', 'Lib', 'site-packages')
+_copilot_bin = os.path.join(_site_packages, 'copilot', 'bin')
+copilot_cli_datas = []
+if os.path.isdir(_copilot_bin):
+    for f in glob.glob(os.path.join(_copilot_bin, '*')):
+        copilot_cli_datas.append((f, os.path.join('copilot', 'bin')))
+
+datas = assets_datas + language_datas + monaco_datas + chat_datas + copilot_cli_datas + [
     # pyproject.toml para leitura de versao
     (os.path.join(ROOT_DIR, 'pyproject.toml'), '.'),
 ] + _mariadb_datas

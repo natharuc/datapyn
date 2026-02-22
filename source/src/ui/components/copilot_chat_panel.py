@@ -28,6 +28,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByt
 from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+import sys
 from PyQt6.QtWebChannel import QWebChannel
 from pathlib import Path
 import json
@@ -875,6 +876,15 @@ class CopilotChatPanel(QWidget):
             }}
         """)
 
+    def _get_template_path(self) -> Path:
+        """Get path to chat template, handling PyInstaller bundle."""
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            # Running as PyInstaller bundle
+            return Path(sys._MEIPASS) / 'src' / 'ui' / 'components' / 'chat_template.html'
+        else:
+            # Development mode
+            return Path(__file__).parent / 'chat_template.html'
+
     def _setup_chat_webview(self):
         """Setup the WebView-based chat messages area."""
         from PyQt6.QtWebEngineCore import QWebEngineSettings
@@ -908,7 +918,7 @@ class CopilotChatPanel(QWidget):
         self._pending_webview_ops = []
         
         # Load the HTML template
-        template_path = Path(__file__).parent / "chat_template.html"
+        template_path = self._get_template_path()
         if template_path.exists():
             self._chat_webview.setUrl(QUrl.fromLocalFile(str(template_path)))
         else:
