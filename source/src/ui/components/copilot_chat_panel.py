@@ -1631,14 +1631,6 @@ class CopilotChatPanel(QWidget):
                 return True
         return False
 
-    def _delete_session(self, session_id: str):
-        """Delete a saved chat session."""
-        sessions = self._get_sessions_list()
-        sessions = [s for s in sessions if s.get("id") != session_id]
-        self._save_sessions_list(sessions)
-        if self._current_session_id == session_id:
-            self.clear_chat()
-
     def _try_auto_auth(self):
         """Try to automatically authenticate if previously logged in."""
         # Check if we were previously authenticated

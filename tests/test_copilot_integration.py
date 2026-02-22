@@ -494,6 +494,78 @@ class TestCopilotChatPanel:
         assert client.model == model_id
         client.cleanup()
 
+    def test_delete_session_removes_from_list(self, qtbot):
+        """_delete_session should remove the session from saved sessions."""
+        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from PyQt6.QtWidgets import QMenu
+
+        panel = CopilotChatPanel()
+        qtbot.addWidget(panel)
+
+        # Add some test sessions
+        test_sessions = [
+            {"id": "session1", "title": "Test 1", "messages": [], "timestamp": "2026-01-01"},
+            {"id": "session2", "title": "Test 2", "messages": [], "timestamp": "2026-01-02"},
+            {"id": "session3", "title": "Test 3", "messages": [], "timestamp": "2026-01-03"},
+        ]
+        panel._settings.setValue("sessions", json.dumps(test_sessions))
+
+        # Delete session2
+        menu = QMenu()
+        panel._delete_session("session2", menu)
+
+        # Verify session2 is gone
+        sessions = panel._get_sessions_list()
+        session_ids = [s["id"] for s in sessions]
+        assert "session2" not in session_ids
+        assert "session1" in session_ids
+        assert "session3" in session_ids
+
+    def test_delete_session_clears_current_if_deleted(self, qtbot):
+        """_delete_session should clear current session if it's the one deleted."""
+        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from PyQt6.QtWidgets import QMenu
+
+        panel = CopilotChatPanel()
+        qtbot.addWidget(panel)
+
+        # Setup: current session is session1
+        panel._current_session_id = "session1"
+        test_sessions = [
+            {"id": "session1", "title": "Test 1", "messages": [], "timestamp": "2026-01-01"},
+        ]
+        panel._settings.setValue("sessions", json.dumps(test_sessions))
+
+        # Delete the current session
+        menu = QMenu()
+        panel._delete_session("session1", menu)
+
+        # Verify current_session_id is cleared
+        assert panel._current_session_id == ""
+
+    def test_delete_session_keeps_current_if_different(self, qtbot):
+        """_delete_session should not change current session if deleting another."""
+        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from PyQt6.QtWidgets import QMenu
+
+        panel = CopilotChatPanel()
+        qtbot.addWidget(panel)
+
+        # Setup: current session is session1, deleting session2
+        panel._current_session_id = "session1"
+        test_sessions = [
+            {"id": "session1", "title": "Test 1", "messages": [], "timestamp": "2026-01-01"},
+            {"id": "session2", "title": "Test 2", "messages": [], "timestamp": "2026-01-02"},
+        ]
+        panel._settings.setValue("sessions", json.dumps(test_sessions))
+
+        # Delete session2 (not the current one)
+        menu = QMenu()
+        panel._delete_session("session2", menu)
+
+        # Verify current_session_id is unchanged
+        assert panel._current_session_id == "session1"
+
 
 # ==================== ChatMessageWidget Tests ====================
 
