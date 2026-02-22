@@ -42,7 +42,7 @@ def mock_all_dialogs():
 
 @pytest.fixture
 def main_window(qapp, qtbot, tmp_path):
-    """Cria MainWindow para testes - agora usa apenas QScintilla"""
+    """Cria MainWindow para testes - usa Monaco Editor"""
     from src.ui.main_window import MainWindow
 
     with (

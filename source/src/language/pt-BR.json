@@ -31,8 +31,11 @@
     "complete_layout_reset": "&Resetar Layout Completo",
     "tools": "&Ferramentas",
     "package_manager": "&Gerenciador de Pacotes...",
-    "shortcut_settings": "&Configuração...",
+    "shortcut_settings": "&Configuracao...",
     "auto_update": "Ativar &Atualizacao Automatica",
+    "copilot_submenu": "&Copilot",
+    "copilot_download_lsp": "Baixar &Language Server...",
+    "copilot_check_status": "Verificar &Status",
     "help": "A&juda",
     "check_updates": "Verificar &Atualizacoes...",
     "about": "&Sobre"
@@ -49,7 +52,8 @@
     "results": "Resultados",
     "output": "Saida",
     "variables": "Variaveis",
-    "object_explorer": "Explorador de Objetos"
+    "object_explorer": "Explorador de Objetos",
+    "copilot": "Copilot Chat"
   },
 
   "status": {
@@ -453,7 +457,12 @@
     "confirm_restore_msg": "Deseja restaurar todos os atalhos para os valores padrao?",
     "section_display": "EXIBICAO",
     "label_grid_row_limit": "Limite de linhas no grid (padrao):",
-    "grid_row_limit_hint": "Apenas afeta a exibicao. Exportacoes sempre incluem todos os dados."
+    "grid_row_limit_hint": "Apenas afeta a exibicao. Exportacoes sempre incluem todos os dados.",
+    "section_editor": "EDITOR DE CODIGO",
+    "label_editor_backend": "Motor do editor:",
+    "editor_scintilla": "QScintilla (padrao, rapido)",
+    "editor_monaco": "Monaco (experimental, ghost text Copilot)",
+    "editor_restart_hint": "Requer reinicializacao. Monaco usa mais memoria."
   },
 
   "connections_manager": {
@@ -730,5 +739,56 @@
     "menu_view": "&Exibir",
     "menu_reset_layout": "&Resetar Layout",
     "menu_panels": "&Paineis"
+  },
+
+  "copilot": {
+    "title": "Copilot",
+    "input_placeholder": "Pergunte ao Copilot... (Enter para enviar, Shift+Enter para nova linha)",
+    "send_tooltip": "Enviar mensagem",
+    "mode_tooltip": "Selecionar modo de interacao",
+    "model_tooltip": "Selecionar modelo de IA",
+    "sign_in": "Entrar",
+    "sign_out": "Sair",
+    "signing_in": "Entrando...",
+    "welcome_message": "Bem-vindo ao GitHub Copilot.\nFaca login com sua conta GitHub para comecar a conversar.\nO Copilot pode ajudar com consultas SQL, codigo Python e analise de dados.",
+    "not_authenticated": "Faca login com o GitHub para usar o Copilot.",
+    "auth_instructions": "Para autenticar, insira o codigo **{code}** em:\n{url}\n\n(Codigo copiado para a area de transferencia)",
+    "auth_code_instructions": "Insira este codigo no GitHub para autenticar:",
+    "copy_code": "Copiar Codigo",
+    "code_copied": "Copiado!",
+    "waiting_auth": "Aguardando autenticacao...",
+    "auth_success": "Autenticado com sucesso! Voce ja pode conversar com o Copilot.",
+    "auth_failed": "Falha na autenticacao: {error}",
+    "unapproved_client": "A API do GitHub Copilot requer um cliente aprovado. O DataPyn nao pode acessar o Copilot diretamente. Considere usar a integracao MCP com VS Code ou JetBrains.",
+    "copilot_login_required": "Por favor, autentique usando o Copilot CLI:\nExecute no terminal: copilot login",
+    "dock_title": "Copilot Chat",
+    "actions_running": "Executando... ({count} acoes)",
+    "actions_complete": "Concluido ({count} acoes)",
+    "action_running": "executando...",
+    "action_ok": "ok",
+    "action_error": "erro",
+    "click_to_sign_out": "Clique para sair",
+    "connected": "Conectado",
+    "sign_in_tooltip": "Entrar com GitHub Copilot",
+    "show_subscription": "Ver assinatura Copilot",
+    "logout": "Sair",
+    "no_sessions": "Nenhuma sessao salva",
+    "clear_all": "Apagar todas as sessoes",
+    "usage_loading": "...",
+    "usage_format": "{used}/{total} premium",
+    "stop_tooltip": "Parar geracao"
+  },
+
+  "copilot_download": {
+    "title": "Copilot Autocomplete",
+    "downloading_title": "Baixando Copilot Engine",
+    "preparing": "Preparando download...",
+    "connecting": "Conectando ao servidor...",
+    "downloading": "Baixando...",
+    "progress_format": "{downloaded:.1f} MB / {total:.1f} MB",
+    "complete": "Download concluido!",
+    "failed": "Falha no download: {error}",
+    "btn_cancel": "Cancelar",
+    "btn_close": "Fechar"
   }
 }

@@ -525,13 +525,13 @@ class DatabaseConnector:
             if cursor:
                 try:
                     cursor.close()
-                except:
+                except Exception:
                     pass
 
             if raw_conn:
                 try:
                     raw_conn.close()
-                except:
+                except Exception:
                     pass
 
     def _execute_databricks_query(self, query: str) -> pd.DataFrame:
@@ -592,13 +592,38 @@ class DatabaseConnector:
             if cursor:
                 try:
                     cursor.close()
-                except:
+                except Exception:
                     pass
             if raw_conn:
                 try:
                     raw_conn.close()
-                except:
+                except Exception:
                     pass
+
+    def _is_select_query(self, query: str) -> bool:
+        """Check if a query is a SELECT (returns data) vs statement (modifies data).
+        
+        Handles comments, whitespace, and common query patterns.
+        """
+        # Remove SQL comments and normalize
+        import re
+        # Remove single-line comments (-- comment)
+        clean = re.sub(r'--.*$', '', query, flags=re.MULTILINE)
+        # Remove multi-line comments (/* comment */)
+        clean = re.sub(r'/\*.*?\*/', '', clean, flags=re.DOTALL)
+        # Strip and uppercase
+        clean = clean.strip().upper()
+        
+        # Check for SELECT-like queries
+        return (
+            clean.startswith("SELECT") or
+            clean.startswith("SHOW") or
+            clean.startswith("WITH") or
+            clean.startswith("(SELECT") or
+            clean.startswith("DESC") or
+            clean.startswith("DESCRIBE") or
+            clean.startswith("EXPLAIN")
+        )
 
     def _execute_generic_query(self, query: str) -> pd.DataFrame:
         """Execute generic query for non-MSSQL databases"""
@@ -611,9 +636,7 @@ class DatabaseConnector:
 
             with self.engine.connect() as conn:
                 for cmd in commands:
-                    cmd_upper = cmd.strip().upper()
-
-                    if cmd_upper.startswith("SELECT") or cmd_upper.startswith("SHOW"):
+                    if self._is_select_query(cmd):
                         # Is SELECT - capture result
                         try:
                             df = pd.read_sql(cmd, self.engine)
@@ -643,13 +666,14 @@ class DatabaseConnector:
             logger.info(msg)
             return pd.DataFrame({"Result": [msg]})
         else:
-            # Single command - try to fetch results
-            try:
+            # Single command - detect query type
+            if self._is_select_query(query):
+                # SELECT query - use read_sql and let errors propagate
                 df = pd.read_sql(query, self.engine)
                 logger.info(f"Query executed successfully. Rows returned: {len(df)}")
                 return df
-            except:
-                # Doesn't return data - execute as statement
+            else:
+                # Non-SELECT - execute as statement
                 with self.engine.connect() as conn:
                     result = conn.execute(text(query))
                     conn.commit()

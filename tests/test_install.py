@@ -26,15 +26,15 @@ def test_imports():
         print("❌ ERRO")
         errors.append(("PyQt6", str(e)))
 
-    # Testar QScintilla
-    print("Testando QScintilla...", end=" ")
+    # Testar PyQt6-WebEngine (Monaco uses WebEngine)
+    print("Testando PyQt6-WebEngine...", end=" ")
     try:
-        from PyQt6.Qsci import QsciScintilla, QsciLexerSQL, QsciLexerPython
+        from PyQt6.QtWebEngineWidgets import QWebEngineView
 
-        print("✅ OK")
+        print("OK")
     except ImportError as e:
-        print("❌ ERRO")
-        errors.append(("PyQt6-QScintilla", str(e)))
+        print("ERRO")
+        errors.append(("PyQt6-WebEngine", str(e)))
 
     # Testar Pandas
     print("Testando Pandas...", end=" ")
@@ -114,7 +114,7 @@ def test_imports():
 
     print("  - editors...", end=" ")
     try:
-        from src.editors import SQLEditor, PythonEditor
+        from src.editors import MonacoEditor, CodeBlock, BlockEditor
 
         print("✅ OK")
     except ImportError as e:

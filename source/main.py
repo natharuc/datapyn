@@ -9,6 +9,8 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QPalette, QColor
 from PyQt6.QtCore import Qt
 
+# Required for QtWebEngineWidgets (Monaco Editor) - must be set before QApplication
+QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
 # Configurar logging
 logging.basicConfig(
@@ -102,6 +104,10 @@ def main():
     init_language(language)
 
     splash.set_progress(25, "Loading design system...")
+
+    # Initialize editor backend from saved settings
+    from src.editors.editor_config import init_editor_backend
+    init_editor_backend()
 
     # Obter cores do design system
     from src.design_system.tokens import get_colors

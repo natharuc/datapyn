@@ -28,6 +28,14 @@ def _no_focus_editor(monkeypatch):
     monkeypatch.setattr(CodeBlock, "focus_editor", lambda self: None)
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_qt_events(qapp):
+    """Processa eventos pendentes do Qt apos cada teste para evitar crash do qtawesome"""
+    yield
+    # Processar eventos pendentes para limpar animacoes do qtawesome
+    qapp.processEvents()
+
+
 # ===== BlockDatabasePanel =====
 
 

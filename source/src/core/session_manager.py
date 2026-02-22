@@ -13,8 +13,11 @@ from typing import Optional, Dict, List, Any
 from pathlib import Path
 import json
 import uuid
+import logging
 
 from .session import Session
+
+logger = logging.getLogger(__name__)
 
 
 class SessionManager(QObject):
@@ -173,7 +176,7 @@ class SessionManager(QObject):
 
             return True
         except Exception as e:
-            print(f"Error saving sessions: {e}")
+            logger.error(f"Error saving sessions: {e}")
             return False
 
     def load_sessions(self, connection_manager=None) -> bool:
@@ -212,7 +215,7 @@ class SessionManager(QObject):
 
             return True
         except Exception as e:
-            print(f"Error loading sessions: {e}")
+            logger.error(f"Error loading sessions: {e}")
             # Don't create default session on error - let UI handle it
             return False
 

@@ -19,8 +19,11 @@ from PyQt6.QtSvg import QSvgRenderer
 import qtawesome as qta
 import os
 import re
+import logging
 
 from src.language import S
+
+logger = logging.getLogger(__name__)
 
 
 # Custom icons folder
@@ -105,7 +108,7 @@ def _load_svg_with_color(svg_path: str, color: str, size: int = 32) -> QIcon:
         return QIcon(pixmap)
 
     except Exception as e:
-        print(f"Error loading SVG {svg_path}: {e}")
+        logger.warning(f"Error loading SVG {svg_path}: {e}")
         return None
 
 

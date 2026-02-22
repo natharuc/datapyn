@@ -2,7 +2,7 @@
 CodeBlock - An individual code block with language selector
 
 Similar to a Jupyter notebook cell.
-Uses configurable editor via editor_config (QScintilla or Monaco).
+Uses Monaco Editor for code editing with Copilot inline completions.
 """
 
 import time
@@ -343,7 +343,7 @@ class CodeBlock(QFrame):
     - Monaco editor
     """
 
-    execute_requested = pyqtSignal(object)  # self
+    execute_requested = pyqtSignal(object, str)  # self, selected_text
     remove_requested = pyqtSignal(object)  # self
     move_requested = pyqtSignal(object, int)  # self, new_index (-1 = drag started)
     language_changed = pyqtSignal(object, str)  # self, new_language
@@ -352,6 +352,7 @@ class CodeBlock(QFrame):
     select_connection_requested = pyqtSignal(object)  # self - to open connection dialog
     connection_name_changed = pyqtSignal(object, str)  # self, connection_name - when block connection changes
     database_changed = pyqtSignal(object, str)  # self, database_name - when block database changes
+    completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
 
     LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00"}
 
@@ -590,13 +591,10 @@ class CodeBlock(QFrame):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(0)
 
-        # Code Editor (configurable via editor_config - implements ICodeEditor)
+        # Monaco Editor with Copilot inline completions
         EditorClass = get_code_editor_class()
         self.editor = EditorClass(theme_manager=self.theme_manager)
-
-        # Compatibility: get_widget() for QScintilla, direct for Monaco
-        editor_widget = self.editor.get_widget() if hasattr(self.editor, "get_widget") else self.editor
-        editor_layout.addWidget(editor_widget)
+        editor_layout.addWidget(self.editor.get_widget())
 
         layout.addWidget(self.editor_container, 1)  # stretch=1 to expand
 
@@ -622,12 +620,16 @@ class CodeBlock(QFrame):
         self.db_panel.database_clicked.connect(self._on_database_panel_clicked)
         self.db_panel.database_dropped.connect(self._on_database_dropped)
         self.db_panel.database_selected.connect(self._on_database_selected)
-        self.run_btn.clicked.connect(lambda: self.execute_requested.emit(self))
+        self.run_btn.clicked.connect(lambda: self.execute_requested.emit(self, ""))
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         self.cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self))
-        self.editor.execute_requested.connect(lambda: self.execute_requested.emit(self))
+        self.editor.execute_requested.connect(lambda sel: self.execute_requested.emit(self, sel))
         self.editor.SCN_FOCUSIN.connect(self._on_focus_in)
         self.editor.SCN_FOCUSOUT.connect(self._on_focus_out)
+        
+        # Setup inline completion service for Copilot
+        if hasattr(self.editor, 'completion_requested'):
+            self._setup_monaco_completion()
 
     def _on_focus_in(self):
         self._is_focused = True
@@ -639,11 +641,114 @@ class CodeBlock(QFrame):
         self._update_style()
         self.focus_changed.emit(self, False)
 
+    def _setup_monaco_completion(self):
+        """Setup inline completion for Monaco editor."""
+        from src.editors.monaco import InlineCompletionService
+        
+        self._completion_service = InlineCompletionService(self)
+        
+        # Connect completion request from Monaco to service
+        self.editor.completion_requested.connect(self._on_completion_requested)
+        
+        # Connect service completion ready to Monaco with logging
+        def on_completion_ready(text):
+            if text:
+                self.completion_log.emit(f"[CodeBlock] Forwarding {len(text)} chars to Monaco", "info")
+            self.editor.provide_completion(text)
+        
+        self._completion_service.completion_ready.connect(on_completion_ready)
+        
+        # Forward log messages from completion service
+        self._completion_service.log_message.connect(self.completion_log.emit)
+        
+        # Set document info for LSP
+        self._update_document_info()
+    
+    def _update_document_info(self):
+        """Update document info for LSP completions."""
+        if not hasattr(self, '_completion_service'):
+            return
+        
+        # Generate a unique URI for this block
+        # Use object id to ensure uniqueness within the session
+        uri = f"file:///datapyn/block_{id(self)}.{self._get_extension()}"
+        language = self.get_language()
+        
+        self._completion_service.set_document_info(uri, language)
+        
+        # Open document in LSP if available
+        text = self.get_code()
+        self._completion_service.open_document(uri, language, text)
+    
+    def _get_extension(self) -> str:
+        """Get file extension for current language."""
+        lang = self.get_language()
+        if lang == "python":
+            return "py"
+        elif lang == "sql":
+            return "sql"
+        return "txt"
+    
+    def set_copilot_client(self, client):
+        """Set Copilot SDK client for inline completions (Monaco only)."""
+        if hasattr(self, '_completion_service'):
+            self._completion_service.set_copilot_client(client)
+    
+    def set_lsp_client(self, client):
+        """Set Copilot LSP client for fast inline completions (Monaco only)."""
+        if hasattr(self, '_completion_service'):
+            self._completion_service.set_lsp_client(client)
+            # Re-open document with LSP
+            self._update_document_info()
+    
+    def set_database_context(self, context: str):
+        """Set database schema context for SQL completions (Monaco only)."""
+        if hasattr(self, '_completion_service'):
+            self._completion_service.set_database_context(context)
+    
+    def set_python_namespace(self, namespace: dict):
+        """Set Python namespace for completions (Monaco only).
+        
+        Args:
+            namespace: Dict mapping variable names to type names
+        """
+        if hasattr(self, '_completion_service'):
+            self._completion_service.set_python_namespace(namespace)
+        # Also pass to editor for local completion
+        if hasattr(self.editor, 'set_python_namespace'):
+            self.editor.set_python_namespace(namespace)
+    
+    def set_blocks_code_context(self, code_context: str):
+        """Set code context from other blocks for completions (Monaco only).
+        
+        Args:
+            code_context: Combined code from other blocks
+        """
+        if hasattr(self, '_completion_service'):
+            self._completion_service.set_blocks_code_context(code_context)
+    
+    def _on_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
+        """Handle completion request from Monaco editor."""
+        if hasattr(self, '_completion_service'):
+            language = self.get_language()
+            
+            # Sync document with LSP before requesting completion
+            full_text = prefix + suffix
+            self._completion_service.notify_document_changed(full_text)
+            
+            self._completion_service.request_completion(
+                prefix, suffix, language, line, column
+            )
+
     def _on_language_changed(self):
         lang = self.lang_combo.currentData()
         self.editor.set_language(lang)
         self._update_connection_panel_visibility()
         self._update_style()
+        
+        # Update document info for LSP with new language
+        self._update_document_info()
+        
         self.language_changed.emit(self, lang)
 
     def _on_connection_panel_clicked(self):

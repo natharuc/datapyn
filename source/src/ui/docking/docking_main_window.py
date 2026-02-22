@@ -41,6 +41,12 @@ class DockingMainWindow(QMainWindow):
         self.auto_save_timer.timeout.connect(self._auto_save_layout)
         self.auto_save_timer.setSingleShot(True)
 
+        # Debounce timer for resize events (avoid excessive splitter adjustments)
+        self._resize_debounce_timer = QTimer()
+        self._resize_debounce_timer.setSingleShot(True)
+        self._resize_debounce_timer.setInterval(50)  # 50ms debounce
+        self._resize_debounce_timer.timeout.connect(self._on_resize_debounced)
+
     def finish_docking_setup(self):
         """Finish docking configuration - called by child class"""
         self._setup_menu_actions()
@@ -254,7 +260,7 @@ class DockingMainWindow(QMainWindow):
                 try:
                     geometry = bytes.fromhex(window_config["geometry"])
                     self.restoreGeometry(geometry)
-                except:
+                except (ValueError, TypeError):
                     pass
 
             if "state" in window_config and window_config["state"]:
@@ -262,7 +268,7 @@ class DockingMainWindow(QMainWindow):
                     state = bytes.fromhex(window_config["state"])
                     if hasattr(self, "restoreState"):
                         self.restoreState(state)
-                except:
+                except (ValueError, TypeError):
                     pass
 
         # Restore docking manager layout
@@ -290,8 +296,13 @@ class DockingMainWindow(QMainWindow):
         QTimer.singleShot(100, self.docking_manager._adjust_splitter_sizes)
 
     def resizeEvent(self, event):
-        """Resize event"""
+        """Resize event - debounced to avoid UI stutter."""
         super().resizeEvent(event)
-        # Readjust splitters when resizing
+        # Debounce splitter adjustment to avoid excessive calls during drag
+        if hasattr(self, "_resize_debounce_timer"):
+            self._resize_debounce_timer.start()  # Restarts the timer
+
+    def _on_resize_debounced(self):
+        """Called after resize settles - adjust splitters."""
         if hasattr(self, "docking_manager"):
-            QTimer.singleShot(10, self.docking_manager._adjust_splitter_sizes)
+            self.docking_manager._adjust_splitter_sizes()

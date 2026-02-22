@@ -32,8 +32,9 @@
     "tools": "&Tools",
     "package_manager": "&Package Manager...",
     "shortcut_settings": "&Settings...",
-    "auto_update": "Enable &Auto-Update",
-    "help": "&Help",
+    "auto_update": "Enable &Auto-Update",    "copilot_submenu": "&Copilot",
+    "copilot_download_lsp": "Download &Language Server...",
+    "copilot_check_status": "Check &Status",    "help": "&Help",
     "check_updates": "Check for &Updates...",
     "about": "&About"
   },
@@ -49,7 +50,8 @@
     "results": "Results",
     "output": "Output",
     "variables": "Variables",
-    "object_explorer": "Object Explorer"
+    "object_explorer": "Object Explorer",
+    "copilot": "Copilot Chat"
   },
 
   "status": {
@@ -453,7 +455,12 @@
     "confirm_restore_msg": "Do you want to restore all shortcuts to default values?",
     "section_display": "DISPLAY",
     "label_grid_row_limit": "Default grid display limit (rows):",
-    "grid_row_limit_hint": "Only affects display. Exports always include all data."
+    "grid_row_limit_hint": "Only affects display. Exports always include all data.",
+    "section_editor": "CODE EDITOR",
+    "label_editor_backend": "Editor engine:",
+    "editor_scintilla": "QScintilla (default, fast)",
+    "editor_monaco": "Monaco (experimental, Copilot ghost text)",
+    "editor_restart_hint": "Requires restart to apply. Monaco uses more memory."
   },
 
   "connections_manager": {
@@ -730,5 +737,56 @@
     "menu_view": "&View",
     "menu_reset_layout": "&Reset Layout",
     "menu_panels": "&Panels"
+  },
+
+  "copilot": {
+    "title": "Copilot",
+    "input_placeholder": "Ask Copilot... (Enter to send, Shift+Enter for new line)",
+    "send_tooltip": "Send message",
+    "mode_tooltip": "Select interaction mode",
+    "model_tooltip": "Select AI model",
+    "sign_in": "Sign In",
+    "sign_out": "Sign Out",
+    "signing_in": "Signing in...",
+    "welcome_message": "Welcome to GitHub Copilot.\nSign in with your GitHub account to start chatting.\nCopilot can help with SQL queries, Python code, and data analysis.",
+    "not_authenticated": "Please sign in with GitHub to use Copilot.",
+    "auth_instructions": "To authenticate, enter the code **{code}** at:\n{url}\n\n(Code copied to clipboard)",
+    "auth_code_instructions": "Enter this code on GitHub to authenticate:",
+    "copy_code": "Copy Code",
+    "code_copied": "Copied!",
+    "waiting_auth": "Waiting for authentication...",
+    "auth_success": "Authenticated successfully! You can now chat with Copilot.",
+    "auth_failed": "Authentication failed: {error}",
+    "unapproved_client": "GitHub Copilot API requires an approved client. DataPyn cannot directly access Copilot. Consider using the MCP integration with VS Code or JetBrains.",
+    "copilot_login_required": "Please authenticate using the Copilot CLI:\nRun in terminal: copilot login",
+    "dock_title": "Copilot Chat",
+    "actions_running": "Running... ({count} actions)",
+    "actions_complete": "Complete ({count} actions)",
+    "action_running": "running...",
+    "action_ok": "ok",
+    "action_error": "error",
+    "click_to_sign_out": "Click to sign out",
+    "connected": "Connected",
+    "sign_in_tooltip": "Sign in with GitHub Copilot",
+    "show_subscription": "Show Copilot subscription",
+    "logout": "Logout",
+    "no_sessions": "No saved sessions",
+    "clear_all": "Clear all sessions",
+    "usage_loading": "...",
+    "usage_format": "{used}/{total} premium",
+    "stop_tooltip": "Stop generation"
+  },
+
+  "copilot_download": {
+    "title": "Copilot Autocomplete",
+    "downloading_title": "Downloading Copilot Engine",
+    "preparing": "Preparing download...",
+    "connecting": "Connecting to server...",
+    "downloading": "Downloading...",
+    "progress_format": "{downloaded:.1f} MB / {total:.1f} MB",
+    "complete": "Download complete!",
+    "failed": "Download failed: {error}",
+    "btn_cancel": "Cancel",
+    "btn_close": "Close"
   }
 }

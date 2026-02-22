@@ -4,7 +4,6 @@ version = "1.10.0"
 dependencies = [
     # GUI Framework
     "PyQt6>=6.6.0",
-    "PyQt6-QScintilla>=2.14.0",
     "PyQt6-WebEngine>=6.6.0",
     "QtAwesome>=1.3.0",
     "qt-material>=2.14",
@@ -37,6 +36,8 @@ dependencies = [
     # Charts
     "matplotlib>=3.7.0",
     "jedi>=0.19.2",
+    # GitHub Copilot SDK (optional, requires gh CLI auth)
+    "github-copilot-sdk>=0.1.20",
 ]
 
 [tool.uv]

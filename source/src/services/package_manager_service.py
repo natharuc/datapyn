@@ -425,8 +425,7 @@ class PackageManagerService:
             "pyqt6",
             "pyqt6-qt6",
             "pyqt6-sip",
-            "qscintilla",
-            "pyqt6-qscintilla",
+            "pyqt6-webengine",
         }
         if package_name.lower() in protected:
             return PackageOperationResult(

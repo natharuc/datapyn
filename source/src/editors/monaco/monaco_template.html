@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataPyn Monaco Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: var(--editor-bg, #1e1e1e);
+        }
+        #editor-container {
+            width: 100%;
+            height: 100%;
+        }
+        /* Ghost text styling */
+        .ghost-text {
+            opacity: 0.4;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div id="editor-container">
+        <div id="loading-indicator" style="color:#888;padding:20px;font-family:sans-serif;">Loading Monaco Editor...</div>
+    </div>
+    
+    <!-- Monaco loader from cdnjs (more reliable) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js" 
+            onerror="document.getElementById('editor-container').innerHTML='<p style=color:#ff6b6b;padding:20px>Failed to load Monaco from CDN. Check network connection.</p>'"></script>
+    
+    <!-- Qt WebChannel -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    
+    <script>
+        // Python bridge reference
+        let pyBridge = null;
+        let editor = null;
+        let inlineCompletionProvider = null;
+        let debounceTimer = null;
+        
+        // Completion tracking
+        let pendingCompletionId = 0;
+        let pendingCompletion = null;
+        
+        // Current state
+        let currentLanguage = 'python';
+        let currentTheme = 'vs-dark';
+        
+        // Initialize Qt WebChannel when transport is available
+        function initWebChannel() {
+            if (typeof qt !== 'undefined' && qt.webChannelTransport) {
+                new QWebChannel(qt.webChannelTransport, function(channel) {
+                    pyBridge = channel.objects.pyBridge;
+                    console.log('WebChannel connected to Python bridge');
+                    
+                    // Initialize Monaco
+                    initMonaco();
+                });
+            } else {
+                // Retry after a short delay
+                setTimeout(initWebChannel, 50);
+            }
+        }
+        
+        // Start initialization
+        if (typeof QWebChannel !== 'undefined') {
+            initWebChannel();
+        } else {
+            // Fallback - just init Monaco without bridge
+            console.warn('QWebChannel not available, initializing Monaco standalone');
+            document.addEventListener('DOMContentLoaded', initMonaco);
+        }
+        
+        function initMonaco() {
+            if (typeof require === 'undefined') {
+                console.error('Monaco loader not available');
+                document.getElementById('editor-container').innerHTML = 
+                    '<p style="color:#ff6b6b;padding:20px;">Failed to load Monaco Editor. Check network connection.</p>';
+                return;
+            }
+            
+            require.config({
+                paths: {
+                    'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs'
+                }
+            });
+            
+            // Configure Monaco Environment for web workers (syntax highlighting)
+            window.MonacoEnvironment = {
+                getWorkerUrl: function(workerId, label) {
+                    return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
+                        self.MonacoEnvironment = { baseUrl: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/' };
+                        importScripts('https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/base/worker/workerMain.min.js');
+                    `)}`;
+                }
+            };
+            
+            require(['vs/editor/editor.main'], function() {
+                // Clear loading indicator
+                var container = document.getElementById('editor-container');
+                container.innerHTML = '';
+                
+                // Create editor instance
+                editor = monaco.editor.create(container, {
+                    value: '',
+                    language: currentLanguage,
+                    theme: currentTheme,
+                    automaticLayout: false,  // Disabled to avoid ResizeObserver loops - call doLayout() manually
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    fontSize: 13,
+                    fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace",
+                    lineNumbers: 'on',
+                    renderWhitespace: 'selection',
+                    tabSize: 4,
+                    insertSpaces: true,
+                    wordWrap: 'off',
+                    suggest: {
+                        showInlineDetails: true,
+                        showMethods: true,
+                        showFunctions: true,
+                        showVariables: true,
+                        showClasses: true,
+                        showKeywords: true
+                    },
+                    inlineSuggest: {
+                        enabled: true,
+                        mode: 'prefix'
+                    },
+                    quickSuggestions: {
+                        other: true,
+                        comments: false,
+                        strings: false
+                    }
+                });
+                
+                // Register inline completion provider for ghost text
+                registerInlineCompletionProvider();
+                
+                // Setup event listeners
+                setupEventListeners();
+                
+                // Setup debounced resize observer for manual layout
+                setupResizeObserver();
+                
+                // Notify Python that editor is ready
+                if (pyBridge) {
+                    pyBridge.onEditorReady();
+                }
+            });
+        }
+        
+        // Debounced resize handling for manual layout
+        var resizeTimeout = null;
+        function setupResizeObserver() {
+            var container = document.getElementById('editor-container');
+            if (window.ResizeObserver && container) {
+                var observer = new ResizeObserver(function(entries) {
+                    // Debounce: wait 100ms after last resize before calling layout
+                    if (resizeTimeout) clearTimeout(resizeTimeout);
+                    resizeTimeout = setTimeout(function() {
+                        if (editor) editor.layout();
+                    }, 100);
+                });
+                observer.observe(container);
+            }
+        }
+        
+        // Manual layout function callable from Python
+        function doLayout() {
+            if (editor) editor.layout();
+        }
+        
+        function setupEventListeners() {
+            // Text change listener
+            editor.onDidChangeModelContent(function(e) {
+                if (pyBridge) {
+                    pyBridge.onTextChanged(editor.getValue());
+                }
+            });
+            
+            // Focus listeners
+            editor.onDidFocusEditorWidget(function() {
+                if (pyBridge) {
+                    pyBridge.onFocusIn();
+                }
+            });
+            
+            editor.onDidBlurEditorWidget(function() {
+                if (pyBridge) {
+                    pyBridge.onFocusOut();
+                }
+            });
+            
+            // Cursor position change
+            editor.onDidChangeCursorPosition(function(e) {
+                if (pyBridge) {
+                    pyBridge.onCursorChanged(e.position.lineNumber, e.position.column);
+                }
+            });
+            
+            // Key bindings for execution (F5, Ctrl+Enter, Shift+Enter)
+            editor.addAction({
+                id: 'execute-code',
+                label: 'Execute Code',
+                keybindings: [
+                    monaco.KeyCode.F5,
+                    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
+                    monaco.KeyMod.Shift | monaco.KeyCode.Enter
+                ],
+                run: function() {
+                    if (pyBridge) {
+                        // Pass selected text so Python doesn't need async round-trip
+                        var selectedText = getSelectedText();
+                        pyBridge.onExecuteRequested(selectedText);
+                    }
+                }
+            });
+            
+            // Toggle comment (Ctrl+/)
+            editor.addAction({
+                id: 'toggle-comment',
+                label: 'Toggle Comment',
+                keybindings: [
+                    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash
+                ],
+                run: function() {
+                    editor.getAction('editor.action.commentLine').run();
+                }
+            });
+        }
+        
+        function registerInlineCompletionProvider() {
+            // Custom inline completion provider for Copilot ghost text
+            inlineCompletionProvider = monaco.languages.registerInlineCompletionsProvider(
+                ['python', 'sql'],
+                {
+                    provideInlineCompletions: async function(model, position, context, token) {
+                        console.log('[Monaco] provideInlineCompletions called at L' + position.lineNumber + ':C' + position.column);
+                        
+                        // Clear any pending requests
+                        if (debounceTimer) {
+                            clearTimeout(debounceTimer);
+                        }
+                        
+                        // Debounce: wait 300ms before requesting (Python has additional 400ms)
+                        return new Promise((resolve) => {
+                            debounceTimer = setTimeout(async () => {
+                                if (token.isCancellationRequested) {
+                                    console.log('[Monaco] Request cancelled');
+                                    resolve({ items: [] });
+                                    return;
+                                }
+                                
+                                const textBeforeCursor = model.getValueInRange({
+                                    startLineNumber: 1,
+                                    startColumn: 1,
+                                    endLineNumber: position.lineNumber,
+                                    endColumn: position.column
+                                });
+                                
+                                const textAfterCursor = model.getValueInRange({
+                                    startLineNumber: position.lineNumber,
+                                    startColumn: position.column,
+                                    endLineNumber: model.getLineCount(),
+                                    endColumn: model.getLineMaxColumn(model.getLineCount())
+                                });
+                                
+                                // Request completion from Python/Copilot
+                                if (pyBridge) {
+                                    try {
+                                        const completionText = await requestCompletion(
+                                            textBeforeCursor,
+                                            textAfterCursor,
+                                            position.lineNumber,
+                                            position.column
+                                        );
+                                        
+                                        if (completionText && completionText.length > 0) {
+                                            console.log('[Monaco] Creating inline completion item: ' + completionText.substring(0, 40) + '...');
+                                            const item = {
+                                                insertText: completionText,
+                                                range: new monaco.Range(
+                                                    position.lineNumber,
+                                                    position.column,
+                                                    position.lineNumber,
+                                                    position.column
+                                                )
+                                            };
+                                            console.log('[Monaco] Returning 1 completion item');
+                                            resolve({ items: [item] });
+                                        } else {
+                                            console.log('[Monaco] Empty completion text, returning no items');
+                                            resolve({ items: [] });
+                                        }
+                                    } catch (e) {
+                                        console.log('[Monaco] Completion error: ' + e);
+                                        resolve({ items: [] });
+                                    }
+                                } else {
+                                    resolve({ items: [] });
+                                }
+                            }, 300);  // Reduced debounce for faster local completions
+                        });
+                    },
+                    
+                    freeInlineCompletions: function(completions) {
+                        // Cleanup if needed
+                    }
+                }
+            );
+        }
+        
+        function requestCompletion(prefix, suffix, line, column) {
+            return new Promise((resolve, reject) => {
+                if (!pyBridge) {
+                    console.log('[Monaco] No Python bridge');
+                    reject('No Python bridge');
+                    return;
+                }
+                
+                // Increment request ID
+                pendingCompletionId++;
+                const requestId = pendingCompletionId;
+                
+                console.log('[Monaco] Request completion #' + requestId + ' at L' + line + ':C' + column);
+                
+                // Store resolver for callback with ID
+                pendingCompletion = { resolve, reject, id: requestId };
+                
+                // Request completion from Python side
+                pyBridge.requestCompletion(prefix, suffix, line, column);
+                
+                // Timeout after 5 seconds (Copilot uses gpt-4o-mini for speed)
+                setTimeout(() => {
+                    if (pendingCompletion && pendingCompletion.id === requestId) {
+                        console.log('[Monaco] Timeout for completion #' + requestId);
+                        pendingCompletion.reject('Timeout');
+                        pendingCompletion = null;
+                    }
+                }, 5000);
+            });
+        }
+        
+        // Called from Python to provide completion result
+        function receiveCompletion(text) {
+            console.log('[Monaco] Received completion: ' + (text ? text.substring(0, 50) + '...' : 'empty'));
+            if (pendingCompletion) {
+                console.log('[Monaco] Resolving completion #' + pendingCompletion.id);
+                pendingCompletion.resolve(text);
+                pendingCompletion = null;
+            } else {
+                console.log('[Monaco] No pending completion to resolve');
+            }
+        }
+        
+        // === API Functions (called from Python) ===
+        
+        function setValue(text) {
+            if (editor) {
+                editor.setValue(text);
+            }
+        }
+        
+        function getValue() {
+            return editor ? editor.getValue() : '';
+        }
+        
+        function setLanguage(language) {
+            currentLanguage = language;
+            if (editor) {
+                monaco.editor.setModelLanguage(editor.getModel(), language);
+            }
+        }
+        
+        function setTheme(theme) {
+            currentTheme = theme;
+            if (editor) {
+                monaco.editor.setTheme(theme);
+            }
+        }
+        
+        function setCustomTheme(themeName, colors) {
+            // Define custom theme based on DataPyn theme colors
+            const themeData = {
+                base: colors.isDark ? 'vs-dark' : 'vs',
+                inherit: true,
+                rules: [],
+                colors: {
+                    'editor.background': colors.background,
+                    'editor.foreground': colors.foreground,
+                    'editorCursor.foreground': colors.caret,
+                    'editor.lineHighlightBackground': colors.caretLine,
+                    'editor.selectionBackground': colors.selection,
+                    'editorLineNumber.foreground': colors.marginFg,
+                    'editorLineNumber.activeForeground': colors.foreground,
+                    'editorGutter.background': colors.marginBg
+                }
+            };
+            
+            // Add syntax highlighting rules based on language
+            if (colors.syntax) {
+                const syntax = colors.syntax;
+                themeData.rules = [
+                    { token: 'keyword', foreground: hex(syntax.keyword) },
+                    { token: 'string', foreground: hex(syntax.string) },
+                    { token: 'number', foreground: hex(syntax.number) },
+                    { token: 'comment', foreground: hex(syntax.comment), fontStyle: 'italic' },
+                ];
+                
+                if (syntax.classname) {
+                    themeData.rules.push({ token: 'type', foreground: hex(syntax.classname) });
+                }
+                if (syntax.function) {
+                    themeData.rules.push({ token: 'function', foreground: hex(syntax.function) });
+                }
+                if (syntax.identifier) {
+                    themeData.rules.push({ token: 'variable', foreground: hex(syntax.identifier) });
+                }
+                if (syntax.operator) {
+                    themeData.rules.push({ token: 'operator', foreground: hex(syntax.operator) });
+                }
+            }
+            
+            monaco.editor.defineTheme(themeName, themeData);
+            monaco.editor.setTheme(themeName);
+        }
+        
+        function hex(color) {
+            // Remove # prefix if present
+            return color.replace('#', '');
+        }
+        
+        function setFontSize(size) {
+            if (editor) {
+                editor.updateOptions({ fontSize: size });
+            }
+        }
+        
+        function setFontFamily(family) {
+            if (editor) {
+                editor.updateOptions({ fontFamily: family });
+            }
+        }
+        
+        function setReadOnly(readOnly) {
+            if (editor) {
+                editor.updateOptions({ readOnly: readOnly });
+            }
+        }
+        
+        function setLineNumbers(visible) {
+            if (editor) {
+                editor.updateOptions({ lineNumbers: visible ? 'on' : 'off' });
+            }
+        }
+        
+        function getLineCount() {
+            return editor ? editor.getModel().getLineCount() : 0;
+        }
+        
+        function getCurrentLine() {
+            return editor ? editor.getPosition().lineNumber - 1 : 0;
+        }
+        
+        function goToLine(line) {
+            if (editor) {
+                editor.setPosition({ lineNumber: line + 1, column: 1 });
+                editor.revealLineInCenter(line + 1);
+            }
+        }
+        
+        function getSelectedText() {
+            if (editor) {
+                return editor.getModel().getValueInRange(editor.getSelection());
+            }
+            return '';
+        }
+        
+        function hasSelection() {
+            if (editor) {
+                const selection = editor.getSelection();
+                return !selection.isEmpty();
+            }
+            return false;
+        }
+        
+        function selectAll() {
+            if (editor) {
+                const model = editor.getModel();
+                if (model) {
+                    const range = model.getFullModelRange();
+                    editor.setSelection(range);
+                }
+            }
+        }
+        
+        function insertTextAtCursor(text) {
+            if (editor) {
+                const selection = editor.getSelection();
+                editor.executeEdits('insert', [{
+                    range: selection,
+                    text: text
+                }]);
+            }
+        }
+        
+        function focusEditor() {
+            if (editor) {
+                editor.focus();
+            }
+        }
+        
+        function showFindWidget() {
+            if (editor) {
+                editor.getAction('actions.find').run();
+            }
+        }
+        
+        function showReplaceWidget() {
+            if (editor) {
+                editor.getAction('editor.action.startFindReplaceAction').run();
+            }
+        }
+        
+        // Register standard completions (non-Copilot)
+        function registerCompletions(completions) {
+            // completions: [{ label, kind, insertText, detail }]
+            monaco.languages.registerCompletionItemProvider(currentLanguage, {
+                provideCompletionItems: function(model, position) {
+                    const word = model.getWordUntilPosition(position);
+                    const range = {
+                        startLineNumber: position.lineNumber,
+                        endLineNumber: position.lineNumber,
+                        startColumn: word.startColumn,
+                        endColumn: word.endColumn
+                    };
+                    
+                    return {
+                        suggestions: completions.map(c => ({
+                            label: c.label,
+                            kind: getCompletionKind(c.kind),
+                            insertText: c.insertText || c.label,
+                            detail: c.detail || '',
+                            range: range
+                        }))
+                    };
+                }
+            });
+        }
+        
+        function getCompletionKind(kind) {
+            const kinds = {
+                'keyword': monaco.languages.CompletionItemKind.Keyword,
+                'function': monaco.languages.CompletionItemKind.Function,
+                'variable': monaco.languages.CompletionItemKind.Variable,
+                'class': monaco.languages.CompletionItemKind.Class,
+                'module': monaco.languages.CompletionItemKind.Module,
+                'property': monaco.languages.CompletionItemKind.Property,
+                'method': monaco.languages.CompletionItemKind.Method,
+                'field': monaco.languages.CompletionItemKind.Field,
+                'text': monaco.languages.CompletionItemKind.Text
+            };
+            return kinds[kind] || monaco.languages.CompletionItemKind.Text;
+        }
+        
+        // Apply background color to page
+        function setBackgroundColor(color) {
+            document.documentElement.style.setProperty('--editor-bg', color);
+            document.body.style.background = color;
+        }
+    </script>
+</body>
+</html>

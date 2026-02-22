@@ -10,9 +10,12 @@ from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, pyqtSignal, QObject, QSettin
 from PyQt6.QtGui import QCursor
 from typing import Dict, List, Optional, Any
 import json
+import logging
 
 from .dockable_widget import DockableWidget, DockPosition
 from .dock_indicators import DockIndicators, DockPreview
+
+logger = logging.getLogger(__name__)
 
 
 class DockingManager(QObject):
@@ -453,7 +456,7 @@ class DockingManager(QObject):
             return True
 
         except Exception as e:
-            print(f"Error loading layout: {e}")
+            logger.error(f"Error loading layout: {e}")
             return False
 
     def get_default_layout(self) -> Dict[str, Any]:
@@ -519,3 +522,8 @@ class DockingManager(QObject):
         self.register_dockable(panel_name, new_panel)
 
         print(f"DEBUG: Floating panel created - {self.drag_title}")
+
+    def cleanup(self):
+        """Cleanup resources before destruction."""
+        if hasattr(self, 'update_timer') and self.update_timer:
+            self.update_timer.stop()

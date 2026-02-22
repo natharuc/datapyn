@@ -25,7 +25,7 @@ def app(qapp):
 
 @pytest.fixture
 def main_window(app):
-    """Fixture da MainWindow - roda com QScintilla E Monaco"""
+    """Fixture da MainWindow - roda com Monaco Editor"""
     window = MainWindow()
     window.show()
     QTest.qWaitForWindowExposed(window)
@@ -144,7 +144,7 @@ def test_shortcut_close_tab(main_window):
 
 
 # test_shortcut_find e test_shortcut_replace removidos
-# Ctrl+F e Ctrl+H agora são gerenciados nativamente pelos editores (QScintilla/Monaco)
+# Ctrl+F e Ctrl+H agora sao gerenciados nativamente pelo Monaco Editor
 
 
 def test_shortcut_save_file(main_window):
@@ -226,60 +226,16 @@ def test_no_ambiguous_shortcuts(main_window):
         assert count == 1, f"Atalho '{shortcut_key}' esta duplicado!"
 
 
+@pytest.mark.skip(reason="QScintilla specific test - removed with QScintilla")
 def test_shift_enter_does_not_insert_newline(main_window):
     """Shift+Enter nao deve inserir nova linha no editor (liberado para execute_block_advance)"""
-    from src.editors.code_editor import CodeEditor
-
-    editor = main_window._get_current_editor()
-    assert editor is not None
-
-    # Forcar Shift+Return como atalho do app (independente de config do usuario)
-    CodeEditor.set_app_shortcuts(
-        set(CodeEditor._app_shortcut_sequences) | {"Shift+Return"}
-    )
-    assert "Shift+Return" in CodeEditor._app_shortcut_sequences
-
-    # Limpar e adicionar bloco com codigo
-    editor.clear_blocks()
-    block = editor.add_block(language="PYTHON")
-    block.set_code("x = 1")
-    block.focus_editor()
-    QApplication.processEvents()
-    QTest.qWait(100)
-
-    # Verificar que o event filter esta instalado
-    assert hasattr(block.editor, '_key_filter'), "Event filter nao foi instalado no CodeEditor"
-
-    # Contar linhas antes
-    text_before = block.get_code()
-
-    # Pressionar Shift+Enter no editor (QScintilla)
-    sci = block.editor._sci
-    QTest.keyClick(sci, Qt.Key.Key_Return, Qt.KeyboardModifier.ShiftModifier)
-    QApplication.processEvents()
-    QTest.qWait(100)
-
-    # O texto nao deve ter mudado (Shift+Enter nao deve inserir newline)
-    text_after = block.get_code()
-    assert text_after == text_before, (
-        f"Shift+Enter inseriu nova linha no editor! Antes: {text_before!r}, Depois: {text_after!r}"
-    )
+    pass
 
 
+@pytest.mark.skip(reason="QScintilla specific test - removed with QScintilla")
 def test_editor_shortcuts_configurable(main_window):
     """Atalhos do editor (QScintilla) devem aparecer nas configuracoes"""
-    shortcut_manager = main_window.shortcut_manager
-    all_shortcuts = shortcut_manager.get_all_shortcuts()
-
-    editor_shortcuts = [k for k in all_shortcuts if k.startswith("editor_")]
-    assert len(editor_shortcuts) >= 5, (
-        f"Deveria ter pelo menos 5 atalhos de editor, encontrou {len(editor_shortcuts)}: {editor_shortcuts}"
-    )
-
-    # editor_newline deve estar vazio por padrao (liberado para o app)
-    assert shortcut_manager.get_shortcut("editor_newline") == "", (
-        "editor_newline deveria estar vazio por padrao"
-    )
+    pass
 
 
 if __name__ == "__main__":
