@@ -97,11 +97,12 @@ class ChatMessageWidget(QFrame):
 
         # Outer layout to handle alignment
         outer_layout = QHBoxLayout(self)
-        outer_layout.setContentsMargins(4, 4, 4, 4)
+        outer_layout.setContentsMargins(4, 2, 4, 2)
         outer_layout.setSpacing(0)
 
         # Create the bubble frame
         bubble = QFrame()
+        bubble.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         bubble_layout = QVBoxLayout(bubble)
         bubble_layout.setContentsMargins(12, 8, 12, 8)
         bubble_layout.setSpacing(4)
@@ -112,7 +113,8 @@ class ChatMessageWidget(QFrame):
         content_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )
-        content_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        # Use Preferred width to allow shrinking, Minimum height to fit content
+        content_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         content_label.setStyleSheet(f"""
             QLabel {{
                 color: {colors.text_primary};
@@ -162,7 +164,8 @@ class ChatMessageWidget(QFrame):
                 }}
             """)
             time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-            bubble.setMaximumWidth(400)
+            # Max 80% of typical chat width
+            bubble.setMaximumWidth(320)
         else:
             # Assistant messages: left aligned, secondary background
             outer_layout.addWidget(bubble)
@@ -174,11 +177,12 @@ class ChatMessageWidget(QFrame):
                     border: none;
                 }}
             """)
-            bubble.setMaximumWidth(500)
+            # Max 85% of typical chat width
+            bubble.setMaximumWidth(380)
 
-        # Main widget should have transparent background
+        # Main widget: fill width but don't request more than needed
         self.setStyleSheet("ChatMessageWidget { background: transparent; border: none; }")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
 
     def append_content(self, text: str):
         """Append text to the message content (for streaming)."""
@@ -692,8 +696,10 @@ class CopilotChatPanel(QWidget):
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self._messages_container = QWidget()
+        self._messages_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self._messages_layout = QVBoxLayout(self._messages_container)
         self._messages_layout.setContentsMargins(8, 8, 8, 8)
         self._messages_layout.setSpacing(8)
@@ -705,7 +711,7 @@ class CopilotChatPanel(QWidget):
                 background-color: {colors.bg_primary};
                 border: none;
             }}
-            QWidget {{
+            QScrollArea > QWidget > QWidget {{
                 background-color: {colors.bg_primary};
             }}
         """)
