@@ -100,14 +100,14 @@ def test_open_sql_file(main_window, temp_sql_file):
     # Usar o último bloco (que agora é o único)
     block = widget.editor.get_blocks()[0]
     block.set_language("sql")
-    block.editor.setText(content)  # Usar setText do QScintilla
+    block.editor.set_text(content)  # Monaco API
     QApplication.processEvents()
     QTest.qWait(100)
 
     # Verificar que o conteúdo foi carregado
     blocks = widget.editor.get_blocks()
     assert len(blocks) > 0
-    assert "SELECT" in blocks[0].editor.text()
+    assert "SELECT" in blocks[0].editor.get_text()
     assert blocks[0].get_language() == "sql"
     assert hasattr(widget, "file_path")
     assert widget.file_path == temp_sql_file
@@ -137,14 +137,14 @@ def test_open_python_file(main_window, temp_python_file):
     # Usar o último bloco
     block = widget.editor.get_blocks()[0]
     block.set_language("python")
-    block.editor.setText(content)  # Usar setText do QScintilla
+    block.editor.set_text(content)  # Monaco API
     QApplication.processEvents()
     QTest.qWait(100)
 
     # Verificar
     blocks = widget.editor.get_blocks()
     assert len(blocks) > 0
-    assert "import pandas" in blocks[0].editor.text()
+    assert "import pandas" in blocks[0].editor.get_text()
     assert blocks[0].get_language() == "python"
 
 
@@ -167,10 +167,10 @@ def test_duplicate_session(main_window):
     # Usar primeiro bloco e adicionar segundo
     block1 = widget.editor.get_blocks()[0]
     block1.set_language("sql")
-    block1.editor.setText("SELECT 1")
+    block1.editor.set_text("SELECT 1")
 
     block2 = widget.editor.add_block(language="python")
-    block2.editor.setText("print('hello')")
+    block2.editor.set_text("print('hello')")
 
     QApplication.processEvents()
     QTest.qWait(200)
@@ -197,9 +197,9 @@ def test_duplicate_session(main_window):
     new_blocks = new_widget.editor.get_blocks()
 
     assert len(new_blocks) == 2, f"Esperado 2 blocos, encontrado {len(new_blocks)}"
-    assert new_blocks[0].editor.text() == "SELECT 1"
+    assert new_blocks[0].editor.get_text() == "SELECT 1"
     assert new_blocks[0].get_language() == "sql"
-    assert new_blocks[1].editor.text() == "print('hello')"
+    assert new_blocks[1].editor.get_text() == "print('hello')"
     assert new_blocks[1].get_language() == "python"
 
 
@@ -278,7 +278,7 @@ def test_file_path_preserved_on_duplicate(main_window, temp_sql_file):
 
     block = widget.editor.get_blocks()[0]
     block.set_language("sql")
-    block.editor.setText("SELECT 1")
+    block.editor.set_text("SELECT 1")
 
     QApplication.processEvents()
     QTest.qWait(200)
