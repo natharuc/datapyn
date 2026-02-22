@@ -878,11 +878,16 @@ class CopilotChatPanel(QWidget):
     def _setup_chat_webview(self):
         """Setup the WebView-based chat messages area."""
         from PyQt6.QtWebEngineCore import QWebEngineSettings
+        from PyQt6.QtGui import QColor
         
         # Create WebView
         self._chat_webview = QWebEngineView()
         self._chat_webview.setMinimumSize(200, 100)
         self._chat_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        
+        # Set dark background BEFORE loading to avoid white flash
+        self._chat_webview.setStyleSheet("background-color: #1e1e1e;")
+        self._chat_webview.page().setBackgroundColor(QColor("#1e1e1e"))
         
         # Enable JavaScript
         settings = self._chat_webview.page().settings()
