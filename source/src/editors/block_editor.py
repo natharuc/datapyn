@@ -70,6 +70,9 @@ class BlockEditor(QWidget):
     # Signal when data file is dropped (to show import dialog)
     file_dropped = pyqtSignal(str)  # file_path
 
+    # Signal for completion/autocomplete logging
+    completion_log = pyqtSignal(str, str)  # message, level
+
     def __init__(self, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
@@ -80,6 +83,9 @@ class BlockEditor(QWidget):
         self._execution_queue_blocks: List[CodeBlock] = []  # Blocks in execution queue
         self._current_executing_block: Optional[CodeBlock] = None  # Currently executing block
         self._dragging_block: Optional[CodeBlock] = None  # Block being dragged
+        self._copilot_client = None  # Copilot client for inline completions
+        self._lsp_client = None  # LSP client for inline completions
+        self._database_context = ""  # Database schema context for SQL completions
 
         self._setup_ui()
 
@@ -90,6 +96,24 @@ class BlockEditor(QWidget):
         self.add_block()
 
     # === Public Properties ===
+
+    def set_copilot_client(self, client) -> None:
+        """Set Copilot client for inline completions in all blocks."""
+        self._copilot_client = client
+        for block in self._blocks:
+            block.set_copilot_client(client)
+
+    def set_lsp_client(self, client) -> None:
+        """Set LSP client for inline completions in all blocks."""
+        self._lsp_client = client
+        for block in self._blocks:
+            block.set_lsp_client(client)
+    
+    def set_database_context(self, context: str) -> None:
+        """Set database schema context for SQL completions in all blocks."""
+        self._database_context = context
+        for block in self._blocks:
+            block.set_database_context(context)
 
     @property
     def blocks(self) -> List["CodeBlock"]:
@@ -180,14 +204,20 @@ class BlockEditor(QWidget):
         - If there's a selection in focused block: runs selection with block's language
         - If no selection: runs focused block
         """
-        if self._focused_block and self._focused_block.has_selection():
-            # Run selection
-            code = self._focused_block.get_selected_text()
-            lang = self._focused_block.get_language()
-            self._execute_code(code, lang, self._focused_block)
-        else:
-            # Run focused block
-            self._execute_block(self._focused_block or (self._blocks[0] if self._blocks else None))
+        if self._focused_block:
+            has_sel = self._focused_block.has_selection()
+            print(f"[BlockEditor] _execute_smart: has_selection={has_sel}")
+            if has_sel:
+                # Run selection
+                code = self._focused_block.get_selected_text()
+                print(f"[BlockEditor] Running selected text ({len(code)} chars): {code[:50]!r}...")
+                lang = self._focused_block.get_language()
+                self._execute_code(code, lang, self._focused_block)
+                return
+        
+        # Run focused block
+        print("[BlockEditor] Running full block (no selection)")
+        self._execute_block(self._focused_block or (self._blocks[0] if self._blocks else None))
 
     def _execute_focused_and_advance(self):
         """Run focused block and move focus to next"""
@@ -327,10 +357,22 @@ class BlockEditor(QWidget):
         block = CodeBlock(theme_manager=self.theme_manager, default_language=language)
         if code:
             block.set_code(code)
+        
+        # Pass Copilot client for inline completions (Monaco)
+        if self._copilot_client:
+            block.set_copilot_client(self._copilot_client)
+
+        # Pass LSP client for inline completions (Monaco)
+        if hasattr(self, "_lsp_client") and self._lsp_client:
+            block.set_lsp_client(self._lsp_client)
+        
+        # Pass database context for SQL completions (Monaco)
+        if self._database_context:
+            block.set_database_context(self._database_context)
 
         # Connect signals
         # execute_requested runs only that block
-        block.execute_requested.connect(lambda b: self._on_block_execute_requested(b))
+        block.execute_requested.connect(lambda b, sel: self._on_block_execute_requested(b, sel))
         block.remove_requested.connect(self.remove_block)
         block.cancel_requested.connect(lambda b: self.cancel_all_executions())
         block.focus_changed.connect(self._on_block_focus_changed)
@@ -338,6 +380,7 @@ class BlockEditor(QWidget):
         block.select_connection_requested.connect(self.select_connection_for_block.emit)
         block.connection_name_changed.connect(self.block_connection_changed.emit)
         block.database_changed.connect(self.block_database_changed.emit)
+        block.completion_log.connect(self.completion_log.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
 
         # Determine position
@@ -618,21 +661,27 @@ class BlockEditor(QWidget):
 
     # === Unified execution (F5 and button do the same thing) ===
 
-    def _on_block_execute_requested(self, block: CodeBlock):
+    def _on_block_execute_requested(self, block: CodeBlock, selected_text: str = ""):
         """
         Handler when a block requests execution (F5 or run button).
 
         Logic:
-        - If there's a selection in block: run only selection
+        - If there's a selection: run only selection
         - If no selection: run only this block
+        
+        Args:
+            block: The CodeBlock requesting execution
+            selected_text: Selected text from the editor (empty if no selection)
         """
-        if block.has_selection():
+        print(f"[BlockEditor] _on_block_execute_requested: selected_text={len(selected_text)} chars")
+        if selected_text:
             # Run only selection from this block
-            code = block.get_selected_text()
+            print(f"[BlockEditor] Running selected text ({len(selected_text)} chars): {selected_text[:50]!r}...")
             lang = block.get_language()
-            self._execute_code(code, lang, block)
+            self._execute_code(selected_text, lang, block)
         else:
             # Run only this block
+            print("[BlockEditor] Running full block (no selection)")
             self._execute_block(block)
 
     # === Drag and Drop ===

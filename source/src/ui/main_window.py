@@ -85,7 +85,6 @@ def _read_file_with_encoding_fallback(filepath: str) -> str:
         return f.read()
 
 
-from src.editors import UnifiedEditor
 from src.database import ConnectionManager
 from src.core import ResultsManager, ShortcutManager, WorkspaceManager, ThemeManager, SessionManager
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
@@ -451,6 +450,12 @@ class MainWindow(DockingMainWindow):
         # Copilot integration (MCP server + client)
         self._mcp_server = MCPServer()
         self._copilot_client = CopilotClient()
+        
+        # LSP server manager for fast inline completions
+        from src.services.copilot import CopilotServerManager, is_copilot_server_available
+        self._copilot_server_manager = CopilotServerManager()
+        self._lsp_client = None
+        self._lsp_server_available = is_copilot_server_available()  # Check now, setup later
 
         # Intelligent file management system
         self._original_file_path = None  # Original opened file path (sql/py/dpw)
@@ -1307,6 +1312,10 @@ class MainWindow(DockingMainWindow):
         # Connect Copilot signals to output panel
         self._connect_copilot_to_output()
 
+        # Setup LSP client for fast inline completions (if server is available)
+        if hasattr(self, "_lsp_server_available") and self._lsp_server_available:
+            self._setup_lsp_client()
+
         # Tabifica Results e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
         self.tabifyDockWidget(self.output_dock, self.copilot_output_dock)
@@ -1970,6 +1979,27 @@ class MainWindow(DockingMainWindow):
         tools_menu.addAction(auto_update_action)
         self._auto_update_action = auto_update_action  # Save reference to update state
 
+        tools_menu.addSeparator()
+
+        # Copilot submenu
+        copilot_menu = tools_menu.addMenu(S.menu.copilot_submenu)
+        if HAS_QTAWESOME:
+            copilot_menu.setIcon(qta.icon("mdi.robot", color="#b0b0b0"))
+
+        # Download Language Server
+        download_lsp_action = QAction(S.menu.copilot_download_lsp, self)
+        if HAS_QTAWESOME:
+            download_lsp_action.setIcon(qta.icon("mdi.download", color="#b0b0b0"))
+        download_lsp_action.triggered.connect(self._show_copilot_download_dialog)
+        copilot_menu.addAction(download_lsp_action)
+
+        # Check Status
+        check_status_action = QAction(S.menu.copilot_check_status, self)
+        if HAS_QTAWESOME:
+            check_status_action.setIcon(qta.icon("mdi.information-outline", color="#b0b0b0"))
+        check_status_action.triggered.connect(self._show_copilot_status)
+        copilot_menu.addAction(check_status_action)
+
         # Help Menu
         help_menu = menubar.addMenu(S.menu.help)
 
@@ -2010,6 +2040,121 @@ class MainWindow(DockingMainWindow):
                     input_field = getattr(self._copilot_chat_panel, "_input", None)
                     if input_field:
                         input_field.setFocus()
+    
+    def _setup_lsp_client(self):
+        """Setup the Copilot LSP client for fast inline completions."""
+        from src.services.copilot import CopilotLSPClient, get_copilot_server_path
+        import logging
+        
+        server_path = get_copilot_server_path()
+        if not server_path:
+            logging.info("[MAIN] LSP server not available")
+            return False
+        
+        logging.info(f"[MAIN] Setting up LSP client with server: {server_path}")
+        
+        self._lsp_client = CopilotLSPClient(str(server_path), self)
+        
+        # Connect LSP signals
+        self._lsp_client.auth_required.connect(self._on_lsp_auth_required)
+        self._lsp_client.authenticated.connect(self._on_lsp_authenticated)
+        self._lsp_client.log_message.connect(self._on_completion_log)
+        
+        # Start the server
+        if self._lsp_client.start():
+            self._lsp_client.initialize()
+            logging.info("[MAIN] LSP client started and initializing")
+            return True
+        
+        self._lsp_client = None
+        logging.warning("[MAIN] Failed to start LSP client")
+        return False
+    
+    def _on_lsp_auth_required(self, user_code: str, verification_uri: str):
+        """Handle LSP authentication request."""
+        # Show in Copilot panel if visible
+        if hasattr(self, "_copilot_chat_panel"):
+            self._copilot_chat_panel._on_auth_required(user_code, verification_uri)
+    
+    def _on_lsp_authenticated(self, username: str):
+        """Handle LSP authentication success."""
+        import logging
+        logging.info(f"[MAIN] LSP authenticated: {username}")
+        # Update all editors with LSP client
+        self._update_editors_lsp_client()
+    
+    def _update_editors_lsp_client(self):
+        """Update all editors with the LSP client."""
+        if not self._lsp_client:
+            return
+        
+        for i in range(self.session_tabs.count()):
+            widget = self.session_tabs.widget(i)
+            if hasattr(widget, "editor") and hasattr(widget.editor, "set_lsp_client"):
+                widget.editor.set_lsp_client(self._lsp_client)
+    
+    def _show_copilot_download_dialog(self):
+        """Show dialog to download the Copilot LSP server."""
+        from src.ui.dialogs import CopilotDownloadDialog
+        
+        dialog = CopilotDownloadDialog(self)
+        if dialog.exec() and dialog.was_successful():
+            # Server downloaded - set it up
+            self._setup_lsp_client()
+            self._update_editors_lsp_client()
+
+    def _show_copilot_status(self):
+        """Show Copilot status dialog with LSP and SDK info."""
+        from PyQt6.QtWidgets import QMessageBox
+        from src.services.copilot import is_copilot_server_available, get_copilot_server_path
+        
+        # LSP status
+        lsp_available = is_copilot_server_available()
+        lsp_path = get_copilot_server_path() if lsp_available else "Not installed"
+        lsp_client_running = hasattr(self, "_lsp_client") and self._lsp_client is not None
+        lsp_authenticated = lsp_client_running and self._lsp_client.is_authenticated
+        
+        # SDK status
+        sdk_available = hasattr(self, "_copilot_client") and self._copilot_client is not None
+        sdk_authenticated = sdk_available and self._copilot_client.is_authenticated
+        sdk_username = ""
+        if sdk_authenticated:
+            sdk_username = getattr(self._copilot_client, "_username", "unknown")
+        
+        # Build status message
+        lines = []
+        lines.append("=== Copilot Language Server (LSP) ===")
+        lines.append(f"Installed: {'Yes' if lsp_available else 'No'}")
+        if lsp_available:
+            lines.append(f"Path: {lsp_path}")
+        lines.append(f"Running: {'Yes' if lsp_client_running else 'No'}")
+        lines.append(f"Authenticated: {'Yes' if lsp_authenticated else 'No'}")
+        lines.append("")
+        lines.append("=== Copilot Chat API (SDK) ===")
+        lines.append(f"Loaded: {'Yes' if sdk_available else 'No'}")
+        lines.append(f"Authenticated: {'Yes' if sdk_authenticated else 'No'}")
+        if sdk_username:
+            lines.append(f"User: {sdk_username}")
+        lines.append("")
+        lines.append("=== Autocomplete Status ===")
+        if lsp_authenticated:
+            lines.append("Using: LSP (fast, <500ms)")
+        elif sdk_authenticated:
+            lines.append("Using: Chat API (slower, 2-3s)")
+        elif not lsp_available:
+            lines.append("Status: LSP not installed")
+            lines.append("Action: Use Tools > Copilot > Download Language Server")
+        elif not lsp_client_running:
+            lines.append("Status: LSP not running")
+        else:
+            lines.append("Status: Not authenticated")
+            lines.append("Action: Open Copilot Chat panel and authenticate")
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Copilot Status")
+        msg.setText("\n".join(lines))
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.exec()
 
     def _connect_copilot_to_output(self):
         """Connect Copilot client signals to output panel."""
@@ -2187,18 +2332,6 @@ class MainWindow(DockingMainWindow):
                 self._shortcuts.append(shortcut)
                 app_keys.add(key_sequence)
 
-        # Informar editores quais atalhos o app usa
-        from src.editors.code_editor import CodeEditor
-        CodeEditor.set_app_shortcuts(app_keys)
-
-        # Informar editores sobre atalhos configuraveis do editor (QScintilla)
-        editor_shortcuts = {
-            action: self.shortcut_manager.get_shortcut(action)
-            for action in self.shortcut_manager.get_all_shortcuts()
-            if action.startswith("editor_")
-        }
-        CodeEditor.set_editor_shortcuts(editor_shortcuts)
-
     def _reload_shortcuts(self):
         """Re-registers all shortcuts (called when user changes settings)"""
         from PyQt6.QtGui import QShortcut, QKeySequence
@@ -2250,26 +2383,6 @@ class MainWindow(DockingMainWindow):
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
                 app_keys.add(key_sequence)
-
-        # Update editors
-        from src.editors.code_editor import CodeEditor
-        CodeEditor.set_app_shortcuts(app_keys)
-
-        # Atualizar atalhos configuraveis do editor (QScintilla)
-        editor_shortcuts = {
-            action: self.shortcut_manager.get_shortcut(action)
-            for action in self.shortcut_manager.get_all_shortcuts()
-            if action.startswith("editor_")
-        }
-        CodeEditor.set_editor_shortcuts(editor_shortcuts)
-
-        # Re-aplicar keybindings nos editores ja existentes
-        for i in range(self.session_tabs.count()):
-            widget = self.session_tabs.widget(i)
-            if isinstance(widget, SessionWidget):
-                for block in widget.editor.get_blocks():
-                    if isinstance(block.editor, CodeEditor):
-                        block.editor._apply_editor_keybindings()
 
     # NOTA: _new_session() definido mais abaixo (linha ~2745) com guard contra duplicacao
 
@@ -2365,6 +2478,7 @@ class MainWindow(DockingMainWindow):
             new_widget.execution_cancelled.connect(
                 lambda w=new_widget: self._on_execution_cancelled(w)
             )
+            new_widget.completion_log.connect(self._on_completion_log)
 
             # Register widget
             self._session_widgets[session.session_id] = new_widget
@@ -2399,7 +2513,7 @@ class MainWindow(DockingMainWindow):
         widget = self._get_current_session_widget()
         if widget and widget.editor:
             block = widget.editor.get_focused_block()
-            if block and hasattr(block, "editor"):
+            if block and hasattr(block, "editor") and hasattr(block.editor, "_open_find"):
                 block.editor._open_find()
 
     def _replace_in_editor(self):
@@ -2407,7 +2521,7 @@ class MainWindow(DockingMainWindow):
         widget = self._get_current_session_widget()
         if widget and widget.editor:
             block = widget.editor.get_focused_block()
-            if block and hasattr(block, "editor"):
+            if block and hasattr(block, "editor") and hasattr(block.editor, "_open_replace"):
                 block.editor._open_replace()
 
     def _format_current_block(self):
@@ -2435,13 +2549,17 @@ class MainWindow(DockingMainWindow):
             return
 
         if formatted != code:
-            # Preserve cursor position
-            sci = block.editor._sci
-            line, col = sci.getCursorPosition()
-            block.editor.set_text(formatted)
-            # Restaurar cursor (limitar a linhas existentes)
-            max_line = sci.lines() - 1
-            sci.setCursorPosition(min(line, max_line), col)
+            # Preserve cursor position (only for QScintilla which has _sci)
+            if hasattr(block.editor, "_sci"):
+                sci = block.editor._sci
+                line, col = sci.getCursorPosition()
+                block.editor.set_text(formatted)
+                # Restaurar cursor (limitar a linhas existentes)
+                max_line = sci.lines() - 1
+                sci.setCursorPosition(min(line, max_line), col)
+            else:
+                # Monaco: just set text (cursor handled by editor)
+                block.editor.set_text(formatted)
             self.action_label.setText(S.status.code_formatted.format(lang=lang.upper()))
         else:
             self.action_label.setText(S.status.code_already_formatted.format(lang=lang.upper()))
@@ -4230,6 +4348,14 @@ class MainWindow(DockingMainWindow):
     def _create_session_widget(self, session):
         """Creates widget for a session and adds it to a tab"""
         widget = SessionWidget(session, theme_manager=self.theme_manager)
+        
+        # Pass Copilot client to BlockEditor for inline completions (Monaco)
+        if hasattr(self, "_copilot_client") and self._copilot_client:
+            widget.editor.set_copilot_client(self._copilot_client)
+
+        # Pass LSP client if available
+        if hasattr(self, "_lsp_client") and self._lsp_client:
+            widget.editor.set_lsp_client(self._lsp_client)
 
         # Criar paineis por sessao (Results, Output, Variables)
         self._create_session_panels(session.session_id)
@@ -4274,6 +4400,9 @@ class MainWindow(DockingMainWindow):
         widget.execution_cancelled.connect(
             lambda w=widget: self._on_execution_cancelled(w)
         )
+
+        # Completion logging (for Copilot output panel)
+        widget.completion_log.connect(self._on_completion_log)
 
         # Conectar sinal de modificacao do editor para rastreamento por hash
         widget.editor.content_changed.connect(lambda w=widget: self._on_editor_modified(w))
@@ -4628,6 +4757,17 @@ class MainWindow(DockingMainWindow):
                     block.editor.set_sql_schema(schema)
                     if hasattr(block, "set_available_databases"):
                         block.set_available_databases(all_databases)
+        
+        # Build text context from schema for Copilot completions
+        schema_context = self._build_schema_context(schema, connection_name)
+        
+        # Propagate schema context to editors for inline completions
+        for sid, widget in self._session_widgets.items():
+            if not (hasattr(widget, "session") and widget.session):
+                continue
+            session_conn = getattr(widget.session, "connection_name", "") or ""
+            if session_conn == connection_name and hasattr(widget, "editor"):
+                widget.editor.set_database_context(schema_context)
 
         # Update Object Explorer for corresponding session
         if hasattr(self, "_session_explorers"):
@@ -4650,6 +4790,31 @@ class MainWindow(DockingMainWindow):
             pending_block = self._pending_block_schemas.pop(connection_name, None)
             if pending_block:
                 self._apply_schema_to_block(pending_block, schema)
+
+    def _build_schema_context(self, schema: dict, connection_name: str) -> str:
+        """Build text context from schema for Copilot inline completions.
+        
+        Returns a compact representation of tables and columns that fits
+        within token limits while providing useful context.
+        """
+        tables = schema.get("tables", [])
+        columns = schema.get("columns", {})
+        db_name = schema.get("database", connection_name)
+        
+        lines = [f"Database: {db_name}", f"Tables ({len(tables)}):"]
+        
+        for table in tables[:30]:  # Limit to first 30 tables
+            table_name = table.get("name", "")
+            table_cols = columns.get(table_name, [])
+            col_names = [c.get("name", "") for c in table_cols[:10]]  # First 10 cols
+            if len(table_cols) > 10:
+                col_names.append(f"... +{len(table_cols) - 10} more")
+            lines.append(f"  {table_name}: {', '.join(col_names)}")
+        
+        if len(tables) > 30:
+            lines.append(f"  ... +{len(tables) - 30} more tables")
+        
+        return "\n".join(lines)
 
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback when an individual block connection changes.
@@ -4767,6 +4932,24 @@ class MainWindow(DockingMainWindow):
         # schema reload, UI updates, etc.)
         self._on_object_explorer_database_switch(database_name)
 
+    def _on_completion_log(self, message: str, level: str):
+        """Handle autocomplete/completion log messages.
+        
+        Forwards to Copilot output panel so users can see what's happening.
+        """
+        if not hasattr(self, "_copilot_output_panel") or not self._copilot_output_panel:
+            return
+        
+        output = self._copilot_output_panel
+        if level == "error":
+            output.log_error(message)
+        elif level == "debug":
+            # Only log debug when panel is visible (avoid spam)
+            if hasattr(self, "copilot_output_dock") and self.copilot_output_dock.isVisible():
+                output.log_info(message)
+        else:
+            output.log_info(message)
+
     def _switch_block_database_background(self, block, connection_name: str, database_name: str):
         """Switch database for a block with custom connection (in background)."""
         from src.database.connection_manager import ConnectionManager
@@ -4864,17 +5047,41 @@ class MainWindow(DockingMainWindow):
         if current_widget and hasattr(current_widget, "editor") and current_widget.editor:
             # Collect import lines from all blocks to share as global context
             import_lines = []
+            blocks_code_context_parts = []
+            
             for block in current_widget.editor.get_blocks():
-                if block.get_language() == "python":
-                    for line in block.get_code().splitlines():
+                block_name = block.get_block_name() if hasattr(block, 'get_block_name') else ""
+                block_lang = block.get_language()
+                block_code = block.get_code()
+                
+                if block_lang == "python":
+                    for line in block_code.splitlines():
                         stripped = line.strip()
                         if stripped.startswith("import ") or stripped.startswith("from "):
                             import_lines.append(stripped)
+                
+                # Build context for other blocks (SQL blocks create DataFrames)
+                if block_lang == "sql" and block_name:
+                    # Show that this SQL block produces a DataFrame with block_name
+                    blocks_code_context_parts.append(
+                        f"# Block '{block_name}' (SQL) creates DataFrame `{block_name}`:\n"
+                        f"# {block_code.strip()[:200]}"
+                    )
+            
             global_imports = "\n".join(dict.fromkeys(import_lines))  # deduplicate preserving order
+            blocks_code_context = "\n\n".join(blocks_code_context_parts)
 
             for block in current_widget.editor.get_blocks():
-                if hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
+                # Pass namespace to completion service via block
+                if hasattr(block, "set_python_namespace"):
+                    block.set_python_namespace(ns_types)
+                elif hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
                     block.editor.set_python_namespace(ns_types)
+                
+                # Pass blocks code context for Python completions
+                if hasattr(block, "set_blocks_code_context"):
+                    block.set_blocks_code_context(blocks_code_context)
+                
                 if hasattr(block, "editor") and hasattr(block.editor, "set_global_imports"):
                     block.editor.set_global_imports(global_imports)
 
@@ -4921,8 +5128,8 @@ class MainWindow(DockingMainWindow):
             return widget
         return None
 
-    def _get_current_editor(self) -> UnifiedEditor:
-        """Returns the editor of the active session"""
+    def _get_current_editor(self):
+        """Returns the editor (BlockEditor) of the active session"""
         widget = self._get_current_session_widget()
         if widget:
             return widget.editor

@@ -529,8 +529,7 @@ class TestProtectedPackages:
         "pyqt6",
         "pyqt6-qt6",
         "pyqt6-sip",
-        "qscintilla",
-        "pyqt6-qscintilla",
+        "pyqt6-webengine",
     ]
 
     @patch("src.services.package_manager_service.subprocess.run")

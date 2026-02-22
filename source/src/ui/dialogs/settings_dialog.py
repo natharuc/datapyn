@@ -295,6 +295,46 @@ class SettingsDialog(QDialog):
         display_layout.addWidget(display_hint)
 
         general_layout.addWidget(display_group)
+
+        # Editor section - Monaco Editor info
+        editor_group = QGroupBox(
+            S.settings.section_editor if hasattr(S.settings, 'section_editor') else "CODE EDITOR"
+        )
+        editor_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 11px;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 0px;
+                margin-top: 12px;
+                padding-top: 20px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }
+        """)
+        editor_layout = QVBoxLayout(editor_group)
+        editor_layout.setSpacing(10)
+
+        # Monaco Editor info
+        editor_info = QLabel(
+            S.settings.editor_monaco if hasattr(S.settings, 'editor_monaco')
+            else "Monaco Editor with Copilot inline completions"
+        )
+        editor_info.setStyleSheet("color: #cccccc; font-size: 11px; font-weight: normal;")
+        editor_layout.addWidget(editor_info)
+
+        # Editor hint
+        editor_hint = QLabel(
+            "Powered by Monaco (VS Code editor engine)"
+        )
+        editor_hint.setStyleSheet("color: #6e6e6e; font-size: 10px; font-style: italic; font-weight: normal;")
+        editor_layout.addWidget(editor_hint)
+
+        general_layout.addWidget(editor_group)
         general_layout.addStretch()
 
         self.tabs.addTab(general_widget, S.settings.tab_general)
@@ -544,7 +584,8 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, S.settings.success_title, S.settings.success_msg)
 
         # If language changed, prompt restart
-        if selected_lang != self._original_language:
+        needs_restart = selected_lang != self._original_language
+        if needs_restart:
             reply = QMessageBox.question(
                 self,
                 S.dialogs.language_restart_title,

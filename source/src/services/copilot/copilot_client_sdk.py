@@ -171,6 +171,7 @@ class CopilotWorker(QObject):
     thinking = pyqtSignal(str)  # Reasoning text
     finished = pyqtSignal()
     ready = pyqtSignal()  # Worker is ready to accept chat requests
+    inline_complete = pyqtSignal(str)  # Inline completion result
 
     def __init__(self, tool_executor: ThreadSafeToolExecutor = None):
         super().__init__()
@@ -183,6 +184,7 @@ class CopilotWorker(QObject):
         self._prompt = ""
         self._system_message = ""
         self._loop = None  # Persistent event loop
+        self._inline_prompt = ""  # For inline completions
 
     def set_model(self, model: str):
         self._model = model
@@ -192,12 +194,17 @@ class CopilotWorker(QObject):
 
     def set_system_message(self, system_message: str):
         self._system_message = system_message
+    
+    def set_inline_prompt(self, prompt: str):
+        """Set prompt for inline completion request."""
+        self._inline_prompt = prompt
 
     def cancel(self):
         self._cancelled = True
-        if self._session:
+        if self._session and self._loop and not self._loop.is_closed():
             try:
-                self._session.abort()
+                # Run abort() coroutine in the worker's event loop
+                self._loop.run_until_complete(self._session.abort())
             except Exception:
                 pass
 
@@ -313,6 +320,8 @@ class CopilotWorker(QObject):
         except Exception as e:
             logger.exception("Error in Copilot chat")
             self.error.emit(str(e))
+        finally:
+            self.finished.emit()
 
     def _do_chat(self):
         """Internal chat implementation using persistent asyncio loop."""
@@ -544,6 +553,173 @@ class CopilotWorker(QObject):
         logger.info(f"Built {len(sdk_tools)} SDK tools: {[t.name for t in sdk_tools]}")
         return sdk_tools
 
+    @pyqtSlot()
+    def run_inline_completion(self):
+        """Run inline completion request using existing SDK client.
+        
+        Does NOT emit finished to keep worker alive for subsequent requests.
+        """
+        import time
+        start = time.time()
+        logger.info("[COPILOT-WORKER] Starting inline completion request...")
+        try:
+            self._cancelled = False
+            self._do_inline_completion()
+            elapsed = time.time() - start
+            logger.info(f"[COPILOT-WORKER] Inline completion finished in {elapsed:.2f}s")
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.warning(f"[COPILOT-WORKER] Inline completion error after {elapsed:.2f}s: {e}")
+            self.inline_complete.emit("")
+        # Note: Do NOT emit finished - worker stays alive for more requests
+
+    @pyqtSlot()
+    def _init_sdk_session(self):
+        """Initialize SDK client and session for faster first completion.
+        
+        Called in background after authentication to pre-warm the session.
+        """
+        import asyncio
+        
+        try:
+            if not self._loop or self._loop.is_closed():
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+            
+            self._loop.run_until_complete(self._async_init_session())
+        except Exception as e:
+            logger.warning(f"SDK session pre-init error: {e}")
+
+    async def _async_init_session(self):
+        """Async session initialization without completion."""
+        SDKClient, _, EventType, import_err = _try_import_sdk()
+        if SDKClient is None:
+            return
+        
+        # Initialize client
+        if not self._sdk_client:
+            self._sdk_client = SDKClient()
+            await self._sdk_client.start()
+            logger.info("Copilot SDK client started (pre-init)")
+        
+        # Create session
+        if not self._session:
+            config = {
+                "model": "gpt-4o-mini",  # Fast model for completions
+                "streaming": True,
+            }
+            if self._system_message:
+                config["system_message"] = {
+                    "message": self._system_message,
+                }
+            self._session = await self._sdk_client.create_session(config)
+            logger.info("Copilot completion session created (pre-init)")
+
+    def _do_inline_completion(self):
+        """Internal inline completion implementation."""
+        import asyncio
+        
+        # Use persistent loop if available
+        if not self._loop or self._loop.is_closed():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        
+        self._loop.run_until_complete(self._async_inline_completion())
+
+    async def _async_inline_completion(self):
+        """Async inline completion - simpler than full chat."""
+        import asyncio
+        
+        SDKClient, _, EventType, import_err = _try_import_sdk()
+        if SDKClient is None:
+            logger.warning("[COPILOT-WORKER] SDK import failed, emitting empty")
+            self.inline_complete.emit("")
+            return
+        
+        # Initialize client if needed
+        if not self._sdk_client:
+            logger.info("[COPILOT-WORKER] Creating new SDK client...")
+            self._sdk_client = SDKClient()
+            await self._sdk_client.start()
+            logger.info("[COPILOT-WORKER] SDK client started")
+        
+        # Create session without tools for faster response
+        if not self._session:
+            logger.info("[COPILOT-WORKER] Creating new session (gpt-4o-mini)...")
+            config = {
+                "model": "gpt-4o-mini",  # Faster model for completions
+                "streaming": True,
+            }
+            if self._system_message:
+                config["system_message"] = {
+                    "message": self._system_message,
+                }
+            self._session = await self._sdk_client.create_session(config)
+            logger.info("[COPILOT-WORKER] Session created successfully")
+        
+        if not self._inline_prompt:
+            logger.info("[COPILOT-WORKER] No inline prompt set, emitting empty")
+            self.inline_complete.emit("")
+            return
+        
+        logger.info(
+            f"[COPILOT-WORKER] Sending prompt ({len(self._inline_prompt)} chars): "
+            f"{self._inline_prompt[:100]}..."
+        )
+        
+        # Collect response
+        full_response = ""
+        idle_event = asyncio.Event()
+        events = []
+        
+        def on_event(event):
+            events.append(event)
+            if event.type == EventType.SESSION_IDLE:
+                logger.info("[COPILOT-WORKER] Session became idle")
+                idle_event.set()
+            elif event.type == EventType.SESSION_ERROR:
+                logger.warning(f"[COPILOT-WORKER] Session error: {event}")
+                idle_event.set()
+        
+        unsubscribe = self._session.on(on_event)
+        
+        try:
+            await self._session.send({"prompt": self._inline_prompt})
+            logger.info("[COPILOT-WORKER] Prompt sent, waiting for response...")
+            
+            # Short timeout for fast completions (3 seconds)
+            start_time = time.time()
+            timeout = 3
+            
+            while not idle_event.is_set() and not self._cancelled:
+                elapsed = time.time() - start_time
+                if elapsed > timeout:
+                    logger.warning(
+                        f"[COPILOT-WORKER] Timeout after {elapsed:.1f}s, "
+                        f"response so far: {len(full_response)} chars"
+                    )
+                    break
+                
+                while events:
+                    event = events.pop(0)
+                    if event.type == EventType.ASSISTANT_MESSAGE_DELTA:
+                        delta = getattr(event.data, "delta_content", "") or ""
+                        if delta:
+                            full_response += delta
+                    elif event.type == EventType.ASSISTANT_MESSAGE:
+                        content = getattr(event.data, "content", "") or ""
+                        if content:
+                            full_response = content
+                
+                await asyncio.sleep(0.02)
+            
+            logger.info(
+                f"[COPILOT-WORKER] Response collected: {len(full_response)} chars"
+            )
+            self.inline_complete.emit(full_response)
+        finally:
+            unsubscribe()
+
     def run_cleanup(self):
         """Clean up SDK resources."""
         import asyncio
@@ -594,6 +770,7 @@ class CopilotClient(QObject):
         tool_result(str, str): tool_name, result
         thinking(str): reasoning/thinking text
         models_changed(list): updated model list
+        inline_completion_ready(str): inline code completion text
     """
 
     auth_required = pyqtSignal(str, str)
@@ -607,6 +784,7 @@ class CopilotClient(QObject):
     tool_result = pyqtSignal(str, str)
     thinking = pyqtSignal(str)
     models_changed = pyqtSignal(list)
+    inline_completion_ready = pyqtSignal(str)  # Inline completion result
 
     def __init__(self, parent=None, tool_registry: "MCPToolRegistry" = None):
         super().__init__(parent)
@@ -623,6 +801,13 @@ class CopilotClient(QObject):
         # Temporary workers for auth operations
         self._worker_thread: Optional[QThread] = None
         self._worker: Optional[CopilotWorker] = None
+        
+        # Inline completion worker (managed separately)
+        self._completion_thread: Optional[QThread] = None
+        self._completion_worker: Optional[CopilotWorker] = None
+        
+        # LSP client for fast completions (optional)
+        self._lsp_client = None
         
         # Tool execution - lives on main thread
         self._tool_executor: Optional[ThreadSafeToolExecutor] = None
@@ -656,6 +841,59 @@ class CopilotClient(QObject):
     def available_models(self) -> List[Dict[str, str]]:
         """Return list of available models (updated from SDK)."""
         return self._available_models
+    
+    @property
+    def lsp_client(self):
+        """Get the LSP client for fast completions (or None if not set up)."""
+        return self._lsp_client
+    
+    def set_lsp_client(self, client) -> None:
+        """Set the LSP client for fast inline completions."""
+        self._lsp_client = client
+    
+    def setup_lsp_client(self, server_path: str) -> bool:
+        """
+        Set up the LSP client for fast completions.
+        
+        Args:
+            server_path: Path to the copilot-language-server executable
+            
+        Returns:
+            True if setup started successfully
+        """
+        from src.services.copilot.copilot_lsp_client import CopilotLSPClient
+        
+        # Clean up existing client
+        if self._lsp_client:
+            try:
+                self._lsp_client.stop()
+            except Exception:
+                pass
+        
+        self._lsp_client = CopilotLSPClient(server_path, self)
+        
+        # Connect LSP signals
+        self._lsp_client.auth_required.connect(self.auth_required.emit)
+        self._lsp_client.authenticated.connect(self._on_lsp_authenticated)
+        self._lsp_client.status_changed.connect(self._on_lsp_status_changed)
+        
+        # Start the server
+        if self._lsp_client.start():
+            # Initialize with workspace
+            self._lsp_client.initialize()
+            return True
+        
+        self._lsp_client = None
+        return False
+    
+    def _on_lsp_authenticated(self, username: str):
+        """Handle LSP authentication success."""
+        logger.info(f"[COPILOT] LSP authenticated: {username}")
+        # LSP auth is independent, just log it
+    
+    def _on_lsp_status_changed(self, status: str):
+        """Handle LSP status changes."""
+        logger.info(f"[COPILOT] LSP status: {status}")
 
     def start_auth(self) -> None:
         """Start authentication check with SDK. Creates persistent session worker."""
@@ -760,6 +998,242 @@ class CopilotClient(QObject):
         if self._worker:
             self._worker.cancel()
 
+    def request_inline_completion(
+        self,
+        prefix: str,
+        suffix: str,
+        language: str,
+        request_id: int = 0,
+        context: str = "",
+    ) -> None:
+        """
+        Request inline code completion from Copilot.
+        
+        Uses a lightweight prompt to get code suggestions for ghost text.
+        Result is emitted via inline_completion_ready signal.
+        
+        Args:
+            prefix: Code before cursor
+            suffix: Code after cursor
+            language: Programming language (python, sql)
+            request_id: Optional ID to track requests
+            context: Additional context (e.g., database schema for SQL)
+        """
+        if not self._is_authenticated:
+            logger.info("[COPILOT] Inline completion skipped: not authenticated")
+            self.inline_completion_ready.emit("")
+            return
+        
+        logger.info(
+            f"[COPILOT] request_inline_completion: lang={language}, "
+            f"prefix={len(prefix)} chars, suffix={len(suffix)} chars"
+        )
+        
+        # Build completion prompt - keep it short for fast response
+        prefix_truncated = prefix[-800:] if len(prefix) > 800 else prefix
+        suffix_truncated = suffix[:200] if len(suffix) > 200 else suffix
+        
+        # Include context if provided (database schema for SQL, namespace for Python)
+        context_section = ""
+        if context:
+            # Truncate context to avoid token limits
+            context_truncated = context[:1500] if len(context) > 1500 else context
+            if language == "sql":
+                context_section = f"\n\nAvailable database schema:\n{context_truncated}\n"
+            else:
+                context_section = f"\n\nContext:\n{context_truncated}\n"
+        
+        prompt = f"""Complete this {language} code. Output ONLY the code to add at the cursor position. No explanations, no markdown, no code blocks - just the raw code.{context_section}
+```{language}
+{prefix_truncated}<CURSOR>{suffix_truncated}
+```
+
+Output ONLY the completion text (what should replace <CURSOR>):"""
+        
+        system_msg = (
+            "You are a code completion assistant. Output ONLY the code completion, nothing else. "
+            "No explanations, no markdown formatting, no code fences. Just raw code."
+        )
+        
+        # Use persistent completion worker if available, else create new one
+        if self._completion_worker and self._completion_thread and self._completion_thread.isRunning():
+            # Reuse existing worker - just update prompt and trigger
+            self._completion_worker.set_inline_prompt(prompt)
+            self._completion_worker.set_system_message(system_msg)
+            # Invoke run_inline_completion via Qt event loop (thread-safe)
+            QMetaObject.invokeMethod(
+                self._completion_worker,
+                "run_inline_completion",
+                Qt.ConnectionType.QueuedConnection,
+            )
+        else:
+            # Create new persistent completion worker
+            self._cleanup_completion_worker()
+            
+            self._completion_worker = CopilotWorker(None)  # No tool executor
+            self._completion_worker.set_model("gpt-4o-mini")  # Use faster model
+            self._completion_worker.set_inline_prompt(prompt)
+            self._completion_worker.set_system_message(system_msg)
+            
+            self._completion_thread = QThread()
+            self._completion_worker.moveToThread(self._completion_thread)
+            
+            # Connect signals - worker stays alive (no finished->quit)
+            self._completion_worker.inline_complete.connect(self._on_inline_completion_received)
+            self._completion_worker.error.connect(self._on_completion_error)
+            self._completion_thread.started.connect(self._completion_worker.run_inline_completion)
+            
+            self._completion_thread.start()
+    
+    def _on_inline_completion_received(self, response: str) -> None:
+        """Handle inline completion response."""
+        logger.info(
+            f"[COPILOT] Raw inline response ({len(response)} chars): "
+            f"{response[:100]}..."
+        )
+        cleaned = self._clean_completion_response(response)
+        logger.info(
+            f"[COPILOT] Cleaned response ({len(cleaned)} chars): "
+            f"{cleaned[:80]}..."
+        )
+        self.inline_completion_ready.emit(cleaned)
+    
+    def _on_completion_received(self, response: str) -> None:
+        """Handle completion response (legacy)."""
+        cleaned = self._clean_completion_response(response)
+        self.inline_completion_ready.emit(cleaned)
+    
+    def _on_completion_error(self, msg: str) -> None:
+        """Handle completion error."""
+        logger.warning(f"Inline completion error: {msg}")
+        self.inline_completion_ready.emit("")
+    
+    def _on_completion_thread_finished(self) -> None:
+        """Cleanup completion thread after it finishes."""
+        # Only cleanup if these are still the active ones
+        # (prevent double cleanup race condition)
+        pass  # Cleanup is handled by _cleanup_completion_worker
+    
+    def _cleanup_completion_worker(self) -> None:
+        """Cancel and cleanup completion worker."""
+        worker = self._completion_worker
+        thread = self._completion_thread
+        
+        # Clear references first to prevent recursion
+        self._completion_worker = None
+        self._completion_thread = None
+        
+        if worker:
+            try:
+                worker.cancel()
+                # Disconnect signals to prevent callbacks
+                worker.complete.disconnect()
+                worker.error.disconnect()
+                worker.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        
+        if thread:
+            try:
+                # Disconnect thread signals
+                thread.started.disconnect()
+                thread.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            
+            if thread.isRunning():
+                thread.quit()
+                if not thread.wait(2000):  # Wait up to 2 seconds
+                    logger.warning("Completion thread did not terminate, forcing...")
+                    thread.terminate()
+                    thread.wait(500)
+            
+            try:
+                thread.deleteLater()
+            except RuntimeError:
+                pass
+        
+        if worker:
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+
+    def _clean_completion_response(self, response: str) -> str:
+        """Clean completion response from chat artifacts."""
+        text = response.strip()
+        
+        # Remove markdown code blocks
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Find end of code block
+            end_idx = -1
+            for i in range(len(lines) - 1, 0, -1):
+                if lines[i].strip() == "```":
+                    end_idx = i
+                    break
+            if end_idx > 0:
+                text = "\n".join(lines[1:end_idx])
+        
+        # Remove single backticks
+        if text.startswith("`") and text.endswith("`") and text.count("`") == 2:
+            text = text[1:-1]
+        
+        # Remove common prefixes like "Here's" or "The completion is:"
+        prefixes = ["here's", "here is", "the completion", "completion:"]
+        lower = text.lower()
+        for prefix in prefixes:
+            if lower.startswith(prefix):
+                # Find the actual code after the prefix
+                idx = text.find("\n")
+                if idx > 0:
+                    text = text[idx:].strip()
+                break
+        
+        return text
+
+    def _preinit_completion_session(self) -> None:
+        """Pre-initialize completion worker and SDK session for faster first completion.
+        
+        This creates the worker thread and SDK session in background so that
+        the first completion request doesn't have to wait for initialization.
+        """
+        if self._completion_worker or self._completion_thread:
+            # Already initialized
+            return
+        
+        logger.info("Pre-initializing completion session...")
+        
+        try:
+            self._completion_worker = CopilotWorker(None)  # No tool executor
+            self._completion_worker.set_model("gpt-4o-mini")  # Fast model
+            self._completion_worker.set_system_message(
+                "You are a code completion assistant. Output ONLY the code completion, nothing else."
+            )
+            # Empty prompt - session will be created but no completion sent
+            self._completion_worker.set_inline_prompt("")
+            
+            self._completion_thread = QThread()
+            self._completion_worker.moveToThread(self._completion_thread)
+            
+            # Connect signals
+            self._completion_worker.inline_complete.connect(self._on_inline_completion_received)
+            self._completion_worker.error.connect(self._on_completion_error)
+            
+            # Start thread but don't trigger completion (no started connection)
+            self._completion_thread.start()
+            
+            # Trigger session initialization in background
+            QMetaObject.invokeMethod(
+                self._completion_worker,
+                "_init_sdk_session",
+                Qt.ConnectionType.QueuedConnection,
+            )
+            
+            logger.info("Completion session pre-initialization started")
+        except Exception as e:
+            logger.warning(f"Failed to pre-init completion session: {e}")
+
     def sign_out(self) -> None:
         """Sign out (CLI manages credentials)."""
         self._is_authenticated = False
@@ -773,6 +1247,8 @@ class CopilotClient(QObject):
         username = self._get_github_username()
         self._username = username
         self.authenticated.emit(username or "Copilot")
+        # Pre-initialize completion worker/session for faster first completion
+        self._preinit_completion_session()
 
     def _get_github_username(self) -> str:
         """Get GitHub username from gh CLI."""
@@ -896,3 +1372,4 @@ class CopilotClient(QObject):
         """Clean up all resources."""
         self._cleanup_worker()
         self._cleanup_session_worker()
+        self._cleanup_completion_worker()

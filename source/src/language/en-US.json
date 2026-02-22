@@ -32,8 +32,9 @@
     "tools": "&Tools",
     "package_manager": "&Package Manager...",
     "shortcut_settings": "&Settings...",
-    "auto_update": "Enable &Auto-Update",
-    "help": "&Help",
+    "auto_update": "Enable &Auto-Update",    "copilot_submenu": "&Copilot",
+    "copilot_download_lsp": "Download &Language Server...",
+    "copilot_check_status": "Check &Status",    "help": "&Help",
     "check_updates": "Check for &Updates...",
     "about": "&About"
   },
@@ -452,7 +453,12 @@
     "confirm_restore_msg": "Do you want to restore all shortcuts to default values?",
     "section_display": "DISPLAY",
     "label_grid_row_limit": "Default grid display limit (rows):",
-    "grid_row_limit_hint": "Only affects display. Exports always include all data."
+    "grid_row_limit_hint": "Only affects display. Exports always include all data.",
+    "section_editor": "CODE EDITOR",
+    "label_editor_backend": "Editor engine:",
+    "editor_scintilla": "QScintilla (default, fast)",
+    "editor_monaco": "Monaco (experimental, Copilot ghost text)",
+    "editor_restart_hint": "Requires restart to apply. Monaco uses more memory."
   },
 
   "connections_manager": {
@@ -767,5 +773,18 @@
     "usage_loading": "...",
     "usage_format": "{used}/{total} premium",
     "stop_tooltip": "Stop generation"
+  },
+
+  "copilot_download": {
+    "title": "Copilot Autocomplete",
+    "downloading_title": "Downloading Copilot Engine",
+    "preparing": "Preparing download...",
+    "connecting": "Connecting to server...",
+    "downloading": "Downloading...",
+    "progress_format": "{downloaded:.1f} MB / {total:.1f} MB",
+    "complete": "Download complete!",
+    "failed": "Download failed: {error}",
+    "btn_cancel": "Cancel",
+    "btn_close": "Close"
   }
 }

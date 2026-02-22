@@ -111,6 +111,7 @@ class SessionWidget(QWidget):
     execution_started = pyqtSignal()  # Emitted when execution starts (for running indicator)
     execution_finished = pyqtSignal(str, str, bool)  # (title, message, success)
     execution_cancelled = pyqtSignal()  # Emitted when execution is cancelled
+    completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -336,6 +337,9 @@ class SessionWidget(QWidget):
 
         # Block database change
         self.editor.block_database_changed.connect(self.block_database_changed.emit)
+
+        # Completion logging (for Copilot output panel)
+        self.editor.completion_log.connect(self.completion_log.emit)
 
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)

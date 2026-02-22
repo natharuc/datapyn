@@ -24,10 +24,10 @@ from src.editors.block_editor import BlockEditor
 from src.editors.code_block import CodeBlock
 
 
-# Fixture autouse para evitar hang do QScintilla focus em testes
+# Fixture autouse para evitar hang do Monaco WebEngine focus em testes
 @pytest.fixture(autouse=True)
 def _no_focus_editor(monkeypatch):
-    """Desabilita focus_editor para evitar hang do QScintilla em testes"""
+    """Desabilita focus_editor para evitar hang do Monaco em testes"""
     monkeypatch.setattr(CodeBlock, "focus_editor", lambda self: None)
 
 
@@ -502,29 +502,17 @@ class TestVariablesTableModel:
 # ==================== 5. AUTOCOMPLETE ====================
 
 
+@pytest.mark.skip(reason="QScintilla CodeEditor removed - Monaco only")
 class TestEditorInsertText:
-    """Testes para insert_text_at_cursor no CodeEditor"""
+    """Testes para insert_text_at_cursor no CodeEditor (QScintilla)"""
 
     def test_editor_has_insert_text_method(self, qapp):
         """CodeEditor deve ter metodo insert_text_at_cursor"""
-        from src.editors.code_editor import CodeEditor
-
-        editor = CodeEditor()
-        assert hasattr(editor, "insert_text_at_cursor")
-        assert callable(editor.insert_text_at_cursor)
+        pass
 
     def test_editor_insert_text_at_cursor(self, qapp):
         """insert_text_at_cursor deve inserir texto na posicao do cursor"""
-        from src.editors.code_editor import CodeEditor
-
-        editor = CodeEditor()
-        editor.set_text("hello ")
-        # Cursor vai para o final do texto por padrao
-        editor._sci.setCursorPosition(0, 6)
-
-        editor.insert_text_at_cursor("world")
-
-        assert editor.get_text().strip() == "hello world"
+        pass
 
 
 # ==================== 6. BLOCKEDITOR FILE_DROPPED SIGNAL ====================
