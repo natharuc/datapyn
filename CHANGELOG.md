@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.12.1 (2026-02-22)
+
+### Bug Fixes
+
+- Esconde janelas CMD dos subprocessos no Windows
+  ([`dba559f`](https://github.com/natharuc/datapyn/commit/dba559f1324d6f89514e3c44ff2764dd17e8fe61))
+
+- MSI install - HTML templates e Copilot CLI
+  ([`1f98e1b`](https://github.com/natharuc/datapyn/commit/1f98e1b04380689c9b18a24ba74f58893feecd21))
+
+### Chores
+
+- Atualiza copilot-instructions.md
+  ([`ef176f8`](https://github.com/natharuc/datapyn/commit/ef176f8320d174a1bad44078d2622fd9b3c68dde))
+
+
 ## v1.12.0 (2026-02-22)
 
 
