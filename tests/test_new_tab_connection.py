@@ -47,6 +47,8 @@ class TestNewTabInheritsConnection:
 
         with patch("src.core.session.Session.connect", fake_connect):
             main._new_session()
+            # Wait for the QTimer.singleShot (150ms) to fire
+            qtbot.wait(300)
 
         assert "TesteConexao" in connected_calls, (
             f"Nova sessao deveria herdar 'TesteConexao', mas connect foi chamado com: {connected_calls}"
