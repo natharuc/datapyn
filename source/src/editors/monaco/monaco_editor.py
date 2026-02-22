@@ -503,7 +503,7 @@ class MonacoEditor(QWidget):
     
     def update_sql_completions(self, schema: Optional[dict]) -> None:
         """
-        Update SQL autocomplete with database schema.
+        Update SQL autocomplete with database schema (context-aware).
         
         Args:
             schema: dict with keys:
@@ -516,17 +516,18 @@ class MonacoEditor(QWidget):
         
         completions = []
         
-        # Add tables
+        # Add tables with category
         tables = schema.get("tables", [])
         for table in tables:
             completions.append({
                 "label": table,
-                "kind": "property",  # tables as properties
+                "kind": "property",
                 "insertText": table,
-                "detail": "table"
+                "detail": "table",
+                "category": "table"
             })
         
-        # Add columns (with table prefix for disambiguation)
+        # Add columns with table reference for context filtering
         columns = schema.get("columns", {})
         for table_name, column_list in columns.items():
             for column in column_list:
@@ -534,7 +535,9 @@ class MonacoEditor(QWidget):
                     "label": column,
                     "kind": "field",
                     "insertText": column,
-                    "detail": f"{table_name}.{column}"
+                    "detail": f"{table_name}.{column}",
+                    "category": "column",
+                    "table": table_name
                 })
         
         # Add common SQL keywords
@@ -554,7 +557,7 @@ class MonacoEditor(QWidget):
                 "detail": "SQL keyword"
             })
         
-        logger.info(f"[MONACO] Registering {len(completions)} SQL completions ({len(tables)} tables, {sum(len(cols) for cols in columns.values())} columns)")
+        logger.info(f"[MONACO] Registering {len(completions)} contextual SQL completions ({len(tables)} tables, {sum(len(cols) for cols in columns.values())} columns)")
         self.register_completions(completions)
     
     def update_python_completions(self, variables: Optional[dict]) -> None:
