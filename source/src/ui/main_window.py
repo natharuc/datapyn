@@ -4772,7 +4772,7 @@ class MainWindow(DockingMainWindow):
         # Update Object Explorer for corresponding session
         # Get db_type from connection config for proper SQL syntax
         db_type = ""
-        conn_config = self.connection_manager.get_config(connection_name)
+        conn_config = self.connection_manager.get_connection_config(connection_name)
         if conn_config:
             db_type = conn_config.get("db_type", "")
 
