@@ -3,8 +3,11 @@ Workspace manager - saves and restores application state
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceManager:
@@ -111,7 +114,7 @@ class WorkspaceManager:
             return workspace
 
         except Exception as e:
-            print(f"Error loading workspace: {e}")
+            logger.error(f"Error loading workspace: {e}")
             return default
 
     def clear_workspace(self):

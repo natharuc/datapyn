@@ -555,6 +555,63 @@ class MCPToolRegistry(QObject):
         """Register a tool."""
         self._tools[tool.name] = tool
 
+    def _get_known_table_names(self) -> set:
+        """Get set of known table names from cached schema (case-insensitive)."""
+        mw = self._main_window
+        session = self._get_active_session()
+        if not session or not session.connection_name:
+            return set()
+
+        schema_service = getattr(mw, "_schema_service", None)
+        if not schema_service:
+            return set()
+
+        cached = schema_service.get_cached_schema(session.connection_name)
+        if not cached:
+            return set()
+
+        tables = cached.get("tables", [])
+        # Include both simple names and schema-qualified names
+        names = set()
+        for t in tables:
+            name = t.get("name", "")
+            schema_name = t.get("schema", "")
+            if name:
+                names.add(name.lower())
+                if schema_name:
+                    names.add(f"{schema_name}.{name}".lower())
+        return names
+
+    def _quote_identifier(self, identifier: str, db_type: str = "mssql") -> str:
+        """Quote SQL identifier to prevent injection.
+        
+        Args:
+            identifier: Table or column name (may include schema: schema.table)
+            db_type: Database type (mssql, postgres, mysql, etc.)
+        
+        Returns:
+            Properly quoted identifier
+        """
+        db_type = db_type.lower()
+        
+        # Split schema.table if present
+        parts = identifier.split(".", 1)
+        
+        if db_type in ("sqlserver", "mssql"):
+            # SQL Server uses [brackets]
+            quoted_parts = [f"[{p}]" for p in parts]
+        elif db_type in ("postgres", "postgresql"):
+            # PostgreSQL uses "double quotes"
+            quoted_parts = [f'"{p}"' for p in parts]
+        elif db_type in ("mysql", "mariadb"):
+            # MySQL uses `backticks`
+            quoted_parts = [f"`{p}`" for p in parts]
+        else:
+            # Default to double quotes (ANSI SQL)
+            quoted_parts = [f'"{p}"' for p in parts]
+        
+        return ".".join(quoted_parts)
+
     def list_tools(self) -> List[Dict[str, Any]]:
         """Return list of all tool schemas for MCP protocol."""
         return [tool.to_schema() for tool in self._tools.values()]
@@ -1859,17 +1916,32 @@ class MCPToolRegistry(QObject):
         if not table_name:
             return {"error": "table_name is required."}
 
+        # Validate limit is a positive integer
+        try:
+            limit = int(limit)
+            if limit <= 0 or limit > 10000:
+                limit = 5
+        except (TypeError, ValueError):
+            limit = 5
+
         connector, error = self._get_connector()
         if error:
             return {"error": error}
 
+        # Validate table_name against known tables (SQL injection prevention)
+        known_tables = self._get_known_table_names()
+        if known_tables and table_name.lower() not in known_tables:
+            return {"error": f"Unknown table: '{table_name}'. Use list_tables to see available tables."}
+
         try:
-            # Build sample query based on db type
+            # Build sample query based on db type with proper quoting
             db_type = getattr(connector, "db_type", "").lower()
+            quoted_table = self._quote_identifier(table_name, db_type)
+            
             if db_type in ("sqlserver", "mssql"):
-                query = f"SELECT TOP {limit} * FROM {table_name}"
+                query = f"SELECT TOP {limit} * FROM {quoted_table}"
             else:
-                query = f"SELECT * FROM {table_name} LIMIT {limit}"
+                query = f"SELECT * FROM {quoted_table} LIMIT {limit}"
 
             result = connector.execute_query(query)
 

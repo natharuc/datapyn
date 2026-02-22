@@ -58,6 +58,7 @@ class ObjectExplorerPanel(QWidget):
         self.theme_manager = theme_manager
         self._current_schema = None  # schema dict from SchemaService
         self._current_connection = ""
+        self._db_type = ""  # Database type (mssql, postgresql, mysql, etc.)
         self._all_databases = []  # list of all databases from server
         self._filter_timer = None
         self._setup_ui()
@@ -250,7 +251,7 @@ class ObjectExplorerPanel(QWidget):
                 self._spinner_widget.hide()
             self.tree.show()
 
-    def set_schema(self, schema: dict, connection_name: str = ""):
+    def set_schema(self, schema: dict, connection_name: str = "", db_type: str = ""):
         """Set the schema to be displayed in the tree.
 
         Args:
@@ -258,10 +259,12 @@ class ObjectExplorerPanel(QWidget):
                     optionally 'databases' (list of all databases)
                     (format from SchemaService)
             connection_name: connection name
+            db_type: database type (mssql, postgresql, mysql, etc.)
         """
         self.set_loading(False)  # Hide loading when schema arrives
         self._current_schema = schema
         self._current_connection = connection_name
+        self._db_type = db_type.lower() if db_type else ""
         if schema:
             self._all_databases = schema.get("databases", [])
         self._build_tree(schema)
@@ -271,9 +274,35 @@ class ObjectExplorerPanel(QWidget):
         self.tree.clear()
         self._current_schema = None
         self._current_connection = ""
+        self._db_type = ""
         self._all_databases = []
         self.info_label.setText(S.object_explorer.no_connection)
         self.search_input.clear()
+
+    def _quote_identifier(self, identifier: str) -> str:
+        """Quote SQL identifier based on current db_type.
+        
+        Args:
+            identifier: Table or column name (may include schema: schema.table)
+        
+        Returns:
+            Properly quoted identifier for safe SQL use
+        """
+        parts = identifier.split(".", 1)
+        db_type = self._db_type
+        
+        if db_type in ("sqlserver", "mssql", ""):
+            # SQL Server uses [brackets] - default for SELECT TOP queries
+            quoted_parts = [f"[{p}]" for p in parts]
+        elif db_type in ("postgres", "postgresql"):
+            quoted_parts = [f'"{p}"' for p in parts]
+        elif db_type in ("mysql", "mariadb"):
+            quoted_parts = [f"`{p}`" for p in parts]
+        else:
+            # ANSI SQL double quotes
+            quoted_parts = [f'"{p}"' for p in parts]
+        
+        return ".".join(quoted_parts)
 
     def _build_tree(self, schema: dict):
         """Build tree from schema"""
@@ -573,11 +602,20 @@ class ObjectExplorerPanel(QWidget):
             """)
 
         if item_type == "table":
-            # Selecionar 1000 linhas
+            # Selecionar 1000 linhas with proper quoting
             qualified = f"{schema_name}.{name}" if schema_name else name
+            quoted = self._quote_identifier(qualified)
+            
+            # Build query based on database type
+            if self._db_type in ("mysql", "mariadb", "postgres", "postgresql", "sqlite"):
+                select_query = f"SELECT * FROM {quoted} LIMIT 1000"
+            else:
+                # SQL Server / default
+                select_query = f"SELECT TOP 1000 * FROM {quoted}"
+            
             act_select = menu.addAction(S.object_explorer.ctx_select_top)
             act_select.triggered.connect(
-                lambda: self.query_requested.emit(f"SELECT TOP 1000 * FROM {qualified}")
+                lambda _, q=select_query: self.query_requested.emit(q)
             )
 
             menu.addSeparator()

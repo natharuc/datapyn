@@ -3001,7 +3001,7 @@ class MainWindow(DockingMainWindow):
                     self.show_panel("results")
                     self._log_info(S.log.list_converted.format(type=execution_type, rows=len(df)))
                     return True
-            except:
+            except (ValueError, TypeError, KeyError):
                 pass
 
             # If could not convert, goes to output
@@ -3021,7 +3021,7 @@ class MainWindow(DockingMainWindow):
                 self.show_panel("results")
                 self._log_info(S.log.dict_converted.format(type=execution_type))
                 return True
-            except:
+            except (ValueError, TypeError, KeyError, IndexError):
                 pass
 
             # If could not convert, goes to output
@@ -4093,7 +4093,7 @@ class MainWindow(DockingMainWindow):
                     result = self._session.connect(self._connection_name)
                     self.finished.emit(result)
                 except Exception as e:
-                    print(f"[WARNING] Background connection failed: {e}")
+                    logger.warning(f"Background connection failed: {e}")
                     self.finished.emit(False)
 
         def on_connected(success):
@@ -4770,6 +4770,12 @@ class MainWindow(DockingMainWindow):
                 widget.editor.set_database_context(schema_context)
 
         # Update Object Explorer for corresponding session
+        # Get db_type from connection config for proper SQL syntax
+        db_type = ""
+        conn_config = self.connection_manager.get_config(connection_name)
+        if conn_config:
+            db_type = conn_config.get("db_type", "")
+
         if hasattr(self, "_session_explorers"):
             for sid, widget in self._session_widgets.items():
                 if not (hasattr(widget, "session") and widget.session):
@@ -4777,7 +4783,7 @@ class MainWindow(DockingMainWindow):
                 session_conn = getattr(widget.session, "connection_name", "") or ""
                 if session_conn == connection_name:
                     explorer = self._get_session_explorer(sid)
-                    explorer.set_schema(schema, connection_name)
+                    explorer.set_schema(schema, connection_name, db_type=db_type)
                     # Mostrar dock se e a sessao ativa
                     current_widget = self._get_current_session_widget()
                     if current_widget and hasattr(current_widget, "session"):
@@ -5249,7 +5255,7 @@ class MainWindow(DockingMainWindow):
             try:
                 self._reconnect_saved_connection(workspace["active_connection"])
             except Exception as e:
-                print(f"Could not restore connection: {e}")
+                logger.warning(f"Could not restore connection: {e}")
 
         # Clear reference
         del self._pending_workspace_restore
@@ -5285,7 +5291,7 @@ class MainWindow(DockingMainWindow):
             self.action_label.setText(S.status.reconnected_to.format(name=connection_name))
 
         except Exception as e:
-            print(f"Error reconnecting {connection_name}: {e}")
+            logger.error(f"Error reconnecting {connection_name}: {e}")
             # Does not fail silently - shows in statusbar
             self.action_label.setText(S.status.reconnection_failed.format(name=connection_name))
 
@@ -5722,8 +5728,12 @@ class MainWindow(DockingMainWindow):
         # Save sessions before closing
         self._save_sessions()
 
-        # Stop auto-save timer BEFORE saving to prevent it from overwriting
-        if hasattr(self, '_layout_save_timer'):
+        # Stop all timers to prevent resource leaks
+        if hasattr(self, 'status_timer') and self.status_timer:
+            self.status_timer.stop()
+        if hasattr(self, '_execution_update_timer') and self._execution_update_timer:
+            self._execution_update_timer.stop()
+        if hasattr(self, '_layout_save_timer') and self._layout_save_timer:
             self._layout_save_timer.stop()
 
         # Save dock layout before closing
@@ -5745,5 +5755,9 @@ class MainWindow(DockingMainWindow):
         # Cleanup Copilot client
         if hasattr(self, "_copilot_client"):
             self._copilot_client.cleanup()
+
+        # Cleanup docking manager timers
+        if hasattr(self, "docking_manager"):
+            self.docking_manager.cleanup()
 
         event.accept()

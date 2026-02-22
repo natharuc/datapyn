@@ -525,13 +525,13 @@ class DatabaseConnector:
             if cursor:
                 try:
                     cursor.close()
-                except:
+                except Exception:
                     pass
 
             if raw_conn:
                 try:
                     raw_conn.close()
-                except:
+                except Exception:
                     pass
 
     def _execute_databricks_query(self, query: str) -> pd.DataFrame:
@@ -592,12 +592,12 @@ class DatabaseConnector:
             if cursor:
                 try:
                     cursor.close()
-                except:
+                except Exception:
                     pass
             if raw_conn:
                 try:
                     raw_conn.close()
-                except:
+                except Exception:
                     pass
 
     def _is_select_query(self, query: str) -> bool:

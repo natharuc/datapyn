@@ -13,9 +13,12 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 import traceback
 import sys
+import logging
 from io import StringIO
 
 from src.language import S
+
+logger = logging.getLogger(__name__)
 
 
 class Session(QObject):
@@ -131,7 +134,7 @@ class Session(QObject):
             config = manager.get_connection_config(connection_name)
 
             if not config:
-                print(f"[ERROR] Connection '{connection_name}' not found")
+                logger.error(f"Connection '{connection_name}' not found")
                 return False
 
             # Create new connection
@@ -162,7 +165,7 @@ class Session(QObject):
         except Exception as e:
             import traceback
 
-            print(f"[ERROR] Connection failed: {str(e)}")
+            logger.error(f"Connection failed: {e}")
             traceback.print_exc()
             return False
 
@@ -171,7 +174,7 @@ class Session(QObject):
         if self._connector and self._connector.is_connected:
             try:
                 self._connector.disconnect()
-            except:
+            except Exception:
                 pass
         self.clear_connection()
 
@@ -265,7 +268,7 @@ class Session(QObject):
         if data.get("created_at"):
             try:
                 session.created_at = datetime.fromisoformat(data["created_at"])
-            except:
+            except (ValueError, TypeError):
                 pass
         return session
 
@@ -301,7 +304,7 @@ class Session(QObject):
                             self._connector = connector
                             self.connection_changed.emit(self._connection_name)
                 except Exception as e:
-                    print(f"Error reconnecting session '{self.title}' to '{self._connection_name}': {e}")
+                    logger.error(f"Error reconnecting session '{self.title}' to '{self._connection_name}': {e}")
                     # Clear connection if it fails
                     self._connection_name = None
 

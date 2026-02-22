@@ -254,7 +254,7 @@ class DockingMainWindow(QMainWindow):
                 try:
                     geometry = bytes.fromhex(window_config["geometry"])
                     self.restoreGeometry(geometry)
-                except:
+                except (ValueError, TypeError):
                     pass
 
             if "state" in window_config and window_config["state"]:
@@ -262,7 +262,7 @@ class DockingMainWindow(QMainWindow):
                     state = bytes.fromhex(window_config["state"])
                     if hasattr(self, "restoreState"):
                         self.restoreState(state)
-                except:
+                except (ValueError, TypeError):
                     pass
 
         # Restore docking manager layout

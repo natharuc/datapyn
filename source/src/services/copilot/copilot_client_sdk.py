@@ -199,6 +199,18 @@ class CopilotWorker(QObject):
         """Set prompt for inline completion request."""
         self._inline_prompt = prompt
 
+    def _ensure_loop(self):
+        """Ensure event loop is available and active. Creates one if needed.
+        
+        Returns the event loop. This prevents creating multiple loops
+        which can cause resource leaks.
+        """
+        import asyncio
+        if self._loop is None or self._loop.is_closed():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        return self._loop
+
     def cancel(self):
         self._cancelled = True
         if self._session and self._loop and not self._loop.is_closed():
@@ -210,11 +222,8 @@ class CopilotWorker(QObject):
 
     def run_init(self):
         """Initialize SDK client and verify auth. Keep loop/client alive for session persistence."""
-        import asyncio
-        
-        # Create a persistent event loop for this worker
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
+        # Use persistent event loop
+        self._ensure_loop()
         
         try:
             SDKClient, SDKTool, _, import_err = _try_import_sdk()
@@ -251,9 +260,8 @@ class CopilotWorker(QObject):
         import subprocess
         import shutil
         
-        # Create persistent event loop
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
+        # Use persistent event loop
+        self._ensure_loop()
         
         try:
             # Check if gh CLI is available
@@ -325,12 +333,8 @@ class CopilotWorker(QObject):
 
     def _do_chat(self):
         """Internal chat implementation using persistent asyncio loop."""
-        import asyncio
-        
-        # Use persistent loop if available, else create new one
-        if not self._loop or self._loop.is_closed():
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
+        # Use persistent loop
+        self._ensure_loop()
         
         self._loop.run_until_complete(self._async_chat())
 

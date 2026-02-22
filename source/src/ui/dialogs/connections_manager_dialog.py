@@ -523,7 +523,7 @@ class ConnectionsManagerDialog(QDialog):
             # Disconnect signal to avoid loop
             try:
                 self.tree.itemChanged.disconnect(on_item_changed)
-            except:
+            except (TypeError, RuntimeError):
                 pass
 
             # Validate new name
