@@ -2,6 +2,120 @@
 
 <!-- version list -->
 
+## v1.11.0 (2026-02-22)
+
+### Bug Fixes
+
+- Adiciona __init__.py faltando (copilot + monaco)
+  ([`457a788`](https://github.com/natharuc/datapyn/commit/457a788011e7df7b82ac58fdb6a8ca5d7420550d))
+
+- Chat message widget vertical sizing for long messages
+  ([`7c4c942`](https://github.com/natharuc/datapyn/commit/7c4c942b66d605581ab8e9785094f2aa4ae4f6ec))
+
+- Chat panel - center welcome label, messages fill available width
+  ([`4a31378`](https://github.com/natharuc/datapyn/commit/4a31378d1ffe3be2cdb876dd3d7de63162f6439f))
+
+- Chat panel layout - no horizontal scroll, proper message alignment
+  ([`4768a7b`](https://github.com/natharuc/datapyn/commit/4768a7bce55eac240523ab2a9fc68db8e1a71e1b))
+
+- Code review improvements - security and resource management
+  ([`d66e602`](https://github.com/natharuc/datapyn/commit/d66e602ab8aa8e3432683501db3f8788578d112c))
+
+- Corrige imports e ignora testes WebEngine no CI
+  ([`2006f3e`](https://github.com/natharuc/datapyn/commit/2006f3e27db1f55905c2281899c7df8374eee2aa))
+
+- Corrige pythonpath para CI - remove source/src duplicado
+  ([`be5f2be`](https://github.com/natharuc/datapyn/commit/be5f2bea90cd188d8d1665a48b820ba37b5e60f6))
+
+- Guard against deleted C++ object in copilot_output_panel
+  ([`f3d094e`](https://github.com/natharuc/datapyn/commit/f3d094e0125b32bfa7586606d3f3a2fcd983ccf8))
+
+- Imports defensivos para copilot em ambiente CI headless
+  ([`55b0020`](https://github.com/natharuc/datapyn/commit/55b0020602148725b0c1b3baad383036b28aad22))
+
+- Make Monaco imports defensive for CI/headless environments
+  ([`197d9c0`](https://github.com/natharuc/datapyn/commit/197d9c099ebb3fdd2fc179ba277fec1de3d0e46f))
+
+- Only ignore generated report PNGs in root
+  ([`d027350`](https://github.com/natharuc/datapyn/commit/d0273501a10524954da1e2a245b8029a82b93e06))
+
+- Remove duplicate _delete_session method causing TypeError
+  ([`23cf4a4`](https://github.com/natharuc/datapyn/commit/23cf4a4673ed497ddc2f6b988524fc27a9e49ccb))
+
+- Remove skipped tests and fix test_settings_dialog
+  ([`078591a`](https://github.com/natharuc/datapyn/commit/078591a10942aad8ae4ba88fb40cd3cdf77d9633))
+
+- Rodar todos testes na CI - remove ignores, fixa API Monaco
+  ([`3a072b1`](https://github.com/natharuc/datapyn/commit/3a072b1097af235f44abdda07801b8db55489f53))
+
+- Use get_connection_config instead of get_config
+  ([`311e69a`](https://github.com/natharuc/datapyn/commit/311e69ab2732c3f9554627cc662b0343ae44a166))
+
+- **chat**: Improve tool group scrolling and visibility
+  ([`e1d8276`](https://github.com/natharuc/datapyn/commit/e1d8276e5267587cb537d40bb8c60bc9265de9b1))
+
+- **chat**: Set dark background on WebView before load to prevent white flash
+  ([`36161b8`](https://github.com/natharuc/datapyn/commit/36161b84258d5531434d100b17052cbd3b0b49d1))
+
+- **test**: Wait for QTimer.singleShot in test_new_session_captures_previous_connection
+  ([`f907c04`](https://github.com/natharuc/datapyn/commit/f907c044546f2ce290a76fc7c27f692f59d4f182))
+
+### Chores
+
+- Add test output files to gitignore
+  ([`f7875cd`](https://github.com/natharuc/datapyn/commit/f7875cdada871eb479c79bf97552c7351933ee2c))
+
+- Ignore png files
+  ([`1d07f83`](https://github.com/natharuc/datapyn/commit/1d07f83bb4bff9993b6fbdf328510f65e3e4ede7))
+
+- Remove accidental image file
+  ([`d73003d`](https://github.com/natharuc/datapyn/commit/d73003ddfb9204581a9d6f0b68731bfecee7bad1))
+
+- Remove accidentally committed image
+  ([`fff13f4`](https://github.com/natharuc/datapyn/commit/fff13f4e85e6a0c287281849b436d2acbf591714))
+
+### Features
+
+- Add Copilot SDK integration - MCP server, client, and chat panel
+  ([`9916a94`](https://github.com/natharuc/datapyn/commit/9916a947e173898e343cb5899c5f14792e68bbef))
+
+- Add stop button, get_execution_results and notify_user tools
+  ([`e62fb84`](https://github.com/natharuc/datapyn/commit/e62fb84f8ab1ee7a752d7ec22a5c02951c3ec626))
+
+- Improve Copilot integration with block naming
+  ([`151dec9`](https://github.com/natharuc/datapyn/commit/151dec99fffc745d08b4de02c54035d99da8373b))
+
+- Monaco Editor integration with Copilot LSP
+  ([`3af0830`](https://github.com/natharuc/datapyn/commit/3af08306be6d690831591de8b6e593bc84b15353))
+
+- **chat**: Group tool calls in collapsible container
+  ([`8e32042`](https://github.com/natharuc/datapyn/commit/8e3204233660412e41c07cf9e282b69cc78644a1))
+
+- **copilot**: Melhorias na UI - menu usuario, delete sessoes, usage label
+  ([`65db95d`](https://github.com/natharuc/datapyn/commit/65db95db0d0da3ba091451681fdea27278f77cf3))
+
+- **deps**: Add GitHub Copilot SDK for integration support (not completed yet)
+  ([`2a40a24`](https://github.com/natharuc/datapyn/commit/2a40a24f22281e31a4634da37c0bac7ff64baa22))
+
+### Performance Improvements
+
+- Fix UI stutter when dragging window
+  ([`99ef098`](https://github.com/natharuc/datapyn/commit/99ef098c2f17d9435a565ab38271133e221245f5))
+
+### Refactoring
+
+- Address code review feedback
+  ([`6022a35`](https://github.com/natharuc/datapyn/commit/6022a3507dd61285d33f8bcca507915c25648b44))
+
+- Replace PyQt chat widgets with WebView-based implementation
+  ([`be5b4a5`](https://github.com/natharuc/datapyn/commit/be5b4a50b50dd1023534a9614eb5612d031545bb))
+
+### Testing
+
+- Add comprehensive tests for Copilot integration (41 tests)
+  ([`32a8893`](https://github.com/natharuc/datapyn/commit/32a8893849def6d2cf1bd215d943c827795881e2))
+
+
 ## v1.10.0 (2026-02-20)
 
 ### Features

@@ -440,6 +440,49 @@ class TestWindowEvents:
             main_window.closeEvent(event)
             mock_save.assert_called()
 
+    def test_close_event_asks_confirmation_when_unsaved(self, main_window, qtbot):
+        """Fechar janela deve exibir diálogo de confirmacao quando ha alteracoes nao salvas"""
+        from PyQt6.QtGui import QCloseEvent
+
+        # Mark a session widget as modified
+        for widget in main_window._session_widgets.values():
+            widget._is_modified = True
+            break
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as mock_question:
+            event = QCloseEvent()
+            with patch.object(main_window, "_save_sessions"):
+                main_window.closeEvent(event)
+            mock_question.assert_called()
+
+    def test_close_event_no_confirmation_when_all_saved(self, main_window, qtbot):
+        """Fechar janela nao deve exibir dialogo quando nao ha alteracoes nao salvas"""
+        from PyQt6.QtGui import QCloseEvent
+
+        # Ensure no session widget is modified
+        for widget in main_window._session_widgets.values():
+            widget._is_modified = False
+
+        with patch.object(QMessageBox, "question") as mock_question:
+            event = QCloseEvent()
+            with patch.object(main_window, "_save_sessions"):
+                main_window.closeEvent(event)
+            mock_question.assert_not_called()
+
+    def test_close_event_cancel_keeps_window_open(self, main_window, qtbot):
+        """Cancelar confirmacao de fechamento deve manter janela aberta"""
+        from PyQt6.QtGui import QCloseEvent
+
+        # Mark a session widget as modified so the dialog is shown
+        for widget in main_window._session_widgets.values():
+            widget._is_modified = True
+            break
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+            event = QCloseEvent()
+            main_window.closeEvent(event)
+            assert not event.isAccepted()
+
     def test_show_restores_geometry(self, main_window, qtbot):
         """Show deve restaurar geometria"""
         # Já foi chamado no fixture, verificar que não deu erro

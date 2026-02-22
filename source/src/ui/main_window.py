@@ -5716,6 +5716,24 @@ class MainWindow(DockingMainWindow):
 
     def closeEvent(self, event):
         """On window close"""
+        # Ask for confirmation only when there are unsaved changes
+        has_unsaved = any(
+            getattr(widget, "_is_modified", False) for widget in self._session_widgets.values()
+        )
+
+        if has_unsaved:
+            reply = QMessageBox.question(
+                self,
+                S.dialogs.close_confirm_title,
+                S.dialogs.close_confirm_msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+
         # Check if there is execution in progress
         has_running = any(
             widget._is_executing for widget in self._session_widgets.values() if hasattr(widget, "_is_executing")

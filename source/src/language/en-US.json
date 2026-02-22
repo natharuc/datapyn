@@ -172,6 +172,8 @@
     "export_complete_title": "Export Complete",
     "export_complete_msg": "Python script exported successfully to:\n{filename}",
     "export_script_title": "Export as Python Script",
+    "close_confirm_title": "Confirmation",
+    "close_confirm_msg": "Are you sure you want to close Datapyn?",
     "execution_in_progress_title": "Execution in progress",
     "execution_in_progress_msg": "There is code being executed. Do you want to cancel and close the application?",
     "language_restart_title": "Restart Required",
