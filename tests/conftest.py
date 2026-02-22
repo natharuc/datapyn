@@ -22,13 +22,10 @@ try:
 except ImportError:
     pass
 
-# Adicionar source/src ao path
+# Adicionar source ao path (apenas source/, nao source/src/)
 source_path = str(Path(__file__).parent.parent / "source")
-src_path = str(Path(__file__).parent.parent / "source" / "src")
 if source_path not in sys.path:
     sys.path.insert(0, source_path)
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
 
 # Inicializar sistema de idiomas para testes
 from src.language import init_language
