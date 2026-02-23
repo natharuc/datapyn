@@ -194,6 +194,11 @@
             editor.onDidFocusEditorWidget(function() {
                 if (pyBridge) {
                     pyBridge.onFocusIn();
+                    // Also emit cursor position on focus (for switching blocks)
+                    var pos = editor.getPosition();
+                    if (pos) {
+                        pyBridge.onCursorChanged(pos.lineNumber, pos.column);
+                    }
                 }
             });
             

@@ -89,9 +89,12 @@ class FileImportDialog(QDialog):
         layout.addWidget(title)
 
         # Selected file
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         file_name = os.path.basename(self.file_path)
         file_label = QLabel(S.file_import.label_file.format(name=file_name))
-        file_label.setStyleSheet("color: #808080; font-size: 11px;")
+        file_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px;")
         layout.addWidget(file_label)
 
         # Group: General settings

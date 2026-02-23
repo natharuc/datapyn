@@ -74,6 +74,9 @@ class BlockEditor(QWidget):
     # Signal for completion/autocomplete logging
     completion_log = pyqtSignal(str, str)  # message, level
 
+    # Signal when cursor position changes in focused block
+    cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
+
     def __init__(self, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
@@ -170,7 +173,7 @@ class BlockEditor(QWidget):
             QPushButton {
                 background: transparent;
                 border: 1px solid #555;
-                border-radius: 0px;
+                border-radius: 6px;
             }
             QPushButton:hover {
                 background: #333;
@@ -433,6 +436,10 @@ class BlockEditor(QWidget):
         block.completion_log.connect(self.completion_log.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
         block.language_changed.connect(lambda b, lang: self._on_block_language_changed(b, lang))
+        
+        # Connect cursor position change (if editor supports it)
+        if hasattr(block.editor, 'cursor_changed'):
+            block.editor.cursor_changed.connect(self.cursor_changed.emit)
 
         # Determine position
         if after_block and after_block in self._blocks:
@@ -506,6 +513,7 @@ class BlockEditor(QWidget):
         if has_focus:
             self._focused_block = block
             self._last_focused_block = block
+            # Cursor position will be updated by the editor's cursor_changed signal
         elif self._focused_block == block:
             self._focused_block = None
 

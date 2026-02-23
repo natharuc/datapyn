@@ -36,15 +36,18 @@ class VariablesTableModel(QAbstractTableModel):
 
     def _update_colors(self):
         """Update theme colors"""
+        from src.design_system.tokens import get_colors
+        tokens = get_colors()
+        
         if self.theme_manager:
             colors = self.theme_manager.get_table_colors()
             self._row_even = QColor(colors["row_even"])
             self._row_odd = QColor(colors["row_odd"])
             self._text_color = QColor(colors["text"])
         else:
-            self._row_even = QColor("#1e1e1e")
-            self._row_odd = QColor("#252526")
-            self._text_color = QColor("#cccccc")
+            self._row_even = QColor(tokens.bg_primary)
+            self._row_odd = QColor(tokens.bg_secondary)
+            self._text_color = QColor(tokens.text_secondary)
 
     def set_theme_manager(self, theme_manager):
         """Define theme manager"""
@@ -117,16 +120,18 @@ class VariablesTableModel(QAbstractTableModel):
             return self._row_even if index.row() % 2 == 0 else self._row_odd
 
         if role == Qt.ItemDataRole.ForegroundRole:
-            # Colors by type
+            # Colors by type - using design tokens
+            from src.design_system.tokens import get_colors
+            tokens = get_colors()
             type_colors = {
-                "DataFrame": QColor("#4ec9b0"),
-                "Series": QColor("#4ec9b0"),
-                "int": QColor("#b5cea8"),
+                "DataFrame": QColor(tokens.success),
+                "Series": QColor(tokens.success),
+                "int": QColor("#b5cea8"),  # Keep VS Code number color
                 "float": QColor("#b5cea8"),
-                "str": QColor("#ce9178"),
-                "list": QColor("#dcdcaa"),
-                "dict": QColor("#dcdcaa"),
-                "bool": QColor("#569cd6"),
+                "str": QColor("#ce9178"),  # Keep VS Code string color
+                "list": QColor(tokens.warning),
+                "dict": QColor(tokens.warning),
+                "bool": QColor(tokens.info),
             }
             if col == 1:
                 return type_colors.get(var["type"], self._text_color)
@@ -192,8 +197,11 @@ class VariablesPanel(QWidget):
         toolbar_layout.setSpacing(8)
 
         # Info label
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
+        
         self.info_label = QLabel(S.variables_panel.no_variables)
-        self.info_label.setStyleSheet("color: #9d9d9d;")
+        self.info_label.setStyleSheet(f"color: {colors_tk.text_tertiary};")
         toolbar_layout.addWidget(self.info_label)
 
         toolbar_layout.addStretch()
@@ -204,21 +212,19 @@ class VariablesPanel(QWidget):
         self.btn_refresh.setToolTip(S.variables_panel.btn_refresh)
         self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         if HAS_QTAWESOME:
-            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#9d9d9d"))
-        self.btn_refresh.setStyleSheet("""
-            QPushButton {
+            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color=colors_tk.text_tertiary))
+        self.btn_refresh.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
                 border: none;
-                border-radius: 0px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.1);
-            }
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background: {colors_tk.bg_tertiary};
+            }}
         """)
         toolbar_layout.addWidget(self.btn_refresh)
 
-        from src.design_system.tokens import get_colors, RADIUS
-        colors_tk = get_colors()
         toolbar.setStyleSheet(f"""
             QWidget {{
                 background-color: {colors_tk.bg_secondary};
@@ -254,13 +260,13 @@ class VariablesPanel(QWidget):
 
     def _apply_theme(self):
         """Aplica tema - design moderno e limpo"""
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
+        
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
-            colors = {"background": "#1a1a1c", "foreground": "#e8e8e8", "border": "#333338", "accent": "#4b7bec"}
-
-        from src.design_system.tokens import get_colors
-        colors_tk = get_colors()
+            colors = {"background": colors_tk.bg_primary, "foreground": colors_tk.text_primary, "border": colors_tk.border_default, "accent": colors_tk.interactive_primary}
 
         self.table_view.setStyleSheet(f"""
             QTableView {{
@@ -268,7 +274,7 @@ class VariablesPanel(QWidget):
                 color: {colors["foreground"]};
                 border: none;
                 gridline-color: transparent;
-                selection-background-color: {colors.get("accent", "#4b7bec")};
+                selection-background-color: {colors.get("accent", colors_tk.interactive_primary)};
                 font-size: 13px;
             }}
             QTableView::item {{
@@ -276,11 +282,11 @@ class VariablesPanel(QWidget):
                 border-bottom: 1px solid {colors["border"]};
             }}
             QTableView::item:selected {{
-                background-color: {colors.get("accent", "#4b7bec")};
+                background-color: {colors.get("accent", colors_tk.interactive_primary)};
                 color: white;
             }}
             QTableView::item:hover {{
-                background-color: rgba(75, 123, 236, 0.15);
+                background-color: {colors_tk.interactive_primary}26;
             }}
             QHeaderView::section {{
                 background-color: {colors_tk.bg_secondary};

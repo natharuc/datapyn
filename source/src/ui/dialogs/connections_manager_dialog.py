@@ -128,17 +128,36 @@ class ConnectionsManagerDialog(QDialog):
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         # Groups toolbar
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         toolbar_layout = QHBoxLayout()
+        toolbar_layout.setSpacing(8)
+        
+        # Compact toolbar button style (use object name for specificity)
+        toolbar_btn_style = """
+            QPushButton#toolbarBtn {
+                padding: 4px 10px;
+                font-size: 11px;
+                min-height: 22px;
+                max-height: 22px;
+                font-weight: 500;
+            }
+        """
 
         btn_new_group = QPushButton(S.connections_manager.btn_new_group)
+        btn_new_group.setObjectName("toolbarBtn")
         if HAS_QTAWESOME:
-            btn_new_group.setIcon(qta.icon("mdi.folder-plus", color="#4ec9b0"))
+            btn_new_group.setIcon(qta.icon("mdi.folder-plus", color="white"))
+        btn_new_group.setStyleSheet(toolbar_btn_style)
         btn_new_group.clicked.connect(self._new_group)
         toolbar_layout.addWidget(btn_new_group)
 
         btn_new_conn = QPushButton(S.connections_manager.btn_new_connection)
+        btn_new_conn.setObjectName("toolbarBtn")
         if HAS_QTAWESOME:
-            btn_new_conn.setIcon(qta.icon("mdi.database-plus", color="#569cd6"))
+            btn_new_conn.setIcon(qta.icon("mdi.database-plus", color="white"))
+        btn_new_conn.setStyleSheet(toolbar_btn_style)
         btn_new_conn.clicked.connect(self._new_connection)
         toolbar_layout.addWidget(btn_new_conn)
 
@@ -173,10 +192,10 @@ class ConnectionsManagerDialog(QDialog):
         header = QHBoxLayout()
         icon_label = QLabel()
         if HAS_QTAWESOME:
-            icon_label.setPixmap(qta.icon("mdi.information", color="#64b5f6").pixmap(20, 20))
+            icon_label.setPixmap(qta.icon("mdi.information", color=colors.info).pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connections_manager.section_details)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {colors.text_tertiary};")
         header.addWidget(title)
         header.addStretch()
         info_group_layout.addLayout(header)
@@ -206,24 +225,42 @@ class ConnectionsManagerDialog(QDialog):
 
         # Action buttons
         actions_layout = QHBoxLayout()
+        actions_layout.setSpacing(8)
+
+        # Compact button style (use object name for specificity)
+        compact_btn_style = """
+            QPushButton#compactBtn {
+                padding: 4px 14px;
+                font-size: 11px;
+                min-height: 24px;
+                max-height: 24px;
+                font-weight: 500;
+            }
+        """
 
         self.btn_connect = QPushButton(S.connections_manager.btn_connect)
+        self.btn_connect.setObjectName("compactBtn")
         if HAS_QTAWESOME:
-            self.btn_connect.setIcon(qta.icon("mdi.lan-connect", color="#4ec9b0"))
+            self.btn_connect.setIcon(qta.icon("mdi.lan-connect", color="white"))
+        self.btn_connect.setStyleSheet(compact_btn_style)
         self.btn_connect.clicked.connect(self._connect_selected)
         self.btn_connect.setEnabled(False)
         actions_layout.addWidget(self.btn_connect)
 
         self.btn_edit = QPushButton(S.connections_manager.btn_edit)
+        self.btn_edit.setObjectName("compactBtn")
         if HAS_QTAWESOME:
-            self.btn_edit.setIcon(qta.icon("mdi.pencil", color="#569cd6"))
+            self.btn_edit.setIcon(qta.icon("mdi.pencil", color="white"))
+        self.btn_edit.setStyleSheet(compact_btn_style)
         self.btn_edit.clicked.connect(self._edit_selected)
         self.btn_edit.setEnabled(False)
         actions_layout.addWidget(self.btn_edit)
 
         self.btn_delete = QPushButton(S.connections_manager.btn_delete)
+        self.btn_delete.setObjectName("compactBtn")
         if HAS_QTAWESOME:
-            self.btn_delete.setIcon(qta.icon("mdi.delete", color="#f48771"))
+            self.btn_delete.setIcon(qta.icon("mdi.delete", color="white"))
+        self.btn_delete.setStyleSheet(compact_btn_style)
         self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_delete.setEnabled(False)
         actions_layout.addWidget(self.btn_delete)
@@ -236,18 +273,11 @@ class ConnectionsManagerDialog(QDialog):
 
         layout.addWidget(splitter)
 
-        # Dialog buttons
-        buttons_layout = QHBoxLayout()
-        buttons_layout.addStretch()
-
-        btn_close = QPushButton(S.connections_manager.btn_close)
-        btn_close.clicked.connect(self.reject)
-        buttons_layout.addWidget(btn_close)
-
-        layout.addLayout(buttons_layout)
-
     def _load_connections(self):
         """Loads connections into the tree"""
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         self.tree.clear()
 
         # Load groups
@@ -260,7 +290,7 @@ class ConnectionsManagerDialog(QDialog):
             item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "name": group_name})
 
             if HAS_QTAWESOME:
-                item.setIcon(0, qta.icon("mdi.folder", color="#dcdcaa"))
+                item.setIcon(0, qta.icon("mdi.folder", color=colors.warning))
 
             # Apply color if set
             if group_data.get("color"):

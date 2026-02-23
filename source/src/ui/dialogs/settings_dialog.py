@@ -24,6 +24,7 @@ from PyQt6.QtGui import QFont, QKeySequence
 from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
+from src.design_system.tokens import get_colors, RADIUS
 
 
 class SettingsDialog(QDialog):
@@ -52,35 +53,38 @@ class SettingsDialog(QDialog):
         # Apply theme
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
+        # Get design tokens
+        colors = get_colors()
+
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
         layout.setContentsMargins(20, 20, 20, 20)
 
         # Tab widget
         self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #3e3e42;
-                border-radius: 0px;
-                background-color: #1e1e1e;
-            }
-            QTabBar::tab {
-                background-color: #2d2d30;
-                color: #cccccc;
-                padding: 8px 20px;
-                border: 1px solid #3e3e42;
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+                background-color: {colors.bg_primary};
+            }}
+            QTabBar::tab {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                padding: 10px 24px;
+                border: 1px solid {colors.border_default};
                 border-bottom: none;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
+                border-top-left-radius: {RADIUS.radius_sm}px;
+                border-top-right-radius: {RADIUS.radius_sm}px;
                 margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background-color: #1e1e1e;
-                border-bottom: 2px solid #007acc;
-            }
-            QTabBar::tab:hover:!selected {
-                background-color: #383838;
-            }
+            }}
+            QTabBar::tab:selected {{
+                background-color: {colors.bg_primary};
+                border-bottom: 2px solid {colors.interactive_primary};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background-color: {colors.bg_elevated};
+            }}
         """)
 
         # General tab
@@ -97,17 +101,17 @@ class SettingsDialog(QDialog):
 
         btn_reset = QPushButton(S.settings.btn_restore_defaults)
         btn_reset.setFixedHeight(32)
-        btn_reset.setStyleSheet("""
-            QPushButton {
-                background-color: #3e3e42;
+        btn_reset.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.bg_elevated};
                 color: white;
                 border: none;
                 padding: 6px 16px;
-                border-radius: 0px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-            }
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_tertiary};
+            }}
         """)
         btn_reset.clicked.connect(self._reset_defaults)
         btn_layout.addWidget(btn_reset)
@@ -116,35 +120,35 @@ class SettingsDialog(QDialog):
 
         btn_cancel = QPushButton(S.settings.btn_cancel)
         btn_cancel.setFixedHeight(32)
-        btn_cancel.setStyleSheet("""
-            QPushButton {
-                background-color: #3e3e42;
+        btn_cancel.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.bg_elevated};
                 color: white;
                 border: none;
                 padding: 6px 20px;
-                border-radius: 0px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-            }
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_tertiary};
+            }}
         """)
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
 
         btn_save = QPushButton(S.settings.btn_save)
         btn_save.setFixedHeight(32)
-        btn_save.setStyleSheet("""
-            QPushButton {
-                background-color: #007acc;
+        btn_save.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
                 color: white;
                 border: none;
                 padding: 6px 20px;
-                border-radius: 0px;
+                border-radius: 4px;
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #005a9e;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary}dd;
+            }}
         """)
         btn_save.clicked.connect(self._save_all)
         btn_layout.addWidget(btn_save)
@@ -159,22 +163,25 @@ class SettingsDialog(QDialog):
         general_layout.setContentsMargins(20, 20, 20, 20)
 
         # Language section
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         lang_group = QGroupBox(S.settings.section_language)
-        lang_group.setStyleSheet("""
-            QGroupBox {
+        lang_group.setStyleSheet(f"""
+            QGroupBox {{
                 font-weight: bold;
                 font-size: 11px;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 0px;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
                 margin-top: 12px;
                 padding-top: 20px;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 6px;
-            }
+            }}
         """)
         lang_layout = QVBoxLayout(lang_group)
         lang_layout.setSpacing(10)
@@ -182,33 +189,33 @@ class SettingsDialog(QDialog):
         # Language combo
         lang_row = QHBoxLayout()
         lang_label = QLabel(S.settings.label_language)
-        lang_label.setStyleSheet("color: #cccccc; font-size: 11px; font-weight: normal;")
+        lang_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
         lang_row.addWidget(lang_label)
 
         self.lang_combo = QComboBox()
         self.lang_combo.setFixedWidth(250)
-        self.lang_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2d2d30;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 0px;
+        self.lang_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
                 padding: 6px 10px;
                 font-size: 11px;
-            }
-            QComboBox:hover {
-                border-color: #007acc;
-            }
-            QComboBox::drop-down {
+            }}
+            QComboBox:hover {{
+                border-color: {colors.interactive_primary};
+            }}
+            QComboBox::drop-down {{
                 border: none;
                 width: 24px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2d2d30;
-                color: #cccccc;
-                selection-background-color: #094771;
-                border: 1px solid #3e3e42;
-            }
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_secondary};
+                selection-background-color: {colors.interactive_primary};
+                border: 1px solid {colors.border_default};
+            }}
         """)
 
         # Load available languages
@@ -226,7 +233,7 @@ class SettingsDialog(QDialog):
 
         # Restart hint
         hint_label = QLabel(S.settings.language_restart_hint)
-        hint_label.setStyleSheet("color: #6e6e6e; font-size: 10px; font-style: italic; font-weight: normal;")
+        hint_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
         lang_layout.addWidget(hint_label)
 
         general_layout.addWidget(lang_group)
@@ -235,21 +242,21 @@ class SettingsDialog(QDialog):
         display_group = QGroupBox(
             S.settings.section_display if hasattr(S.settings, 'section_display') else "DISPLAY"
         )
-        display_group.setStyleSheet("""
-            QGroupBox {
+        display_group.setStyleSheet(f"""
+            QGroupBox {{
                 font-weight: bold;
                 font-size: 11px;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 0px;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
                 margin-top: 12px;
                 padding-top: 20px;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 6px;
-            }
+            }}
         """)
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(10)
@@ -260,7 +267,7 @@ class SettingsDialog(QDialog):
             S.settings.label_grid_row_limit if hasattr(S.settings, 'label_grid_row_limit')
             else "Default grid display limit (rows):"
         )
-        row_limit_label.setStyleSheet("color: #cccccc; font-size: 11px; font-weight: normal;")
+        row_limit_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
         row_limit_row.addWidget(row_limit_label)
 
         self.grid_row_limit_spin = QSpinBox()
@@ -269,18 +276,18 @@ class SettingsDialog(QDialog):
         settings = QSettings("DataPyn", "DataPyn")
         self.grid_row_limit_spin.setValue(int(settings.value("grid/display_row_limit", 100)))
         self.grid_row_limit_spin.setFixedWidth(120)
-        self.grid_row_limit_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #2d2d30;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 0px;
+        self.grid_row_limit_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
                 padding: 6px 10px;
                 font-size: 11px;
-            }
-            QSpinBox:hover {
-                border-color: #007acc;
-            }
+            }}
+            QSpinBox:hover {{
+                border-color: {colors.interactive_primary};
+            }}
         """)
         row_limit_row.addWidget(self.grid_row_limit_spin)
         row_limit_row.addStretch()
@@ -291,7 +298,7 @@ class SettingsDialog(QDialog):
             S.settings.grid_row_limit_hint if hasattr(S.settings, 'grid_row_limit_hint')
             else "Only affects display. Exports always include all data."
         )
-        display_hint.setStyleSheet("color: #6e6e6e; font-size: 10px; font-style: italic; font-weight: normal;")
+        display_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
         display_layout.addWidget(display_hint)
 
         general_layout.addWidget(display_group)
@@ -300,21 +307,21 @@ class SettingsDialog(QDialog):
         editor_group = QGroupBox(
             S.settings.section_editor if hasattr(S.settings, 'section_editor') else "CODE EDITOR"
         )
-        editor_group.setStyleSheet("""
-            QGroupBox {
+        editor_group.setStyleSheet(f"""
+            QGroupBox {{
                 font-weight: bold;
                 font-size: 11px;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 0px;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
                 margin-top: 12px;
                 padding-top: 20px;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 6px;
-            }
+            }}
         """)
         editor_layout = QVBoxLayout(editor_group)
         editor_layout.setSpacing(10)
@@ -324,14 +331,14 @@ class SettingsDialog(QDialog):
             S.settings.editor_monaco if hasattr(S.settings, 'editor_monaco')
             else "Monaco Editor with Copilot inline completions"
         )
-        editor_info.setStyleSheet("color: #cccccc; font-size: 11px; font-weight: normal;")
+        editor_info.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
         editor_layout.addWidget(editor_info)
 
         # Editor hint
         editor_hint = QLabel(
             "Powered by Monaco (VS Code editor engine)"
         )
-        editor_hint.setStyleSheet("color: #6e6e6e; font-size: 10px; font-style: italic; font-weight: normal;")
+        editor_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
         editor_layout.addWidget(editor_hint)
 
         general_layout.addWidget(editor_group)
@@ -358,19 +365,21 @@ class SettingsDialog(QDialog):
         header_layout.addWidget(title)
 
         subtitle = QLabel(S.settings.subtitle_shortcuts)
-        subtitle.setStyleSheet("color: #999999; font-size: 11px;")
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        subtitle.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px;")
         header_layout.addWidget(subtitle)
 
         shortcuts_layout.addLayout(header_layout)
 
         # Instructions
         instructions = QLabel(S.settings.tip_shortcuts)
-        instructions.setStyleSheet("""
-            background-color: #2d2d30;
-            color: #cccccc;
+        instructions.setStyleSheet(f"""
+            background-color: {colors.bg_secondary};
+            color: {colors.text_secondary};
             padding: 10px;
-            border-radius: 0px;
-            border-left: 3px solid #007acc;
+            border-radius: 4px;
+            border-left: 3px solid {colors.interactive_primary};
             font-size: 10px;
         """)
         shortcuts_layout.addWidget(instructions)
@@ -389,24 +398,24 @@ class SettingsDialog(QDialog):
         self.table.cellDoubleClicked.connect(self._edit_shortcut)
 
         # Table style
-        self.table.setStyleSheet("""
-            QTableWidget {
-                gridline-color: #3e3e42;
+        self.table.setStyleSheet(f"""
+            QTableWidget {{
+                gridline-color: {colors.border_default};
                 font-size: 11px;
-            }
-            QTableWidget::item {
+            }}
+            QTableWidget::item {{
                 padding: 8px;
-            }
-            QTableWidget::item:selected {
-                background-color: #094771;
-            }
-            QHeaderView::section {
-                background-color: #2d2d30;
-                color: #cccccc;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {colors.interactive_primary};
+            }}
+            QHeaderView::section {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_secondary};
                 padding: 8px;
                 border: none;
                 font-weight: bold;
-            }
+            }}
         """)
 
         shortcuts_layout.addWidget(self.table)
@@ -508,35 +517,37 @@ class SettingsDialog(QDialog):
 
         btn_cancel = QPushButton(S.settings.btn_cancel)
         btn_cancel.setFixedHeight(28)
-        btn_cancel.setStyleSheet("""
-            QPushButton {
-                background-color: #3e3e42;
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        btn_cancel.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.bg_elevated};
                 color: white;
                 border: none;
                 padding: 4px 16px;
-                border-radius: 0px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-            }
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_tertiary};
+            }}
         """)
         btn_cancel.clicked.connect(key_dialog.reject)
         btn_layout.addWidget(btn_cancel)
 
         btn_ok = QPushButton(S.settings.btn_ok)
         btn_ok.setFixedHeight(28)
-        btn_ok.setStyleSheet("""
-            QPushButton {
-                background-color: #007acc;
+        btn_ok.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
                 color: white;
                 border: none;
                 padding: 4px 16px;
-                border-radius: 0px;
+                border-radius: 4px;
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #005a9e;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary}dd;
+            }}
         """)
         btn_ok.clicked.connect(key_dialog.accept)
         btn_layout.addWidget(btn_ok)

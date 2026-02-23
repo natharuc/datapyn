@@ -107,6 +107,15 @@ from src.ui.components.copilot_chat_panel import CopilotChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS, RADIUS
+from src.design_system.stylesheet import (
+    get_main_window_stylesheet,
+    get_dock_widget_stylesheet,
+    get_bottom_dock_stylesheet,
+    get_execution_label_stylesheet,
+    get_connection_status_stylesheet,
+    get_empty_state_stylesheet,
+    get_start_button_stylesheet,
+)
 
 # Services
 from src.services import AutoUpdateService
@@ -485,8 +494,8 @@ class MainWindow(DockingMainWindow):
         self.setCorner(Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
         self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
 
-        # Finalize docking system configuration
-        self.finish_docking_setup()
+        # Finalize docking system configuration (skip menu creation - MainWindow creates its own)
+        self._connect_signals()  # Only connect signals, skip _setup_menu_actions
 
         # Apply theme after configuring editor themes
         self._apply_app_theme()
@@ -771,136 +780,8 @@ class MainWindow(DockingMainWindow):
         self.setWindowTitle(S.main_window.window_title)
         self.setGeometry(100, 100, 1400, 900)
 
-        # Carregar cores do design system
-        colors = get_colors()
-
-        # Tema escuro - moderno e limpo
-        self.setStyleSheet(f"""
-            QMainWindow {{
-                background-color: {colors.bg_primary};
-            }}
-            QMenuBar {{
-                background-color: {colors.bg_secondary};
-                color: {colors.text_primary};
-                border: none;
-                padding: 2px 0;
-            }}
-            QMenuBar::item {{
-                padding: 6px 12px;
-                border-radius: {RADIUS.radius_sm}px;
-                margin: 2px;
-            }}
-            QMenuBar::item:selected {{
-                background-color: {colors.bg_elevated};
-            }}
-            QMenu {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_muted};
-                border-radius: {RADIUS.radius_md}px;
-                padding: 6px;
-            }}
-            QMenu::item {{
-                padding: 8px 32px 8px 32px;
-                border-radius: {RADIUS.radius_sm}px;
-                margin: 2px 4px;
-            }}
-            QMenu::item:selected {{
-                background-color: {colors.interactive_primary};
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background: {colors.border_muted};
-                margin: 6px 12px;
-            }}
-            QMenu::icon {{
-                padding-left: 12px;
-                margin-right: 8px;
-                width: 14px;
-                height: 14px;
-            }}
-            QToolBar {{
-                background-color: {colors.bg_secondary};
-                border: none;
-                spacing: 4px;
-                padding: 4px;
-            }}
-            QStatusBar {{
-                background-color: {colors.interactive_primary};
-                color: {colors.text_inverse};
-                border: none;
-            }}
-            QSplitter::handle {{
-                background-color: {colors.border_muted};
-                width: 1px;
-                height: 1px;
-            }}
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                color: {colors.text_inverse};
-                border: none;
-                padding: 8px 16px;
-                border-radius: {RADIUS.radius_sm}px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors.interactive_primary_active};
-            }}
-            QTextEdit {{
-                background-color: {colors.bg_primary};
-                color: {colors.editor_fg};
-                border: 1px solid {colors.border_muted};
-                border-radius: {RADIUS.radius_sm}px;
-                selection-background-color: {colors.editor_selection};
-            }}
-            QLineEdit {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_muted};
-                border-radius: {RADIUS.radius_sm}px;
-                padding: 6px 10px;
-            }}
-            QLineEdit:focus {{
-                border: 1px solid {colors.interactive_primary};
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 8px;
-                border-radius: 0px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(150, 150, 150, 0.35);
-                border-radius: 0px;
-                min-height: 24px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: rgba(150, 150, 150, 0.55);
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0;
-            }}
-            QScrollBar:horizontal {{
-                background: transparent;
-                height: 8px;
-                border-radius: 0px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: rgba(150, 150, 150, 0.35);
-                border-radius: 0px;
-                min-width: 24px;
-            }}
-            QScrollBar::handle:horizontal:hover {{
-                background: rgba(150, 150, 150, 0.55);
-            }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0;
-            }}
-        """)
+        # Apply centralized stylesheet from design system
+        self.setStyleSheet(get_main_window_stylesheet())
 
         # Container for session tabs (will be the central area)
         session_container = QWidget()
@@ -963,10 +844,21 @@ class MainWindow(DockingMainWindow):
             }}
             QDockWidget::title {{
                 background-color: {colors.bg_tertiary};
-                padding: 10px 12px;
+                padding: 8px 10px;
+                padding-right: 60px;
                 font-weight: 500;
                 font-size: 12px;
                 border: none;
+            }}
+            QDockWidget::close-button, QDockWidget::float-button {{
+                border: none;
+                background: transparent;
+                padding: 4px;
+                icon-size: 14px;
+            }}
+            QDockWidget::close-button:hover, QDockWidget::float-button:hover {{
+                background: {colors.bg_elevated};
+                border-radius: 4px;
             }}
         """)
 
@@ -1021,10 +913,21 @@ class MainWindow(DockingMainWindow):
             }}
             QDockWidget::title {{
                 background-color: {colors.bg_tertiary};
-                padding: 10px 12px;
+                padding: 8px 10px;
+                padding-right: 60px;
                 font-weight: 500;
                 font-size: 12px;
                 border: none;
+            }}
+            QDockWidget::close-button, QDockWidget::float-button {{
+                border: none;
+                background: transparent;
+                padding: 4px;
+                icon-size: 14px;
+            }}
+            QDockWidget::close-button:hover, QDockWidget::float-button:hover {{
+                background: {colors.bg_elevated};
+                border-radius: 4px;
             }}
         """)
 
@@ -1244,10 +1147,21 @@ class MainWindow(DockingMainWindow):
             }}
             QDockWidget::title {{
                 background-color: {colors.bg_tertiary};
-                padding: 10px 12px;
+                padding: 8px 10px;
+                padding-right: 60px;
                 font-weight: 500;
                 font-size: 12px;
                 border: none;
+            }}
+            QDockWidget::close-button, QDockWidget::float-button {{
+                border: none;
+                background: transparent;
+                padding: 4px;
+                icon-size: 14px;
+            }}
+            QDockWidget::close-button:hover, QDockWidget::float-button:hover {{
+                background: {colors.bg_elevated};
+                border-radius: 4px;
             }}
         """
 
@@ -2248,7 +2162,7 @@ class MainWindow(DockingMainWindow):
                 padding: 4px 12px;
                 background: rgba(255, 215, 0, 0.15);
                 border-left: 3px solid #FFD700;
-                border-radius: 0px;
+                border-radius: 8px;
             }
         """)
         self._update_execution_time()
@@ -2480,6 +2394,7 @@ class MainWindow(DockingMainWindow):
                 lambda w=new_widget: self._on_execution_cancelled(w)
             )
             new_widget.completion_log.connect(self._on_completion_log)
+            new_widget.cursor_changed.connect(self._on_cursor_position_changed)
 
             # Register widget
             self._session_widgets[session.session_id] = new_widget
@@ -2726,17 +2641,8 @@ class MainWindow(DockingMainWindow):
                     break
 
             # === STATUSBAR ===
-            conn_display = f"{conn_name} @ {host}/{db}"
-            self.connection_status_bar.setText(conn_display)
-            self.connection_status_bar.setStyleSheet("""
-                QLabel {
-                    color: white;
-                    font-weight: bold;
-                    padding: 0 15px;
-                    border-right: 1px solid rgba(255,255,255,0.3);
-                }
-            """)
-
+            self.main_statusbar.set_connection(conn_name, db_type)
+            
             # Use configured connection color (or default blue)
             status_color = config.get("color", "#007acc") if config else "#007acc"
             if not status_color:
@@ -2748,15 +2654,7 @@ class MainWindow(DockingMainWindow):
             self.connections_list.clearSelection()
 
             # === STATUSBAR ===
-            self.connection_status_bar.setText(S.status.disconnected)
-            self.connection_status_bar.setStyleSheet("""
-                QLabel {
-                    color: white;
-                    font-weight: bold;
-                    padding: 0 15px;
-                    border-right: 1px solid rgba(255,255,255,0.3);
-                }
-            """)
+            self.main_statusbar.set_connection(None)
             # Barra de status cinza escuro quando desconectado
             self.statusbar.setStyleSheet("QStatusBar { background-color: #3e3e42; color: white; }}")
 
@@ -3714,10 +3612,14 @@ class MainWindow(DockingMainWindow):
                 background-color: {colors["background"]};
                 color: {colors["foreground"]};
                 border: 1px solid {colors["border"]};
+                padding: 4px 0px;
             }}
             QMenu::item {{
-                padding: 6px 40px 6px 30px;
+                padding: 8px 40px 8px 36px;
                 min-width: 180px;
+            }}
+            QMenu::icon {{
+                padding-left: 12px;
             }}
             QMenu::item:selected {{
                 background-color: {colors["accent"]};
@@ -3733,7 +3635,7 @@ class MainWindow(DockingMainWindow):
                 color: {colors["foreground"]};
                 border: none;
                 padding: 6px 12px;
-                border-radius: 0px;
+                border-radius: 8px;
             }}
             QPushButton:hover {{
                 background-color: {colors["accent"]};
@@ -3769,7 +3671,7 @@ class MainWindow(DockingMainWindow):
             }}
             QTabBar::close-button:hover {{
                 background-color: #ff6b6b;
-                border-radius: 0px;
+                border-radius: 4px;
             }}
             QTextEdit {{
                 background-color: {colors["background"]};
@@ -3783,7 +3685,7 @@ class MainWindow(DockingMainWindow):
                 color: {colors["accent"]};
                 font-weight: bold;
                 border: 1px solid {colors["border"]};
-                border-radius: 0px;
+                border-radius: 8px;
                 margin-top: 10px;
                 padding-top: 10px;
             }}
@@ -3861,11 +3763,12 @@ class MainWindow(DockingMainWindow):
             <p><b>{S.about.technologies}</b></p>
             <ul>
                 <li>Python 3.12+</li>
-                <li>PyQt6 - Graphical interface</li>
+                <li>PyQt6 - Interface</li>
+                <li>Monaco Editor - Code editor (VS Code)</li>
                 <li>Pandas & Polars - Data analysis</li>
-                <li>SQLAlchemy - Database abstraction</li>
-                <li>QScintilla - Code editor</li>
-                <li>Matplotlib - Data visualization</li>
+                <li>SQLAlchemy - Database ORM</li>
+                <li>Matplotlib - Visualization</li>
+                <li>GitHub Copilot SDK - AI completions</li>
             </ul>
             
             <p><b>{S.about.databases}</b></p>
@@ -3874,9 +3777,11 @@ class MainWindow(DockingMainWindow):
                 <li>MySQL / MariaDB</li>
                 <li>PostgreSQL</li>
                 <li>SQLite</li>
+                <li>Databricks</li>
             </ul>
             
             <p><b>{S.about.license}</b></p>
+            <p><b>Website:</b> <a href="http://datapyn.com">datapyn.com</a></p>
             <p><b>Repository:</b> <a href="https://github.com/natharuc/datapyn">github.com/natharuc/datapyn</a></p>
             
             <p style="margin-top: 15px; color: #888;">{S.about.built_with}</p>
@@ -4306,7 +4211,7 @@ class MainWindow(DockingMainWindow):
                 padding: 12px 40px;
                 font-size: 16px;
                 font-weight: bold;
-                border-radius: 0px;
+                border-radius: 8px;
                 margin-top: 30px;
             }}
             QPushButton:hover {{
@@ -4404,6 +4309,9 @@ class MainWindow(DockingMainWindow):
 
         # Completion logging (for Copilot output panel)
         widget.completion_log.connect(self._on_completion_log)
+        
+        # Cursor position change (for statusbar)
+        widget.cursor_changed.connect(self._on_cursor_position_changed)
 
         # Conectar sinal de modificacao do editor para rastreamento por hash
         widget.editor.content_changed.connect(lambda w=widget: self._on_editor_modified(w))
@@ -4964,6 +4872,11 @@ class MainWindow(DockingMainWindow):
                 output.log_info(message)
         else:
             output.log_info(message)
+
+    def _on_cursor_position_changed(self, line: int, column: int):
+        """Handle cursor position change from editor (updates statusbar)."""
+        if hasattr(self, "main_statusbar"):
+            self.main_statusbar.set_cursor_position(line, column)
 
     def _switch_block_database_background(self, block, connection_name: str, database_name: str):
         """Switch database for a block with custom connection (in background)."""

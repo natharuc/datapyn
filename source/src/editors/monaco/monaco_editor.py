@@ -62,6 +62,9 @@ class MonacoEditor(QWidget):
     # Completion signals
     completion_requested = pyqtSignal(str, str, int, int)
     
+    # Cursor position signal
+    cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
+    
     def __init__(
         self,
         parent: Optional[QWidget] = None,
@@ -184,6 +187,7 @@ class MonacoEditor(QWidget):
         self._bridge.focus_out.connect(self._on_focus_out)
         self._bridge.execute_requested.connect(self._on_execute_requested)
         self._bridge.completion_requested.connect(self._on_completion_requested)
+        self._bridge.cursor_changed.connect(self._on_cursor_changed)
     
     def _on_editor_ready(self):
         """Called when Monaco editor is fully loaded."""
@@ -224,6 +228,10 @@ class MonacoEditor(QWidget):
     def _on_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
         """Handle inline completion request from JS."""
         self.completion_requested.emit(prefix, suffix, line, column)
+    
+    def _on_cursor_changed(self, line: int, column: int):
+        """Handle cursor position change from JS."""
+        self.cursor_changed.emit(line, column)
     
     def _run_js(self, script: str, callback=None):
         """Execute JavaScript in the Monaco editor."""

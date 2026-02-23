@@ -24,6 +24,7 @@ from PyQt6.QtGui import QColor
 from src.database import DatabaseConnector
 from src.core.theme_manager import ThemeManager
 from src.language import S
+from src.design_system.tokens import get_colors
 
 try:
     import qtawesome as qta
@@ -120,13 +121,14 @@ class ConnectionEditDialog(QDialog):
         basic_group_layout.setContentsMargins(12, 12, 12, 12)
 
         # Header
+        colors = get_colors()
         header = QHBoxLayout()
         icon_label = QLabel()
         if HAS_QTAWESOME:
-            icon_label.setPixmap(qta.icon("mdi.database-cog", color="#64b5f6").pixmap(20, 20))
+            icon_label.setPixmap(qta.icon("mdi.database-cog", color=colors.info).pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connection_edit.section_connection_info)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {colors.text_secondary};")
         header.addWidget(title)
         header.addStretch()
         basic_group_layout.addLayout(header)
@@ -170,14 +172,15 @@ class ConnectionEditDialog(QDialog):
         auth_group_layout = QVBoxLayout(auth_group)
         auth_group_layout.setContentsMargins(12, 12, 12, 12)
 
-        # Header
+        # Header (colors already imported at top of file)
+        
         header = QHBoxLayout()
         icon_label = QLabel()
         if HAS_QTAWESOME:
-            icon_label.setPixmap(qta.icon("mdi.lock", color="#64b5f6").pixmap(20, 20))
+            icon_label.setPixmap(qta.icon("mdi.lock", color=colors.info).pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connection_edit.section_authentication)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {colors.text_tertiary};")
         header.addWidget(title)
         header.addStretch()
         auth_group_layout.addLayout(header)
@@ -221,10 +224,10 @@ class ConnectionEditDialog(QDialog):
         header = QHBoxLayout()
         icon_label = QLabel()
         if HAS_QTAWESOME:
-            icon_label.setPixmap(qta.icon("mdi.folder-cog", color="#64b5f6").pixmap(20, 20))
+            icon_label.setPixmap(qta.icon("mdi.folder-cog", color=colors.info).pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connection_edit.section_organization)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {colors.text_tertiary};")
         header.addWidget(title)
         header.addStretch()
         org_group_layout.addLayout(header)

@@ -6,7 +6,7 @@ import sys
 import os
 import logging
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon, QPalette, QColor
+from PyQt6.QtGui import QIcon, QPalette, QColor, QFont
 from PyQt6.QtCore import Qt
 
 # Required for QtWebEngineWidgets (Monaco Editor) - must be set before QApplication
@@ -35,34 +35,34 @@ def _apply_dark_palette(app):
     """Aplica paleta dark nativa via QPalette para visual consistente"""
     palette = QPalette()
 
-    # Backgrounds
-    palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
-    palette.setColor(QPalette.ColorRole.Base, QColor("#252526"))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#2d2d30"))
+    # Backgrounds - with subtle blue undertone
+    palette.setColor(QPalette.ColorRole.Window, QColor("#181a1f"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#1f2228"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#282c34"))
 
     # Text
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#cccccc"))
-    palette.setColor(QPalette.ColorRole.Text, QColor("#cccccc"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#dcdee4"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#dcdee4"))
     palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6e6e6e"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#70758a"))
 
     # Buttons
-    palette.setColor(QPalette.ColorRole.Button, QColor("#2d2d30"))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#cccccc"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#282c34"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#dcdee4"))
 
-    # Highlights
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#3369FF"))
+    # Highlights - modern blue
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#3b82f6"))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
 
     # Misc
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#252526"))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#cccccc"))
-    palette.setColor(QPalette.ColorRole.Link, QColor("#3369FF"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#282c34"))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#dcdee4"))
+    palette.setColor(QPalette.ColorRole.Link, QColor("#3b82f6"))
 
     # Disabled
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#5a5a5a"))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#5a5a5a"))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#5a5a5a"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#50556b"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#50556b"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#50556b"))
 
     app.setPalette(palette)
 
@@ -83,6 +83,32 @@ def main():
 
     # Estilo Fusion para visual consistente cross-platform
     app.setStyle("Fusion")
+    
+    # Fonte global moderna - Inter/Segoe UI (web-like)
+    from PyQt6.QtCore import QCoreApplication
+    global_font = QFont("Inter", 10)
+    if not global_font.exactMatch():
+        global_font = QFont("SF Pro Display", 10)
+    if not global_font.exactMatch():
+        global_font = QFont("Roboto", 10)
+    if not global_font.exactMatch():
+        global_font = QFont("-apple-system", 10)
+    global_font.setWeight(QFont.Weight.Normal)
+    global_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    global_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    app.setFont(global_font)
+    
+    # Stylesheet global para fonte consistente
+    app.setStyleSheet("""
+        * {
+            font-family: "Inter", "SF Pro Display", "Roboto", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+        }
+        QToolTip {
+            font-size: 11px;
+            padding: 6px 10px;
+            border-radius: 6px;
+        }
+    """)
 
     # Paleta dark nativa
     _apply_dark_palette(app)

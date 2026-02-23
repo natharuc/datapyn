@@ -258,7 +258,7 @@ class ExportToTableDialog(QDialog):
 
         # DataFrame info
         info_label = QLabel(S.export_to_table.info_row_col.format(rows=f"{len(self.df):,}", cols=len(self.df.columns)))
-        info_label.setFont(QFont("Segoe UI", 9))
+        info_label.setFont(QFont("Inter", 9))
         info_label.setStyleSheet("color: #888; margin-bottom: 4px;")
         layout.addWidget(info_label)
 
@@ -325,7 +325,7 @@ class ExportToTableDialog(QDialog):
         progress_layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel(S.export_to_table.status_ready)
-        self.status_label.setFont(QFont("Segoe UI", 9))
+        self.status_label.setFont(QFont("Inter", 9))
         progress_layout.addWidget(self.status_label)
 
         self.progress_group.setVisible(False)
@@ -359,14 +359,14 @@ class ExportToTableDialog(QDialog):
             QProgressBar {{
                 background-color: {colors["border"]};
                 border: 1px solid {colors["border"]};
-                border-radius: 0px;
+                border-radius: 4px;
                 text-align: center;
                 color: {colors["foreground"]};
                 min-height: 20px;
             }}
             QProgressBar::chunk {{
                 background-color: {colors["accent"]};
-                border-radius: 0px;
+                border-radius: 4px;
             }}
             QPushButton:disabled {{
                 background-color: {colors["border"]};

@@ -51,20 +51,23 @@ class ConnectionPickerDialog(QDialog):
         layout.setSpacing(12)
 
         # Header
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         header = QHBoxLayout()
         if qta:
             icon_label = QLabel()
-            icon_label.setPixmap(qta.icon("mdi.database-search", color="#64b5f6").pixmap(20, 20))
+            icon_label.setPixmap(qta.icon("mdi.database-search", color=colors.info).pixmap(20, 20))
             header.addWidget(icon_label)
         title = QLabel(S.connection_picker.header)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {colors.text_tertiary};")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
         # Instruction
         hint = QLabel(S.connection_picker.hint)
-        hint.setStyleSheet("color: #666; font-size: 11px; font-style: italic;")
+        hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px; font-style: italic;")
         layout.addWidget(hint)
 
         # Connection list - reuses components from connection_panel

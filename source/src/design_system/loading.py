@@ -119,12 +119,12 @@ class ProgressIndicator(QWidget):
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
                 border: none;
-                border-radius: 0px;
+                border-radius: 4px;
                 background-color: {colors.bg_tertiary};
             }}
             QProgressBar::chunk {{
                 background-color: {colors.interactive_primary};
-                border-radius: 0px;
+                border-radius: 4px;
             }}
         """)
 

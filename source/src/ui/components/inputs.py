@@ -28,11 +28,15 @@ def _get_line_edit_style():
             background-color: {colors.interactive_secondary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_strong};
-            border-radius: 0px;
-            padding: 6px 10px;
+            border-radius: 8px;
+            padding: 8px 12px;
+            min-height: 20px;
             selection-background-color: {colors.interactive_primary_active};
         }}
         QLineEdit:focus {{
+            border: 2px solid {colors.interactive_primary};
+        }}
+        QLineEdit:hover {{
             border-color: {colors.interactive_primary};
         }}
         QLineEdit:disabled {{
@@ -52,11 +56,14 @@ def _get_text_edit_style():
             background-color: {colors.bg_primary};
             color: {colors.editor_fg};
             border: 1px solid {colors.border_default};
-            border-radius: 0px;
-            padding: 8px;
+            border-radius: 8px;
+            padding: 10px;
             selection-background-color: {colors.interactive_primary_active};
         }}
         QTextEdit:focus {{
+            border: 2px solid {colors.interactive_primary};
+        }}
+        QTextEdit:hover {{
             border-color: {colors.interactive_primary};
         }}
     """
@@ -69,16 +76,21 @@ def _get_spinbox_style():
             background-color: {colors.interactive_secondary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_strong};
-            border-radius: 0px;
-            padding: 4px 8px;
+            border-radius: 8px;
+            padding: 6px 10px;
+            min-height: 20px;
         }}
         QSpinBox:focus {{
+            border: 2px solid {colors.interactive_primary};
+        }}
+        QSpinBox:hover {{
             border-color: {colors.interactive_primary};
         }}
         QSpinBox::up-button, QSpinBox::down-button {{
             background-color: {colors.interactive_secondary_hover};
             border: none;
             width: 20px;
+            border-radius: 4px;
         }}
         QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
             background-color: {colors.bg_elevated};
@@ -109,16 +121,21 @@ def _get_combobox_style():
             background-color: {colors.interactive_secondary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_strong};
-            border-radius: 0px;
-            padding: 6px 10px;
+            border-radius: 8px;
+            padding: 8px 12px;
             min-width: 100px;
+            min-height: 24px;
         }}
         QComboBox:focus {{
+            border: 2px solid {colors.interactive_primary};
+        }}
+        QComboBox:hover {{
             border-color: {colors.interactive_primary};
         }}
         QComboBox::drop-down {{
             border: none;
             width: 25px;
+            border-radius: 8px;
         }}
         QComboBox::down-arrow {{
             image: none;
@@ -132,7 +149,16 @@ def _get_combobox_style():
             background-color: {colors.bg_tertiary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_default};
+            border-radius: 8px;
+            padding: 4px;
             selection-background-color: {colors.interactive_primary_active};
+        }}
+        QComboBox QAbstractItemView::item {{
+            padding: 8px;
+            border-radius: 6px;
+        }}
+        QComboBox QAbstractItemView::item:hover {{
+            background-color: {colors.bg_elevated};
         }}
     """
 
@@ -142,13 +168,13 @@ def _get_checkbox_style():
     return f"""
         QCheckBox {{
             color: {colors.text_primary};
-            spacing: 8px;
+            spacing: 10px;
         }}
         QCheckBox::indicator {{
-            width: 18px;
-            height: 18px;
-            border: 1px solid {colors.border_strong};
-            border-radius: 0px;
+            width: 20px;
+            height: 20px;
+            border: 2px solid {colors.border_strong};
+            border-radius: 6px;
             background-color: {colors.interactive_secondary};
         }}
         QCheckBox::indicator:checked {{

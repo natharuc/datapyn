@@ -315,80 +315,130 @@ class ThemeManager:
                 background-color: {c["border"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
-                padding: 8px;
-                border-radius: 0px;
+                padding: 10px 12px;
+                border-radius: 8px;
+                min-height: 20px;
             }}
             QLineEdit:focus {{
+                border: 2px solid {c["accent"]};
+            }}
+            QLineEdit:hover {{
                 border-color: {c["accent"]};
             }}
             QTextEdit {{
                 background-color: {c["border"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
+                border-radius: 8px;
             }}
             QComboBox {{
                 background-color: {c["border"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
-                padding: 8px;
-                border-radius: 0px;
+                padding: 10px 12px;
+                border-radius: 8px;
+                min-height: 24px;
             }}
             QComboBox:hover {{
                 border-color: {c["accent"]};
             }}
+            QComboBox:focus {{
+                border: 2px solid {c["accent"]};
+            }}
             QComboBox::drop-down {{
                 border: none;
+                border-radius: 8px;
             }}
             QComboBox QAbstractItemView {{
                 background-color: {c["background"]};
                 color: {c["foreground"]};
                 selection-background-color: {c["accent"]};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 8px;
+                border-radius: 6px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {c["border"]};
             }}
             QCheckBox {{
                 color: {c["foreground"]};
+                spacing: 8px;
             }}
             QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
             }}
             QCheckBox::indicator:unchecked {{
-                border: 1px solid {c["border"]};
+                border: 2px solid {c["border"]};
                 background-color: {c["background"]};
+                border-radius: 4px;
             }}
             QCheckBox::indicator:checked {{
                 background-color: {c["accent"]};
-                border: 1px solid {c["accent"]};
+                border: 2px solid {c["accent"]};
+                border-radius: 4px;
+            }}
+            QCheckBox::indicator:unchecked:hover {{
+                border-color: {c["accent"]};
             }}
             QSpinBox {{
                 background-color: {c["border"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
-                padding: 5px;
+                padding: 8px 10px;
+                border-radius: 8px;
+                min-height: 20px;
+            }}
+            QSpinBox:hover {{
+                border-color: {c["accent"]};
+            }}
+            QSpinBox:focus {{
+                border: 2px solid {c["accent"]};
             }}
             QPushButton {{
                 background-color: {c["accent"]};
                 color: white;
                 border: none;
-                padding: 8px 16px;
-                border-radius: 0px;
-                font-weight: bold;
+                padding: 10px 20px;
+                border-radius: 8px;
+                font-weight: 600;
+                min-height: 24px;
             }}
             QPushButton:hover {{
                 background-color: {c["accent"]};
-                opacity: 0.8;
+                filter: brightness(1.1);
+            }}
+            QPushButton:pressed {{
+                filter: brightness(0.9);
             }}
             QPushButton#btnCancel {{
                 background-color: {c["border"]};
                 color: {c["foreground"]};
             }}
+            QPushButton#btnCancel:hover {{
+                background-color: {c["foreground"]};
+                color: {c["background"]};
+            }}
             QPushButton#btnReset {{
-                background-color: #c5534d;
+                background-color: #ef4444;
+            }}
+            QPushButton#btnReset:hover {{
+                background-color: #f87171;
             }}
             QTableWidget {{
                 background-color: {c["background"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
+                border-radius: 8px;
                 gridline-color: {c["border"]};
+            }}
+            QTableWidget::item {{
+                padding: 8px;
+                border-radius: 4px;
             }}
             QTableWidget::item:selected {{
                 background-color: {c["accent"]};
@@ -396,41 +446,51 @@ class ThemeManager:
             QHeaderView::section {{
                 background-color: {c["border"]};
                 color: {c["foreground"]};
-                padding: 5px;
-                border: 1px solid {c["border"]};
-                font-weight: bold;
-                text-transform: none;
+                padding: 8px 10px;
+                border: none;
+                border-right: 1px solid {c["background"]};
+                border-bottom: 1px solid {c["background"]};
+                font-weight: 600;
             }}
             QTableView {{
                 background-color: {c["background"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
+                border-radius: 8px;
                 gridline-color: {c["border"]};
+            }}
+            QTableView::item {{
+                padding: 8px;
+                border-radius: 4px;
             }}
             QTableView::item:selected {{
                 background-color: {c["accent"]};
             }}
             QGroupBox {{
-                color: {c["accent"]};
-                font-weight: bold;
+                color: {c["foreground"]};
+                font-weight: 600;
                 border: 1px solid {c["border"]};
-                border-radius: 0px;
-                margin-top: 10px;
-                padding-top: 10px;
+                border-radius: 12px;
+                margin-top: 16px;
+                padding: 16px;
+                padding-top: 24px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
+                left: 12px;
+                padding: 0 8px;
             }}
             QListWidget {{
                 background-color: {c["background"]};
                 border: 1px solid {c["border"]};
+                border-radius: 8px;
                 color: {c["foreground"]};
+                padding: 4px;
             }}
             QListWidget::item {{
-                padding: 8px;
-                border-bottom: 1px solid {c["border"]};
+                padding: 10px 12px;
+                border-radius: 6px;
+                margin: 2px 0;
             }}
             QListWidget::item:hover {{
                 background-color: {c["border"]};
@@ -440,21 +500,52 @@ class ThemeManager:
                 color: white;
             }}
             QScrollBar:vertical {{
-                background-color: {c["background"]};
-                width: 12px;
+                background-color: transparent;
+                width: 10px;
+                margin: 2px;
             }}
             QScrollBar::handle:vertical {{
                 background-color: {c["border"]};
-                border-radius: 0px;
-                min-height: 20px;
+                border-radius: 5px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {c["foreground"]};
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+            QScrollBar:horizontal {{
+                background-color: transparent;
+                height: 10px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: {c["border"]};
+                border-radius: 5px;
+                min-width: 30px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {c["foreground"]};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
             }}
             QTreeWidget {{
                 background-color: {c["background"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
+                border-radius: 8px;
+            }}
+            QTreeWidget::item {{
+                padding: 6px 8px;
+                border-radius: 4px;
+            }}
+            QTreeWidget::item:hover {{
+                background-color: {c["border"]};
             }}
             QTreeWidget::item:selected {{
                 background-color: {c["accent"]};
@@ -462,16 +553,31 @@ class ThemeManager:
             QTreeWidget QLineEdit {{
                 background-color: {c["border"]};
                 color: {c["foreground"]};
-                border: 1px solid {c["accent"]};
-                padding: 2px 4px;
+                border: 2px solid {c["accent"]};
+                border-radius: 6px;
+                padding: 4px 8px;
                 selection-background-color: {c["accent"]};
                 selection-color: white;
             }}
             QToolBar {{
-                background-color: {c["border"]};
+                background-color: {c["background"]};
+                border: none;
                 border-bottom: 1px solid {c["border"]};
-                spacing: 5px;
-                padding: 5px;
+                spacing: 8px;
+                padding: 8px;
+            }}
+            QToolBar QToolButton {{
+                border-radius: 6px;
+                padding: 6px;
+            }}
+            QToolBar QToolButton:hover {{
+                background-color: {c["border"]};
+            }}
+            QFrame[frameShape="StyledPanel"] {{
+                background-color: {c["background"]};
+                border: 1px solid {c["border"]};
+                border-radius: 12px;
+                padding: 12px;
             }}
         """
 

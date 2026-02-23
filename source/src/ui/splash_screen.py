@@ -112,7 +112,7 @@ class SplashScreen(QSplashScreen):
 
         # -- Titulo --
         title_y = logo_y + logo_size + 16
-        font_title = QFont("Segoe UI", 22, QFont.Weight.Bold)
+        font_title = QFont("Inter", 22, QFont.Weight.Bold)
         painter.setFont(font_title)
         painter.setPen(QColor("#FFFFFF"))
         painter.drawText(
@@ -123,7 +123,7 @@ class SplashScreen(QSplashScreen):
 
         # -- Subtitulo --
         sub_y = title_y + 34
-        font_sub = QFont("Segoe UI", 10)
+        font_sub = QFont("Inter", 10)
         painter.setFont(font_sub)
         painter.setPen(self.TEXT_DIM)
         painter.drawText(
@@ -133,7 +133,7 @@ class SplashScreen(QSplashScreen):
         )
 
         # -- Versao --
-        font_ver = QFont("Segoe UI", 8)
+        font_ver = QFont("Inter", 8)
         painter.setFont(font_ver)
         painter.setPen(self.TEXT_DIM)
         painter.drawText(
@@ -166,7 +166,7 @@ class SplashScreen(QSplashScreen):
 
         # -- Texto de status --
         status_y = bar_y + 10
-        font_status = QFont("Segoe UI", 8)
+        font_status = QFont("Inter", 8)
         painter.setFont(font_status)
         painter.setPen(self.TEXT_DIM)
         painter.drawText(
