@@ -5548,6 +5548,15 @@ class MainWindow(DockingMainWindow):
 
     def _update_window_title(self):
         """Updates window title with context indicator and file path"""
+        from src.core.workspace_service import get_workspace_service
+        
+        ws_service = get_workspace_service()
+        
+        # Workspace prefix (empty for Default workspace)
+        workspace_prefix = ""
+        if not ws_service.is_default_workspace:
+            workspace_prefix = f"{ws_service.current_workspace_name} - "
+        
         base_title = "DataPyn"
 
         # Detectar contexto atual
@@ -5576,7 +5585,7 @@ class MainWindow(DockingMainWindow):
             file_info = f" - {self.workspace_manager.current_file_path}"
             file_path_for_statusbar = str(self.workspace_manager.current_file_path)
 
-        self.setWindowTitle(f"{indicator} {base_title}{file_info}")
+        self.setWindowTitle(f"{workspace_prefix}{indicator} {base_title}{file_info}")
 
         # Atualizar informacao do arquivo na statusbar
         if hasattr(self, "main_statusbar"):
