@@ -564,7 +564,7 @@ class CopilotLSPClient(QObject):
             
             # Log full result structure for debugging
             import json
-            logger.debug(f"[LSP] Full completion result: {json.dumps(result, default=str)[:500]}")
+            logger.info(f"[LSP] Full completion result: {json.dumps(result, default=str)[:1000]}")
             
             # getCompletions returns { completions: [...] } structure
             completions = result.get("completions", []) if result else []
@@ -575,7 +575,7 @@ class CopilotLSPClient(QObject):
             
             if completions:
                 item = completions[0]
-                logger.debug(f"[LSP] Full completion item: {item}")
+                logger.info(f"[LSP] Full completion item keys: {list(item.keys()) if isinstance(item, dict) else type(item)}")
                 
                 # getCompletions uses displayText or text
                 insert_text = item.get("displayText", "")
@@ -600,22 +600,29 @@ class CopilotLSPClient(QObject):
         # Use Copilot's custom getCompletions method (returns full multi-line completions)
         # Extract relative path from URI for context
         relative_path = uri.replace("file:///", "").replace("file://", "")
+        path = relative_path  # Full path for Copilot
         if relative_path.startswith("datapyn/"):
             relative_path = relative_path[8:]  # Remove "datapyn/" prefix
         
-        req_id = self._send_request("getCompletions", {
+        params = {
             "doc": {
                 "uri": uri,
                 "version": version,
                 "position": {"line": line, "character": character},
                 "source": self._current_document_text,
                 "languageId": self._current_document_language,
+                "path": path,
                 "relativePath": relative_path,
                 "tabSize": 4,
                 "insertSpaces": True,
                 "indentSize": 4,
             }
-        }, on_completion)
+        }
+        
+        import json
+        logger.info(f"[LSP] getCompletions request: {json.dumps(params, default=str)[:500]}")
+        
+        req_id = self._send_request("getCompletions", params, on_completion)
         
         self._pending_completion_id = req_id
         logger.debug(f"[LSP] Requesting getCompletions at {line}:{character}")

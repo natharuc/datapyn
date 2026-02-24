@@ -293,7 +293,8 @@
                                         );
                                         
                                         if (completionText && completionText.length > 0) {
-                                            console.log('[Monaco] Creating inline completion item: ' + completionText.substring(0, 40) + '...');
+                                            const lineCount = (completionText.match(/\n/g) || []).length + 1;
+                                            console.log('[Monaco] Creating inline completion item: lines=' + lineCount + ', len=' + completionText.length + ', preview=' + completionText.substring(0, 60).replace(/\n/g, '\\n') + '...');
                                             const item = {
                                                 insertText: completionText,
                                                 range: new monaco.Range(
