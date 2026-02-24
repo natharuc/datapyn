@@ -321,3 +321,118 @@ def execute_worker(worker: BaseWorker, parent_thread: QThread = None) -> QThread
     thread.start()
 
     return thread
+
+
+class FileReadWorker(BaseWorker):
+    """
+    Worker for reading files in background
+
+    Signals:
+        - file_read(str, str): (content, file_path) - File read successfully
+        - error(str): Read error
+    """
+
+    file_read = pyqtSignal(str, str)  # (content, file_path)
+
+    def __init__(self, file_path: str):
+        super().__init__()
+        self.file_path = file_path
+
+    def run(self):
+        """Read file with encoding detection"""
+        self.started.emit()
+
+        try:
+            content = self._read_with_encoding_fallback(self.file_path)
+            self.file_read.emit(content, self.file_path)
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self.finished.emit()
+
+    def _read_with_encoding_fallback(self, filepath: str) -> str:
+        """Read file trying multiple encodings"""
+        # Try utf-8 first
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return f.read()
+        except UnicodeDecodeError:
+            pass
+
+        # Try chardet detection
+        try:
+            import chardet
+            with open(filepath, "rb") as f:
+                raw_data = f.read()
+            detected = chardet.detect(raw_data)
+            encoding = detected.get("encoding", "latin-1") or "latin-1"
+            return raw_data.decode(encoding)
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        # Fallback to latin-1
+        with open(filepath, "r", encoding="latin-1") as f:
+            return f.read()
+
+
+class FileExportWorker(BaseWorker):
+    """
+    Worker for exporting DataFrames to files in background
+
+    Signals:
+        - export_complete(str): File exported successfully (file_path)
+        - error(str): Export error
+    """
+
+    export_complete = pyqtSignal(str)  # file_path
+
+    def __init__(self, df: pd.DataFrame, file_path: str, export_format: str = "csv", **options):
+        """
+        Args:
+            df: DataFrame to export
+            file_path: Destination path
+            export_format: "csv", "excel", "json"
+            **options: Format-specific options (encoding, sep, index, etc.)
+        """
+        super().__init__()
+        self.df = df
+        self.file_path = file_path
+        self.export_format = export_format
+        self.options = options
+
+    def run(self):
+        """Export DataFrame to file"""
+        self.started.emit()
+
+        try:
+            if self.export_format == "csv":
+                self.df.to_csv(
+                    self.file_path,
+                    index=self.options.get("index", False),
+                    encoding=self.options.get("encoding", "utf-8"),
+                    sep=self.options.get("sep", ","),
+                    header=self.options.get("header", True),
+                )
+            elif self.export_format == "excel":
+                self.df.to_excel(
+                    self.file_path,
+                    index=self.options.get("index", False),
+                )
+            elif self.export_format == "json":
+                self.df.to_json(
+                    self.file_path,
+                    orient=self.options.get("orient", "records"),
+                    indent=self.options.get("indent", 2),
+                    force_ascii=self.options.get("force_ascii", False),
+                )
+            else:
+                raise ValueError(f"Unsupported export format: {self.export_format}")
+
+            self.export_complete.emit(self.file_path)
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self.finished.emit()
+

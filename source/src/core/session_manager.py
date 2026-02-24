@@ -45,7 +45,9 @@ class SessionManager(QObject):
         if workspace_path:
             self._sessions_file = workspace_path / "sessions.json"
         else:
-            self._sessions_file = Path.home() / ".datapyn" / "sessions.json"
+            # Use WorkspaceService for default path (supports workspace switching)
+            from src.core.workspace_service import get_workspace_service
+            self._sessions_file = get_workspace_service().get_config_path("sessions.json")
 
         self._sessions_file.parent.mkdir(parents=True, exist_ok=True)
 

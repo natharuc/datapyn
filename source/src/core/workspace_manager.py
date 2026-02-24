@@ -15,7 +15,9 @@ class WorkspaceManager:
 
     def __init__(self, config_path: str = None):
         if config_path is None:
-            config_path = Path.home() / ".datapyn" / "workspace.json"
+            # Use WorkspaceService for default path (supports workspace switching)
+            from src.core.workspace_service import get_workspace_service
+            config_path = get_workspace_service().get_config_path("workspace.json")
 
         self.config_path = Path(config_path)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)

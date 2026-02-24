@@ -519,49 +519,63 @@ class InlineCompletionService(QObject):
         """
         self._log(f"Force completion request (Ctrl+.) at L{line}:C{column}", "info")
         
-        # Reset processing state to allow immediate request
-        self._is_processing = False
+        try:
+            # Reset processing state to allow immediate request
+            self._is_processing = False
+            
+            # Generate unique request ID
+            self._current_request_id += 1
+            request_id = self._current_request_id
+            self._active_request_id = request_id
+            
+            # Start processing
+            self._is_processing = True
+            
+            # Build request
+            request = {
+                "id": request_id,
+                "prefix": prefix,
+                "suffix": suffix,
+                "language": language,
+                "line": line,
+                "column": column,
+            }
+            
+            # Sync document with LSP
+            full_text = prefix + suffix
+            self._log(f"Force: syncing doc (len={len(full_text)})", "info")
+            self.notify_document_changed(full_text)
+            
+            # Debug: check LSP state
+            lsp_present = self._lsp_client is not None
+            lsp_auth = self._lsp_client.is_authenticated if self._lsp_client else False
+            doc_uri = self._document_uri
+            self._log(f"Force: lsp_present={lsp_present}, lsp_auth={lsp_auth}, doc_uri={doc_uri}", "info")
+            
+            # Try LSP client with manual trigger
+            if self.has_lsp and self._document_uri:
+                self._log(
+                    f"Force LSP completion ({language}, L{line}:C{column})", "info"
+                )
+                self._lsp_client.request_completion(
+                    uri=self._document_uri,
+                    version=self._document_version,
+                    line=line - 1,  # LSP uses 0-indexed
+                    character=column - 1,
+                    trigger_kind=1,  # Manual trigger
+                )
+                return
+            
+            # LSP not available
+            self._log(f"Force completion failed - LSP not available (lsp={lsp_present}, auth={lsp_auth}, uri={doc_uri})", "warning")
+            self._is_processing = False
+            self.completion_ready.emit("")
         
-        # Generate unique request ID
-        self._current_request_id += 1
-        request_id = self._current_request_id
-        self._active_request_id = request_id
-        
-        # Start processing
-        self._is_processing = True
-        
-        # Build request
-        request = {
-            "id": request_id,
-            "prefix": prefix,
-            "suffix": suffix,
-            "language": language,
-            "line": line,
-            "column": column,
-        }
-        
-        # Sync document with LSP
-        full_text = prefix + suffix
-        self.notify_document_changed(full_text)
-        
-        # Try LSP client with manual trigger
-        if self.has_lsp and self._document_uri:
-            self._log(
-                f"Force LSP completion ({language}, L{line}:C{column})", "info"
-            )
-            self._lsp_client.request_completion(
-                uri=self._document_uri,
-                version=self._document_version,
-                line=line - 1,  # LSP uses 0-indexed
-                character=column - 1,
-                trigger_kind=1,  # Manual trigger
-            )
-            return
-        
-        # LSP not available
-        self._log("Force completion failed - LSP not available", "warning")
-        self._is_processing = False
-        self.completion_ready.emit("")
+        except Exception as e:
+            import traceback
+            self._log(f"Force completion exception: {e}\n{traceback.format_exc()}", "error")
+            self._is_processing = False
+            self.completion_ready.emit("")
 
     def _get_smart_completion(
         self,

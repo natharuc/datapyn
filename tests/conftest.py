@@ -36,6 +36,54 @@ from src.language import init_language
 init_language("en-US")
 
 
+# ==================== ISOLAMENTO DO WORKSPACE PARA TESTES ====================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolate_workspace_for_tests(tmp_path_factory):
+    """
+    Isola o workspace para testes - todos os testes usam um diretorio temporario
+    ao inves do workspace real do usuario (~/.datapyn)
+    
+    Isso evita que testes criem sessoes/abas no workspace real.
+    """
+    # Criar diretorio temporario para testes
+    test_workspace = tmp_path_factory.mktemp("datapyn_test_workspace")
+    
+    # Patch o modulo workspace_service ANTES de qualquer uso
+    from src.core import workspace_service
+    
+    # Salvar valores originais
+    original_default_path = workspace_service.DEFAULT_WORKSPACE_PATH
+    original_instance = workspace_service._workspace_service_instance
+    
+    # Configurar para testes
+    workspace_service.DEFAULT_WORKSPACE_PATH = test_workspace
+    workspace_service._workspace_service_instance = None  # Reset singleton
+    
+    # Tambem limpar QSettings do Workspaces para testes
+    from PyQt6.QtCore import QSettings
+    test_settings = QSettings("DataPyn", "Workspaces")
+    original_current = test_settings.value("current_workspace", "")
+    original_list = test_settings.value("workspace_list", [])
+    
+    # Limpar para testes
+    test_settings.remove("current_workspace")
+    test_settings.remove("workspace_list")
+    
+    yield test_workspace
+    
+    # Restaurar valores originais apos todos os testes
+    workspace_service.DEFAULT_WORKSPACE_PATH = original_default_path
+    workspace_service._workspace_service_instance = None  # Reset para proximo uso
+    
+    # Restaurar QSettings
+    if original_current:
+        test_settings.setValue("current_workspace", original_current)
+    if original_list:
+        test_settings.setValue("workspace_list", original_list)
+
+
 # ==================== CONFIGURAÇÃO MATPLOTLIB PARA TESTES ====================
 
 

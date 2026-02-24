@@ -75,6 +75,9 @@ class CopilotLSPClient(QObject):
         
         # Completion tracking
         self._pending_completion_id: Optional[int] = None
+        self._panel_solutions: List[str] = []  # Solutions from getPanelCompletions
+        self._panel_request_active = False
+        self._panel_start_time: float = 0.0
     
     @property
     def is_initialized(self) -> bool:
@@ -554,17 +557,32 @@ class CopilotLSPClient(QObject):
         
         start_time = time.time()
         
+        # Reset panel solutions for new request
+        self._panel_solutions = []
+        self._panel_request_active = True
+        self._panel_start_time = start_time
+        
         def on_completion(result, error):
             elapsed = (time.time() - start_time) * 1000
             
             if error:
                 logger.warning(f"[LSP] Completion error after {elapsed:.0f}ms: {error}")
+                self._panel_request_active = False
                 self.completion_ready.emit("")
                 return
             
             # Log full result structure for debugging
             import json
             logger.info(f"[LSP] Full completion result: {json.dumps(result, default=str)[:1000]}")
+            
+            # getPanelCompletions returns { solutionCountTarget: N }
+            # Actual solutions come via PanelSolution notifications
+            if result and "solutionCountTarget" in result:
+                target = result.get("solutionCountTarget", 0)
+                logger.info(f"[LSP] Expecting {target} panel solutions via notifications")
+                # Solutions will arrive via PanelSolution notifications
+                # Don't emit yet - wait for notifications
+                return
             
             # getCompletions returns { completions: [...] } structure
             completions = result.get("completions", []) if result else []
@@ -590,19 +608,24 @@ class CopilotLSPClient(QObject):
                     f"chars={len(insert_text)}, "
                     f"preview={insert_text[:80].replace(chr(10), ' ')}..."
                 )
+                self._panel_request_active = False
                 self.completion_ready.emit(insert_text)
             else:
                 logger.debug(f"[LSP] No completions in {elapsed:.0f}ms")
+                self._panel_request_active = False
                 self.completion_ready.emit("")
             
             self._pending_completion_id = None
         
-        # Use Copilot's custom getCompletions method (returns full multi-line completions)
-        # Extract relative path from URI for context
-        relative_path = uri.replace("file:///", "").replace("file://", "")
-        path = relative_path  # Full path for Copilot
-        if relative_path.startswith("datapyn/"):
-            relative_path = relative_path[8:]  # Remove "datapyn/" prefix
+        # Use getPanelCompletions for more complete multi-line suggestions
+        # This is the method used by Copilot Panel (Ctrl+Enter in VS Code)
+        # Returns multiple longer suggestions compared to inline completions
+        
+        # Extract path from URI
+        path = uri.replace("file:///", "").replace("file://", "")
+        relative_path = path
+        if path.startswith("datapyn/"):
+            relative_path = path[8:]
         
         params = {
             "doc": {
@@ -616,16 +639,17 @@ class CopilotLSPClient(QObject):
                 "tabSize": 4,
                 "insertSpaces": True,
                 "indentSize": 4,
-            }
+            },
+            "panelId": f"panel-{self._request_id}",
         }
         
         import json
-        logger.info(f"[LSP] getCompletions request: {json.dumps(params, default=str)[:500]}")
+        logger.info(f"[LSP] getPanelCompletions request: {json.dumps(params, default=str)[:500]}")
         
-        req_id = self._send_request("getCompletions", params, on_completion)
+        req_id = self._send_request("getPanelCompletions", params, on_completion)
         
         self._pending_completion_id = req_id
-        logger.debug(f"[LSP] Requesting getCompletions at {line}:{character}")
+        logger.debug(f"[LSP] Requesting getPanelCompletions at {line}:{character}")
     
     def _send_request(
         self,
@@ -765,6 +789,17 @@ class CopilotLSPClient(QObject):
                 # Unknown or other status - don't change auth state
                 logger.debug(f"[LSP] Ignoring unknown status: {status}")
         
+        elif method == "PanelSolution":
+            # Handle panel completion solution from getPanelCompletions
+            self._handle_panel_solution(params)
+        
+        elif method == "PanelSolutionsDone":
+            # All panel solutions have been sent
+            logger.info(f"[LSP] Panel solutions complete")
+            if not self._panel_solutions:
+                # No solutions received, emit empty
+                self.completion_ready.emit("")
+        
         elif method == "window/logMessage":
             msg = params.get("message", "")
             level = params.get("type", 3)  # 1=error, 2=warn, 3=info, 4=log
@@ -776,3 +811,43 @@ class CopilotLSPClient(QObject):
         elif method == "window/showMessage":
             msg = params.get("message", "")
             logger.info(f"[LSP] Message: {msg}")
+    
+    def _handle_panel_solution(self, params: Dict[str, Any]) -> None:
+        """Handle a panel completion solution from getPanelCompletions.
+        
+        Panel solutions arrive via notifications containing:
+        - panelId: The panel request identifier
+        - completionText: The complete suggested code
+        - displayText: Alternative text for display
+        - score: Completion quality score
+        - range: Text range info
+        """
+        import json
+        logger.info(f"[LSP] PanelSolution received: {json.dumps(params, default=str)[:500]}")
+        
+        # Extract completion text from various possible fields
+        solution_text = params.get("completionText", "")
+        if not solution_text:
+            solution_text = params.get("displayText", "")
+        if not solution_text:
+            solution_text = params.get("solutionText", "")
+        if not solution_text:
+            solution_text = params.get("text", "")
+        
+        if solution_text:
+            line_count = solution_text.count('\n') + 1
+            logger.info(
+                f"[LSP] Panel solution: lines={line_count}, "
+                f"chars={len(solution_text)}, "
+                f"preview={solution_text[:100].replace(chr(10), ' ')}..."
+            )
+            
+            # Store solution
+            self._panel_solutions.append(solution_text)
+            
+            # Emit first solution immediately so user sees it
+            if len(self._panel_solutions) == 1:
+                self._panel_request_active = False
+                self.completion_ready.emit(solution_text)
+        else:
+            logger.warning(f"[LSP] Empty panel solution: {list(params.keys())}")

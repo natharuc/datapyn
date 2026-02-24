@@ -19,12 +19,13 @@ logger = logging.getLogger(__name__)
 def _get_oauth_token_cache_path(host: str) -> Path:
     """Get path for OAuth token cache file.
     
-    Tokens are stored per-host in the user's app config directory.
+    Tokens are stored per-host in the user's workspace config directory.
     """
     # Use a safe filename derived from the host
     safe_host = host.replace(".", "_").replace(":", "_").replace("/", "_")
-    config_dir = Path.home() / ".datapyn" / "oauth_cache"
-    config_dir.mkdir(parents=True, exist_ok=True)
+    # Use WorkspaceService for path (supports workspace switching)
+    from src.core.workspace_service import get_workspace_service
+    config_dir = get_workspace_service().get_config_dir("oauth_cache")
     return config_dir / f"databricks_{safe_host}.json"
 
 

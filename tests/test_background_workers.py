@@ -13,6 +13,8 @@ from src.workers import (
     BaseWorker,
     DatabaseSwitchWorker,
     BlockConnectionWorker,
+    FileReadWorker,
+    FileExportWorker,
     execute_worker,
 )
 
@@ -248,3 +250,216 @@ class TestBlockConnectionWorker:
             use_windows_auth=True,
             trust_server_certificate=True,
         )
+
+
+class TestFileReadWorker:
+    """Testes para FileReadWorker"""
+
+    def test_worker_inherits_base(self):
+        """FileReadWorker deve herdar de BaseWorker"""
+        worker = FileReadWorker("/path/to/file.txt")
+        assert isinstance(worker, BaseWorker)
+
+    def test_worker_has_file_read_signal(self):
+        """Worker deve ter sinal file_read"""
+        worker = FileReadWorker("/path/to/file.txt")
+        assert hasattr(worker, "file_read")
+
+    def test_worker_stores_path(self):
+        """Worker deve armazenar o caminho do arquivo"""
+        worker = FileReadWorker("/path/to/test.csv")
+        assert worker.file_path == "/path/to/test.csv"
+
+    def test_run_success_emits_file_read(self, qtbot, tmp_path):
+        """Worker deve emitir file_read ao ler arquivo com sucesso"""
+        # Create test file
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Hello, World!", encoding="utf-8")
+
+        worker = FileReadWorker(str(test_file))
+
+        signals = {"started": False, "content": None, "path": None, "finished": False}
+        worker.started.connect(lambda: signals.__setitem__("started", True))
+        worker.file_read.connect(lambda c, p: (signals.__setitem__("content", c), signals.__setitem__("path", p)))
+        worker.finished.connect(lambda: signals.__setitem__("finished", True))
+
+        worker.run()
+
+        assert signals["started"] is True
+        assert signals["content"] == "Hello, World!"
+        assert signals["path"] == str(test_file)
+        assert signals["finished"] is True
+
+    def test_run_error_emits_error_signal(self, qtbot):
+        """Worker deve emitir error se arquivo nao existir"""
+        worker = FileReadWorker("/nonexistent/path/file.txt")
+
+        error_received = {"msg": None}
+        worker.error.connect(lambda msg: error_received.__setitem__("msg", msg))
+
+        worker.run()
+
+        assert error_received["msg"] is not None
+
+    def test_run_always_emits_finished(self, qtbot):
+        """Worker deve sempre emitir finished, mesmo em caso de erro"""
+        worker = FileReadWorker("/nonexistent/file.txt")
+
+        finished = {"called": False}
+        worker.finished.connect(lambda: finished.__setitem__("called", True))
+
+        worker.run()
+
+        assert finished["called"] is True
+
+    def test_read_file_with_utf8(self, qtbot, tmp_path):
+        """Worker deve ler arquivo UTF-8 corretamente"""
+        test_file = tmp_path / "unicode.txt"
+        test_file.write_text("Ola, mundo! Acao, coracao", encoding="utf-8")
+
+        worker = FileReadWorker(str(test_file))
+        result = {"content": None}
+        worker.file_read.connect(lambda c, p: result.__setitem__("content", c))
+        worker.run()
+
+        assert "Ola" in result["content"]
+        assert "coracao" in result["content"]
+
+    def test_read_file_with_latin1_fallback(self, qtbot, tmp_path):
+        """Worker deve fazer fallback para latin-1 se UTF-8 falhar"""
+        test_file = tmp_path / "latin1.txt"
+        test_file.write_bytes("Acao e coracao".encode("latin-1"))
+
+        worker = FileReadWorker(str(test_file))
+        result = {"content": None}
+        worker.file_read.connect(lambda c, p: result.__setitem__("content", c))
+        worker.run()
+
+        # Worker conseguiu ler (pode ter caracteres diferentes, mas nao deu erro)
+        assert result["content"] is not None
+
+
+class TestFileExportWorker:
+    """Testes para FileExportWorker"""
+
+    def test_worker_inherits_base(self):
+        """FileExportWorker deve herdar de BaseWorker"""
+        import pandas as pd
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        worker = FileExportWorker(df, "/path/to/file.csv", "csv")
+        assert isinstance(worker, BaseWorker)
+
+    def test_worker_has_export_complete_signal(self):
+        """Worker deve ter sinal export_complete"""
+        import pandas as pd
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        worker = FileExportWorker(df, "/path/to/file.csv", "csv")
+        assert hasattr(worker, "export_complete")
+
+    def test_worker_stores_params(self):
+        """Worker deve armazenar parametros de exportacao"""
+        import pandas as pd
+        df = pd.DataFrame({"x": [1, 2]})
+        worker = FileExportWorker(df, "/path/to/data.csv", "csv", sep=";", encoding="latin-1")
+        assert worker.file_path == "/path/to/data.csv"
+        assert worker.export_format == "csv"
+        assert worker.options["sep"] == ";"
+        assert worker.options["encoding"] == "latin-1"
+
+    def test_export_csv_success(self, qtbot, tmp_path):
+        """Worker deve exportar CSV com sucesso"""
+        import pandas as pd
+        df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
+        output_file = tmp_path / "output.csv"
+
+        worker = FileExportWorker(df, str(output_file), "csv", sep=",")
+
+        signals = {"started": False, "path": None, "finished": False}
+        worker.started.connect(lambda: signals.__setitem__("started", True))
+        worker.export_complete.connect(lambda p: signals.__setitem__("path", p))
+        worker.finished.connect(lambda: signals.__setitem__("finished", True))
+
+        worker.run()
+
+        assert signals["started"] is True
+        assert signals["path"] == str(output_file)
+        assert signals["finished"] is True
+        assert output_file.exists()
+
+        # Verify content
+        content = output_file.read_text()
+        assert "col1" in content
+        assert "1" in content
+
+    def test_export_json_success(self, qtbot, tmp_path):
+        """Worker deve exportar JSON com sucesso"""
+        import pandas as pd
+        df = pd.DataFrame({"name": ["Alice", "Bob"], "age": [30, 25]})
+        output_file = tmp_path / "output.json"
+
+        worker = FileExportWorker(df, str(output_file), "json")
+
+        result = {"path": None}
+        worker.export_complete.connect(lambda p: result.__setitem__("path", p))
+        worker.run()
+
+        assert output_file.exists()
+        content = output_file.read_text()
+        assert "Alice" in content
+        assert "Bob" in content
+
+    def test_export_excel_success(self, qtbot, tmp_path):
+        """Worker deve exportar Excel com sucesso"""
+        import pandas as pd
+        df = pd.DataFrame({"value": [100, 200, 300]})
+        output_file = tmp_path / "output.xlsx"
+
+        worker = FileExportWorker(df, str(output_file), "excel")
+
+        result = {"path": None}
+        worker.export_complete.connect(lambda p: result.__setitem__("path", p))
+        worker.run()
+
+        assert output_file.exists()
+        assert output_file.stat().st_size > 0
+
+    def test_export_error_emits_error_signal(self, qtbot):
+        """Worker deve emitir error se exportacao falhar"""
+        import pandas as pd
+        df = pd.DataFrame({"a": [1]})
+        
+        # Invalid path that should fail
+        worker = FileExportWorker(df, "/nonexistent/path/file.csv", "csv")
+
+        error_received = {"msg": None}
+        worker.error.connect(lambda msg: error_received.__setitem__("msg", msg))
+        worker.run()
+
+        assert error_received["msg"] is not None
+
+    def test_export_always_emits_finished(self, qtbot):
+        """Worker deve sempre emitir finished, mesmo em caso de erro"""
+        import pandas as pd
+        df = pd.DataFrame({"a": [1]})
+        worker = FileExportWorker(df, "/invalid/path.csv", "csv")
+
+        finished = {"called": False}
+        worker.finished.connect(lambda: finished.__setitem__("called", True))
+        worker.run()
+
+        assert finished["called"] is True
+
+    def test_export_invalid_format_emits_error(self, qtbot, tmp_path):
+        """Worker deve emitir error para formato invalido"""
+        import pandas as pd
+        df = pd.DataFrame({"a": [1]})
+        output_file = tmp_path / "output.xyz"
+
+        worker = FileExportWorker(df, str(output_file), "xyz_invalid_format")
+
+        error_received = {"msg": None}
+        worker.error.connect(lambda msg: error_received.__setitem__("msg", msg))
+        worker.run()
+
+        assert error_received["msg"] is not None
+        assert "Unsupported" in error_received["msg"]
