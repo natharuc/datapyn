@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.13.0 (2026-02-24)
+
+### Features
+
+- **ui**: Modern theme overhaul with blue accent and Inter font
+  ([`bb1d3c6`](https://github.com/natharuc/datapyn/commit/bb1d3c621732208cc87e824285fc51481891adae))
+
+- **ui**: Polish visual com fonte Ubuntu, dropdowns e status
+  ([`0810de5`](https://github.com/natharuc/datapyn/commit/0810de58111abed91af58c5a0b86b11fe4991ef2))
+
+
 ## v1.12.1 (2026-02-22)
 
 ### Bug Fixes

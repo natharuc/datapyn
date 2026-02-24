@@ -1,6 +1,6 @@
 [project]
 name = "DataPyn"
-version = "1.12.1"
+version = "1.13.0"
 dependencies = [
     # GUI Framework
     "PyQt6>=6.6.0",
