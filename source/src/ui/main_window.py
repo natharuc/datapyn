@@ -4637,11 +4637,49 @@ class MainWindow(DockingMainWindow):
         widget.session.title = new_name.strip()
         self._save_sessions()
 
+    def _ask_save_before_close(self) -> str:
+        """Ask user whether to save, discard, or cancel when closing unsaved tab.
+        
+        Returns:
+            'save': User wants to save first
+            'discard': User wants to close without saving
+            'cancel': User wants to cancel and keep tab open
+        """
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle(S.dialogs.close_tab_unsaved_title)
+        msg_box.setText(S.dialogs.close_tab_unsaved_msg)
+        
+        save_btn = msg_box.addButton(S.dialogs.save_btn, QMessageBox.ButtonRole.AcceptRole)
+        msg_box.addButton(S.dialogs.dont_save_btn, QMessageBox.ButtonRole.DestructiveRole)
+        msg_box.addButton(QMessageBox.StandardButton.Cancel)
+        msg_box.setDefaultButton(save_btn)
+        
+        msg_box.exec()
+        clicked = msg_box.clickedButton()
+        clicked_role = msg_box.buttonRole(clicked) if clicked else None
+        
+        if clicked_role == QMessageBox.ButtonRole.RejectRole:
+            return "cancel"
+        elif clicked_role == QMessageBox.ButtonRole.AcceptRole:
+            return "save"
+        else:
+            return "discard"
+
     def _close_session_tab(self, index: int):
         """Closes session tab"""
         widget = self.session_tabs.widget(index)
         if not isinstance(widget, SessionWidget):
             return
+
+        # Check if tab has unsaved changes - ask user what to do
+        if getattr(widget, "_is_modified", False):
+            action = self._ask_save_before_close()
+            if action == "cancel":
+                return  # User clicked Cancel - don't close
+            elif action == "save":
+                # Save the file before closing
+                self._save_file()
 
         # Check if execution is running - ask user to confirm cancellation
         if getattr(widget, "_is_executing", False):

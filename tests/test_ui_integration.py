@@ -399,6 +399,90 @@ class TestCloseTab:
         )
         assert new_count == 1
 
+    def test_close_unsaved_tab_shows_dialog(self, main_window, qtbot):
+        """Fechar aba com alteracoes nao salvas deve chamar metodo de confirmacao"""
+        from unittest.mock import patch
+        from src.ui.components.session_widget import SessionWidget
+        
+        # Marcar a sessao atual como modificada
+        widget = main_window._get_current_session_widget()
+        if widget:
+            widget._is_modified = True
+            
+            # Mock do metodo de confirmacao para retornar "discard"
+            with patch.object(main_window, '_ask_save_before_close', return_value="discard") as mock_ask:
+                current_idx = main_window.session_tabs.currentIndex()
+                main_window._close_session_tab(current_idx)
+                
+                # Verificar que o metodo de confirmacao foi chamado
+                mock_ask.assert_called_once()
+
+    def test_close_unsaved_tab_cancel_keeps_tab(self, main_window, qtbot):
+        """Clicar em Cancel no dialogo de fechar aba nao salva deve manter a aba"""
+        from unittest.mock import patch
+        from src.ui.components.session_widget import SessionWidget
+        
+        # Criar nova sessao para garantir que temos pelo menos uma
+        main_window._new_session()
+        qtbot.wait(50)
+        
+        # Marcar a sessao como modificada
+        widget = main_window._get_current_session_widget()
+        if widget:
+            widget._is_modified = True
+            
+            initial_count = sum(
+                1 for i in range(main_window.session_tabs.count())
+                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
+            )
+            
+            # Mock do metodo de confirmacao para retornar "cancel"
+            with patch.object(main_window, '_ask_save_before_close', return_value="cancel"):
+                current_idx = main_window.session_tabs.currentIndex()
+                main_window._close_session_tab(current_idx)
+                
+            # Verificar que a aba nao foi fechada
+            final_count = sum(
+                1 for i in range(main_window.session_tabs.count())
+                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
+            )
+            assert final_count == initial_count
+
+    def test_close_saved_tab_no_dialog(self, main_window, qtbot):
+        """Fechar aba sem alteracoes nao salvas nao deve mostrar dialogo"""
+        from unittest.mock import patch
+        from src.ui.components.session_widget import SessionWidget
+        
+        # Criar nova sessao para garantir que temos pelo menos uma
+        main_window._new_session()
+        qtbot.wait(50)
+        
+        # Garantir que a sessao nao esta modificada  
+        widget = main_window._get_current_session_widget()
+        if widget:
+            widget._is_modified = False
+            widget._is_executing = False
+            
+            initial_count = sum(
+                1 for i in range(main_window.session_tabs.count())
+                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
+            )
+            
+            # Mock do metodo de confirmacao - nao deve ser chamado
+            with patch.object(main_window, '_ask_save_before_close') as mock_ask:
+                current_idx = main_window.session_tabs.currentIndex()
+                main_window._close_session_tab(current_idx)
+                
+                # Metodo de confirmacao nao deve ter sido chamado
+                mock_ask.assert_not_called()
+            
+            # A aba deve ter sido fechada
+            final_count = sum(
+                1 for i in range(main_window.session_tabs.count())
+                if isinstance(main_window.session_tabs.widget(i), SessionWidget)
+            )
+            assert final_count == initial_count - 1
+
 
 # === TESTES DE EXECUÇÃO (sem banco real) ===
 
