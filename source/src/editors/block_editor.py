@@ -707,6 +707,15 @@ class BlockEditor(QWidget):
                 code = block.get_code()
             lang = block.get_language()
             self._execute_code(code, lang, block)
+    
+    def force_autocomplete_focused_block(self):
+        """Force autocomplete on the focused block (Ctrl+. shortcut)."""
+        block = self._focused_block
+        if not block and self._blocks:
+            block = self._blocks[0]
+        
+        if block and hasattr(block, 'force_autocomplete'):
+            block.force_autocomplete()
 
     def hasSelectedText(self) -> bool:
         """Compatibility: check if there's a selection"""

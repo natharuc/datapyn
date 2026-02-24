@@ -24,6 +24,7 @@ class MonacoBridge(QObject):
     cursor_changed = pyqtSignal(int, int)  # line, column
     execute_requested = pyqtSignal(str)  # selected_text (empty if no selection)
     completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column
+    force_completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column (bypasses throttling)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,3 +78,18 @@ class MonacoBridge(QObject):
             column: Current column (1-indexed)
         """
         self.completion_requested.emit(prefix, suffix, line, column)
+    
+    @pyqtSlot(str, str, int, int)
+    def forceRequestCompletion(self, prefix: str, suffix: str, line: int, column: int):
+        """
+        Called when force inline completion is requested (Ctrl+.).
+        
+        Bypasses throttling and minimum prefix checks.
+        
+        Args:
+            prefix: Text before cursor
+            suffix: Text after cursor
+            line: Current line number (1-indexed)
+            column: Current column (1-indexed)
+        """
+        self.force_completion_requested.emit(prefix, suffix, line, column)

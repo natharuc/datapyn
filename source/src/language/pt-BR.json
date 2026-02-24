@@ -500,6 +500,12 @@
     "workspace_remove_confirm": "Tem certeza que deseja excluir permanentemente este workspace e todos os seus arquivos?\n\n{path}\n\nEsta acao nao pode ser desfeita.",
     "workspace_remove_success": "Workspace removido com sucesso.",
     "workspace_remove_error": "Falha ao remover workspace:\n{error}",
+    "workspace_switch_title": "Trocar de Workspace",
+    "workspace_switch_message": "Escolha como deseja abrir o workspace selecionado:",
+    "workspace_switch_restart": "Reiniciar App Atual",
+    "workspace_switch_restart_tooltip": "Fecha o DataPyn atual e reabre com o novo workspace",
+    "workspace_switch_new_instance": "Abrir Nova Instancia",
+    "workspace_switch_new_instance_tooltip": "Mantem o atual aberto e abre outro DataPyn com o novo workspace",
     "workspace_restart_title": "Reiniciar Necessario",
     "workspace_restart_message": "O aplicativo precisa reiniciar para trocar de workspace. Deseja reiniciar agora?"
   },

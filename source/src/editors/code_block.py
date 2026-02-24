@@ -447,7 +447,26 @@ class CodeBlock(QFrame):
         control_layout.setContentsMargins(8, 6, 12, 6)
         control_layout.setSpacing(8)
 
-        # Run button (play icon) - PRIMEIRO elemento
+        # Drag handle - primeiro elemento (para arrastar o bloco)
+        self.drag_handle = QPushButton()
+        self.drag_handle.setFixedSize(CTRL_H, CTRL_H)
+        self.drag_handle.setToolTip(S.block.tooltip_drag)
+        self.drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.drag_handle.setIcon(qta.icon("mdi.drag-horizontal-variant", color=colors.text_tertiary))
+        self.drag_handle.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: {colors.bg_elevated};
+            }}
+        """)
+        self.drag_handle.pressed.connect(self._start_drag)
+        control_layout.addWidget(self.drag_handle)
+
+        # Run button (play icon)
         self.run_btn = QPushButton()
         self.run_btn.setFixedSize(26, 26)
         self.run_btn.setToolTip(S.block.tooltip_run)
@@ -542,24 +561,29 @@ class CodeBlock(QFrame):
         self.db_panel.setMaximumWidth(180)
         control_layout.addWidget(self.db_panel)
 
-        # Drag handle - discreto no final
-        self.drag_handle = QPushButton()
-        self.drag_handle.setFixedSize(CTRL_H, CTRL_H)
-        self.drag_handle.setToolTip(S.block.tooltip_drag)
-        self.drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.drag_handle.setIcon(qta.icon("mdi.drag-horizontal-variant", color=colors.text_tertiary))
-        self.drag_handle.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                border: none;
+        # Block name field (becomes dataframe variable name for SQL)
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText(S.block.placeholder_name)
+        self.name_input.setToolTip(S.block.tooltip_block_name)
+        self.name_input.setFixedWidth(120)
+        self.name_input.setFixedHeight(CTRL_H)
+        self.name_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
                 border-radius: 6px;
+                padding: 2px 8px;
+                font-size: 11px;
             }}
-            QPushButton:hover {{
-                background: {colors.bg_elevated};
+            QLineEdit:focus {{
+                border-color: {colors.interactive_primary};
+            }}
+            QLineEdit::placeholder {{
+                color: {colors.text_tertiary};
             }}
         """)
-        self.drag_handle.pressed.connect(self._start_drag)
-        control_layout.addWidget(self.drag_handle)
+        control_layout.addWidget(self.name_input)
 
         # Remove button (discrete X icon)
         self.remove_btn = QPushButton()
@@ -581,11 +605,6 @@ class CodeBlock(QFrame):
             }}
         """)
         control_layout.addWidget(self.remove_btn)
-
-        # Block name field - hidden, kept for compatibility
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText(S.block.placeholder_name)
-        self.name_input.hide()
 
         layout.addWidget(self.control_bar)
 
@@ -661,6 +680,9 @@ class CodeBlock(QFrame):
         
         # Connect completion request from Monaco to service
         self.editor.completion_requested.connect(self._on_completion_requested)
+        
+        # Connect force completion request (Ctrl+.)
+        self.editor.force_completion_requested.connect(self._on_force_completion_requested)
         
         # Connect service completion ready to Monaco with logging
         def on_completion_ready(text):
@@ -757,6 +779,31 @@ class CodeBlock(QFrame):
             self._completion_service.request_completion(
                 prefix, suffix, language, line, column
             )
+    
+    def _on_force_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
+        """Handle force completion request (Ctrl+.) from Monaco editor."""
+        if hasattr(self, '_completion_service'):
+            language = self.get_language()
+            
+            # Sync document with LSP before requesting completion
+            full_text = prefix + suffix
+            self._completion_service.notify_document_changed(full_text)
+            
+            # Use force_completion to bypass throttling
+            self._completion_service.force_completion(
+                prefix, suffix, language, line, column
+            )
+    
+    def force_autocomplete(self):
+        """Force trigger autocomplete (Ctrl+. shortcut).
+        
+        Bypasses throttling and minimum prefix checks, sending the full
+        block content to the LSP for completion.
+        """
+        # Monaco editor handles everything internally: gets cursor position,
+        # calculates prefix/suffix, and calls requestCompletion
+        if hasattr(self.editor, 'force_request_completion'):
+            self.editor.force_request_completion()
 
     def _on_language_changed(self):
         lang = self.lang_combo.currentData()

@@ -1965,7 +1965,7 @@ class MainWindow(DockingMainWindow):
     def _on_workspace_switch(self, path: str):
         """Handle workspace switch request from toolbar."""
         from pathlib import Path
-        from PyQt6.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
         from src.core.workspace_service import get_workspace_service
         
         ws_service = get_workspace_service()
@@ -1981,25 +1981,108 @@ class MainWindow(DockingMainWindow):
         except Exception as e:
             logging.warning(f"Failed to save session before workspace switch: {e}")
         
-        # Ask user to confirm restart
-        title = S.settings.workspace_restart_title if hasattr(S.settings, 'workspace_restart_title') else "Restart Required"
-        message = S.settings.workspace_restart_message if hasattr(S.settings, 'workspace_restart_message') else "The application needs to restart to switch workspaces. Restart now?"
-        
-        reply = QMessageBox.question(
-            self,
-            title,
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        # Create custom dialog with two options
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            S.settings.workspace_switch_title if hasattr(S.settings, 'workspace_switch_title') 
+            else "Switch Workspace"
         )
+        dialog.setModal(True)
+        dialog.setMinimumWidth(400)
         
-        if reply == QMessageBox.StandardButton.Yes:
-            # Set the new workspace and restart
-            ws_service.switch_workspace(target_path)
-            self._restart_application()
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Message
+        message = QLabel(
+            S.settings.workspace_switch_message if hasattr(S.settings, 'workspace_switch_message')
+            else "Choose how you want to open the selected workspace:"
+        )
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        # Restart current app button
+        restart_btn = QPushButton(
+            S.settings.workspace_switch_restart if hasattr(S.settings, 'workspace_switch_restart')
+            else "Restart Current App"
+        )
+        restart_btn.setToolTip(
+            S.settings.workspace_switch_restart_tooltip if hasattr(S.settings, 'workspace_switch_restart_tooltip')
+            else "Closes current DataPyn and reopens with the new workspace"
+        )
+        restart_btn.setMinimumHeight(35)
+        
+        # Open new instance button
+        new_instance_btn = QPushButton(
+            S.settings.workspace_switch_new_instance if hasattr(S.settings, 'workspace_switch_new_instance')
+            else "Open New Instance"
+        )
+        new_instance_btn.setToolTip(
+            S.settings.workspace_switch_new_instance_tooltip if hasattr(S.settings, 'workspace_switch_new_instance_tooltip')
+            else "Keeps current open and opens another DataPyn with the new workspace"
+        )
+        new_instance_btn.setMinimumHeight(35)
+        
+        # Cancel button
+        cancel_btn = QPushButton(S.general.cancel if hasattr(S.general, 'cancel') else "Cancel")
+        cancel_btn.setMinimumHeight(35)
+        
+        btn_layout.addWidget(restart_btn)
+        btn_layout.addWidget(new_instance_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        # Store result
+        result = {"action": None}
+        
+        def on_restart():
+            result["action"] = "restart"
+            dialog.accept()
+        
+        def on_new_instance():
+            result["action"] = "new_instance"
+            dialog.accept()
+        
+        restart_btn.clicked.connect(on_restart)
+        new_instance_btn.clicked.connect(on_new_instance)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if result["action"] == "restart":
+                # Set the new workspace and restart
+                ws_service.switch_workspace(target_path)
+                self._restart_application()
+            elif result["action"] == "new_instance":
+                # Open new instance with the new workspace
+                self._open_new_instance(target_path)
+                # Revert combo to current workspace (keep current app unchanged)
+                if hasattr(self, 'main_toolbar'):
+                    self.main_toolbar._refresh_workspace_combo()
         else:
-            # User declined - revert combo box
+            # User cancelled - revert combo box
             if hasattr(self, 'main_toolbar'):
                 self.main_toolbar._refresh_workspace_combo()
+    
+    def _open_new_instance(self, workspace_path):
+        """Open a new DataPyn instance with the specified workspace."""
+        import sys
+        import os
+        from PyQt6.QtCore import QProcess
+        
+        python = sys.executable
+        script = os.path.abspath(sys.argv[0])
+        working_dir = os.path.dirname(script) or os.getcwd()
+        
+        # Pass workspace path as argument
+        args = [script, "--workspace", str(workspace_path)]
+        
+        success = QProcess.startDetached(python, args, working_dir)
+        logging.info(f"New instance started: workspace={workspace_path}, success={success}")
     
     def _restart_application(self):
         """Restart the application."""
@@ -2393,6 +2476,8 @@ class MainWindow(DockingMainWindow):
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
             "format_code": self._format_current_block,
+            # Autocompletar
+            "force_autocomplete": self._force_autocomplete,
             # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
@@ -2445,6 +2530,8 @@ class MainWindow(DockingMainWindow):
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
             "format_code": self._format_current_block,
+            # Autocompletar
+            "force_autocomplete": self._force_autocomplete,
             # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
@@ -2645,6 +2732,18 @@ class MainWindow(DockingMainWindow):
             self.action_label.setText(S.status.code_formatted.format(lang=lang.upper()))
         else:
             self.action_label.setText(S.status.code_already_formatted.format(lang=lang.upper()))
+
+    def _force_autocomplete(self):
+        """Force trigger autocomplete in current block (Ctrl+. shortcut)."""
+        widget = self._get_current_session_widget()
+        if not widget or not widget.editor:
+            return
+        
+        from src.editors.block_editor import BlockEditor
+        
+        if isinstance(widget.editor, BlockEditor):
+            widget.editor.force_autocomplete_focused_block()
+            logging.info("[MAIN] Force autocomplete triggered via Ctrl+.")
 
     def _add_block_to_current_session(self):
         """Adds a new code block in the current session"""

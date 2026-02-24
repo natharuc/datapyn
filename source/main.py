@@ -69,6 +69,13 @@ def _apply_dark_palette(app):
 
 def main():
     """Funcao principal"""
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="DataPyn - IDE moderna para consultas SQL com Python integrado")
+    parser.add_argument("--workspace", type=str, help="Path to workspace folder to open")
+    args, unknown = parser.parse_known_args()
+    
     # Setar AppUserModelID para icone correto na barra de tarefas do Windows
     try:
         import ctypes
@@ -174,6 +181,18 @@ def main():
     init_language(language)
 
     splash.set_progress(25, "Loading design system...")
+    
+    # Handle --workspace argument: switch to specified workspace before loading UI
+    if args.workspace:
+        from pathlib import Path
+        from src.core.workspace_service import get_workspace_service
+        ws_service = get_workspace_service()
+        workspace_path = Path(args.workspace)
+        if workspace_path.exists():
+            logging.info(f"Switching to workspace from command line: {workspace_path}")
+            ws_service.switch_workspace(workspace_path)
+        else:
+            logging.warning(f"Workspace path does not exist: {workspace_path}")
 
     # Initialize editor backend from saved settings
     from src.editors.editor_config import init_editor_backend

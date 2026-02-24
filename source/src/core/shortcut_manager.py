@@ -35,6 +35,8 @@ class ShortcutManager:
         "find": "Ctrl+F",
         "replace": "Ctrl+H",
         "format_code": "Ctrl+Shift+F",
+        # Autocompletar
+        "force_autocomplete": "Ctrl+.",
         # Conexoes
         "manage_connections": "Ctrl+Shift+M",
         "new_connection": "Ctrl+Shift+D",
@@ -54,7 +56,9 @@ class ShortcutManager:
 
     def __init__(self, config_path: str = None):
         if config_path is None:
-            config_path = Path.home() / ".datapyn" / "shortcuts.json"
+            # Use WorkspaceService for default path (supports workspace switching)
+            from src.core.workspace_service import get_workspace_service
+            config_path = get_workspace_service().get_config_path("shortcuts.json")
 
         self.config_path = Path(config_path)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)

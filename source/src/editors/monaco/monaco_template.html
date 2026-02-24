@@ -370,6 +370,34 @@
             }
         }
         
+        // Force request completion (triggered by Ctrl+. from Python)
+        function forceRequestCompletion() {
+            if (!editor) {
+                console.log('[Monaco] No editor for force completion');
+                return;
+            }
+            
+            const model = editor.getModel();
+            const position = editor.getPosition();
+            
+            if (!model || !position) {
+                console.log('[Monaco] No model/position for force completion');
+                return;
+            }
+            
+            const fullText = model.getValue();
+            const offset = model.getOffsetAt(position);
+            const prefix = fullText.substring(0, offset);
+            const suffix = fullText.substring(offset);
+            
+            console.log('[Monaco] Force completion at L' + position.lineNumber + ':C' + position.column);
+            
+            // Call the force bridge method (bypasses throttling on Python side)
+            if (pyBridge) {
+                pyBridge.forceRequestCompletion(prefix, suffix, position.lineNumber, position.column);
+            }
+        }
+        
         // === API Functions (called from Python) ===
         
         function setValue(text) {

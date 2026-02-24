@@ -62,6 +62,7 @@ class MonacoEditor(QWidget):
     
     # Completion signals
     completion_requested = pyqtSignal(str, str, int, int)
+    force_completion_requested = pyqtSignal(str, str, int, int)  # bypasses throttling
     
     # Cursor position signal
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
@@ -188,6 +189,7 @@ class MonacoEditor(QWidget):
         self._bridge.focus_out.connect(self._on_focus_out)
         self._bridge.execute_requested.connect(self._on_execute_requested)
         self._bridge.completion_requested.connect(self._on_completion_requested)
+        self._bridge.force_completion_requested.connect(self._on_force_completion_requested)
         self._bridge.cursor_changed.connect(self._on_cursor_changed)
     
     def _on_editor_ready(self):
@@ -230,6 +232,10 @@ class MonacoEditor(QWidget):
         """Handle inline completion request from JS."""
         self.completion_requested.emit(prefix, suffix, line, column)
     
+    def _on_force_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
+        """Handle force inline completion request from JS (Ctrl+.)."""
+        self.force_completion_requested.emit(prefix, suffix, line, column)
+    
     def _on_cursor_changed(self, line: int, column: int):
         """Handle cursor position change from JS."""
         self.cursor_changed.emit(line, column)
@@ -265,6 +271,10 @@ class MonacoEditor(QWidget):
         self._text_cache = text
         escaped = json.dumps(text)
         self._run_js_when_ready(f"setValue({escaped})")
+    
+    def force_request_completion(self) -> None:
+        """Force trigger an inline completion request (Ctrl+. shortcut)."""
+        self._run_js_when_ready("forceRequestCompletion()")
     
     def get_selected_text(self) -> str:
         """Returns selected text or empty string."""

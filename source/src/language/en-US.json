@@ -498,6 +498,12 @@
     "workspace_remove_confirm": "Are you sure you want to permanently delete this workspace and all its files?\n\n{path}\n\nThis action cannot be undone.",
     "workspace_remove_success": "Workspace removed successfully.",
     "workspace_remove_error": "Failed to remove workspace:\n{error}",
+    "workspace_switch_title": "Switch Workspace",
+    "workspace_switch_message": "Choose how you want to open the selected workspace:",
+    "workspace_switch_restart": "Restart Current App",
+    "workspace_switch_restart_tooltip": "Closes current DataPyn and reopens with the new workspace",
+    "workspace_switch_new_instance": "Open New Instance",
+    "workspace_switch_new_instance_tooltip": "Keeps current open and opens another DataPyn with the new workspace",
     "workspace_restart_title": "Restart Required",
     "workspace_restart_message": "The application needs to restart to switch workspaces. Restart now?"
   },
