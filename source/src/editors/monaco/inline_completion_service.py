@@ -368,11 +368,18 @@ class InlineCompletionService(QObject):
             self.completion_ready.emit("")
             return
         
-        # Skip if last char is whitespace at line start (likely just indenting)
-        last_line = prefix.split('\n')[-1] if '\n' in prefix else prefix
+        # Get last line for context analysis
+        lines = prefix.split('\n')
+        last_line = lines[-1] if lines else prefix
+        
+        # Allow empty line if previous line has content (user pressed Enter)
+        # This enables "continuation" completions
         if last_line.strip() == "":
-            self.completion_ready.emit("")
-            return
+            # Check if there's meaningful content in previous lines
+            has_previous_content = len(lines) > 1 and any(line.strip() for line in lines[:-1])
+            if not has_previous_content:
+                self.completion_ready.emit("")
+                return
         
         # THROTTLE: Skip if already processing a request
         if self._is_processing:
