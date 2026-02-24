@@ -84,6 +84,26 @@ class ConnectionPickerDialog(QDialog):
         self.list_widget.setSpacing(2)
         self.list_widget.setWordWrap(True)
         self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)
+        # Estilo com selecao suave
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background: {colors.bg_primary};
+                border: 1px solid {colors.border_muted};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QListWidget::item {{
+                padding: 6px 8px;
+                border-radius: 6px;
+                margin: 2px 0px;
+            }}
+            QListWidget::item:selected {{
+                background: rgba(59, 130, 246, 0.2);
+            }}
+            QListWidget::item:hover {{
+                background: {colors.bg_elevated};
+            }}
+        """)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.list_widget, 1)
 

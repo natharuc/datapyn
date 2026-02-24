@@ -84,30 +84,74 @@ def main():
     # Estilo Fusion para visual consistente cross-platform
     app.setStyle("Fusion")
     
-    # Fonte global moderna - Inter/Segoe UI (web-like)
-    from PyQt6.QtCore import QCoreApplication
-    global_font = QFont("Inter", 10)
-    if not global_font.exactMatch():
-        global_font = QFont("SF Pro Display", 10)
-    if not global_font.exactMatch():
-        global_font = QFont("Roboto", 10)
-    if not global_font.exactMatch():
-        global_font = QFont("-apple-system", 10)
-    global_font.setWeight(QFont.Weight.Normal)
-    global_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-    global_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    # Inicializar fontes customizadas (baixa Ubuntu se necessario)
+    from src.design_system.font_manager import initialize_fonts, get_application_font
+    initialize_fonts()
+    
+    # Fonte global moderna - Ubuntu (empacotada com o app)
+    global_font = get_application_font(size=10)
     app.setFont(global_font)
     
-    # Stylesheet global para fonte consistente
-    app.setStyleSheet("""
-        * {
-            font-family: "Inter", "SF Pro Display", "Roboto", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
-        }
-        QToolTip {
+    # Stylesheet global para fonte consistente e scrollbars clean
+    from src.design_system.font_manager import FONT_FAMILY_PRIMARY
+    app.setStyleSheet(f"""
+        * {{
+            font-family: {FONT_FAMILY_PRIMARY};
+        }}
+        QToolTip {{
             font-size: 11px;
             padding: 6px 10px;
             border-radius: 6px;
-        }
+        }}
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 8px;
+            margin: 0px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: rgba(128, 128, 128, 0.3);
+            border-radius: 4px;
+            min-height: 40px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: rgba(128, 128, 128, 0.5);
+        }}
+        QScrollBar::handle:vertical:pressed {{
+            background: rgba(128, 128, 128, 0.7);
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: none;
+        }}
+        QScrollBar:horizontal {{
+            background: transparent;
+            height: 8px;
+            margin: 0px;
+        }}
+        QScrollBar::handle:horizontal {{
+            background: rgba(128, 128, 128, 0.3);
+            border-radius: 4px;
+            min-width: 40px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background: rgba(128, 128, 128, 0.5);
+        }}
+        QScrollBar::handle:horizontal:pressed {{
+            background: rgba(128, 128, 128, 0.7);
+        }}
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            width: 0px;
+        }}
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: none;
+        }}
+        QScrollBar::corner {{
+            background: transparent;
+        }}
     """)
 
     # Paleta dark nativa

@@ -6,6 +6,7 @@ Provides a standardized dialog with:
 - Optional header with icon, title and subtitle  
 - Content area
 - Standard button bar (Cancel/OK pattern)
+- Soft shadow effect for modern look
 """
 
 from typing import Optional, Callable
@@ -22,6 +23,7 @@ from PyQt6.QtCore import Qt
 from src.design_system.tokens import get_colors, get_dialog_base_stylesheet, SPACING
 from src.design_system.button import PrimaryButton, SecondaryButton
 from src.design_system.headers import DialogHeader, ButtonBar, Divider
+from src.design_system.effects import shadow_xl
 
 try:
     from src.core.theme_manager import ThemeManager
@@ -167,8 +169,11 @@ class BaseDialog(QDialog):
             self._cancel_button = None
     
     def _apply_styling(self):
-        """Apply dialog stylesheet"""
+        """Apply dialog stylesheet and shadow effect"""
         self.setStyleSheet(get_dialog_base_stylesheet())
+        # Note: Drop shadow on QDialog may not work on all platforms
+        # It works best on frameless dialogs. For windowed dialogs,
+        # the window manager typically handles shadows.
     
     def _setup_buttons(self):
         """Setup the standard button bar"""

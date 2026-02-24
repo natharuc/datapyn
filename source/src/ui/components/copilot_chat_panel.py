@@ -23,9 +23,12 @@ from PyQt6.QtWidgets import (
     QApplication,
     QMenu,
     QWidgetAction,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QStyle,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject
-from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize
+from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 import sys
@@ -83,6 +86,70 @@ def _load_copilot_icon(color: str, size: int = 20) -> QIcon:
     except Exception as e:
         logger.error(f"Failed to load Copilot icon: {e}")
         return None
+
+
+class ModelItemDelegate(QStyledItemDelegate):
+    """Custom delegate for model combobox with right-aligned multiplier."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._colors = get_colors()
+    
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
+        """Paint item with model name left-aligned and multiplier right-aligned."""
+        painter.save()
+        
+        # Get colors
+        colors = self._colors
+        
+        # Draw background
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, QColor(colors.interactive_primary))
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            painter.fillRect(option.rect, QColor(colors.bg_elevated))
+        else:
+            painter.fillRect(option.rect, QColor(colors.bg_tertiary))
+        
+        # Get data
+        display_text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        multiplier = index.data(Qt.ItemDataRole.UserRole + 1)  # Store multiplier separately
+        
+        # Parse multiplier from display text if not stored separately
+        if multiplier is None and "  (" in display_text:
+            # Extract from "Model Name  (0.33x)" format
+            parts = display_text.rsplit("  (", 1)
+            if len(parts) == 2:
+                display_text = parts[0]
+                multiplier = parts[1].rstrip(")")
+        
+        # Text rect with padding
+        rect = option.rect.adjusted(12, 0, -12, 0)
+        
+        # Draw model name (left aligned)
+        painter.setPen(QColor(colors.text_primary))
+        font = painter.font()
+        font.setPointSize(11)
+        painter.setFont(font)
+        
+        fm = QFontMetrics(font)
+        name_rect = QRect(rect.left(), rect.top(), rect.width() - 50, rect.height())
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, display_text)
+        
+        # Draw multiplier (right aligned, smaller, dimmer)
+        if multiplier:
+            painter.setPen(QColor(colors.text_tertiary))
+            mult_font = painter.font()
+            mult_font.setPointSize(10)
+            painter.setFont(mult_font)
+            
+            mult_rect = QRect(rect.right() - 45, rect.top(), 45, rect.height())
+            painter.drawText(mult_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, str(multiplier))
+        
+        painter.restore()
+    
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        """Return size hint for item."""
+        return QSize(200, 32)
 
 
 class ChatBridge(QObject):
@@ -730,21 +797,26 @@ class CopilotChatPanel(QWidget):
         # Mode is always Agent (hidden) - tools only work in agent mode
         self._mode_combo = None  # Removed - always agent mode
 
-        # Model selector
+        # Model selector with custom delegate
         self._model_combo = QComboBox()
+        self._model_delegate = ModelItemDelegate(self._model_combo)
+        self._model_combo.setItemDelegate(self._model_delegate)
         for model in [
-            {"id": "gpt-4o", "name": "GPT-4o"},
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
-            {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet"},
-            {"id": "o3-mini", "name": "o3-mini"},
+            {"id": "gpt-4o", "name": "GPT-4o", "multiplier": "1x"},
+            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": "0.33x"},
+            {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": "1x"},
+            {"id": "o3-mini", "name": "o3-mini", "multiplier": "1x"},
         ]:
+            idx = self._model_combo.count()
             self._model_combo.addItem(model["name"], model["id"])
-        self._model_combo.setFixedWidth(140)
+            self._model_combo.setItemData(idx, model["multiplier"], Qt.ItemDataRole.UserRole + 1)
+        self._model_combo.setFixedWidth(220)  # Accommodate model names + multiplier
         self._model_combo.setToolTip(S.copilot.model_tooltip)
         config_layout.addWidget(self._model_combo)
 
         # Usage label (shows premium requests percentage)
-        self._usage_label = QLabel(S.copilot.usage_loading)
+        # Hidden by default - shown when usage data becomes available
+        self._usage_label = QLabel("")
         self._usage_label.setStyleSheet(f"""
             QLabel {{
                 color: {colors.text_tertiary};
@@ -752,6 +824,7 @@ class CopilotChatPanel(QWidget):
                 padding: 0 8px;
             }}
         """)
+        self._usage_label.setVisible(False)  # Hidden until we have data
         config_layout.addWidget(self._usage_label)
 
         config_layout.addStretch()
@@ -782,6 +855,26 @@ class CopilotChatPanel(QWidget):
             }}
             QTextEdit:focus {{
                 border-color: {colors.interactive_primary};
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-height: 40px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
             }}
         """)
         input_layout.addWidget(self._input, 1)
@@ -1414,7 +1507,19 @@ class CopilotChatPanel(QWidget):
         for model in models:
             model_id = model.get("id", "")
             model_name = model.get("name", model_id)
+            multiplier = model.get("multiplier", 1.0)
+            # Format multiplier: show as "0.33x", "1x", "2x" etc.
+            if multiplier is not None:
+                if multiplier == int(multiplier):
+                    mult_str = f"{int(multiplier)}x"
+                else:
+                    mult_str = f"{multiplier:.2g}x"
+            else:
+                mult_str = "1x"
+            
+            idx = self._model_combo.count()
             self._model_combo.addItem(model_name, model_id)
+            self._model_combo.setItemData(idx, mult_str, Qt.ItemDataRole.UserRole + 1)
         # Restore selection if possible
         if current_model:
             idx = self._model_combo.findData(current_model)
@@ -1468,7 +1573,20 @@ class CopilotChatPanel(QWidget):
         if self._copilot_client:
             self._copilot_client.sign_out()
             self._update_auth_state()
-            self._usage_label.setText(S.copilot.usage_loading)
+            self._usage_label.setVisible(False)
+            # Mark as logged out so we don't auto-login on next startup
+            self._settings.setValue("was_authenticated", "false")
+            # Reset model combo to defaults
+            self._model_combo.clear()
+            for model in [
+                {"id": "gpt-4o", "name": "GPT-4o", "multiplier": "1x"},
+                {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": "0.33x"},
+                {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": "1x"},
+                {"id": "o3-mini", "name": "o3-mini", "multiplier": "1x"},
+            ]:
+                idx = self._model_combo.count()
+                self._model_combo.addItem(model["name"], model["id"])
+                self._model_combo.setItemData(idx, model["multiplier"], Qt.ItemDataRole.UserRole + 1)
 
     def _on_auth_required(self, user_code: str, verification_uri: str):
         """Show authentication instructions to the user."""
@@ -1531,7 +1649,19 @@ class CopilotChatPanel(QWidget):
                 for model in models:
                     model_id = model.get("id", "")
                     model_name = model.get("name", model_id)
+                    multiplier = model.get("multiplier", 1.0)
+                    # Format multiplier
+                    if multiplier is not None:
+                        if multiplier == int(multiplier):
+                            mult_str = f"{int(multiplier)}x"
+                        else:
+                            mult_str = f"{multiplier:.2g}x"
+                    else:
+                        mult_str = "1x"
+                    
+                    idx = self._model_combo.count()
                     self._model_combo.addItem(model_name, model_id)
+                    self._model_combo.setItemData(idx, mult_str, Qt.ItemDataRole.UserRole + 1)
                 # Restore selection if possible
                 if current_model:
                     idx = self._model_combo.findData(current_model)

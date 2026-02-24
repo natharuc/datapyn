@@ -17,6 +17,7 @@ from PyQt6.QtCore import (
     QEventLoop,
     Qt,
 )
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
@@ -101,6 +102,7 @@ class MonacoEditor(QWidget):
         
         # Use custom page to capture JS console messages
         self._page = MonacoPage(self._web_view)
+        self._page.setBackgroundColor(QColor("#1e1e1e"))  # Evita flash branco
         self._web_view.setPage(self._page)
         
         self._web_view.setContextMenuPolicy(
@@ -171,9 +173,8 @@ class MonacoEditor(QWidget):
         return """
         <!DOCTYPE html>
         <html>
-        <head><title>Editor Loading...</title></head>
-        <body style="background:#1e1e1e;color:#fff;">
-            <p>Loading Monaco Editor...</p>
+        <head><title>Editor</title></head>
+        <body style="background:#1e1e1e;margin:0;">
         </body>
         </html>
         """

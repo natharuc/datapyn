@@ -2,7 +2,7 @@
 Panel Component - Styled panel for visual grouping
 
 Similar to shadcn/ui Card.
-Used to group related content.
+Used to group related content with optional shadow for elevation.
 """
 
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget
@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
 from ..design_system import get_colors, TYPOGRAPHY, SPACING, RADIUS, SHADOW
+from ..design_system.effects import shadow_sm, shadow_md, shadow_none
 
 
 class Panel(QFrame):
@@ -73,11 +74,11 @@ class Panel(QFrame):
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
-        # Header style
+        # Header style with subtle border
         header.setStyleSheet(f"""
             QWidget {{
                 background-color: {colors.bg_secondary};
-                border-bottom: 1px solid {colors.border_default};
+                border-bottom: 1px solid {colors.border_muted};
             }}
         """)
 
@@ -89,7 +90,8 @@ class Panel(QFrame):
         colors = get_colors()
 
         bg_color = colors.bg_elevated if self.elevated else colors.bg_primary
-        border_style = f"1px solid {colors.border_default}" if self.has_border else "none"
+        # Use very subtle border since we rely on shadows for elevation
+        border_style = f"1px solid {colors.border_muted}" if self.has_border else "none"
 
         stylesheet = f"""
             Panel {{
@@ -100,6 +102,12 @@ class Panel(QFrame):
         """
 
         self.setStyleSheet(stylesheet)
+        
+        # Apply shadow for elevated panels
+        if self.elevated:
+            shadow_md(self)
+        else:
+            shadow_none(self)
 
     def set_content(self, widget: QWidget):
         """Sets content widget"""
@@ -126,7 +134,7 @@ class Panel(QFrame):
             self.header.setStyleSheet(f"""
                 QWidget {{
                     background-color: {colors.bg_secondary};
-                    border-bottom: 1px solid {colors.border_default};
+                    border-bottom: 1px solid {colors.border_muted};
                 }}
             """)
 

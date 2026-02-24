@@ -241,6 +241,55 @@ class ObjectExplorerPanel(QWidget):
                 image: url(none);
                 border-image: none;
             }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-height: 40px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::handle:vertical:pressed {{
+                background: rgba(128, 128, 128, 0.7);
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+            QScrollBar:horizontal {{
+                background: transparent;
+                height: 8px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-width: 40px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::handle:horizontal:pressed {{
+                background: rgba(128, 128, 128, 0.7);
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+            }}
+            QScrollBar::corner {{
+                background: transparent;
+            }}
         """)
 
     def set_theme_manager(self, theme_manager):

@@ -147,10 +147,10 @@ DARK_COLORS = ColorPalette(
     bg_tertiary="#282c34",
     bg_elevated="#353a45",
     bg_overlay="rgba(0, 0, 0, 0.65)",
-    # Borders - subtle but visible
-    border_default="#3a3f4b",
-    border_muted="#2a2e38",
-    border_strong="#50556b",
+    # Borders - very subtle, almost invisible (shadow-friendly)
+    border_default="rgba(255, 255, 255, 0.06)",
+    border_muted="rgba(255, 255, 255, 0.03)",
+    border_strong="rgba(255, 255, 255, 0.10)",
     # Text - high contrast for readability
     text_primary="#dcdee4",
     text_secondary="#a0a4b0",
@@ -194,10 +194,10 @@ LIGHT_COLORS = ColorPalette(
     bg_tertiary="#eeeeee",
     bg_elevated="#fafafa",
     bg_overlay="rgba(0, 0, 0, 0.5)",
-    # Borders
-    border_default="#e0e0e0",
-    border_muted="#f0f0f0",
-    border_strong="#bdbdbd",
+    # Borders - very subtle (shadow-friendly)
+    border_default="rgba(0, 0, 0, 0.06)",
+    border_muted="rgba(0, 0, 0, 0.03)",
+    border_strong="rgba(0, 0, 0, 0.10)",
     # Text
     text_primary="#333333",
     text_secondary="#666666",
@@ -235,7 +235,7 @@ LIGHT_COLORS = ColorPalette(
 
 
 TYPOGRAPHY = Typography(
-    font_family_primary="Inter, SF Pro Display, Roboto, -apple-system, BlinkMacSystemFont, sans-serif",
+    font_family_primary="Ubuntu, Roboto, Segoe UI, -apple-system, BlinkMacSystemFont, sans-serif",
     font_family_mono="JetBrains Mono, Fira Code, Consolas, monospace",
     text_xs=11,
     text_sm=12,
@@ -620,47 +620,63 @@ def get_tab_stylesheet() -> str:
     """
 
 
+# Constant for clean scrollbar style - can be concatenated to any stylesheet
+SCROLLBAR_STYLE = """
+    QScrollBar:vertical {
+        background: transparent;
+        width: 8px;
+        margin: 0px;
+    }
+    QScrollBar::handle:vertical {
+        background: rgba(128, 128, 128, 0.3);
+        border-radius: 4px;
+        min-height: 40px;
+        margin: 2px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: rgba(128, 128, 128, 0.5);
+    }
+    QScrollBar::handle:vertical:pressed {
+        background: rgba(128, 128, 128, 0.7);
+    }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+        background: none;
+    }
+    QScrollBar:horizontal {
+        background: transparent;
+        height: 8px;
+        margin: 0px;
+    }
+    QScrollBar::handle:horizontal {
+        background: rgba(128, 128, 128, 0.3);
+        border-radius: 4px;
+        min-width: 40px;
+        margin: 2px;
+    }
+    QScrollBar::handle:horizontal:hover {
+        background: rgba(128, 128, 128, 0.5);
+    }
+    QScrollBar::handle:horizontal:pressed {
+        background: rgba(128, 128, 128, 0.7);
+    }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+        background: none;
+    }
+    QScrollBar::corner {
+        background: transparent;
+    }
+"""
+
+
 def get_scrollbar_stylesheet() -> str:
-    """Returns stylesheet for scrollbars"""
-    colors = get_colors()
-    
-    return f"""
-        QScrollBar:vertical {{
-            background-color: transparent;
-            width: 10px;
-            margin: 2px;
-        }}
-        QScrollBar::handle:vertical {{
-            background-color: {colors.border_strong};
-            border-radius: 5px;
-            min-height: 30px;
-        }}
-        QScrollBar::handle:vertical:hover {{
-            background-color: {colors.text_tertiary};
-        }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-            height: 0px;
-        }}
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-            background: none;
-        }}
-        QScrollBar:horizontal {{
-            background-color: transparent;
-            height: 10px;
-            margin: 2px;
-        }}
-        QScrollBar::handle:horizontal {{
-            background-color: {colors.border_strong};
-            border-radius: 5px;
-            min-width: 20px;
-        }}
-        QScrollBar::handle:horizontal:hover {{
-            background-color: {colors.text_tertiary};
-        }}
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-            width: 0px;
-        }}
-    """
+    """Returns stylesheet for scrollbars - minimal macOS-style"""
+    return SCROLLBAR_STYLE
 
 
 def get_table_stylesheet() -> str:
@@ -697,6 +713,7 @@ def get_table_stylesheet() -> str:
             border-bottom: 1px solid {colors.border_muted};
             font-weight: {TYPOGRAPHY.font_semibold};
         }}
+        {SCROLLBAR_STYLE}
     """
 
 
@@ -724,6 +741,7 @@ def get_list_stylesheet() -> str:
             background-color: {colors.interactive_primary};
             color: {colors.text_inverse};
         }}
+        {SCROLLBAR_STYLE}
     """
 
 
@@ -752,6 +770,7 @@ def get_tree_stylesheet() -> str:
         QTreeWidget::branch, QTreeView::branch {{
             background-color: {colors.bg_primary};
         }}
+        {SCROLLBAR_STYLE}
     """
 
 

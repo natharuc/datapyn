@@ -74,6 +74,7 @@ class CopilotOutputPanel(QWidget):
 
     def _apply_theme(self):
         """Apply theme."""
+        from src.design_system.tokens import SCROLLBAR_STYLE
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
@@ -88,6 +89,7 @@ class CopilotOutputPanel(QWidget):
                 font-size: 12px;
                 line-height: 1.4;
             }}
+            {SCROLLBAR_STYLE}
         """)
 
     def set_theme_manager(self, theme_manager):

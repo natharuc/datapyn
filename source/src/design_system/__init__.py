@@ -16,6 +16,7 @@ from .tokens import (
     SPACING,
     RADIUS,
     SHADOW,
+    SCROLLBAR_STYLE,
     get_colors,
     get_theme,
     set_theme,
@@ -112,6 +113,15 @@ from .stylesheet import (
     get_start_button_stylesheet,
 )
 
+from .effects import (
+    apply_shadow,
+    shadow_sm,
+    shadow_md,
+    shadow_lg,
+    shadow_xl,
+    shadow_none,
+)
+
 __all__ = [
     # Tokens
     "ColorPalette",
@@ -125,6 +135,7 @@ __all__ = [
     "SPACING",
     "RADIUS",
     "SHADOW",
+    "SCROLLBAR_STYLE",
     "get_colors",
     "get_theme",
     "set_theme",
@@ -201,4 +212,11 @@ __all__ = [
     "get_connection_status_stylesheet",
     "get_empty_state_stylesheet",
     "get_start_button_stylesheet",
+    # Effects
+    "apply_shadow",
+    "shadow_sm",
+    "shadow_md",
+    "shadow_lg",
+    "shadow_xl",
+    "shadow_none",
 ]

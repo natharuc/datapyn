@@ -24,7 +24,7 @@ def get_main_window_stylesheet() -> str:
     
     return f"""
         * {{
-            font-family: \"Inter\", \"SF Pro Display\", \"Roboto\", -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif;
+            font-family: "Ubuntu", "Roboto", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
         }}
         QMainWindow {{
             background-color: {colors.bg_primary};
@@ -123,37 +123,52 @@ def get_main_window_stylesheet() -> str:
         }}
         QScrollBar:vertical {{
             background: transparent;
-            width: 10px;
-            border-radius: 5px;
-            margin: 2px;
+            width: 8px;
+            margin: 0px;
         }}
         QScrollBar::handle:vertical {{
-            background: rgba(150, 150, 150, 0.4);
-            border-radius: 5px;
-            min-height: 28px;
+            background: rgba(128, 128, 128, 0.3);
+            border-radius: 4px;
+            min-height: 40px;
+            margin: 2px;
         }}
         QScrollBar::handle:vertical:hover {{
-            background: rgba(150, 150, 150, 0.6);
+            background: rgba(128, 128, 128, 0.5);
+        }}
+        QScrollBar::handle:vertical:pressed {{
+            background: rgba(128, 128, 128, 0.7);
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
             height: 0;
         }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: none;
+        }}
         QScrollBar:horizontal {{
             background: transparent;
-            height: 10px;
-            border-radius: 5px;
-            margin: 2px;
+            height: 8px;
+            margin: 0px;
         }}
         QScrollBar::handle:horizontal {{
-            background: rgba(150, 150, 150, 0.4);
-            border-radius: 5px;
-            min-width: 28px;
+            background: rgba(128, 128, 128, 0.3);
+            border-radius: 4px;
+            min-width: 40px;
+            margin: 2px;
         }}
         QScrollBar::handle:horizontal:hover {{
-            background: rgba(150, 150, 150, 0.6);
+            background: rgba(128, 128, 128, 0.5);
+        }}
+        QScrollBar::handle:horizontal:pressed {{
+            background: rgba(128, 128, 128, 0.7);
         }}
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
             width: 0;
+        }}
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: none;
+        }}
+        QScrollBar::corner {{
+            background: transparent;
         }}
         QDockWidget {{
             font-size: 12px;

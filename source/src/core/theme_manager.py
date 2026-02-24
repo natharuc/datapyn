@@ -500,17 +500,21 @@ class ThemeManager:
                 color: white;
             }}
             QScrollBar:vertical {{
-                background-color: transparent;
-                width: 10px;
-                margin: 2px;
+                background: transparent;
+                width: 8px;
+                margin: 0px;
             }}
             QScrollBar::handle:vertical {{
-                background-color: {c["border"]};
-                border-radius: 5px;
-                min-height: 30px;
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-height: 40px;
+                margin: 2px;
             }}
             QScrollBar::handle:vertical:hover {{
-                background-color: {c["foreground"]};
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::handle:vertical:pressed {{
+                background: rgba(128, 128, 128, 0.7);
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 height: 0px;
@@ -519,20 +523,30 @@ class ThemeManager:
                 background: none;
             }}
             QScrollBar:horizontal {{
-                background-color: transparent;
-                height: 10px;
-                margin: 2px;
+                background: transparent;
+                height: 8px;
+                margin: 0px;
             }}
             QScrollBar::handle:horizontal {{
-                background-color: {c["border"]};
-                border-radius: 5px;
-                min-width: 30px;
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-width: 40px;
+                margin: 2px;
             }}
             QScrollBar::handle:horizontal:hover {{
-                background-color: {c["foreground"]};
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::handle:horizontal:pressed {{
+                background: rgba(128, 128, 128, 0.7);
             }}
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
                 width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+            }}
+            QScrollBar::corner {{
+                background: transparent;
             }}
             QTreeWidget {{
                 background-color: {c["background"]};

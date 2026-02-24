@@ -260,7 +260,7 @@ class VariablesPanel(QWidget):
 
     def _apply_theme(self):
         """Aplica tema - design moderno e limpo"""
-        from src.design_system.tokens import get_colors
+        from src.design_system.tokens import get_colors, SCROLLBAR_STYLE
         colors_tk = get_colors()
         
         if self.theme_manager:
@@ -300,6 +300,7 @@ class VariablesPanel(QWidget):
             QHeaderView::section:hover {{
                 background-color: {colors["border"]};
             }}
+            {SCROLLBAR_STYLE}
         """)
 
     def set_theme_manager(self, theme_manager):

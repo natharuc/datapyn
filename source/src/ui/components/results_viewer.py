@@ -36,6 +36,7 @@ import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.language import S
+from src.design_system.tokens import SCROLLBAR_STYLE
 
 
 class CSVExportDialog(QDialog):
@@ -360,6 +361,7 @@ class ResultsViewer(QWidget):
                 border: none;
                 padding: 10px;
             }}
+            {SCROLLBAR_STYLE}
         """)
         self.stack.addWidget(self.html_viewer)  # index 2
 
@@ -386,6 +388,7 @@ class ResultsViewer(QWidget):
                 padding: 5px;
                 font-weight: bold;
             }}
+            {SCROLLBAR_STYLE}
         """)
         self.json_tree.setFont(QFont("Consolas", 10))
         self.stack.addWidget(self.json_tree)  # index 3
@@ -431,35 +434,48 @@ class ResultsViewer(QWidget):
                 font-size: 12px;
             }}
             QComboBox {{
-                background-color: {colors["background"]};
+                background-color: #2d2d2d;
                 color: {colors["foreground"]};
                 border: 1px solid {colors["border"]};
-                border-radius: {RADIUS.radius_sm}px;
+                border-radius: 6px;
                 padding: 6px 12px;
                 font-size: 12px;
-                min-width: 120px;
+                min-width: 130px;
+                font-weight: 500;
             }}
             QComboBox:hover {{
                 border-color: {colors["accent"]};
             }}
             QComboBox::drop-down {{
                 border: none;
-                padding-right: 8px;
+                width: 20px;
             }}
             QComboBox::down-arrow {{
                 image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 6px solid {colors["foreground"]};
+                border-top: 5px solid {colors["foreground"]};
                 margin-right: 8px;
             }}
             QComboBox QAbstractItemView {{
-                background-color: {colors["background"]};
+                background-color: #2d2d2d;
                 color: {colors["foreground"]};
                 border: 1px solid {colors["border"]};
-                selection-background-color: {colors["accent"]};
-                selection-color: white;
+                border-radius: 8px;
+                padding: 4px;
                 outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 6px 10px;
+                border-radius: 4px;
+                min-height: 24px;
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: rgba(59, 130, 246, 0.25);
+                color: white;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: #3a3a3a;
             }}
         """)
 
@@ -467,7 +483,7 @@ class ResultsViewer(QWidget):
         """Aplica estilo na tabela baseado no tema - moderno e limpo"""
         table_colors = self.theme_manager.get_table_colors()
         colors = self.theme_manager.get_app_colors()
-        from src.design_system.tokens import RADIUS
+        from src.design_system.tokens import RADIUS, SCROLLBAR_STYLE
         self.table_view.setStyleSheet(f"""
             QTableView {{
                 background-color: {colors["background"]};
@@ -500,6 +516,7 @@ class ResultsViewer(QWidget):
             QHeaderView::section:hover {{
                 background-color: {colors["border"]};
             }}
+            {SCROLLBAR_STYLE}
         """)
 
     def set_theme_manager(self, theme_manager: ThemeManager):
@@ -728,7 +745,7 @@ class ResultsViewer(QWidget):
             body, html {{
                 background-color: {colors["background"]};
                 color: {colors["foreground"]};
-                font-family: 'Inter', -apple-system, sans-serif;
+                font-family: 'Ubuntu', 'Roboto', -apple-system, sans-serif;
                 font-size: 13px;
                 margin: 10px;
             }}

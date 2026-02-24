@@ -551,6 +551,36 @@ class MCPToolRegistry(QObject):
             handler=self._notify_user,
         ))
 
+        # === Variable Inspection ===
+        self._register(MCPTool(
+            name="inspect_variable",
+            description="GET the actual VALUE of a Python variable in the session namespace. Returns the variable's data (for DataFrames: first 20 rows as text, for other types: string representation). Use to see what data a variable contains.",
+            parameters={
+                "name": {
+                    "type": "string",
+                    "description": "Name of the variable to inspect (e.g., 'vendas', 'df', 'results').",
+                },
+                "max_rows": {
+                    "type": "integer",
+                    "description": "For DataFrames: maximum rows to return (default: 20).",
+                    "optional": True,
+                },
+            },
+            handler=self._inspect_variable,
+        ))
+
+        self._register(MCPTool(
+            name="get_dataframe_info",
+            description="GET detailed info about a DataFrame: columns, dtypes, shape, null counts, sample values. Use to understand DataFrame structure before analysis.",
+            parameters={
+                "name": {
+                    "type": "string",
+                    "description": "Name of the DataFrame variable.",
+                },
+            },
+            handler=self._get_dataframe_info,
+        ))
+
     def _register(self, tool: MCPTool) -> None:
         """Register a tool."""
         self._tools[tool.name] = tool
@@ -1201,6 +1231,107 @@ class MCPToolRegistry(QObject):
 
         lines = [f"- {name}: {vtype}" for name, vtype in variables.items()]
         text = "Session variables:\n" + "\n".join(lines)
+        return {"content": [{"type": "text", "text": text}]}
+
+    def _inspect_variable(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the actual value of a variable."""
+        var_name = args.get("name")
+        if not var_name:
+            return {"error": "name is required."}
+
+        max_rows = args.get("max_rows", 20)
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        namespace = getattr(session_widget, "namespace", None)
+        if namespace is None and hasattr(session_widget, "_namespace"):
+            namespace = session_widget._namespace
+
+        if not namespace:
+            return {"error": "No namespace available."}
+
+        if var_name not in namespace:
+            available = [k for k in namespace.keys() if not k.startswith("_")]
+            return {"error": f"Variable '{var_name}' not found. Available: {', '.join(available[:10])}"}
+
+        value = namespace[var_name]
+        type_name = type(value).__name__
+
+        try:
+            # Handle DataFrames specially
+            if hasattr(value, "to_string") and hasattr(value, "shape"):
+                # It's a DataFrame or Series
+                import io
+                buf = io.StringIO()
+                # Print head with max_rows
+                if hasattr(value, "head"):
+                    preview = value.head(max_rows)
+                else:
+                    preview = value
+                preview.to_string(buf, max_rows=max_rows)
+                text = f"{type_name} {value.shape}:\n\n{buf.getvalue()}"
+            elif isinstance(value, (list, dict)):
+                import json
+                try:
+                    json_str = json.dumps(value, indent=2, default=str, ensure_ascii=False)
+                    if len(json_str) > 3000:
+                        json_str = json_str[:3000] + "\n... (truncated)"
+                    text = f"{type_name}:\n{json_str}"
+                except Exception:
+                    text = f"{type_name}: {repr(value)[:3000]}"
+            else:
+                # Simple repr for other types
+                text = f"{type_name}: {repr(value)[:3000]}"
+        except Exception as e:
+            text = f"{type_name}: (could not display: {e})"
+
+        return {"content": [{"type": "text", "text": text}]}
+
+    def _get_dataframe_info(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get detailed info about a DataFrame."""
+        var_name = args.get("name")
+        if not var_name:
+            return {"error": "name is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        namespace = getattr(session_widget, "namespace", None)
+        if namespace is None and hasattr(session_widget, "_namespace"):
+            namespace = session_widget._namespace
+
+        if not namespace:
+            return {"error": "No namespace available."}
+
+        if var_name not in namespace:
+            return {"error": f"Variable '{var_name}' not found."}
+
+        df = namespace[var_name]
+        if not hasattr(df, "dtypes") or not hasattr(df, "shape"):
+            return {"error": f"'{var_name}' is not a DataFrame."}
+
+        try:
+            lines = [
+                f"DataFrame: {var_name}",
+                f"Shape: {df.shape[0]} rows x {df.shape[1]} columns",
+                "",
+                "Columns:",
+            ]
+
+            for col in df.columns:
+                dtype = df[col].dtype
+                null_count = df[col].isnull().sum()
+                sample = df[col].dropna().head(3).tolist()
+                sample_str = ", ".join(str(s)[:30] for s in sample)
+                lines.append(f"  - {col} ({dtype}): nulls={null_count}, sample=[{sample_str}]")
+
+            text = "\n".join(lines)
+        except Exception as e:
+            text = f"Error inspecting DataFrame: {e}"
+
         return {"content": [{"type": "text", "text": text}]}
 
     def _set_block_language(self, args: Dict[str, Any]) -> Dict[str, Any]:

@@ -83,7 +83,7 @@ class OutputPanel(QWidget):
 
     def _apply_theme(self):
         """Apply theme"""
-        from src.design_system.tokens import get_colors
+        from src.design_system.tokens import get_colors, SCROLLBAR_STYLE
         tokens = get_colors()
         
         if self.theme_manager:
@@ -100,6 +100,7 @@ class OutputPanel(QWidget):
                 font-size: 13px;
                 line-height: 1.5;
             }}
+            {SCROLLBAR_STYLE}
         """)
 
     def set_theme_manager(self, theme_manager):
