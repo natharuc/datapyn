@@ -65,6 +65,8 @@ class CopilotLSPClient(QObject):
         self._is_authenticated = False
         self._current_document_version = 0
         self._current_document_uri = ""
+        self._current_document_text = ""  # Cached document text for getCompletions
+        self._current_document_language = "python"  # Language ID
         
         # Sign-in tracking
         self._sign_in_in_progress = False
@@ -82,7 +84,14 @@ class CopilotLSPClient(QObject):
     @property
     def is_authenticated(self) -> bool:
         """Check if the user is authenticated."""
+        # Debug: log every check at INFO level to see the problem
+        logger.info(f"[LSP] is_authenticated={self._is_authenticated} (id={id(self)})")
         return self._is_authenticated
+    
+    def _set_authenticated(self, value: bool, source: str = "unknown") -> None:
+        """Set authentication state with logging."""
+        logger.info(f"[LSP] _set_authenticated({value}) from {source} (id={id(self)}, was={self._is_authenticated})")
+        self._is_authenticated = value
     
     def _log(self, message: str, level: str = "info") -> None:
         """Log message to both logger and output panel signal."""
@@ -100,7 +109,7 @@ class CopilotLSPClient(QObject):
         Note: CopilotAuthService handles state persistence and lock release
         via its signal handler.
         """
-        self._is_authenticated = True
+        self._set_authenticated(True, "_emit_authenticated")
         self.authenticated.emit(username)
 
     def start(self) -> bool:
@@ -164,7 +173,7 @@ class CopilotLSPClient(QObject):
             self._process = None
         
         self._initialized = False
-        self._is_authenticated = False
+        self._set_authenticated(False, "stop")
         logger.info("[LSP] Server stopped")
     
     def cleanup(self) -> None:
@@ -247,7 +256,7 @@ class CopilotLSPClient(QObject):
             self._log(f"Auth status: {status}", "info")
             
             # LSP returns "OK" or "SignedIn" when authenticated
-            self._is_authenticated = status in ("SignedIn", "OK")
+            self._set_authenticated(status in ("SignedIn", "OK"), f"on_status({status})")
             self.status_changed.emit(status)
             
             if self._is_authenticated:
@@ -348,7 +357,7 @@ class CopilotLSPClient(QObject):
     def sign_out(self) -> None:
         """Sign out from Copilot."""
         def on_sign_out(result, error):
-            self._is_authenticated = False
+            self._set_authenticated(False, "sign_out")
             self.status_changed.emit("SignedOut")
             # Mark as logged out in centralized settings
             get_copilot_settings().on_lsp_logged_out()
@@ -473,6 +482,10 @@ class CopilotLSPClient(QObject):
         """
         self._current_document_uri = uri
         self._current_document_version = version
+        self._current_document_text = text
+        self._current_document_language = language_id
+        
+        logger.info(f"[LSP] Opening document: uri={uri}, lang={language_id}, text_len={len(text)}")
         
         self._send_notification("textDocument/didOpen", {
             "textDocument": {
@@ -495,6 +508,9 @@ class CopilotLSPClient(QObject):
             text: New full document text
         """
         self._current_document_version = version
+        self._current_document_text = text
+        
+        logger.info(f"[LSP] Document changed: uri={uri}, version={version}, text_len={len(text)}")
         
         self._send_notification("textDocument/didChange", {
             "textDocument": {"uri": uri, "version": version},
@@ -525,7 +541,10 @@ class CopilotLSPClient(QObject):
             character: Character position (0-indexed)
             trigger_kind: 1=manual, 2=automatic
         """
+        logger.info(f"[LSP] request_completion: uri={uri}, version={version}, line={line}, char={character}")
+        
         if not self._initialized or not self._is_authenticated:
+            logger.warning(f"[LSP] request_completion blocked: init={self._initialized}, auth={self._is_authenticated}")
             self.completion_ready.emit("")
             return
         
@@ -543,14 +562,33 @@ class CopilotLSPClient(QObject):
                 self.completion_ready.emit("")
                 return
             
-            # Extract completion text
-            items = result.get("items", []) if result else []
+            # Log full result structure for debugging
+            import json
+            logger.debug(f"[LSP] Full completion result: {json.dumps(result, default=str)[:500]}")
             
-            if items:
-                insert_text = items[0].get("insertText", "")
+            # getCompletions returns { completions: [...] } structure
+            completions = result.get("completions", []) if result else []
+            
+            # Fallback to items for inlineCompletion format
+            if not completions:
+                completions = result.get("items", []) if result else []
+            
+            if completions:
+                item = completions[0]
+                logger.debug(f"[LSP] Full completion item: {item}")
+                
+                # getCompletions uses displayText or text
+                insert_text = item.get("displayText", "")
+                if not insert_text:
+                    insert_text = item.get("text", "")
+                if not insert_text:
+                    insert_text = item.get("insertText", "")
+                
                 logger.info(
                     f"[LSP] Completion received in {elapsed:.0f}ms: "
-                    f"{insert_text[:50]}..."
+                    f"lines={insert_text.count(chr(10))+1}, "
+                    f"chars={len(insert_text)}, "
+                    f"preview={insert_text[:80].replace(chr(10), ' ')}..."
                 )
                 self.completion_ready.emit(insert_text)
             else:
@@ -559,15 +597,28 @@ class CopilotLSPClient(QObject):
             
             self._pending_completion_id = None
         
-        req_id = self._send_request("textDocument/inlineCompletion", {
-            "textDocument": {"uri": uri, "version": version},
-            "position": {"line": line, "character": character},
-            "context": {"triggerKind": trigger_kind},
-            "formattingOptions": {"tabSize": 4, "insertSpaces": True}
+        # Use Copilot's custom getCompletions method (returns full multi-line completions)
+        # Extract relative path from URI for context
+        relative_path = uri.replace("file:///", "").replace("file://", "")
+        if relative_path.startswith("datapyn/"):
+            relative_path = relative_path[8:]  # Remove "datapyn/" prefix
+        
+        req_id = self._send_request("getCompletions", {
+            "doc": {
+                "uri": uri,
+                "version": version,
+                "position": {"line": line, "character": character},
+                "source": self._current_document_text,
+                "languageId": self._current_document_language,
+                "relativePath": relative_path,
+                "tabSize": 4,
+                "insertSpaces": True,
+                "indentSize": 4,
+            }
         }, on_completion)
         
         self._pending_completion_id = req_id
-        logger.debug(f"[LSP] Requesting completion at {line}:{character}")
+        logger.debug(f"[LSP] Requesting getCompletions at {line}:{character}")
     
     def _send_request(
         self,
@@ -694,9 +745,18 @@ class CopilotLSPClient(QObject):
         if method == "didChangeStatus":
             status = params.get("status", "Unknown")
             logger.info(f"[LSP] Status notification: {status}")
-            # LSP returns "OK" or "SignedIn" when authenticated
-            self._is_authenticated = status in ("SignedIn", "OK")
-            self.status_changed.emit(status)
+            
+            # Only update auth state for definitive statuses
+            # Ignore "Unknown" - keep current state
+            if status in ("SignedIn", "OK"):
+                self._set_authenticated(True, f"didChangeStatus({status})")
+                self.status_changed.emit(status)
+            elif status in ("NotSignedIn", "SignedOut"):
+                self._set_authenticated(False, f"didChangeStatus({status})")
+                self.status_changed.emit(status)
+            else:
+                # Unknown or other status - don't change auth state
+                logger.debug(f"[LSP] Ignoring unknown status: {status}")
         
         elif method == "window/logMessage":
             msg = params.get("message", "")
