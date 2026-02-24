@@ -516,8 +516,8 @@ class InlineCompletionService(QObject):
         self._is_processing = False
         
         # Generate unique request ID
-        self._request_counter += 1
-        request_id = self._request_counter
+        self._current_request_id += 1
+        request_id = self._current_request_id
         self._active_request_id = request_id
         
         # Start processing
