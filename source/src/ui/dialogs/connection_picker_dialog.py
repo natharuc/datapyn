@@ -51,20 +51,23 @@ class ConnectionPickerDialog(QDialog):
         layout.setSpacing(12)
 
         # Header
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         header = QHBoxLayout()
         if qta:
             icon_label = QLabel()
-            icon_label.setPixmap(qta.icon("mdi.database-search", color="#64b5f6").pixmap(20, 20))
+            icon_label.setPixmap(qta.icon("mdi.database-search", color=colors.info).pixmap(20, 20))
             header.addWidget(icon_label)
         title = QLabel(S.connection_picker.header)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        title.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {colors.text_tertiary};")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
         # Instruction
         hint = QLabel(S.connection_picker.hint)
-        hint.setStyleSheet("color: #666; font-size: 11px; font-style: italic;")
+        hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px; font-style: italic;")
         layout.addWidget(hint)
 
         # Connection list - reuses components from connection_panel
@@ -81,6 +84,26 @@ class ConnectionPickerDialog(QDialog):
         self.list_widget.setSpacing(2)
         self.list_widget.setWordWrap(True)
         self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)
+        # Estilo com selecao suave
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background: {colors.bg_primary};
+                border: 1px solid {colors.border_muted};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QListWidget::item {{
+                padding: 6px 8px;
+                border-radius: 6px;
+                margin: 2px 0px;
+            }}
+            QListWidget::item:selected {{
+                background: rgba(59, 130, 246, 0.2);
+            }}
+            QListWidget::item:hover {{
+                background: {colors.bg_elevated};
+            }}
+        """)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.list_widget, 1)
 

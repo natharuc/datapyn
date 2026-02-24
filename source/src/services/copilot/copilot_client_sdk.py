@@ -237,6 +237,7 @@ class CopilotWorker(QObject):
     auth_ok = pyqtSignal()  # Auth verified
     auth_needed = pyqtSignal()  # Auth required
     auth_started = pyqtSignal(str)  # Login process started with info message
+    auth_required = pyqtSignal(str, str)  # Device code and verification URL
     models_ready = pyqtSignal(list)  # List of available models
     tool_call = pyqtSignal(str, dict, str)  # tool_name, arguments, tool_call_id
     tool_result = pyqtSignal(str, str)  # tool_name, result
@@ -311,7 +312,11 @@ class CopilotWorker(QObject):
             # List models to verify auth (async)
             try:
                 models = self._loop.run_until_complete(self._sdk_client.list_models())
-                model_list = [{"id": m.id, "name": m.name} for m in models]
+                model_list = [{
+                    "id": m.id,
+                    "name": m.name,
+                    "multiplier": m.billing.multiplier if m.billing else 1.0
+                } for m in models]
                 self.models_ready.emit(model_list)
                 self.auth_ok.emit()
                 # Keep worker alive - emit ready for subsequent chats
@@ -331,6 +336,9 @@ class CopilotWorker(QObject):
         import asyncio
         import subprocess
         import shutil
+        import webbrowser
+        import re
+        import time
         
         # Use persistent event loop
         self._ensure_loop()
@@ -346,22 +354,90 @@ class CopilotWorker(QObject):
                 self.finished.emit()
                 return
             
-            self.auth_started.emit("Opening browser for GitHub authentication...")
+            self.auth_started.emit("Starting GitHub authentication...")
             
-            # Run gh auth login with web flow
-            # -w opens browser, -s sets scopes, -h for github.com
+            # Run gh auth login with device code flow
+            # Use -p https to ensure web flow (not SSH)
             process = subprocess.Popen(
-                [gh_path, "auth", "login", "-w", "-h", "github.com", "-s", "read:user,repo,gist"],
+                [gh_path, "auth", "login", "-h", "github.com", "-p", "https", "-w"],
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Merge stderr into stdout
                 text=True,
                 creationflags=_CREATE_NO_WINDOW,
             )
             
-            # Wait for process to complete (user authenticates in browser)
-            stdout, stderr = process.communicate(timeout=180)  # 3 min timeout
+            # Read output line by line to find the device code and URL
+            device_code = None
+            verification_url = None
             
-            if process.returncode == 0:
+            # gh auth login outputs:
+            # ! First copy your one-time code: XXXX-XXXX
+            # Press Enter to open github.com in your browser...
+            # 
+            # We need to extract the code and open browser ourselves
+            
+            output_lines = []
+            try:
+                # Read with timeout - we need to capture the initial output
+                for _ in range(20):  # Max 20 iterations
+                    line = process.stdout.readline()
+                    if not line:
+                        break
+                    output_lines.append(line)
+                    logger.debug(f"gh output: {line.strip()}")
+                    
+                    # Look for the one-time code
+                    code_match = re.search(r'code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})', line, re.IGNORECASE)
+                    if code_match:
+                        device_code = code_match.group(1)
+                        logger.info(f"Found device code: {device_code}")
+                    
+                    # Look for URL
+                    url_match = re.search(r'(https://github\.com/login/device)', line)
+                    if url_match:
+                        verification_url = url_match.group(1)
+                    
+                    # If we found what we need, break
+                    if device_code:
+                        break
+                    
+                    # Also break on "Press Enter" prompt
+                    if "Press Enter" in line or "open github.com" in line:
+                        break
+                
+                if device_code:
+                    # Emit the auth_required signal with device code
+                    verification_url = verification_url or "https://github.com/login/device"
+                    self.auth_required.emit(device_code, verification_url)
+                    
+                    # Open browser
+                    webbrowser.open(verification_url)
+                    
+                    # Send Enter to continue the process
+                    try:
+                        process.stdin.write("\n")
+                        process.stdin.flush()
+                    except Exception:
+                        pass
+                    
+                    # Wait for process to complete (user authenticates in browser)
+                    stdout_rest, _ = process.communicate(timeout=180)  # 3 min timeout
+                    output_lines.append(stdout_rest or "")
+                else:
+                    # No device code found - maybe already logged in or error
+                    stdout_rest, _ = process.communicate(timeout=30)
+                    output_lines.append(stdout_rest or "")
+                    
+            except subprocess.TimeoutExpired:
+                process.kill()
+                self.error.emit("Authentication timed out. Please try again.")
+                self.finished.emit()
+                return
+            
+            full_output = "".join(output_lines)
+            
+            if process.returncode == 0 or "Logged in as" in full_output:
                 logger.info("GitHub auth completed successfully")
                 # Now verify with SDK (async)
                 SDKClient, _, _, _ = _try_import_sdk()
@@ -370,7 +446,11 @@ class CopilotWorker(QObject):
                     self._loop.run_until_complete(self._sdk_client.start())
                     try:
                         models = self._loop.run_until_complete(self._sdk_client.list_models())
-                        model_list = [{"id": m.id, "name": m.name} for m in models]
+                        model_list = [{
+                            "id": m.id,
+                            "name": m.name,
+                            "multiplier": m.billing.multiplier if m.billing else 1.0
+                        } for m in models]
                         self.models_ready.emit(model_list)
                         self.auth_ok.emit()
                         # Keep worker alive for chats
@@ -380,7 +460,7 @@ class CopilotWorker(QObject):
                         self.auth_ok.emit()
                         self.ready.emit()  # Still ready for chats
             else:
-                error_msg = stderr.strip() or stdout.strip() or "Authentication failed"
+                error_msg = full_output.strip() or "Authentication failed"
                 logger.error(f"GitHub auth failed: {error_msg}")
                 self.error.emit(f"GitHub authentication failed: {error_msg}")
                 self.finished.emit()
@@ -1315,11 +1395,28 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
             logger.warning(f"Failed to pre-init completion session: {e}")
 
     def sign_out(self) -> None:
-        """Sign out (CLI manages credentials)."""
+        """Sign out - clears local state and runs gh auth logout."""
         self._is_authenticated = False
         self._username = None
         self._cleanup_worker()
         self._cleanup_session_worker()
+        
+        # Actually logout from GitHub CLI
+        import subprocess
+        import shutil
+        try:
+            gh_path = shutil.which("gh")
+            if gh_path:
+                # Run gh auth logout with --hostname to avoid prompts
+                subprocess.run(
+                    [gh_path, "auth", "logout", "--hostname", "github.com"],
+                    capture_output=True,
+                    timeout=10,
+                    creationflags=_CREATE_NO_WINDOW,
+                )
+                logger.info("GitHub auth logout completed")
+        except Exception as e:
+            logger.warning(f"Failed to run gh auth logout: {e}")
 
     def _on_auth_success(self):
         self._is_authenticated = True
@@ -1352,8 +1449,12 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         return ""
 
     def _on_auth_needed(self):
-        """Auth not found - start automatic login process."""
-        self.do_login()
+        """Auth not found - just update state, don't auto-login.
+        
+        User must click Sign In button to start login process.
+        """
+        self._is_authenticated = False
+        # Don't call do_login() - let user click Sign In manually
 
     def _on_auth_started(self, message: str):
         """Login process started."""
@@ -1373,6 +1474,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._session_thread.started.connect(self._session_worker.run_login)
         self._session_worker.auth_ok.connect(self._on_auth_success)
         self._session_worker.auth_started.connect(self._on_auth_started)
+        self._session_worker.auth_required.connect(self.auth_required.emit)
         self._session_worker.models_ready.connect(self._on_models_loaded)
         self._session_worker.error.connect(self._on_init_error)
         self._session_worker.ready.connect(self._on_session_ready)

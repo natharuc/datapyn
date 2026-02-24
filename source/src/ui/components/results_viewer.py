@@ -36,6 +36,7 @@ import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
 from src.language import S
+from src.design_system.tokens import SCROLLBAR_STYLE
 
 
 class CSVExportDialog(QDialog):
@@ -243,11 +244,14 @@ class ResultsViewer(QWidget):
         self._apply_toolbar_style()
 
         # Combobox de destino (Clipboard ou File)
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
+        
         self.export_destination = QComboBox()
         self.export_destination.addItem(S.results.dest_clipboard, "clipboard")
-        self.export_destination.setItemIcon(0, qta.icon("mdi.clipboard-text", color="#64b5f6"))
+        self.export_destination.setItemIcon(0, qta.icon("mdi.clipboard-text", color=colors_tk.info))
         self.export_destination.addItem(S.results.dest_file, "file")
-        self.export_destination.setItemIcon(1, qta.icon("mdi.file-export", color="#64b5f6"))
+        self.export_destination.setItemIcon(1, qta.icon("mdi.file-export", color=colors_tk.info))
         self.export_destination.setMinimumWidth(140)
         self.export_destination.setToolTip(S.results.tooltip_export_dest)
         self.toolbar.addWidget(self.export_destination)
@@ -255,13 +259,13 @@ class ResultsViewer(QWidget):
 
         # Toolbar buttons with icons
         self.btn_export_csv = QPushButton(S.results.btn_csv)
-        self.btn_export_csv.setIcon(qta.icon("mdi.file-delimited-outline", color="#9d9d9d"))
+        self.btn_export_csv.setIcon(qta.icon("mdi.file-delimited-outline", color=colors_tk.text_tertiary))
         self.btn_export_excel = QPushButton(S.results.btn_excel)
-        self.btn_export_excel.setIcon(qta.icon("mdi.file-excel-outline", color="#4caf50"))
+        self.btn_export_excel.setIcon(qta.icon("mdi.file-excel-outline", color=colors_tk.success))
         self.btn_export_json = QPushButton(S.results.btn_json)
-        self.btn_export_json.setIcon(qta.icon("mdi.code-json", color="#ffc107"))
+        self.btn_export_json.setIcon(qta.icon("mdi.code-json", color=colors_tk.warning))
         self.btn_copy = QPushButton(S.results.btn_copy_all)
-        self.btn_copy.setIcon(qta.icon("mdi.content-copy", color="#9d9d9d"))
+        self.btn_copy.setIcon(qta.icon("mdi.content-copy", color=colors_tk.text_tertiary))
 
         self.toolbar.addWidget(self.btn_export_csv)
         self.toolbar.addWidget(self.btn_export_excel)
@@ -271,7 +275,7 @@ class ResultsViewer(QWidget):
         # Export to Table button (database)
         self.toolbar.addSeparator()
         self.btn_export_table = QPushButton(S.results.btn_table)
-        self.btn_export_table.setIcon(qta.icon("mdi.database-export", color="#4fc3f7"))
+        self.btn_export_table.setIcon(qta.icon("mdi.database-export", color=colors_tk.info))
         self.btn_export_table.setToolTip(S.results.tooltip_export_table)
         self.toolbar.addWidget(self.btn_export_table)
 
@@ -301,16 +305,16 @@ class ResultsViewer(QWidget):
             S.results.tooltip_row_limit if hasattr(S.results, 'tooltip_row_limit')
             else "Max rows displayed in grid (exports use all data)"
         )
-        self.row_limit_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #2d2d30;
-                color: #cccccc;
-                border: 1px solid #3e3e42;
-                border-radius: 0px;
+        self.row_limit_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {colors_tk.bg_secondary};
+                color: {colors_tk.text_secondary};
+                border: 1px solid {colors_tk.border_default};
+                border-radius: 4px;
                 padding: 2px 6px;
                 font-size: 11px;
-            }
-            QSpinBox:hover { border-color: #007acc; }
+            }}
+            QSpinBox:hover {{ border-color: {colors_tk.interactive_primary}; }}
         """)
         self.row_limit_spin.valueChanged.connect(self._on_row_limit_changed)
         self.toolbar.addWidget(self.row_limit_spin)
@@ -357,6 +361,7 @@ class ResultsViewer(QWidget):
                 border: none;
                 padding: 10px;
             }}
+            {SCROLLBAR_STYLE}
         """)
         self.stack.addWidget(self.html_viewer)  # index 2
 
@@ -383,6 +388,7 @@ class ResultsViewer(QWidget):
                 padding: 5px;
                 font-weight: bold;
             }}
+            {SCROLLBAR_STYLE}
         """)
         self.json_tree.setFont(QFont("Consolas", 10))
         self.stack.addWidget(self.json_tree)  # index 3
@@ -427,13 +433,57 @@ class ResultsViewer(QWidget):
                 padding: 4px 8px;
                 font-size: 12px;
             }}
+            QComboBox {{
+                background-color: #2d2d2d;
+                color: {colors["foreground"]};
+                border: 1px solid {colors["border"]};
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 12px;
+                min-width: 130px;
+                font-weight: 500;
+            }}
+            QComboBox:hover {{
+                border-color: {colors["accent"]};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid {colors["foreground"]};
+                margin-right: 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: #2d2d2d;
+                color: {colors["foreground"]};
+                border: 1px solid {colors["border"]};
+                border-radius: 8px;
+                padding: 4px;
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 6px 10px;
+                border-radius: 4px;
+                min-height: 24px;
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: rgba(59, 130, 246, 0.25);
+                color: white;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: #3a3a3a;
+            }}
         """)
 
     def _apply_table_style(self):
         """Aplica estilo na tabela baseado no tema - moderno e limpo"""
         table_colors = self.theme_manager.get_table_colors()
         colors = self.theme_manager.get_app_colors()
-        from src.design_system.tokens import RADIUS
+        from src.design_system.tokens import RADIUS, SCROLLBAR_STYLE
         self.table_view.setStyleSheet(f"""
             QTableView {{
                 background-color: {colors["background"]};
@@ -466,6 +516,7 @@ class ResultsViewer(QWidget):
             QHeaderView::section:hover {{
                 background-color: {colors["border"]};
             }}
+            {SCROLLBAR_STYLE}
         """)
 
     def set_theme_manager(self, theme_manager: ThemeManager):
@@ -623,9 +674,11 @@ class ResultsViewer(QWidget):
 
         # Criar imagem combinada
         from PyQt6.QtGui import QPainter
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
 
         combined = QImage(max_w, total_h, QImage.Format.Format_ARGB32)
-        combined.fill(QColor("#1e1e1e"))
+        combined.fill(QColor(colors_tk.bg_primary))
 
         painter = QPainter(combined)
         y_offset = 0
@@ -692,7 +745,7 @@ class ResultsViewer(QWidget):
             body, html {{
                 background-color: {colors["background"]};
                 color: {colors["foreground"]};
-                font-family: 'Segoe UI', Consolas, monospace;
+                font-family: 'Ubuntu', 'Roboto', -apple-system, sans-serif;
                 font-size: 13px;
                 margin: 10px;
             }}
@@ -719,7 +772,7 @@ class ResultsViewer(QWidget):
             pre, code {{
                 background-color: {colors["border"]};
                 padding: 4px 8px;
-                border-radius: 0px;
+                border-radius: 6px;
                 font-family: Consolas, monospace;
             }}
         </style>
@@ -748,7 +801,9 @@ class ResultsViewer(QWidget):
         self.json_tree.clear()
 
         colors = self.theme_manager.get_app_colors()
-        type_color = QColor(colors.get("accent", "#3369FF"))
+        from src.design_system.tokens import get_colors
+        colors_tk = get_colors()
+        type_color = QColor(colors.get("accent", colors_tk.interactive_primary))
 
         if isinstance(data, dict):
             self._populate_json_tree(self.json_tree.invisibleRootItem(), data, type_color)

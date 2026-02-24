@@ -112,6 +112,7 @@ class SessionWidget(QWidget):
     execution_finished = pyqtSignal(str, str, bool)  # (title, message, success)
     execution_cancelled = pyqtSignal()  # Emitted when execution is cancelled
     completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
+    cursor_changed = pyqtSignal(int, int)  # line, column (1-based) - for statusbar
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -340,6 +341,9 @@ class SessionWidget(QWidget):
 
         # Completion logging (for Copilot output panel)
         self.editor.completion_log.connect(self.completion_log.emit)
+
+        # Cursor position change (for statusbar)
+        self.editor.cursor_changed.connect(self.cursor_changed.emit)
 
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
@@ -1129,7 +1133,7 @@ class SessionWidget(QWidget):
                     font-size: 14px;
                     font-weight: 500;
                     border: 1px solid {self._connection_color};
-                    border-radius: 0px;
+                    border-radius: 12px;
                     padding: 20px 40px;
                 }}
             """)

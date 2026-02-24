@@ -40,12 +40,12 @@ class MainStatusBar(QStatusBar):
         if connected:
             icon = qta.icon("mdi.database-check", color="#4caf50")
             label = f" {text}" if text else f" {S.status.connected}"
+            self.connection_label.setPixmap(icon.pixmap(16, 16))
+            self.connection_label.setText(label)
+            self.connection_label.setVisible(True)
         else:
-            icon = qta.icon("mdi.database-off", color="#757575")
-            label = f" {S.status.disconnected}"
-
-        self.connection_label.setPixmap(icon.pixmap(16, 16))
-        self.connection_label.setText(label)
+            # Hide when not connected (cleaner UI)
+            self.connection_label.setVisible(False)
 
     def _setup_widgets(self):
         # Action
@@ -79,18 +79,6 @@ class MainStatusBar(QStatusBar):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self._update_timer_display)
         self.update_timer.setInterval(100)
-
-    def _update_connection_icon(self, connected: bool, text: str = ""):
-        """Update connection icon"""
-        if connected:
-            icon = qta.icon("mdi.database-check", color="#4caf50")
-            label = f" {text}" if text else f" {S.status.connected}"
-        else:
-            icon = qta.icon("mdi.database-off", color="#757575")
-            label = f" {S.status.disconnected}"
-
-        self.connection_label.setPixmap(icon.pixmap(16, 16))
-        self.connection_label.setText(label)
 
     def set_action(self, text: str):
         self.action_label.setText(text)

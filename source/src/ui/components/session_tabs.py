@@ -158,6 +158,9 @@ class SessionTabBar(QTabBar):
 
     def _rename_tab_inline(self, index):
         """Rename tab using inline input"""
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         if index < 0:
             return
 
@@ -165,14 +168,14 @@ class SessionTabBar(QTabBar):
         line_edit = QLineEdit(self)
         line_edit.setText(self.tabText(index))
         line_edit.selectAll()
-        line_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #3e3e42;
-                color: #ffffff;
-                border: 1px solid #007acc;
+        line_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.interactive_primary};
                 padding: 4px 8px;
                 font-size: 11px;
-            }
+            }}
         """)
 
         # Function to save the new name
@@ -254,8 +257,8 @@ class SessionTabs(QTabWidget):
     new_session_requested = pyqtSignal()
     duplicate_session = pyqtSignal(int)  # index - duplicate session
 
-    # Spinner colors
-    _SPINNER_COLOR = QColor("#FFD700")
+    # Spinner colors - use warning for visibility
+    _SPINNER_COLOR = QColor("#fbbf24")  # warning/amber from tokens
     _SPINNER_BG = QColor(80, 80, 80, 60)
 
     def __init__(self, parent=None):
@@ -284,33 +287,36 @@ class SessionTabs(QTabWidget):
 
     def _setup_close_button(self, index):
         """Configure X icon on tab close button - elegant and compact"""
+        from src.design_system.tokens import get_colors
         from PyQt6.QtWidgets import QToolButton
         from PyQt6.QtCore import Qt
+        
+        colors = get_colors()
 
         # Create compact and subtle custom button with X icon
         close_btn = QToolButton()
-        close_btn.setIcon(qta.icon("mdi.close", color="#777777", scale_factor=0.55))
-        close_btn.setFixedSize(16, 16)
+        close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.6))
+        close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setStyleSheet("""
-            QToolButton {
+        close_btn.setStyleSheet(f"""
+            QToolButton {{
                 background: transparent;
                 border: none;
                 margin: 0px;
-                border-radius: 0px;
-            }
-            QToolButton:hover {
-                background-color: rgba(231, 76, 60, 0.7);
-            }
+                border-radius: 6px;
+            }}
+            QToolButton:hover {{
+                background-color: rgba(239, 68, 68, 0.25);
+            }}
         """)
 
         # Update icon on hover to white
         def on_hover_enter(event):
-            close_btn.setIcon(qta.icon("mdi.close", color="#ffffff", scale_factor=0.55))
+            close_btn.setIcon(qta.icon("mdi.close", color=colors.text_primary, scale_factor=0.55))
             QToolButton.enterEvent(close_btn, event)
 
         def on_hover_leave(event):
-            close_btn.setIcon(qta.icon("mdi.close", color="#777777", scale_factor=0.55))
+            close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.55))
             QToolButton.leaveEvent(close_btn, event)
 
         close_btn.enterEvent = on_hover_enter

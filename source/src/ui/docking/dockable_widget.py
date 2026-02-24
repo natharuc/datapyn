@@ -22,6 +22,8 @@ import qtawesome as qta
 from typing import Optional, List, Dict, Any
 from enum import Enum
 
+from src.design_system.tokens import get_colors
+
 
 class DockPosition(Enum):
     """Possible docking positions"""
@@ -77,34 +79,69 @@ class DockableWidget(QWidget):
 
     def _create_header(self) -> QFrame:
         """Create header with title and controls"""
+        colors = get_colors()
         header = QFrame()
         header.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-        header.setFixedHeight(28)
+        header.setFixedHeight(36)
+        header.setStyleSheet(f"""
+            QFrame {{
+                background: {colors.bg_secondary};
+                border: none;
+                border-bottom: 1px solid {colors.border_muted};
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+            }}
+        """)
 
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(8, 4, 4, 4)
+        layout.setContentsMargins(12, 6, 8, 6)
 
         # Title
         self.title_label = QLabel(self.title)
-        self.title_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.title_label.setFont(QFont("Inter", 10, QFont.Weight.DemiBold))
+        self.title_label.setStyleSheet(f"color: {colors.text_primary}; background: transparent;")
         layout.addWidget(self.title_label)
 
         layout.addStretch()
 
         # Control buttons
+        btn_style = f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: {colors.bg_elevated};
+            }}
+        """
+        
         self.float_btn = QPushButton()
-        self.float_btn.setIcon(qta.icon("mdi.window-restore", color="#888"))
-        self.float_btn.setFixedSize(20, 20)
+        self.float_btn.setIcon(qta.icon("mdi.window-restore", color=colors.text_secondary))
+        self.float_btn.setFixedSize(26, 26)
         self.float_btn.setFlat(True)
         self.float_btn.setToolTip("Make floating")
+        self.float_btn.setStyleSheet(btn_style)
+        self.float_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.float_btn.clicked.connect(self._toggle_floating)
         layout.addWidget(self.float_btn)
 
         self.close_btn = QPushButton()
-        self.close_btn.setIcon(qta.icon("mdi.close", color="#888"))
-        self.close_btn.setFixedSize(20, 20)
+        self.close_btn.setIcon(qta.icon("mdi.close", color=colors.text_secondary))
+        self.close_btn.setFixedSize(26, 26)
         self.close_btn.setFlat(True)
         self.close_btn.setToolTip("Close panel")
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: rgba(239, 68, 68, 0.2);
+            }}
+        """)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_btn.clicked.connect(self.hide)
         layout.addWidget(self.close_btn)
 
@@ -112,23 +149,25 @@ class DockableWidget(QWidget):
 
     def _setup_style(self):
         """Configure style"""
-        self.setStyleSheet("""
-            DockableWidget {
-                background-color: #2d2d30;
+        colors = get_colors()
+        self.setStyleSheet(f"""
+            DockableWidget {{
+                background-color: {colors.bg_primary};
+                border: 1px solid {colors.border_muted};
+                border-radius: 10px;
+            }}
+            QFrame {{
+                background-color: {colors.bg_secondary};
                 border: none;
-            }
-            QFrame {
-                background-color: #3c3c3c;
-                border: none;
-                color: #cccccc;
-            }
-            QPushButton:hover {
-                background-color: #404040;
-                border-radius: 0px;
-            }
-            QPushButton:pressed {
-                background-color: #505050;
-            }
+                color: {colors.text_primary};
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_elevated};
+                border-radius: 6px;
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.bg_tertiary};
+            }}
         """)
 
     def add_tab(self, widget: QWidget, title: str, icon=None):
@@ -236,46 +275,49 @@ class DragDropTabWidget(QTabWidget):
 
     def _setup_style(self):
         """Configure tab style"""
-        self.setStyleSheet("""
-            QTabWidget::pane {
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
+        self.setStyleSheet(f"""
+            QTabWidget::pane {{
                 border: none;
-                background-color: #2d2d30;
+                background-color: {colors.bg_secondary};
                 top: -1px;
-            }
-            QTabBar::tab {
-                background-color: #3c3c3c;
-                color: #cccccc;
+            }}
+            QTabBar::tab {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_secondary};
                 padding: 8px 16px;
                 margin: 0px;
                 border: none;
                 border-bottom: 2px solid transparent;
                 min-width: 80px;
-            }
-            QTabBar::tab:selected {
-                background-color: #2d2d30;
-                color: #ffffff;
-                border-bottom: 2px solid #007acc;
-            }
-            QTabBar::tab:hover {
-                background-color: #404040;
-                color: #ffffff;
-            }
-            QTabBar::tab:first {
+            }}
+            QTabBar::tab:selected {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_primary};
+                border-bottom: 2px solid {colors.interactive_primary};
+            }}
+            QTabBar::tab:hover {{
+                background-color: {colors.bg_elevated};
+                color: {colors.text_primary};
+            }}
+            QTabBar::tab:first {{
                 margin-left: 0px;
-            }
-            QTabBar::tab:last {
+            }}
+            QTabBar::tab:last {{
                 margin-right: 0px;
-            }
-            QTabBar::close-button {
+            }}
+            QTabBar::close-button {{
                 image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cGF0aCBkPSJNMTIgNEw0IDEyTTQgNEwxMiAxMiIgc3Ryb2tlPSIjY2NjIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4=);
                 subcontrol-position: right;
                 margin: 2px;
                 padding: 2px;
-                border-radius: 0px;
-            }
-            QTabBar::close-button:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
+                border-radius: 4px;
+            }}
+            QTabBar::close-button:hover {{
+                background-color: {colors.bg_tertiary};
+            }}
         """)
 
     def mousePressEvent(self, event):

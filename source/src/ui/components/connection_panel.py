@@ -22,6 +22,7 @@ import re
 import logging
 
 from src.language import S
+from src.design_system.tokens import get_colors
 
 logger = logging.getLogger(__name__)
 
@@ -167,14 +168,15 @@ class ConnectionItemWidget(QWidget):
         text_layout.setSpacing(0)
 
         # Connection name (main line)
+        colors = get_colors()
         self.name_label = QLabel(name)
-        self.name_label.setStyleSheet("font-size: 13px; font-weight: 500; color: #e8e8e8;")
+        self.name_label.setStyleSheet(f"font-size: 13px; font-weight: 500; color: {colors.text_primary};")
         text_layout.addWidget(self.name_label)
 
         # Group (secondary line - smaller and gray)
         if group:
             self.group_label = QLabel(group)
-            self.group_label.setStyleSheet("font-size: 10px; color: #9d9d9d;")
+            self.group_label.setStyleSheet(f"font-size: 10px; color: {colors.text_secondary};")
             text_layout.addWidget(self.group_label)
 
         layout.addWidget(text_container)
@@ -269,6 +271,7 @@ class ActiveConnectionWidget(QFrame):
         self.set_disconnected()
 
     def _setup_ui(self):
+        colors = get_colors()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
@@ -276,23 +279,23 @@ class ActiveConnectionWidget(QFrame):
         # Header with icon
         header = QHBoxLayout()
         icon_label = QLabel()
-        icon_label.setPixmap(qta.icon("mdi.connection", color="#64b5f6").pixmap(20, 20))
+        icon_label.setPixmap(qta.icon("mdi.connection", color=colors.info).pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connection_panel.section_active)
-        title.setStyleSheet("font-weight: 500; font-size: 11px; color: #9d9d9d;")
+        title.setStyleSheet(f"font-weight: 500; font-size: 11px; color: {colors.text_secondary};")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
 
         # Name
         self.name_label = QLabel(S.connection_panel.label_none)
-        self.name_label.setStyleSheet("font-size: 14px; font-weight: 500; color: #e8e8e8;")
+        self.name_label.setStyleSheet(f"font-size: 14px; font-weight: 500; color: {colors.text_primary};")
         layout.addWidget(self.name_label)
 
         # Info
         self.info_label = QLabel("")
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #9d9d9d; font-size: 12px;")
+        self.info_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
         layout.addWidget(self.info_label)
 
         # Button
@@ -340,6 +343,7 @@ class ConnectionsList(QFrame):
         self._setup_ui()
 
     def _setup_ui(self):
+        colors = get_colors()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)  # Back to normal margin
         layout.setSpacing(8)
@@ -347,10 +351,10 @@ class ConnectionsList(QFrame):
         # Header
         header = QHBoxLayout()
         icon_label = QLabel()
-        icon_label.setPixmap(qta.icon("mdi.database-cog", color="#64b5f6").pixmap(20, 20))
+        icon_label.setPixmap(qta.icon("mdi.database-cog", color=colors.info).pixmap(20, 20))
         header.addWidget(icon_label)
         title = QLabel(S.connection_panel.section_saved)
-        title.setStyleSheet("font-weight: 500; font-size: 11px; color: #9d9d9d;")
+        title.setStyleSheet(f"font-weight: 500; font-size: 11px; color: {colors.text_secondary};")
         header.addWidget(title)
         header.addStretch()
         layout.addLayout(header)
@@ -359,9 +363,51 @@ class ConnectionsList(QFrame):
         self.list_widget = DraggableConnectionList()
         self.list_widget.setMinimumHeight(150)
         self.list_widget.setIconSize(QSize(28, 28))  # Larger icons
-        self.list_widget.setSpacing(2)  # Spacing between items
+        self.list_widget.setSpacing(4)  # Spacing between items
         self.list_widget.setWordWrap(True)  # Allow line break
         self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)  # Don't truncate with "..."
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background: {colors.bg_primary};
+                border: 1px solid {colors.border_muted};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QListWidget::item {{
+                padding: 6px 8px;
+                border-radius: 6px;
+                margin: 2px 0px;
+            }}
+            QListWidget::item:selected {{
+                background: rgba(59, 130, 246, 0.25);
+            }}
+            QListWidget::item:hover {{
+                background: {colors.bg_elevated};
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-height: 40px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::handle:vertical:pressed {{
+                background: rgba(128, 128, 128, 0.7);
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         # Context menu
         self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -415,18 +461,19 @@ class ConnectionsList(QFrame):
             return
 
         menu = QMenu(self)
+        colors = get_colors()
 
-        connect_action = QAction(qta.icon("mdi.lan-connect", color="#4ec9b0"), f" {S.connection_panel.ctx_connect}", self)
+        connect_action = QAction(qta.icon("mdi.lan-connect", color=colors.interactive_primary), f" {S.connection_panel.ctx_connect}", self)
         connect_action.triggered.connect(lambda: self.connection_double_clicked.emit(conn_name))
         menu.addAction(connect_action)
 
-        new_tab_action = QAction(qta.icon("mdi.tab-plus", color="#4ec9b0"), f" {S.connection_panel.ctx_connect_new_tab}", self)
+        new_tab_action = QAction(qta.icon("mdi.tab-plus", color=colors.interactive_primary), f" {S.connection_panel.ctx_connect_new_tab}", self)
         new_tab_action.triggered.connect(lambda: self.new_tab_connection_requested.emit(conn_name))
         menu.addAction(new_tab_action)
 
         menu.addSeparator()
 
-        edit_action = QAction(qta.icon("mdi.pencil", color="#569cd6"), f" {S.connection_panel.ctx_edit}", self)
+        edit_action = QAction(qta.icon("mdi.pencil", color=colors.info), f" {S.connection_panel.ctx_edit}", self)
         edit_action.triggered.connect(lambda: self._edit_connection(conn_name))
         menu.addAction(edit_action)
 

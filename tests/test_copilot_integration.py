@@ -246,6 +246,81 @@ class TestMCPToolRegistry:
         assert len(context["blocks"]) == 1
         assert context["blocks"][0]["language"] == "python"
 
+    def test_inspect_variable_returns_value(self):
+        """inspect_variable should return the actual value of a variable."""
+        import pandas as pd
+        
+        mock_session = MagicMock()
+        mock_widget = MagicMock()
+        mock_widget.namespace = {
+            "my_var": 42,
+            "my_list": [1, 2, 3],
+            "my_df": pd.DataFrame({"a": [1, 2], "b": [3, 4]}),
+        }
+        mock_widget.editor = MagicMock()
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = mock_session
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        
+        # Test simple int
+        result = self.registry.execute("inspect_variable", {"name": "my_var"})
+        assert "content" in result
+        assert "42" in result["content"][0]["text"]
+        
+        # Test list
+        result = self.registry.execute("inspect_variable", {"name": "my_list"})
+        assert "content" in result
+        assert "1" in result["content"][0]["text"]
+        
+        # Test DataFrame
+        result = self.registry.execute("inspect_variable", {"name": "my_df"})
+        assert "content" in result
+        assert "DataFrame" in result["content"][0]["text"]
+
+    def test_inspect_variable_not_found(self):
+        """inspect_variable should error when variable doesn't exist."""
+        mock_widget = MagicMock()
+        mock_widget.namespace = {"x": 1}
+        mock_widget.editor = MagicMock()
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("inspect_variable", {"name": "nonexistent"})
+        assert "error" in result
+        assert "not found" in result["error"]
+
+    def test_get_dataframe_info_returns_structure(self):
+        """get_dataframe_info should return DataFrame structure info."""
+        import pandas as pd
+        
+        mock_widget = MagicMock()
+        mock_widget.namespace = {
+            "df": pd.DataFrame({"col_a": [1, 2, None], "col_b": ["x", "y", "z"]}),
+        }
+        mock_widget.editor = MagicMock()
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("get_dataframe_info", {"name": "df"})
+        
+        assert "content" in result
+        text = result["content"][0]["text"]
+        assert "col_a" in text
+        assert "col_b" in text
+        assert "3 rows" in text
+
 
 # ==================== MCPServer Tests ====================
 

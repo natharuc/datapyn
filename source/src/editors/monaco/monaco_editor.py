@@ -17,6 +17,7 @@ from PyQt6.QtCore import (
     QEventLoop,
     Qt,
 )
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
@@ -62,6 +63,9 @@ class MonacoEditor(QWidget):
     # Completion signals
     completion_requested = pyqtSignal(str, str, int, int)
     
+    # Cursor position signal
+    cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
+    
     def __init__(
         self,
         parent: Optional[QWidget] = None,
@@ -98,6 +102,7 @@ class MonacoEditor(QWidget):
         
         # Use custom page to capture JS console messages
         self._page = MonacoPage(self._web_view)
+        self._page.setBackgroundColor(QColor("#1e1e1e"))  # Evita flash branco
         self._web_view.setPage(self._page)
         
         self._web_view.setContextMenuPolicy(
@@ -168,9 +173,8 @@ class MonacoEditor(QWidget):
         return """
         <!DOCTYPE html>
         <html>
-        <head><title>Editor Loading...</title></head>
-        <body style="background:#1e1e1e;color:#fff;">
-            <p>Loading Monaco Editor...</p>
+        <head><title>Editor</title></head>
+        <body style="background:#1e1e1e;margin:0;">
         </body>
         </html>
         """
@@ -184,6 +188,7 @@ class MonacoEditor(QWidget):
         self._bridge.focus_out.connect(self._on_focus_out)
         self._bridge.execute_requested.connect(self._on_execute_requested)
         self._bridge.completion_requested.connect(self._on_completion_requested)
+        self._bridge.cursor_changed.connect(self._on_cursor_changed)
     
     def _on_editor_ready(self):
         """Called when Monaco editor is fully loaded."""
@@ -224,6 +229,10 @@ class MonacoEditor(QWidget):
     def _on_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
         """Handle inline completion request from JS."""
         self.completion_requested.emit(prefix, suffix, line, column)
+    
+    def _on_cursor_changed(self, line: int, column: int):
+        """Handle cursor position change from JS."""
+        self.cursor_changed.emit(line, column)
     
     def _run_js(self, script: str, callback=None):
         """Execute JavaScript in the Monaco editor."""

@@ -112,11 +112,14 @@ class _AddSourceDialog(QDialog):
         self.setMinimumWidth(500)
 
         # Inherit theme from parent PackageManagerDialog
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        
         c = parent.theme_manager.get_app_colors() if parent and hasattr(parent, "theme_manager") else {}
-        bg = c.get("background", "#1e1e1e")
-        fg = c.get("foreground", "#d4d4d4")
-        border = c.get("border", "#3c3c3c")
-        accent = c.get("accent", "#0078d4")
+        bg = c.get("background", colors.bg_primary)
+        fg = c.get("foreground", colors.text_primary)
+        border = c.get("border", colors.border_default)
+        accent = c.get("accent", colors.interactive_primary)
 
         self.setStyleSheet(f"""
             QDialog {{
@@ -131,7 +134,7 @@ class _AddSourceDialog(QDialog):
                 background-color: {bg};
                 color: {fg};
                 border: 1px solid {border};
-                border-radius: 0px;
+                border-radius: 4px;
                 padding: 6px 8px;
                 font-size: 12px;
             }}
@@ -186,7 +189,7 @@ class _AddSourceDialog(QDialog):
         btn_box.setStyleSheet(f"""
             QPushButton {{
                 padding: 6px 18px;
-                border-radius: 0px;
+                border-radius: 8px;
                 font-size: 11px;
                 min-width: 70px;
             }}
@@ -245,7 +248,9 @@ class PackageManagerDialog(QDialog):
         self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
         c = self.theme_manager.get_app_colors()
-        dim_color = "#999999"  # secondary color for less important text
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        dim_color = colors.text_tertiary  # secondary color for less important text
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -279,7 +284,7 @@ class PackageManagerDialog(QDialog):
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
                 padding: 10px 12px;
-                border-radius: 0px;
+                border-radius: 8px;
                 font-size: 12px;
             }}
             QLineEdit:focus {{
@@ -298,7 +303,7 @@ class PackageManagerDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 10px 20px;
-                border-radius: 0px;
+                border-radius: 8px;
                 font-weight: bold;
                 font-size: 12px;
             }}
@@ -323,12 +328,12 @@ class PackageManagerDialog(QDialog):
                 color: {c["foreground"]};
                 border: none;
                 padding: 10px 16px;
-                border-radius: 0px;
+                border-radius: 4px;
                 font-weight: bold;
                 font-size: 12px;
             }}
             QPushButton:hover {{
-                background-color: #4a4a4a;
+                background-color: {colors.bg_tertiary};
             }}
         """)
         self.btn_show_installed.clicked.connect(self._load_installed)
@@ -342,8 +347,8 @@ class PackageManagerDialog(QDialog):
             background-color: {c["border"]};
             color: {c["foreground"]};
             padding: 8px 12px;
-            border-radius: 0px;
-            border-left: 3px solid {c["accent"]};
+            border-radius: 4px;
+            border-left: 3px solid {colors.interactive_primary};
             font-size: 11px;
         """)
         layout.addWidget(self.lbl_info)
@@ -372,7 +377,7 @@ class PackageManagerDialog(QDialog):
                 padding: 6px 8px;
             }}
             QTableWidget::item:selected {{
-                background-color: #094771;
+                background-color: {colors.interactive_primary};
             }}
             QHeaderView::section {{
                 background-color: {c["border"]};
@@ -395,11 +400,11 @@ class PackageManagerDialog(QDialog):
             QProgressBar {{
                 background-color: {c["border"]};
                 border: none;
-                border-radius: 0px;
+                border-radius: 4px;
             }}
             QProgressBar::chunk {{
                 background-color: {c["accent"]};
-                border-radius: 0px;
+                border-radius: 4px;
             }}
         """)
         self.progress.hide()
@@ -423,7 +428,7 @@ class PackageManagerDialog(QDialog):
                 color: {c["foreground"]};
                 border: none;
                 padding: 6px 14px;
-                border-radius: 0px;
+                border-radius: 8px;
                 font-size: 11px;
             }}
             QPushButton:hover {{
@@ -447,7 +452,7 @@ class PackageManagerDialog(QDialog):
             QFrame {{
                 background-color: {c["border"]};
                 border: 1px solid {c["border"]};
-                border-radius: 0px;
+                border-radius: 8px;
             }}
         """)
         self.sources_frame.setVisible(False)
@@ -473,14 +478,14 @@ class PackageManagerDialog(QDialog):
                 background-color: {c["background"]};
                 color: {c["foreground"]};
                 border: 1px solid {c["border"]};
-                border-radius: 0px;
+                border-radius: 4px;
                 font-size: 11px;
             }}
             QListWidget::item {{
                 padding: 4px 8px;
             }}
             QListWidget::item:selected {{
-                background-color: #094771;
+                background-color: {colors.interactive_primary};
             }}
         """)
         sources_layout.addWidget(self.sources_list)
@@ -493,11 +498,11 @@ class PackageManagerDialog(QDialog):
             btn_add_source.setIcon(qta.icon("fa5s.plus", color="white"))
         btn_add_source.setStyleSheet(f"""
             QPushButton {{
-                background-color: {c["accent"]};
+                background-color: {colors.interactive_primary};
                 color: white;
                 border: none;
                 padding: 4px 12px;
-                border-radius: 0px;
+                border-radius: 4px;
                 font-size: 10px;
             }}
             QPushButton:hover {{ opacity: 0.85; }}
@@ -510,14 +515,14 @@ class PackageManagerDialog(QDialog):
             btn_remove_source.setIcon(qta.icon("fa5s.trash-alt", color="white"))
         btn_remove_source.setStyleSheet(f"""
             QPushButton {{
-                background-color: #c5534d;
+                background-color: {colors.danger};
                 color: white;
                 border: none;
                 padding: 4px 12px;
-                border-radius: 0px;
+                border-radius: 4px;
                 font-size: 10px;
             }}
-            QPushButton:hover {{ background-color: #e06060; }}
+            QPushButton:hover {{ background-color: {colors.danger}dd; }}
         """)
         btn_remove_source.clicked.connect(self._remove_source)
         sources_btn_row.addWidget(btn_remove_source)
@@ -650,7 +655,7 @@ class PackageManagerDialog(QDialog):
                 color: white;
                 border: none;
                 padding: 4px 14px;
-                border-radius: 0px;
+                border-radius: 8px;
                 font-size: 10px;
                 font-weight: bold;
             }}
@@ -685,7 +690,9 @@ class PackageManagerDialog(QDialog):
     def _populate_table(self, packages: list):
         """Populates the table with packages"""
         c = self.theme_manager.get_app_colors()
-        dim_color = "#999999"
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        dim_color = colors.text_tertiary
         self.table.setRowCount(len(packages))
 
         for row, pkg in enumerate(packages):
@@ -711,7 +718,7 @@ class PackageManagerDialog(QDialog):
             latest_item = QTableWidgetItem(latest)
             latest_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             if pkg.has_update:
-                latest_item.setForeground(QColor("#4ec9b0"))
+                latest_item.setForeground(QColor(colors.success))
             self.table.setItem(row, 2, latest_item)
 
             # Action buttons
@@ -728,14 +735,14 @@ class PackageManagerDialog(QDialog):
                         btn_update.setIcon(qta.icon("fa5s.arrow-up", color="white"))
                     btn_update.setStyleSheet(f"""
                         QPushButton {{
-                            background-color: #2e7d32;
+                            background-color: {colors.success};
                             color: white;
                             border: none;
                             padding: 4px 10px;
-                            border-radius: 0px;
+                            border-radius: 4px;
                             font-size: 10px;
                         }}
-                        QPushButton:hover {{ background-color: #388e3c; }}
+                        QPushButton:hover {{ background-color: {colors.success}dd; }}
                         QPushButton:disabled {{
                             background-color: {c["border"]};
                             color: {dim_color};
@@ -750,14 +757,14 @@ class PackageManagerDialog(QDialog):
                     btn_uninstall.setIcon(qta.icon("fa5s.trash-alt", color="white"))
                 btn_uninstall.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: #c5534d;
+                        background-color: {colors.danger};
                         color: white;
                         border: none;
                         padding: 4px 10px;
-                        border-radius: 0px;
+                        border-radius: 4px;
                         font-size: 10px;
                     }}
-                    QPushButton:hover {{ background-color: #e06060; }}
+                    QPushButton:hover {{ background-color: {colors.danger}dd; }}
                     QPushButton:disabled {{
                         background-color: {c["border"]};
                         color: {dim_color};
@@ -772,11 +779,11 @@ class PackageManagerDialog(QDialog):
                     btn_install.setIcon(qta.icon("fa5s.download", color="white"))
                 btn_install.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: {c["accent"]};
+                        background-color: {colors.interactive_primary};
                         color: white;
                         border: none;
                         padding: 4px 14px;
-                        border-radius: 0px;
+                        border-radius: 4px;
                         font-size: 10px;
                         font-weight: bold;
                     }}

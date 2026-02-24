@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="background:#1e1e1e;">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,7 +14,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background: var(--editor-bg, #1e1e1e);
+            background: #1e1e1e;
         }
         #editor-container {
             width: 100%;
@@ -29,7 +29,7 @@
 </head>
 <body>
     <div id="editor-container">
-        <div id="loading-indicator" style="color:#888;padding:20px;font-family:sans-serif;">Loading Monaco Editor...</div>
+        <div id="loading-indicator"></div>
     </div>
     
     <!-- Monaco loader from cdnjs (more reliable) -->
@@ -194,6 +194,11 @@
             editor.onDidFocusEditorWidget(function() {
                 if (pyBridge) {
                     pyBridge.onFocusIn();
+                    // Also emit cursor position on focus (for switching blocks)
+                    var pos = editor.getPosition();
+                    if (pos) {
+                        pyBridge.onCursorChanged(pos.lineNumber, pos.column);
+                    }
                 }
             });
             

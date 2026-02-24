@@ -94,7 +94,7 @@ class ObjectExplorerPanel(QWidget):
             QPushButton {
                 background: transparent;
                 border: none;
-                border-radius: 0px;
+                border-radius: 8px;
             }
             QPushButton:hover {
                 background: rgba(255, 255, 255, 0.1);
@@ -197,13 +197,16 @@ class ObjectExplorerPanel(QWidget):
 
     def _apply_theme(self):
         """Apply theme to tree widget"""
+        from src.design_system.tokens import get_colors, RADIUS
+        colors_tk = get_colors()
+        
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
             colors = {
-                "background": "#1e1e1e",
-                "foreground": "#cccccc",
-                "border": "#3e3e42",
+                "background": colors_tk.bg_primary,
+                "foreground": colors_tk.text_primary,
+                "border": colors_tk.border_default,
             }
 
         self.tree.setStyleSheet(f"""
@@ -214,13 +217,78 @@ class ObjectExplorerPanel(QWidget):
                 font-size: 12px;
             }}
             QTreeWidget::item {{
-                padding: 3px 4px;
+                padding: 5px 6px;
+                border-radius: 4px;
+                margin: 1px 4px;
             }}
             QTreeWidget::item:selected {{
-                background-color: #094771;
+                background-color: {colors_tk.interactive_primary};
+                color: {colors_tk.text_inverse};
             }}
             QTreeWidget::item:hover {{
-                background-color: #2a2d2e;
+                background-color: {colors_tk.bg_elevated};
+            }}
+            QTreeWidget::branch {{
+                background: transparent;
+            }}
+            QTreeWidget::branch:has-children:!has-siblings:closed,
+            QTreeWidget::branch:closed:has-children:has-siblings {{
+                image: url(none);
+                border-image: none;
+            }}
+            QTreeWidget::branch:open:has-children:!has-siblings,
+            QTreeWidget::branch:open:has-children:has-siblings {{
+                image: url(none);
+                border-image: none;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-height: 40px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::handle:vertical:pressed {{
+                background: rgba(128, 128, 128, 0.7);
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+            QScrollBar:horizontal {{
+                background: transparent;
+                height: 8px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: rgba(128, 128, 128, 0.3);
+                border-radius: 4px;
+                min-width: 40px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: rgba(128, 128, 128, 0.5);
+            }}
+            QScrollBar::handle:horizontal:pressed {{
+                background: rgba(128, 128, 128, 0.7);
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+            }}
+            QScrollBar::corner {{
+                background: transparent;
             }}
         """)
 

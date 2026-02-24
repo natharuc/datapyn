@@ -108,7 +108,7 @@ class ToastNotification(QWidget):
             ToastNotification {{
                 background-color: {bg};
                 border: 1px solid {border_color};
-                border-radius: 0px;
+                border-radius: 8px;
             }}
             ToastNotification:hover {{
                 background-color: {bg_hover};
@@ -121,7 +121,7 @@ class ToastNotification(QWidget):
 
         # Icon
         icon_label = QLabel(icon_char)
-        icon_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        icon_label.setFont(QFont("Inter", 16, QFont.Weight.Bold))
         icon_label.setStyleSheet("color: white; background: transparent; border: none;")
         icon_label.setFixedWidth(24)
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -132,13 +132,13 @@ class ToastNotification(QWidget):
         text_layout.setSpacing(2)
 
         title_label = QLabel(title)
-        title_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        title_label.setFont(QFont("Inter", 10, QFont.Weight.Bold))
         title_label.setStyleSheet("color: white; background: transparent; border: none;")
         title_label.setWordWrap(True)
         text_layout.addWidget(title_label)
 
         msg_label = QLabel(message)
-        msg_label.setFont(QFont("Segoe UI", 9))
+        msg_label.setFont(QFont("Inter", 9))
         msg_label.setStyleSheet("color: rgba(255,255,255,220); background: transparent; border: none;")
         msg_label.setWordWrap(True)
         text_layout.addWidget(msg_label)
@@ -148,13 +148,13 @@ class ToastNotification(QWidget):
         # Close button
         close_btn = QPushButton("\u00d7")  # multiplication sign
         close_btn.setFixedSize(20, 20)
-        close_btn.setFont(QFont("Segoe UI", 12))
+        close_btn.setFont(QFont("Inter", 12))
         close_btn.setStyleSheet("""
             QPushButton {
                 color: rgba(255,255,255,180);
                 background: transparent;
                 border: none;
-                border-radius: 0px;
+                border-radius: 4px;
             }
             QPushButton:hover {
                 color: white;

@@ -45,9 +45,10 @@ def _get_styles():
                 background-color: {colors.interactive_primary};
                 color: {colors.text_inverse};
                 border: none;
-                padding: 6px 16px;
-                border-radius: 0px;
-                font-weight: 500;
+                padding: 10px 20px;
+                border-radius: 8px;
+                font-weight: 600;
+                min-height: 24px;
             }}
             QPushButton:hover {{
                 background-color: {colors.interactive_primary_hover};
@@ -65,12 +66,13 @@ def _get_styles():
                 background-color: {colors.interactive_secondary};
                 color: {colors.text_primary};
                 border: 1px solid {colors.border_strong};
-                padding: 6px 16px;
-                border-radius: 0px;
+                padding: 10px 20px;
+                border-radius: 8px;
+                min-height: 24px;
             }}
             QPushButton:hover {{
                 background-color: {colors.interactive_secondary_hover};
-                border-color: {colors.border_strong};
+                border-color: {colors.interactive_primary};
             }}
             QPushButton:pressed {{
                 background-color: {colors.interactive_secondary_active};
@@ -86,8 +88,9 @@ def _get_styles():
                 background-color: {colors.danger};
                 color: {colors.text_inverse};
                 border: none;
-                padding: 6px 16px;
-                border-radius: 0px;
+                padding: 10px 20px;
+                border-radius: 8px;
+                min-height: 24px;
             }}
             QPushButton:hover {{
                 background-color: {colors.danger_hover};
@@ -105,8 +108,9 @@ def _get_styles():
                 background-color: {colors.success};
                 color: {colors.text_inverse};
                 border: none;
-                padding: 6px 16px;
-                border-radius: 0px;
+                padding: 10px 20px;
+                border-radius: 8px;
+                min-height: 24px;
             }}
             QPushButton:hover {{
                 background-color: {colors.success_hover};
@@ -124,8 +128,8 @@ def _get_styles():
                 background-color: transparent;
                 color: {colors.text_primary};
                 border: none;
-                padding: 6px 16px;
-                border-radius: 0px;
+                padding: 10px 20px;
+                border-radius: 8px;
             }}
             QPushButton:hover {{
                 background-color: {colors.bg_tertiary};
@@ -139,8 +143,8 @@ def _get_styles():
                 background-color: transparent;
                 color: {colors.text_primary};
                 border: none;
-                padding: 5px 12px;
-                border-radius: 0px;
+                padding: 8px 14px;
+                border-radius: 6px;
             }}
             QPushButton:hover {{
                 background-color: {colors.bg_elevated};
@@ -231,7 +235,7 @@ class IconButton(QToolButton):
                 background-color: transparent;
                 border: none;
                 padding: 4px;
-                border-radius: 0px;
+                border-radius: 8px;
             }}
             QToolButton:hover {{
                 background-color: #3e3e42;

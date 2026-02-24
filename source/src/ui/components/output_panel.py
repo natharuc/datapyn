@@ -52,23 +52,25 @@ class OutputPanel(QWidget):
         # Clear button
         self.btn_clear = GhostButton(S.output_panel.btn_clear)
         if HAS_QTAWESOME:
-            self.btn_clear.setIcon(qta.icon("fa5s.trash", color="#888888"))
+            from src.design_system.tokens import get_colors
+            colors = get_colors()
+            self.btn_clear.setIcon(qta.icon("fa5s.trash", color=colors.text_tertiary))
         self.btn_clear.clicked.connect(self.clear)
         toolbar_layout.addWidget(self.btn_clear)
 
         # Copy button
         self.btn_copy = GhostButton(S.output_panel.btn_copy)
         if HAS_QTAWESOME:
-            self.btn_copy.setIcon(qta.icon("fa5s.copy", color="#888888"))
+            self.btn_copy.setIcon(qta.icon("fa5s.copy", color=colors.text_tertiary))
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
         toolbar_layout.addWidget(self.btn_copy)
 
-        toolbar.setStyleSheet("""
-            QWidget {
-                background-color: #222225;
+        toolbar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors.bg_secondary};
                 border: none;
-                border-bottom: 1px solid #28282c;
-            }
+                border-bottom: 1px solid {colors.border_default};
+            }}
         """)
         layout.addWidget(toolbar)
 
@@ -81,10 +83,13 @@ class OutputPanel(QWidget):
 
     def _apply_theme(self):
         """Apply theme"""
+        from src.design_system.tokens import get_colors, SCROLLBAR_STYLE
+        tokens = get_colors()
+        
         if self.theme_manager:
             colors = self.theme_manager.get_app_colors()
         else:
-            colors = {"background": "#1a1a1c", "foreground": "#e0e0e4"}
+            colors = {"background": tokens.bg_primary, "foreground": tokens.text_primary}
 
         self.text_edit.setStyleSheet(f"""
             QTextEdit {{
@@ -95,6 +100,7 @@ class OutputPanel(QWidget):
                 font-size: 13px;
                 line-height: 1.5;
             }}
+            {SCROLLBAR_STYLE}
         """)
 
     def set_theme_manager(self, theme_manager):
@@ -109,9 +115,12 @@ class OutputPanel(QWidget):
             text: Text to add
             level: Level ('info', 'success', 'warning', 'error')
         """
+        from src.design_system.tokens import get_colors
+        tokens = get_colors()
+        
         timestamp = datetime.now().strftime("%H:%M:%S")
 
-        colors = {"info": "#9cdcfe", "success": "#4ec9b0", "warning": "#dcdcaa", "error": "#f48771", "debug": "#808080"}
+        colors = {"info": tokens.info, "success": tokens.success, "warning": tokens.warning, "error": tokens.danger, "debug": tokens.text_tertiary}
         color = colors.get(level, colors["info"])
 
         # Icons by level
@@ -122,9 +131,9 @@ class OutputPanel(QWidget):
         safe_text = html_module.escape(text).replace("\n", "<br>")
 
         if icon:
-            html = f'<span style="color: #808080;">[{timestamp}]</span> <span style="color: {color};">{icon} {safe_text}</span><br>'
+            html = f'<span style="color: {tokens.text_tertiary};">[{timestamp}]</span> <span style="color: {color};">{icon} {safe_text}</span><br>'
         else:
-            html = f'<span style="color: #808080;">[{timestamp}]</span> <span style="color: {color};">{safe_text}</span><br>'
+            html = f'<span style="color: {tokens.text_tertiary};">[{timestamp}]</span> <span style="color: {color};">{safe_text}</span><br>'
 
         self.text_edit.append(html)
 
@@ -180,8 +189,10 @@ class OutputPanel(QWidget):
         detail_edit.setReadOnly(True)
         detail_edit.setFont(QFont("Consolas", 10))
         detail_edit.setPlainText(plain_text)
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
         detail_edit.setStyleSheet(
-            "QTextEdit { background: #1e1e1e; color: #d4d4d4; border: none; }"
+            f"QTextEdit {{ background: {colors.bg_primary}; color: {colors.text_primary}; border: none; }}"
         )
         layout.addWidget(detail_edit)
 

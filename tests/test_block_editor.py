@@ -73,9 +73,9 @@ class TestCodeBlock:
 
     def test_language_changed_signal(self, block, qtbot):
         """Mudar linguagem deve emitir sinal"""
-        # Bloco começa em SQL (index 1), mudar para Python (index 0) para garantir mudança
+        # Bloco começa em SQL (index 0), mudar para Python (index 1) para garantir mudança
         with qtbot.waitSignal(block.language_changed, timeout=1000):
-            block.lang_combo.setCurrentIndex(0)  # Python
+            block.lang_combo.setCurrentIndex(1)  # Python
 
     def test_to_dict_serialization(self, block):
         """Deve serializar corretamente"""

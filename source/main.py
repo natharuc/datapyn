@@ -6,7 +6,7 @@ import sys
 import os
 import logging
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon, QPalette, QColor
+from PyQt6.QtGui import QIcon, QPalette, QColor, QFont
 from PyQt6.QtCore import Qt
 
 # Required for QtWebEngineWidgets (Monaco Editor) - must be set before QApplication
@@ -35,34 +35,34 @@ def _apply_dark_palette(app):
     """Aplica paleta dark nativa via QPalette para visual consistente"""
     palette = QPalette()
 
-    # Backgrounds
-    palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
-    palette.setColor(QPalette.ColorRole.Base, QColor("#252526"))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#2d2d30"))
+    # Backgrounds - with subtle blue undertone
+    palette.setColor(QPalette.ColorRole.Window, QColor("#181a1f"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#1f2228"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#282c34"))
 
     # Text
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#cccccc"))
-    palette.setColor(QPalette.ColorRole.Text, QColor("#cccccc"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#dcdee4"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#dcdee4"))
     palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6e6e6e"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#70758a"))
 
     # Buttons
-    palette.setColor(QPalette.ColorRole.Button, QColor("#2d2d30"))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#cccccc"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#282c34"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#dcdee4"))
 
-    # Highlights
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#3369FF"))
+    # Highlights - modern blue
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#3b82f6"))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
 
     # Misc
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#252526"))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#cccccc"))
-    palette.setColor(QPalette.ColorRole.Link, QColor("#3369FF"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#282c34"))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#dcdee4"))
+    palette.setColor(QPalette.ColorRole.Link, QColor("#3b82f6"))
 
     # Disabled
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#5a5a5a"))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#5a5a5a"))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#5a5a5a"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#50556b"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#50556b"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#50556b"))
 
     app.setPalette(palette)
 
@@ -83,6 +83,76 @@ def main():
 
     # Estilo Fusion para visual consistente cross-platform
     app.setStyle("Fusion")
+    
+    # Inicializar fontes customizadas (baixa Ubuntu se necessario)
+    from src.design_system.font_manager import initialize_fonts, get_application_font
+    initialize_fonts()
+    
+    # Fonte global moderna - Ubuntu (empacotada com o app)
+    global_font = get_application_font(size=10)
+    app.setFont(global_font)
+    
+    # Stylesheet global para fonte consistente e scrollbars clean
+    from src.design_system.font_manager import FONT_FAMILY_PRIMARY
+    app.setStyleSheet(f"""
+        * {{
+            font-family: {FONT_FAMILY_PRIMARY};
+        }}
+        QToolTip {{
+            font-size: 11px;
+            padding: 6px 10px;
+            border-radius: 6px;
+        }}
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 8px;
+            margin: 0px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: rgba(128, 128, 128, 0.3);
+            border-radius: 4px;
+            min-height: 40px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: rgba(128, 128, 128, 0.5);
+        }}
+        QScrollBar::handle:vertical:pressed {{
+            background: rgba(128, 128, 128, 0.7);
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: none;
+        }}
+        QScrollBar:horizontal {{
+            background: transparent;
+            height: 8px;
+            margin: 0px;
+        }}
+        QScrollBar::handle:horizontal {{
+            background: rgba(128, 128, 128, 0.3);
+            border-radius: 4px;
+            min-width: 40px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background: rgba(128, 128, 128, 0.5);
+        }}
+        QScrollBar::handle:horizontal:pressed {{
+            background: rgba(128, 128, 128, 0.7);
+        }}
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            width: 0px;
+        }}
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: none;
+        }}
+        QScrollBar::corner {{
+            background: transparent;
+        }}
+    """)
 
     # Paleta dark nativa
     _apply_dark_palette(app)

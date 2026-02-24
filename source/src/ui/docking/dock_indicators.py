@@ -123,7 +123,7 @@ class DockIndicators(QWidget):
 
         # Draw icon/text
         painter.setPen(QPen(text_color))
-        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        painter.setFont(QFont("Inter", 8, QFont.Weight.Bold))
 
         icon_text = self._get_icon_text(position)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, icon_text)
