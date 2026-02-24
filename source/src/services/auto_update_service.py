@@ -185,15 +185,13 @@ class AutoUpdateService:
         self._checker.no_update_available.connect(on_no_update)
         self._checker.check_failed.connect(on_error)
 
-        # Cleanup - clear reference when thread finishes
-        def cleanup_check_thread():
-            self._check_thread = None
-            self._checker = None
-
+        # Quit thread when worker finishes (use queued connection to ensure signals are delivered first)
         self._checker.update_available.connect(self._check_thread.quit)
         self._checker.no_update_available.connect(self._check_thread.quit)
         self._checker.check_failed.connect(self._check_thread.quit)
-        self._check_thread.finished.connect(cleanup_check_thread)
+        
+        # Cleanup - use deleteLater to ensure proper cleanup after event loop processes
+        self._check_thread.finished.connect(self._checker.deleteLater)
         self._check_thread.finished.connect(self._check_thread.deleteLater)
 
         self._check_thread.start()
@@ -230,14 +228,12 @@ class AutoUpdateService:
         self._downloader.download_complete.connect(on_complete)
         self._downloader.download_failed.connect(on_error)
 
-        # Cleanup - clear reference when thread finishes
-        def cleanup_download_thread():
-            self._download_thread = None
-            self._downloader = None
-
+        # Quit thread when worker finishes
         self._downloader.download_complete.connect(self._download_thread.quit)
         self._downloader.download_failed.connect(self._download_thread.quit)
-        self._download_thread.finished.connect(cleanup_download_thread)
+        
+        # Cleanup - use deleteLater to ensure proper cleanup after event loop processes
+        self._download_thread.finished.connect(self._downloader.deleteLater)
         self._download_thread.finished.connect(self._download_thread.deleteLater)
 
         self._download_thread.start()

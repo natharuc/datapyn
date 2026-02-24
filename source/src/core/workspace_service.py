@@ -199,14 +199,14 @@ class WorkspaceService(QObject):
         """
         Switch to a different workspace.
         
-        Note: This only updates the setting. The app should restart
-        for the change to take effect fully.
+        Updates the current workspace immediately and saves the setting.
+        For use with --workspace command line argument in new instances.
         
         Args:
             path: Target workspace path
         
         Returns:
-            True if switch was set (restart needed)
+            True if switch was successful
         """
         path = Path(path).resolve()
         
@@ -222,7 +222,10 @@ class WorkspaceService(QObject):
                 path.mkdir(parents=True, exist_ok=True)
             self._global_settings.setValue("current_workspace", str(path))
         
-        logger.info(f"Workspace set to: {path} (restart required)")
+        # Update current workspace immediately (for new instances with --workspace)
+        self._current_workspace = path
+        
+        logger.info(f"Workspace switched to: {path}")
         self.workspace_changed.emit(str(path))
         return True
     
