@@ -5,13 +5,14 @@ Toolbar principal da aplicacao
 import os
 import re
 
-from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy
+from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy, QComboBox
 from PyQt6.QtCore import pyqtSignal, QSize, Qt, QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 import qtawesome as qta
 
 from src.language import S
+from src.core.workspace_service import get_workspace_service
 
 # Default color for all toolbar icons (consistent)
 _ICON_COLOR = "#b0b0b0"
@@ -59,6 +60,8 @@ class MainToolbar(QToolBar):
     new_tab_clicked = pyqtSignal()
     run_clicked = pyqtSignal()
     copilot_clicked = pyqtSignal()
+    workspace_switch_requested = pyqtSignal(str)  # path
+    workspace_settings_requested = pyqtSignal()  # open settings on workspace tab
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__("Main", parent)
@@ -124,6 +127,11 @@ class MainToolbar(QToolBar):
         self.btn_run.clicked.connect(self.run_clicked.emit)
         self.addWidget(self.btn_run)
 
+        self.addSeparator()
+
+        # Workspace selector
+        self._setup_workspace_selector()
+
         # Spacer
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -153,6 +161,95 @@ class MainToolbar(QToolBar):
         """)
         self.btn_copilot.clicked.connect(self.copilot_clicked.emit)
         self.addWidget(self.btn_copilot)
+
+    def _setup_workspace_selector(self):
+        """Setup workspace dropdown selector."""
+        self.workspace_combo = QComboBox()
+        self.workspace_combo.setFixedWidth(140)
+        self.workspace_combo.setToolTip("Workspace")
+        self.workspace_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: #2d2d30;
+                color: {_ICON_COLOR};
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }}
+            QComboBox:hover {{
+                border-color: #007acc;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid {_ICON_COLOR};
+                margin-right: 6px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: #2d2d30;
+                color: {_ICON_COLOR};
+                border: 1px solid #3e3e42;
+                selection-background-color: #007acc;
+            }}
+        """)
+        
+        self._refresh_workspace_combo()
+        self.workspace_combo.currentIndexChanged.connect(self._on_workspace_selected)
+        self.addWidget(self.workspace_combo)
+        
+        # Config button to open workspace settings
+        self.workspace_config_btn = QPushButton()
+        self.workspace_config_btn.setIcon(qta.icon("fa5s.cog", color=_ICON_COLOR))
+        self.workspace_config_btn.setToolTip("Workspace settings")
+        self.workspace_config_btn.setFixedSize(24, 24)
+        self.workspace_config_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255, 255, 255, 0.1);
+            }}
+        """)
+        self.workspace_config_btn.clicked.connect(self.workspace_settings_requested.emit)
+        self.addWidget(self.workspace_config_btn)
+        
+        # Connect to workspace service signals for auto-refresh
+        ws_service = get_workspace_service()
+        ws_service.workspace_added.connect(self._refresh_workspace_combo)
+        ws_service.workspace_removed.connect(self._refresh_workspace_combo)
+    
+    def _refresh_workspace_combo(self, *args):
+        """Refresh workspace combo box items."""
+        ws_service = get_workspace_service()
+        workspaces = ws_service.list_workspaces()
+        current = ws_service.current_workspace
+        
+        self.workspace_combo.blockSignals(True)
+        self.workspace_combo.clear()
+        
+        current_index = 0
+        for i, (name, path) in enumerate(workspaces):
+            self.workspace_combo.addItem(name, str(path))
+            if path == current:
+                current_index = i
+        
+        self.workspace_combo.setCurrentIndex(current_index)
+        self.workspace_combo.blockSignals(False)
+    
+    def _on_workspace_selected(self, index: int):
+        """Handle workspace selection change."""
+        if index < 0:
+            return
+        path = self.workspace_combo.itemData(index)
+        if path:
+            self.workspace_switch_requested.emit(path)
 
     def apply_theme(self):
         pass

@@ -410,10 +410,10 @@ class ThemeManager:
             }}
             QPushButton:hover {{
                 background-color: {c["accent"]};
-                filter: brightness(1.1);
+                opacity: 0.9;
             }}
             QPushButton:pressed {{
-                filter: brightness(0.9);
+                background-color: {c["accent"]};
             }}
             QPushButton#btnCancel {{
                 background-color: {c["border"]};
