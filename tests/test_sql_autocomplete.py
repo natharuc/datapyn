@@ -393,12 +393,12 @@ class TestEdgeCases:
         assert "id" in n
 
     def test_dot_unknown_table(self, service):
-        """Dot on unknown table/alias returns all columns as fallback."""
+        """Dot on unknown table/alias returns empty list (no fallback to all columns)."""
         sql = "SELECT xxx."
         result = service.get_completions(sql, 0, 11)
-        # Should return all columns as fallback
+        # New behavior: do NOT return all columns as fallback, return empty
         n = names(result)
-        assert len(n) > 0  # at least some columns
+        assert len(n) == 0  # unknown alias should return empty
 
     def test_set_schema_none(self, service):
         service.set_schema(None)

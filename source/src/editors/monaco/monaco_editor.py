@@ -191,6 +191,11 @@ class MonacoEditor(QWidget):
         self._bridge.completion_requested.connect(self._on_completion_requested)
         self._bridge.force_completion_requested.connect(self._on_force_completion_requested)
         self._bridge.cursor_changed.connect(self._on_cursor_changed)
+        
+        # SQL/Python context-aware completions
+        self._bridge.sql_context_requested.connect(self._on_sql_context_requested)
+        self._bridge.sql_completion_requested.connect(self._on_sql_completion_requested)
+        self._bridge.python_completion_requested.connect(self._on_python_completion_requested)
     
     def _on_editor_ready(self):
         """Called when Monaco editor is fully loaded."""
@@ -240,6 +245,142 @@ class MonacoEditor(QWidget):
         """Handle cursor position change from JS."""
         self.cursor_changed.emit(line, column)
     
+    def _on_sql_context_requested(self, full_text: str, prefix: str, line: int, column: int):
+        """Handle SQL context-aware completion request.
+        
+        Uses SqlAutoCompleteService to resolve aliases, CTEs, and subqueries.
+        """
+        from src.services.sql_autocomplete_service import SqlAutoCompleteService
+        
+        try:
+            service = SqlAutoCompleteService()
+            service.set_schema(self._sql_schema)
+            
+            # Get completions for the prefix (alias or table name)
+            # Returns list of (name, category, detail) tuples
+            completions = service._dot_completions(prefix, full_text)
+            
+            # Format and send back to JavaScript
+            js_completions = []
+            for comp in completions:
+                # comp is a tuple: (name, category, detail/type)
+                name = comp[0] if len(comp) > 0 else ""
+                category = comp[1] if len(comp) > 1 else "column"
+                detail = comp[2] if len(comp) > 2 else ""
+                
+                js_completions.append({
+                    'label': name,
+                    'kind': 'field',
+                    'insertText': name,
+                    'detail': detail,
+                    'category': category,
+                    'table': prefix
+                })
+            
+            escaped = json.dumps(js_completions)
+            self._run_js_when_ready(f"receiveSqlContextCompletions({escaped})")
+        except Exception as e:
+            logger.warning(f"[MONACO] SQL context completion error: {e}")
+            self._run_js_when_ready("receiveSqlContextCompletions([])")
+    
+    def _on_sql_completion_requested(self, full_text: str, line: int, column: int):
+        """Handle SQL completion request (SSMS-style full context).
+        
+        Uses SqlAutoCompleteService to provide intelligent completions based on:
+        - Current position (SELECT, FROM, WHERE, etc.)
+        - Tables mentioned in FROM/JOIN clauses
+        - Aliases defined in the query
+        """
+        from src.services.sql_autocomplete_service import SqlAutoCompleteService
+        
+        try:
+            service = SqlAutoCompleteService()
+            service.set_schema(self._sql_schema)
+            
+            # Get context-aware completions
+            completions = service.get_completions(full_text, line - 1, column)
+            
+            # Format for JavaScript
+            js_completions = []
+            for comp in completions:
+                # comp is a tuple: (name, category, detail)
+                name = comp[0] if len(comp) > 0 else ""
+                category = comp[1] if len(comp) > 1 else "text"
+                detail = comp[2] if len(comp) > 2 else ""
+                
+                # Map category to Monaco completion kind
+                kind = 'text'
+                if category == 'keyword':
+                    kind = 'keyword'
+                elif category == 'function':
+                    kind = 'function'
+                elif category == 'table':
+                    kind = 'class'
+                elif category == 'column':
+                    kind = 'field'
+                elif category == 'database':
+                    kind = 'module'
+                
+                js_completions.append({
+                    'label': name,
+                    'kind': kind,
+                    'insertText': name,
+                    'detail': detail,
+                    'category': category
+                })
+            
+            escaped = json.dumps(js_completions)
+            self._run_js_when_ready(f"receiveSqlCompletions({escaped})")
+        except Exception as e:
+            logger.warning(f"[MONACO] SQL completion error: {e}")
+            self._run_js_when_ready("receiveSqlCompletions([])")
+
+    def _on_python_completion_requested(self, full_text: str, line: int, column: int):
+        """Handle Python Jedi completion request.
+        
+        Uses JediCompleter with namespace injection for type-aware completions.
+        """
+        from src.services.jedi_completer import JediCompleter
+        
+        try:
+            completer = JediCompleter.instance()
+            completer.set_namespace(self._python_namespace)
+            
+            # Prepend global imports for better context
+            code_with_context = self._global_imports + "\n" + full_text if self._global_imports else full_text
+            
+            # Adjust line number if we prepended imports
+            adjusted_line = line
+            if self._global_imports:
+                import_lines = self._global_imports.count("\n") + 1
+                adjusted_line = line + import_lines
+            
+            # Synchronous completion for dropdown
+            # Returns list of (name, type, description) tuples
+            completions = completer.complete_sync(code_with_context, adjusted_line, column)
+            
+            # Format for JavaScript
+            js_completions = []
+            for comp in completions:
+                # comp is a tuple: (name, type, description)
+                name = comp[0] if len(comp) > 0 else ""
+                kind = comp[1] if len(comp) > 1 else "text"
+                detail = comp[2] if len(comp) > 2 else ""
+                
+                js_completions.append({
+                    'label': name,
+                    'kind': kind,
+                    'insertText': name,
+                    'detail': detail,
+                    'category': 'python'
+                })
+            
+            escaped = json.dumps(js_completions)
+            self._run_js_when_ready(f"receivePythonCompletions({escaped})")
+        except Exception as e:
+            logger.warning(f"[MONACO] Python completion error: {e}")
+            self._run_js_when_ready("receivePythonCompletions([])")
+
     def _run_js(self, script: str, callback=None):
         """Execute JavaScript in the Monaco editor."""
         if callback:

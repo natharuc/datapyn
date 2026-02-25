@@ -376,6 +376,10 @@ class CodeBlock(QFrame):
     completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
 
     LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00"}
+    
+    # Initial editor heights (in pixels, ~20px per line)
+    DEFAULT_SQL_HEIGHT = 400     # ~20 lines for SQL blocks
+    DEFAULT_PYTHON_HEIGHT = 200  # ~10 lines for Python blocks
 
     def __init__(self, theme_manager: ThemeManager = None, parent=None, default_language="sql"):
         super().__init__(parent)
@@ -403,6 +407,10 @@ class CodeBlock(QFrame):
         # Initialize completions based on language
         if self._default_language == "python":
             self._update_python_completions()
+        
+        # Set initial height based on language (SQL = larger, Python = smaller)
+        initial_height = self.DEFAULT_SQL_HEIGHT if self._default_language == "sql" else self.DEFAULT_PYTHON_HEIGHT
+        self._set_editor_height(initial_height)
 
     def _setup_ui(self):
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Plain)

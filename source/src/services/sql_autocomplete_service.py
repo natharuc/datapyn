@@ -7,11 +7,27 @@ Analyzes the SQL text and cursor position to provide context-aware completions:
 - After "table." or "alias.": suggests columns of that specific table
 - After USE/DATABASE: suggests database names
 - Default (start of statement): suggests SQL keywords + tables
+
+Uses sqlglot for advanced parsing of:
+- CTEs (WITH clauses)
+- Subquery aliases
+- Complex nested queries
 """
 
 import logging
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
+
+logger = logging.getLogger(__name__)
+
+# Try to import sqlglot for advanced parsing
+try:
+    import sqlglot
+    from sqlglot import exp
+    HAS_SQLGLOT = True
+except ImportError:
+    HAS_SQLGLOT = False
+    logger.warning("sqlglot not installed - advanced SQL autocomplete disabled")
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +117,169 @@ _RE_TABLE_REF = re.compile(
 )
 
 
+class SqlContextParser:
+    """
+    Advanced SQL parser using sqlglot for:
+    - CTE extraction (WITH clauses)
+    - Subquery alias tracking
+    - Complex alias resolution
+    """
+
+    def __init__(self):
+        self._ctes: Dict[str, List[str]] = {}  # CTE name -> column names
+        self._aliases: Dict[str, str] = {}     # alias -> real table name
+        self._subquery_aliases: Dict[str, List[str]] = {}  # subquery alias -> column names
+
+    def parse(self, sql: str, schema_columns: Dict[str, List] = None) -> Dict[str, str]:
+        """
+        Parse SQL and build comprehensive alias mapping.
+
+        Args:
+            sql: The SQL query text
+            schema_columns: Dict of table_name -> list of columns from schema
+
+        Returns:
+            Dict mapping alias/CTE names (lowercase) -> real table name or '__cte__' or '__subquery__'
+        """
+        self._ctes = {}
+        self._aliases = {}
+        self._subquery_aliases = {}
+        schema_columns = schema_columns or {}
+
+        if not HAS_SQLGLOT:
+            return self._fallback_parse(sql)
+
+        try:
+            # Parse SQL - try multiple dialects for best coverage
+            parsed = None
+            for dialect in [None, "tsql", "mysql", "postgres"]:
+                try:
+                    parsed = sqlglot.parse(sql, dialect=dialect)
+                    if parsed:
+                        break
+                except Exception:
+                    continue
+
+            if not parsed:
+                return self._fallback_parse(sql)
+
+            for statement in parsed:
+                if statement:
+                    self._extract_from_statement(statement, schema_columns)
+
+        except Exception as e:
+            logger.debug(f"sqlglot parse error: {e}, falling back to regex")
+            return self._fallback_parse(sql)
+
+        # Build combined alias map
+        result = {}
+        for alias, table in self._aliases.items():
+            result[alias.lower()] = table
+        for cte_name in self._ctes:
+            result[cte_name.lower()] = "__cte__"
+        for subq_alias in self._subquery_aliases:
+            result[subq_alias.lower()] = "__subquery__"
+
+        return result
+
+    def get_cte_columns(self, cte_name: str) -> List[str]:
+        """Get columns defined in a CTE."""
+        return self._ctes.get(cte_name.lower(), [])
+
+    def get_subquery_columns(self, alias: str) -> List[str]:
+        """Get columns from a subquery alias."""
+        return self._subquery_aliases.get(alias.lower(), [])
+
+    def _extract_from_statement(self, statement, schema_columns: Dict[str, List]) -> None:
+        """Extract CTEs, aliases, and subqueries from a parsed statement."""
+        if not HAS_SQLGLOT:
+            return
+
+        # Extract CTEs
+        for cte in statement.find_all(exp.CTE):
+            cte_name = cte.alias
+            if cte_name:
+                # Get columns from CTE definition
+                cte_cols = self._extract_select_columns(cte.this)
+                self._ctes[cte_name.lower()] = cte_cols
+
+        # Extract table aliases from FROM and JOIN
+        for table in statement.find_all(exp.Table):
+            table_name = table.name
+            alias = table.alias
+            if alias:
+                self._aliases[alias.lower()] = table_name
+            # Also map table name to itself
+            self._aliases[table_name.lower()] = table_name
+
+        # Extract subquery aliases
+        for subquery in statement.find_all(exp.Subquery):
+            alias = subquery.alias
+            if alias:
+                # Get columns from subquery SELECT
+                inner_cols = self._extract_select_columns(subquery.this)
+                self._subquery_aliases[alias.lower()] = inner_cols
+
+    def _extract_select_columns(self, select_node) -> List[str]:
+        """Extract column names from a SELECT statement."""
+        columns = []
+        if not HAS_SQLGLOT or not select_node:
+            return columns
+
+        try:
+            # Look for SELECT expressions
+            if hasattr(select_node, "expressions"):
+                for expr in select_node.expressions:
+                    col_name = None
+                    # Check for alias first
+                    if hasattr(expr, "alias") and expr.alias:
+                        col_name = expr.alias
+                    elif isinstance(expr, exp.Column):
+                        col_name = expr.name
+                    elif isinstance(expr, exp.Star):
+                        # SELECT * - we can't know columns without schema
+                        continue
+                    elif hasattr(expr, "name"):
+                        col_name = expr.name
+
+                    if col_name and col_name not in columns:
+                        columns.append(col_name)
+        except Exception as e:
+            logger.debug(f"Error extracting columns: {e}")
+
+        return columns
+
+    def _fallback_parse(self, sql: str) -> Dict[str, str]:
+        """Fallback to regex-based parsing when sqlglot fails."""
+        result = {}
+
+        # Use existing regex pattern for basic alias detection
+        for match in _RE_TABLE_REF.finditer(sql):
+            table = match.group(2)
+            alias = match.group(3)
+
+            if table:
+                table_clean = table.strip("[]")
+                if alias:
+                    alias_clean = alias.strip("[]")
+                    # Don't treat SQL keywords as aliases
+                    if alias_clean.upper() not in {kw.upper() for kw in SQL_KEYWORDS}:
+                        result[alias_clean.lower()] = table_clean
+                result[table_clean.lower()] = table_clean
+
+        # Basic CTE detection with regex
+        cte_pattern = re.compile(
+            r"WITH\s+(\w+)\s+(?:\([^)]*\)\s+)?AS\s*\(",
+            re.IGNORECASE
+        )
+        for match in cte_pattern.finditer(sql):
+            cte_name = match.group(1)
+            result[cte_name.lower()] = "__cte__"
+            self._ctes[cte_name.lower()] = []  # Can't extract columns without full parse
+
+        return result
+
+
 class SqlAutoCompleteService:
     """
     Context-aware SQL autocomplete service.
@@ -114,6 +293,7 @@ class SqlAutoCompleteService:
     def __init__(self):
         self._schema: dict = {}
         self._keywords_lower = {kw.lower() for kw in SQL_KEYWORDS}
+        self._context_parser = SqlContextParser()
 
     def set_schema(self, schema: Optional[dict]) -> None:
         """Update the database schema used for completions.
@@ -304,76 +484,147 @@ class SqlAutoCompleteService:
         return result
 
     def _column_completions(self, full_text: str) -> List[Tuple[str, str, str]]:
-        """Return column completions, including table-qualified columns."""
+        """Return column completions from tables mentioned in FROM/JOIN clauses."""
         columns = self._schema.get("columns", {})
-        tables = self._schema.get("tables", [])
         result = []
         seen = set()
 
-        # Also suggest table names (useful for table.column qualification)
-        for t in tables:
-            name = t["name"] if isinstance(t, dict) else str(t)
-            if name not in seen:
-                seen.add(name)
-                result.append((name, CAT_TABLE, ""))
-
-        # Try to resolve aliases from the query
+        # Extract tables from FROM/JOIN clauses
+        tables_in_query = self._extract_tables_from_query(full_text)
+        
+        # Also resolve aliases to get real table names
         aliases = self._resolve_aliases(full_text)
-
+        
+        # Build set of table names to include
+        relevant_tables = set()
+        for t in tables_in_query:
+            relevant_tables.add(t.lower())
+            # If it's an alias, add the real table too
+            real_table = aliases.get(t.lower())
+            if real_table and real_table not in ("__cte__", "__subquery__"):
+                relevant_tables.add(real_table.lower())
+        
+        # Add real table names from aliases
+        for alias, table in aliases.items():
+            if table not in ("__cte__", "__subquery__"):
+                relevant_tables.add(table.lower())
+        
+        # If no tables found, maybe user is still typing - show all columns
+        if not relevant_tables:
+            return self._all_columns_flat()
+        
+        # Get columns only from relevant tables
         for table_name, cols in columns.items():
+            if table_name.lower() not in relevant_tables:
+                continue
+                
             for col in cols:
                 cname = col["name"] if isinstance(col, dict) else str(col)
                 ctype = col.get("type", "") if isinstance(col, dict) else ""
 
-                # Plain column name
                 key = cname.lower()
                 if key not in seen:
                     seen.add(key)
-                    detail = f"{ctype} ({table_name})" if ctype else table_name
+                    detail = f"{table_name}.{cname} ({ctype})" if ctype else f"{table_name}.{cname}"
                     result.append((cname, CAT_COLUMN, detail))
 
-                # table.column qualified
+        # Also suggest qualified table.column for tables in query
+        for table_name, cols in columns.items():
+            if table_name.lower() not in relevant_tables:
+                continue
+            for col in cols:
+                cname = col["name"] if isinstance(col, dict) else str(col)
+                ctype = col.get("type", "") if isinstance(col, dict) else ""
                 qualified = f"{table_name}.{cname}"
-                result.append((qualified, CAT_COLUMN, ctype))
+                if qualified.lower() not in seen:
+                    result.append((qualified, CAT_COLUMN, ctype))
 
         return result
+
+    def _extract_tables_from_query(self, text: str) -> List[str]:
+        """Extract table names from FROM and JOIN clauses."""
+        tables = []
+        
+        # Clean the text
+        cleaned = self._strip_noise(text.upper())
+        
+        # Pattern: FROM table_name [AS alias] or FROM table_name alias
+        from_pattern = r'\bFROM\s+(\w+)'
+        for match in re.finditer(from_pattern, cleaned, re.IGNORECASE):
+            tables.append(match.group(1))
+        
+        # Pattern: JOIN table_name [AS alias]
+        join_pattern = r'\bJOIN\s+(\w+)'
+        for match in re.finditer(join_pattern, cleaned, re.IGNORECASE):
+            tables.append(match.group(1))
+        
+        # Pattern: UPDATE table_name
+        update_pattern = r'\bUPDATE\s+(\w+)'
+        for match in re.finditer(update_pattern, cleaned, re.IGNORECASE):
+            tables.append(match.group(1))
+        
+        # Pattern: INSERT INTO table_name
+        insert_pattern = r'\bINTO\s+(\w+)'
+        for match in re.finditer(insert_pattern, cleaned, re.IGNORECASE):
+            tables.append(match.group(1))
+        
+        return tables
 
     def _dot_completions(
         self, prefix: str, full_text: str
     ) -> List[Tuple[str, str, str]]:
         """
-        Return columns for the table/alias before the dot.
+        Return columns for the table/alias/CTE/subquery before the dot.
 
         Args:
-            prefix: The identifier before the dot (table name or alias).
+            prefix: The identifier before the dot (table name, alias, CTE, or subquery).
             full_text: Complete SQL text for alias resolution.
         """
         columns = self._schema.get("columns", {})
+        prefix_lower = prefix.lower()
+
+        # First resolve aliases (including CTEs and subqueries)
+        aliases = self._resolve_aliases(full_text)
+        real_target = aliases.get(prefix_lower)
+
+        # Check if it's a CTE
+        if real_target == "__cte__":
+            cte_cols = self._context_parser.get_cte_columns(prefix_lower)
+            if cte_cols:
+                return [(col, CAT_COLUMN, "CTE column") for col in cte_cols]
+            # CTE with unknown columns - return empty (no fallback to all columns)
+            return []
+
+        # Check if it's a subquery alias
+        if real_target == "__subquery__":
+            subq_cols = self._context_parser.get_subquery_columns(prefix_lower)
+            if subq_cols:
+                return [(col, CAT_COLUMN, "Subquery column") for col in subq_cols]
+            # Subquery with unknown columns - return empty
+            return []
 
         # Direct match: prefix is a table name
         if prefix in columns:
             return self._columns_of(prefix)
 
-        # Case-insensitive match
-        prefix_lower = prefix.lower()
+        # Case-insensitive match for table name
         for table_name in columns:
             if table_name.lower() == prefix_lower:
                 return self._columns_of(table_name)
 
-        # Resolve aliases
-        aliases = self._resolve_aliases(full_text)
-        real_table = aliases.get(prefix_lower)
-        if real_table and real_table in columns:
-            return self._columns_of(real_table)
+        # Alias points to a real table
+        if real_target and real_target in columns:
+            return self._columns_of(real_target)
 
         # Case-insensitive alias->table
-        if real_table:
+        if real_target:
             for table_name in columns:
-                if table_name.lower() == real_table.lower():
+                if table_name.lower() == real_target.lower():
                     return self._columns_of(table_name)
 
-        # No match - return all columns as fallback
-        return self._all_columns_flat()
+        # No match - return empty list (don't flood with all columns)
+        logger.debug(f"No columns found for prefix: {prefix}")
+        return []
 
     def _columns_of(self, table_name: str) -> List[Tuple[str, str, str]]:
         """Return columns of a specific table."""
@@ -387,10 +638,20 @@ class SqlAutoCompleteService:
         return result
 
     def _all_columns_flat(self) -> List[Tuple[str, str, str]]:
-        """Return all columns from all tables (fallback)."""
+        """Return all columns from all tables plus table names (fallback for SELECT without FROM)."""
         columns = self._schema.get("columns", {})
+        tables = self._schema.get("tables", [])
         result = []
         seen = set()
+        
+        # Include table names for qualification (e.g., SELECT users.id)
+        for t in tables:
+            name = t["name"] if isinstance(t, dict) else str(t)
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                result.append((name, CAT_TABLE, ""))
+        
+        # Include all columns
         for table_name, cols in columns.items():
             for col in cols:
                 cname = col["name"] if isinstance(col, dict) else str(col)
@@ -409,34 +670,10 @@ class SqlAutoCompleteService:
 
     def _resolve_aliases(self, text: str) -> Dict[str, str]:
         """
-        Parse FROM/JOIN clauses to build alias->table_name mapping.
+        Parse SQL to build alias->table_name mapping including CTEs and subqueries.
 
         Returns:
-            Dict mapping alias (lowercase) -> real table name.
+            Dict mapping alias/CTE name (lowercase) -> real table name or '__cte__'/'__subquery__'.
         """
-        cleaned = self._strip_noise(text)
-        aliases = {}
-
-        # Find all FROM/JOIN table references
-        for match in _RE_TABLE_REF.finditer(cleaned):
-            _schema = match.group(1)  # optional schema prefix
-            table = match.group(2)    # table name
-            alias = match.group(3)    # optional alias
-
-            if not table:
-                continue
-
-            # Clean bracket-quoted names: [dbo] -> dbo
-            table_clean = table.strip("[]")
-            alias_clean = alias.strip("[]") if alias else None
-
-            if alias_clean:
-                # Don't treat SQL keywords as aliases
-                if alias_clean.upper() not in self._keywords_lower and \
-                   alias_clean.upper() not in {kw.upper() for kw in SQL_KEYWORDS}:
-                    aliases[alias_clean.lower()] = table_clean
-
-            # Table name itself maps to itself (for case-insensitive lookup)
-            aliases[table_clean.lower()] = table_clean
-
-        return aliases
+        schema_columns = self._schema.get("columns", {})
+        return self._context_parser.parse(text, schema_columns)

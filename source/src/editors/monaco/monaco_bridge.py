@@ -26,6 +26,15 @@ class MonacoBridge(QObject):
     completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column
     force_completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column (bypasses throttling)
     
+    # SQL context-aware completion request (for dot patterns)
+    sql_context_requested = pyqtSignal(str, str, int, int)  # full_text, prefix (before dot), line, column
+    
+    # SQL general completion request (like SSMS - full context)
+    sql_completion_requested = pyqtSignal(str, int, int)  # full_text, line, column
+    
+    # Python Jedi completion request
+    python_completion_requested = pyqtSignal(str, int, int)  # full_text, line, column
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self._completion_callback = None
@@ -93,3 +102,42 @@ class MonacoBridge(QObject):
             column: Current column (1-indexed)
         """
         self.force_completion_requested.emit(prefix, suffix, line, column)
+
+    @pyqtSlot(str, str, int, int)
+    def requestSqlContext(self, full_text: str, prefix: str, line: int, column: int):
+        """
+        Called when SQL context-aware completion is requested.
+        
+        Used for "table." or "alias." completion to get specific columns.
+        
+        Args:
+            full_text: Complete SQL text for alias resolution
+            prefix: Identifier before the dot (table name or alias)
+            line: Current line number (1-indexed)
+            column: Current column (1-indexed)
+        """
+        self.sql_context_requested.emit(full_text, prefix, line, column)
+
+    @pyqtSlot(str, int, int)
+    def requestSqlCompletion(self, full_text: str, line: int, column: int):
+        """
+        Called when SQL completion is requested (SSMS-style full context).
+        
+        Args:
+            full_text: Complete SQL text
+            line: Current line number (1-indexed)
+            column: Current column (1-indexed)
+        """
+        self.sql_completion_requested.emit(full_text, line, column)
+
+    @pyqtSlot(str, int, int)
+    def requestPythonCompletion(self, full_text: str, line: int, column: int):
+        """
+        Called when Python Jedi completion is requested.
+        
+        Args:
+            full_text: Complete Python source code
+            line: Current line number (1-indexed)
+            column: Current column (0-indexed)
+        """
+        self.python_completion_requested.emit(full_text, line, column)
