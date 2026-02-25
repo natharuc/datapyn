@@ -649,6 +649,16 @@ class GhCliInstallWorker(QObject):
 
             self.progress.emit("Downloading GitHub CLI package...")
 
+            # Pre-compute architecture since we can't use $() inside pkexec
+            try:
+                arch_result = subprocess.run(
+                    ["dpkg", "--print-architecture"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                arch = arch_result.stdout.strip() or "amd64"
+            except Exception:
+                arch = "amd64"
+
             # Step 1: Add GPG key and repository
             setup_script = (
                 "set -e && "
@@ -656,7 +666,7 @@ class GhCliInstallWorker(QObject):
                 "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg "
                 "| tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && "
                 "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
-                "echo 'deb [arch=$(dpkg --print-architecture) "
+                f"echo 'deb [arch={arch} "
                 "signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] "
                 "https://cli.github.com/packages stable main' "
                 "| tee /etc/apt/sources.list.d/github-cli.list > /dev/null && "

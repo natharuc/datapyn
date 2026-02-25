@@ -295,12 +295,16 @@ class TestGhCliInstallWorker:
                 return "/usr/bin/pkexec"
             return None
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
+        mock_arch_result = MagicMock()
+        mock_arch_result.stdout = "amd64\n"
+        mock_arch_result.returncode = 0
+
+        mock_install_result = MagicMock()
+        mock_install_result.returncode = 0
 
         with patch("shutil.which", side_effect=mock_which), \
              patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", return_value=mock_result):
+             patch("subprocess.run", side_effect=[mock_arch_result, mock_install_result]):
             worker.run()
 
         assert len(results) == 1
@@ -321,14 +325,18 @@ class TestGhCliInstallWorker:
                 return "/usr/bin/pkexec"
             return None
 
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = "apt-get: package not found"
-        mock_result.stdout = ""
+        mock_arch_result = MagicMock()
+        mock_arch_result.stdout = "amd64\n"
+        mock_arch_result.returncode = 0
+
+        mock_install_result = MagicMock()
+        mock_install_result.returncode = 1
+        mock_install_result.stderr = "apt-get: package not found"
+        mock_install_result.stdout = ""
 
         with patch("shutil.which", side_effect=mock_which), \
              patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", return_value=mock_result):
+             patch("subprocess.run", side_effect=[mock_arch_result, mock_install_result]):
             worker.run()
 
         assert len(results) == 1
@@ -350,14 +358,18 @@ class TestGhCliInstallWorker:
                 return "/usr/bin/pkexec"
             return None
 
-        mock_result = MagicMock()
-        mock_result.returncode = 126
-        mock_result.stderr = "Request dismissed"
-        mock_result.stdout = ""
+        mock_arch_result = MagicMock()
+        mock_arch_result.stdout = "amd64\n"
+        mock_arch_result.returncode = 0
+
+        mock_install_result = MagicMock()
+        mock_install_result.returncode = 126
+        mock_install_result.stderr = "Request dismissed"
+        mock_install_result.stdout = ""
 
         with patch("shutil.which", side_effect=mock_which), \
              patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", return_value=mock_result):
+             patch("subprocess.run", side_effect=[mock_arch_result, mock_install_result]):
             worker.run()
 
         assert len(results) == 1
@@ -380,9 +392,13 @@ class TestGhCliInstallWorker:
                 return "/usr/bin/pkexec"
             return None
 
+        mock_arch_result = MagicMock()
+        mock_arch_result.stdout = "amd64\n"
+        mock_arch_result.returncode = 0
+
         with patch("shutil.which", side_effect=mock_which), \
              patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="pkexec", timeout=120)):
+             patch("subprocess.run", side_effect=[mock_arch_result, subprocess.TimeoutExpired(cmd="pkexec", timeout=120)]):
             worker.run()
 
         assert len(results) == 1
