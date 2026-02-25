@@ -1,6 +1,7 @@
 [project]
 name = "DataPyn"
 version = "1.13.0"
+requires-python = ">=3.12"
 dependencies = [
     # GUI Framework
     "PyQt6>=6.6.0",
@@ -14,7 +15,7 @@ dependencies = [
     "mysql-connector-python>=8.0.0",
     "PyMySQL>=1.1.0",
     "psycopg2-binary>=2.9.0",
-    "mariadb>=1.1.0",
+    # mariadb requires libmariadb-dev on Linux - use PyMySQL instead
     "databricks-sql-connector>=3.0.0",
     "databricks-sqlalchemy>=1.0.0",
     # Data Processing
@@ -41,9 +42,8 @@ dependencies = [
     "github-copilot-sdk>=0.1.20",
 ]
 
-[tool.uv]
-native-tls=true
-dev-dependencies = [
+[dependency-groups]
+dev = [
     # Testing
     "pytest>=8.0.0",
     "pytest-cov>=4.5.0",
@@ -55,6 +55,9 @@ dev-dependencies = [
     "pyinstaller",
     "ruff>=0.15.0",
 ]
+
+[tool.uv]
+native-tls = true
 
 
 [tool.semantic_release]

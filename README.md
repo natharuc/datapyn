@@ -99,9 +99,11 @@ uv run python source/main.py
 ### Linux (Ubuntu/Debian)
 
 ```bash
-# 1. Instale Python 3.12 e dependencias
+# 1. Instale Python 3.12 e dependencias do sistema
 sudo apt update
-sudo apt install -y git python3.12 python3.12-venv libxcb-cursor0
+sudo apt install -y git curl python3.12 python3.12-venv python3.12-dev \
+    build-essential libxcb-cursor0 libxcb-xinerama0 libxkbcommon0 \
+    libgl1 libegl1 libpq-dev unixodbc-dev
 
 # 2. Clone e entre no projeto
 git clone https://github.com/natharuc/datapyn.git
