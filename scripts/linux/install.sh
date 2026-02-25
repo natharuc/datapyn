@@ -32,6 +32,8 @@ if command -v apt-get &> /dev/null; then
         "libpq-dev"
         "unixodbc-dev"
         "curl"
+        "xclip"              # Clipboard support for X11
+        "wl-clipboard"        # Clipboard support for Wayland
     )
 
     for pkg in "${REQUIRED_PKGS[@]}"; do
@@ -56,7 +58,45 @@ if command -v apt-get &> /dev/null; then
 else
     echo -e "${YELLOW}[AVISO]${NC} apt-get nao encontrado. Certifique-se de ter instalado:"
     echo "  build-essential python3-dev python3-venv libxcb-cursor0"
-    echo "  libxcb-xinerama0 libxkbcommon0 libgl1 libegl1 libpq-dev unixodbc-dev"
+    echo "  libxcb-xinerama0 libxkbcommon0 libgl1 libegl1 libpq-dev unixodbc-dev xclip"
+fi
+echo ""
+
+# Instalar GitHub CLI (necessario para Copilot)
+echo -e "${YELLOW}[INFO]${NC} Verificando GitHub CLI (necessario para Copilot)..."
+
+if ! command -v gh &> /dev/null; then
+    echo -e "${YELLOW}[INFO]${NC} GitHub CLI nao encontrado. Instalando..."
+    if command -v apt-get &> /dev/null; then
+        ARCH=$(dpkg --print-architecture)
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt-get update -qq
+        sudo apt-get install -y gh
+        if [ $? -ne 0 ]; then
+            echo -e "${YELLOW}[AVISO]${NC} Falha ao instalar GitHub CLI. Copilot pode nao funcionar."
+        else
+            echo -e "${GREEN}[OK]${NC} GitHub CLI instalado!"
+            # Instalar extensao Copilot
+            echo -e "${YELLOW}[INFO]${NC} Instalando extensao GitHub Copilot..."
+            gh extension install github/gh-copilot 2>/dev/null || true
+            echo -e "${GREEN}[OK]${NC} Extensao Copilot instalada!"
+        fi
+    else
+        echo -e "${YELLOW}[AVISO]${NC} apt-get nao encontrado. Instale gh manualmente: https://cli.github.com"
+    fi
+else
+    echo -e "${GREEN}[OK]${NC} GitHub CLI ja esta instalado!"
+    gh --version
+    # Garantir que extensao Copilot esta instalada
+    if ! gh extension list 2>/dev/null | grep -q copilot; then
+        echo -e "${YELLOW}[INFO]${NC} Instalando extensao GitHub Copilot..."
+        gh extension install github/gh-copilot 2>/dev/null || true
+        echo -e "${GREEN}[OK]${NC} Extensao Copilot instalada!"
+    else
+        echo -e "${GREEN}[OK]${NC} Extensao Copilot ja esta instalada!"
+    fi
 fi
 echo ""
 
