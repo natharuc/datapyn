@@ -78,10 +78,6 @@ if ! command -v gh &> /dev/null; then
             echo -e "${YELLOW}[AVISO]${NC} Falha ao instalar GitHub CLI. Copilot pode nao funcionar."
         else
             echo -e "${GREEN}[OK]${NC} GitHub CLI instalado!"
-            # Instalar extensao Copilot
-            echo -e "${YELLOW}[INFO]${NC} Instalando extensao GitHub Copilot..."
-            gh extension install github/gh-copilot 2>/dev/null || true
-            echo -e "${GREEN}[OK]${NC} Extensao Copilot instalada!"
         fi
     else
         echo -e "${YELLOW}[AVISO]${NC} apt-get nao encontrado. Instale gh manualmente: https://cli.github.com"
@@ -89,13 +85,22 @@ if ! command -v gh &> /dev/null; then
 else
     echo -e "${GREEN}[OK]${NC} GitHub CLI ja esta instalado!"
     gh --version
-    # Garantir que extensao Copilot esta instalada
-    if ! gh extension list 2>/dev/null | grep -q copilot; then
-        echo -e "${YELLOW}[INFO]${NC} Instalando extensao GitHub Copilot..."
-        gh extension install github/gh-copilot 2>/dev/null || true
-        echo -e "${GREEN}[OK]${NC} Extensao Copilot instalada!"
+fi
+
+# Verificar se gh copilot funciona (built-in no gh 2.87+ ou via extensao)
+if command -v gh &> /dev/null; then
+    if gh copilot --help &> /dev/null; then
+        echo -e "${GREEN}[OK]${NC} GitHub Copilot disponivel (built-in ou extensao)!"
     else
-        echo -e "${GREEN}[OK]${NC} Extensao Copilot ja esta instalada!"
+        # Tentar instalar extensao (para versoes antigas do gh)
+        echo -e "${YELLOW}[INFO]${NC} Tentando instalar extensao GitHub Copilot..."
+        if gh extension install github/gh-copilot 2>&1 | grep -q "built-in"; then
+            echo -e "${GREEN}[OK]${NC} GitHub Copilot disponivel como comando built-in!"
+        elif [ $? -eq 0 ]; then
+            echo -e "${GREEN}[OK]${NC} Extensao Copilot instalada!"
+        else
+            echo -e "${YELLOW}[AVISO]${NC} Nao foi possivel configurar Copilot. Verifique manualmente."
+        fi
     fi
 fi
 echo ""

@@ -747,18 +747,33 @@ class GhCliInstallWorker(QObject):
         self._process = None
 
     def _install_copilot_extension(self):
-        """Install the gh-copilot extension (no sudo needed)."""
+        """Install the gh-copilot extension (no sudo needed).
+        
+        Note: In gh CLI 2.87+, copilot is a built-in command and no extension is needed.
+        """
         import shutil
-        from PyQt6.QtCore import QProcess
+        import subprocess
 
         gh_path = shutil.which("gh")
         if not gh_path:
             self.finished.emit(False, "gh CLI not found")
             return
 
-        # Check if extension already installed
+        # First check if gh copilot command works (built-in in gh 2.87+)
         try:
-            import subprocess
+            result = subprocess.run(
+                [gh_path, "copilot", "--help"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                # Copilot command works (built-in or extension already installed)
+                self.finished.emit(True, "")
+                return
+        except Exception:
+            pass  # Continue with install attempt
+
+        # Check if extension already installed (for older gh versions)
+        try:
             result = subprocess.run(
                 [gh_path, "extension", "list"],
                 capture_output=True, text=True, timeout=10
@@ -770,7 +785,8 @@ class GhCliInstallWorker(QObject):
         except Exception:
             pass  # Continue with install attempt
 
-        # Install extension using QProcess
+        # Install extension using QProcess (for older gh versions)
+        from PyQt6.QtCore import QProcess
         self._ext_process = QProcess(self)
         self._ext_process.finished.connect(self._on_extension_finished)
         self._ext_process.errorOccurred.connect(self._on_extension_error)
@@ -785,9 +801,15 @@ class GhCliInstallWorker(QObject):
             stderr = ""
             if self._ext_process:
                 stderr = self._ext_process.readAllStandardError().data().decode("utf-8", errors="replace")
-            # Extension install failed - but gh is installed, so partial success
-            error_msg = stderr.strip() or f"Extension install failed (code {exit_code})"
-            self.finished.emit(False, f"gh CLI installed but Copilot extension failed: {error_msg[:150]}")
+            
+            # Check if error is because copilot is already a built-in command
+            if "built-in" in stderr.lower() or "matches the name" in stderr.lower():
+                # This means gh copilot is available as built-in, success!
+                self.finished.emit(True, "")
+            else:
+                # Real extension install failure
+                error_msg = stderr.strip() or f"Extension install failed (code {exit_code})"
+                self.finished.emit(False, f"gh CLI installed but Copilot extension failed: {error_msg[:150]}")
 
         self._ext_process = None
 
