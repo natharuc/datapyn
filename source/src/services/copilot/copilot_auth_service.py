@@ -54,6 +54,7 @@ class CopilotAuthService(QObject):
     chat_auth_failed = pyqtSignal(str)  # error message
     chat_auth_required = pyqtSignal(str, str)  # code, url
     chat_auth_started = pyqtSignal(str)  # message
+    chat_gh_not_found = pyqtSignal()  # GitHub CLI not installed
     chat_logged_out = pyqtSignal()
     
     # LSP signals
@@ -127,6 +128,8 @@ class CopilotAuthService(QObject):
             self._chat_client.auth_required.connect(self._on_chat_auth_required)
             self._chat_client.auth_started.connect(self._on_chat_auth_started)
             self._chat_client.models_changed.connect(self._on_models_changed)
+            if hasattr(self._chat_client, 'gh_not_found'):
+                self._chat_client.gh_not_found.connect(self._on_chat_gh_not_found)
             self._chat_connected = True
             logger.debug("[AuthService] Chat signals connected")
         except Exception as e:
@@ -143,6 +146,11 @@ class CopilotAuthService(QObject):
             self._chat_client.auth_required.disconnect(self._on_chat_auth_required)
             self._chat_client.auth_started.disconnect(self._on_chat_auth_started)
             self._chat_client.models_changed.disconnect(self._on_models_changed)
+            if hasattr(self._chat_client, 'gh_not_found'):
+                try:
+                    self._chat_client.gh_not_found.disconnect(self._on_chat_gh_not_found)
+                except (TypeError, RuntimeError):
+                    pass
             self._chat_connected = False
         except Exception:
             pass
@@ -401,6 +409,12 @@ class CopilotAuthService(QObject):
         logger.warning(f"[AuthService] Chat auth failed: {error}")
         self._end_auth_flow()
         self.chat_auth_failed.emit(error)
+    
+    def _on_chat_gh_not_found(self) -> None:
+        """Handle GitHub CLI not found during chat login."""
+        logger.warning("[AuthService] GitHub CLI not found")
+        self._end_auth_flow()
+        self.chat_gh_not_found.emit()
     
     def _on_chat_auth_required(self, code: str, url: str) -> None:
         """Handle chat device code flow."""

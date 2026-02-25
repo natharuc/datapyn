@@ -1,104 +1,214 @@
 <p align="center">
-  <img src="source/src/assets/datapyn_logo.svg" alt="DataPyn Logo" width="200">
+  <img src="source/src/assets/datapyn_logo.svg" alt="DataPyn Logo" width="180">
 </p>
 
 <h1 align="center">DataPyn</h1>
 
 <p align="center">
-  <strong>IDE moderna para consultas SQL com Python integrado</strong>
+  <strong>IDE moderna para analise de dados com SQL e Python integrados</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/PyQt6-6.6+-green.svg" alt="PyQt6">
-  <img src="https://img.shields.io/badge/uv-package%20manager-blueviolet.svg" alt="uv">
+  <a href="#instalacao"><img src="https://img.shields.io/badge/version-1.13.0-blue.svg" alt="Version"></a>
+  <img src="https://img.shields.io/badge/Python-3.12+-3776AB.svg?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/PyQt6-6.6+-41CD52.svg?logo=qt&logoColor=white" alt="PyQt6">
+  <img src="https://img.shields.io/badge/Monaco_Editor-VS_Code-007ACC.svg?logo=visualstudiocode&logoColor=white" alt="Monaco">
+  <img src="https://img.shields.io/badge/uv-package_manager-DE5FE9.svg" alt="uv">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> |
+  <a href="#instalacao">Instalacao</a> |
+  <a href="#tecnologias">Tecnologias</a> |
+  <a href="#atalhos">Atalhos</a> |
+  <a href="#testes">Testes</a>
+</p>
+
+---
+
+## Screenshots
+
+<p align="center">
+  <em>Interface moderna com blocos de codigo, resultados interativos e Object Explorer</em>
 </p>
 
 ---
 
 ## Features
 
-- **Multi-database** -- SQL Server, MySQL, PostgreSQL, MariaDB, SQLite
-- **Python integrado** -- Manipule resultados SQL com Pandas diretamente
-- **Cross-syntax** -- Misture SQL e Python no mesmo bloco com `{{ SELECT ... }}`
-- **Block Editor** -- Blocos de codigo independentes com linguagem por bloco
-- **Conexao per-block** -- Cada bloco pode usar uma conexao de banco diferente
-- **Importacao rapida** -- Arraste arquivos CSV/JSON/XLSX para importar automaticamente
-- **Exportar script** -- Exporte sua analise como script Python standalone
-- **Exportar para tabela** -- Exporte DataFrames diretamente para tabelas no banco
-- **Gerenciador de pacotes** -- Instale/atualize pacotes Python sem sair da IDE
-- **Auto-update** -- Atualizacoes automaticas do GitHub para manter o DataPyn sempre atualizado
-- **Visualizacao** -- Tabelas interativas com exportacao para Excel/CSV
-- **Temas** -- Interface moderna com Material Design (dark/light)
-- **Atalhos** -- Produtividade maxima com atalhos de teclado configuraveis
-- **Workspaces** -- Salve e restaure suas sessoes de trabalho
-- **Seguro** -- Credenciais armazenadas com criptografia
+### Editor de Blocos
+- **Block Editor** - Blocos de codigo independentes com linguagem por bloco (SQL/Python)
+- **Monaco Editor** - Mesmo editor do VS Code com syntax highlighting
+- **GitHub Copilot** - Sugestoes de codigo inline integradas (requer autenticacao)
+- **SQL Autocomplete** - Completions inteligentes estilo SSMS (colunas, tabelas, aliases)
+- **Conexao per-block** - Cada bloco pode usar uma conexao de banco diferente
+
+### Multi-Database
+- **SQL Server** - via pyodbc/pymssql
+- **MySQL / MariaDB** - via mysql-connector e mariadb
+- **PostgreSQL** - via psycopg2
+- **SQLite** - nativo
+- **Databricks** - via databricks-sql-connector
+
+### Python Integrado
+- **Cross-syntax** - Misture SQL e Python: `df = {{ SELECT * FROM users }}`
+- **Pandas/Polars** - Manipule resultados SQL como DataFrames
+- **Namespace compartilhado** - Variaveis Python disponiveis entre blocos
+- **Gerenciador de pacotes** - Instale/atualize pacotes sem sair da IDE
+
+### Produtividade
+- **Importacao rapida** - Arraste CSV/JSON/XLSX para importar automaticamente
+- **Exportar script** - Exporte analise como script Python standalone
+- **Exportar para tabela** - Envie DataFrames diretamente para o banco
+- **Workspaces** - Salve e restaure sessoes completas
+- **Auto-update** - Atualizacoes automaticas via GitHub Releases
+
+### Interface
+- **Temas** - Dark/Light com Material Design
+- **Object Explorer** - Navegue tabelas, colunas e stored procedures
+- **Resultados interativos** - Tabelas com filtro, ordenacao e exportacao
+- **Atalhos configuraveis** - Produtividade maxima
 
 ---
 
 ## Instalacao
 
-O DataPyn usa [uv](https://docs.astral.sh/uv/) como gerenciador de pacotes e ambientes virtuais.
+> **Requisito:** Python 3.12 ou superior
 
-### Windows (automatico)
+O DataPyn usa [uv](https://docs.astral.sh/uv/) como gerenciador de pacotes (mais rapido que pip).
 
-```bash
+### Windows
+
+```powershell
 # 1. Clone o repositorio
-git clone https://github.com/seu-usuario/datapyn.git
+git clone https://github.com/natharuc/datapyn.git
 cd datapyn
 
-# 2. Execute o instalador (instala uv se necessario)
+# 2. Execute o instalador (verifica Python 3.12+ e instala uv automaticamente)
 scripts\install.bat
 
-# 3. Inicie o DataPyn
+# 3. Execute o DataPyn
 scripts\run.bat
-```
 
-### Manual (Linux/Mac/Windows)
-
-```bash
-# 1. Instale o uv (caso nao tenha)
-# Windows:
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-# Linux/Mac:
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Clone e entre no projeto
-git clone https://github.com/seu-usuario/datapyn.git
-cd datapyn
-
-# 3. Crie o ambiente e instale dependencias
+# Ou manualmente:
 uv sync
-
-# 4. Execute
 uv run python source/main.py
 ```
 
-### Dependencias de desenvolvimento
+### Linux (Ubuntu/Debian)
 
 ```bash
-# Instalar com dependencias de dev (testes, build)
-uv sync --dev
+# 1. Certifique-se de ter Python 3.12+ e git instalados
+sudo apt update
+sudo apt install -y git python3 python3-venv
 
-# Executar testes
-uv run pytest
+# 2. Clone e entre no projeto
+git clone https://github.com/natharuc/datapyn.git
+cd datapyn
+
+# 3. Execute o instalador (instala uv e dependencias do sistema automaticamente)
+chmod +x scripts/linux/install.sh
+./scripts/linux/install.sh
+
+# 4. Execute o DataPyn
+./scripts/linux/run.sh
+
+# Ou manualmente:
+uv sync
+uv run python source/main.py
+```
+
+> **Nota:** O script `install.sh` detecta e instala automaticamente as dependencias
+> do sistema necessarias (build-essential, libpq-dev, unixodbc-dev, libs Qt, etc.).
+> Sera solicitada a senha sudo se necessario.
+
+### macOS
+
+```bash
+# 1. Instale Python 3.12 via Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew install python@3.12
+
+# 2. Clone e entre no projeto
+git clone https://github.com/natharuc/datapyn.git
+cd datapyn
+
+# 3. Execute o instalador (instala uv automaticamente)
+chmod +x scripts/linux/install.sh
+./scripts/linux/install.sh
+
+# 4. Execute o DataPyn
+./scripts/linux/run.sh
+
+# Ou manualmente:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.zshrc
+uv sync
+uv run python source/main.py
+```
+
+### Docker (Experimental)
+
+```bash
+# Build da imagem
+docker build -t datapyn .
+
+# Execute com display (Linux com X11)
+docker run -it --rm \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v $(pwd)/workspaces:/app/workspaces \
+  datapyn
 ```
 
 ---
 
-## Atalhos de Teclado
+## Tecnologias
+
+| Categoria | Tecnologia | Versao |
+|-----------|------------|--------|
+| **GUI** | PyQt6 + WebEngine | 6.6+ |
+| **Editor** | Monaco (VS Code) | latest |
+| **AI** | GitHub Copilot SDK | 0.1.20+ |
+| **Database** | SQLAlchemy | 2.0+ |
+| **Data** | Pandas, Polars, PyArrow | latest |
+| **SQL Parsing** | sqlglot | 26.0+ |
+| **Formatting** | Ruff, sqlparse | latest |
+| **Package Manager** | uv (Astral) | latest |
+| **Build** | PyInstaller | latest |
+
+### Drivers de Banco Suportados
+
+| Banco | Driver | Versao |
+|-------|--------|--------|
+| SQL Server | pyodbc / pymssql | 5.0+ / 2.2+ |
+| MySQL | mysql-connector-python | 8.0+ |
+| PostgreSQL | psycopg2-binary | 2.9+ |
+| MariaDB | mariadb | 1.1+ |
+| SQLite | nativo | - |
+| Databricks | databricks-sql-connector | 3.0+ |
+
+---
+
+## Atalhos
 
 | Atalho | Acao |
 |--------|------|
+| `Ctrl+Enter` | Executar bloco atual |
+| `Shift+Enter` | Executar e avancar |
 | `F5` | Executar SQL |
 | `Shift+F5` | Executar Python |
-| `Ctrl+Enter` | Executar bloco atual |
 | `Ctrl+N` | Nova aba |
 | `Ctrl+W` | Fechar aba |
 | `Ctrl+S` | Salvar workspace |
 | `Ctrl+O` | Abrir workspace |
+| `Ctrl+B` | Novo bloco |
 | `Ctrl+,` | Configuracoes |
+| `Ctrl+Shift+F` | Formatar codigo |
+| `Escape` | Cancelar execucao |
+
+> Atalhos sao configuraveis em **Configuracoes > Atalhos**
 
 ---
 
@@ -106,20 +216,21 @@ uv run pytest
 
 ```
 datapyn/
-├── source/                  # Codigo-fonte
-│   ├── main.py              # Ponto de entrada
+├── source/                  # Codigo-fonte principal
+│   ├── main.py              # Entry point
 │   └── src/
-│       ├── core/            # Logica central (executor, sessoes, results)
-│       ├── database/        # Conectores e gerenciador de conexoes
-│       ├── editors/         # Block editor, code editor, Monaco
-│       ├── services/        # Servicos (import, export, packages, panels)
-│       ├── ui/              # Interface grafica (main_window, dialogs, components)
+│       ├── core/            # Executor, sessoes, results
+│       ├── database/        # Conectores SQL (SQLAlchemy)
+│       ├── editors/         # Block editor, Monaco wrapper
+│       ├── services/        # Import/export, packages, autocomplete
+│       ├── ui/              # Main window, dialogs, components
+│       ├── design_system/   # Tokens, temas, estilos
 │       └── assets/          # Icones e recursos
-├── tests/                   # Testes automatizados (850+)
-├── scripts/                 # Scripts de build/install
-├── docs/                    # Documentacao
-├── pyproject.toml           # Dependencias e config do projeto
-└── uv.lock                  # Lock file de dependencias
+├── tests/                   # 850+ testes automatizados
+├── scripts/                 # Build, install, CI/CD
+├── docs/                    # Documentacao tecnica
+├── pyproject.toml           # Dependencias (uv/pip)
+└── uv.lock                  # Lock file
 ```
 
 ---
@@ -130,39 +241,71 @@ datapyn/
 # Executar todos os testes
 uv run pytest
 
+# Modo rapido (sem testes visuais)
+uv run pytest tests/ --ignore=tests/test_visual_manual.py --ignore=tests/test_gui.py -q
+
 # Com cobertura
 uv run pytest --cov=source/src --cov-report=html
 
-# Testes especificos
-uv run pytest tests/test_mixed_executor.py -v
-
-# Testes rapidos (sem testes visuais)
-uv run pytest tests/ --ignore=tests/test_visual_manual.py --ignore=tests/test_gui.py -q
+# Teste especifico
+uv run pytest tests/test_sql_autocomplete.py -v
 ```
 
-Os testes usam `pytest-qt` para testar a interface PyQt6 em modo headless (`QT_QPA_PLATFORM=offscreen`), com timeout de 30s por teste para evitar travamentos.
+> Testes usam `pytest-qt` com `QT_QPA_PLATFORM=offscreen` para rodar headless.
 
 ---
 
 ## Build (Executavel)
 
-```bash
-# Gerar executavel standalone
+### Windows
+
+```powershell
+# Gerar .exe standalone
 scripts\build.bat
 
-# O executavel sera gerado em dist/DataPyn.exe
+# Saida: dist/DataPyn.exe
 ```
+
+### Linux/macOS
+
+```bash
+# Gerar executavel
+uv run pyinstaller scripts/datapyn.spec --clean
+
+# Saida: dist/DataPyn
+```
+
+---
+
+## Contribuindo
+
+1. Fork o repositorio
+2. Crie uma branch: `git checkout -b feat/minha-feature`
+3. Commit suas mudancas: `git commit -m 'feat: minha feature'`
+4. Push: `git push origin feat/minha-feature`
+5. Abra um Pull Request
+
+### Conventional Commits
+
+Usamos [Conventional Commits](https://www.conventionalcommits.org/) para mensagens:
+
+- `feat:` nova feature
+- `fix:` correcao de bug
+- `docs:` documentacao
+- `refactor:` refatoracao
+- `test:` testes
+- `chore:` tarefas de manutencao
 
 ---
 
 ## Licenca
 
-Este projeto esta sob a licenca MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+Este projeto esta sob a licenca **MIT**. Veja [LICENSE](LICENSE) para detalhes.
 
 ---
 
 <p align="center">
-  Feito com amor, cafe e IA
+  <sub>Feito com Python, cafe e IA</sub>
   <br>
-  <sub>Com carinho por um humano incrivel e seu copiloto</sub>
+  <sub>DataPyn - Analise de dados sem complicacao</sub>
 </p>

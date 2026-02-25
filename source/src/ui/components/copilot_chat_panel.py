@@ -27,10 +27,11 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QStyle,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize, QThread
 from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEnginePage
 import sys
 from PyQt6.QtWebChannel import QWebChannel
 from pathlib import Path
@@ -610,6 +611,241 @@ class ChatInputWidget(QTextEdit):
         super().keyPressEvent(event)
 
 
+class ExternalLinkPage(QWebEnginePage):
+    """WebEnginePage that opens external links in the system browser."""
+
+    def acceptNavigationRequest(self, url: QUrl, nav_type, is_main_frame: bool) -> bool:
+        """Intercept navigation requests and open external URLs in system browser."""
+        # Allow local file URLs (our template)
+        if url.isLocalFile():
+            return True
+
+        # Allow qrc: URLs
+        if url.scheme() == "qrc":
+            return True
+
+        # Allow about:blank and similar
+        if url.scheme() in ("about", "data", "javascript"):
+            return True
+
+        # For http/https URLs, open in external browser
+        if url.scheme() in ("http", "https"):
+            QDesktopServices.openUrl(url)
+            return False  # Don't navigate in webview
+
+        # Default: allow navigation
+        return True
+
+
+class GhCliInstallWorker(QObject):
+    """Worker that installs GitHub CLI using QProcess (non-blocking)."""
+
+    progress = pyqtSignal(str)  # Status message
+    finished = pyqtSignal(bool, str)  # success, message
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._process = None
+        self._arch = "amd64"
+
+    def run(self):
+        """Install GitHub CLI and Copilot extension."""
+        import shutil
+        import platform
+        import subprocess
+
+        try:
+            # Check if gh is already installed
+            if shutil.which("gh"):
+                # gh exists - check/install extension
+                self.progress.emit("Checking Copilot extension...")
+                self._install_copilot_extension()
+                return
+
+            system = platform.system()
+            if system != "Linux":
+                self.finished.emit(
+                    False,
+                    f"Automatic installation is only supported on Linux. "
+                    f"Please install manually from https://cli.github.com/"
+                )
+                return
+
+            # Use pkexec for graphical sudo prompt
+            pkexec = shutil.which("pkexec")
+            if not pkexec:
+                self.finished.emit(
+                    False,
+                    "pkexec not found. Please install GitHub CLI manually:\n"
+                    "https://cli.github.com/"
+                )
+                return
+
+            self.progress.emit("Downloading GitHub CLI package...")
+
+            # Pre-compute architecture
+            try:
+                arch_result = subprocess.run(
+                    ["dpkg", "--print-architecture"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                self._arch = arch_result.stdout.strip() or "amd64"
+            except Exception:
+                self._arch = "amd64"
+
+            # Build install script
+            setup_script = (
+                "set -e && "
+                "mkdir -p -m 755 /etc/apt/keyrings && "
+                "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg "
+                "| tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && "
+                "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
+                f"echo 'deb [arch={self._arch} "
+                "signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] "
+                "https://cli.github.com/packages stable main' "
+                "| tee /etc/apt/sources.list.d/github-cli.list > /dev/null && "
+                "apt-get update -qq && "
+                "apt-get install -y gh"
+            )
+
+            # Use QProcess for non-blocking execution
+            from PyQt6.QtCore import QProcess
+
+            self._process = QProcess(self)
+            self._process.finished.connect(self._on_process_finished)
+            self._process.errorOccurred.connect(self._on_process_error)
+
+            self._process.start(pkexec, ["bash", "-c", setup_script])
+
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+    def _on_process_finished(self, exit_code, exit_status):
+        """Handle QProcess completion for gh CLI install."""
+        import shutil
+
+        if exit_code == 0:
+            # Verify gh installation
+            if shutil.which("gh"):
+                # gh installed - now install the Copilot extension
+                self.progress.emit("Installing GitHub Copilot extension...")
+                self._install_copilot_extension()
+            else:
+                self.finished.emit(
+                    False,
+                    "Installation completed but 'gh' command not found in PATH."
+                )
+        elif exit_code == 126:
+            self.finished.emit(False, "Installation cancelled by user.")
+        else:
+            stderr = ""
+            if self._process:
+                stderr = self._process.readAllStandardError().data().decode("utf-8", errors="replace")
+            error_msg = stderr.strip() or f"Installation failed (exit code {exit_code})"
+            self.finished.emit(False, error_msg[:200])
+
+        self._process = None
+
+    def _install_copilot_extension(self):
+        """Install the gh-copilot extension (no sudo needed).
+        
+        Note: In gh CLI 2.87+, copilot is a built-in command and no extension is needed.
+        """
+        import shutil
+        import subprocess
+
+        gh_path = shutil.which("gh")
+        if not gh_path:
+            self.finished.emit(False, "gh CLI not found")
+            return
+
+        # First check if gh copilot command works (built-in in gh 2.87+)
+        try:
+            result = subprocess.run(
+                [gh_path, "copilot", "--help"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                # Copilot command works (built-in or extension already installed)
+                self.finished.emit(True, "")
+                return
+        except Exception:
+            pass  # Continue with install attempt
+
+        # Check if extension already installed (for older gh versions)
+        try:
+            result = subprocess.run(
+                [gh_path, "extension", "list"],
+                capture_output=True, text=True, timeout=10
+            )
+            if "copilot" in result.stdout.lower():
+                # Already installed
+                self.finished.emit(True, "")
+                return
+        except Exception:
+            pass  # Continue with install attempt
+
+        # Install extension using QProcess (for older gh versions)
+        from PyQt6.QtCore import QProcess
+        self._ext_process = QProcess(self)
+        self._ext_process.finished.connect(self._on_extension_finished)
+        self._ext_process.errorOccurred.connect(self._on_extension_error)
+
+        self._ext_process.start(gh_path, ["extension", "install", "github/gh-copilot"])
+
+    def _on_extension_finished(self, exit_code, exit_status):
+        """Handle Copilot extension install completion."""
+        if exit_code == 0:
+            self.finished.emit(True, "")
+        else:
+            stderr = ""
+            if self._ext_process:
+                stderr = self._ext_process.readAllStandardError().data().decode("utf-8", errors="replace")
+            
+            # Check if error is because copilot is already a built-in command
+            if "built-in" in stderr.lower() or "matches the name" in stderr.lower():
+                # This means gh copilot is available as built-in, success!
+                self.finished.emit(True, "")
+            else:
+                # Real extension install failure
+                error_msg = stderr.strip() or f"Extension install failed (code {exit_code})"
+                self.finished.emit(False, f"gh CLI installed but Copilot extension failed: {error_msg[:150]}")
+
+        self._ext_process = None
+
+    def _on_extension_error(self, error):
+        """Handle QProcess error for extension install."""
+        from PyQt6.QtCore import QProcess
+
+        error_messages = {
+            QProcess.ProcessError.FailedToStart: "Failed to start gh",
+            QProcess.ProcessError.Crashed: "gh process crashed",
+            QProcess.ProcessError.Timedout: "Extension install timed out",
+            QProcess.ProcessError.WriteError: "Write error",
+            QProcess.ProcessError.ReadError: "Read error",
+            QProcess.ProcessError.UnknownError: "Unknown error",
+        }
+        msg = error_messages.get(error, "Unknown error")
+        self.finished.emit(False, f"gh CLI installed but extension failed: {msg}")
+        self._ext_process = None
+
+    def _on_process_error(self, error):
+        """Handle QProcess error."""
+        from PyQt6.QtCore import QProcess
+
+        error_messages = {
+            QProcess.ProcessError.FailedToStart: "Failed to start pkexec",
+            QProcess.ProcessError.Crashed: "Installation process crashed",
+            QProcess.ProcessError.Timedout: "Installation timed out",
+            QProcess.ProcessError.WriteError: "Write error",
+            QProcess.ProcessError.ReadError: "Read error",
+            QProcess.ProcessError.UnknownError: "Unknown error",
+        }
+        msg = error_messages.get(error, "Unknown error")
+        self.finished.emit(False, msg)
+        self._process = None
+
+
 class CopilotChatPanel(QWidget):
     """
     Copilot Chat panel - integrates as a dockable panel in DataPyn.
@@ -639,6 +875,7 @@ class CopilotChatPanel(QWidget):
         self._active_tool_calls: dict = {}  # tool_name -> reference
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._current_session_id = None
+        self._gh_install_worker = None
         self._setup_ui()
         self._connect_signals()
         # Restore last session on startup
@@ -664,6 +901,8 @@ class CopilotChatPanel(QWidget):
                     self._copilot_client.models_changed.disconnect(self._on_models_changed)
                 if hasattr(self._copilot_client, 'auth_started'):
                     self._copilot_client.auth_started.disconnect(self._on_auth_started)
+                if hasattr(self._copilot_client, 'gh_not_found'):
+                    self._copilot_client.gh_not_found.disconnect(self._on_gh_not_found)
             except (TypeError, RuntimeError):
                 pass
 
@@ -685,6 +924,8 @@ class CopilotChatPanel(QWidget):
                 client.models_changed.connect(self._on_models_changed)
             if hasattr(client, 'auth_started'):
                 client.auth_started.connect(self._on_auth_started)
+            if hasattr(client, 'gh_not_found'):
+                client.gh_not_found.connect(self._on_gh_not_found)
             # Pass tool registry from MCP server to client
             if self._mcp_server and hasattr(client, 'set_tool_registry'):
                 client.set_tool_registry(self._mcp_server.tool_registry)
@@ -788,6 +1029,59 @@ class CopilotChatPanel(QWidget):
         # === Messages area (WebView-based) ===
         self._setup_chat_webview()
         layout.addWidget(self._chat_webview, 1)
+
+        # === GitHub CLI install bar (hidden by default) ===
+        self._gh_install_widget = QWidget()
+        gh_layout = QHBoxLayout(self._gh_install_widget)
+        gh_layout.setContentsMargins(10, 8, 10, 8)
+        gh_layout.setSpacing(8)
+
+        gh_icon_label = QLabel()
+        if HAS_QTAWESOME:
+            gh_icon_label.setPixmap(
+                qta.icon("mdi.alert-circle-outline", color="#e5c07b").pixmap(20, 20)
+            )
+        else:
+            gh_icon_label.setText("!")
+        gh_layout.addWidget(gh_icon_label)
+
+        gh_text = QLabel(S.copilot.gh_cli_not_found.split("\n")[0])
+        gh_text.setWordWrap(True)
+        gh_text.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
+        gh_layout.addWidget(gh_text, 1)
+
+        self._gh_install_btn = QPushButton(S.copilot.install_gh_cli)
+        self._gh_install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._gh_install_btn.setFixedHeight(30)
+        self._gh_install_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 4px 14px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary_hover};
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_tertiary};
+            }}
+        """)
+        self._gh_install_btn.clicked.connect(self._install_gh_cli)
+        gh_layout.addWidget(self._gh_install_btn)
+
+        self._gh_install_widget.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors.bg_secondary};
+                border-top: 1px solid {colors.border_muted};
+            }}
+        """)
+        self._gh_install_widget.setVisible(False)
+        layout.addWidget(self._gh_install_widget)
 
         # === Config bar (Model selector only - always uses Agent mode) ===
         config_bar = QWidget()
@@ -984,8 +1278,10 @@ class CopilotChatPanel(QWidget):
         from PyQt6.QtWebEngineCore import QWebEngineSettings
         from PyQt6.QtGui import QColor
         
-        # Create WebView
+        # Create WebView with custom page for external links
         self._chat_webview = QWebEngineView()
+        self._external_link_page = ExternalLinkPage(self._chat_webview)
+        self._chat_webview.setPage(self._external_link_page)
         self._chat_webview.setMinimumSize(200, 100)
         self._chat_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
@@ -1065,6 +1361,8 @@ class CopilotChatPanel(QWidget):
         auth_service = get_copilot_auth_service()
         auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
         auth_service.chat_logged_out.connect(self._on_auth_service_chat_logged_out)
+        if hasattr(auth_service, 'chat_gh_not_found'):
+            auth_service.chat_gh_not_found.connect(self._on_gh_not_found)
 
     def _on_new_chat(self):
         """Start a new chat session."""
@@ -1463,7 +1761,15 @@ class CopilotChatPanel(QWidget):
         # Clear active tool calls tracking
         self._active_tool_calls.clear()
         
-        self._add_message("assistant", f"Error: {error}")
+        # Check if error is about missing Copilot extension
+        if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
+            self._on_gh_not_found()
+            self._add_message(
+                "assistant",
+                "GitHub Copilot extension not found. Click the button above to install it."
+            )
+        else:
+            self._add_message("assistant", f"Error: {error}")
 
     def _show_thinking_indicator(self):
         """Show the animated thinking indicator via WebView."""
@@ -1635,7 +1941,55 @@ class CopilotChatPanel(QWidget):
         """Authentication failed."""
         self._auth_btn.setText(S.copilot.sign_in)
         self._auth_btn.setEnabled(True)
-        self._add_message("assistant", S.copilot.auth_failed.format(error=error))
+        
+        # Check if error is about missing Copilot extension
+        if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
+            self._on_gh_not_found()
+            self._add_message(
+                "assistant",
+                "GitHub Copilot extension not found. Click the button above to install it."
+            )
+        else:
+            self._add_message("assistant", S.copilot.auth_failed.format(error=error))
+
+    def _on_gh_not_found(self):
+        """GitHub CLI not found - show install widget and message."""
+        self._auth_btn.setText(S.copilot.sign_in)
+        self._auth_btn.setEnabled(True)
+        self._gh_install_widget.setVisible(True)
+        self._add_message("assistant", S.copilot.gh_cli_not_found)
+
+    def _install_gh_cli(self):
+        """Start GitHub CLI installation (non-blocking via QProcess)."""
+        self._gh_install_btn.setEnabled(False)
+        self._gh_install_btn.setText(S.copilot.installing_gh_cli)
+        self._add_message("assistant", S.copilot.installing_gh_cli)
+
+        # GhCliInstallWorker uses QProcess internally - no QThread needed
+        self._gh_install_worker = GhCliInstallWorker(self)
+        self._gh_install_worker.progress.connect(
+            lambda msg: self._add_message("assistant", msg)
+        )
+        self._gh_install_worker.finished.connect(self._on_gh_install_finished)
+
+        # Start the installation (non-blocking)
+        self._gh_install_worker.run()
+
+    def _on_gh_install_finished(self, success: bool, message: str):
+        """Handle GitHub CLI installation result."""
+        if success:
+            self._add_message("assistant", S.copilot.gh_cli_installed)
+            self._gh_install_widget.setVisible(False)
+        else:
+            self._add_message(
+                "assistant",
+                S.copilot.gh_cli_install_failed.format(error=message),
+            )
+            self._gh_install_btn.setEnabled(True)
+            self._gh_install_btn.setText(S.copilot.install_gh_cli)
+
+        # Cleanup worker
+        self._gh_install_worker = None
 
     def _update_auth_state(self):
         """Update UI based on authentication state."""

@@ -7,6 +7,37 @@ echo.
 REM Navegar para a raiz do projeto
 cd /d "%~dp0.."
 
+REM Verificar versao do Python (requer 3.12+)
+echo [INFO] Verificando versao do Python...
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERRO] Python nao encontrado!
+    echo Instale Python 3.12 ou superior: https://www.python.org/downloads/
+    pause
+    exit /b 1
+)
+
+for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYTHON_VERSION=%%v
+for /f "tokens=1,2 delims=." %%a in ("%PYTHON_VERSION%") do (
+    set PYTHON_MAJOR=%%a
+    set PYTHON_MINOR=%%b
+)
+
+if %PYTHON_MAJOR% LSS 3 (
+    echo [ERRO] Python 3.12+ necessario. Versao atual: %PYTHON_VERSION%
+    echo Instale Python 3.12 ou superior: https://www.python.org/downloads/
+    pause
+    exit /b 1
+)
+if %PYTHON_MAJOR% EQU 3 if %PYTHON_MINOR% LSS 12 (
+    echo [ERRO] Python 3.12+ necessario. Versao atual: %PYTHON_VERSION%
+    echo Instale Python 3.12 ou superior: https://www.python.org/downloads/
+    pause
+    exit /b 1
+)
+echo [OK] Python %PYTHON_VERSION% encontrado!
+echo.
+
 REM Verificar se UV está instalado
 uv --version >nul 2>&1
 if errorlevel 1 (

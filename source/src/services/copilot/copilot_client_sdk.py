@@ -41,11 +41,12 @@ def _get_sdk_options():
     
     Priority:
     1. PyInstaller bundled CLI (if running as frozen app)
-    2. System-installed CLI (via gh copilot or standalone)
-    3. None (let SDK use its bundled CLI if available)
+    2. SDK's own bundled CLI (preferred - ships with the copilot pip package)
+    3. System-installed CLI (verified to actually work)
     """
     import sys
     import shutil
+    import subprocess
     from pathlib import Path
     
     # 1. If running as PyInstaller bundle, try bundled CLI first
@@ -57,28 +58,38 @@ def _get_sdk_options():
         else:
             logger.debug(f"Bundled Copilot CLI not found: {cli_path}")
     
-    # 2. Try to find system-installed CLI
-    # Check common locations for copilot CLI
+    # 2. Let SDK use its own bundled CLI (copilot pip package includes a binary)
+    # This is the most reliable option - avoids VS Code shims and broken PATH entries.
+    try:
+        sdk_bin = Path(__file__).parent
+        # Walk up to find the venv site-packages copilot/bin/copilot
+        for site_pkg in sys.path:
+            candidate = Path(site_pkg) / "copilot" / "bin" / "copilot"
+            if sys.platform == "win32":
+                candidate = candidate.with_suffix(".exe")
+            if candidate.exists():
+                logger.info(f"Using SDK bundled Copilot CLI: {candidate}")
+                return {"cli_path": str(candidate)}
+    except Exception:
+        pass
+    
+    # 3. Try system-installed CLI - but verify it actually works
+    # (VS Code installs a shim script that doesn't work standalone)
     system_paths = []
     
-    # Windows locations
     if sys.platform == "win32":
         local_app_data = os.environ.get("LOCALAPPDATA", "")
         app_data = os.environ.get("APPDATA", "")
         user_profile = os.environ.get("USERPROFILE", "")
         
         system_paths.extend([
-            # GitHub CLI extension
             Path(local_app_data) / "GitHub CLI" / "copilot" / "copilot.exe",
             Path(app_data) / "GitHub CLI" / "copilot" / "copilot.exe",
-            # Standalone install
             Path(local_app_data) / "Programs" / "copilot" / "copilot.exe",
             Path(user_profile) / ".copilot" / "bin" / "copilot.exe",
-            # Scoop
             Path(user_profile) / "scoop" / "shims" / "copilot.exe",
         ])
     else:
-        # Linux/macOS
         home = Path.home()
         system_paths.extend([
             home / ".copilot" / "bin" / "copilot",
@@ -86,21 +97,38 @@ def _get_sdk_options():
             Path("/usr/local/bin/copilot"),
         ])
     
-    # Check known paths
     for path in system_paths:
-        if path.exists():
+        if path.exists() and _verify_cli_works(str(path)):
             logger.info(f"Using system Copilot CLI: {path}")
             return {"cli_path": str(path)}
     
-    # Check PATH
     copilot_in_path = shutil.which("copilot")
-    if copilot_in_path:
+    if copilot_in_path and _verify_cli_works(copilot_in_path):
         logger.info(f"Using Copilot CLI from PATH: {copilot_in_path}")
         return {"cli_path": copilot_in_path}
     
-    # 3. No explicit path - let SDK use its bundled CLI
+    # 4. No explicit path - let SDK use its own bundled CLI
     logger.debug("No system Copilot CLI found, SDK will use bundled CLI")
     return None
+
+
+def _verify_cli_works(cli_path: str) -> bool:
+    """Verify that a copilot CLI binary actually works (not a broken shim)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            [cli_path, "--version"],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "ELECTRON_RUN_AS_NODE": ""},
+        )
+        # A working CLI outputs version info; a broken shim outputs error messages
+        if result.returncode == 0 and "Cannot find" not in result.stderr:
+            return True
+        logger.debug(f"CLI at {cli_path} not usable: {result.stderr[:100]}")
+        return False
+    except Exception as e:
+        logger.debug(f"CLI at {cli_path} failed verification: {e}")
+        return False
 
 
 def _try_import_sdk():
@@ -245,6 +273,7 @@ class CopilotWorker(QObject):
     finished = pyqtSignal()
     ready = pyqtSignal()  # Worker is ready to accept chat requests
     inline_complete = pyqtSignal(str)  # Inline completion result
+    gh_not_found = pyqtSignal()  # GitHub CLI not installed
 
     def __init__(self, tool_executor: ThreadSafeToolExecutor = None):
         super().__init__()
@@ -347,10 +376,7 @@ class CopilotWorker(QObject):
             # Check if gh CLI is available
             gh_path = shutil.which("gh")
             if not gh_path:
-                self.error.emit(
-                    "GitHub CLI not found. Please install it from https://cli.github.com/ "
-                    "and restart DataPyn."
-                )
+                self.gh_not_found.emit()
                 self.finished.emit()
                 return
             
@@ -945,6 +971,7 @@ class CopilotClient(QObject):
     thinking = pyqtSignal(str)
     models_changed = pyqtSignal(list)
     inline_completion_ready = pyqtSignal(str)  # Inline completion result
+    gh_not_found = pyqtSignal()  # GitHub CLI not installed
 
     def __init__(self, parent=None, tool_registry: "MCPToolRegistry" = None):
         super().__init__(parent)
@@ -1483,6 +1510,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._session_worker.auth_required.connect(self.auth_required.emit)
         self._session_worker.models_ready.connect(self._on_models_loaded)
         self._session_worker.error.connect(self._on_init_error)
+        self._session_worker.gh_not_found.connect(self._on_gh_not_found)
         self._session_worker.ready.connect(self._on_session_ready)
         # Note: Do NOT connect finished to cleanup - worker stays alive
         
@@ -1497,6 +1525,11 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._is_authenticated = False
         self.auth_failed.emit(error)
         # Note: CopilotAuthService handles lock release via auth_failed signal handler
+
+    def _on_gh_not_found(self):
+        """GitHub CLI not found - emit dedicated signal."""
+        self._is_authenticated = False
+        self.gh_not_found.emit()
 
     def _on_worker_finished(self):
         """Cleanup after worker finishes."""
