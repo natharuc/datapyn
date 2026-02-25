@@ -2,6 +2,46 @@
 
 <!-- version list -->
 
+## v1.14.0 (2026-02-25)
+
+### Bug Fixes
+
+- Force_completion usava _request_counter inexistente
+  ([`7d66c4b`](https://github.com/natharuc/datapyn/commit/7d66c4bd1faf27ce93df43dc6edc40e057eb716f))
+
+- LSP auth status 'OK' nao era reconhecido como autenticado
+  ([`be3524c`](https://github.com/natharuc/datapyn/commit/be3524c187b75340a65110d1fb48635e55dd2141))
+
+- Permitir autocomplete ao quebrar linha
+  ([`9c76808`](https://github.com/natharuc/datapyn/commit/9c768082fddb2b9c31fce804931ea2ed1b636c35))
+
+- Usar getCompletions para completions multi-linha
+  ([`154fcdf`](https://github.com/natharuc/datapyn/commit/154fcdf6243bf28c632b3f6f7ad74dc32e011b13))
+
+- Workspace switch e auto update service cleanup
+  ([`6c81985`](https://github.com/natharuc/datapyn/commit/6c81985b5930bcd2bcb129b0bea1097abd6f4cd1))
+
+### Features
+
+- Workspace name prefix no titulo da janela
+  ([`b08429f`](https://github.com/natharuc/datapyn/commit/b08429ff5c74932f9441d730c3d4123216bc5ad9))
+
+- Workspace switch dialog e force autocomplete (Ctrl+.)
+  ([`b630991`](https://github.com/natharuc/datapyn/commit/b6309913f336c3833ff4ed1b27746d361cdd8904))
+
+- **copilot**: Auth service + workspace improvements
+  ([`a56576a`](https://github.com/natharuc/datapyn/commit/a56576af6db783135565cd5bbc76cdcc0626f476))
+
+- **copilot**: Implement getPanelCompletions for multi-line suggestions
+  ([`6805110`](https://github.com/natharuc/datapyn/commit/6805110b04b47eda4bd5d691e6ac11a346f6b8e3))
+
+- **sql**: Autocomplete SSMS-style + blocos SQL maiores
+  ([`8496f54`](https://github.com/natharuc/datapyn/commit/8496f541b6d5b25a8afe4629bdb8b0c5b363f376))
+
+- **ux**: Ask confirmation before closing unsaved tab
+  ([`3444ca2`](https://github.com/natharuc/datapyn/commit/3444ca20af683cf920b5260259c8dabbca6b2ba3))
+
+
 ## v1.13.0 (2026-02-24)
 
 ### Features
