@@ -649,15 +649,17 @@ class GhCliInstallWorker(QObject):
         self._arch = "amd64"
 
     def run(self):
-        """Install GitHub CLI on Ubuntu/Debian using the official repository."""
+        """Install GitHub CLI and Copilot extension."""
         import shutil
         import platform
         import subprocess
 
         try:
-            # Check if already installed (race condition guard)
+            # Check if gh is already installed
             if shutil.which("gh"):
-                self.finished.emit(True, "GitHub CLI is already installed.")
+                # gh exists - check/install extension
+                self.progress.emit("Checking Copilot extension...")
+                self._install_copilot_extension()
                 return
 
             system = platform.system()
@@ -719,14 +721,15 @@ class GhCliInstallWorker(QObject):
             self.finished.emit(False, str(e))
 
     def _on_process_finished(self, exit_code, exit_status):
-        """Handle QProcess completion."""
+        """Handle QProcess completion for gh CLI install."""
         import shutil
-        from PyQt6.QtCore import QProcess
 
         if exit_code == 0:
-            # Verify installation
+            # Verify gh installation
             if shutil.which("gh"):
-                self.finished.emit(True, "")
+                # gh installed - now install the Copilot extension
+                self.progress.emit("Installing GitHub Copilot extension...")
+                self._install_copilot_extension()
             else:
                 self.finished.emit(
                     False,
@@ -742,6 +745,67 @@ class GhCliInstallWorker(QObject):
             self.finished.emit(False, error_msg[:200])
 
         self._process = None
+
+    def _install_copilot_extension(self):
+        """Install the gh-copilot extension (no sudo needed)."""
+        import shutil
+        from PyQt6.QtCore import QProcess
+
+        gh_path = shutil.which("gh")
+        if not gh_path:
+            self.finished.emit(False, "gh CLI not found")
+            return
+
+        # Check if extension already installed
+        try:
+            import subprocess
+            result = subprocess.run(
+                [gh_path, "extension", "list"],
+                capture_output=True, text=True, timeout=10
+            )
+            if "copilot" in result.stdout.lower():
+                # Already installed
+                self.finished.emit(True, "")
+                return
+        except Exception:
+            pass  # Continue with install attempt
+
+        # Install extension using QProcess
+        self._ext_process = QProcess(self)
+        self._ext_process.finished.connect(self._on_extension_finished)
+        self._ext_process.errorOccurred.connect(self._on_extension_error)
+
+        self._ext_process.start(gh_path, ["extension", "install", "github/gh-copilot"])
+
+    def _on_extension_finished(self, exit_code, exit_status):
+        """Handle Copilot extension install completion."""
+        if exit_code == 0:
+            self.finished.emit(True, "")
+        else:
+            stderr = ""
+            if self._ext_process:
+                stderr = self._ext_process.readAllStandardError().data().decode("utf-8", errors="replace")
+            # Extension install failed - but gh is installed, so partial success
+            error_msg = stderr.strip() or f"Extension install failed (code {exit_code})"
+            self.finished.emit(False, f"gh CLI installed but Copilot extension failed: {error_msg[:150]}")
+
+        self._ext_process = None
+
+    def _on_extension_error(self, error):
+        """Handle QProcess error for extension install."""
+        from PyQt6.QtCore import QProcess
+
+        error_messages = {
+            QProcess.ProcessError.FailedToStart: "Failed to start gh",
+            QProcess.ProcessError.Crashed: "gh process crashed",
+            QProcess.ProcessError.Timedout: "Extension install timed out",
+            QProcess.ProcessError.WriteError: "Write error",
+            QProcess.ProcessError.ReadError: "Read error",
+            QProcess.ProcessError.UnknownError: "Unknown error",
+        }
+        msg = error_messages.get(error, "Unknown error")
+        self.finished.emit(False, f"gh CLI installed but extension failed: {msg}")
+        self._ext_process = None
 
     def _on_process_error(self, error):
         """Handle QProcess error."""
@@ -1675,7 +1739,15 @@ class CopilotChatPanel(QWidget):
         # Clear active tool calls tracking
         self._active_tool_calls.clear()
         
-        self._add_message("assistant", f"Error: {error}")
+        # Check if error is about missing Copilot extension
+        if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
+            self._on_gh_not_found()
+            self._add_message(
+                "assistant",
+                "GitHub Copilot extension not found. Click the button above to install it."
+            )
+        else:
+            self._add_message("assistant", f"Error: {error}")
 
     def _show_thinking_indicator(self):
         """Show the animated thinking indicator via WebView."""
