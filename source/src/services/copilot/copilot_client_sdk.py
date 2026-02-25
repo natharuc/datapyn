@@ -245,6 +245,7 @@ class CopilotWorker(QObject):
     finished = pyqtSignal()
     ready = pyqtSignal()  # Worker is ready to accept chat requests
     inline_complete = pyqtSignal(str)  # Inline completion result
+    gh_not_found = pyqtSignal()  # GitHub CLI not installed
 
     def __init__(self, tool_executor: ThreadSafeToolExecutor = None):
         super().__init__()
@@ -347,10 +348,7 @@ class CopilotWorker(QObject):
             # Check if gh CLI is available
             gh_path = shutil.which("gh")
             if not gh_path:
-                self.error.emit(
-                    "GitHub CLI not found. Please install it from https://cli.github.com/ "
-                    "and restart DataPyn."
-                )
+                self.gh_not_found.emit()
                 self.finished.emit()
                 return
             
@@ -945,6 +943,7 @@ class CopilotClient(QObject):
     thinking = pyqtSignal(str)
     models_changed = pyqtSignal(list)
     inline_completion_ready = pyqtSignal(str)  # Inline completion result
+    gh_not_found = pyqtSignal()  # GitHub CLI not installed
 
     def __init__(self, parent=None, tool_registry: "MCPToolRegistry" = None):
         super().__init__(parent)
@@ -1483,6 +1482,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._session_worker.auth_required.connect(self.auth_required.emit)
         self._session_worker.models_ready.connect(self._on_models_loaded)
         self._session_worker.error.connect(self._on_init_error)
+        self._session_worker.gh_not_found.connect(self._on_gh_not_found)
         self._session_worker.ready.connect(self._on_session_ready)
         # Note: Do NOT connect finished to cleanup - worker stays alive
         
@@ -1497,6 +1497,11 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._is_authenticated = False
         self.auth_failed.emit(error)
         # Note: CopilotAuthService handles lock release via auth_failed signal handler
+
+    def _on_gh_not_found(self):
+        """GitHub CLI not found - emit dedicated signal."""
+        self._is_authenticated = False
+        self.gh_not_found.emit()
 
     def _on_worker_finished(self):
         """Cleanup after worker finishes."""

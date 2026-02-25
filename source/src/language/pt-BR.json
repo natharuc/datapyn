@@ -825,7 +825,12 @@
     "clear_all": "Apagar todas as sessoes",
     "usage_loading": "...",
     "usage_format": "{used}/{total} premium",
-    "stop_tooltip": "Parar geracao"
+    "stop_tooltip": "Parar geracao",
+    "gh_cli_not_found": "O GitHub CLI e necessario para autenticacao do Copilot, mas nao foi encontrado no seu sistema.\nClique no botao abaixo para instalar automaticamente.",
+    "install_gh_cli": "Instalar GitHub CLI",
+    "installing_gh_cli": "Instalando GitHub CLI...",
+    "gh_cli_installed": "GitHub CLI instalado com sucesso! Agora clique em **Entrar** para autenticar.",
+    "gh_cli_install_failed": "Falha ao instalar o GitHub CLI: {error}\nVoce pode instalar manualmente em https://cli.github.com/"
   },
 
   "copilot_download": {

@@ -823,7 +823,12 @@
     "clear_all": "Clear all sessions",
     "usage_loading": "...",
     "usage_format": "{used}/{total} premium",
-    "stop_tooltip": "Stop generation"
+    "stop_tooltip": "Stop generation",
+    "gh_cli_not_found": "GitHub CLI is required for Copilot authentication but was not found on your system.\nClick the button below to install it automatically.",
+    "install_gh_cli": "Install GitHub CLI",
+    "installing_gh_cli": "Installing GitHub CLI...",
+    "gh_cli_installed": "GitHub CLI installed successfully! You can now click **Sign In** to authenticate.",
+    "gh_cli_install_failed": "Failed to install GitHub CLI: {error}\nYou can install it manually from https://cli.github.com/"
   },
 
   "copilot_download": {

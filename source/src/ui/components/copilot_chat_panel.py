@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QStyle,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize, QThread
 from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -610,6 +610,88 @@ class ChatInputWidget(QTextEdit):
         super().keyPressEvent(event)
 
 
+class GhCliInstallWorker(QObject):
+    """Worker that installs GitHub CLI in a background thread."""
+
+    progress = pyqtSignal(str)  # Status message
+    finished = pyqtSignal(bool, str)  # success, message
+
+    def run(self):
+        """Install GitHub CLI on Ubuntu/Debian using the official repository."""
+        import subprocess
+        import shutil
+        import platform
+
+        try:
+            # Check if already installed (race condition guard)
+            if shutil.which("gh"):
+                self.finished.emit(True, "GitHub CLI is already installed.")
+                return
+
+            system = platform.system()
+            if system != "Linux":
+                self.finished.emit(
+                    False,
+                    f"Automatic installation is only supported on Linux. "
+                    f"Please install manually from https://cli.github.com/"
+                )
+                return
+
+            # Use pkexec for graphical sudo prompt
+            pkexec = shutil.which("pkexec")
+            if not pkexec:
+                self.finished.emit(
+                    False,
+                    "pkexec not found. Please install GitHub CLI manually:\n"
+                    "https://cli.github.com/"
+                )
+                return
+
+            self.progress.emit("Downloading GitHub CLI package...")
+
+            # Step 1: Add GPG key and repository
+            setup_script = (
+                "set -e && "
+                "mkdir -p -m 755 /etc/apt/keyrings && "
+                "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg "
+                "| tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && "
+                "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
+                "echo 'deb [arch=$(dpkg --print-architecture) "
+                "signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] "
+                "https://cli.github.com/packages stable main' "
+                "| tee /etc/apt/sources.list.d/github-cli.list > /dev/null && "
+                "apt-get update -qq && "
+                "apt-get install -y gh"
+            )
+
+            result = subprocess.run(
+                [pkexec, "bash", "-c", setup_script],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                # Check if user cancelled pkexec
+                if "dismissed" in error_msg.lower() or result.returncode == 126:
+                    self.finished.emit(False, "Installation cancelled by user.")
+                else:
+                    self.finished.emit(False, error_msg[:200])
+                return
+
+            # Verify installation
+            if shutil.which("gh"):
+                self.finished.emit(True, "")
+            else:
+                self.finished.emit(False, "Installation completed but 'gh' command not found in PATH.")
+
+        except subprocess.TimeoutExpired:
+            self.finished.emit(False, "Installation timed out after 120 seconds.")
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+
 class CopilotChatPanel(QWidget):
     """
     Copilot Chat panel - integrates as a dockable panel in DataPyn.
@@ -639,6 +721,8 @@ class CopilotChatPanel(QWidget):
         self._active_tool_calls: dict = {}  # tool_name -> reference
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._current_session_id = None
+        self._gh_install_thread = None
+        self._gh_install_worker = None
         self._setup_ui()
         self._connect_signals()
         # Restore last session on startup
@@ -664,6 +748,8 @@ class CopilotChatPanel(QWidget):
                     self._copilot_client.models_changed.disconnect(self._on_models_changed)
                 if hasattr(self._copilot_client, 'auth_started'):
                     self._copilot_client.auth_started.disconnect(self._on_auth_started)
+                if hasattr(self._copilot_client, 'gh_not_found'):
+                    self._copilot_client.gh_not_found.disconnect(self._on_gh_not_found)
             except (TypeError, RuntimeError):
                 pass
 
@@ -685,6 +771,8 @@ class CopilotChatPanel(QWidget):
                 client.models_changed.connect(self._on_models_changed)
             if hasattr(client, 'auth_started'):
                 client.auth_started.connect(self._on_auth_started)
+            if hasattr(client, 'gh_not_found'):
+                client.gh_not_found.connect(self._on_gh_not_found)
             # Pass tool registry from MCP server to client
             if self._mcp_server and hasattr(client, 'set_tool_registry'):
                 client.set_tool_registry(self._mcp_server.tool_registry)
@@ -788,6 +876,59 @@ class CopilotChatPanel(QWidget):
         # === Messages area (WebView-based) ===
         self._setup_chat_webview()
         layout.addWidget(self._chat_webview, 1)
+
+        # === GitHub CLI install bar (hidden by default) ===
+        self._gh_install_widget = QWidget()
+        gh_layout = QHBoxLayout(self._gh_install_widget)
+        gh_layout.setContentsMargins(10, 8, 10, 8)
+        gh_layout.setSpacing(8)
+
+        gh_icon_label = QLabel()
+        if HAS_QTAWESOME:
+            gh_icon_label.setPixmap(
+                qta.icon("mdi.alert-circle-outline", color="#e5c07b").pixmap(20, 20)
+            )
+        else:
+            gh_icon_label.setText("!")
+        gh_layout.addWidget(gh_icon_label)
+
+        gh_text = QLabel(S.copilot.gh_cli_not_found.split("\n")[0])
+        gh_text.setWordWrap(True)
+        gh_text.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
+        gh_layout.addWidget(gh_text, 1)
+
+        self._gh_install_btn = QPushButton(S.copilot.install_gh_cli)
+        self._gh_install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._gh_install_btn.setFixedHeight(30)
+        self._gh_install_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 4px 14px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary_hover};
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_tertiary};
+            }}
+        """)
+        self._gh_install_btn.clicked.connect(self._install_gh_cli)
+        gh_layout.addWidget(self._gh_install_btn)
+
+        self._gh_install_widget.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors.bg_secondary};
+                border-top: 1px solid {colors.border_muted};
+            }}
+        """)
+        self._gh_install_widget.setVisible(False)
+        layout.addWidget(self._gh_install_widget)
 
         # === Config bar (Model selector only - always uses Agent mode) ===
         config_bar = QWidget()
@@ -1065,6 +1206,8 @@ class CopilotChatPanel(QWidget):
         auth_service = get_copilot_auth_service()
         auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
         auth_service.chat_logged_out.connect(self._on_auth_service_chat_logged_out)
+        if hasattr(auth_service, 'chat_gh_not_found'):
+            auth_service.chat_gh_not_found.connect(self._on_gh_not_found)
 
     def _on_new_chat(self):
         """Start a new chat session."""
@@ -1636,6 +1779,56 @@ class CopilotChatPanel(QWidget):
         self._auth_btn.setText(S.copilot.sign_in)
         self._auth_btn.setEnabled(True)
         self._add_message("assistant", S.copilot.auth_failed.format(error=error))
+
+    def _on_gh_not_found(self):
+        """GitHub CLI not found - show install widget and message."""
+        self._auth_btn.setText(S.copilot.sign_in)
+        self._auth_btn.setEnabled(True)
+        self._gh_install_widget.setVisible(True)
+        self._add_message("assistant", S.copilot.gh_cli_not_found)
+
+    def _install_gh_cli(self):
+        """Start GitHub CLI installation in background."""
+        self._gh_install_btn.setEnabled(False)
+        self._gh_install_btn.setText(S.copilot.installing_gh_cli)
+        self._add_message("assistant", S.copilot.installing_gh_cli)
+
+        # Cleanup previous worker if any
+        if self._gh_install_thread and self._gh_install_thread.isRunning():
+            self._gh_install_thread.quit()
+            self._gh_install_thread.wait(3000)
+
+        self._gh_install_worker = GhCliInstallWorker()
+        self._gh_install_thread = QThread()
+        self._gh_install_worker.moveToThread(self._gh_install_thread)
+
+        self._gh_install_thread.started.connect(self._gh_install_worker.run)
+        self._gh_install_worker.progress.connect(
+            lambda msg: self._add_message("assistant", msg)
+        )
+        self._gh_install_worker.finished.connect(self._on_gh_install_finished)
+
+        self._gh_install_thread.start()
+
+    def _on_gh_install_finished(self, success: bool, message: str):
+        """Handle GitHub CLI installation result."""
+        if success:
+            self._add_message("assistant", S.copilot.gh_cli_installed)
+            self._gh_install_widget.setVisible(False)
+        else:
+            self._add_message(
+                "assistant",
+                S.copilot.gh_cli_install_failed.format(error=message),
+            )
+            self._gh_install_btn.setEnabled(True)
+            self._gh_install_btn.setText(S.copilot.install_gh_cli)
+
+        # Cleanup thread
+        if self._gh_install_thread:
+            self._gh_install_thread.quit()
+            self._gh_install_thread.wait(3000)
+            self._gh_install_thread = None
+            self._gh_install_worker = None
 
     def _update_auth_state(self):
         """Update UI based on authentication state."""
