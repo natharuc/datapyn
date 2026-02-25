@@ -99,17 +99,15 @@ uv run python source/main.py
 ### Linux (Ubuntu/Debian)
 
 ```bash
-# 1. Instale Python 3.12 e dependencias do sistema
+# 1. Certifique-se de ter Python 3.12+ e git instalados
 sudo apt update
-sudo apt install -y git curl python3.12 python3.12-venv python3.12-dev \
-    build-essential libxcb-cursor0 libxcb-xinerama0 libxkbcommon0 \
-    libgl1 libegl1 libpq-dev unixodbc-dev
+sudo apt install -y git python3 python3-venv
 
 # 2. Clone e entre no projeto
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
 
-# 3. Execute o instalador (instala uv automaticamente)
+# 3. Execute o instalador (instala uv e dependencias do sistema automaticamente)
 chmod +x scripts/linux/install.sh
 ./scripts/linux/install.sh
 
@@ -120,6 +118,10 @@ chmod +x scripts/linux/install.sh
 uv sync
 uv run python source/main.py
 ```
+
+> **Nota:** O script `install.sh` detecta e instala automaticamente as dependencias
+> do sistema necessarias (build-essential, libpq-dev, unixodbc-dev, libs Qt, etc.).
+> Sera solicitada a senha sudo se necessario.
 
 ### macOS
 

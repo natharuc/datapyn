@@ -15,6 +15,51 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/../.." || exit 1
 
+# Instalar dependencias do sistema (requer sudo)
+echo -e "${YELLOW}[INFO]${NC} Verificando dependencias do sistema..."
+
+if command -v apt-get &> /dev/null; then
+    MISSING_PKGS=()
+    REQUIRED_PKGS=(
+        "build-essential"
+        "python3-dev"
+        "python3-venv"
+        "libxcb-cursor0"
+        "libxcb-xinerama0"
+        "libxkbcommon0"
+        "libgl1"
+        "libegl1"
+        "libpq-dev"
+        "unixodbc-dev"
+        "curl"
+    )
+
+    for pkg in "${REQUIRED_PKGS[@]}"; do
+        if ! dpkg -s "$pkg" &> /dev/null; then
+            MISSING_PKGS+=("$pkg")
+        fi
+    done
+
+    if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
+        echo -e "${YELLOW}[INFO]${NC} Instalando pacotes do sistema: ${MISSING_PKGS[*]}"
+        sudo apt-get update -qq
+        sudo apt-get install -y "${MISSING_PKGS[@]}"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}[ERRO]${NC} Falha ao instalar pacotes do sistema."
+            echo "Tente instalar manualmente: sudo apt install -y ${MISSING_PKGS[*]}"
+            exit 1
+        fi
+        echo -e "${GREEN}[OK]${NC} Pacotes do sistema instalados!"
+    else
+        echo -e "${GREEN}[OK]${NC} Todas as dependencias do sistema ja estao instaladas!"
+    fi
+else
+    echo -e "${YELLOW}[AVISO]${NC} apt-get nao encontrado. Certifique-se de ter instalado:"
+    echo "  build-essential python3-dev python3-venv libxcb-cursor0"
+    echo "  libxcb-xinerama0 libxkbcommon0 libgl1 libegl1 libpq-dev unixodbc-dev"
+fi
+echo ""
+
 # Verificar versao do Python (requer 3.12+)
 echo -e "${YELLOW}[INFO]${NC} Verificando versao do Python..."
 
@@ -64,7 +109,7 @@ uv --version
 echo ""
 
 # Criar ambiente virtual
-echo -e "${YELLOW}[1/3]${NC} Criando ambiente virtual..."
+echo -e "${YELLOW}[1/3]${NC} Criando ambiente virtual com Python $PYTHON_VERSION..."
 
 if [ -d ".venv" ]; then
     echo "Ambiente virtual ja existe. Pulando..."
