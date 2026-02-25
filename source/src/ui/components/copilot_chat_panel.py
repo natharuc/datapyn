@@ -1919,7 +1919,16 @@ class CopilotChatPanel(QWidget):
         """Authentication failed."""
         self._auth_btn.setText(S.copilot.sign_in)
         self._auth_btn.setEnabled(True)
-        self._add_message("assistant", S.copilot.auth_failed.format(error=error))
+        
+        # Check if error is about missing Copilot extension
+        if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
+            self._on_gh_not_found()
+            self._add_message(
+                "assistant",
+                "GitHub Copilot extension not found. Click the button above to install it."
+            )
+        else:
+            self._add_message("assistant", S.copilot.auth_failed.format(error=error))
 
     def _on_gh_not_found(self):
         """GitHub CLI not found - show install widget and message."""
