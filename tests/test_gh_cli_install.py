@@ -39,23 +39,33 @@ class TestCopilotWorkerGhDetection:
         assert signals_received["error"] is None  # Should NOT emit error
 
     def test_does_not_emit_gh_not_found_when_gh_exists(self, qtbot):
-        """Worker should NOT emit gh_not_found when gh CLI exists."""
+        """Worker should NOT emit gh_not_found when gh CLI exists.
+        
+        This test verifies the initial gh check passes - we don't need to
+        run the full login flow.
+        """
         from src.services.copilot.copilot_client_sdk import CopilotWorker
 
         worker = CopilotWorker()
         gh_not_found_emitted = []
+        finished_emitted = []
 
         worker.gh_not_found.connect(lambda: gh_not_found_emitted.append(True))
+        worker.finished.connect(lambda: finished_emitted.append(True))
 
+        # When gh exists, run_login should NOT emit gh_not_found
+        # We mock the Popen to fail immediately so we don't run the full flow
         mock_process = MagicMock()
         mock_process.stdout.readline.return_value = ""
-        mock_process.communicate.return_value = ("Logged in as test", "")
-        mock_process.returncode = 0
+        mock_process.communicate.return_value = ("", "error")
+        mock_process.returncode = 1
+        mock_process.stdin = MagicMock()
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
              patch("subprocess.Popen", return_value=mock_process):
             worker.run_login()
 
+        # Should NOT have emitted gh_not_found since gh CLI exists
         assert len(gh_not_found_emitted) == 0
 
     def test_gh_not_found_signal_exists(self, qtbot):
@@ -277,7 +287,7 @@ class TestGhCliInstallWorker:
         assert "pkexec" in results[0][1]
 
     def test_successful_install(self, qtbot):
-        """Successful installation should emit True."""
+        """Successful installation should emit True via QProcess finished signal."""
         from src.ui.components.copilot_chat_panel import GhCliInstallWorker
 
         worker = GhCliInstallWorker()
@@ -288,7 +298,7 @@ class TestGhCliInstallWorker:
 
         def mock_which(cmd):
             if cmd == "gh":
-                # First call: not found, second call (verify): found
+                # On final check (after install), return found
                 call_count["n"] += 1
                 return "/usr/bin/gh" if call_count["n"] > 1 else None
             if cmd == "pkexec":
@@ -299,13 +309,17 @@ class TestGhCliInstallWorker:
         mock_arch_result.stdout = "amd64\n"
         mock_arch_result.returncode = 0
 
-        mock_install_result = MagicMock()
-        mock_install_result.returncode = 0
+        # Mock QProcess to simulate successful completion
+        mock_process = MagicMock()
 
         with patch("shutil.which", side_effect=mock_which), \
              patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", side_effect=[mock_arch_result, mock_install_result]):
+             patch("subprocess.run", return_value=mock_arch_result), \
+             patch("PyQt6.QtCore.QProcess", return_value=mock_process):
             worker.run()
+
+            # Simulate QProcess finishing successfully
+            worker._on_process_finished(0, 0)
 
         assert len(results) == 1
         assert results[0][0] is True
@@ -329,15 +343,19 @@ class TestGhCliInstallWorker:
         mock_arch_result.stdout = "amd64\n"
         mock_arch_result.returncode = 0
 
-        mock_install_result = MagicMock()
-        mock_install_result.returncode = 1
-        mock_install_result.stderr = "apt-get: package not found"
-        mock_install_result.stdout = ""
+        # Mock QProcess
+        mock_process = MagicMock()
+        mock_process.readAllStandardError.return_value.data.return_value = b"apt-get: package not found"
 
         with patch("shutil.which", side_effect=mock_which), \
              patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", side_effect=[mock_arch_result, mock_install_result]):
+             patch("subprocess.run", return_value=mock_arch_result), \
+             patch("PyQt6.QtCore.QProcess", return_value=mock_process):
             worker.run()
+            worker._process = mock_process
+
+            # Simulate QProcess finishing with error
+            worker._on_process_finished(1, 0)
 
         assert len(results) == 1
         assert results[0][0] is False
@@ -362,48 +380,36 @@ class TestGhCliInstallWorker:
         mock_arch_result.stdout = "amd64\n"
         mock_arch_result.returncode = 0
 
-        mock_install_result = MagicMock()
-        mock_install_result.returncode = 126
-        mock_install_result.stderr = "Request dismissed"
-        mock_install_result.stdout = ""
+        mock_process = MagicMock()
 
         with patch("shutil.which", side_effect=mock_which), \
              patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", side_effect=[mock_arch_result, mock_install_result]):
+             patch("subprocess.run", return_value=mock_arch_result), \
+             patch("PyQt6.QtCore.QProcess", return_value=mock_process):
             worker.run()
+
+            # Simulate user cancelling pkexec (exit code 126)
+            worker._on_process_finished(126, 0)
 
         assert len(results) == 1
         assert results[0][0] is False
         assert "cancelled" in results[0][1].lower()
 
-    def test_timeout_handled(self, qtbot):
-        """Timeout during installation should be handled gracefully."""
-        import subprocess
+    def test_process_error_handled(self, qtbot):
+        """QProcess error should be handled gracefully."""
         from src.ui.components.copilot_chat_panel import GhCliInstallWorker
+        from PyQt6.QtCore import QProcess
 
         worker = GhCliInstallWorker()
         results = []
         worker.finished.connect(lambda s, m: results.append((s, m)))
 
-        def mock_which(cmd):
-            if cmd == "gh":
-                return None
-            if cmd == "pkexec":
-                return "/usr/bin/pkexec"
-            return None
-
-        mock_arch_result = MagicMock()
-        mock_arch_result.stdout = "amd64\n"
-        mock_arch_result.returncode = 0
-
-        with patch("shutil.which", side_effect=mock_which), \
-             patch("platform.system", return_value="Linux"), \
-             patch("subprocess.run", side_effect=[mock_arch_result, subprocess.TimeoutExpired(cmd="pkexec", timeout=120)]):
-            worker.run()
+        # Simulate QProcess error
+        worker._on_process_error(QProcess.ProcessError.FailedToStart)
 
         assert len(results) == 1
         assert results[0][0] is False
-        assert "timed out" in results[0][1].lower()
+        assert "pkexec" in results[0][1].lower()
 
 
 # ==================== CopilotChatPanel Tests ====================
@@ -446,22 +452,15 @@ class TestChatPanelGhNotFound:
         """Install button should be disabled during installation."""
         from src.language import S
 
-        # Mock the thread so it doesn't actually run
-        with patch.object(chat_panel, '_gh_install_worker', None), \
-             patch.object(chat_panel, '_gh_install_thread', None):
-            # We need to patch QThread to not actually start
-            with patch("src.ui.components.copilot_chat_panel.QThread") as MockThread:
-                mock_thread = MagicMock()
-                MockThread.return_value = mock_thread
+        # Mock GhCliInstallWorker to not actually run
+        with patch("src.ui.components.copilot_chat_panel.GhCliInstallWorker") as MockWorker:
+            mock_worker = MagicMock()
+            MockWorker.return_value = mock_worker
 
-                with patch("src.ui.components.copilot_chat_panel.GhCliInstallWorker") as MockWorker:
-                    mock_worker = MagicMock()
-                    MockWorker.return_value = mock_worker
+            chat_panel._install_gh_cli()
 
-                    chat_panel._install_gh_cli()
-
-                    assert chat_panel._gh_install_btn.isEnabled() is False
-                    assert chat_panel._gh_install_btn.text() == S.copilot.installing_gh_cli
+            assert chat_panel._gh_install_btn.isEnabled() is False
+            assert chat_panel._gh_install_btn.text() == S.copilot.installing_gh_cli
 
     def test_install_success_hides_widget(self, chat_panel):
         """Successful installation should hide the install widget."""

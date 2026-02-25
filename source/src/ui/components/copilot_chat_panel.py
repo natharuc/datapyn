@@ -611,16 +611,21 @@ class ChatInputWidget(QTextEdit):
 
 
 class GhCliInstallWorker(QObject):
-    """Worker that installs GitHub CLI in a background thread."""
+    """Worker that installs GitHub CLI using QProcess (non-blocking)."""
 
     progress = pyqtSignal(str)  # Status message
     finished = pyqtSignal(bool, str)  # success, message
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._process = None
+        self._arch = "amd64"
+
     def run(self):
         """Install GitHub CLI on Ubuntu/Debian using the official repository."""
-        import subprocess
         import shutil
         import platform
+        import subprocess
 
         try:
             # Check if already installed (race condition guard)
@@ -649,24 +654,24 @@ class GhCliInstallWorker(QObject):
 
             self.progress.emit("Downloading GitHub CLI package...")
 
-            # Pre-compute architecture since we can't use $() inside pkexec
+            # Pre-compute architecture
             try:
                 arch_result = subprocess.run(
                     ["dpkg", "--print-architecture"],
                     capture_output=True, text=True, timeout=10,
                 )
-                arch = arch_result.stdout.strip() or "amd64"
+                self._arch = arch_result.stdout.strip() or "amd64"
             except Exception:
-                arch = "amd64"
+                self._arch = "amd64"
 
-            # Step 1: Add GPG key and repository
+            # Build install script
             setup_script = (
                 "set -e && "
                 "mkdir -p -m 755 /etc/apt/keyrings && "
                 "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg "
                 "| tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && "
                 "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
-                f"echo 'deb [arch={arch} "
+                f"echo 'deb [arch={self._arch} "
                 "signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] "
                 "https://cli.github.com/packages stable main' "
                 "| tee /etc/apt/sources.list.d/github-cli.list > /dev/null && "
@@ -674,32 +679,58 @@ class GhCliInstallWorker(QObject):
                 "apt-get install -y gh"
             )
 
-            result = subprocess.run(
-                [pkexec, "bash", "-c", setup_script],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
+            # Use QProcess for non-blocking execution
+            from PyQt6.QtCore import QProcess
 
-            if result.returncode != 0:
-                error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-                # Check if user cancelled pkexec
-                if "dismissed" in error_msg.lower() or result.returncode == 126:
-                    self.finished.emit(False, "Installation cancelled by user.")
-                else:
-                    self.finished.emit(False, error_msg[:200])
-                return
+            self._process = QProcess(self)
+            self._process.finished.connect(self._on_process_finished)
+            self._process.errorOccurred.connect(self._on_process_error)
 
+            self._process.start(pkexec, ["bash", "-c", setup_script])
+
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+    def _on_process_finished(self, exit_code, exit_status):
+        """Handle QProcess completion."""
+        import shutil
+        from PyQt6.QtCore import QProcess
+
+        if exit_code == 0:
             # Verify installation
             if shutil.which("gh"):
                 self.finished.emit(True, "")
             else:
-                self.finished.emit(False, "Installation completed but 'gh' command not found in PATH.")
+                self.finished.emit(
+                    False,
+                    "Installation completed but 'gh' command not found in PATH."
+                )
+        elif exit_code == 126:
+            self.finished.emit(False, "Installation cancelled by user.")
+        else:
+            stderr = ""
+            if self._process:
+                stderr = self._process.readAllStandardError().data().decode("utf-8", errors="replace")
+            error_msg = stderr.strip() or f"Installation failed (exit code {exit_code})"
+            self.finished.emit(False, error_msg[:200])
 
-        except subprocess.TimeoutExpired:
-            self.finished.emit(False, "Installation timed out after 120 seconds.")
-        except Exception as e:
-            self.finished.emit(False, str(e))
+        self._process = None
+
+    def _on_process_error(self, error):
+        """Handle QProcess error."""
+        from PyQt6.QtCore import QProcess
+
+        error_messages = {
+            QProcess.ProcessError.FailedToStart: "Failed to start pkexec",
+            QProcess.ProcessError.Crashed: "Installation process crashed",
+            QProcess.ProcessError.Timedout: "Installation timed out",
+            QProcess.ProcessError.WriteError: "Write error",
+            QProcess.ProcessError.ReadError: "Read error",
+            QProcess.ProcessError.UnknownError: "Unknown error",
+        }
+        msg = error_messages.get(error, "Unknown error")
+        self.finished.emit(False, msg)
+        self._process = None
 
 
 class CopilotChatPanel(QWidget):
@@ -731,7 +762,6 @@ class CopilotChatPanel(QWidget):
         self._active_tool_calls: dict = {}  # tool_name -> reference
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._current_session_id = None
-        self._gh_install_thread = None
         self._gh_install_worker = None
         self._setup_ui()
         self._connect_signals()
@@ -1798,27 +1828,20 @@ class CopilotChatPanel(QWidget):
         self._add_message("assistant", S.copilot.gh_cli_not_found)
 
     def _install_gh_cli(self):
-        """Start GitHub CLI installation in background."""
+        """Start GitHub CLI installation (non-blocking via QProcess)."""
         self._gh_install_btn.setEnabled(False)
         self._gh_install_btn.setText(S.copilot.installing_gh_cli)
         self._add_message("assistant", S.copilot.installing_gh_cli)
 
-        # Cleanup previous worker if any
-        if self._gh_install_thread and self._gh_install_thread.isRunning():
-            self._gh_install_thread.quit()
-            self._gh_install_thread.wait(3000)
-
-        self._gh_install_worker = GhCliInstallWorker()
-        self._gh_install_thread = QThread()
-        self._gh_install_worker.moveToThread(self._gh_install_thread)
-
-        self._gh_install_thread.started.connect(self._gh_install_worker.run)
+        # GhCliInstallWorker uses QProcess internally - no QThread needed
+        self._gh_install_worker = GhCliInstallWorker(self)
         self._gh_install_worker.progress.connect(
             lambda msg: self._add_message("assistant", msg)
         )
         self._gh_install_worker.finished.connect(self._on_gh_install_finished)
 
-        self._gh_install_thread.start()
+        # Start the installation (non-blocking)
+        self._gh_install_worker.run()
 
     def _on_gh_install_finished(self, success: bool, message: str):
         """Handle GitHub CLI installation result."""
@@ -1833,12 +1856,8 @@ class CopilotChatPanel(QWidget):
             self._gh_install_btn.setEnabled(True)
             self._gh_install_btn.setText(S.copilot.install_gh_cli)
 
-        # Cleanup thread
-        if self._gh_install_thread:
-            self._gh_install_thread.quit()
-            self._gh_install_thread.wait(3000)
-            self._gh_install_thread = None
-            self._gh_install_worker = None
+        # Cleanup worker
+        self._gh_install_worker = None
 
     def _update_auth_state(self):
         """Update UI based on authentication state."""
