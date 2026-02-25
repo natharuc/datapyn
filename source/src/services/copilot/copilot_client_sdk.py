@@ -411,8 +411,8 @@ class CopilotWorker(QObject):
                     verification_url = verification_url or "https://github.com/login/device"
                     self.auth_required.emit(device_code, verification_url)
                     
-                    # Open browser
-                    webbrowser.open(verification_url)
+                    # NOTE: Browser is opened by main_window._on_lsp_auth_required
+                    # Do NOT open browser here to avoid duplication
                     
                     # Send Enter to continue the process
                     try:
@@ -1424,6 +1424,10 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         username = self._get_github_username()
         self._username = username
         self.authenticated.emit(username or "Copilot")
+        
+        # Note: CopilotAuthService handles state persistence and lock release
+        # via its signal handler (_on_chat_authenticated)
+        
         # Pre-initialize completion worker/session for faster first completion
         self._preinit_completion_session()
 
@@ -1452,9 +1456,11 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         """Auth not found - just update state, don't auto-login.
         
         User must click Sign In button to start login process.
+        Emits auth_failed so CopilotAuthService can release the lock.
         """
         self._is_authenticated = False
-        # Don't call do_login() - let user click Sign In manually
+        # Emit auth_failed to notify CopilotAuthService (which releases the lock)
+        self.auth_failed.emit("Not authenticated - sign in required")
 
     def _on_auth_started(self, message: str):
         """Login process started."""
@@ -1490,6 +1496,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
     def _on_init_error(self, error: str):
         self._is_authenticated = False
         self.auth_failed.emit(error)
+        # Note: CopilotAuthService handles lock release via auth_failed signal handler
 
     def _on_worker_finished(self):
         """Cleanup after worker finishes."""

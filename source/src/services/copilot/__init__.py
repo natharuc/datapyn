@@ -53,11 +53,28 @@ except ImportError:
         logging.getLogger(__name__).warning(f"CopilotClient import failed: {e}")
         CopilotClient = None
 
+# Auth service (centralized authentication)
+try:
+    from .copilot_auth_service import (
+        CopilotAuthService,
+        get_copilot_auth_service,
+        reset_copilot_auth_service,
+    )
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).warning(f"CopilotAuthService import failed: {e}")
+    CopilotAuthService = None
+    get_copilot_auth_service = lambda: None
+    reset_copilot_auth_service = lambda: None
+
 __all__ = [
     "MCPServer",
     "CopilotClient",
     "CopilotServerManager",
     "CopilotLSPClient",
+    "CopilotAuthService",
     "is_copilot_server_available",
     "get_copilot_server_path",
+    "get_copilot_auth_service",
+    "reset_copilot_auth_service",
 ]

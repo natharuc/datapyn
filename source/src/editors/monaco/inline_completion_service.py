@@ -15,6 +15,7 @@ import re
 from typing import Optional, List, Dict
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
+from src.services.copilot.copilot_settings import get_copilot_settings
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +237,7 @@ class InlineCompletionService(QObject):
             self._lsp_connected = False
         
         self._lsp_client = client
+        self._sign_in_attempted = False  # Reset sign-in flag for new client
         
         # Connect to LSP completion signal
         if client and hasattr(client, "completion_ready"):
@@ -244,12 +246,17 @@ class InlineCompletionService(QObject):
             if hasattr(client, "authenticated"):
                 client.authenticated.connect(self._on_lsp_authenticated)
             self._lsp_connected = True
-            auth_status = "authenticated" if client.is_authenticated else "awaiting auth"
-            self._log(f"Copilot LSP connected ({auth_status})", "info")
+            
+            if client.is_authenticated:
+                self._log("Copilot LSP connected (authenticated)", "info")
+            else:
+                # Note: Auto-auth is now handled by CopilotAuthService
+                self._log("Copilot LSP connected (not authenticated yet)", "info")
     
     @pyqtSlot(str)
     def _on_lsp_authenticated(self, username: str) -> None:
         """Handle LSP authentication success."""
+        self._sign_in_attempted = False  # Reset so we can retry if needed
         self._log(f"LSP authenticated as {username} - fast completions ready", "info")
     
     def set_document_info(self, uri: str, language: str) -> None:
@@ -260,6 +267,8 @@ class InlineCompletionService(QObject):
     
     def notify_document_changed(self, text: str) -> None:
         """Notify LSP that the document content changed."""
+        import logging
+        logging.info(f"[Autocomplete] notify_document_changed: uri={self._document_uri}, len={len(text)}, preview={text[:50]!r}...")
         if self._lsp_client and self._document_uri:
             self._document_version += 1
             self._lsp_client.change_document(
@@ -267,11 +276,11 @@ class InlineCompletionService(QObject):
                 self._document_version,
                 text
             )
-    
+
     def open_document(self, uri: str, language: str, text: str) -> None:
         """Open a document in the LSP server."""
-        self._document_uri = uri
-        self._document_language = language
+        import logging
+        logging.info(f"[Autocomplete] open_document: uri={uri}, lang={language}, len={len(text)}")
         self._document_version = 1
         
         if self._lsp_client:
@@ -287,9 +296,13 @@ class InlineCompletionService(QObject):
     @property
     def has_lsp(self) -> bool:
         """Check if LSP client is available and authenticated."""
+        import logging
+        client_id = id(self._lsp_client) if self._lsp_client else None
+        is_auth = self._lsp_client.is_authenticated if self._lsp_client else False
+        logging.info(f"[Autocomplete] has_lsp check: client_id={client_id}, is_auth={is_auth}")
         return (
             self._lsp_client is not None
-            and self._lsp_client.is_authenticated
+            and is_auth
         )
     
     @property
@@ -303,6 +316,11 @@ class InlineCompletionService(QObject):
     @pyqtSlot(str)
     def _on_lsp_completion(self, completion: str) -> None:
         """Handle completion from LSP client."""
+        # Only process if THIS service was waiting for a completion
+        # This prevents duplicate handling when multiple CodeBlocks share LSP client
+        if not self._is_processing:
+            return  # Ignore - this completion is for another code block
+        
         self._is_processing = False  # Release lock
         if completion:
             preview = completion[:60].replace('\n', ' ')
@@ -314,6 +332,10 @@ class InlineCompletionService(QObject):
     @pyqtSlot(str)
     def _on_copilot_completion(self, completion: str) -> None:
         """Handle completion from Copilot."""
+        # Only process if THIS service was waiting for a completion
+        if not self._is_processing:
+            return  # Ignore - this completion is for another code block
+            
         self._is_processing = False  # Release lock
         if completion:
             preview = completion[:60].replace('\n', ' ')
@@ -346,11 +368,18 @@ class InlineCompletionService(QObject):
             self.completion_ready.emit("")
             return
         
-        # Skip if last char is whitespace at line start (likely just indenting)
-        last_line = prefix.split('\n')[-1] if '\n' in prefix else prefix
+        # Get last line for context analysis
+        lines = prefix.split('\n')
+        last_line = lines[-1] if lines else prefix
+        
+        # Allow empty line if previous line has content (user pressed Enter)
+        # This enables "continuation" completions
         if last_line.strip() == "":
-            self.completion_ready.emit("")
-            return
+            # Check if there's meaningful content in previous lines
+            has_previous_content = len(lines) > 1 and any(line.strip() for line in lines[:-1])
+            if not has_previous_content:
+                self.completion_ready.emit("")
+                return
         
         # THROTTLE: Skip if already processing a request
         if self._is_processing:
@@ -437,51 +466,117 @@ class InlineCompletionService(QObject):
             )
             return
         
-        # Log why LSP isn't being used
+        # LSP not available - determine reason and try to help
         if self._lsp_client:
-            lsp_reason = "no subscription" if not self._lsp_client.is_authenticated else "no document URI"
+            if not self._lsp_client.is_authenticated:
+                # LSP exists but not authenticated - notify user
+                if not getattr(self, "_sign_in_attempted", False):
+                    self._sign_in_attempted = True
+                    self._log(
+                        "LSP not authenticated - use Settings > Copilot to sign in",
+                        "info"
+                    )
+                    # Note: Auth is now handled by CopilotAuthService
+                    # User should use Settings > Copilot or Chat panel to sign in
+                lsp_reason = "not authenticated - use Settings > Copilot to sign in"
+            elif not self._document_uri:
+                lsp_reason = "no document URI"
+            else:
+                lsp_reason = "unknown"
         else:
             lsp_reason = "not installed"
         
-        # Fall back to SDK client (slower, 2-3s)
-        if self.has_sdk:
-            self._log(
-                f"Completion via Chat API - {request['language']}, "
-                f"{len(request['prefix'])} chars", "info"
-            )
-            # Include appropriate context based on language
-            context = ""
-            if request["language"] == "sql" and self._database_context:
-                context = self._database_context
-            elif request["language"] == "python":
-                context = self._build_python_context()
-                if context:
-                    self._log(f"Python context: {len(context)} chars", "debug")
-            
-            self._copilot_client.request_inline_completion(
-                prefix=request["prefix"],
-                suffix=request["suffix"],
-                language=request["language"],
-                request_id=request["id"],
-                context=context,
-            )
-            return
-        
-        # No Copilot available - log details
-        lsp_status = "connected" if self._lsp_client else "not loaded"
-        lsp_auth = getattr(self._lsp_client, "is_authenticated", False) if self._lsp_client else False
-        sdk_status = "connected" if self._copilot_client else "not loaded"
-        sdk_auth = getattr(self._copilot_client, "is_authenticated", False) if self._copilot_client else False
-        
         self._log(
-            f"Autocomplete unavailable - LSP: {lsp_status} (auth={lsp_auth}), "
-            f"SDK: {sdk_status} (auth={sdk_auth})",
-            "info"  # Changed from debug so users see this
+            f"Autocomplete unavailable - LSP: {lsp_reason}",
+            "info"
         )
         self._is_processing = False  # Release lock when no service available
         if request["id"] == self._active_request_id:
             self.completion_ready.emit("")
     
+    def force_completion(
+        self,
+        prefix: str,
+        suffix: str,
+        language: str,
+        line: int,
+        column: int,
+    ) -> None:
+        """
+        Force an inline completion request (manual trigger, bypasses throttling).
+        
+        This is triggered by Ctrl+. shortcut and bypasses:
+        - Minimum prefix length check
+        - Throttling/debouncing
+        - Whitespace-only line check
+        
+        Args:
+            prefix: Text before cursor
+            suffix: Text after cursor  
+            language: Programming language (python, sql)
+            line: Current line number (1-indexed)
+            column: Current column (1-indexed)
+        """
+        self._log(f"Force completion request (Ctrl+.) at L{line}:C{column}", "info")
+        
+        try:
+            # Reset processing state to allow immediate request
+            self._is_processing = False
+            
+            # Generate unique request ID
+            self._current_request_id += 1
+            request_id = self._current_request_id
+            self._active_request_id = request_id
+            
+            # Start processing
+            self._is_processing = True
+            
+            # Build request
+            request = {
+                "id": request_id,
+                "prefix": prefix,
+                "suffix": suffix,
+                "language": language,
+                "line": line,
+                "column": column,
+            }
+            
+            # Sync document with LSP
+            full_text = prefix + suffix
+            self._log(f"Force: syncing doc (len={len(full_text)})", "info")
+            self.notify_document_changed(full_text)
+            
+            # Debug: check LSP state
+            lsp_present = self._lsp_client is not None
+            lsp_auth = self._lsp_client.is_authenticated if self._lsp_client else False
+            doc_uri = self._document_uri
+            self._log(f"Force: lsp_present={lsp_present}, lsp_auth={lsp_auth}, doc_uri={doc_uri}", "info")
+            
+            # Try LSP client with manual trigger
+            if self.has_lsp and self._document_uri:
+                self._log(
+                    f"Force LSP completion ({language}, L{line}:C{column})", "info"
+                )
+                self._lsp_client.request_completion(
+                    uri=self._document_uri,
+                    version=self._document_version,
+                    line=line - 1,  # LSP uses 0-indexed
+                    character=column - 1,
+                    trigger_kind=1,  # Manual trigger
+                )
+                return
+            
+            # LSP not available
+            self._log(f"Force completion failed - LSP not available (lsp={lsp_present}, auth={lsp_auth}, uri={doc_uri})", "warning")
+            self._is_processing = False
+            self.completion_ready.emit("")
+        
+        except Exception as e:
+            import traceback
+            self._log(f"Force completion exception: {e}\n{traceback.format_exc()}", "error")
+            self._is_processing = False
+            self.completion_ready.emit("")
+
     def _get_smart_completion(
         self,
         prefix: str,

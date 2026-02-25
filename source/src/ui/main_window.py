@@ -120,6 +120,7 @@ from src.design_system.stylesheet import (
 # Services
 from src.services import AutoUpdateService
 from src.services.copilot import MCPServer, CopilotClient
+from src.services.copilot.copilot_settings import get_copilot_settings
 from src.language import S
 
 # Constantes
@@ -1230,6 +1231,9 @@ class MainWindow(DockingMainWindow):
         # Setup LSP client for fast inline completions (if server is available)
         if hasattr(self, "_lsp_server_available") and self._lsp_server_available:
             self._setup_lsp_client()
+        
+        # Initialize centralized Copilot auth service
+        self._setup_copilot_auth_service()
 
         # Tabifica Results e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
@@ -1941,6 +1945,8 @@ class MainWindow(DockingMainWindow):
         self.main_toolbar.new_tab_clicked.connect(self._new_session)
         self.main_toolbar.run_clicked.connect(self._execute_from_toolbar)
         self.main_toolbar.copilot_clicked.connect(self._toggle_copilot_dock)
+        self.main_toolbar.workspace_switch_requested.connect(self._on_workspace_switch)
+        self.main_toolbar.workspace_settings_requested.connect(self._show_workspace_settings)
 
     def _toggle_copilot_dock(self):
         """Toggle Copilot dock visibility and focus."""
@@ -1955,6 +1961,156 @@ class MainWindow(DockingMainWindow):
                     input_field = getattr(self._copilot_chat_panel, "_input", None)
                     if input_field:
                         input_field.setFocus()
+    
+    def _on_workspace_switch(self, path: str):
+        """Handle workspace switch request from toolbar."""
+        from pathlib import Path
+        from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+        from src.core.workspace_service import get_workspace_service
+        
+        ws_service = get_workspace_service()
+        target_path = Path(path)
+        
+        # Check if already in this workspace
+        if target_path == ws_service.current_workspace:
+            return
+        
+        # Save current state before switching
+        try:
+            self._save_sessions()
+        except Exception as e:
+            logging.warning(f"Failed to save session before workspace switch: {e}")
+        
+        # Create custom dialog with two options
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            S.settings.workspace_switch_title if hasattr(S.settings, 'workspace_switch_title') 
+            else "Switch Workspace"
+        )
+        dialog.setModal(True)
+        dialog.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Message
+        message = QLabel(
+            S.settings.workspace_switch_message if hasattr(S.settings, 'workspace_switch_message')
+            else "Choose how you want to open the selected workspace:"
+        )
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        # Restart current app button
+        restart_btn = QPushButton(
+            S.settings.workspace_switch_restart if hasattr(S.settings, 'workspace_switch_restart')
+            else "Restart Current App"
+        )
+        restart_btn.setToolTip(
+            S.settings.workspace_switch_restart_tooltip if hasattr(S.settings, 'workspace_switch_restart_tooltip')
+            else "Closes current DataPyn and reopens with the new workspace"
+        )
+        restart_btn.setMinimumHeight(35)
+        
+        # Open new instance button
+        new_instance_btn = QPushButton(
+            S.settings.workspace_switch_new_instance if hasattr(S.settings, 'workspace_switch_new_instance')
+            else "Open New Instance"
+        )
+        new_instance_btn.setToolTip(
+            S.settings.workspace_switch_new_instance_tooltip if hasattr(S.settings, 'workspace_switch_new_instance_tooltip')
+            else "Keeps current open and opens another DataPyn with the new workspace"
+        )
+        new_instance_btn.setMinimumHeight(35)
+        
+        # Cancel button
+        cancel_btn = QPushButton(S.general.cancel if hasattr(S.general, 'cancel') else "Cancel")
+        cancel_btn.setMinimumHeight(35)
+        
+        btn_layout.addWidget(restart_btn)
+        btn_layout.addWidget(new_instance_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        # Store result
+        result = {"action": None}
+        
+        def on_restart():
+            result["action"] = "restart"
+            dialog.accept()
+        
+        def on_new_instance():
+            result["action"] = "new_instance"
+            dialog.accept()
+        
+        restart_btn.clicked.connect(on_restart)
+        new_instance_btn.clicked.connect(on_new_instance)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if result["action"] == "restart":
+                # Set the new workspace and restart
+                ws_service.switch_workspace(target_path)
+                self._restart_application()
+            elif result["action"] == "new_instance":
+                # Open new instance with the new workspace
+                self._open_new_instance(target_path)
+                # Revert combo to current workspace (keep current app unchanged)
+                if hasattr(self, 'main_toolbar'):
+                    self.main_toolbar._refresh_workspace_combo()
+        else:
+            # User cancelled - revert combo box
+            if hasattr(self, 'main_toolbar'):
+                self.main_toolbar._refresh_workspace_combo()
+    
+    def _open_new_instance(self, workspace_path):
+        """Open a new DataPyn instance with the specified workspace."""
+        import sys
+        import os
+        from PyQt6.QtCore import QProcess
+        
+        python = sys.executable
+        script = os.path.abspath(sys.argv[0])
+        working_dir = os.path.dirname(script) or os.getcwd()
+        
+        # Pass workspace path as argument
+        args = [script, "--workspace", str(workspace_path)]
+        
+        success = QProcess.startDetached(python, args, working_dir)
+        logging.info(f"New instance started: workspace={workspace_path}, success={success}")
+    
+    def _restart_application(self):
+        """Restart the application."""
+        import sys
+        import os
+        
+        # Save state
+        self._save_sessions()
+        self._save_dock_layout()
+        
+        # Get current script/executable with absolute paths
+        python = sys.executable
+        script = os.path.abspath(sys.argv[0])
+        
+        # Build arguments list (use script path directly)
+        args = [script] + sys.argv[1:]
+        
+        # Schedule restart with working directory
+        from PyQt6.QtCore import QProcess
+        working_dir = os.path.dirname(script) or os.getcwd()
+        
+        # Start the new process
+        success = QProcess.startDetached(python, args, working_dir)
+        logging.info(f"Restart initiated: python={python}, args={args}, cwd={working_dir}, success={success}")
+        
+        # Close this instance
+        from PyQt6.QtWidgets import QApplication
+        QApplication.instance().quit()
     
     def _setup_lsp_client(self):
         """Setup the Copilot LSP client for fast inline completions."""
@@ -1971,7 +2127,7 @@ class MainWindow(DockingMainWindow):
         self._lsp_client = CopilotLSPClient(str(server_path), self)
         
         # Connect LSP signals
-        self._lsp_client.auth_required.connect(self._on_lsp_auth_required)
+        # NOTE: auth_required is handled via CopilotAuthService to avoid duplication
         self._lsp_client.authenticated.connect(self._on_lsp_authenticated)
         self._lsp_client.log_message.connect(self._on_completion_log)
         
@@ -1985,8 +2141,69 @@ class MainWindow(DockingMainWindow):
         logging.warning("[MAIN] Failed to start LSP client")
         return False
     
+    def _setup_copilot_auth_service(self):
+        """Initialize the centralized Copilot authentication service."""
+        from src.services.copilot import get_copilot_auth_service
+        import logging
+        
+        self._copilot_auth_service = get_copilot_auth_service()
+        
+        # Pass clients to auth service
+        if hasattr(self, "_copilot_client") and self._copilot_client:
+            self._copilot_auth_service.set_chat_client(self._copilot_client)
+        
+        if hasattr(self, "_lsp_client") and self._lsp_client:
+            self._copilot_auth_service.set_lsp_client(self._lsp_client)
+        
+        # Connect auth service signals for UI updates
+        self._copilot_auth_service.chat_authenticated.connect(self._on_auth_service_chat_authenticated)
+        self._copilot_auth_service.lsp_authenticated.connect(self._on_auth_service_lsp_authenticated)
+        self._copilot_auth_service.chat_auth_required.connect(self._on_lsp_auth_required)  # Reuse existing handler
+        self._copilot_auth_service.lsp_auth_required.connect(self._on_lsp_auth_required)
+        
+        # Trigger auto-auth after UI is ready
+        self._copilot_auth_service.trigger_auto_auth(delay_ms=500)
+        
+        logging.info("[MAIN] Copilot auth service initialized")
+    
+    def _on_auth_service_chat_authenticated(self, username: str):
+        """Handle Chat authentication via auth service."""
+        import logging
+        logging.info(f"[MAIN] Chat authenticated via auth service: {username}")
+        # Update chat panel if needed
+        if hasattr(self, "_copilot_chat_panel"):
+            self._copilot_chat_panel._on_authenticated(username)
+    
+    def _on_auth_service_lsp_authenticated(self, username: str):
+        """Handle LSP authentication via auth service."""
+        import logging
+        logging.info(f"[MAIN] LSP authenticated via auth service: {username}")
+        self._update_editors_lsp_client()
+    
     def _on_lsp_auth_required(self, user_code: str, verification_uri: str):
         """Handle LSP authentication request."""
+        import logging
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl
+        
+        logging.info(f"[LSP Auth] Device code: {user_code} - Verify at: {verification_uri}")
+        
+        # Copy code to clipboard
+        QApplication.clipboard().setText(user_code)
+        
+        # Open browser
+        QDesktopServices.openUrl(QUrl(verification_uri))
+        
+        # Log to output panel
+        if hasattr(self, "_output_panel") and self._output_panel:
+            self._output_panel.append_styled_text(
+                f"\n[Copilot LSP] Authentication required!\n"
+                f"Code: {user_code} (copied to clipboard)\n"
+                f"Open: {verification_uri}\n",
+                "yellow"
+            )
+        
         # Show in Copilot panel if visible
         if hasattr(self, "_copilot_chat_panel"):
             self._copilot_chat_panel._on_auth_required(user_code, verification_uri)
@@ -2008,6 +2225,38 @@ class MainWindow(DockingMainWindow):
             if hasattr(widget, "editor") and hasattr(widget.editor, "set_lsp_client"):
                 widget.editor.set_lsp_client(self._lsp_client)
     
+    def _on_settings_chat_login(self):
+        """Handle Chat login request from settings dialog.
+        
+        Note: SettingsDialog now calls CopilotAuthService.login_chat() directly.
+        This handler is kept for signal compatibility but does nothing.
+        """
+        logging.info("[Settings] Chat login signal received (handled by auth service)")
+    
+    def _on_settings_chat_logout(self):
+        """Handle Chat logout request from settings dialog.
+        
+        Note: SettingsDialog now calls CopilotAuthService.logout_chat() directly.
+        This handler is kept for signal compatibility but does nothing.
+        """
+        logging.info("[Settings] Chat logout signal received (handled by auth service)")
+    
+    def _on_settings_lsp_login(self):
+        """Handle LSP/Autocomplete login request from settings dialog.
+        
+        Note: SettingsDialog now calls CopilotAuthService.login_lsp() directly.
+        This handler is kept for signal compatibility but does nothing.
+        """
+        logging.info("[Settings] LSP login signal received (handled by auth service)")
+    
+    def _on_settings_lsp_logout(self):
+        """Handle LSP/Autocomplete logout request from settings dialog.
+        
+        Note: SettingsDialog now calls CopilotAuthService.logout_lsp() directly.
+        This handler is kept for signal compatibility but does nothing.
+        """
+        logging.info("[Settings] LSP logout signal received (handled by auth service)")
+
     def _show_copilot_download_dialog(self):
         """Show dialog to download the Copilot LSP server."""
         from src.ui.dialogs import CopilotDownloadDialog
@@ -2227,6 +2476,8 @@ class MainWindow(DockingMainWindow):
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
             "format_code": self._format_current_block,
+            # Autocompletar
+            "force_autocomplete": self._force_autocomplete,
             # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
@@ -2279,6 +2530,8 @@ class MainWindow(DockingMainWindow):
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
             "format_code": self._format_current_block,
+            # Autocompletar
+            "force_autocomplete": self._force_autocomplete,
             # Conexoes
             "manage_connections": self._manage_connections,
             "new_connection": self._new_connection,
@@ -2479,6 +2732,18 @@ class MainWindow(DockingMainWindow):
             self.action_label.setText(S.status.code_formatted.format(lang=lang.upper()))
         else:
             self.action_label.setText(S.status.code_already_formatted.format(lang=lang.upper()))
+
+    def _force_autocomplete(self):
+        """Force trigger autocomplete in current block (Ctrl+. shortcut)."""
+        widget = self._get_current_session_widget()
+        if not widget or not widget.editor:
+            return
+        
+        from src.editors.block_editor import BlockEditor
+        
+        if isinstance(widget.editor, BlockEditor):
+            widget.editor.force_autocomplete_focused_block()
+            logging.info("[MAIN] Force autocomplete triggered via Ctrl+.")
 
     def _add_block_to_current_session(self):
         """Adds a new code block in the current session"""
@@ -3797,6 +4062,26 @@ class MainWindow(DockingMainWindow):
         """Shows the settings dialog"""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
+        
+        # Connect Copilot auth signals
+        dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
+        dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
+        dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
+        dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
+        
+        dialog.exec()
+
+    def _show_workspace_settings(self):
+        """Shows the settings dialog on the Workspace tab."""
+        dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager, initial_tab="workspace")
+        dialog.shortcuts_changed.connect(self._reload_shortcuts)
+        
+        # Connect Copilot auth signals
+        dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
+        dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
+        dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
+        dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
+        
         dialog.exec()
 
     def _toggle_auto_update(self, checked: bool):
@@ -4352,11 +4637,49 @@ class MainWindow(DockingMainWindow):
         widget.session.title = new_name.strip()
         self._save_sessions()
 
+    def _ask_save_before_close(self) -> str:
+        """Ask user whether to save, discard, or cancel when closing unsaved tab.
+        
+        Returns:
+            'save': User wants to save first
+            'discard': User wants to close without saving
+            'cancel': User wants to cancel and keep tab open
+        """
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle(S.dialogs.close_tab_unsaved_title)
+        msg_box.setText(S.dialogs.close_tab_unsaved_msg)
+        
+        save_btn = msg_box.addButton(S.dialogs.save_btn, QMessageBox.ButtonRole.AcceptRole)
+        msg_box.addButton(S.dialogs.dont_save_btn, QMessageBox.ButtonRole.DestructiveRole)
+        msg_box.addButton(QMessageBox.StandardButton.Cancel)
+        msg_box.setDefaultButton(save_btn)
+        
+        msg_box.exec()
+        clicked = msg_box.clickedButton()
+        clicked_role = msg_box.buttonRole(clicked) if clicked else None
+        
+        if clicked_role == QMessageBox.ButtonRole.RejectRole:
+            return "cancel"
+        elif clicked_role == QMessageBox.ButtonRole.AcceptRole:
+            return "save"
+        else:
+            return "discard"
+
     def _close_session_tab(self, index: int):
         """Closes session tab"""
         widget = self.session_tabs.widget(index)
         if not isinstance(widget, SessionWidget):
             return
+
+        # Check if tab has unsaved changes - ask user what to do
+        if getattr(widget, "_is_modified", False):
+            action = self._ask_save_before_close()
+            if action == "cancel":
+                return  # User clicked Cancel - don't close
+            elif action == "save":
+                # Save the file before closing
+                self._save_file()
 
         # Check if execution is running - ask user to confirm cancellation
         if getattr(widget, "_is_executing", False):
@@ -5263,6 +5586,15 @@ class MainWindow(DockingMainWindow):
 
     def _update_window_title(self):
         """Updates window title with context indicator and file path"""
+        from src.core.workspace_service import get_workspace_service
+        
+        ws_service = get_workspace_service()
+        
+        # Workspace prefix (empty for Default workspace)
+        workspace_prefix = ""
+        if not ws_service.is_default_workspace:
+            workspace_prefix = f"{ws_service.current_workspace_name} - "
+        
         base_title = "DataPyn"
 
         # Detectar contexto atual
@@ -5291,7 +5623,7 @@ class MainWindow(DockingMainWindow):
             file_info = f" - {self.workspace_manager.current_file_path}"
             file_path_for_statusbar = str(self.workspace_manager.current_file_path)
 
-        self.setWindowTitle(f"{indicator} {base_title}{file_info}")
+        self.setWindowTitle(f"{workspace_prefix}{indicator} {base_title}{file_info}")
 
         # Atualizar informacao do arquivo na statusbar
         if hasattr(self, "main_statusbar"):

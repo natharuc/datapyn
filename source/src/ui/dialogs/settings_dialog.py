@@ -18,6 +18,9 @@ from PyQt6.QtWidgets import (
     QWidget,
     QComboBox,
     QSpinBox,
+    QCheckBox,
+    QListWidget,
+    QListWidgetItem,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSettings
 from PyQt6.QtGui import QFont, QKeySequence
@@ -25,18 +28,33 @@ from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
 from src.design_system.tokens import get_colors, RADIUS
+from src.services.copilot.copilot_settings import get_copilot_settings
 
 
 class SettingsDialog(QDialog):
     """Settings dialog with tabs for General and Shortcuts"""
 
     shortcuts_changed = pyqtSignal()  # Signal emitted when shortcuts are saved
+    copilot_chat_login_requested = pyqtSignal()  # User wants to login to Chat
+    copilot_chat_logout_requested = pyqtSignal()  # User wants to logout from Chat
+    copilot_lsp_login_requested = pyqtSignal()  # User wants to login to LSP/Autocomplete
+    copilot_lsp_logout_requested = pyqtSignal()  # User wants to logout from LSP/Autocomplete
 
-    def __init__(self, shortcut_manager: ShortcutManager, theme_manager: ThemeManager = None, parent=None):
+    def __init__(self, shortcut_manager: ShortcutManager, theme_manager: ThemeManager = None, parent=None, initial_tab: str = None):
+        """
+        Initialize settings dialog.
+        
+        Args:
+            shortcut_manager: Shortcut manager instance
+            theme_manager: Theme manager instance
+            parent: Parent widget
+            initial_tab: Tab to show initially ("general", "shortcuts", "copilot", "workspace")
+        """
         super().__init__(parent)
         self.shortcut_manager = shortcut_manager
         self.theme_manager = theme_manager or ThemeManager()
         self._original_language = S.language_code
+        self._initial_tab = initial_tab
         self._setup_ui()
         self._load_shortcuts()
 
@@ -93,7 +111,19 @@ class SettingsDialog(QDialog):
         # Shortcuts tab
         self._setup_shortcuts_tab()
 
+        # Copilot tab
+        self._setup_copilot_tab()
+
+        # Workspace tab
+        self._setup_workspace_tab()
+
         layout.addWidget(self.tabs)
+
+        # Select initial tab if specified
+        if self._initial_tab:
+            tab_map = {"general": 0, "shortcuts": 1, "copilot": 2, "workspace": 3}
+            if self._initial_tab in tab_map:
+                self.tabs.setCurrentIndex(tab_map[self._initial_tab])
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -421,6 +451,773 @@ class SettingsDialog(QDialog):
         shortcuts_layout.addWidget(self.table)
 
         self.tabs.addTab(shortcuts_widget, S.settings.tab_shortcuts)
+
+    def _setup_copilot_tab(self):
+        """Sets up the Copilot tab with Chat and Autocomplete settings."""
+        copilot_widget = QWidget()
+        copilot_layout = QVBoxLayout(copilot_widget)
+        copilot_layout.setSpacing(20)
+        copilot_layout.setContentsMargins(20, 20, 20, 20)
+
+        colors = get_colors()
+        self._copilot_settings = get_copilot_settings()
+
+        # ========================
+        # COPILOT CHAT SECTION
+        # ========================
+        chat_group = QGroupBox(
+            S.settings.section_copilot_chat if hasattr(S.settings, 'section_copilot_chat')
+            else "COPILOT CHAT"
+        )
+        chat_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: bold;
+                font-size: 11px;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 20px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }}
+        """)
+        chat_layout = QVBoxLayout(chat_group)
+        chat_layout.setSpacing(10)
+
+        # Chat status row
+        chat_status_row = QHBoxLayout()
+        chat_status_label = QLabel(
+            S.settings.copilot_status if hasattr(S.settings, 'copilot_status')
+            else "Status:"
+        )
+        chat_status_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
+        chat_status_row.addWidget(chat_status_label)
+
+        self._chat_status_value = QLabel()
+        self._chat_status_value.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;")
+        self._update_chat_status_label()
+        chat_status_row.addWidget(self._chat_status_value)
+        chat_status_row.addStretch()
+
+        # Chat login/logout button
+        self._chat_auth_btn = QPushButton()
+        self._chat_auth_btn.setFixedHeight(28)
+        self._chat_auth_btn.setFixedWidth(100)
+        self._update_chat_button_state()
+        self._chat_auth_btn.clicked.connect(self._on_chat_auth_clicked)
+        chat_status_row.addWidget(self._chat_auth_btn)
+
+        chat_layout.addLayout(chat_status_row)
+
+        # Chat auto-connect hint
+        chat_hint = QLabel(self._get_chat_auth_hint())
+        chat_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
+        chat_layout.addWidget(chat_hint)
+        self._chat_hint_label = chat_hint
+
+        copilot_layout.addWidget(chat_group)
+
+        # ========================
+        # AUTOCOMPLETE SECTION
+        # ========================
+        lsp_group = QGroupBox(
+            S.settings.section_copilot_autocomplete if hasattr(S.settings, 'section_copilot_autocomplete')
+            else "AUTOCOMPLETE"
+        )
+        lsp_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: bold;
+                font-size: 11px;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 20px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }}
+        """)
+        lsp_layout = QVBoxLayout(lsp_group)
+        lsp_layout.setSpacing(10)
+
+        # LSP status row
+        lsp_status_row = QHBoxLayout()
+        lsp_status_label = QLabel(
+            S.settings.copilot_status if hasattr(S.settings, 'copilot_status')
+            else "Status:"
+        )
+        lsp_status_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
+        lsp_status_row.addWidget(lsp_status_label)
+
+        self._lsp_status_value = QLabel()
+        self._lsp_status_value.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;")
+        self._update_lsp_status_label()
+        lsp_status_row.addWidget(self._lsp_status_value)
+        lsp_status_row.addStretch()
+
+        # LSP login/logout button
+        self._lsp_auth_btn = QPushButton()
+        self._lsp_auth_btn.setFixedHeight(28)
+        self._lsp_auth_btn.setFixedWidth(100)
+        self._update_lsp_button_state()
+        self._lsp_auth_btn.clicked.connect(self._on_lsp_auth_clicked)
+        lsp_status_row.addWidget(self._lsp_auth_btn)
+
+        lsp_layout.addLayout(lsp_status_row)
+
+        # LSP auto-connect hint
+        lsp_hint = QLabel(self._get_lsp_auth_hint())
+        lsp_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
+        lsp_layout.addWidget(lsp_hint)
+        self._lsp_hint_label = lsp_hint
+
+        copilot_layout.addWidget(lsp_group)
+        copilot_layout.addStretch()
+
+        tab_title = S.settings.tab_copilot if hasattr(S.settings, 'tab_copilot') else "Copilot"
+        self.tabs.addTab(copilot_widget, tab_title)
+
+        # Connect to auth service signals for real-time updates
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
+        auth_service.chat_logged_out.connect(self._on_auth_service_chat_updated)
+        auth_service.lsp_authenticated.connect(self._on_auth_service_lsp_updated)
+        auth_service.lsp_logged_out.connect(self._on_auth_service_lsp_updated)
+
+    def _update_chat_status_label(self):
+        """Update the Chat status label based on current state."""
+        settings = self._copilot_settings
+        if settings.chat_user_logged_out:
+            text = S.settings.copilot_logged_out if hasattr(S.settings, 'copilot_logged_out') else "Logged out by user"
+        elif settings.chat_was_authenticated:
+            username = settings.chat_username or "GitHub User"
+            template = S.settings.copilot_authenticated_as if hasattr(S.settings, 'copilot_authenticated_as') else "Authenticated as {user}"
+            text = template.format(user=username)
+        else:
+            text = S.settings.copilot_never_authenticated if hasattr(S.settings, 'copilot_never_authenticated') else "Never authenticated"
+        self._chat_status_value.setText(text)
+
+    def _update_lsp_status_label(self):
+        """Update the LSP status label based on current state."""
+        settings = self._copilot_settings
+        if settings.lsp_user_logged_out:
+            text = S.settings.copilot_logged_out if hasattr(S.settings, 'copilot_logged_out') else "Logged out by user"
+        elif settings.lsp_was_authenticated:
+            username = settings.lsp_username or "GitHub User"
+            template = S.settings.copilot_authenticated_as if hasattr(S.settings, 'copilot_authenticated_as') else "Authenticated as {user}"
+            text = template.format(user=username)
+        else:
+            text = S.settings.copilot_never_authenticated if hasattr(S.settings, 'copilot_never_authenticated') else "Never authenticated"
+        self._lsp_status_value.setText(text)
+
+    def _on_auth_service_chat_updated(self, *args):
+        """Handle chat auth state change from auth service."""
+        self._update_chat_status_label()
+        self._update_chat_button_state()
+        self._chat_hint_label.setText(self._get_chat_auth_hint())
+
+    def _on_auth_service_lsp_updated(self, *args):
+        """Handle LSP auth state change from auth service."""
+        self._update_lsp_status_label()
+        self._update_lsp_button_state()
+        self._lsp_hint_label.setText(self._get_lsp_auth_hint())
+
+    def _update_chat_button_state(self):
+        """Update Chat button text based on auth state."""
+        colors = get_colors()
+        settings = self._copilot_settings
+        if settings.chat_was_authenticated and not settings.chat_user_logged_out:
+            text = S.settings.copilot_logout if hasattr(S.settings, 'copilot_logout') else "Sign Out"
+            self._chat_auth_btn.setText(text)
+            self._chat_auth_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.bg_elevated};
+                    color: {colors.text_secondary};
+                    border: 1px solid {colors.border_default};
+                    border-radius: 4px;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.danger};
+                    color: white;
+                }}
+            """)
+        else:
+            text = S.settings.copilot_login if hasattr(S.settings, 'copilot_login') else "Sign In"
+            self._chat_auth_btn.setText(text)
+            self._chat_auth_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.interactive_primary};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.interactive_primary}dd;
+                }}
+            """)
+
+    def _update_lsp_button_state(self):
+        """Update LSP button text based on auth state."""
+        colors = get_colors()
+        settings = self._copilot_settings
+        if settings.lsp_was_authenticated and not settings.lsp_user_logged_out:
+            text = S.settings.copilot_logout if hasattr(S.settings, 'copilot_logout') else "Sign Out"
+            self._lsp_auth_btn.setText(text)
+            self._lsp_auth_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.bg_elevated};
+                    color: {colors.text_secondary};
+                    border: 1px solid {colors.border_default};
+                    border-radius: 4px;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.danger};
+                    color: white;
+                }}
+            """)
+        else:
+            text = S.settings.copilot_login if hasattr(S.settings, 'copilot_login') else "Sign In"
+            self._lsp_auth_btn.setText(text)
+            self._lsp_auth_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.interactive_primary};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.interactive_primary}dd;
+                }}
+            """)
+
+    def _get_chat_auth_hint(self) -> str:
+        """Get hint text for Chat auto-auth status."""
+        settings = self._copilot_settings
+        hint_template = S.settings.copilot_auto_connect_hint if hasattr(S.settings, 'copilot_auto_connect_hint') else "Only if you have authenticated before"
+        if settings.should_auto_auth_chat():
+            return f"Auto-connect: ON - {hint_template}"
+        elif settings.chat_user_logged_out:
+            return "Auto-connect: OFF - User logged out"
+        else:
+            return "Auto-connect: OFF - Never authenticated"
+
+    def _get_lsp_auth_hint(self) -> str:
+        """Get hint text for LSP auto-auth status."""
+        settings = self._copilot_settings
+        hint_template = S.settings.copilot_auto_connect_hint if hasattr(S.settings, 'copilot_auto_connect_hint') else "Only if you have authenticated before"
+        if settings.should_auto_auth_lsp():
+            return f"Auto-connect: ON - {hint_template}"
+        elif settings.lsp_user_logged_out:
+            return "Auto-connect: OFF - User logged out"
+        else:
+            return "Auto-connect: OFF - Never authenticated"
+
+    def _on_chat_auth_clicked(self):
+        """Handle Chat login/logout button click."""
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        
+        if auth_service.is_chat_authenticated or (auth_service.chat_was_authenticated and not auth_service.chat_user_logged_out):
+            # Logout
+            auth_service.logout_chat()
+            self.copilot_chat_logout_requested.emit()  # Notify MainWindow
+        else:
+            # Login
+            if auth_service.login_chat():
+                self.copilot_chat_login_requested.emit()  # Notify MainWindow
+            # else: login blocked - auth already in progress
+        
+        self._update_chat_status_label()
+        self._update_chat_button_state()
+        self._chat_hint_label.setText(self._get_chat_auth_hint())
+
+    def _on_lsp_auth_clicked(self):
+        """Handle LSP login/logout button click."""
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        
+        if auth_service.is_lsp_authenticated or (auth_service.lsp_was_authenticated and not auth_service.lsp_user_logged_out):
+            # Logout
+            auth_service.logout_lsp()
+            self.copilot_lsp_logout_requested.emit()  # Notify MainWindow
+        else:
+            # Login
+            if auth_service.login_lsp():
+                self.copilot_lsp_login_requested.emit()  # Notify MainWindow
+            # else: login blocked - auth already in progress
+        
+        self._update_lsp_status_label()
+        self._update_lsp_button_state()
+        self._lsp_hint_label.setText(self._get_lsp_auth_hint())
+
+    def _setup_workspace_tab(self):
+        """Setup Workspace tab for workspace/profile management."""
+        from src.core.workspace_service import get_workspace_service
+        colors = get_colors()
+        
+        workspace_widget = QWidget()
+        workspace_layout = QVBoxLayout(workspace_widget)
+        workspace_layout.setSpacing(15)
+        workspace_layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Store workspace service reference
+        self._workspace_service = get_workspace_service()
+        
+        # ========================
+        # CURRENT WORKSPACE SECTION
+        # ========================
+        current_group = QGroupBox(
+            S.settings.section_workspace_current if hasattr(S.settings, 'section_workspace_current')
+            else "CURRENT WORKSPACE"
+        )
+        current_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: bold;
+                font-size: 11px;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 20px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }}
+        """)
+        current_layout = QVBoxLayout(current_group)
+        current_layout.setSpacing(8)
+        
+        # Workspace name
+        name_row = QHBoxLayout()
+        name_label = QLabel(
+            S.settings.workspace_name if hasattr(S.settings, 'workspace_name')
+            else "Name:"
+        )
+        name_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
+        name_label.setFixedWidth(60)
+        name_row.addWidget(name_label)
+        
+        self._workspace_name_label = QLabel(self._workspace_service.current_workspace_name)
+        self._workspace_name_label.setStyleSheet(f"color: {colors.text_primary}; font-size: 12px; font-weight: bold;")
+        name_row.addWidget(self._workspace_name_label)
+        name_row.addStretch()
+        current_layout.addLayout(name_row)
+        
+        # Workspace path
+        path_row = QHBoxLayout()
+        path_label = QLabel(
+            S.settings.workspace_path if hasattr(S.settings, 'workspace_path')
+            else "Folder:"
+        )
+        path_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
+        path_label.setFixedWidth(60)
+        path_row.addWidget(path_label)
+        
+        self._workspace_path_label = QLabel(str(self._workspace_service.current_workspace))
+        self._workspace_path_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-weight: normal;")
+        self._workspace_path_label.setWordWrap(True)
+        path_row.addWidget(self._workspace_path_label, 1)
+        current_layout.addLayout(path_row)
+        
+        # Hint
+        hint_label = QLabel(
+            S.settings.workspace_hint if hasattr(S.settings, 'workspace_hint')
+            else "All configurations are stored in this folder"
+        )
+        hint_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
+        current_layout.addWidget(hint_label)
+        
+        workspace_layout.addWidget(current_group)
+        
+        # ========================
+        # SAVED WORKSPACES SECTION
+        # ========================
+        saved_group = QGroupBox(
+            S.settings.section_workspaces if hasattr(S.settings, 'section_workspaces')
+            else "SAVED WORKSPACES"
+        )
+        saved_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: bold;
+                font-size: 11px;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 20px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }}
+        """)
+        saved_layout = QVBoxLayout(saved_group)
+        saved_layout.setSpacing(10)
+        
+        # Workspace list
+        self._workspace_list = QListWidget()
+        self._workspace_list.setFixedHeight(120)
+        self._workspace_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {colors.bg_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                font-size: 11px;
+            }}
+            QListWidget::item {{
+                padding: 6px 8px;
+                border-bottom: 1px solid {colors.border_muted};
+            }}
+            QListWidget::item:selected {{
+                background-color: {colors.interactive_primary};
+                color: white;
+            }}
+            QListWidget::item:hover:!selected {{
+                background-color: {colors.bg_elevated};
+            }}
+        """)
+        
+        # Store colors for button state updates (must be before _refresh_workspace_list)
+        self._workspace_colors = colors
+        
+        self._refresh_workspace_list()
+        saved_layout.addWidget(self._workspace_list)
+        
+        # Buttons row
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        
+        add_btn = QPushButton(
+            S.settings.workspace_add if hasattr(S.settings, 'workspace_add')
+            else "Add..."
+        )
+        add_btn.setFixedHeight(28)
+        add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.interactive_primary};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 11px;
+                padding: 0 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary}dd;
+            }}
+        """)
+        add_btn.clicked.connect(self._on_add_workspace)
+        btn_row.addWidget(add_btn)
+        
+        duplicate_btn = QPushButton(
+            S.settings.workspace_duplicate if hasattr(S.settings, 'workspace_duplicate')
+            else "Duplicate..."
+        )
+        duplicate_btn.setFixedHeight(28)
+        duplicate_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.bg_elevated};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                font-size: 11px;
+                padding: 0 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary};
+                color: white;
+            }}
+        """)
+        duplicate_btn.clicked.connect(self._on_duplicate_workspace)
+        btn_row.addWidget(duplicate_btn)
+        
+        self._remove_btn = QPushButton(
+            S.settings.workspace_remove if hasattr(S.settings, 'workspace_remove')
+            else "Remove"
+        )
+        self._remove_btn.setFixedHeight(28)
+        self._remove_btn.clicked.connect(self._on_remove_workspace)
+        btn_row.addWidget(self._remove_btn)
+        
+        # Connect list selection to update button state
+        self._workspace_list.currentItemChanged.connect(self._update_remove_button_state)
+        
+        btn_row.addStretch()
+        saved_layout.addLayout(btn_row)
+        
+        # Switch hint
+        switch_hint = QLabel(
+            S.settings.workspace_switch_hint if hasattr(S.settings, 'workspace_switch_hint')
+            else "Switching workspace requires restarting the app"
+        )
+        switch_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
+        saved_layout.addWidget(switch_hint)
+        
+        workspace_layout.addWidget(saved_group)
+        workspace_layout.addStretch()
+        
+        # Add tab
+        tab_title = S.settings.tab_workspace if hasattr(S.settings, 'tab_workspace') else "Workspace"
+        self.tabs.addTab(workspace_widget, tab_title)
+    
+    def _refresh_workspace_list(self):
+        """Refresh the workspace list widget."""
+        self._workspace_list.clear()
+        workspaces = self._workspace_service.list_workspaces()
+        current = self._workspace_service.current_workspace
+        
+        for name, path in workspaces:
+            item_text = f"{name}"
+            if path == current:
+                item_text += " (current)"
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            self._workspace_list.addItem(item)
+        
+        # Update remove button state
+        self._update_remove_button_state()
+    
+    def _update_remove_button_state(self, current_item=None):
+        """Update remove button enabled/disabled state based on selection."""
+        # Skip if button or colors not yet created
+        if not hasattr(self, '_remove_btn') or not hasattr(self, '_workspace_colors'):
+            return
+        
+        from pathlib import Path
+        colors = self._workspace_colors
+        
+        current_item = current_item or self._workspace_list.currentItem()
+        can_remove = False
+        
+        if current_item:
+            path_str = current_item.data(Qt.ItemDataRole.UserRole)
+            path = Path(path_str)
+            
+            # Can remove if: not default workspace AND not current workspace
+            is_default = (path == self._workspace_service.current_workspace and 
+                         self._workspace_service.is_default_workspace)
+            is_current = (path == self._workspace_service.current_workspace)
+            
+            # Check if it's the default workspace path
+            from src.core.workspace_service import DEFAULT_WORKSPACE_PATH
+            is_default_path = (path == DEFAULT_WORKSPACE_PATH)
+            
+            can_remove = not is_current and not is_default_path
+        
+        if can_remove:
+            # Enable with red danger style
+            self._remove_btn.setEnabled(True)
+            self._remove_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.danger};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    padding: 0 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.danger}dd;
+                }}
+            """)
+        else:
+            # Disable with muted style
+            self._remove_btn.setEnabled(False)
+            self._remove_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.bg_tertiary};
+                    color: {colors.text_tertiary};
+                    border: 1px solid {colors.border_muted};
+                    border-radius: 4px;
+                    font-size: 11px;
+                    padding: 0 12px;
+                }}
+            """)
+    
+    def _on_add_workspace(self):
+        """Handle add workspace button click."""
+        from PyQt6.QtWidgets import QFileDialog
+        from pathlib import Path
+        
+        title = (S.settings.workspace_browse_title 
+                 if hasattr(S.settings, 'workspace_browse_title') 
+                 else "Select Workspace Folder")
+        
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            title,
+            str(Path.home()),
+        )
+        
+        if folder:
+            path = Path(folder)
+            if self._workspace_service.add_workspace(path):
+                self._refresh_workspace_list()
+    
+    def _on_remove_workspace(self):
+        """Handle remove workspace button click - deletes the folder."""
+        from pathlib import Path
+        from PyQt6.QtWidgets import QMessageBox
+        import shutil
+        
+        current_item = self._workspace_list.currentItem()
+        if not current_item:
+            return
+        
+        path_str = current_item.data(Qt.ItemDataRole.UserRole)
+        path = Path(path_str)
+        
+        # Can't remove default or current
+        from src.core.workspace_service import DEFAULT_WORKSPACE_PATH
+        if path == DEFAULT_WORKSPACE_PATH:
+            return
+        if path == self._workspace_service.current_workspace:
+            return
+        
+        # Ask for confirmation
+        reply = QMessageBox.warning(
+            self,
+            S.settings.workspace_remove_title if hasattr(S.settings, 'workspace_remove_title')
+            else "Remove Workspace",
+            (S.settings.workspace_remove_confirm if hasattr(S.settings, 'workspace_remove_confirm')
+             else f"Are you sure you want to permanently delete this workspace and all its files?\n\n{path}\n\nThis action cannot be undone."),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        try:
+            # Remove from workspace list first
+            self._workspace_service.remove_workspace(path)
+            
+            # Delete the folder
+            if path.exists():
+                shutil.rmtree(path)
+            
+            self._refresh_workspace_list()
+            
+            QMessageBox.information(
+                self,
+                "Success",
+                S.settings.workspace_remove_success if hasattr(S.settings, 'workspace_remove_success')
+                else "Workspace removed successfully."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                (S.settings.workspace_remove_error if hasattr(S.settings, 'workspace_remove_error')
+                 else f"Failed to remove workspace:\n{str(e)}")
+            )
+
+    def _on_duplicate_workspace(self):
+        """Handle duplicate workspace button click."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
+        from pathlib import Path
+        import shutil
+        
+        # Get selected workspace or use current
+        current_item = self._workspace_list.currentItem()
+        if current_item:
+            source_path = Path(current_item.data(Qt.ItemDataRole.UserRole))
+        else:
+            source_path = self._workspace_service.current_workspace
+        
+        if not source_path.exists():
+            return
+        
+        # Ask for destination folder
+        title = (S.settings.workspace_duplicate_title 
+                 if hasattr(S.settings, 'workspace_duplicate_title') 
+                 else "Select Destination Folder for Duplicate")
+        
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            title,
+            str(Path.home()),
+        )
+        
+        if not folder:
+            return
+        
+        dest_path = Path(folder)
+        
+        # Check if destination is not same as source
+        if dest_path == source_path:
+            QMessageBox.warning(
+                self,
+                "Error",
+                S.settings.workspace_duplicate_same_folder if hasattr(S.settings, 'workspace_duplicate_same_folder')
+                else "Destination folder cannot be the same as source."
+            )
+            return
+        
+        # Check if destination already has files
+        if any(dest_path.iterdir()) if dest_path.exists() else False:
+            reply = QMessageBox.question(
+                self,
+                "Confirm",
+                S.settings.workspace_duplicate_not_empty if hasattr(S.settings, 'workspace_duplicate_not_empty')
+                else "Destination folder is not empty. Files may be overwritten. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        
+        # Copy files
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            
+            # Ensure destination exists
+            dest_path.mkdir(parents=True, exist_ok=True)
+            
+            # Copy each file/folder from source to dest
+            for item in source_path.iterdir():
+                src_item = source_path / item.name
+                dst_item = dest_path / item.name
+                
+                if src_item.is_dir():
+                    if dst_item.exists():
+                        shutil.rmtree(dst_item)
+                    shutil.copytree(src_item, dst_item)
+                else:
+                    shutil.copy2(src_item, dst_item)
+            
+            QApplication.restoreOverrideCursor()
+            
+            # Add the new workspace
+            if self._workspace_service.add_workspace(dest_path):
+                self._refresh_workspace_list()
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    S.settings.workspace_duplicate_success if hasattr(S.settings, 'workspace_duplicate_success')
+                    else f"Workspace duplicated successfully to:\n{dest_path}"
+                )
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(
+                self,
+                "Error",
+                S.settings.workspace_duplicate_error if hasattr(S.settings, 'workspace_duplicate_error')
+                else f"Failed to duplicate workspace:\n{str(e)}"
+            )
 
     def _load_shortcuts(self):
         """Loads shortcuts into the table"""

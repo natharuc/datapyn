@@ -25,6 +25,17 @@
             opacity: 0.4;
             font-style: italic;
         }
+        /* Suggest widget (autocomplete dropdown) - show more items */
+        .monaco-editor .suggest-widget {
+            min-height: 200px !important;
+            max-height: 400px !important;
+        }
+        .monaco-editor .suggest-widget .monaco-list {
+            min-height: 180px !important;
+        }
+        .monaco-editor .suggest-widget .monaco-list .monaco-scrollable-element {
+            min-height: 180px !important;
+        }
     </style>
 </head>
 <body>
@@ -129,8 +140,14 @@
                         showFunctions: true,
                         showVariables: true,
                         showClasses: true,
-                        showKeywords: true
+                        showKeywords: true,
+                        maxVisibleSuggestions: 12,
+                        showStatusBar: true,
+                        preview: true,
+                        previewMode: 'subwordSmart'
                     },
+                    suggestFontSize: 13,
+                    suggestLineHeight: 22,
                     inlineSuggest: {
                         enabled: true,
                         mode: 'prefix'
@@ -293,7 +310,8 @@
                                         );
                                         
                                         if (completionText && completionText.length > 0) {
-                                            console.log('[Monaco] Creating inline completion item: ' + completionText.substring(0, 40) + '...');
+                                            const lineCount = (completionText.match(/\n/g) || []).length + 1;
+                                            console.log('[Monaco] Creating inline completion item: lines=' + lineCount + ', len=' + completionText.length + ', preview=' + completionText.substring(0, 60).replace(/\n/g, '\\n') + '...');
                                             const item = {
                                                 insertText: completionText,
                                                 range: new monaco.Range(
@@ -367,6 +385,140 @@
                 pendingCompletion = null;
             } else {
                 console.log('[Monaco] No pending completion to resolve');
+            }
+        }
+        
+        // Request SQL context completions from Python (aliases, CTEs, subqueries)
+        function requestSqlContextCompletions(fullText, prefix, line, column) {
+            return new Promise((resolve, reject) => {
+                if (!pyBridge) {
+                    reject('No Python bridge');
+                    return;
+                }
+                
+                console.log('[Monaco] Requesting SQL context for "' + prefix + '."');
+                pendingSqlContextCompletion = { resolve, reject };
+                
+                pyBridge.requestSqlContext(fullText, prefix, line, column);
+                
+                // Timeout after 3 seconds
+                setTimeout(() => {
+                    if (pendingSqlContextCompletion) {
+                        console.log('[Monaco] SQL context timeout');
+                        pendingSqlContextCompletion.resolve([]);
+                        pendingSqlContextCompletion = null;
+                    }
+                }, 3000);
+            });
+        }
+        
+        // Called from Python to provide SQL context-aware completions
+        function receiveSqlContextCompletions(completions) {
+            console.log('[Monaco] Received SQL context completions: ' + (completions ? completions.length : 0));
+            if (pendingSqlContextCompletion) {
+                pendingSqlContextCompletion.resolve(completions || []);
+                pendingSqlContextCompletion = null;
+            }
+        }
+        
+        // Request general SQL completions from Python (SSMS-style context-aware)
+        function requestSqlCompletions(fullText, line, column) {
+            return new Promise((resolve, reject) => {
+                if (!pyBridge) {
+                    reject('No Python bridge');
+                    return;
+                }
+                
+                console.log('[Monaco] Requesting SQL completions at L' + line + ':C' + column);
+                pendingSqlCompletion = { resolve, reject };
+                
+                pyBridge.requestSqlCompletion(fullText, line, column);
+                
+                // Timeout after 3 seconds
+                setTimeout(() => {
+                    if (pendingSqlCompletion) {
+                        console.log('[Monaco] SQL completion timeout');
+                        pendingSqlCompletion.resolve([]);
+                        pendingSqlCompletion = null;
+                    }
+                }, 3000);
+            });
+        }
+        
+        // Called from Python to provide SQL completions
+        function receiveSqlCompletions(completions) {
+            console.log('[Monaco] Received SQL completions: ' + (completions ? completions.length : 0));
+            if (pendingSqlCompletion) {
+                pendingSqlCompletion.resolve(completions || []);
+                pendingSqlCompletion = null;
+            }
+        }
+        
+        // Sort text helper - columns first, then tables, then keywords
+        function getSortText(c) {
+            if (c.category === 'column') return '0' + c.label;
+            if (c.category === 'table') return '1' + c.label;
+            return '2' + c.label;
+        }
+        
+        // Request Python Jedi completions from Python
+        function requestPythonCompletions(fullText, line, column) {
+            return new Promise((resolve, reject) => {
+                if (!pyBridge) {
+                    reject('No Python bridge');
+                    return;
+                }
+                
+                console.log('[Monaco] Requesting Python completions at L' + line + ':C' + column);
+                pendingPythonCompletion = { resolve, reject };
+                
+                pyBridge.requestPythonCompletion(fullText, line, column);
+                
+                // Timeout after 3 seconds
+                setTimeout(() => {
+                    if (pendingPythonCompletion) {
+                        console.log('[Monaco] Python completion timeout');
+                        pendingPythonCompletion.resolve([]);
+                        pendingPythonCompletion = null;
+                    }
+                }, 3000);
+            });
+        }
+        
+        // Called from Python to provide Python completions
+        function receivePythonCompletions(completions) {
+            console.log('[Monaco] Received Python completions: ' + (completions ? completions.length : 0));
+            if (pendingPythonCompletion) {
+                pendingPythonCompletion.resolve(completions || []);
+                pendingPythonCompletion = null;
+            }
+        }
+
+        // Force request completion (triggered by Ctrl+. from Python)
+        function forceRequestCompletion() {
+            if (!editor) {
+                console.log('[Monaco] No editor for force completion');
+                return;
+            }
+            
+            const model = editor.getModel();
+            const position = editor.getPosition();
+            
+            if (!model || !position) {
+                console.log('[Monaco] No model/position for force completion');
+                return;
+            }
+            
+            const fullText = model.getValue();
+            const offset = model.getOffsetAt(position);
+            const prefix = fullText.substring(0, offset);
+            const suffix = fullText.substring(offset);
+            
+            console.log('[Monaco] Force completion at L' + position.lineNumber + ':C' + position.column);
+            
+            // Call the force bridge method (bypasses throttling on Python side)
+            if (pyBridge) {
+                pyBridge.forceRequestCompletion(prefix, suffix, position.lineNumber, position.column);
             }
         }
         
@@ -547,10 +699,17 @@
         let keywordCompletions = [];
         let columnsByTable = {}; // { tableName: [columns] }
         
+        // Pending completion requests for async handling
+        let pendingSqlContextCompletion = null;
+        let pendingSqlCompletion = null;
+        let pendingPythonCompletion = null;
+        
         // Register completion providers ONCE (called after Monaco is loaded)
         function registerStandardCompletionProviders() {
+            // SQL provider - ALWAYS requests from Python (SSMS-style)
             monaco.languages.registerCompletionItemProvider('sql', {
-                provideCompletionItems: function(model, position) {
+                triggerCharacters: ['.', ' '],
+                provideCompletionItems: async function(model, position, context) {
                     const word = model.getWordUntilPosition(position);
                     const range = {
                         startLineNumber: position.lineNumber,
@@ -559,33 +718,73 @@
                         endColumn: word.endColumn
                     };
                     
-                    // Get text before cursor for context analysis
+                    const fullText = model.getValue();
+                    
+                    if (!pyBridge) {
+                        console.log('[MONACO] No Python bridge for SQL completions');
+                        return { suggestions: [] };
+                    }
+                    
+                    // Check for dot pattern (table.column style)
                     const textBeforeCursor = model.getValueInRange({
                         startLineNumber: 1,
                         startColumn: 1,
                         endLineNumber: position.lineNumber,
                         endColumn: position.column
                     });
+                    const lines = textBeforeCursor.split('\n');
+                    const currentLine = lines[lines.length - 1];
+                    const dotMatch = currentLine.match(/(\w+)\.$/);
                     
-                    // Filter completions based on context
-                    let filtered = filterCompletionsByContext(textBeforeCursor, 'sql');
+                    if (dotMatch) {
+                        // Dot pattern - request column completions for specific table/alias
+                        const prefix = dotMatch[1];
+                        console.log('[MONACO] SQL dot pattern: "' + prefix + '."');
+                        
+                        try {
+                            const completions = await requestSqlContextCompletions(fullText, prefix, position.lineNumber, position.column);
+                            console.log('[MONACO] Received ' + (completions ? completions.length : 0) + ' dot completions');
+                            return {
+                                suggestions: (completions || []).map(c => ({
+                                    label: c.label,
+                                    kind: getCompletionKind(c.kind),
+                                    insertText: c.insertText || c.label,
+                                    detail: c.detail || '',
+                                    range: range
+                                }))
+                            };
+                        } catch (e) {
+                            console.log('[MONACO] Dot completion error:', e);
+                            return { suggestions: [] };
+                        }
+                    }
                     
-                    console.log('[MONACO] provideCompletionItems SQL: textBefore=', textBeforeCursor.slice(-50), 'allCompletions=', allCompletions.length, 'filtered=', filtered.length);
+                    // General SQL completion - SSMS style (context-aware keywords, tables, columns)
+                    console.log('[MONACO] SQL general completion at L' + position.lineNumber + ':C' + position.column);
                     
-                    return {
-                        suggestions: filtered.map(c => ({
-                            label: c.label,
-                            kind: getCompletionKind(c.kind),
-                            insertText: c.insertText || c.label,
-                            detail: c.detail || '',
-                            range: range
-                        }))
-                    };
+                    try {
+                        const completions = await requestSqlCompletions(fullText, position.lineNumber, position.column);
+                        console.log('[MONACO] Received ' + (completions ? completions.length : 0) + ' SQL completions');
+                        return {
+                            suggestions: (completions || []).map(c => ({
+                                label: c.label,
+                                kind: getCompletionKind(c.kind),
+                                insertText: c.insertText || c.label,
+                                detail: c.detail || '',
+                                range: range,
+                                sortText: getSortText(c)
+                            }))
+                        };
+                    } catch (e) {
+                        console.log('[MONACO] SQL completion error:', e);
+                        return { suggestions: [] };
+                    }
                 }
             });
             
             monaco.languages.registerCompletionItemProvider('python', {
-                provideCompletionItems: function(model, position) {
+                triggerCharacters: ['.'],
+                provideCompletionItems: async function(model, position, context) {
                     const word = model.getWordUntilPosition(position);
                     const range = {
                         startLineNumber: position.lineNumber,
@@ -594,6 +793,7 @@
                         endColumn: word.endColumn
                     };
                     
+                    const fullText = model.getValue();
                     const textBeforeCursor = model.getValueInRange({
                         startLineNumber: 1,
                         startColumn: 1,
@@ -601,8 +801,35 @@
                         endColumn: position.column
                     });
                     
-                    let filtered = filterCompletionsByContext(textBeforeCursor, 'python');
+                    // Check if triggered by dot or identifier
+                    const lines = textBeforeCursor.split('\n');
+                    const currentLine = lines[lines.length - 1];
+                    const dotMatch = currentLine.match(/(\w+)\.$/);
                     
+                    // Request from Python Jedi for context-aware completions
+                    if (pyBridge && (dotMatch || word.word.length >= 1)) {
+                        try {
+                            console.log('[MONACO] Requesting Python Jedi completions');
+                            const completions = await requestPythonCompletions(fullText, position.lineNumber, position.column);
+                            if (completions && completions.length > 0) {
+                                console.log('[MONACO] Received ' + completions.length + ' Jedi completions');
+                                return {
+                                    suggestions: completions.map(c => ({
+                                        label: c.label,
+                                        kind: getCompletionKind(c.kind),
+                                        insertText: c.insertText || c.label,
+                                        detail: c.detail || '',
+                                        range: range
+                                    }))
+                                };
+                            }
+                        } catch (e) {
+                            console.log('[MONACO] Python Jedi completion error:', e);
+                        }
+                    }
+                    
+                    // Fallback to local filtering
+                    let filtered = filterCompletionsByContext(textBeforeCursor, 'python');
                     console.log('[MONACO] provideCompletionItems Python: allCompletions=', allCompletions.length, 'filtered=', filtered.length);
                     
                     return {

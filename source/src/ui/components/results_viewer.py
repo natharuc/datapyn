@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QSpinBox,
 )
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer
+from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer, QThread
 from PyQt6.QtGui import QColor, QImage, QPixmap, QFont
 import pandas as pd
 import json
@@ -37,6 +37,7 @@ import qtawesome as qta
 from src.core.theme_manager import ThemeManager
 from src.language import S
 from src.design_system.tokens import SCROLLBAR_STYLE
+from src.workers import FileExportWorker
 
 
 class CSVExportDialog(QDialog):
@@ -229,6 +230,9 @@ class ResultsViewer(QWidget):
         self.current_df: Optional[pd.DataFrame] = None
         self._current_image_bytes: Optional[bytes] = None
         self._display_limit: int = self._load_display_limit()
+        # Background export tracking
+        self._export_thread: Optional[QThread] = None
+        self._export_worker: Optional[FileExportWorker] = None
 
     def _setup_ui(self):
         """Configura a interface"""
@@ -1011,14 +1015,15 @@ class ResultsViewer(QWidget):
         if not filename.lower().endswith(".csv"):
             filename += ".csv"
 
-        try:
-            self.current_df.to_csv(filename, index=False, encoding=encoding, sep=delimiter, header=include_header)
-
-            if open_folder:
-                subprocess.run(["explorer", "/select,", os.path.normpath(filename)])
-
-        except Exception as e:
-            QMessageBox.critical(self, S.results.error_title, S.results.error_export_csv.format(error=str(e)))
+        # Export in background to avoid blocking UI
+        self._start_export_background(
+            filename, 
+            "csv",
+            encoding=encoding,
+            sep=delimiter,
+            header=include_header,
+            open_folder=open_folder
+        )
 
     def _export_excel(self):
         """Export to Excel (clipboard or file)"""
@@ -1041,10 +1046,8 @@ class ResultsViewer(QWidget):
         if filename:
             if not filename.lower().endswith(".xlsx"):
                 filename += ".xlsx"
-            try:
-                self.current_df.to_excel(filename, index=False)
-            except Exception as e:
-                QMessageBox.critical(self, S.results.error_title, S.results.error_export_excel.format(error=str(e)))
+            # Export in background
+            self._start_export_background(filename, "excel")
 
     def _export_json(self):
         """Export to JSON (clipboard or file)"""
@@ -1066,10 +1069,64 @@ class ResultsViewer(QWidget):
         if filename:
             if not filename.lower().endswith(".json"):
                 filename += ".json"
-            try:
-                self.current_df.to_json(filename, orient="records", indent=2, force_ascii=False)
-            except Exception as e:
-                QMessageBox.critical(self, S.results.error_title, S.results.error_export_json.format(error=str(e)))
+            # Export in background
+            self._start_export_background(filename, "json", orient="records", indent=2, force_ascii=False)
+
+    def _start_export_background(self, filepath: str, export_format: str, open_folder: bool = False, **options):
+        """Start export in background thread"""
+        # Cancel any existing export
+        self._cleanup_export_thread()
+
+        # Show progress indicator
+        self.info_label.setText(S.results.exporting if hasattr(S.results, 'exporting') else "Exporting...")
+
+        # Create thread and worker
+        self._export_thread = QThread()
+        self._export_worker = FileExportWorker(
+            df=self.current_df.copy(),  # Copy to avoid issues
+            file_path=filepath,
+            export_format=export_format,
+            **options
+        )
+        self._export_worker.moveToThread(self._export_thread)
+
+        # Store open_folder flag
+        self._export_open_folder = open_folder
+
+        # Connect signals
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.export_complete.connect(self._on_export_complete)
+        self._export_worker.error.connect(self._on_export_error)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_thread.finished.connect(self._cleanup_export_thread)
+
+        # Start
+        self._export_thread.start()
+
+    def _on_export_complete(self, filepath: str):
+        """Callback when export finishes successfully"""
+        self.info_label.setText(S.results.export_success if hasattr(S.results, 'export_success') else "Export complete!")
+        
+        # Open folder if requested
+        if getattr(self, '_export_open_folder', False):
+            subprocess.run(["explorer", "/select,", os.path.normpath(filepath)])
+
+    def _on_export_error(self, error_msg: str):
+        """Callback when export fails"""
+        self.info_label.setText(S.results.export_failed if hasattr(S.results, 'export_failed') else "Export failed")
+        QMessageBox.critical(self, S.results.error_title, error_msg)
+
+    def _cleanup_export_thread(self):
+        """Cleanup export thread and worker"""
+        if self._export_worker is not None:
+            self._export_worker.deleteLater()
+            self._export_worker = None
+        if self._export_thread is not None:
+            if self._export_thread.isRunning():
+                self._export_thread.quit()
+                self._export_thread.wait(1000)
+            self._export_thread.deleteLater()
+            self._export_thread = None
 
     def _copy_to_clipboard(self):
         """Copy formatted data to clipboard"""

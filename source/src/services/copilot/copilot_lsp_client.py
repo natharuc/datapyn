@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer
+from src.services.copilot.copilot_settings import get_copilot_settings
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,19 @@ class CopilotLSPClient(QObject):
         self._is_authenticated = False
         self._current_document_version = 0
         self._current_document_uri = ""
+        self._current_document_text = ""  # Cached document text for getCompletions
+        self._current_document_language = "python"  # Language ID
+        
+        # Sign-in tracking
+        self._sign_in_in_progress = False
+        self._polling_active = False
+        self._poll_attempts = 0
         
         # Completion tracking
         self._pending_completion_id: Optional[int] = None
+        self._panel_solutions: List[str] = []  # Solutions from getPanelCompletions
+        self._panel_request_active = False
+        self._panel_start_time: float = 0.0
     
     @property
     def is_initialized(self) -> bool:
@@ -76,7 +87,14 @@ class CopilotLSPClient(QObject):
     @property
     def is_authenticated(self) -> bool:
         """Check if the user is authenticated."""
+        # Debug: log every check at INFO level to see the problem
+        logger.info(f"[LSP] is_authenticated={self._is_authenticated} (id={id(self)})")
         return self._is_authenticated
+    
+    def _set_authenticated(self, value: bool, source: str = "unknown") -> None:
+        """Set authentication state with logging."""
+        logger.info(f"[LSP] _set_authenticated({value}) from {source} (id={id(self)}, was={self._is_authenticated})")
+        self._is_authenticated = value
     
     def _log(self, message: str, level: str = "info") -> None:
         """Log message to both logger and output panel signal."""
@@ -87,6 +105,15 @@ class CopilotLSPClient(QObject):
         else:
             logger.info(f"[LSP] {message}")
         self.log_message.emit(f"[LSP] {message}", level)
+
+    def _emit_authenticated(self, username: str) -> None:
+        """Emit authenticated signal.
+        
+        Note: CopilotAuthService handles state persistence and lock release
+        via its signal handler.
+        """
+        self._set_authenticated(True, "_emit_authenticated")
+        self.authenticated.emit(username)
 
     def start(self) -> bool:
         """
@@ -149,8 +176,12 @@ class CopilotLSPClient(QObject):
             self._process = None
         
         self._initialized = False
-        self._is_authenticated = False
+        self._set_authenticated(False, "stop")
         logger.info("[LSP] Server stopped")
+    
+    def cleanup(self) -> None:
+        """Cleanup resources. Alias for stop()."""
+        self.stop()
     
     def initialize(self, workspace_path: str = "") -> None:
         """
@@ -210,12 +241,15 @@ class CopilotLSPClient(QObject):
             }
         }, on_init_response)
     
-    def check_status(self, auto_sign_in: bool = True) -> None:
+    def check_status(self, auto_sign_in: bool = False) -> None:
         """Check authentication status.
         
         Args:
-            auto_sign_in: If True and not signed in, automatically start sign-in
+            auto_sign_in: If True and not signed in, automatically start sign-in.
+                          Default is False - CopilotAuthService controls when to sign in.
         """
+        self._log(f"Checking auth status (auto_sign_in={auto_sign_in})...", "info")
+        
         def on_status(result, error):
             if error:
                 self._log(f"checkStatus error: {error}", "error")
@@ -224,39 +258,72 @@ class CopilotLSPClient(QObject):
             status = result.get("status", "Unknown") if result else "Unknown"
             self._log(f"Auth status: {status}", "info")
             
-            self._is_authenticated = status == "SignedIn"
+            # LSP returns "OK" or "SignedIn" when authenticated
+            self._set_authenticated(status in ("SignedIn", "OK"), f"on_status({status})")
             self.status_changed.emit(status)
             
             if self._is_authenticated:
                 user = result.get("user", "GitHub User")
                 self._log(f"Authenticated as {user}", "info")
-                self.authenticated.emit(user)
+                self._emit_authenticated(user)
             elif auto_sign_in and status in ("NotSignedIn", "SignedOut", "Unknown"):
                 # Auto-trigger sign-in for device flow
+                # Note: CopilotAuthService should call this with auto_sign_in=True
+                # only when it has acquired the auth lock
                 self._log("Not authenticated, starting sign-in flow...", "info")
                 self.sign_in()
+            else:
+                self._log(f"Status {status}, auto_sign_in={auto_sign_in}", "debug")
         
         self._send_request("checkStatus", {}, on_status)
     
     def sign_in(self) -> None:
         """Start the sign-in process."""
+        # Prevent multiple concurrent sign-in attempts
+        if getattr(self, "_sign_in_in_progress", False):
+            self._log("Sign-in already in progress, skipping...", "debug")
+            return
+        
+        self._sign_in_in_progress = True
+        self._log("Initiating sign-in request...", "info")
+        
         def on_sign_in(result, error):
+            self._sign_in_in_progress = False
+            
             if error:
                 self._log(f"signIn error: {error}", "error")
                 self.error.emit(f"Sign-in failed: {error}")
+                # Note: CopilotAuthService handles lock release via error signal
                 return
             
             if not result:
+                self._log("signIn returned no result", "debug")
                 return
             
+            self._log(f"signIn result: {result}", "debug")
             status = result.get("status", "")
             
-            if status == "SignedIn":
+            # LSP returns "OK" or "SignedIn" when authenticated
+            if status in ("SignedIn", "OK"):
                 user = result.get("user", "GitHub User")
-                self._is_authenticated = True
                 self._log(f"Signed in as {user}", "info")
-                self.authenticated.emit(user)
+                self._emit_authenticated(user)
                 self.status_changed.emit("SignedIn")
+            
+            elif status == "PromptUserDeviceFlow":
+                # Device flow - userCode is already in the response
+                user_code = result.get("userCode", "")
+                verification_uri = result.get("verificationUri", "https://github.com/login/device")
+                
+                if user_code:
+                    self._log(f"Device flow: enter code {user_code} at {verification_uri}", "info")
+                    self.auth_required.emit(user_code, verification_uri)
+                
+                # Execute finishDeviceFlow to poll for completion
+                command = result.get("command", {})
+                if command.get("command") == "github.copilot.finishDeviceFlow":
+                    self._log("Executing finishDeviceFlow to poll for auth...", "info")
+                    self._execute_device_flow_command(command.get("arguments", []))
             
             elif status in ("NotSignedIn", "SignedOut"):
                 # Device flow - need user to visit URL
@@ -270,17 +337,126 @@ class CopilotLSPClient(QObject):
                     # Execute the finish command to complete device flow
                     command = result.get("command", {})
                     if command.get("command") == "github.copilot.finishDeviceFlow":
-                        self._execute_command("github.copilot.finishDeviceFlow", [])
+                        self._log("Executing finishDeviceFlow to poll for auth...", "info")
+                        self._execute_device_flow_command(command.get("arguments", []))
+                    else:
+                        # No finishDeviceFlow command, just start polling
+                        self._poll_for_auth_completion()
+                else:
+                    self._log(f"signIn status {status} but no userCode in result: {result}", "warning")
+            
+            elif status == "AlreadySignedIn":
+                # Already authenticated - update state and emit signal
+                user = result.get("user", "GitHub User")
+                self._log(f"Already signed in as {user}", "info")
+                self._emit_authenticated(user)
+                self.status_changed.emit("SignedIn")
+            
+            else:
+                self._log(f"Unexpected signIn status: {status}", "warning")
         
         self._send_request("signIn", {}, on_sign_in)
     
     def sign_out(self) -> None:
         """Sign out from Copilot."""
         def on_sign_out(result, error):
-            self._is_authenticated = False
+            self._set_authenticated(False, "sign_out")
             self.status_changed.emit("SignedOut")
+            # Mark as logged out in centralized settings
+            get_copilot_settings().on_lsp_logged_out()
         
         self._send_request("signOut", {}, on_sign_out)
+    
+    def _execute_device_flow_command(self, args: List[Any]) -> None:
+        """Execute finishDeviceFlow command and handle the response."""
+        def on_result(result, error):
+            if error:
+                self._log(f"finishDeviceFlow error: {error}", "error")
+                self.error.emit(f"Device flow failed: {error}")
+                # Note: CopilotAuthService handles lock release via error signal
+                return
+            
+            self._log(f"finishDeviceFlow result: {result}", "debug")
+            
+            if not result:
+                self._log("finishDeviceFlow returned no result", "warning")
+                return
+            
+            # Check if we're now signed in
+            # LSP returns "OK" or "SignedIn" when authenticated
+            status = result.get("status", "")
+            if status in ("SignedIn", "OK"):
+                user = result.get("user", "GitHub User")
+                self._log(f"Signed in as {user}", "info")
+                self._emit_authenticated(user)
+                self.status_changed.emit("SignedIn")
+                return
+            
+            # Look for device code in the response
+            user_code = result.get("userCode", "")
+            verification_uri = result.get("verificationUri", "https://github.com/login/device")
+            
+            if user_code:
+                self._log(f"Device flow: enter code {user_code} at {verification_uri}", "info")
+                self.auth_required.emit(user_code, verification_uri)
+                # Poll for completion
+                self._poll_for_auth_completion()
+            else:
+                # No userCode - check if there's a nested command
+                command = result.get("command", {})
+                if command:
+                    self._log(f"finishDeviceFlow returned command: {command}", "debug")
+                # Re-check status after a delay
+                QTimer.singleShot(2000, self.check_status)
+        
+        self._send_request("workspace/executeCommand", {
+            "command": "github.copilot.finishDeviceFlow",
+            "arguments": args
+        }, on_result)
+    
+    def _poll_for_auth_completion(self) -> None:
+        """Poll for authentication completion after user enters device code."""
+        self._polling_active = True
+        self._poll_attempts = 0
+        max_attempts = 60  # 3 minutes max (60 * 3s)
+        
+        def check():
+            if self._is_authenticated:
+                self._polling_active = False
+                self._log("Polling stopped - authenticated", "debug")
+                return
+            
+            self._poll_attempts += 1
+            if self._poll_attempts > max_attempts:
+                self._polling_active = False
+                self._log("Polling stopped - max attempts reached", "warning")
+                return
+            
+            self._log(f"Polling for auth completion ({self._poll_attempts}/{max_attempts})...", "debug")
+            
+            # Check status - this will set _is_authenticated if signed in
+            def on_status_check(result, error):
+                if error:
+                    self._log(f"Poll check_status error: {error}", "debug")
+                elif result:
+                    status = result.get("status", "")
+                    # LSP returns "OK" or "SignedIn" when authenticated
+                    if status in ("SignedIn", "OK"):
+                        user = result.get("user", "GitHub User")
+                        self._polling_active = False
+                        self._log(f"Poll detected sign-in: {user}", "info")
+                        self._emit_authenticated(user)
+                        self.status_changed.emit("SignedIn")
+                        return
+                
+                # Continue polling if not authenticated
+                if not self._is_authenticated and self._polling_active:
+                    QTimer.singleShot(3000, check)
+            
+            self._send_request("checkStatus", {}, on_status_check)
+        
+        # Start polling after 3 seconds (give user time to enter code)
+        QTimer.singleShot(3000, check)
     
     def _execute_command(self, command: str, args: List[Any]) -> None:
         """Execute a workspace command."""
@@ -309,6 +485,10 @@ class CopilotLSPClient(QObject):
         """
         self._current_document_uri = uri
         self._current_document_version = version
+        self._current_document_text = text
+        self._current_document_language = language_id
+        
+        logger.info(f"[LSP] Opening document: uri={uri}, lang={language_id}, text_len={len(text)}")
         
         self._send_notification("textDocument/didOpen", {
             "textDocument": {
@@ -331,6 +511,9 @@ class CopilotLSPClient(QObject):
             text: New full document text
         """
         self._current_document_version = version
+        self._current_document_text = text
+        
+        logger.info(f"[LSP] Document changed: uri={uri}, version={version}, text_len={len(text)}")
         
         self._send_notification("textDocument/didChange", {
             "textDocument": {"uri": uri, "version": version},
@@ -361,7 +544,10 @@ class CopilotLSPClient(QObject):
             character: Character position (0-indexed)
             trigger_kind: 1=manual, 2=automatic
         """
+        logger.info(f"[LSP] request_completion: uri={uri}, version={version}, line={line}, char={character}")
+        
         if not self._initialized or not self._is_authenticated:
+            logger.warning(f"[LSP] request_completion blocked: init={self._initialized}, auth={self._is_authenticated}")
             self.completion_ready.emit("")
             return
         
@@ -371,39 +557,99 @@ class CopilotLSPClient(QObject):
         
         start_time = time.time()
         
+        # Reset panel solutions for new request
+        self._panel_solutions = []
+        self._panel_request_active = True
+        self._panel_start_time = start_time
+        
         def on_completion(result, error):
             elapsed = (time.time() - start_time) * 1000
             
             if error:
                 logger.warning(f"[LSP] Completion error after {elapsed:.0f}ms: {error}")
+                self._panel_request_active = False
                 self.completion_ready.emit("")
                 return
             
-            # Extract completion text
-            items = result.get("items", []) if result else []
+            # Log full result structure for debugging
+            import json
+            logger.info(f"[LSP] Full completion result: {json.dumps(result, default=str)[:1000]}")
             
-            if items:
-                insert_text = items[0].get("insertText", "")
+            # getPanelCompletions returns { solutionCountTarget: N }
+            # Actual solutions come via PanelSolution notifications
+            if result and "solutionCountTarget" in result:
+                target = result.get("solutionCountTarget", 0)
+                logger.info(f"[LSP] Expecting {target} panel solutions via notifications")
+                # Solutions will arrive via PanelSolution notifications
+                # Don't emit yet - wait for notifications
+                return
+            
+            # getCompletions returns { completions: [...] } structure
+            completions = result.get("completions", []) if result else []
+            
+            # Fallback to items for inlineCompletion format
+            if not completions:
+                completions = result.get("items", []) if result else []
+            
+            if completions:
+                item = completions[0]
+                logger.info(f"[LSP] Full completion item keys: {list(item.keys()) if isinstance(item, dict) else type(item)}")
+                
+                # getCompletions uses displayText or text
+                insert_text = item.get("displayText", "")
+                if not insert_text:
+                    insert_text = item.get("text", "")
+                if not insert_text:
+                    insert_text = item.get("insertText", "")
+                
                 logger.info(
                     f"[LSP] Completion received in {elapsed:.0f}ms: "
-                    f"{insert_text[:50]}..."
+                    f"lines={insert_text.count(chr(10))+1}, "
+                    f"chars={len(insert_text)}, "
+                    f"preview={insert_text[:80].replace(chr(10), ' ')}..."
                 )
+                self._panel_request_active = False
                 self.completion_ready.emit(insert_text)
             else:
                 logger.debug(f"[LSP] No completions in {elapsed:.0f}ms")
+                self._panel_request_active = False
                 self.completion_ready.emit("")
             
             self._pending_completion_id = None
         
-        req_id = self._send_request("textDocument/inlineCompletion", {
-            "textDocument": {"uri": uri, "version": version},
-            "position": {"line": line, "character": character},
-            "context": {"triggerKind": trigger_kind},
-            "formattingOptions": {"tabSize": 4, "insertSpaces": True}
-        }, on_completion)
+        # Use getPanelCompletions for more complete multi-line suggestions
+        # This is the method used by Copilot Panel (Ctrl+Enter in VS Code)
+        # Returns multiple longer suggestions compared to inline completions
+        
+        # Extract path from URI
+        path = uri.replace("file:///", "").replace("file://", "")
+        relative_path = path
+        if path.startswith("datapyn/"):
+            relative_path = path[8:]
+        
+        params = {
+            "doc": {
+                "uri": uri,
+                "version": version,
+                "position": {"line": line, "character": character},
+                "source": self._current_document_text,
+                "languageId": self._current_document_language,
+                "path": path,
+                "relativePath": relative_path,
+                "tabSize": 4,
+                "insertSpaces": True,
+                "indentSize": 4,
+            },
+            "panelId": f"panel-{self._request_id}",
+        }
+        
+        import json
+        logger.info(f"[LSP] getPanelCompletions request: {json.dumps(params, default=str)[:500]}")
+        
+        req_id = self._send_request("getPanelCompletions", params, on_completion)
         
         self._pending_completion_id = req_id
-        logger.debug(f"[LSP] Requesting completion at {line}:{character}")
+        logger.debug(f"[LSP] Requesting getPanelCompletions at {line}:{character}")
     
     def _send_request(
         self,
@@ -530,8 +776,29 @@ class CopilotLSPClient(QObject):
         if method == "didChangeStatus":
             status = params.get("status", "Unknown")
             logger.info(f"[LSP] Status notification: {status}")
-            self._is_authenticated = status == "SignedIn"
-            self.status_changed.emit(status)
+            
+            # Only update auth state for definitive statuses
+            # Ignore "Unknown" - keep current state
+            if status in ("SignedIn", "OK"):
+                self._set_authenticated(True, f"didChangeStatus({status})")
+                self.status_changed.emit(status)
+            elif status in ("NotSignedIn", "SignedOut"):
+                self._set_authenticated(False, f"didChangeStatus({status})")
+                self.status_changed.emit(status)
+            else:
+                # Unknown or other status - don't change auth state
+                logger.debug(f"[LSP] Ignoring unknown status: {status}")
+        
+        elif method == "PanelSolution":
+            # Handle panel completion solution from getPanelCompletions
+            self._handle_panel_solution(params)
+        
+        elif method == "PanelSolutionsDone":
+            # All panel solutions have been sent
+            logger.info(f"[LSP] Panel solutions complete")
+            if not self._panel_solutions:
+                # No solutions received, emit empty
+                self.completion_ready.emit("")
         
         elif method == "window/logMessage":
             msg = params.get("message", "")
@@ -544,3 +811,43 @@ class CopilotLSPClient(QObject):
         elif method == "window/showMessage":
             msg = params.get("message", "")
             logger.info(f"[LSP] Message: {msg}")
+    
+    def _handle_panel_solution(self, params: Dict[str, Any]) -> None:
+        """Handle a panel completion solution from getPanelCompletions.
+        
+        Panel solutions arrive via notifications containing:
+        - panelId: The panel request identifier
+        - completionText: The complete suggested code
+        - displayText: Alternative text for display
+        - score: Completion quality score
+        - range: Text range info
+        """
+        import json
+        logger.info(f"[LSP] PanelSolution received: {json.dumps(params, default=str)[:500]}")
+        
+        # Extract completion text from various possible fields
+        solution_text = params.get("completionText", "")
+        if not solution_text:
+            solution_text = params.get("displayText", "")
+        if not solution_text:
+            solution_text = params.get("solutionText", "")
+        if not solution_text:
+            solution_text = params.get("text", "")
+        
+        if solution_text:
+            line_count = solution_text.count('\n') + 1
+            logger.info(
+                f"[LSP] Panel solution: lines={line_count}, "
+                f"chars={len(solution_text)}, "
+                f"preview={solution_text[:100].replace(chr(10), ' ')}..."
+            )
+            
+            # Store solution
+            self._panel_solutions.append(solution_text)
+            
+            # Emit first solution immediately so user sees it
+            if len(self._panel_solutions) == 1:
+                self._panel_request_active = False
+                self.completion_ready.emit(solution_text)
+        else:
+            logger.warning(f"[LSP] Empty panel solution: {list(params.keys())}")

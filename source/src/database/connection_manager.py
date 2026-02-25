@@ -15,7 +15,9 @@ class ConnectionManager:
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
-            config_path = Path.home() / ".datapyn" / "connections.json"
+            # Use WorkspaceService for default path (supports workspace switching)
+            from src.core.workspace_service import get_workspace_service
+            config_path = get_workspace_service().get_config_path("connections.json")
 
         self.config_path = Path(config_path)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)

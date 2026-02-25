@@ -144,21 +144,52 @@ class DownloadWorker(QObject):
             
             logger.info(f"[COPILOT-DL] Downloaded {downloaded} bytes, extracting...")
             
-            # Extract to target directory
-            self._target_dir.mkdir(parents=True, exist_ok=True)
+            # Extract to a temporary directory first, then move to target
+            # This avoids PermissionError when overwriting files in use
+            temp_extract_dir = Path(tempfile.mkdtemp(prefix="copilot_extract_"))
             
-            with tarfile.open(tmp_path, "r:gz") as tar:
-                # NPM packages have a "package" folder inside
-                for member in tar.getmembers():
-                    if self._cancelled:
-                        self.finished.emit(False, "Extraction cancelled")
-                        return
-                    
-                    # Strip "package/" prefix from path
-                    if member.name.startswith("package/"):
-                        member.name = member.name[8:]  # Remove "package/"
-                        if member.name:  # Skip empty names
-                            tar.extract(member, self._target_dir)
+            try:
+                with tarfile.open(tmp_path, "r:gz") as tar:
+                    # NPM packages have a "package" folder inside
+                    for member in tar.getmembers():
+                        if self._cancelled:
+                            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+                            self.finished.emit(False, "Extraction cancelled")
+                            return
+                        
+                        # Strip "package/" prefix from path
+                        if member.name.startswith("package/"):
+                            member.name = member.name[8:]  # Remove "package/"
+                            if member.name:  # Skip empty names
+                                tar.extract(member, temp_extract_dir)
+                
+                # Remove existing target directory if it exists
+                if self._target_dir.exists():
+                    logger.info(f"[COPILOT-DL] Removing old installation at {self._target_dir}")
+                    try:
+                        shutil.rmtree(self._target_dir)
+                    except PermissionError as e:
+                        # Files may be in use - try to move instead
+                        logger.warning(f"[COPILOT-DL] Cannot remove old dir, trying rename: {e}")
+                        old_backup = self._target_dir.parent / f"copilot-lsp-old-{os.getpid()}"
+                        try:
+                            self._target_dir.rename(old_backup)
+                            # Schedule cleanup on next restart
+                        except Exception:
+                            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+                            self.finished.emit(
+                                False,
+                                "Cannot update: Language Server may be running. "
+                                "Close the application and try again."
+                            )
+                            return
+                
+                # Move extracted files to target
+                self._target_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(temp_extract_dir), str(self._target_dir))
+            except Exception:
+                shutil.rmtree(temp_extract_dir, ignore_errors=True)
+                raise
             
             # Find and make executable
             exe_path = self._find_executable()

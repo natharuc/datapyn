@@ -42,6 +42,7 @@ from datetime import datetime
 
 from src.language import S
 from src.design_system.tokens import get_colors, RADIUS
+from src.services.copilot.copilot_settings import get_copilot_settings
 
 try:
     import qtawesome as qta
@@ -650,7 +651,7 @@ class CopilotChatPanel(QWidget):
                 self._copilot_client.chat_response_chunk.disconnect(self._on_response_chunk)
                 self._copilot_client.chat_response_complete.disconnect(self._on_response_complete)
                 self._copilot_client.chat_error.disconnect(self._on_chat_error)
-                self._copilot_client.auth_required.disconnect(self._on_auth_required)
+                # NOTE: auth_required handled by main_window to avoid duplication
                 self._copilot_client.authenticated.disconnect(self._on_authenticated)
                 self._copilot_client.auth_failed.disconnect(self._on_auth_failed)
                 if hasattr(self._copilot_client, 'tool_called'):
@@ -671,7 +672,7 @@ class CopilotChatPanel(QWidget):
             client.chat_response_chunk.connect(self._on_response_chunk)
             client.chat_response_complete.connect(self._on_response_complete)
             client.chat_error.connect(self._on_chat_error)
-            client.auth_required.connect(self._on_auth_required)
+            # NOTE: auth_required handled by main_window to avoid duplication
             client.authenticated.connect(self._on_authenticated)
             client.auth_failed.connect(self._on_auth_failed)
             if hasattr(client, 'tool_called'):
@@ -1058,6 +1059,12 @@ class CopilotChatPanel(QWidget):
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
         self._new_chat_btn.clicked.connect(self._on_new_chat)
         self._sessions_btn.clicked.connect(self._on_sessions_clicked)
+        
+        # Connect to auth service for cross-component updates
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
+        auth_service.chat_logged_out.connect(self._on_auth_service_chat_logged_out)
 
     def _on_new_chat(self):
         """Start a new chat session."""
@@ -1528,7 +1535,11 @@ class CopilotChatPanel(QWidget):
 
     def _on_auth_clicked(self):
         """Handle auth button click."""
-        if self._copilot_client and self._copilot_client.is_authenticated:
+        # Use centralized auth service
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        
+        if auth_service.is_chat_authenticated:
             # Show menu with options
             colors = get_colors()
             menu = QMenu(self)
@@ -1563,42 +1574,46 @@ class CopilotChatPanel(QWidget):
             menu.exec(self._auth_btn.mapToGlobal(self._auth_btn.rect().bottomLeft()))
             return
 
-        if self._copilot_client:
-            self._copilot_client.start_auth()
+        # Start login via centralized auth service
+        if auth_service.login_chat():
             self._auth_btn.setText(S.copilot.signing_in)
             self._auth_btn.setEnabled(False)
+        else:
+            logger.info("Chat login blocked - auth already in progress")
 
     def _do_logout(self):
-        """Perform logout."""
-        if self._copilot_client:
-            self._copilot_client.sign_out()
-            self._update_auth_state()
-            self._usage_label.setVisible(False)
-            # Mark as logged out so we don't auto-login on next startup
-            self._settings.setValue("was_authenticated", "false")
-            # Reset model combo to defaults
-            self._model_combo.clear()
-            for model in [
-                {"id": "gpt-4o", "name": "GPT-4o", "multiplier": "1x"},
-                {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": "0.33x"},
-                {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": "1x"},
-                {"id": "o3-mini", "name": "o3-mini", "multiplier": "1x"},
-            ]:
-                idx = self._model_combo.count()
-                self._model_combo.addItem(model["name"], model["id"])
-                self._model_combo.setItemData(idx, model["multiplier"], Qt.ItemDataRole.UserRole + 1)
+        """Perform logout via centralized auth service."""
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        
+        auth_service.logout_chat()
+        self._update_auth_state()
+        self._usage_label.setVisible(False)
+        # Also update legacy setting
+        self._settings.setValue("was_authenticated", "false")
+        # Reset model combo to defaults
+        self._model_combo.clear()
+        for model in [
+            {"id": "gpt-4o", "name": "GPT-4o", "multiplier": "1x"},
+            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": "0.33x"},
+            {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": "1x"},
+            {"id": "o3-mini", "name": "o3-mini", "multiplier": "1x"},
+        ]:
+            idx = self._model_combo.count()
+            self._model_combo.addItem(model["name"], model["id"])
+            self._model_combo.setItemData(idx, model["multiplier"], Qt.ItemDataRole.UserRole + 1)
 
     def _on_auth_required(self, user_code: str, verification_uri: str):
         """Show authentication instructions to the user."""
-        # Device code flow - show code and open browser
+        # Device code flow - show code to user
+        # NOTE: Browser is opened by main_window._on_lsp_auth_required
+        # Do NOT open browser here to avoid duplication
         self._add_message(
             "assistant",
             S.copilot.auth_instructions.format(code=user_code, url=verification_uri),
         )
         # Copy code to clipboard
         QApplication.clipboard().setText(user_code)
-        # Open browser
-        QDesktopServices.openUrl(QUrl(verification_uri))
 
     def _on_auth_started(self, message: str):
         """Authentication process started - show info to user."""
@@ -1610,7 +1625,10 @@ class CopilotChatPanel(QWidget):
         """Authentication succeeded."""
         self._update_auth_state()
         self._add_message("assistant", S.copilot.auth_success)
-        # Save auth state for auto-auth next time
+        # Save auth state using centralized settings manager
+        username = getattr(self._copilot_client, "_username", "") if self._copilot_client else ""
+        get_copilot_settings().on_chat_authenticated(username)
+        # Also keep legacy setting for backwards compatibility
         self._settings.setValue("was_authenticated", True)
 
     def _on_auth_failed(self, error: str):
@@ -1635,6 +1653,17 @@ class CopilotChatPanel(QWidget):
             self._auth_btn.setText(S.copilot.sign_in)
             self._auth_btn.setToolTip(S.copilot.sign_in_tooltip)
             self._auth_btn.setEnabled(True)
+
+    def _on_auth_service_chat_updated(self, username: str):
+        """Handle chat auth state change from auth service (e.g., login via Settings)."""
+        self._update_auth_state()
+        # Update models if available
+        self._update_models_from_client()
+
+    def _on_auth_service_chat_logged_out(self):
+        """Handle chat logout from auth service (e.g., logout via Settings)."""
+        self._update_auth_state()
+        self._usage_label.setVisible(False)
 
     def _update_models_from_client(self):
         """Update model combo box from client's available models."""
@@ -1754,8 +1783,7 @@ class CopilotChatPanel(QWidget):
         last_id = self._settings.value("last_session_id", "")
         if last_id:
             self._restore_session(last_id)
-        # Also try auto-auth if previously authenticated
-        QTimer.singleShot(500, self._try_auto_auth)
+        # Note: Auto-auth is now handled by CopilotAuthService.trigger_auto_auth()
 
     def _restore_session(self, session_id: str):
         """Restore a specific chat session."""
@@ -1771,22 +1799,7 @@ class CopilotChatPanel(QWidget):
                 return True
         return False
 
-    def _try_auto_auth(self):
-        """Try to automatically authenticate if previously logged in."""
-        # Check if we were previously authenticated
-        # QSettings.value() can return various types - normalize to string
-        saved_value = self._settings.value("was_authenticated", False)
-        was_authenticated = saved_value in (True, "true", "True", 1, "1")
-        logger.info(f"Auto-auth check: saved_value={saved_value!r}, was_authenticated={was_authenticated}")
-        
-        if was_authenticated and self._copilot_client:
-            if hasattr(self._copilot_client, "is_authenticated") and not self._copilot_client.is_authenticated:
-                logger.info("Attempting auto-authentication...")
-                if hasattr(self._copilot_client, "start_auth"):
-                    try:
-                        self._copilot_client.start_auth()
-                    except Exception as e:
-                        logger.debug(f"Auto-auth failed: {e}")
+    # Note: _try_auto_auth removed - CopilotAuthService handles auto-auth centrally
 
     def _on_authenticated_save(self):
         """Save authentication state when authenticated."""
