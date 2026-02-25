@@ -74,6 +74,8 @@
 
 ## Instalacao
 
+> **Requisito:** Python 3.12 ou superior
+
 O DataPyn usa [uv](https://docs.astral.sh/uv/) como gerenciador de pacotes (mais rapido que pip).
 
 ### Windows
@@ -83,63 +85,62 @@ O DataPyn usa [uv](https://docs.astral.sh/uv/) como gerenciador de pacotes (mais
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
 
-# 2. Instale uv (se nao tiver)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# 2. Execute o instalador (verifica Python 3.12+ e instala uv automaticamente)
+scripts\install.bat
 
-# 3. Crie o ambiente e instale dependencias
+# 3. Execute o DataPyn
+scripts\run.bat
+
+# Ou manualmente:
 uv sync
-
-# 4. Execute o DataPyn
 uv run python source/main.py
-
-# Ou use os scripts prontos:
-scripts\install.bat   # Instala tudo
-scripts\run.bat       # Executa
 ```
 
 ### Linux (Ubuntu/Debian)
 
 ```bash
-# 1. Instale dependencias do sistema
+# 1. Instale Python 3.12 e dependencias
 sudo apt update
 sudo apt install -y git python3.12 python3.12-venv libxcb-cursor0
 
-# 2. Instale uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc  # ou ~/.zshrc
-
-# 3. Clone e entre no projeto
+# 2. Clone e entre no projeto
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
 
-# 4. Crie o ambiente e instale dependencias
-uv sync
+# 3. Execute o instalador (instala uv automaticamente)
+chmod +x scripts/linux/install.sh
+./scripts/linux/install.sh
 
-# 5. Execute o DataPyn
+# 4. Execute o DataPyn
+./scripts/linux/run.sh
+
+# Ou manualmente:
+uv sync
 uv run python source/main.py
 ```
 
 ### macOS
 
 ```bash
-# 1. Instale Homebrew (se nao tiver)
+# 1. Instale Python 3.12 via Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# 2. Instale Python 3.12
 brew install python@3.12
 
-# 3. Instale uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.zshrc
-
-# 4. Clone e entre no projeto
+# 2. Clone e entre no projeto
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
 
-# 5. Crie o ambiente e instale dependencias
-uv sync
+# 3. Execute o instalador (instala uv automaticamente)
+chmod +x scripts/linux/install.sh
+./scripts/linux/install.sh
 
-# 6. Execute o DataPyn
+# 4. Execute o DataPyn
+./scripts/linux/run.sh
+
+# Ou manualmente:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.zshrc
+uv sync
 uv run python source/main.py
 ```
 
