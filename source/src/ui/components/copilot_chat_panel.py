@@ -31,6 +31,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByt
 from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEnginePage
 import sys
 from PyQt6.QtWebChannel import QWebChannel
 from pathlib import Path
@@ -610,6 +611,32 @@ class ChatInputWidget(QTextEdit):
         super().keyPressEvent(event)
 
 
+class ExternalLinkPage(QWebEnginePage):
+    """WebEnginePage that opens external links in the system browser."""
+
+    def acceptNavigationRequest(self, url: QUrl, nav_type, is_main_frame: bool) -> bool:
+        """Intercept navigation requests and open external URLs in system browser."""
+        # Allow local file URLs (our template)
+        if url.isLocalFile():
+            return True
+
+        # Allow qrc: URLs
+        if url.scheme() == "qrc":
+            return True
+
+        # Allow about:blank and similar
+        if url.scheme() in ("about", "data", "javascript"):
+            return True
+
+        # For http/https URLs, open in external browser
+        if url.scheme() in ("http", "https"):
+            QDesktopServices.openUrl(url)
+            return False  # Don't navigate in webview
+
+        # Default: allow navigation
+        return True
+
+
 class GhCliInstallWorker(QObject):
     """Worker that installs GitHub CLI using QProcess (non-blocking)."""
 
@@ -1165,8 +1192,10 @@ class CopilotChatPanel(QWidget):
         from PyQt6.QtWebEngineCore import QWebEngineSettings
         from PyQt6.QtGui import QColor
         
-        # Create WebView
+        # Create WebView with custom page for external links
         self._chat_webview = QWebEngineView()
+        self._external_link_page = ExternalLinkPage(self._chat_webview)
+        self._chat_webview.setPage(self._external_link_page)
         self._chat_webview.setMinimumSize(200, 100)
         self._chat_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
