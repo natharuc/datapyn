@@ -255,7 +255,8 @@
     "status_conn_error": "Erro de conexao",
     "loading_connecting": "Conectando a {name}...",
     "file_import_error": "[ERRO] Falha ao importar arquivo: {error}",
-    "conn_dialog_error": "Erro ao abrir dialogo de conexao: {error}"
+    "conn_dialog_error": "Erro ao abrir dialogo de conexao: {error}",
+    "connecting_block": "Conectando a {name}..."
   },
 
   "results": {
@@ -264,11 +265,13 @@
     "btn_json": "JSON",
     "btn_copy_all": "Copiar Tudo",
     "btn_table": "  Tabela",
+    "btn_sql": "SQL",
     "btn_save_image": "Salvar Imagem",
     "dest_clipboard": "Area de Transferencia",
     "dest_file": "Arquivo",
     "tooltip_export_dest": "Destino da exportacao",
     "tooltip_export_table": "Exportar dados para uma tabela do banco (to_sql)",
+    "tooltip_export_sql": "Exportar dados como comandos SQL INSERT",
     "no_results": "Sem resultados",
     "label_row_limit": "Linhas:",
     "tooltip_row_limit": "Max linhas exibidas no grid (exportacoes usam todos os dados)",
@@ -293,6 +296,8 @@
     "filter_excel": "Arquivos Excel (*.xlsx)",
     "save_json_title": "Salvar JSON",
     "filter_json": "Arquivos JSON (*.json)",
+    "save_sql_title": "Salvar SQL",
+    "filter_sql": "Arquivos SQL (*.sql);;Todos os Arquivos (*)",
     "save_image_title": "Salvar Imagem",
     "filter_image": "Arquivos PNG (*.png);;Arquivos JPEG (*.jpg);;Todos os Arquivos (*)",
     "error_title": "Erro",
@@ -331,6 +336,7 @@
     "placeholder_search": "Buscar tabelas e colunas...",
     "db_connected": "{db} (conectado)",
     "info_dbs_tables": "{dbs} bancos, {tables} tabelas",
+    "info_catalogs_tables": "{catalogs} catalogos, {tables} tabelas",
     "info_tables_cols": "{tables} tabelas, {cols} colunas",
     "view_suffix": "(view)",
     "ctx_select_top": "Selecionar 1000 linhas",
@@ -340,7 +346,10 @@
     "ctx_copy_as_qualified": "Copiar como {table}.{name}",
     "ctx_type_info": "Tipo: {type}",
     "ctx_use_database": "Usar banco '{name}'",
-    "ctx_copy_db_name": "Copiar nome"
+    "ctx_use_catalog": "Usar catalogo '{name}'",
+    "ctx_use_schema": "Usar schema '{name}'",
+    "ctx_copy_db_name": "Copiar nome",
+    "btn_insert_to_editor": "Inserir no editor"
   },
 
   "variables_panel": {
@@ -398,6 +407,7 @@
 
   "block": {
     "conn_tab_default": "Padrao da Aba",
+    "conn_first_block_locked": "O primeiro bloco usa a conexao da aba",
     "db_default": "BD Padrao",
     "lang_python": "Python",
     "lang_sql": "SQL",
@@ -551,6 +561,8 @@
     "dialog_duplicate_prompt": "Nome para a nova conexao:",
     "dialog_duplicate_default": "{name} (copia)",
     "dialog_duplicate_exists": "Uma conexao com este nome ja existe!",
+    "dialog_confirm_replace_title": "Substituir Conexao",
+    "dialog_confirm_replace_msg": "A conexao '{name}' ja existe. Deseja substitui-la?",
     "dialog_confirm_delete_title": "Confirmar Exclusao",
     "dialog_confirm_delete_conn": "Deseja realmente excluir a conexao '{name}'?",
     "dialog_confirm_delete_group": "Deseja realmente excluir o grupo '{name}'?\nAs conexoes dentro dele serao movidas para a raiz."

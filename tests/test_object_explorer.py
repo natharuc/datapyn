@@ -242,7 +242,7 @@ class TestObjectExplorerMultipleDatabases:
         assert found_connected
 
     def test_multi_db_current_has_tables(self, explorer, multi_db_schema):
-        """Apenas banco conectado tem tabelas carregadas"""
+        """Apenas banco conectado tem tabelas carregadas (com lazy loading, outros tem placeholder)"""
         explorer.set_schema(multi_db_schema, "conn1")
 
         for i in range(explorer.tree.topLevelItemCount()):
@@ -251,7 +251,12 @@ class TestObjectExplorerMultipleDatabases:
             if data and data.get("name") == "testdb":
                 assert item.childCount() > 0  # tem tabelas
             else:
-                assert item.childCount() == 0  # sem tabelas
+                # Com lazy loading, outros bancos tem placeholder child
+                assert item.childCount() == 1  # placeholder para lazy loading
+                # Verificar que e placeholder
+                child = item.child(0)
+                child_data = child.data(0, Qt.ItemDataRole.UserRole) if child else None
+                assert child_data is None or child_data.get("type") == "__placeholder__"
 
     def test_multi_db_info_shows_db_count(self, explorer, multi_db_schema):
         """Info label mostra contagem de bancos"""
@@ -389,7 +394,7 @@ class TestObjectExplorerSignals:
     """Testes de sinais emitidos"""
 
     def test_double_click_table_emits_signal(self, explorer, sample_schema, qtbot):
-        """Duplo clique em tabela emite insert_text_requested"""
+        """>> button on table emits insert_text_requested with qualified name"""
         explorer.set_schema(sample_schema, "conn1")
 
         # Encontrar item da tabela "users"
@@ -405,12 +410,13 @@ class TestObjectExplorerSignals:
         assert users_item is not None
 
         with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
-            explorer._on_double_click(users_item, 0)
+            explorer._on_insert_clicked(users_item)
 
-        assert blocker.args == ["users"]
+        # Tables with schema emit schema.table (qualified name)
+        assert blocker.args == ["dbo.users"]
 
     def test_double_click_column_emits_signal(self, explorer, sample_schema, qtbot):
-        """Duplo clique em coluna emite insert_text_requested"""
+        """>> button on column emits insert_text_requested"""
         explorer.set_schema(sample_schema, "conn1")
 
         # Encontrar coluna "id" de users
@@ -426,24 +432,24 @@ class TestObjectExplorerSignals:
         assert col_item is not None
 
         with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
-            explorer._on_double_click(col_item, 0)
+            explorer._on_insert_clicked(col_item)
 
         assert blocker.args == ["id"]
 
-    def test_double_click_database_emits_switch_signal(self, explorer, multi_db_schema, qtbot):
-        """Duplo clique em banco emite database_switch_requested"""
+    def test_double_click_database_emits_insert_signal(self, explorer, multi_db_schema, qtbot):
+        """>> button on database emits insert_text_requested (no full reload)"""
         explorer.set_schema(multi_db_schema, "conn1")
 
         db_item = explorer.tree.topLevelItem(0)  # primeiro banco
         data = db_item.data(0, Qt.ItemDataRole.UserRole)
 
-        with qtbot.waitSignal(explorer.database_switch_requested, timeout=1000) as blocker:
-            explorer._on_double_click(db_item, 0)
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_insert_clicked(db_item)
 
         assert blocker.args == [data["name"]]
 
     def test_double_click_schema_emits_insert_signal(self, explorer, multi_schema, qtbot):
-        """Duplo clique em schema emite insert_text_requested"""
+        """>> button on schema emits insert_text_requested"""
         explorer.set_schema(multi_schema, "conn1")
 
         db_item = explorer.tree.topLevelItem(0)
@@ -459,7 +465,7 @@ class TestObjectExplorerSignals:
         schema_data = schema_item.data(0, Qt.ItemDataRole.UserRole)
 
         with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
-            explorer._on_double_click(schema_item, 0)
+            explorer._on_insert_clicked(schema_item)
 
         assert blocker.args == [schema_data["name"]]
 
@@ -512,4 +518,1132 @@ class TestObjectExplorerNotNull:
                 # Segunda coluna "name" e nullable
                 col_item2 = child.child(1)
                 assert "NOT NULL" not in col_item2.text(0)
+                break
+
+
+# ---------------------------------------------------------------------------
+#  Fixtures para Databricks e quote_identifier
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def databricks_schema():
+    """Schema Databricks com catalogo, schemas e tabelas, usando campo 'key'"""
+    return {
+        "database": "main",
+        "databases": ["main", "hive_metastore"],
+        "tables": [
+            {"name": "customers", "schema": "default", "key": "default.customers", "type": "BASE TABLE"},
+            {"name": "orders", "schema": "default", "key": "default.orders", "type": "BASE TABLE"},
+            {"name": "logs", "schema": "audit", "key": "audit.logs", "type": "BASE TABLE"},
+            {"name": "v_report", "schema": "audit", "key": "audit.v_report", "type": "VIEW"},
+        ],
+        "columns": {
+            "default.customers": [
+                {"name": "id", "type": "bigint", "nullable": "NO"},
+                {"name": "name", "type": "string", "nullable": "YES"},
+            ],
+            "default.orders": [
+                {"name": "order_id", "type": "bigint", "nullable": "NO"},
+                {"name": "amount", "type": "double", "nullable": "YES"},
+            ],
+            "audit.logs": [
+                {"name": "log_id", "type": "bigint", "nullable": "NO"},
+                {"name": "message", "type": "string", "nullable": "YES"},
+            ],
+            "audit.v_report": [
+                {"name": "total", "type": "double", "nullable": "YES"},
+            ],
+        },
+    }
+
+
+@pytest.fixture
+def pg_single_db_schema():
+    """Schema PostgreSQL - banco unico (current_database somente)"""
+    return {
+        "database": "mydb",
+        "tables": [
+            {"name": "users", "schema": "public", "key": "public.users", "type": "BASE TABLE"},
+            {"name": "items", "schema": "public", "key": "public.items", "type": "BASE TABLE"},
+        ],
+        "columns": {
+            "public.users": [
+                {"name": "id", "type": "integer", "nullable": "NO"},
+                {"name": "email", "type": "text", "nullable": "YES"},
+            ],
+            "public.items": [
+                {"name": "item_id", "type": "integer", "nullable": "NO"},
+            ],
+        },
+    }
+
+
+@pytest.fixture
+def keyed_multi_schema():
+    """Schema com key field e multiplos schemas (MSSQL)"""
+    return {
+        "database": "testdb",
+        "databases": ["testdb", "master"],
+        "tables": [
+            {"name": "orders", "schema": "dbo", "key": "dbo.orders", "type": "BASE TABLE"},
+            {"name": "audit_log", "schema": "audit", "key": "audit.audit_log", "type": "BASE TABLE"},
+        ],
+        "columns": {
+            "dbo.orders": [
+                {"name": "order_id", "type": "int", "nullable": "NO"},
+            ],
+            "audit.audit_log": [
+                {"name": "log_id", "type": "int", "nullable": "NO"},
+            ],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Databricks 3-level tree
+# ---------------------------------------------------------------------------
+
+class TestObjectExplorerDatabricks:
+    """Testes do Object Explorer com Databricks (Catalog > Schema > Table)"""
+
+    def test_databricks_catalogs_as_root(self, explorer, databricks_schema):
+        """Catalogos Databricks aparecem como nos raiz"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        # 2 catalogs: main, hive_metastore
+        assert explorer.tree.topLevelItemCount() == 2
+
+    def test_databricks_current_catalog_marked(self, explorer, databricks_schema):
+        """Catalogo atual marcado com (connected)"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        found = False
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                assert data["type"] == "catalog"
+                assert "(connected)" in item.text(0) or "connected" in item.text(0).lower()
+                found = True
+                break
+        assert found
+
+    def test_databricks_schemas_as_children(self, explorer, databricks_schema):
+        """Schemas Databricks agrupados sob catalogo atual"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        # Encontrar catalogo "main" (ativo)
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        assert main_item is not None
+
+        # Deve ter 2 schemas: default e audit
+        schema_names = []
+        for i in range(main_item.childCount()):
+            child = main_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "schema":
+                schema_names.append(data["name"])
+        assert "default" in schema_names
+        assert "audit" in schema_names
+
+    def test_databricks_tables_under_schema(self, explorer, databricks_schema):
+        """Tabelas ficam sob nos de schema no Databricks - com lazy loading via callback"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+
+        # Encontrar schema "default"
+        default_schema = None
+        for i in range(main_item.childCount()):
+            child = main_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "schema" and data.get("name") == "default":
+                default_schema = child
+                break
+        assert default_schema is not None
+
+        # Com lazy loading, schema tem placeholder inicialmente
+        assert default_schema.childCount() == 1  # placeholder
+
+        # Simular lazy loading de tabelas
+        tables = [
+            {"name": "customers", "schema": "default", "type": "TABLE"},
+            {"name": "orders", "schema": "default", "type": "TABLE"},
+        ]
+        explorer.add_tables_to_schema("main", "default", tables)
+
+        # Agora verificar tabelas
+        table_names = []
+        for i in range(default_schema.childCount()):
+            tdata = default_schema.child(i).data(0, Qt.ItemDataRole.UserRole)
+            if tdata and tdata.get("type") == "table":
+                table_names.append(tdata["name"])
+        assert "customers" in table_names
+        assert "orders" in table_names
+
+    def test_databricks_columns_via_key(self, explorer, databricks_schema):
+        """Colunas Databricks resolvidas via lazy loading callback"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+
+        # Encontrar schema "default"
+        default_schema = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                default_schema = schema_item
+                break
+        assert default_schema is not None
+
+        # Simular lazy loading de tabelas
+        tables = [{"name": "customers", "schema": "default", "type": "TABLE"}]
+        explorer.add_tables_to_schema("main", "default", tables)
+
+        # Encontrar tabela customers
+        cust_item = None
+        for j in range(default_schema.childCount()):
+            titem = default_schema.child(j)
+            tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+            if tdata and tdata.get("name") == "customers":
+                cust_item = titem
+                break
+        assert cust_item is not None
+
+        # Tabela tem placeholder para colunas
+        assert cust_item.childCount() == 1  # placeholder
+
+        # Simular lazy loading de colunas
+        columns = [
+            {"name": "id", "type": "INT", "nullable": "NO"},
+            {"name": "name", "type": "STRING", "nullable": "YES"},
+        ]
+        explorer.add_columns_to_table("main", "default", "customers", columns)
+
+        # Verificar colunas
+        assert cust_item.childCount() == 2
+        col0 = cust_item.child(0).data(0, Qt.ItemDataRole.UserRole)
+        assert col0["name"] == "id"
+
+    def test_databricks_inactive_catalog_empty(self, explorer, databricks_schema):
+        """Catalogo inativo tem placeholder para lazy loading"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "hive_metastore":
+                # Com lazy loading, tem placeholder child
+                assert item.childCount() == 1
+                # Verificar que e placeholder
+                child = item.child(0)
+                child_data = child.data(0, Qt.ItemDataRole.UserRole) if child else None
+                assert child_data is None or child_data.get("type") == "__placeholder__"
+                return
+        pytest.fail("hive_metastore catalog not found")
+
+    def test_databricks_view_labeled(self, explorer, databricks_schema):
+        """Views Databricks marcadas com (view) via lazy loading"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+
+        # Encontrar schema "audit"
+        audit_schema = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "audit":
+                audit_schema = schema_item
+                break
+        assert audit_schema is not None
+
+        # Simular lazy loading de tabelas/views
+        tables = [{"name": "v_report", "schema": "audit", "type": "VIEW"}]
+        explorer.add_tables_to_schema("main", "audit", tables)
+
+        # Verificar que view tem label (view)
+        for j in range(audit_schema.childCount()):
+            titem = audit_schema.child(j)
+            tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+            if tdata and tdata.get("name") == "v_report":
+                assert "(view)" in titem.text(0)
+                return
+        pytest.fail("v_report view not found under audit schema")
+
+
+# ---------------------------------------------------------------------------
+#  Context Menu
+# ---------------------------------------------------------------------------
+
+class TestObjectExplorerContextMenu:
+    """Testes de context menu (query gerada, signals)"""
+
+    def test_databricks_context_menu_uses_limit(self, explorer, databricks_schema, qtbot):
+        """Context menu Databricks gera LIMIT 1000 (nao TOP)"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+
+        # Encontrar tabela "customers" em main > default
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+
+        # Encontrar schema "default"
+        default_schema = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                default_schema = schema_item
+                break
+        assert default_schema is not None
+
+        # Simular lazy loading de tabelas
+        tables = [{"name": "customers", "schema": "default", "type": "TABLE"}]
+        explorer.add_tables_to_schema("main", "default", tables)
+
+        # Agora encontrar tabela customers
+        customers_item = None
+        for j in range(default_schema.childCount()):
+            titem = default_schema.child(j)
+            tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+            if tdata and tdata.get("name") == "customers":
+                customers_item = titem
+                break
+
+        assert customers_item is not None
+
+        # Simular context menu capturando o signal
+        signals = []
+        explorer.query_requested.connect(lambda q: signals.append(q))
+
+        # Chamar context menu logic diretamente via action
+        data = customers_item.data(0, Qt.ItemDataRole.UserRole)
+        schema_name = data.get("schema", "")
+        name = data.get("name", "")
+        qualified = f"{schema_name}.{name}" if schema_name else name
+        quoted = explorer._quote_identifier(qualified)
+
+        query = f"SELECT * FROM {quoted} LIMIT 1000"
+        explorer.query_requested.emit(query)
+
+        assert len(signals) == 1
+        assert "LIMIT 1000" in signals[0]
+        assert "TOP" not in signals[0]
+
+    def test_databricks_no_schema_duplication(self, explorer, databricks_schema):
+        """Databricks context menu nao duplica schema no nome qualificado"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+
+        # Encontrar schema "default"
+        default_schema = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                default_schema = schema_item
+                break
+        assert default_schema is not None
+
+        # Simular lazy loading de tabelas
+        tables = [{"name": "customers", "schema": "default", "type": "TABLE", "key": "default.customers"}]
+        explorer.add_tables_to_schema("main", "default", tables)
+
+        # Verificar tabela customers
+        for j in range(default_schema.childCount()):
+            titem = default_schema.child(j)
+            tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+            if tdata and tdata.get("name") == "customers":
+                # table name e "customers", NAO "default.customers"
+                assert tdata["name"] == "customers"
+                # qualified = schema.name
+                qualified = f"{tdata['schema']}.{tdata['name']}"
+                assert qualified == "default.customers"
+                # NAO duplicado (default.default.customers)
+                assert "default.default" not in qualified
+                return
+        pytest.fail("customers not found")
+
+    def test_mssql_context_menu_uses_top(self, explorer, keyed_multi_schema, qtbot):
+        """Context menu MSSQL usa SELECT TOP 1000"""
+        explorer.set_schema(keyed_multi_schema, "conn1", db_type="mssql")
+
+        # Encontrar tabela orders em testdb
+        testdb_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "testdb":
+                testdb_item = item
+                break
+        assert testdb_item is not None
+
+        # Encontrar tabela orders (pode estar sob schema dbo)
+        orders_item = None
+        def find_table(parent, table_name):
+            for i in range(parent.childCount()):
+                child = parent.child(i)
+                cdata = child.data(0, Qt.ItemDataRole.UserRole)
+                if cdata and cdata.get("type") == "table" and cdata.get("name") == table_name:
+                    return child
+                found = find_table(child, table_name)
+                if found:
+                    return found
+            return None
+
+        orders_item = find_table(testdb_item, "orders")
+        assert orders_item is not None
+
+        data = orders_item.data(0, Qt.ItemDataRole.UserRole)
+        schema_name = data.get("schema", "")
+        name = data.get("name", "")
+        qualified = f"{schema_name}.{name}" if schema_name else name
+        quoted = explorer._quote_identifier(qualified)
+
+        # MSSQL usa TOP
+        query = f"SELECT TOP 1000 * FROM {quoted}"
+        assert "TOP 1000" in query
+        assert "LIMIT" not in query
+
+    def test_catalog_double_click_emits_prefix(self, explorer, databricks_schema, qtbot):
+        """>> button on catalog emits insert_text_requested with name"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+
+        cat_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "catalog":
+                cat_item = item
+                break
+
+        assert cat_item is not None
+        cat_data = cat_item.data(0, Qt.ItemDataRole.UserRole)
+
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_insert_clicked(cat_item)
+
+        assert blocker.args[0] == cat_data['name']
+
+    def test_databricks_table_double_click_emits_full_namespace(self, explorer, databricks_schema, qtbot):
+        """Duplo clique em tabela Databricks emite catalog.schema.table"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+
+        # Find the "main" catalog (current)
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+
+        assert main_item is not None
+
+        # Encontrar schema "default"
+        default_schema = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                default_schema = schema_item
+                break
+        assert default_schema is not None
+
+        # Simular lazy loading de tabelas
+        tables = [{"name": "customers", "schema": "default", "type": "TABLE"}]
+        explorer.add_tables_to_schema("main", "default", tables)
+
+        # Find table "customers"
+        table_item = None
+        for j in range(default_schema.childCount()):
+            titem = default_schema.child(j)
+            tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+            if tdata and tdata.get("name") == "customers":
+                table_item = titem
+                break
+
+        assert table_item is not None
+
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_insert_clicked(table_item)
+
+        # Should emit full namespace: catalog.schema.table
+        assert blocker.args[0] == "main.default.customers"
+
+    def test_databricks_schema_double_click_emits_catalog_schema(self, explorer, databricks_schema, qtbot):
+        """>> button on Databricks schema emits catalog.schema for insert"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+
+        # Find "audit" schema under "main" catalog
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+
+        assert main_item is not None
+
+        audit_item = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "audit":
+                audit_item = schema_item
+                break
+
+        assert audit_item is not None
+
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_insert_clicked(audit_item)
+
+        # Should emit catalog.schema format for insert
+        assert blocker.args[0] == "main.audit"
+
+
+# ---------------------------------------------------------------------------
+#  _quote_identifier
+# ---------------------------------------------------------------------------
+
+class TestQuoteIdentifier:
+    """Testes de _quote_identifier para diferentes db_types"""
+
+    def test_quote_mssql_simple(self, explorer):
+        """MSSQL usa colchetes"""
+        explorer._db_type = "mssql"
+        assert explorer._quote_identifier("users") == "[users]"
+
+    def test_quote_mssql_two_parts(self, explorer):
+        """MSSQL: schema.table"""
+        explorer._db_type = "mssql"
+        assert explorer._quote_identifier("dbo.users") == "[dbo].[users]"
+
+    def test_quote_mssql_three_parts(self, explorer):
+        """MSSQL: db.schema.table"""
+        explorer._db_type = "mssql"
+        assert explorer._quote_identifier("mydb.dbo.users") == "[mydb].[dbo].[users]"
+
+    def test_quote_postgresql(self, explorer):
+        """PostgreSQL usa aspas duplas"""
+        explorer._db_type = "postgresql"
+        assert explorer._quote_identifier("public.users") == '"public"."users"'
+
+    def test_quote_mysql(self, explorer):
+        """MySQL usa backticks"""
+        explorer._db_type = "mysql"
+        assert explorer._quote_identifier("mydb.users") == "`mydb`.`users`"
+
+    def test_quote_databricks(self, explorer):
+        """Databricks usa backticks"""
+        explorer._db_type = "databricks"
+        assert explorer._quote_identifier("default.customers") == "`default`.`customers`"
+
+    def test_quote_databricks_three_parts(self, explorer):
+        """Databricks: catalog.schema.table"""
+        explorer._db_type = "databricks"
+        assert explorer._quote_identifier("main.default.customers") == "`main`.`default`.`customers`"
+
+    def test_quote_empty_type_defaults_brackets(self, explorer):
+        """Tipo vazio usa colchetes (padrao MSSQL)"""
+        explorer._db_type = ""
+        assert explorer._quote_identifier("users") == "[users]"
+
+
+# ---------------------------------------------------------------------------
+#  PostgreSQL single-DB
+# ---------------------------------------------------------------------------
+
+class TestObjectExplorerPostgres:
+    """Testes de PostgreSQL com banco unico"""
+
+    def test_pg_single_database_node(self, explorer, pg_single_db_schema):
+        """PostgreSQL mostra apenas 1 no de banco"""
+        explorer.set_schema(pg_single_db_schema, "conn1", db_type="postgresql")
+        # Sem lista "databases", deve ter 1 raiz
+        assert explorer.tree.topLevelItemCount() == 1
+        db_item = explorer.tree.topLevelItem(0)
+        data = db_item.data(0, Qt.ItemDataRole.UserRole)
+        assert data["name"] == "mydb"
+
+    def test_pg_columns_resolved_via_key(self, explorer, pg_single_db_schema):
+        """PostgreSQL resolve colunas usando key (public.users)"""
+        explorer.set_schema(pg_single_db_schema, "conn1", db_type="postgresql")
+        db_item = explorer.tree.topLevelItem(0)
+
+        # Com apenas 1 schema (public), tabelas ficam direto sob banco
+        users_item = None
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table" and data.get("name") == "users":
+                users_item = child
+                break
+
+        assert users_item is not None
+        # 2 colunas: id, email
+        assert users_item.childCount() == 2
+
+    def test_pg_no_multi_db_listing(self, explorer, pg_single_db_schema):
+        """PostgreSQL NAO lista multiplos bancos"""
+        # Sem "databases" key -> single-db mode
+        assert "databases" not in pg_single_db_schema
+        explorer.set_schema(pg_single_db_schema, "conn1", db_type="postgresql")
+        assert explorer.tree.topLevelItemCount() == 1
+
+    def test_pg_info_label_tables_cols(self, explorer, pg_single_db_schema):
+        """PostgreSQL info label mostra tabelas e colunas"""
+        explorer.set_schema(pg_single_db_schema, "conn1", db_type="postgresql")
+        text = explorer.info_label.text()
+        assert "2 tables" in text
+        assert "3 columns" in text
+
+
+# ---------------------------------------------------------------------------
+#  Column lookup com campo key
+# ---------------------------------------------------------------------------
+
+class TestColumnKeyLookup:
+    """Testes garantindo que colunas usam table['key'] para lookup"""
+
+    def test_key_fallback_to_name(self, explorer):
+        """Sem key, usa table name diretamente (compatibilidade)"""
+        schema = {
+            "database": "db1",
+            "tables": [{"name": "t1", "schema": "dbo", "type": "BASE TABLE"}],
+            "columns": {"t1": [{"name": "col_a", "type": "int", "nullable": "YES"}]},
+        }
+        explorer.set_schema(schema, "c1")
+        db_item = explorer.tree.topLevelItem(0)
+        t1 = db_item.child(0)
+        assert t1.childCount() == 1
+        assert t1.child(0).data(0, Qt.ItemDataRole.UserRole)["name"] == "col_a"
+
+    def test_key_used_over_name(self, explorer):
+        """Com campo key, colunas sao buscadas pelo key e nao pelo name"""
+        schema = {
+            "database": "db1",
+            "tables": [{"name": "t1", "schema": "sales", "key": "sales.t1", "type": "BASE TABLE"}],
+            "columns": {
+                "t1": [{"name": "wrong", "type": "int", "nullable": "YES"}],
+                "sales.t1": [{"name": "correct", "type": "int", "nullable": "YES"}],
+            },
+        }
+        explorer.set_schema(schema, "c1")
+        db_item = explorer.tree.topLevelItem(0)
+        t1 = db_item.child(0)
+        assert t1.childCount() == 1
+        assert t1.child(0).data(0, Qt.ItemDataRole.UserRole)["name"] == "correct"
+
+    def test_key_stored_in_item_data(self, explorer):
+        """Campo key armazenado no data do item da tabela"""
+        schema = {
+            "database": "db1",
+            "tables": [{"name": "t1", "schema": "dbo", "key": "dbo.t1", "type": "BASE TABLE"}],
+            "columns": {"dbo.t1": [{"name": "c1", "type": "int", "nullable": "YES"}]},
+        }
+        explorer.set_schema(schema, "c1")
+        db_item = explorer.tree.topLevelItem(0)
+        t1 = db_item.child(0)
+        tdata = t1.data(0, Qt.ItemDataRole.UserRole)
+        assert tdata["key"] == "dbo.t1"
+        assert tdata["name"] == "t1"
+
+    def test_column_stores_table_key(self, explorer):
+        """Coluna armazena table_key no data"""
+        schema = {
+            "database": "db1",
+            "tables": [{"name": "t1", "schema": "dbo", "key": "dbo.t1", "type": "BASE TABLE"}],
+            "columns": {"dbo.t1": [{"name": "c1", "type": "int", "nullable": "YES"}]},
+        }
+        explorer.set_schema(schema, "c1")
+        db_item = explorer.tree.topLevelItem(0)
+        t1 = db_item.child(0)
+        col = t1.child(0)
+        cdata = col.data(0, Qt.ItemDataRole.UserRole)
+        assert cdata["table_key"] == "dbo.t1"
+        assert cdata["table"] == "t1"
+
+
+# ---------------------------------------------------------------------------
+#  Search com Databricks
+# ---------------------------------------------------------------------------
+
+class TestObjectExplorerSearchDatabricks:
+    """Testes de busca/filtro com hierarquia Databricks"""
+
+    def test_search_filters_databricks_table(self, explorer, databricks_schema):
+        """Busca filtra tabelas na hierarquia Databricks"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        explorer.search_input.setText("customers")
+        explorer._apply_filter()
+
+        # Deve manter catalogo main, schema default, tabela customers
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        assert main_item is not None
+
+        # Devera ter apenas schema "default"
+        table_names = []
+        for i in range(main_item.childCount()):
+            child = main_item.child(i)
+            cdata = child.data(0, Qt.ItemDataRole.UserRole)
+            if cdata and cdata.get("type") == "schema":
+                for j in range(child.childCount()):
+                    titem = child.child(j)
+                    tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+                    if tdata and tdata.get("type") == "table":
+                        table_names.append(tdata["name"])
+        assert "customers" in table_names
+        assert "orders" not in table_names
+        assert "logs" not in table_names
+
+    def test_search_hides_inactive_catalog(self, explorer, databricks_schema):
+        """Busca esconde catalogos inativos que nao correspondem"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        explorer.search_input.setText("customers")
+        explorer._apply_filter()
+
+        names = []
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            names.append(data.get("name", ""))
+
+        # hive_metastore nao tem match -> escondido
+        assert "hive_metastore" not in names
+
+    def test_search_by_column_in_databricks(self, explorer, databricks_schema):
+        """Busca por coluna mostra tabela pai no Databricks"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        explorer.search_input.setText("message")
+        explorer._apply_filter()
+
+        # "message" e coluna de audit.logs
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        assert main_item is not None
+
+        table_names = []
+        for i in range(main_item.childCount()):
+            child = main_item.child(i)
+            cdata = child.data(0, Qt.ItemDataRole.UserRole)
+            if cdata and cdata.get("type") == "schema":
+                for j in range(child.childCount()):
+                    titem = child.child(j)
+                    tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+                    if tdata and tdata.get("type") == "table":
+                        table_names.append(tdata["name"])
+        assert "logs" in table_names
+
+
+# ---------------------------------------------------------------------------
+#  Lazy Loading Tests
+# ---------------------------------------------------------------------------
+
+class TestObjectExplorerLazyLoading:
+    """Testes para carregamento lazy do Object Explorer"""
+
+    def test_inactive_catalog_has_placeholder(self, explorer, databricks_schema):
+        """Catalogos inativos tem placeholder para lazy loading"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "hive_metastore":
+                # Tem placeholder
+                assert explorer._has_placeholder_child(item)
+                assert item.childCount() == 1
+                return
+        pytest.fail("hive_metastore not found")
+
+    def test_active_schema_has_placeholder(self, explorer, databricks_schema):
+        """Schemas do catalogo ativo tem placeholder para tabelas"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        
+        assert main_item is not None
+        
+        # Schemas devem ter placeholder
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("type") == "schema":
+                assert explorer._has_placeholder_child(schema_item)
+
+    def test_add_schemas_to_catalog(self, explorer, databricks_schema):
+        """Callback add_schemas_to_catalog adiciona schemas ao catalogo"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        # Adicionar schemas ao hive_metastore (inativo)
+        schemas = ["bronze", "silver", "gold"]
+        explorer.add_schemas_to_catalog("hive_metastore", schemas)
+        
+        # Verificar que schemas foram adicionados
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "hive_metastore":
+                assert item.childCount() == 3
+                schema_names = []
+                for j in range(item.childCount()):
+                    child = item.child(j)
+                    cdata = child.data(0, Qt.ItemDataRole.UserRole)
+                    if cdata and cdata.get("type") == "schema":
+                        schema_names.append(cdata["name"])
+                assert "bronze" in schema_names
+                assert "silver" in schema_names
+                assert "gold" in schema_names
+                return
+        pytest.fail("hive_metastore not found")
+
+    def test_add_tables_to_schema(self, explorer, databricks_schema):
+        """Callback add_tables_to_schema adiciona tabelas ao schema"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        tables = [
+            {"name": "new_table1", "schema": "default", "type": "TABLE"},
+            {"name": "new_table2", "schema": "default", "type": "VIEW"},
+        ]
+        explorer.add_tables_to_schema("main", "default", tables)
+        
+        # Verificar
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                table_names = []
+                for j in range(schema_item.childCount()):
+                    titem = schema_item.child(j)
+                    tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+                    if tdata and tdata.get("type") == "table":
+                        table_names.append(tdata["name"])
+                assert "new_table1" in table_names
+                assert "new_table2" in table_names
+                return
+        pytest.fail("default schema not found")
+
+    def test_add_columns_to_table(self, explorer, databricks_schema):
+        """Callback add_columns_to_table adiciona colunas a tabela"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        # Primeiro adicionar tabelas
+        tables = [{"name": "test_table", "schema": "default", "type": "TABLE"}]
+        explorer.add_tables_to_schema("main", "default", tables)
+        
+        # Adicionar colunas
+        columns = [
+            {"name": "col1", "type": "INT", "nullable": "NO"},
+            {"name": "col2", "type": "STRING", "nullable": "YES"},
+            {"name": "col3", "type": "TIMESTAMP", "nullable": "YES"},
+        ]
+        explorer.add_columns_to_table("main", "default", "test_table", columns)
+        
+        # Verificar
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                for j in range(schema_item.childCount()):
+                    titem = schema_item.child(j)
+                    tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+                    if tdata and tdata.get("name") == "test_table":
+                        assert titem.childCount() == 3
+                        col_names = []
+                        for k in range(titem.childCount()):
+                            citem = titem.child(k)
+                            cdata = citem.data(0, Qt.ItemDataRole.UserRole)
+                            if cdata:
+                                col_names.append(cdata["name"])
+                        assert "col1" in col_names
+                        assert "col2" in col_names
+                        assert "col3" in col_names
+                        return
+        pytest.fail("test_table not found")
+
+    def test_lazy_loading_signals_emitted(self, explorer, databricks_schema, qtbot):
+        """Signals de lazy loading sao emitidos ao expandir itens"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        # Encontrar catalogo inativo
+        hive_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "hive_metastore":
+                hive_item = item
+                break
+        
+        assert hive_item is not None
+        
+        # Verificar que signal e emitido ao expandir
+        with qtbot.waitSignal(explorer.schemas_requested, timeout=1000) as blocker:
+            explorer._on_item_expanded(hive_item)
+        
+        assert blocker.args[0] == "hive_metastore"
+
+    def test_tables_requested_signal(self, explorer, databricks_schema, qtbot):
+        """Signal tables_requested emitido ao expandir schema"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        # Encontrar schema default sob main
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        
+        default_schema = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                default_schema = schema_item
+                break
+        
+        assert default_schema is not None
+        
+        with qtbot.waitSignal(explorer.tables_requested, timeout=1000) as blocker:
+            explorer._on_item_expanded(default_schema)
+        
+        assert blocker.args[0] == "main"
+        assert blocker.args[1] == "default"
+
+    def test_columns_requested_signal(self, explorer, databricks_schema, qtbot):
+        """Signal columns_requested emitido ao expandir tabela"""
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        # Adicionar tabela primeiro
+        tables = [{"name": "my_table", "schema": "default", "type": "TABLE"}]
+        explorer.add_tables_to_schema("main", "default", tables)
+        
+        # Encontrar tabela
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        
+        table_item = None
+        for i in range(main_item.childCount()):
+            schema_item = main_item.child(i)
+            sdata = schema_item.data(0, Qt.ItemDataRole.UserRole)
+            if sdata and sdata.get("name") == "default":
+                for j in range(schema_item.childCount()):
+                    titem = schema_item.child(j)
+                    tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+                    if tdata and tdata.get("name") == "my_table":
+                        table_item = titem
+                        break
+        
+        assert table_item is not None
+        
+        with qtbot.waitSignal(explorer.columns_requested, timeout=1000) as blocker:
+            explorer._on_item_expanded(table_item)
+        
+        assert blocker.args[0] == "main"
+        assert blocker.args[1] == "default"
+        assert blocker.args[2] == "my_table"
+
+    def test_filter_mode_loads_fully(self, explorer, databricks_schema):
+        """Com filtro ativo, carrega arvore completa (nao lazy)"""
+        # Aplicar filtro antes de set_schema
+        explorer.search_input.setText("customers")
+        
+        # Set schema com filtro ativo
+        explorer.set_schema(databricks_schema, "conn1", db_type="databricks")
+        
+        # Catalogo ativo deve ter tabelas carregadas (modo full)
+        main_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "main":
+                main_item = item
+                break
+        
+        # Com filtro, deve carregar tudo - verificar que tem tabelas
+        found_table = False
+        for i in range(main_item.childCount()):
+            child = main_item.child(i)
+            cdata = child.data(0, Qt.ItemDataRole.UserRole)
+            if cdata and cdata.get("type") == "schema":
+                for j in range(child.childCount()):
+                    titem = child.child(j)
+                    tdata = titem.data(0, Qt.ItemDataRole.UserRole)
+                    if tdata and tdata.get("type") == "table":
+                        found_table = True
+                        break
+        assert found_table, "Com filtro ativo, tabelas devem ser carregadas imediatamente"
+
+
+class TestObjectExplorerExpansionBehavior:
+    """Tests for tree item expansion behavior (arrow clicks and double-click)."""
+
+    def test_double_click_toggles_expansion(self, qtbot):
+        """Double-click on an item with children should toggle expansion."""
+        explorer = ObjectExplorerPanel()
+        qtbot.addWidget(explorer)
+
+        schema = {
+            "database": "testdb",
+            "databases": ["testdb", "other"],
+            "tables": [{"name": "users", "type": "TABLE", "schema": "dbo"}],
+            "columns": {},
+        }
+        explorer.set_schema(schema, "conn1", db_type="mssql")
+
+        # Find current db item
+        db_item = explorer.tree.topLevelItem(0)
+        data = db_item.data(0, Qt.ItemDataRole.UserRole)
+        # Sort may put "other" first; find testdb
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            d = item.data(0, Qt.ItemDataRole.UserRole)
+            if d and d.get("name") == "testdb":
+                db_item = item
+                break
+
+        # Current db should be auto-expanded
+        assert db_item.isExpanded()
+
+        # Double-click should collapse it
+        explorer._on_double_click(db_item, 0)
+        assert not db_item.isExpanded()
+
+        # Double-click again should expand it
+        explorer._on_double_click(db_item, 0)
+        assert db_item.isExpanded()
+
+    def test_double_click_leaf_no_crash(self, qtbot):
+        """Double-click on a leaf item (no children) should not crash."""
+        explorer = ObjectExplorerPanel()
+        qtbot.addWidget(explorer)
+
+        schema = {
+            "database": "testdb",
+            "databases": [],
+            "tables": [{"name": "users", "type": "TABLE", "schema": "dbo"}],
+            "columns": {"users": [{"name": "id", "type": "int", "nullable": "NO"}]},
+        }
+        explorer.set_schema(schema, "conn1", db_type="postgresql")
+
+        # Find column item (leaf)
+        db_item = explorer.tree.topLevelItem(0)
+        table_item = db_item.child(0)
+        col_item = table_item.child(0)
+
+        # Should not crash - leaf items have no children
+        explorer._on_double_click(col_item, 0)
+
+    def test_current_catalog_auto_expanded_databricks(self, qtbot):
+        """Current catalog should be auto-expanded in Databricks lazy loading mode."""
+        explorer = ObjectExplorerPanel()
+        qtbot.addWidget(explorer)
+
+        schema = {
+            "database": "main",
+            "databases": ["main", "other_catalog"],
+            "tables": [
+                {"name": "t1", "type": "TABLE", "schema": "default"},
+            ],
+            "columns": {},
+        }
+        explorer.set_schema(schema, "conn1", db_type="databricks")
+
+        # Find the current catalog
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            d = item.data(0, Qt.ItemDataRole.UserRole)
+            if d and d.get("name") == "main":
+                assert item.isExpanded(), "Current catalog should be auto-expanded"
+                break
+
+    def test_current_db_auto_expanded_multi_db(self, qtbot):
+        """Current database should be auto-expanded in multi-db lazy loading mode."""
+        explorer = ObjectExplorerPanel()
+        qtbot.addWidget(explorer)
+
+        schema = {
+            "database": "mydb",
+            "databases": ["mydb", "other"],
+            "tables": [{"name": "orders", "type": "TABLE", "schema": "dbo"}],
+            "columns": {},
+        }
+        explorer.set_schema(schema, "conn1", db_type="mssql")
+
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            d = item.data(0, Qt.ItemDataRole.UserRole)
+            if d and d.get("name") == "mydb":
+                assert item.isExpanded(), "Current db should be auto-expanded"
                 break

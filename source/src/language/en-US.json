@@ -253,7 +253,8 @@
     "status_conn_error": "Connection error",
     "loading_connecting": "Connecting to {name}...",
     "file_import_error": "[ERROR] Failed to import file: {error}",
-    "conn_dialog_error": "Error opening connection dialog: {error}"
+    "conn_dialog_error": "Error opening connection dialog: {error}",
+    "connecting_block": "Connecting to {name}..."
   },
 
   "results": {
@@ -262,11 +263,13 @@
     "btn_json": "JSON",
     "btn_copy_all": "Copy All",
     "btn_table": "  Table",
+    "btn_sql": "SQL",
     "btn_save_image": "Save Image",
     "dest_clipboard": "Clipboard",
     "dest_file": "File",
     "tooltip_export_dest": "Export destination",
     "tooltip_export_table": "Export data to a database table (to_sql)",
+    "tooltip_export_sql": "Export data as SQL INSERT statements",
     "no_results": "No results",
     "json_header_key": "Key",
     "json_header_value": "Value",
@@ -288,6 +291,8 @@
     "filter_excel": "Excel Files (*.xlsx)",
     "save_json_title": "Save JSON",
     "filter_json": "JSON Files (*.json)",
+    "save_sql_title": "Save SQL",
+    "filter_sql": "SQL Files (*.sql);;All Files (*)",
     "save_image_title": "Save Image",
     "filter_image": "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)",
     "error_title": "Error",
@@ -329,6 +334,7 @@
     "placeholder_search": "Search tables and columns...",
     "db_connected": "{db} (connected)",
     "info_dbs_tables": "{dbs} databases, {tables} tables",
+    "info_catalogs_tables": "{catalogs} catalogs, {tables} tables",
     "info_tables_cols": "{tables} tables, {cols} columns",
     "view_suffix": "(view)",
     "ctx_select_top": "Select top 1000 rows",
@@ -338,7 +344,10 @@
     "ctx_copy_as_qualified": "Copy as {table}.{name}",
     "ctx_type_info": "Type: {type}",
     "ctx_use_database": "Use database '{name}'",
-    "ctx_copy_db_name": "Copy name"
+    "ctx_use_catalog": "Use catalog '{name}'",
+    "ctx_use_schema": "Use schema '{name}'",
+    "ctx_copy_db_name": "Copy name",
+    "btn_insert_to_editor": "Insert into editor"
   },
 
   "variables_panel": {
@@ -396,6 +405,7 @@
 
   "block": {
     "conn_tab_default": "Tab Default",
+    "conn_first_block_locked": "First block uses the tab connection",
     "db_default": "Default DB",
     "lang_python": "Python",
     "lang_sql": "SQL",
@@ -549,6 +559,8 @@
     "dialog_duplicate_prompt": "Name for the new connection:",
     "dialog_duplicate_default": "{name} (copy)",
     "dialog_duplicate_exists": "A connection with this name already exists!",
+    "dialog_confirm_replace_title": "Replace Connection",
+    "dialog_confirm_replace_msg": "Connection '{name}' already exists. Do you want to replace it?",
     "dialog_confirm_delete_title": "Confirm Deletion",
     "dialog_confirm_delete_conn": "Do you really want to delete connection '{name}'?",
     "dialog_confirm_delete_group": "Do you really want to delete group '{name}'?\nConnections inside it will be moved to root."

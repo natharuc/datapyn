@@ -338,50 +338,54 @@ class TestConnectionResolution:
         assert any("Nenhuma" in o or "ERRO" in o for o in outputs)
 
     def test_on_execute_sql_with_connection_auto_connects(self, qapp):
-        """_on_execute_sql com connection_name deve auto-conectar"""
+        """_on_execute_sql com connection_name deve auto-conectar via background worker"""
         from src.core.session import Session
 
         session = Session("test")
         widget = SessionWidget(session)
 
-        mock_config = {
-            "db_type": "mysql",
-            "host": "localhost",
-            "port": 3306,
-            "database": "testdb",
-            "username": "user",
-            "password": "pass",
-            "use_windows_auth": False,
-        }
+        mock_connector = MagicMock()
+        mock_connector.is_connected.return_value = True
 
-        mock_db_connector = MagicMock()
-        mock_db_connector.is_connected = True
+        with patch("src.database.connection_manager.ConnectionManager") as MockMgr:
+            mock_manager = MockMgr.return_value
+            mock_manager.get_connection.return_value = mock_connector
 
-        with (
-            patch("src.database.connection_manager.ConnectionManager") as MockMgr,
-            patch("src.database.database_connector.DatabaseConnector") as MockConn,
-        ):
+            # Mock _execute_sql_with_connector para nao executar SQL real
+            with patch.object(widget, "_execute_sql_with_connector") as mock_exec:
+                widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")
+
+                # Quando connector ja esta conectado, deve chamar direto
+                mock_exec.assert_called_once()
+                call_args = mock_exec.call_args
+                assert call_args[0][0] == mock_connector  # connector
+                assert call_args[0][1] == "SELECT 1"  # query
+                assert call_args[0][2] == "bloco1"  # block_name
+                assert call_args[0][3] == "BlockConn"  # connection_name
+
+    def test_on_execute_sql_with_connection_not_connected_starts_thread(self, qapp):
+        """_on_execute_sql sem connector conectado deve iniciar thread de auto-connect"""
+        from src.core.session import Session
+
+        session = Session("test")
+        widget = SessionWidget(session)
+
+        with patch("src.database.connection_manager.ConnectionManager") as MockMgr:
             mock_manager = MockMgr.return_value
             mock_manager.get_connection.return_value = None  # Nao conectado ainda
-            mock_manager.get_connection_config.return_value = mock_config
-            mock_manager.connections = {}
 
-            MockConn.return_value = mock_db_connector
-
-            # Mock para nao criar thread real
-            widget._is_executing = True  # Forca ir para a fila ao inves de executar
-
+            # Capturar criacao de thread verificando se _auto_connect_threads foi populado
             widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")
 
-            # Deve ter tentado auto-conectar (verifica argumentos principais)
-            call_kwargs = MockConn.return_value.connect.call_args.kwargs
-            assert call_kwargs["db_type"] == "mysql"
-            assert call_kwargs["host"] == "localhost"
-            assert call_kwargs["port"] == 3306
-            assert call_kwargs["database"] == "testdb"
-            assert call_kwargs["username"] == "user"
-            assert call_kwargs["password"] == "pass"
-            assert call_kwargs["use_windows_auth"] is False
+            # Deve ter criado thread de auto-connect
+            assert hasattr(widget, "_auto_connect_threads")
+            assert len(widget._auto_connect_threads) == 1
+
+            # Cleanup: parar thread se estiver rodando
+            thread, worker = widget._auto_connect_threads[0]
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(1000)
 
 
 # ===== SessionWidget Dialog =====
@@ -831,3 +835,91 @@ class TestObjectExplorerDrag:
             mime_data = mock_drag_instance.setMimeData.call_args[0][0]
             assert mime_data.hasFormat("application/x-database-name")
             assert not mime_data.hasFormat("application/x-connection-name")
+
+
+# ===== Connection Manager Reuse (no reconnect per execution) =====
+
+
+class TestConnectionManagerReuse:
+    """Testes para reutilizacao do ConnectionManager compartilhado.
+
+    Garante que blocos com conexao customizada NAO reconectam toda execucao.
+    """
+
+    def test_get_connection_manager_from_main_window(self, qapp):
+        """_get_connection_manager deve buscar instancia da MainWindow"""
+        from src.core.session import Session
+
+        session = Session("test")
+        widget = SessionWidget(session)
+
+        mock_main = MagicMock()
+        mock_manager = MagicMock()
+        mock_main.connection_manager = mock_manager
+
+        with patch.object(widget, "_get_main_window", return_value=mock_main):
+            result = widget._get_connection_manager()
+            assert result is mock_manager
+
+    def test_get_connection_manager_fallback(self, qapp):
+        """_get_connection_manager sem MainWindow cria fallback"""
+        from src.core.session import Session
+
+        session = Session("test")
+        widget = SessionWidget(session)
+
+        with patch.object(widget, "_get_main_window", return_value=None):
+            result = widget._get_connection_manager()
+            # Deve retornar uma instancia valida (fallback)
+            assert result is not None
+
+    def test_execute_sql_reuses_connected_connector(self, qapp):
+        """Executar SQL com conexao customizada deve reutilizar connector existente"""
+        from src.core.session import Session
+
+        session = Session("test")
+        widget = SessionWidget(session)
+
+        mock_connector = MagicMock()
+        mock_connector.is_connected.return_value = True
+
+        mock_manager = MagicMock()
+        mock_manager.get_connection.return_value = mock_connector
+
+        with patch.object(widget, "_get_connection_manager", return_value=mock_manager):
+            with patch.object(widget, "_execute_sql_with_connector") as mock_exec:
+                # Executar 3 vezes seguidas com a mesma conexao
+                widget._on_execute_sql("SELECT 1", block_name="b1", connection_name="Conn1")
+                widget._on_execute_sql("SELECT 2", block_name="b2", connection_name="Conn1")
+                widget._on_execute_sql("SELECT 3", block_name="b3", connection_name="Conn1")
+
+                # Deve chamar _execute_sql_with_connector 3x sem auto-connect
+                assert mock_exec.call_count == 3
+                # Todas usam o mesmo connector (reutilizado)
+                for call in mock_exec.call_args_list:
+                    assert call[0][0] is mock_connector
+
+    def test_auto_connect_worker_uses_shared_manager(self, qapp):
+        """BlockAutoConnectWorker deve receber o manager compartilhado"""
+        from src.core.session import Session
+
+        session = Session("test")
+        widget = SessionWidget(session)
+
+        mock_manager = MagicMock()
+        mock_manager.get_connection.return_value = None  # Nao conectado
+
+        with patch.object(widget, "_get_connection_manager", return_value=mock_manager):
+            widget._on_execute_sql("SELECT 1", block_name="b1", connection_name="Conn1")
+
+            assert hasattr(widget, "_auto_connect_threads")
+            assert len(widget._auto_connect_threads) == 1
+            thread, worker = widget._auto_connect_threads[0]
+
+            # Verificar que o worker recebeu o manager correto
+            assert worker._manager is mock_manager
+
+            # Cleanup
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(1000)
