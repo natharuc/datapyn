@@ -73,6 +73,60 @@ class SessionSqlWorker(QObject):
                 self.finished.emit(None, error_msg)
 
 
+class BlockAutoConnectWorker(QObject):
+    """Worker to auto-connect a per-block connection in background.
+
+    Prevents UI freeze when a block needs to connect before executing SQL.
+    """
+
+    finished = pyqtSignal(object, str)  # (connector or None, error_msg)
+
+    def __init__(self, connection_name: str, connection_manager=None):
+        super().__init__()
+        self.connection_name = connection_name
+        self._manager = connection_manager
+
+    def run(self):
+        try:
+            from src.database.database_connector import DatabaseConnector
+
+            manager = self._manager
+            if not manager:
+                from src.database.connection_manager import ConnectionManager
+                manager = ConnectionManager()
+
+            connector = manager.get_connection(self.connection_name)
+            if connector and connector.is_connected():
+                self.finished.emit(connector, "")
+                return
+
+            config = manager.get_connection_config(self.connection_name)
+            if not config:
+                self.finished.emit(None, f"Connection config not found: {self.connection_name}")
+                return
+
+            connector = DatabaseConnector()
+            connector.connect(
+                db_type=config["db_type"],
+                host=config["host"],
+                port=config["port"],
+                database=config["database"],
+                username=config.get("username", ""),
+                password=config.get("password", ""),
+                use_windows_auth=config.get("use_windows_auth", False),
+                trust_server_certificate=config.get("trust_server_certificate", False),
+                http_path=config.get("http_path", ""),
+            )
+
+            if connector.is_connected:
+                manager.connections[self.connection_name] = connector
+                self.finished.emit(connector, "")
+            else:
+                self.finished.emit(None, f"Failed to connect: {self.connection_name}")
+        except Exception as e:
+            self.finished.emit(None, str(e))
+
+
 class SessionPythonWorker(QObject):
     """Worker to execute Python in background for a session"""
 
@@ -113,6 +167,7 @@ class SessionWidget(QWidget):
     execution_cancelled = pyqtSignal()  # Emitted when execution is cancelled
     completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based) - for statusbar
+    block_focused = pyqtSignal(object)  # CodeBlock that gained focus (for OE tracking)
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -345,6 +400,9 @@ class SessionWidget(QWidget):
         # Cursor position change (for statusbar)
         self.editor.cursor_changed.connect(self.cursor_changed.emit)
 
+        # Block focus change (for Object Explorer connection tracking)
+        self.editor.block_focused.connect(self.block_focused.emit)
+
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
 
@@ -360,6 +418,18 @@ class SessionWidget(QWidget):
 
     # === SQL EXECUTION ===
 
+    def _get_connection_manager(self):
+        """Get the shared ConnectionManager instance from MainWindow.
+
+        Avoids creating new instances that lose track of active connections.
+        Falls back to a new instance if MainWindow is not reachable.
+        """
+        main_window = self._get_main_window()
+        if main_window and hasattr(main_window, "connection_manager"):
+            return main_window.connection_manager
+        from src.database.connection_manager import ConnectionManager
+        return ConnectionManager()
+
     def _on_execute_sql(self, query: str, block_name: str = None, connection_name: str = None, database_name: str = None):
         """Execute SQL in background
 
@@ -371,47 +441,40 @@ class SessionWidget(QWidget):
         """
         # Determine which connection to use
         if connection_name:
-            # Fetch specific connection - auto-connect if needed
-            from src.database.connection_manager import ConnectionManager
-            from src.database.database_connector import DatabaseConnector
-
-            manager = ConnectionManager()
+            # Fetch specific connection - auto-connect in background if needed
+            manager = self._get_connection_manager()
             connector = manager.get_connection(connection_name)
-            if not connector or not connector.is_connected():
-                # Try to auto-connect from saved config
-                config = manager.get_connection_config(connection_name)
-                if config:
-                    try:
-                        connector = DatabaseConnector()
-                        connector.connect(
-                            db_type=config["db_type"],
-                            host=config["host"],
-                            port=config["port"],
-                            database=config["database"],
-                            username=config.get("username", ""),
-                            password=config.get("password", ""),
-                            use_windows_auth=config.get("use_windows_auth", False),
-                            trust_server_certificate=config.get("trust_server_certificate", False),
-                            http_path=config.get("http_path", ""),
-                        )
-                        if connector.is_connected:
-                            manager.connections[connection_name] = connector
-                        else:
-                            self.append_output(S.session_widget.block_connect_failed.format(name=connection_name), error=True)
-                            self.status_changed.emit(S.session_widget.status_conn_failed)
-                            self._process_next_in_queue()
-                            return
-                    except Exception as e:
-                        self.append_output(S.session_widget.block_connect_error.format(name=connection_name, error=e), error=True)
-                        self.status_changed.emit(S.session_widget.status_conn_failed)
-                        self._process_next_in_queue()
-                        return
-                else:
-                    self.append_output(S.session_widget.conn_not_found.format(name=connection_name), error=True)
-                    self.status_changed.emit(S.session_widget.status_conn_unavailable)
-                    self._process_next_in_queue()
-                    return
-            conn_label = connection_name
+            if connector and connector.is_connected():
+                # Already connected, proceed directly
+                self._execute_sql_with_connector(
+                    connector, query, block_name, connection_name, database_name
+                )
+            else:
+                # Need auto-connect in background (never block UI)
+                self.append_output(S.session_widget.connecting_block.format(name=connection_name))
+                self.status_changed.emit(S.session_widget.connecting_block.format(name=connection_name))
+
+                thread = QThread()
+                worker = BlockAutoConnectWorker(connection_name, connection_manager=manager)
+                worker.moveToThread(thread)
+
+                thread.started.connect(worker.run)
+                worker.finished.connect(
+                    lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name:
+                        self._on_auto_connect_finished(conn, err, q, bn, cn, dn)
+                )
+                worker.finished.connect(thread.quit)
+                thread.finished.connect(worker.deleteLater)
+                thread.finished.connect(thread.deleteLater)
+
+                # Keep reference to prevent GC
+                if not hasattr(self, "_auto_connect_threads"):
+                    self._auto_connect_threads = []
+                self._auto_connect_threads.append((thread, worker))
+                thread.finished.connect(lambda t=thread: self._cleanup_auto_connect_thread(t))
+
+                thread.start()
+                return
         else:
             # Use session default connection
             if not self.session.is_connected:
@@ -420,7 +483,33 @@ class SessionWidget(QWidget):
                 self._process_next_in_queue()
                 return
             connector = self.session.connector
-            conn_label = S.session_widget.default_connection_label
+            self._execute_sql_with_connector(
+                connector, query, block_name, connection_name, database_name
+            )
+
+    def _cleanup_auto_connect_thread(self, thread):
+        """Remove finished auto-connect thread from tracking list."""
+        if hasattr(self, "_auto_connect_threads"):
+            self._auto_connect_threads = [
+                (t, w) for t, w in self._auto_connect_threads if t is not thread
+            ]
+
+    def _on_auto_connect_finished(self, connector, error_msg, query, block_name, connection_name, database_name):
+        """Callback when auto-connect finishes. Proceeds with SQL execution if successful."""
+        if not connector or error_msg:
+            self.append_output(
+                S.session_widget.block_connect_error.format(name=connection_name, error=error_msg),
+                error=True
+            )
+            self.status_changed.emit(S.session_widget.status_conn_failed)
+            self._process_next_in_queue()
+            return
+
+        self._execute_sql_with_connector(connector, query, block_name, connection_name, database_name)
+
+    def _execute_sql_with_connector(self, connector, query, block_name, connection_name, database_name):
+        """Execute SQL query using the given connector (called after connection is ready)."""
+        conn_label = connection_name or S.session_widget.default_connection_label
 
         # Apply custom database if specified (before executing)
         if database_name:

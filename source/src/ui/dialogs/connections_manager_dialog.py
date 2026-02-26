@@ -606,6 +606,19 @@ class ConnectionsManagerDialog(QDialog):
         if dialog.exec():
             name, config = dialog.get_result()
 
+            # Check if connection already exists and ask for confirmation
+            existing_connections = self.connection_manager.saved_configs.get("connections", {})
+            if name in existing_connections:
+                reply = QMessageBox.question(
+                    self,
+                    S.connections_manager.dialog_confirm_replace_title,
+                    S.connections_manager.dialog_confirm_replace_msg.format(name=name),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+
             self.connection_manager.save_connection_config(
                 name,
                 config["db_type"],

@@ -1092,11 +1092,16 @@ class MainWindow(DockingMainWindow):
             block._database_name = display_name
             block.db_panel.set_database(display_name)
 
-        # Invalidate cache and reload OE for this block's connection
-        self._schema_service.invalidate_cache(connection_name)
+        # Get session_id for per-session cache
+        sid = ""
+        if widget and hasattr(widget, "session"):
+            sid = widget.session.session_id
+
+        # Invalidate cache and reload OE for this block's connection (per-session)
+        self._schema_service.invalidate_cache(connection_name, session_id=sid)
         connector = self.connection_manager.get_connection(connection_name)
         if connector and connector.is_connected():
-            self._load_schema_with_loading(connector, connection_name)
+            self._load_schema_with_loading(connector, connection_name, session_id=sid)
 
     def _on_database_switch_success(self, database_name, connection_name, connector, widget):
         """Callback when database switch completes successfully.
@@ -1113,8 +1118,13 @@ class MainWindow(DockingMainWindow):
 
         self.statusBar().showMessage(S.status.database_changed.format(name=display_name), 5000)
 
+        # Get session_id for per-session cache
+        sid = ""
+        if widget and hasattr(widget, "session"):
+            sid = widget.session.session_id
+
         # --- Schema reload (invalidate since database changed) ---
-        self._schema_service.invalidate_cache(connection_name)
+        self._schema_service.invalidate_cache(connection_name, session_id=sid)
         # Note: connection_changed signal will trigger _on_session_connection_changed which loads schema
 
         if hasattr(widget, "connection_changed"):
@@ -1194,8 +1204,11 @@ class MainWindow(DockingMainWindow):
         if not connector or not connector.is_connected():
             return
 
-        self._schema_service.invalidate_cache(connection_name)
-        self._load_schema_with_loading(connector, connection_name)
+        # Get session_id for per-session cache
+        sid = self._get_active_session_id() or ""
+
+        self._schema_service.invalidate_cache(connection_name, session_id=sid)
+        self._load_schema_with_loading(connector, connection_name, session_id=sid)
 
     # =========================================================================
     # Lazy loading handlers for Object Explorer
@@ -1258,10 +1271,16 @@ class MainWindow(DockingMainWindow):
         if explorer:
             explorer.add_columns_to_table(catalog_name, schema_name, table_name, columns)
 
-    def _load_schema_with_loading(self, connector, connection_name: str):
-        """Load schema and show loading indicator in Object Explorer."""
+    def _load_schema_with_loading(self, connector, connection_name: str, session_id: str = ""):
+        """Load schema and show loading indicator in Object Explorer.
+        
+        Args:
+            connector: DatabaseConnector with active connection
+            connection_name: Connection name
+            session_id: Session ID for per-session cache (optional, defaults to active)
+        """
         # Get or CREATE the explorer for the current session (important: _get_session_explorer creates if needed)
-        sid = self._get_active_session_id()
+        sid = session_id or self._get_active_session_id()
         if sid:
             explorer = self._get_session_explorer(sid)
             explorer.set_loading(True, S.object_explorer.loading)
@@ -1280,7 +1299,7 @@ class MainWindow(DockingMainWindow):
             if hasattr(self, 'object_explorer_action'):
                 self.object_explorer_action.setChecked(True)
 
-        self._schema_service.load_schema(connector, connection_name)
+        self._schema_service.load_schema(connector, connection_name, session_id=sid or "")
 
     def _setup_dockable_panels(self):
         """Configures dockable panels (Results, Output, Variables) using QDockWidget.
@@ -3212,8 +3231,9 @@ class MainWindow(DockingMainWindow):
                 # Reload Object Explorer for the new database
                 connection_name = getattr(session, "connection_name", "") or ""
                 if connection_name:
-                    # Invalidate cache since database changed via USE command
-                    self._schema_service.invalidate_cache(connection_name)
+                    # Invalidate cache since database changed via USE command (per-session)
+                    sid = session.session_id
+                    self._schema_service.invalidate_cache(connection_name, session_id=sid)
                     # Signal triggers _on_session_connection_changed which handles:
                     # - Schema reload
                     # - Connection panel update
@@ -3433,8 +3453,9 @@ class MainWindow(DockingMainWindow):
         # Database actually changed - reload schema
         connection_name = getattr(session, "connection_name", "") or ""
         if connection_name:
-            # Invalidate cache since database changed
-            self._schema_service.invalidate_cache(connection_name)
+            # Invalidate cache since database changed (per-session)
+            sid = session.session_id
+            self._schema_service.invalidate_cache(connection_name, session_id=sid)
             # Signal triggers _on_session_connection_changed which handles:
             # - Schema reload
             # - Connection panel update
@@ -5073,13 +5094,17 @@ class MainWindow(DockingMainWindow):
         # === CARREGAR SCHEMA ===
         # This is the central place for schema loading when connection changes.
         # Invalidate cache only if database changed, otherwise load from cache.
-        if session.connector:
+        # Only load schema if we have a real connector (not a Mock in tests)
+        from src.database.database_connector import DatabaseConnector
+        if (session.connector 
+            and isinstance(session.connector, DatabaseConnector)
+            and session.connector.is_connected()):
             # Update OE tracking - the session's OE should show this connection now
             if not hasattr(self, "_oe_current_connection"):
                 self._oe_current_connection = {}
             self._oe_current_connection[session.session_id] = connection_name
 
-            self._load_schema_with_loading(session.connector, connection_name)
+            self._load_schema_with_loading(session.connector, connection_name, session_id=session.session_id)
 
         # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
         current_widget = self._get_current_session_widget()
@@ -5122,30 +5147,42 @@ class MainWindow(DockingMainWindow):
             self.statusBar().showMessage(S.status.no_active_connection_reload, 3000)
             return
 
-        # Invalidate cache and reload
-        self._schema_service.invalidate_cache(connection_name)
+        # Get session_id for per-session cache
+        sid = widget.session.session_id if hasattr(widget, "session") else ""
+
+        # Invalidate cache and reload (per-session)
+        self._schema_service.invalidate_cache(connection_name, session_id=sid)
         self.statusBar().showMessage(S.status.reloading_schema.format(name=connection_name), 5000)
 
         if connector and connector.is_connected():
-            self._load_schema_with_loading(connector, connection_name)
+            self._load_schema_with_loading(connector, connection_name, session_id=sid)
         else:
             # Need to get connector from ConnectionManager
             from src.database.connection_manager import ConnectionManager
             manager = ConnectionManager()
             conn = manager.connections.get(connection_name)
             if conn and conn.is_connected():
-                self._load_schema_with_loading(conn, connection_name)
+                self._load_schema_with_loading(conn, connection_name, session_id=sid)
             else:
                 self.statusBar().showMessage(S.status.connection_not_active.format(name=connection_name), 3000)
 
-    def _on_schema_loaded(self, schema: dict, connection_name: str):
+    def _on_schema_loaded(self, schema: dict, connection_name: str, session_id: str = ""):
         """Callback when database schema is loaded by SchemaService.
 
         Distribui o schema para os blocos SQL que usam
         a conexao correspondente.
         Se connection_name e a conexao da sessao, aplica aos blocos sem conexao customizada.
         Se connection_name e uma conexao de bloco especifico, aplica so a esse bloco.
+        
+        Args:
+            schema: Loaded schema dict
+            connection_name: Connection name
+            session_id: Session ID that requested the schema (for isolation)
         """
+        # Guard against invalid data (e.g., Mock objects in tests)
+        if not isinstance(schema, dict) or not isinstance(connection_name, str):
+            return
+        
         tables_total = len(schema.get('tables', []))
         cols_total = sum(len(v) for v in schema.get('columns', {}).values())
         self._log_info(
@@ -5179,10 +5216,9 @@ class MainWindow(DockingMainWindow):
             if current_catalog and schemas_set:
                 all_databases = sorted([f"{current_catalog}.{s}" for s in schemas_set])
 
-        # Determine which session requested this schema
-        requesting_sid = None
-        if hasattr(self, "_pending_schema_sessions"):
-            # Peek without removing (will be removed later in OE section)
+        # Determine which session requested this schema (use signal param OR fallback to tracking dict)
+        requesting_sid = session_id
+        if not requesting_sid and hasattr(self, "_pending_schema_sessions"):
             requesting_sid = self._pending_schema_sessions.get(connection_name)
 
         for widget in self._session_widgets.values():
@@ -5341,8 +5377,8 @@ class MainWindow(DockingMainWindow):
         # Update tracking
         self._oe_current_connection[sid] = effective_conn
 
-        # Try cache first
-        cached = self._schema_service.get_cached_schema(effective_conn)
+        # Try cache first (per-session cache)
+        cached = self._schema_service.get_cached_schema(effective_conn, session_id=sid)
         if cached:
             db_type = ""
             config = self.connection_manager.get_connection_config(effective_conn)
@@ -5353,10 +5389,13 @@ class MainWindow(DockingMainWindow):
             explorer.set_schema(cached, effective_conn, db_type=db_type)
             return
 
-        # Need to load schema - get connector
-        connector = self.connection_manager.get_connection(effective_conn)
+        # Need to load schema - get connector from session (NOT shared cache!)
+        connector = getattr(session, "connector", None)
+        if not connector or not connector.is_connected():
+            # Fallback to connection_manager for per-block connections
+            connector = self.connection_manager.get_connection(effective_conn)
         if connector and connector.is_connected():
-            self._load_schema_with_loading(connector, effective_conn)
+            self._load_schema_with_loading(connector, effective_conn, session_id=sid)
 
     def _on_block_focused(self, block, widget):
         """Called when a block gains focus. Updates Object Explorer to show the
@@ -5393,8 +5432,8 @@ class MainWindow(DockingMainWindow):
         # Update tracking
         self._oe_current_connection[sid] = effective_conn
 
-        # Try to get schema from cache first
-        cached = self._schema_service.get_cached_schema(effective_conn)
+        # Try to get schema from cache first (per-session cache)
+        cached = self._schema_service.get_cached_schema(effective_conn, session_id=sid)
         if cached:
             # Get db_type for proper SQL quoting
             db_type = ""
@@ -5421,8 +5460,14 @@ class MainWindow(DockingMainWindow):
         if not connection_name:
             return
 
-        # Check cache first - if available, apply immediately
-        cached = self._schema_service.get_cached_schema(connection_name)
+        # Try to get session_id from current widget for per-session cache
+        sid = ""
+        current_widget = self._get_current_session_widget()
+        if current_widget and hasattr(current_widget, "session"):
+            sid = current_widget.session.session_id
+
+        # Check cache first - if available, apply immediately (per-session cache)
+        cached = self._schema_service.get_cached_schema(connection_name, session_id=sid)
         if cached:
             # Get db_type for special handling (e.g., Databricks catalog.schema)
             db_type = ""
@@ -5515,6 +5560,9 @@ class MainWindow(DockingMainWindow):
                 f"Loading schema for {connection_name}...", 5000
             )
 
+            # Get session_id for per-session cache
+            sid = self._get_active_session_id() or ""
+
             thread = QThread()
             worker = BlockConnectionWorker(
                 db_type=config["db_type"],
@@ -5529,9 +5577,9 @@ class MainWindow(DockingMainWindow):
             worker.moveToThread(thread)
 
             # When connection is ready, load schema (also in background via SchemaService)
-            def on_connection_ready(connector):
-                # SchemaService.load_schema already runs in background
-                self._schema_service.load_schema(connector, connection_name)
+            def on_connection_ready(connector, session_id=sid):
+                # SchemaService.load_schema already runs in background (per-session)
+                self._schema_service.load_schema(connector, connection_name, session_id=session_id)
                 # Store block reference to apply schema when loaded (support multiple blocks)
                 if not hasattr(self, "_pending_block_schemas"):
                     self._pending_block_schemas = {}  # conn_name -> [weakref.ref(block)]
@@ -5627,6 +5675,9 @@ class MainWindow(DockingMainWindow):
             f"Switching to database {database_name}...", 5000
         )
 
+        # Get session_id for per-session cache
+        sid = self._get_active_session_id() or ""
+
         # Create connection with the NEW database
         thread = QThread()
         worker = BlockConnectionWorker(
@@ -5641,10 +5692,10 @@ class MainWindow(DockingMainWindow):
         )
         worker.moveToThread(thread)
 
-        def on_connection_ready(connector):
-            # Invalidate old cache and load new schema
-            self._schema_service.invalidate_cache(connection_name)
-            self._schema_service.load_schema(connector, connection_name)
+        def on_connection_ready(connector, session_id=sid):
+            # Invalidate old cache and load new schema (per-session)
+            self._schema_service.invalidate_cache(connection_name, session_id=session_id)
+            self._schema_service.load_schema(connector, connection_name, session_id=session_id)
             # Store block reference to apply schema when loaded (support multiple blocks)
             if not hasattr(self, "_pending_block_schemas"):
                 self._pending_block_schemas = {}

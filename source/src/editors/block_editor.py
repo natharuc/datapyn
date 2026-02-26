@@ -77,6 +77,9 @@ class BlockEditor(QWidget):
     # Signal when cursor position changes in focused block
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
 
+    # Signal when focused block changes (for Object Explorer tracking)
+    block_focused = pyqtSignal(object)  # CodeBlock that gained focus
+
     def __init__(self, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
@@ -466,6 +469,10 @@ class BlockEditor(QWidget):
         if not block.get_block_name():
             block.set_block_name(f"block{len(self._blocks)}")
 
+        # Lock connection panel for first block (always uses tab connection)
+        if index == 0:
+            block.set_connection_locked(True)
+
         self.content_changed.emit()
         return block
 
@@ -481,11 +488,18 @@ class BlockEditor(QWidget):
             return
 
         index = self._blocks.index(block)
+        was_first = (index == 0)
         self._blocks.remove(block)
 
         # Remove from layout
         self.blocks_layout.removeWidget(block)
         block.deleteLater()
+
+        # If first block was removed, lock the new first block
+        if was_first and self._blocks:
+            self._blocks[0].set_connection_locked(True)
+            # Clear any custom connection from what is now the first block
+            self._blocks[0].set_connection_name(None)
 
         # Update focus
         if self._focused_block == block:
@@ -506,13 +520,17 @@ class BlockEditor(QWidget):
         self._blocks.clear()
         self._focused_block = None
         self._last_focused_block = None
-        self.add_block()
+        block = self.add_block()
+        # First block is already locked by add_block, but ensure it's set
+        block.set_connection_locked(True)
 
     def _on_block_focus_changed(self, block: CodeBlock, has_focus: bool):
         """When a block gains/loses focus"""
         if has_focus:
             self._focused_block = block
             self._last_focused_block = block
+            # Notify listeners (MainWindow) so Object Explorer can track focused connection
+            self.block_focused.emit(block)
             # Cursor position will be updated by the editor's cursor_changed signal
         elif self._focused_block == block:
             self._focused_block = None
@@ -654,20 +672,21 @@ class BlockEditor(QWidget):
 
         for i, data in enumerate(blocks_data):
             if i == 0:
-                # First block already exists
+                # First block already exists (and is already locked)
                 block = self._blocks[0]
                 block.set_language(data.get("language", "python"))
                 block.set_code(data.get("code", ""))
+                # First block cannot have custom connection - ignore it from saved data
             else:
                 block = self.add_block(language=data.get("language", "python"), code=data.get("code", ""))
+
+                # Restore custom connection only for blocks after the first
+                if "connection_name" in data:
+                    block.set_connection_name(data["connection_name"], data.get("db_type"))
 
             # Restore block name
             if "block_name" in data and data["block_name"]:
                 block.set_block_name(data["block_name"])
-
-            # Restore custom connection if exists
-            if "connection_name" in data:
-                block.set_connection_name(data["connection_name"], data.get("db_type"))
 
             # Restore custom database if exists
             if "database_name" in data and data["database_name"]:
