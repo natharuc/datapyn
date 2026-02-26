@@ -1267,6 +1267,12 @@ class MainWindow(DockingMainWindow):
             explorer.set_loading(True, S.object_explorer.loading)
             self._switch_session_explorer(sid)
 
+            # Track which session requested this schema load
+            # (so _on_schema_loaded only updates this session's OE)
+            if not hasattr(self, "_pending_schema_sessions"):
+                self._pending_schema_sessions = {}  # connection_name -> session_id
+            self._pending_schema_sessions[connection_name] = sid
+
         # Show Object Explorer dock if hidden (so user sees the loading)
         if hasattr(self, 'object_explorer_dock') and not self.object_explorer_dock.isVisible():
             self.object_explorer_dock.show()
@@ -4940,6 +4946,9 @@ class MainWindow(DockingMainWindow):
             # Trocar paineis para a sessao ativa
             self._switch_session_panels(widget.session.session_id)
 
+            # Atualizar OE para mostrar a conexao efetiva desta aba
+            self._update_oe_for_session(widget)
+
             # Restaurar contexto de arquivo da aba selecionada
             if hasattr(widget, "file_path") and widget.file_path:
                 self._original_file_path = widget.file_path
@@ -5065,6 +5074,11 @@ class MainWindow(DockingMainWindow):
         # This is the central place for schema loading when connection changes.
         # Invalidate cache only if database changed, otherwise load from cache.
         if session.connector:
+            # Update OE tracking - the session's OE should show this connection now
+            if not hasattr(self, "_oe_current_connection"):
+                self._oe_current_connection = {}
+            self._oe_current_connection[session.session_id] = connection_name
+
             self._load_schema_with_loading(session.connector, connection_name)
 
         # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
@@ -5165,14 +5179,26 @@ class MainWindow(DockingMainWindow):
             if current_catalog and schemas_set:
                 all_databases = sorted([f"{current_catalog}.{s}" for s in schemas_set])
 
+        # Determine which session requested this schema
+        requesting_sid = None
+        if hasattr(self, "_pending_schema_sessions"):
+            # Peek without removing (will be removed later in OE section)
+            requesting_sid = self._pending_schema_sessions.get(connection_name)
+
         for widget in self._session_widgets.values():
             if not (hasattr(widget, "editor") and widget.editor):
                 continue
 
             # Verificar se esta conexao e a conexao da sessao
             session_conn = ""
+            sid = ""
             if hasattr(widget, "session") and widget.session:
                 session_conn = getattr(widget.session, "connection_name", "") or ""
+                sid = widget.session.session_id
+
+            # Only update session that REQUESTED the schema (sessions are isolated)
+            if requesting_sid and sid != requesting_sid:
+                continue
 
             # If this is the session's connection, cache schema in BlockEditor
             # BlockEditor will apply to all SQL blocks and handle language changes
@@ -5203,35 +5229,37 @@ class MainWindow(DockingMainWindow):
         # Build text context from schema for Copilot completions
         schema_context = self._build_schema_context(schema, connection_name)
         
-        # Propagate schema context to editors for inline completions
-        for sid, widget in self._session_widgets.items():
-            if not (hasattr(widget, "session") and widget.session):
-                continue
-            session_conn = getattr(widget.session, "connection_name", "") or ""
-            if session_conn == connection_name and hasattr(widget, "editor"):
+        # Propagate schema context only to the session that REQUESTED this schema
+        if requesting_sid:
+            widget = self._session_widgets.get(requesting_sid)
+            if widget and hasattr(widget, "editor"):
                 widget.editor.set_database_context(schema_context)
 
-        # Update Object Explorer for corresponding session
-        # (db_type already computed above)
+        # Update Object Explorer for the session that REQUESTED this schema
+        # (not all sessions - each session has its own OE state)
         if hasattr(self, "_session_explorers"):
-            # Primeiro atualiza os OEs das sessoes que usam esta conexao
-            for sid, widget in self._session_widgets.items():
-                if not (hasattr(widget, "session") and widget.session):
-                    continue
-                session_conn = getattr(widget.session, "connection_name", "") or ""
-                if session_conn == connection_name:
-                    explorer = self._get_session_explorer(sid)
-                    explorer.set_schema(schema, connection_name, db_type=db_type)
+            # Find which session requested this schema load
+            requesting_sid = None
+            if hasattr(self, "_pending_schema_sessions"):
+                requesting_sid = self._pending_schema_sessions.pop(connection_name, None)
+
+            if requesting_sid:
+                # Only update the requesting session's OE
+                explorer = self._get_session_explorer(requesting_sid)
+                explorer.set_schema(schema, connection_name, db_type=db_type)
+                
+                # Update OE tracking for this session
+                if not hasattr(self, "_oe_current_connection"):
+                    self._oe_current_connection = {}
+                self._oe_current_connection[requesting_sid] = connection_name
             
-            # Depois, SEMPRE garante que o OE mostra a sessao ativa atual
-            # (pode ter mudado durante o carregamento)
+            # Ensure we're showing the active session's OE
             current_widget = self._get_current_session_widget()
             if current_widget and hasattr(current_widget, "session"):
                 active_sid = current_widget.session.session_id
                 self._switch_session_explorer(active_sid)
-                # So mostra o dock se a sessao ativa usa esta conexao
-                active_conn = getattr(current_widget.session, "connection_name", "") or ""
-                if active_conn == connection_name:
+                # Show dock if the active session requested this schema
+                if requesting_sid == active_sid:
                     self.object_explorer_dock.show()
 
         # Check if any block was waiting for this schema (per-block connection)
@@ -5271,6 +5299,64 @@ class MainWindow(DockingMainWindow):
             lines.append(f"  ... +{len(tables) - 30} more tables")
         
         return "\n".join(lines)
+
+    def _update_oe_for_session(self, widget):
+        """Update Object Explorer to show the effective connection for a session/tab.
+
+        Called when switching tabs. Determines the effective connection
+        (focused block's connection or session connection) and updates OE.
+        """
+        if not widget or not hasattr(widget, "session"):
+            return
+
+        session = widget.session
+        sid = session.session_id
+
+        # Determine effective connection: focused block's or session's
+        effective_conn = ""
+        if hasattr(widget, "editor"):
+            block = widget.editor.get_last_focused_block()
+            if block and hasattr(block, "get_connection_name"):
+                block_conn = block.get_connection_name()
+                if block_conn:
+                    effective_conn = block_conn
+
+        if not effective_conn:
+            effective_conn = getattr(session, "connection_name", "") or ""
+
+        if not effective_conn:
+            # No connection - clear OE or show empty
+            explorer = self._get_session_explorer(sid)
+            explorer.clear()
+            return
+
+        # Check if OE is already showing this connection
+        if not hasattr(self, "_oe_current_connection"):
+            self._oe_current_connection = {}
+
+        current_oe_conn = self._oe_current_connection.get(sid)
+        if current_oe_conn == effective_conn:
+            return  # Already showing correct schema
+
+        # Update tracking
+        self._oe_current_connection[sid] = effective_conn
+
+        # Try cache first
+        cached = self._schema_service.get_cached_schema(effective_conn)
+        if cached:
+            db_type = ""
+            config = self.connection_manager.get_connection_config(effective_conn)
+            if config:
+                db_type = config.get("db_type", "")
+
+            explorer = self._get_session_explorer(sid)
+            explorer.set_schema(cached, effective_conn, db_type=db_type)
+            return
+
+        # Need to load schema - get connector
+        connector = self.connection_manager.get_connection(effective_conn)
+        if connector and connector.is_connected():
+            self._load_schema_with_loading(connector, effective_conn)
 
     def _on_block_focused(self, block, widget):
         """Called when a block gains focus. Updates Object Explorer to show the
