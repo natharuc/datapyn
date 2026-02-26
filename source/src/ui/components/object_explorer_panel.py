@@ -24,9 +24,11 @@ from PyQt6.QtWidgets import (
     QMenu,
     QApplication,
     QPushButton,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData
-from PyQt6.QtGui import QFont, QColor, QAction, QDrag
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QRect, QModelIndex, QPoint
+from PyQt6.QtGui import QFont, QColor, QAction, QDrag, QPainter, QPen, QMouseEvent
 
 from .buttons import GhostButton
 
@@ -44,14 +46,107 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class InsertButtonDelegate(QStyledItemDelegate):
+    """Delegate that paints a >> button on the right side of tree items.
+    
+    The button appears on hover and emits insert_clicked when clicked.
+    Only shows for items that have meaningful content to insert
+    (tables, columns, schemas, catalogs, databases).
+    """
+    
+    insert_clicked = pyqtSignal(QTreeWidgetItem)
+    
+    BUTTON_WIDTH = 24
+    BUTTON_MARGIN = 4
+    
+    def __init__(self, tree: QTreeWidget, parent=None):
+        super().__init__(parent)
+        self._tree = tree
+        self._hovered_index: QModelIndex | None = None
+        # Enable mouse tracking on the viewport for hover detection
+        self._tree.viewport().setMouseTracking(True)
+        self._tree.viewport().installEventFilter(self)
+    
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
+        """Paint the item normally, then overlay >> button on hover."""
+        super().paint(painter, option, index)
+        
+        # Only paint >> on hovered row
+        if self._hovered_index is not None and index.row() == self._hovered_index.row() and index.parent() == self._hovered_index.parent():
+            item = self._tree.itemFromIndex(index)
+            if item:
+                data = item.data(0, Qt.ItemDataRole.UserRole)
+                if data and data.get("type") != self._tree.parent().PLACEHOLDER_TYPE:
+                    btn_rect = self._get_button_rect(option.rect)
+                    
+                    painter.save()
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    
+                    # Draw >> text
+                    painter.setPen(QPen(QColor("#569cd6")))
+                    font = painter.font()
+                    font.setPointSize(9)
+                    font.setBold(True)
+                    painter.setFont(font)
+                    painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, ">>")
+                    
+                    painter.restore()
+    
+    def _get_button_rect(self, item_rect: QRect) -> QRect:
+        """Get the rectangle for the >> button at the right edge of item."""
+        return QRect(
+            item_rect.right() - self.BUTTON_WIDTH - self.BUTTON_MARGIN,
+            item_rect.top(),
+            self.BUTTON_WIDTH,
+            item_rect.height()
+        )
+    
+    def eventFilter(self, obj, event):
+        """Track mouse for hover and click on >> button."""
+        if obj is self._tree.viewport():
+            if event.type() == event.Type.MouseMove:
+                pos = event.pos()
+                index = self._tree.indexAt(pos)
+                if index.isValid():
+                    if self._hovered_index != index:
+                        self._hovered_index = index
+                        self._tree.viewport().update()
+                else:
+                    if self._hovered_index is not None:
+                        self._hovered_index = None
+                        self._tree.viewport().update()
+            elif event.type() == event.Type.Leave:
+                if self._hovered_index is not None:
+                    self._hovered_index = None
+                    self._tree.viewport().update()
+            elif event.type() == event.Type.MouseButtonPress:
+                pos = event.pos()
+                index = self._tree.indexAt(pos)
+                if index.isValid():
+                    item = self._tree.itemFromIndex(index)
+                    if item:
+                        vis_rect = self._tree.visualItemRect(item)
+                        btn_rect = self._get_button_rect(vis_rect)
+                        if btn_rect.contains(pos):
+                            self.insert_clicked.emit(item)
+                            return True  # consume the event
+        return super().eventFilter(obj, event)
+
+
 class ObjectExplorerPanel(QWidget):
     """Object Explorer Panel - displays database structure in tree"""
 
     # Signals
     insert_text_requested = pyqtSignal(str)  # text to insert (append) in focused editor
-    select_top_requested = pyqtSignal(str, str)  # schema, table_name -> SELECT TOP 1000
     query_requested = pyqtSignal(str)  # SQL query to execute
     database_switch_requested = pyqtSignal(str)  # database name to switch to
+    # Lazy loading signals
+    schemas_requested = pyqtSignal(str)  # catalog_name -> request schemas for this catalog
+    tables_requested = pyqtSignal(str, str)  # catalog, schema -> request tables
+    columns_requested = pyqtSignal(str, str, str)  # catalog, schema, table -> request columns
+
+    # Placeholder marker for lazy loading
+    PLACEHOLDER_TYPE = "__placeholder__"
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -150,8 +245,16 @@ class ObjectExplorerPanel(QWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
 
-        # Double click
+        # Double click - only expand/collapse
         self.tree.itemDoubleClicked.connect(self._on_double_click)
+
+        # >> insert button delegate
+        self._insert_delegate = InsertButtonDelegate(self.tree, self)
+        self.tree.setItemDelegate(self._insert_delegate)
+        self._insert_delegate.insert_clicked.connect(self._on_insert_clicked)
+
+        # Lazy loading on expand
+        self.tree.itemExpanded.connect(self._on_item_expanded)
 
         # Override startDrag to provide database mime data
         self.tree.startDrag = self._start_drag
@@ -230,16 +333,6 @@ class ObjectExplorerPanel(QWidget):
             }}
             QTreeWidget::branch {{
                 background: transparent;
-            }}
-            QTreeWidget::branch:has-children:!has-siblings:closed,
-            QTreeWidget::branch:closed:has-children:has-siblings {{
-                image: url(none);
-                border-image: none;
-            }}
-            QTreeWidget::branch:open:has-children:!has-siblings,
-            QTreeWidget::branch:open:has-children:has-siblings {{
-                image: url(none);
-                border-image: none;
             }}
             QScrollBar:vertical {{
                 background: transparent;
@@ -351,12 +444,13 @@ class ObjectExplorerPanel(QWidget):
         """Quote SQL identifier based on current db_type.
         
         Args:
-            identifier: Table or column name (may include schema: schema.table)
+            identifier: Table or column name (may include schema: schema.table
+                        or catalog.schema.table for Databricks)
         
         Returns:
             Properly quoted identifier for safe SQL use
         """
-        parts = identifier.split(".", 1)
+        parts = identifier.split(".")
         db_type = self._db_type
         
         if db_type in ("sqlserver", "mssql", ""):
@@ -364,7 +458,7 @@ class ObjectExplorerPanel(QWidget):
             quoted_parts = [f"[{p}]" for p in parts]
         elif db_type in ("postgres", "postgresql"):
             quoted_parts = [f'"{p}"' for p in parts]
-        elif db_type in ("mysql", "mariadb"):
+        elif db_type in ("mysql", "mariadb", "databricks"):
             quoted_parts = [f"`{p}`" for p in parts]
         else:
             # ANSI SQL double quotes
@@ -373,7 +467,21 @@ class ObjectExplorerPanel(QWidget):
         return ".".join(quoted_parts)
 
     def _build_tree(self, schema: dict):
-        """Build tree from schema"""
+        """Build tree from schema.
+
+        For Databricks: Catalog > Schema > Table > Columns (3-level namespace)
+        For SQL Server/MySQL: Database > Schema > Table > Columns
+        For PostgreSQL: Database > Schema > Table > Columns (single DB only)
+        """
+        # Disable updates during bulk tree building to prevent UI freezes
+        self.tree.setUpdatesEnabled(False)
+        try:
+            self._do_build_tree(schema)
+        finally:
+            self.tree.setUpdatesEnabled(True)
+
+    def _do_build_tree(self, schema: dict):
+        """Internal tree building implementation."""
         self.tree.clear()
 
         if not schema:
@@ -387,52 +495,14 @@ class ObjectExplorerPanel(QWidget):
 
         filter_text = self.search_input.text().strip().lower()
 
-        # Criar nos raiz para cada banco do servidor
-        if all_databases:
-            for db in sorted(all_databases):
-                is_current = (db.lower() == db_name.lower()) if db_name else False
+        is_databricks = self._db_type == "databricks"
 
-                # So o banco atual tem tabelas/colunas carregados
-                if is_current:
-                    # Quando filtro ativo, verificar se banco tem conteudo relevante
-                    if filter_text:
-                        has_match = any(
-                            filter_text in t.get("name", "").lower()
-                            or any(filter_text in c.get("name", "").lower() for c in columns.get(t.get("name", ""), []))
-                            for t in tables
-                        )
-                        # Verificar tambem se o nome do banco corresponde
-                        if not has_match and filter_text not in db.lower():
-                            continue
-
-                    display = f"{db} {S.object_explorer.db_connected.format(db='')}" if not filter_text else db
-                    db_item = QTreeWidgetItem(self.tree, [display])
-                    db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
-
-                    if HAS_QTAWESOME:
-                        db_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
-
-                    font = db_item.font(0)
-                    font.setBold(True)
-                    db_item.setFont(0, font)
-
-                    self._add_tables_to_node(db_item, tables, columns, filter_text)
-                    db_item.setExpanded(True)
-                else:
-                    # Bancos nao-atuais: esconder quando filtro ativo (nao tem tabelas carregadas)
-                    if filter_text:
-                        # Mostrar apenas se nome do banco corresponde ao filtro
-                        if filter_text not in db.lower():
-                            continue
-
-                    display = db
-                    db_item = QTreeWidgetItem(self.tree, [display])
-                    db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
-
-                    if HAS_QTAWESOME:
-                        db_item.setIcon(0, qta.icon("mdi.database", color="#888888"))
+        if is_databricks:
+            self._build_tree_databricks(tables, columns, db_name, all_databases, filter_text)
+        elif all_databases and len(all_databases) > 1:
+            self._build_tree_multi_db(tables, columns, db_name, all_databases, filter_text)
         else:
-            # Fallback: apenas o banco conectado (sem lista de bancos)
+            # Single database (PostgreSQL, or single MySQL/MariaDB)
             db_display = db_name or self._current_connection or "Database"
             db_item = QTreeWidgetItem(self.tree, [db_display])
             db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
@@ -447,23 +517,213 @@ class ObjectExplorerPanel(QWidget):
             self._add_tables_to_node(db_item, tables, columns, filter_text)
             db_item.setExpanded(True)
 
-        # Atualizar info
+        # Update info label
         table_count = len(tables)
         col_count = sum(len(v) for v in columns.values())
         db_count = len(all_databases)
-        if db_count > 0:
+        if is_databricks and db_count > 0:
+            self.info_label.setText(S.object_explorer.info_catalogs_tables.format(
+                catalogs=db_count, tables=table_count
+            ))
+        elif db_count > 0:
             self.info_label.setText(S.object_explorer.info_dbs_tables.format(dbs=db_count, tables=table_count))
         else:
             self.info_label.setText(S.object_explorer.info_tables_cols.format(tables=table_count, cols=col_count))
 
-    def _add_tables_to_node(self, parent_item, tables, columns, filter_text=""):
+    def _build_tree_databricks(self, tables, columns, current_catalog, all_catalogs, filter_text):
+        """Build tree for Databricks 3-level namespace: Catalog > Schema > Table > Columns
+        
+        Uses lazy loading: only catalogs shown initially, schemas/tables/columns loaded on expand.
+        Exception: when filter is active, loads matching items fully.
+        """
+        logger.info(f"[OE Databricks] Building tree: {len(tables)} tables, {len(all_catalogs)} catalogs, current={current_catalog}")
+        
+        # If filter is active, use full loading (old behavior)
+        if filter_text:
+            self._build_tree_databricks_full(tables, columns, current_catalog, all_catalogs, filter_text)
+            return
+
+        # Lazy loading mode: show catalogs with placeholder children
+        for catalog in sorted(all_catalogs):
+            is_current = (catalog.lower() == current_catalog.lower()) if current_catalog else False
+
+            if is_current:
+                display = f"{catalog} {S.object_explorer.db_connected.format(db='')}"
+            else:
+                display = catalog
+
+            cat_item = QTreeWidgetItem(self.tree, [display])
+            cat_item.setData(0, Qt.ItemDataRole.UserRole, {
+                "type": "catalog", "name": catalog
+            })
+
+            icon_color = "#569cd6" if is_current else "#888888"
+            if HAS_QTAWESOME:
+                cat_item.setIcon(0, qta.icon("mdi.database", color=icon_color))
+
+            if is_current:
+                font = cat_item.font(0)
+                font.setBold(True)
+                cat_item.setFont(0, font)
+                
+                # For current catalog, show schemas if we have table data
+                if tables:
+                    # Extract unique schemas from tables
+                    schemas = sorted(set(t.get("schema", "") for t in tables if t.get("schema")))
+                    for schema_name in schemas:
+                        schema_item = QTreeWidgetItem(cat_item, [schema_name])
+                        schema_item.setData(0, Qt.ItemDataRole.UserRole, {
+                            "type": "schema", "name": schema_name, "catalog": catalog
+                        })
+                        if HAS_QTAWESOME:
+                            schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
+                        # Add placeholder for tables (lazy load)
+                        self._add_placeholder_child(schema_item)
+                else:
+                    # No tables loaded yet, add placeholder
+                    self._add_placeholder_child(cat_item)
+                # Auto-expand current catalog
+                cat_item.setExpanded(True)
+            else:
+                # Non-current catalogs get placeholder for lazy loading
+                self._add_placeholder_child(cat_item)
+
+    def _build_tree_databricks_full(self, tables, columns, current_catalog, all_catalogs, filter_text):
+        """Build full tree for Databricks with filter active (loads everything)."""
+        if tables:
+            schemas_in_tables = set(t.get("schema", "") for t in tables)
+            logger.info(f"[OE Databricks] Schemas found in tables: {schemas_in_tables}")
+        for catalog in sorted(all_catalogs):
+            is_current = (catalog.lower() == current_catalog.lower()) if current_catalog else False
+
+            if is_current:
+                has_match = any(
+                    filter_text in t.get("name", "").lower()
+                    or filter_text in t.get("schema", "").lower()
+                    or any(filter_text in c.get("name", "").lower()
+                           for c in columns.get(t.get("key", t.get("name", "")), []))
+                    for t in tables
+                )
+                if not has_match and filter_text not in catalog.lower():
+                    continue
+
+                display = catalog  # No "(connected)" suffix when filtering
+                cat_item = QTreeWidgetItem(self.tree, [display])
+                cat_item.setData(0, Qt.ItemDataRole.UserRole, {
+                    "type": "catalog", "name": catalog
+                })
+
+                if HAS_QTAWESOME:
+                    cat_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
+
+                font = cat_item.font(0)
+                font.setBold(True)
+                cat_item.setFont(0, font)
+
+                # Load full tree when filtering
+                self._add_tables_to_node(cat_item, tables, columns, filter_text, catalog=catalog)
+                cat_item.setExpanded(True)
+            else:
+                if filter_text and filter_text not in catalog.lower():
+                    continue
+
+                cat_item = QTreeWidgetItem(self.tree, [catalog])
+                cat_item.setData(0, Qt.ItemDataRole.UserRole, {
+                    "type": "catalog", "name": catalog
+                })
+                if HAS_QTAWESOME:
+                    cat_item.setIcon(0, qta.icon("mdi.database", color="#888888"))
+
+    def _build_tree_multi_db(self, tables, columns, db_name, all_databases, filter_text):
+        """Build tree for multi-database servers (SQL Server, MySQL)
+        
+        Uses lazy loading: databases shown initially, tables/columns loaded on expand.
+        Exception: when filter is active, loads matching items fully.
+        """
+        # If filter is active, use full loading
+        if filter_text:
+            self._build_tree_multi_db_full(tables, columns, db_name, all_databases, filter_text)
+            return
+        
+        # Lazy loading mode
+        for db in sorted(all_databases):
+            is_current = (db.lower() == db_name.lower()) if db_name else False
+
+            if is_current:
+                display = f"{db} {S.object_explorer.db_connected.format(db='')}"
+            else:
+                display = db
+                
+            db_item = QTreeWidgetItem(self.tree, [display])
+            db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
+
+            icon_color = "#569cd6" if is_current else "#888888"
+            if HAS_QTAWESOME:
+                db_item.setIcon(0, qta.icon("mdi.database", color=icon_color))
+
+            if is_current:
+                font = db_item.font(0)
+                font.setBold(True)
+                db_item.setFont(0, font)
+                
+                # For current db, show tables with placeholder for columns
+                if tables:
+                    self._add_table_items(db_item, tables, with_column_placeholder=True)
+                else:
+                    self._add_placeholder_child(db_item)
+                # Auto-expand current db
+                db_item.setExpanded(True)
+            else:
+                # Non-current databases get placeholder for lazy loading
+                self._add_placeholder_child(db_item)
+
+    def _build_tree_multi_db_full(self, tables, columns, db_name, all_databases, filter_text):
+        """Build full tree for multi-DB with filter active (loads everything)."""
+        for db in sorted(all_databases):
+            is_current = (db.lower() == db_name.lower()) if db_name else False
+
+            if is_current:
+                has_match = any(
+                    filter_text in t.get("name", "").lower()
+                    or any(filter_text in c.get("name", "").lower()
+                           for c in columns.get(t.get("key", t.get("name", "")), []))
+                    for t in tables
+                )
+                if not has_match and filter_text not in db.lower():
+                    continue
+
+                display = db  # No "(connected)" suffix when filtering
+                db_item = QTreeWidgetItem(self.tree, [display])
+                db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
+
+                if HAS_QTAWESOME:
+                    db_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
+
+                font = db_item.font(0)
+                font.setBold(True)
+                db_item.setFont(0, font)
+
+                self._add_tables_to_node(db_item, tables, columns, filter_text)
+                db_item.setExpanded(True)
+            else:
+                if filter_text and filter_text not in db.lower():
+                    continue
+
+                db_item = QTreeWidgetItem(self.tree, [db])
+                db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db})
+
+                if HAS_QTAWESOME:
+                    db_item.setIcon(0, qta.icon("mdi.database", color="#888888"))
+
+    def _add_tables_to_node(self, parent_item, tables, columns, filter_text="", catalog: str = ""):
         """Adiciona tabelas e colunas a um no da arvore.
 
         Args:
-            parent_item: QTreeWidgetItem pai (banco)
+            parent_item: QTreeWidgetItem pai (banco ou catalog)
             tables: lista de tabelas
-            columns: dict de colunas por tabela
+            columns: dict de colunas por table_key (schema.table_name)
             filter_text: filtro de busca (lowercase)
+            catalog: Databricks catalog name (for full namespace references)
         """
         # Agrupar tabelas por schema
         schema_groups = {}
@@ -481,21 +741,24 @@ class ObjectExplorerPanel(QWidget):
                 schema_item = QTreeWidgetItem(parent_item, [schema_name])
                 schema_item.setData(
                     0, Qt.ItemDataRole.UserRole,
-                    {"type": "schema", "name": schema_name},
+                    {"type": "schema", "name": schema_name, "catalog": catalog},
                 )
                 if HAS_QTAWESOME:
                     schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
                 parent = schema_item
+                # Expand schema nodes by default so tables are visible
+                schema_item.setExpanded(True)
             else:
                 parent = parent_item
 
             for table in sorted(schema_tables, key=lambda t: t.get("name", "")):
                 table_name = table.get("name", "")
+                table_key = table.get("key", table_name)
                 table_type = table.get("type", "TABLE")
                 table_schema = table.get("schema", "")
 
-                # Colunas da tabela
-                table_columns = columns.get(table_name, [])
+                # Columns use the composite key (schema.table) for lookup
+                table_columns = columns.get(table_key, [])
 
                 # Filtro de busca: verificar se tabela ou alguma coluna corresponde
                 if filter_text:
@@ -515,7 +778,9 @@ class ObjectExplorerPanel(QWidget):
                     {
                         "type": "table",
                         "name": table_name,
+                        "key": table_key,
                         "schema": table_schema,
+                        "catalog": catalog,
                         "table_type": table_type,
                     },
                 )
@@ -526,15 +791,12 @@ class ObjectExplorerPanel(QWidget):
                     else:
                         table_item.setIcon(0, qta.icon("mdi.table", color="#4ec9b0"))
 
-                # Determinar se a tabela em si corresponde ao filtro
-                table_matches_filter = filter_text in table_name.lower() if filter_text else True
-
                 for col in table_columns:
                     col_name = col.get("name", "")
                     col_type = col.get("type", "")
                     nullable = col.get("nullable", "YES")
 
-                    # Quando filtro ativo, sempre filtrar colunas individualmente
+                    # Quando filtro ativo, filtrar colunas individualmente
                     if filter_text and filter_text not in col_name.lower() and filter_text not in col_type.lower():
                         continue
 
@@ -551,6 +813,7 @@ class ObjectExplorerPanel(QWidget):
                             "data_type": col_type,
                             "nullable": nullable,
                             "table": table_name,
+                            "table_key": table_key,
                             "schema": table_schema,
                         },
                     )
@@ -581,8 +844,217 @@ class ObjectExplorerPanel(QWidget):
         if self._current_schema:
             self._build_tree(self._current_schema)
 
+    def _add_placeholder_child(self, parent_item: QTreeWidgetItem):
+        """Add a placeholder child to make item expandable. Will be replaced on expand."""
+        placeholder = QTreeWidgetItem(parent_item, [S.object_explorer.loading if hasattr(S.object_explorer, 'loading') else "Loading..."])
+        placeholder.setData(0, Qt.ItemDataRole.UserRole, {"type": self.PLACEHOLDER_TYPE})
+        placeholder.setForeground(0, QColor("#808080"))
+        if HAS_QTAWESOME:
+            placeholder.setIcon(0, qta.icon("mdi.loading", color="#808080"))
+
+    def _has_placeholder_child(self, item: QTreeWidgetItem) -> bool:
+        """Check if item has a placeholder child (needs lazy loading)."""
+        if item.childCount() == 0:
+            return False
+        first_child = item.child(0)
+        data = first_child.data(0, Qt.ItemDataRole.UserRole)
+        return data and data.get("type") == self.PLACEHOLDER_TYPE
+
+    def _remove_placeholder_children(self, item: QTreeWidgetItem):
+        """Remove placeholder children from item."""
+        to_remove = []
+        for i in range(item.childCount()):
+            child = item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == self.PLACEHOLDER_TYPE:
+                to_remove.append(child)
+        for child in to_remove:
+            item.removeChild(child)
+
+    def _on_item_expanded(self, item: QTreeWidgetItem):
+        """Handle item expansion for lazy loading."""
+        if item is None:
+            return
+
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+
+        # Check if this item needs lazy loading (has placeholder child)
+        if not self._has_placeholder_child(item):
+            return
+
+        item_type = data.get("type", "")
+        name = data.get("name", "")
+        catalog = data.get("catalog", "")
+
+        if item_type == "catalog" and name:
+            # Request schemas/tables for this catalog
+            self.schemas_requested.emit(name)
+        elif item_type == "schema" and name:
+            # Request tables for this schema
+            cat = catalog or self._current_schema.get("database", "") if self._current_schema else ""
+            self.tables_requested.emit(cat, name)
+        elif item_type == "table" and name:
+            # Request columns for this table
+            schema_name = data.get("schema", "")
+            cat = catalog or self._current_schema.get("database", "") if self._current_schema else ""
+            self.columns_requested.emit(cat, schema_name, name)
+        elif item_type == "database" and name:
+            # For non-Databricks, request tables for this database
+            self.tables_requested.emit(name, "")
+
+    def add_schemas_to_catalog(self, catalog_name: str, schemas: list):
+        """Add schemas to a catalog item (lazy loading callback)."""
+        # Find the catalog item
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "catalog" and data.get("name") == catalog_name:
+                self._remove_placeholder_children(item)
+                for schema_name in sorted(schemas):
+                    schema_item = QTreeWidgetItem(item, [schema_name])
+                    schema_item.setData(0, Qt.ItemDataRole.UserRole, {
+                        "type": "schema", "name": schema_name, "catalog": catalog_name
+                    })
+                    if HAS_QTAWESOME:
+                        schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
+                    # Add placeholder for tables
+                    self._add_placeholder_child(schema_item)
+                return
+
+    def add_tables_to_schema(self, catalog_name: str, schema_name: str, tables: list):
+        """Add tables to a schema item (lazy loading callback)."""
+        # Find the schema item
+        for i in range(self.tree.topLevelItemCount()):
+            cat_item = self.tree.topLevelItem(i)
+            cat_data = cat_item.data(0, Qt.ItemDataRole.UserRole)
+            if not cat_data:
+                continue
+            cat_type = cat_data.get("type", "")
+            cat_name = cat_data.get("name", "")
+            
+            # For catalog items, search children
+            if cat_type == "catalog" and cat_name == catalog_name:
+                for j in range(cat_item.childCount()):
+                    schema_item = cat_item.child(j)
+                    schema_data = schema_item.data(0, Qt.ItemDataRole.UserRole)
+                    if schema_data and schema_data.get("type") == "schema" and schema_data.get("name") == schema_name:
+                        self._remove_placeholder_children(schema_item)
+                        self._add_table_items(schema_item, tables, catalog_name, schema_name)
+                        return
+            # For database items (non-Databricks)
+            elif cat_type == "database" and cat_name == catalog_name:
+                self._remove_placeholder_children(cat_item)
+                self._add_table_items(cat_item, tables, "", "")
+                return
+
+    def _add_table_items(
+        self, parent_item: QTreeWidgetItem, tables: list,
+        catalog: str = "", schema: str = "", with_column_placeholder: bool = True
+    ):
+        """Add table items to a parent node.
+        
+        Args:
+            parent_item: Parent tree item
+            tables: List of table dictionaries or strings
+            catalog: Databricks catalog name
+            schema: Schema name
+            with_column_placeholder: If True, add placeholder for lazy column loading
+        """
+        for table in sorted(tables, key=lambda t: t.get("name", "") if isinstance(t, dict) else t):
+            if isinstance(table, dict):
+                table_name = table.get("name", "")
+                table_type = table.get("type", "TABLE")
+                table_schema = table.get("schema", schema)
+            else:
+                table_name = str(table)
+                table_type = "TABLE"
+                table_schema = schema
+
+            is_view = "VIEW" in table_type.upper()
+            label = f"{table_name} {S.object_explorer.view_suffix}" if is_view else table_name
+
+            table_item = QTreeWidgetItem(parent_item, [label])
+            table_item.setData(0, Qt.ItemDataRole.UserRole, {
+                "type": "table",
+                "name": table_name,
+                "schema": table_schema,
+                "catalog": catalog,
+                "table_type": table_type,
+            })
+
+            if HAS_QTAWESOME:
+                if is_view:
+                    table_item.setIcon(0, qta.icon("mdi.table-eye", color="#4ec9b0"))
+                else:
+                    table_item.setIcon(0, qta.icon("mdi.table", color="#4ec9b0"))
+
+            # Add placeholder for lazy column loading
+            if with_column_placeholder:
+                self._add_placeholder_child(table_item)
+
+    def add_columns_to_table(self, catalog_name: str, schema_name: str, table_name: str, columns: list):
+        """Add columns to a table item (lazy loading callback)."""
+        # Find the table item by traversing the tree
+        def find_table(parent):
+            for i in range(parent.childCount()):
+                child = parent.child(i)
+                data = child.data(0, Qt.ItemDataRole.UserRole)
+                if not data:
+                    continue
+                if data.get("type") == "table" and data.get("name") == table_name:
+                    # Check schema match
+                    if schema_name and data.get("schema", "") != schema_name:
+                        continue
+                    return child
+                # Recurse into schema/catalog nodes
+                result = find_table(child)
+                if result:
+                    return result
+            return None
+
+        for i in range(self.tree.topLevelItemCount()):
+            table_item = find_table(self.tree.topLevelItem(i))
+            if table_item:
+                self._remove_placeholder_children(table_item)
+                for col in columns:
+                    col_name = col.get("name", "")
+                    col_type = col.get("type", "")
+                    nullable = col.get("nullable", "YES")
+
+                    display = f"{col_name}  ({col_type})"
+                    if nullable.upper() == "NO":
+                        display += "  NOT NULL"
+
+                    col_item = QTreeWidgetItem(table_item, [display])
+                    col_item.setData(0, Qt.ItemDataRole.UserRole, {
+                        "type": "column",
+                        "name": col_name,
+                        "data_type": col_type,
+                        "table": table_name,
+                    })
+
+                    if HAS_QTAWESOME:
+                        col_item.setIcon(0, qta.icon("mdi.table-column", color="#9cdcfe"))
+                    col_item.setForeground(0, QColor("#b0b0b0"))
+                return
+
     def _on_double_click(self, item: QTreeWidgetItem, column: int):
-        """Duplo clique: append no editor para qualquer objeto, troca banco para database"""
+        """Double-click only toggles expand/collapse. Insert is via >> button."""
+        if item is None:
+            return
+
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+
+        # Toggle expand/collapse on double-click for items with children
+        if item.childCount() > 0:
+            item.setExpanded(not item.isExpanded())
+
+    def _on_insert_clicked(self, item: QTreeWidgetItem):
+        """Handle click on the >> insert button - sends path to editor."""
         if item is None:
             return
 
@@ -592,11 +1064,27 @@ class ObjectExplorerPanel(QWidget):
 
         item_type = data.get("type", "")
         name = data.get("name", "")
+        if not name:
+            return
 
-        if item_type == "database" and name:
-            # Trocar banco ativo da conexao da aba
-            self.database_switch_requested.emit(name)
-        elif item_type in ("table", "column", "schema") and name:
+        if item_type == "table":
+            catalog = data.get("catalog", "")
+            schema = data.get("schema", "")
+            if catalog and schema:
+                self.insert_text_requested.emit(f"{catalog}.{schema}.{name}")
+            elif schema:
+                self.insert_text_requested.emit(f"{schema}.{name}")
+            else:
+                self.insert_text_requested.emit(name)
+        elif item_type == "column":
+            self.insert_text_requested.emit(name)
+        elif item_type == "schema":
+            catalog = data.get("catalog", "")
+            if catalog:
+                self.insert_text_requested.emit(f"{catalog}.{name}")
+            else:
+                self.insert_text_requested.emit(name)
+        elif item_type == "catalog" or item_type == "database":
             self.insert_text_requested.emit(name)
 
     def _start_drag(self, supported_actions):
@@ -670,12 +1158,20 @@ class ObjectExplorerPanel(QWidget):
             """)
 
         if item_type == "table":
-            # Selecionar 1000 linhas with proper quoting
-            qualified = f"{schema_name}.{name}" if schema_name else name
+            # Build qualified name
+            # For Databricks, use full namespace: catalog.schema.table
+            catalog_name = data.get("catalog", "")
+            if catalog_name and schema_name:
+                # Databricks: catalog.schema.table
+                qualified = f"{catalog_name}.{schema_name}.{name}"
+            elif schema_name:
+                qualified = f"{schema_name}.{name}"
+            else:
+                qualified = name
             quoted = self._quote_identifier(qualified)
             
             # Build query based on database type
-            if self._db_type in ("mysql", "mariadb", "postgres", "postgresql", "sqlite"):
+            if self._db_type in ("mysql", "mariadb", "postgres", "postgresql", "sqlite", "databricks"):
                 select_query = f"SELECT * FROM {quoted} LIMIT 1000"
             else:
                 # SQL Server / default
@@ -688,56 +1184,82 @@ class ObjectExplorerPanel(QWidget):
 
             menu.addSeparator()
 
-            # Inserir nome no editor
+            # Insert name in editor (full qualified for Databricks)
+            insert_name = qualified if catalog_name else name
             act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
-            act_insert.triggered.connect(lambda: self.insert_text_requested.emit(name))
+            act_insert.triggered.connect(lambda _, n=insert_name: self.insert_text_requested.emit(n))
 
-            # Copiar nome
+            # Copy name (simple table name)
             act_copy = menu.addAction(S.object_explorer.ctx_copy_name)
-            act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
+            act_copy.triggered.connect(lambda _, n=name: QApplication.clipboard().setText(n))
 
-            # Copiar nome qualificado
-            if schema_name:
-                act_copy_qual = menu.addAction(S.object_explorer.ctx_copy_qualified)
-                act_copy_qual.triggered.connect(
-                    lambda: QApplication.clipboard().setText(f"{schema_name}.{name}")
-                )
+            # Copy qualified name
+            act_copy_qual = menu.addAction(S.object_explorer.ctx_copy_qualified)
+            act_copy_qual.triggered.connect(
+                lambda _, q=qualified: QApplication.clipboard().setText(q)
+            )
 
         elif item_type == "column":
             table_name = data.get("table", "")
             col_type = data.get("data_type", "")
 
-            # Inserir nome no editor
+            # Insert name in editor
             act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
-            act_insert.triggered.connect(lambda: self.insert_text_requested.emit(name))
+            act_insert.triggered.connect(lambda _, n=name: self.insert_text_requested.emit(n))
 
-            # Copiar nome
+            # Copy name
             act_copy = menu.addAction(S.object_explorer.ctx_copy_name)
-            act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
+            act_copy.triggered.connect(lambda _, n=name: QApplication.clipboard().setText(n))
 
-            # Copiar como table.column
+            # Copy as table.column
             if table_name:
                 act_copy_full = menu.addAction(S.object_explorer.ctx_copy_as_qualified.format(table=table_name, name=name))
                 act_copy_full.triggered.connect(
-                    lambda: QApplication.clipboard().setText(f"{table_name}.{name}")
+                    lambda _, t=table_name, n=name: QApplication.clipboard().setText(f"{t}.{n}")
                 )
 
             menu.addSeparator()
 
-            # Info do tipo (desabilitado)
+            # Type info (disabled)
             act_type_info = menu.addAction(S.object_explorer.ctx_type_info.format(type=col_type))
             act_type_info.setEnabled(False)
 
         elif item_type == "database":
             # Switch to this database
             act_switch = menu.addAction(S.object_explorer.ctx_use_database.format(name=name))
-            act_switch.triggered.connect(lambda: self.database_switch_requested.emit(name))
+            act_switch.triggered.connect(lambda _, n=name: self.database_switch_requested.emit(n))
 
             menu.addSeparator()
 
             # Copy database name
             act_copy = menu.addAction(S.object_explorer.ctx_copy_db_name)
-            act_copy.triggered.connect(lambda: QApplication.clipboard().setText(name))
+            act_copy.triggered.connect(lambda _, n=name: QApplication.clipboard().setText(n))
+
+        elif item_type == "catalog":
+            # Switch to this Databricks catalog
+            act_switch = menu.addAction(S.object_explorer.ctx_use_catalog.format(name=name))
+            act_switch.triggered.connect(
+                lambda _, n=name: self.database_switch_requested.emit(f"CATALOG:{n}")
+            )
+
+            menu.addSeparator()
+
+            # Copy name
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_db_name)
+            act_copy.triggered.connect(lambda _, n=name: QApplication.clipboard().setText(n))
+
+        elif item_type == "schema" and self._db_type == "databricks":
+            # Switch to this Databricks schema
+            act_switch = menu.addAction(S.object_explorer.ctx_use_schema.format(name=name))
+            act_switch.triggered.connect(
+                lambda _, n=name: self.database_switch_requested.emit(f"SCHEMA:{n}")
+            )
+
+            menu.addSeparator()
+
+            # Copy name
+            act_copy = menu.addAction(S.object_explorer.ctx_copy_db_name)
+            act_copy.triggered.connect(lambda _, n=name: QApplication.clipboard().setText(n))
 
         else:
             return
