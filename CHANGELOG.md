@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.17.0 (2026-02-26)
+
+### Features
+
+- **oe**: Isolamento per-session do cache de schema
+  ([`2b37d45`](https://github.com/natharuc/datapyn/commit/2b37d4540be2c000d81c10859b080c2ffb6e9cac))
+
+
 ## v1.16.0 (2026-02-26)
 
 ### Bug Fixes
