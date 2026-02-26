@@ -259,7 +259,7 @@ class SchemaService(QObject):
     "QThread: Destroyed while thread is still running".
     """
 
-    schema_loaded = pyqtSignal(dict, str)  # Emits complete schema + connection_name
+    schema_loaded = pyqtSignal(dict, str, str)  # schema, connection_name, session_id
     schema_error = pyqtSignal(str)
     loading_progress = pyqtSignal(str)
     
@@ -271,9 +271,17 @@ class SchemaService(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._active_threads: list = []  # active threads to keep reference
-        self._cache: Dict[str, dict] = {}  # connection_name -> schema
+        # Cache per session: key = "session_id:connection_name" for isolation
+        # Each tab can have its own database context (USE CATALOG, etc.)
+        self._cache: Dict[str, dict] = {}
 
-    def load_schema(self, connector, connection_name: str = ""):
+    def _cache_key(self, connection_name: str, session_id: str = "") -> str:
+        """Build cache key. If session_id provided, cache is per-session."""
+        if session_id:
+            return f"{session_id}:{connection_name}"
+        return connection_name
+
+    def load_schema(self, connector, connection_name: str = "", session_id: str = ""):
         """
         Start loading schema in background.
 
@@ -282,13 +290,15 @@ class SchemaService(QObject):
         Args:
             connector: DatabaseConnector with active connection
             connection_name: Connection name (for cache)
+            session_id: Session ID for per-session cache isolation
         """
         # Cancel previous workers (won't emit signals)
         self._cancel_pending_workers()
 
-        # Check cache
-        if connection_name and connection_name in self._cache:
-            self.schema_loaded.emit(self._cache[connection_name], connection_name)
+        # Check cache (per-session key)
+        cache_key = self._cache_key(connection_name, session_id)
+        if connection_name and cache_key in self._cache:
+            self.schema_loaded.emit(self._cache[cache_key], connection_name, session_id)
             return
 
         try:
@@ -299,7 +309,7 @@ class SchemaService(QObject):
 
             # Connect signals
             thread.started.connect(worker.run)
-            worker.finished.connect(lambda schema: self._on_finished(schema, connection_name))
+            worker.finished.connect(lambda schema: self._on_finished(schema, connection_name, session_id))
             worker.error.connect(self._on_error)
             worker.progress.connect(self.loading_progress.emit)
 
@@ -315,12 +325,13 @@ class SchemaService(QObject):
         except Exception as e:
             logger.warning(f"Error starting schema load: {e}")
 
-    def _on_finished(self, schema: dict, connection_name: str):
+    def _on_finished(self, schema: dict, connection_name: str, session_id: str = ""):
         """Schema loaded successfully"""
         try:
             if connection_name:
-                self._cache[connection_name] = schema
-            self.schema_loaded.emit(schema, connection_name)
+                cache_key = self._cache_key(connection_name, session_id)
+                self._cache[cache_key] = schema
+            self.schema_loaded.emit(schema, connection_name, session_id)
         except RuntimeError:
             pass  # Qt object may have been deleted
 
@@ -332,14 +343,31 @@ class SchemaService(QObject):
         except RuntimeError:
             pass
 
-    def get_cached_schema(self, connection_name: str) -> Optional[dict]:
-        """Return cached schema or None"""
-        return self._cache.get(connection_name)
+    def get_cached_schema(self, connection_name: str, session_id: str = "") -> Optional[dict]:
+        """Return cached schema or None.
+        
+        Args:
+            connection_name: Connection name
+            session_id: Session ID for per-session lookup (optional)
+        """
+        cache_key = self._cache_key(connection_name, session_id)
+        return self._cache.get(cache_key)
 
-    def invalidate_cache(self, connection_name: str = ""):
-        """Invalidate cache for one connection or all"""
+    def invalidate_cache(self, connection_name: str = "", session_id: str = ""):
+        """Invalidate cache for one connection/session or all.
+        
+        Args:
+            connection_name: Connection name (if empty with no session_id, clears all)
+            session_id: Session ID for per-session invalidation
+        """
         if connection_name:
-            self._cache.pop(connection_name, None)
+            cache_key = self._cache_key(connection_name, session_id)
+            self._cache.pop(cache_key, None)
+        elif session_id:
+            # Clear all caches for this session
+            keys_to_remove = [k for k in self._cache if k.startswith(f"{session_id}:")]
+            for k in keys_to_remove:
+                self._cache.pop(k, None)
         else:
             self._cache.clear()
 

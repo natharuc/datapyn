@@ -926,6 +926,8 @@ class CopilotChatPanel(QWidget):
                 client.auth_started.connect(self._on_auth_started)
             if hasattr(client, 'gh_not_found'):
                 client.gh_not_found.connect(self._on_gh_not_found)
+            if hasattr(client, 'license_warning'):
+                client.license_warning.connect(self._on_license_warning)
             # Pass tool registry from MCP server to client
             if self._mcp_server and hasattr(client, 'set_tool_registry'):
                 client.set_tool_registry(self._mcp_server.tool_registry)
@@ -1958,6 +1960,15 @@ class CopilotChatPanel(QWidget):
         self._auth_btn.setEnabled(True)
         self._gh_install_widget.setVisible(True)
         self._add_message("assistant", S.copilot.gh_cli_not_found)
+
+    def _on_license_warning(self, message: str):
+        """License may not support chat - show warning message."""
+        self._add_message(
+            "assistant",
+            f"Warning: {message}\n\n"
+            "Your organization's Copilot license may not include Chat API access. "
+            "Please contact your IT admin to verify your Copilot subscription includes Chat features."
+        )
 
     def _install_gh_cli(self):
         """Start GitHub CLI installation (non-blocking via QProcess)."""

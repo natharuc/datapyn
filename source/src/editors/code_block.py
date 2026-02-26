@@ -41,6 +41,7 @@ class BlockConnectionPanel(QFrame):
         super().__init__(parent)
         self._connection_name = None
         self._db_type = None
+        self._locked = False  # True = first block, cannot change connection
         self._setup_ui()
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -111,14 +112,35 @@ class BlockConnectionPanel(QFrame):
         """Return current connection name (None = tab default)"""
         return self._connection_name
 
+    def set_locked(self, locked: bool):
+        """Lock/unlock connection changes (first block is always locked)"""
+        self._locked = locked
+        if locked:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.setAcceptDrops(False)
+            self.setToolTip(S.block.conn_first_block_locked)
+        else:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setAcceptDrops(True)
+            self.setToolTip("")
+
+    def is_locked(self) -> bool:
+        """Return whether connection changes are locked"""
+        return self._locked
+
     def mousePressEvent(self, event):
         """Click on panel"""
+        if self._locked:
+            return  # Ignore clicks when locked
         if event.button() == Qt.MouseButton.LeftButton:
             self.connection_clicked.emit()
         super().mousePressEvent(event)
 
     def dragEnterEvent(self, event):
         """Accept connection drag"""
+        if self._locked:
+            event.ignore()
+            return
         if event.mimeData().hasFormat("application/x-connection-name"):
             event.acceptProposedAction()
             self.setStyleSheet("""
@@ -951,6 +973,14 @@ class CodeBlock(QFrame):
         self._connection_name = conn_name
         self.conn_panel.set_connection(conn_name, db_type, color)
         self.connection_name_changed.emit(self, conn_name)
+
+    def set_connection_locked(self, locked: bool):
+        """Lock/unlock connection changes (first block cannot change connection)"""
+        self.conn_panel.set_locked(locked)
+
+    def is_connection_locked(self) -> bool:
+        """Return whether connection changes are locked"""
+        return self.conn_panel.is_locked()
 
     def get_database_name(self) -> str:
         """Return custom database name or None (uses connection default)"""

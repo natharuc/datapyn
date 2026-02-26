@@ -283,6 +283,12 @@ class ResultsViewer(QWidget):
         self.btn_export_table.setToolTip(S.results.tooltip_export_table)
         self.toolbar.addWidget(self.btn_export_table)
 
+        # Export to SQL INSERTs button
+        self.btn_export_sql = QPushButton(S.results.btn_sql)
+        self.btn_export_sql.setIcon(qta.icon("mdi.database-import-outline", color=colors_tk.warning))
+        self.btn_export_sql.setToolTip(S.results.tooltip_export_sql)
+        self.toolbar.addWidget(self.btn_export_sql)
+
         # Info label
         self.info_label = QLabel(S.results.no_results)
         self.toolbar.addSeparator()
@@ -406,6 +412,7 @@ class ResultsViewer(QWidget):
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
         self.btn_save_image.clicked.connect(self._save_image)
         self.btn_export_table.clicked.connect(self._export_to_table)
+        self.btn_export_sql.clicked.connect(self._export_sql)
 
     def _apply_toolbar_style(self):
         """Aplica estilo na toolbar baseado no tema - moderno e limpo"""
@@ -562,13 +569,7 @@ class ResultsViewer(QWidget):
 
         # Mostrar tabela e botoes de export
         self.stack.setCurrentIndex(0)
-        self.btn_export_csv.setVisible(True)
-        self.btn_export_excel.setVisible(True)
-        self.btn_export_json.setVisible(True)
-        self.btn_copy.setVisible(True)
-        self.btn_export_table.setVisible(True)
-        self.export_destination.setVisible(True)
-        self.btn_save_image.setVisible(False)
+        self._show_dataframe_toolbar_buttons()
 
     def _resize_columns(self):
         """Ajusta largura das colunas pelo conteudo visivel (deferido via QTimer)."""
@@ -944,6 +945,17 @@ class ResultsViewer(QWidget):
             else:
                 self.display_json(json_items, label)
 
+    def _show_dataframe_toolbar_buttons(self):
+        """Mostra botoes relevantes para DataFrame (tabela de dados)."""
+        self.btn_export_csv.setVisible(True)
+        self.btn_export_excel.setVisible(True)
+        self.btn_export_json.setVisible(True)
+        self.btn_copy.setVisible(True)
+        self.btn_export_table.setVisible(True)
+        self.btn_export_sql.setVisible(True)
+        self.export_destination.setVisible(True)
+        self.btn_save_image.setVisible(False)
+
     def _hide_all_toolbar_buttons(self):
         """Esconde todos os botoes da toolbar (usado para HTML e JSON pages)."""
         self.btn_export_csv.setVisible(False)
@@ -951,6 +963,7 @@ class ResultsViewer(QWidget):
         self.btn_export_json.setVisible(False)
         self.btn_copy.setVisible(False)
         self.btn_export_table.setVisible(False)
+        self.btn_export_sql.setVisible(False)
         self.export_destination.setVisible(False)
         self.btn_save_image.setVisible(False)
 
@@ -964,13 +977,7 @@ class ResultsViewer(QWidget):
         self.json_tree.clear()
         self.info_label.setText(S.results.no_results)
         self.stack.setCurrentIndex(0)
-        self.btn_save_image.setVisible(False)
-        self.btn_export_csv.setVisible(True)
-        self.btn_export_excel.setVisible(True)
-        self.btn_export_json.setVisible(True)
-        self.btn_copy.setVisible(True)
-        self.btn_export_table.setVisible(True)
-        self.export_destination.setVisible(True)
+        self._show_dataframe_toolbar_buttons()
 
     def _get_export_destination(self) -> str:
         """Return selected destination: 'clipboard' or 'file'"""
@@ -1071,6 +1078,102 @@ class ResultsViewer(QWidget):
                 filename += ".json"
             # Export in background
             self._start_export_background(filename, "json", orient="records", indent=2, force_ascii=False)
+
+    def _export_sql(self):
+        """Export DataFrame as SQL INSERT statements (clipboard or file)"""
+        if self.current_df is None or len(self.current_df) == 0:
+            return
+
+        # Get db_type from the active connection (for proper quoting)
+        db_type = self._get_active_db_type()
+        table_name = self._current_var_name() or "table1"
+
+        from src.utils.sql_insert_generator import generate_inserts
+
+        destination = self._get_export_destination()
+
+        if destination == "clipboard":
+            from PyQt6.QtWidgets import QApplication
+
+            sql_text = generate_inserts(
+                df=self.current_df,
+                table_name=table_name,
+                db_type=db_type,
+                batch_size=1,
+            )
+            QApplication.instance().clipboard().setText(sql_text)
+            self._show_clipboard_success("SQL")
+            return
+
+        # Export to file
+        filename, _ = QFileDialog.getSaveFileName(
+            self, S.results.save_sql_title, f"{table_name}.sql", S.results.filter_sql
+        )
+        if filename:
+            if not filename.lower().endswith(".sql"):
+                filename += ".sql"
+
+            sql_text = generate_inserts(
+                df=self.current_df,
+                table_name=table_name,
+                db_type=db_type,
+                batch_size=1,
+            )
+            try:
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(sql_text)
+                self.info_label.setText(
+                    S.results.export_success if hasattr(S.results, "export_success") else "Export complete!"
+                )
+            except Exception as e:
+                self.info_label.setText(
+                    S.results.export_failed if hasattr(S.results, "export_failed") else "Export failed"
+                )
+                QMessageBox.critical(self, S.results.error_title, str(e))
+
+    def _get_active_db_type(self) -> str:
+        """Determine the db_type from the active connection.
+
+        Checks the focused block's connection first, then the session connection.
+        Returns 'sqlserver' as default if no connection is found.
+        """
+        main_window = self._get_main_window()
+        if not main_window:
+            return "sqlserver"
+
+        current_widget = main_window._get_current_session_widget()
+        if not current_widget:
+            return "sqlserver"
+
+        # Check focused block first
+        focused_block = current_widget.editor.get_focused_block()
+        if focused_block:
+            block_conn = focused_block.get_connection_name()
+            if block_conn:
+                connector = self._find_connector(main_window, block_conn)
+                if connector:
+                    return getattr(connector, "db_type", "sqlserver")
+
+        # Fall back to session connection
+        session = getattr(current_widget, "session", None)
+        if session:
+            connector = getattr(session, "connector", None)
+            if connector:
+                return getattr(connector, "db_type", "sqlserver")
+
+        return "sqlserver"
+
+    def _find_connector(self, main_window, connection_name: str):
+        """Find an active connector by connection name across sessions."""
+        if hasattr(main_window, "_session_widgets"):
+            for widget in main_window._session_widgets.values():
+                session = getattr(widget, "session", None)
+                if session:
+                    conn_name = getattr(session, "connection_name", None)
+                    connector = getattr(session, "connector", None)
+                    if conn_name == connection_name and connector:
+                        return connector
+        return None
 
     def _start_export_background(self, filepath: str, export_format: str, open_folder: bool = False, **options):
         """Start export in background thread"""

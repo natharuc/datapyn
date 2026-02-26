@@ -274,6 +274,7 @@ class CopilotWorker(QObject):
     ready = pyqtSignal()  # Worker is ready to accept chat requests
     inline_complete = pyqtSignal(str)  # Inline completion result
     gh_not_found = pyqtSignal()  # GitHub CLI not installed
+    license_warning = pyqtSignal(str)  # License may not support chat
 
     def __init__(self, tool_executor: ThreadSafeToolExecutor = None):
         super().__init__()
@@ -341,6 +342,9 @@ class CopilotWorker(QObject):
             # List models to verify auth (async)
             try:
                 models = self._loop.run_until_complete(self._sdk_client.list_models())
+                logger.info(f"SDK returned {len(models)} models")
+                for m in models:
+                    logger.info(f"  Model: {m.id} ({m.name})")
                 model_list = [{
                     "id": m.id,
                     "name": m.name,
@@ -351,9 +355,22 @@ class CopilotWorker(QObject):
                 # Keep worker alive - emit ready for subsequent chats
                 self.ready.emit()
             except Exception as e:
-                logger.info(f"Auth check failed: {e}")
-                self.auth_needed.emit()
-                self.finished.emit()
+                error_str = str(e)
+                logger.warning(f"list_models failed (may be normal for enterprise): {e}")
+                # Check if this is a 403 error - indicates license doesn't support chat
+                if "403" in error_str or "unauthorized" in error_str.lower():
+                    self.license_warning.emit(
+                        "Your Copilot license may not support Chat API. "
+                        "Chat may not work. Contact your organization admin."
+                    )
+                # Emit default models for enterprise accounts that may not list models
+                self.models_ready.emit([
+                    {"id": "gpt-4o", "name": "GPT-4o", "multiplier": 1.0},
+                    {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": 1.0},
+                    {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": 1.0},
+                ])
+                self.auth_ok.emit()
+                self.ready.emit()
 
         except Exception as e:
             logger.exception("Error initializing Copilot SDK")
@@ -530,22 +547,25 @@ class CopilotWorker(QObject):
             return
 
         # Initialize client if needed
+        logger.info(f"[CHAT] sdk_client exists: {self._sdk_client is not None}, session exists: {self._session is not None}")
         if not self._sdk_client:
+            logger.info("[CHAT] Creating new SDK client")
             self._sdk_client = SDKClient(_get_sdk_options())
             await self._sdk_client.start()
-            logger.info("Copilot SDK client started")
+            logger.info("[CHAT] Copilot SDK client started")
 
         # Build SDK tools if we have an executor
         if self._tool_executor and not self._sdk_tools:
             self._sdk_tools = self._build_sdk_tools(SDKTool)
-            logger.info(f"Built {len(self._sdk_tools)} SDK tools")
+            logger.info(f"[CHAT] Built {len(self._sdk_tools)} SDK tools")
             for t in self._sdk_tools:
                 logger.info(f"  Tool: {t.name}")
 
         # Create session if needed (or recreate to update tools)
         if not self._session:
+            logger.info("[CHAT] Creating new session")
             await self._async_create_session()
-            logger.info("Copilot session created")
+            logger.info("[CHAT] Copilot session created")
 
         if not self._prompt:
             self.error.emit("No message to send")
@@ -560,9 +580,13 @@ class CopilotWorker(QObject):
         
         def on_event(event):
             events.append(event)
+            logger.debug(f"SDK event: {event.type}")
             if event.type == EventType.SESSION_IDLE:
+                logger.info(f"Session idle, full_response so far: {len(full_response)} chars")
                 idle_event.set()
             elif event.type == EventType.SESSION_ERROR:
+                error_data = getattr(event, 'data', None)
+                logger.error(f"Session error: {error_data}")
                 idle_event.set()
         
         # Register handler
@@ -570,11 +594,15 @@ class CopilotWorker(QObject):
         
         try:
             # Send message
+            logger.info(f"[CHAT] Sending message, model={self._model}, prompt_len={len(self._prompt)}")
+            logger.info(f"[CHAT] Prompt: {self._prompt[:100]}...")
             await self._session.send({"prompt": self._prompt})
+            logger.info("[CHAT] Message sent, waiting for events...")
             
             # Wait for idle with timeout, processing events as they come
             start_time = time.time()
             timeout = 180  # 3 minutes for complex workflows with multiple tool calls
+            event_count = 0
             
             while not idle_event.is_set() and not self._cancelled:
                 if time.time() - start_time > timeout:
@@ -585,6 +613,10 @@ class CopilotWorker(QObject):
                 while events:
                     event = events.pop(0)
                     event_type = event.type
+                    event_count += 1
+                    
+                    # Log all event types for debugging
+                    logger.info(f"[CHAT] Event #{event_count}: {event_type}")
                     
                     if event_type == EventType.ASSISTANT_MESSAGE_DELTA:
                         delta = getattr(event.data, "delta_content", "") or ""
@@ -623,7 +655,16 @@ class CopilotWorker(QObject):
                     
                     elif event_type == EventType.SESSION_ERROR:
                         error_msg = getattr(event.data, "message", "") or str(event.data)
-                        self.error.emit(error_msg)
+                        logger.error(f"[CHAT] Session error: {error_msg}")
+                        # Check for 403 unauthorized error (enterprise license issue)
+                        if "403" in error_msg or "unauthorized" in error_msg.lower():
+                            self.error.emit(
+                                "Your Copilot license does not include Chat API access. "
+                                "This is common with some enterprise licenses. "
+                                "Please contact your organization admin to enable Copilot Chat."
+                            )
+                        else:
+                            self.error.emit(error_msg)
                         break
                 
                 # Brief sleep to avoid busy loop
@@ -638,6 +679,9 @@ class CopilotWorker(QObject):
                         full_response += delta
                         self.chunk.emit(delta)
             
+            logger.info(f"Chat complete, response length: {len(full_response)} chars")
+            if not full_response:
+                logger.warning("Empty response from Copilot - enterprise account may not have chat access")
             self.complete.emit(full_response)
             
         except Exception as e:
@@ -972,6 +1016,7 @@ class CopilotClient(QObject):
     models_changed = pyqtSignal(list)
     inline_completion_ready = pyqtSignal(str)  # Inline completion result
     gh_not_found = pyqtSignal()  # GitHub CLI not installed
+    license_warning = pyqtSignal(str)  # License may not support chat
 
     def __init__(self, parent=None, tool_registry: "MCPToolRegistry" = None):
         super().__init__(parent)
@@ -1099,6 +1144,7 @@ class CopilotClient(QObject):
         self._session_worker.models_ready.connect(self._on_models_loaded)
         self._session_worker.error.connect(self._on_init_error)
         self._session_worker.ready.connect(self._on_session_ready)
+        self._session_worker.license_warning.connect(self.license_warning.emit)
         # Note: Do NOT connect finished to cleanup - worker stays alive
         
         self._session_thread.start()
@@ -1512,14 +1558,21 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._session_worker.error.connect(self._on_init_error)
         self._session_worker.gh_not_found.connect(self._on_gh_not_found)
         self._session_worker.ready.connect(self._on_session_ready)
+        self._session_worker.license_warning.connect(self.license_warning.emit)
         # Note: Do NOT connect finished to cleanup - worker stays alive
         
         self._session_thread.start()
 
     def _on_models_loaded(self, models: list):
+        logger.info(f"Models loaded: {len(models)} models")
         if models:
             self._available_models = models
             self.models_changed.emit(models)
+        else:
+            # Keep default models for enterprise accounts that may not list models
+            logger.warning("No models returned from SDK, keeping defaults")
+            # Still emit to update UI
+            self.models_changed.emit(self._available_models)
 
     def _on_init_error(self, error: str):
         self._is_authenticated = False

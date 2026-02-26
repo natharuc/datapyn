@@ -422,6 +422,10 @@ class ObjectExplorerPanel(QWidget):
             connection_name: connection name
             db_type: database type (mssql, postgresql, mysql, etc.)
         """
+        # Guard against invalid data (e.g., Mock objects from async tests)
+        if not isinstance(schema, dict) or not isinstance(connection_name, str):
+            return
+        
         self.set_loading(False)  # Hide loading when schema arrives
         self._current_schema = schema
         self._current_connection = connection_name
@@ -492,6 +496,10 @@ class ObjectExplorerPanel(QWidget):
         columns = schema.get("columns", {})
         db_name = schema.get("database", "")
         all_databases = schema.get("databases", [])
+        
+        # Guard: ensure db_name is a string (protect against Mock objects from async tests)
+        if not isinstance(db_name, str):
+            db_name = ""
 
         filter_text = self.search_input.text().strip().lower()
 

@@ -135,6 +135,30 @@ class DatabaseConnector:
             self.db_type = db_type
             self.connection_params = {"host": host, "port": port, "database": database, "username": username}
 
+            # For Databricks, initialize catalog/schema tracking
+            # If user didn't specify a catalog, query Databricks for current catalog/schema
+            if db_type == "databricks":
+                if database:
+                    self.connection_params["databricks_catalog"] = database
+                    self.connection_params["databricks_schema"] = "default"
+                else:
+                    # Query Databricks for current catalog and schema
+                    try:
+                        with self.engine.connect() as conn:
+                            result = conn.execute(text("SELECT current_catalog(), current_schema()"))
+                            row = result.fetchone()
+                            if row:
+                                current_cat = str(row[0]) if row[0] else ""
+                                current_sch = str(row[1]) if row[1] else "default"
+                                self.connection_params["database"] = current_cat
+                                self.connection_params["databricks_catalog"] = current_cat
+                                self.connection_params["databricks_schema"] = current_sch
+                                logger.info(f"Databricks current context: catalog='{current_cat}', schema='{current_sch}'")
+                    except Exception as e:
+                        logger.warning(f"Could not query Databricks current catalog/schema: {e}")
+                        self.connection_params["databricks_catalog"] = ""
+                        self.connection_params["databricks_schema"] = "default"
+
             logger.info(f"Connected to {self.SUPPORTED_DATABASES[db_type]}: {host}/{database}")
             return True
 
@@ -725,8 +749,39 @@ class DatabaseConnector:
         if not self.engine:
             raise ConnectionError("No active database connection")
 
+        # Skip if already on the same database (avoid unnecessary roundtrip)
+        current_db = self.connection_params.get("database", "")
+        if self.db_type == "databricks":
+            if database.startswith("CATALOG:"):
+                target = database[8:]
+                if current_db.lower() == target.lower():
+                    logger.debug(f"Already on catalog '{target}', skipping USE CATALOG")
+                    return True
+            elif database.startswith("SCHEMA:"):
+                target = database[7:]
+                current_schema = self.connection_params.get("databricks_schema", "")
+                if current_schema.lower() == target.lower():
+                    logger.debug(f"Already on schema '{target}', skipping USE SCHEMA")
+                    return True
+            elif "." not in database:
+                # Schema-only for Databricks
+                current_schema = self.connection_params.get("databricks_schema", "")
+                if current_schema.lower() == database.lower():
+                    logger.debug(f"Already on schema '{database}', skipping USE SCHEMA")
+                    return True
+        else:
+            # Non-Databricks: simple database comparison
+            if current_db.lower() == database.lower():
+                logger.debug(f"Already on database '{database}', skipping USE")
+                return True
+
         try:
             use_command = self._build_use_command(database)
+            # Log for debugging Databricks catalog/schema issues
+            if self.db_type == "databricks":
+                current_catalog = self.connection_params.get("databricks_catalog", self.connection_params.get("database", ""))
+                current_schema = self.connection_params.get("databricks_schema", "default")
+                logger.debug(f"Databricks change_database: target='{database}', current_catalog='{current_catalog}', current_schema='{current_schema}', command='{use_command}'")
             with self.engine.connect() as conn:
                 # For Databricks, may have multiple commands separated by ;
                 if self.db_type == "databricks" and ";" in use_command:
@@ -738,13 +793,34 @@ class DatabaseConnector:
                     conn.execute(text(use_command))
                 conn.commit()
 
-            # Update internal params
-            self.connection_params["database"] = database
+            # Update internal params for Databricks (track catalog and schema separately)
+            if self.db_type == "databricks":
+                if database.startswith("CATALOG:"):
+                    self.connection_params["database"] = database[8:]
+                    self.connection_params["databricks_catalog"] = database[8:]
+                elif database.startswith("SCHEMA:"):
+                    self.connection_params["databricks_schema"] = database[7:]
+                elif "." in database:
+                    parts = database.split(".", 1)
+                    self.connection_params["database"] = parts[0]
+                    self.connection_params["databricks_catalog"] = parts[0]
+                    self.connection_params["databricks_schema"] = parts[1]
+                else:
+                    self.connection_params["databricks_schema"] = database
+            else:
+                self.connection_params["database"] = database
+
             logger.info(f"Database changed to: {database}")
             return True
 
         except Exception as e:
-            logger.error(f"Error changing database: {str(e)}")
+            # For Databricks, add context about current catalog/schema
+            if self.db_type == "databricks":
+                current_catalog = self.connection_params.get("databricks_catalog", self.connection_params.get("database", ""))
+                current_schema = self.connection_params.get("databricks_schema", "default")
+                logger.error(f"Error changing database: {str(e)} (current catalog='{current_catalog}', schema='{current_schema}')")
+            else:
+                logger.error(f"Error changing database: {str(e)}")
             raise
 
     def _build_use_command(self, database: str) -> str:
@@ -779,15 +855,34 @@ class DatabaseConnector:
                 parts = database.split(".", 1)
                 return f"USE CATALOG `{parts[0]}`; USE SCHEMA `{parts[1]}`"
             else:
-                # Assume it's a schema name in the current catalog
-                # (most common use case when user types USE <name>)
-                return f"USE SCHEMA `{database}`"
+                # No prefix, no dot - need to determine if it's a catalog or schema
+                # Heuristic: if it matches the current catalog name, it's a catalog switch
+                # Otherwise, assume it's a schema within the current catalog
+                current_catalog = self.connection_params.get("databricks_catalog", 
+                                                             self.connection_params.get("database", ""))
+                if current_catalog and database.lower() == current_catalog.lower():
+                    # Already on this catalog, no action needed
+                    logger.debug(f"Databricks: '{database}' matches current catalog, skipping USE")
+                    return ""  # Empty command - will be skipped
+                else:
+                    # Try as catalog first (safer) - if fails, Databricks will error
+                    # This handles the case where user specifies a catalog name directly
+                    return f"USE CATALOG `{database}`"
         else:
             return f"USE {database}"
 
     def get_current_database(self) -> str:
-        """Return current database name"""
+        """Return current database name (or catalog for Databricks)"""
         return self.connection_params.get("database", "")
+
+    def get_current_catalog(self) -> str:
+        """Return current Databricks catalog name"""
+        return self.connection_params.get("databricks_catalog", 
+                                          self.connection_params.get("database", ""))
+
+    def get_current_schema(self) -> str:
+        """Return current Databricks schema name"""
+        return self.connection_params.get("databricks_schema", "default")
 
     def disconnect(self):
         """Disconnect from database"""
