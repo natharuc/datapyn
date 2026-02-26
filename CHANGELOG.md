@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.16.0 (2026-02-26)
+
+### Bug Fixes
+
+- **oe**: Isolar Object Explorer por sessao
+  ([`4dae634`](https://github.com/natharuc/datapyn/commit/4dae634394c7f009a4c9d9811a6cc6ad0e48a16e))
+
+### Features
+
+- **oe**: Integracao Object Explorer com conexoes per-block
+  ([`57f931d`](https://github.com/natharuc/datapyn/commit/57f931d795e7a35d7d0279cefefe3c6ee706f390))
+
+
 ## v1.15.0 (2026-02-25)
 
 
