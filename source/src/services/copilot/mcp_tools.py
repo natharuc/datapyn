@@ -2271,8 +2271,12 @@ class MCPToolRegistry(QObject):
         lines = current_code.split("\n")
         total_lines = len(lines)
 
-        if start_line < 1 or start_line > total_lines + 1:
-            return {"error": f"start_line {start_line} out of range (1-{total_lines})."}
+        if mode == "insert":
+            if start_line < 1 or start_line > total_lines + 1:
+                return {"error": f"start_line {start_line} out of range (1-{total_lines + 1})."}
+        else:
+            if start_line < 1 or start_line > total_lines:
+                return {"error": f"start_line {start_line} out of range (1-{total_lines})."}
 
         if mode == "replace":
             if end_line is None:
@@ -2286,8 +2290,7 @@ class MCPToolRegistry(QObject):
         elif mode == "insert":
             new_lines = new_code.split("\n") if new_code else []
             insert_pos = start_line - 1
-            for i, line in enumerate(new_lines):
-                lines.insert(insert_pos + i, line)
+            lines[insert_pos:insert_pos] = new_lines
             action = f"Inserted {len(new_lines)} lines before line {start_line}"
 
         elif mode == "delete":
