@@ -460,6 +460,63 @@ class MCPToolRegistry(QObject):
             handler=self._move_focus,
         ))
 
+        # === Granular Editing Tools ===
+        self._register(MCPTool(
+            name="edit_block_lines",
+            description="EDIT specific lines in a block without replacing the entire code. Use to replace, insert, or delete a range of lines. Line numbers are 1-based. Modes: 'replace' replaces lines start_line..end_line with new_code, 'insert' inserts new_code BEFORE start_line, 'delete' removes lines start_line..end_line.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block to edit (0-based).",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "First line number to affect (1-based).",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Last line number to affect (1-based, inclusive). Required for 'replace' and 'delete' modes. Ignored for 'insert'.",
+                    "optional": True,
+                },
+                "new_code": {
+                    "type": "string",
+                    "description": "Replacement or insertion text. Required for 'replace' and 'insert' modes. Not used for 'delete'.",
+                    "optional": True,
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Edit mode: 'replace' (default), 'insert', or 'delete'.",
+                    "enum": ["replace", "insert", "delete"],
+                    "optional": True,
+                },
+            },
+            handler=self._edit_block_lines,
+        ))
+
+        self._register(MCPTool(
+            name="get_block_code",
+            description="GET the FULL code from a specific block by index. Unlike get_context (which truncates code to 100 chars), this returns the complete code. Use when you need to read or analyze a block's full content.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block (0-based).",
+                },
+            },
+            handler=self._get_block_code,
+        ))
+
+        self._register(MCPTool(
+            name="search_in_code",
+            description="SEARCH for text or pattern across ALL blocks in the current session. Returns matching lines with block index and line numbers. Use to find where a variable, function, or pattern is used.",
+            parameters={
+                "query": {
+                    "type": "string",
+                    "description": "Text to search for (case-insensitive substring match).",
+                },
+            },
+            handler=self._search_in_code,
+        ))
+
         # === Database Intelligence Tools ===
         self._register(MCPTool(
             name="get_database_schema",
@@ -1016,8 +1073,10 @@ class MCPToolRegistry(QObject):
                         lang = block.get_language() if hasattr(block, "get_language") else "unknown"
                         code = block.get_code() if hasattr(block, "get_code") else ""
                         is_focused = block == block_editor.focused_block
+                        name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{i + 1}"
                         blocks_info.append({
                             "index": i,
+                            "name": name,
                             "language": lang,
                             "code": code[:100] + "..." if len(code) > 100 else code,
                             "is_focused": is_focused,
@@ -1701,7 +1760,8 @@ class MCPToolRegistry(QObject):
                 code = block.get_code()
             elif hasattr(block, "code"):
                 code = block.code
-            parts.append(f"## Block {i} ({language}):\n```{language}\n{code}\n```")
+            name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{i + 1}"
+            parts.append(f"## Block {i} - '{name}' ({language}):\n```{language}\n{code}\n```")
 
         return {"content": [{"type": "text", "text": "\n\n".join(parts)}]}
 
@@ -2170,6 +2230,158 @@ class MCPToolRegistry(QObject):
             "content": [{
                 "type": "text",
                 "text": f"Notification sent: {title}"
+            }]
+        }
+
+    # === Granular Editing Tool Implementations ===
+
+    def _edit_block_lines(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit specific lines in a block (replace, insert, or delete)."""
+        block_index = args.get("block_index")
+        start_line = args.get("start_line")
+        end_line = args.get("end_line")
+        new_code = args.get("new_code", "")
+        mode = args.get("mode", "replace")
+
+        if block_index is None or start_line is None:
+            return {"error": "block_index and start_line are required."}
+
+        if mode not in ("replace", "insert", "delete"):
+            return {"error": f"Invalid mode '{mode}'. Use 'replace', 'insert', or 'delete'."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
+
+        target_block = blocks[block_index]
+        current_code = ""
+        if hasattr(target_block, "get_code"):
+            current_code = target_block.get_code()
+        elif hasattr(target_block, "code"):
+            current_code = target_block.code
+
+        lines = current_code.split("\n")
+        total_lines = len(lines)
+
+        if start_line < 1 or start_line > total_lines + 1:
+            return {"error": f"start_line {start_line} out of range (1-{total_lines})."}
+
+        if mode == "replace":
+            if end_line is None:
+                end_line = start_line
+            if end_line < start_line or end_line > total_lines:
+                return {"error": f"end_line {end_line} out of range ({start_line}-{total_lines})."}
+            new_lines = new_code.split("\n") if new_code else []
+            lines[start_line - 1:end_line] = new_lines
+            action = f"Replaced lines {start_line}-{end_line}"
+
+        elif mode == "insert":
+            new_lines = new_code.split("\n") if new_code else []
+            insert_pos = start_line - 1
+            for i, line in enumerate(new_lines):
+                lines.insert(insert_pos + i, line)
+            action = f"Inserted {len(new_lines)} lines before line {start_line}"
+
+        elif mode == "delete":
+            if end_line is None:
+                end_line = start_line
+            if end_line < start_line or end_line > total_lines:
+                return {"error": f"end_line {end_line} out of range ({start_line}-{total_lines})."}
+            del lines[start_line - 1:end_line]
+            action = f"Deleted lines {start_line}-{end_line}"
+
+        result_code = "\n".join(lines)
+        target_block.set_code(result_code)
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"{action} in block {block_index}. Block now has {len(lines)} lines."
+            }]
+        }
+
+    def _get_block_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the full code from a specific block by index."""
+        block_index = args.get("block_index")
+        if block_index is None:
+            return {"error": "block_index is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
+
+        target_block = blocks[block_index]
+        code = ""
+        if hasattr(target_block, "get_code"):
+            code = target_block.get_code()
+        elif hasattr(target_block, "code"):
+            code = target_block.code
+
+        language = target_block.get_language() if hasattr(target_block, "get_language") else "unknown"
+        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index + 1}"
+        total_lines = len(code.split("\n"))
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Block {block_index} ('{name}', {language}, {total_lines} lines):\n```{language}\n{code}\n```"
+            }]
+        }
+
+    def _search_in_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Search for text across all blocks."""
+        query = args.get("query", "")
+        if not query:
+            return {"error": "query is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks:
+            return {"content": [{"type": "text", "text": "No blocks in session."}]}
+
+        query_lower = query.lower()
+        matches = []
+        for i, block in enumerate(blocks):
+            code = ""
+            if hasattr(block, "get_code"):
+                code = block.get_code()
+            elif hasattr(block, "code"):
+                code = block.code
+
+            for line_num, line in enumerate(code.split("\n"), start=1):
+                if query_lower in line.lower():
+                    matches.append(f"  Block {i}, line {line_num}: {line.strip()}")
+
+        if not matches:
+            return {"content": [{"type": "text", "text": f"No matches found for '{query}'."}]}
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Found {len(matches)} matches for '{query}':\n" + "\n".join(matches)
             }]
         }
 

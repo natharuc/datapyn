@@ -1601,11 +1601,28 @@ class CopilotChatPanel(QWidget):
             "- **think**: ALWAYS use first to plan",
             "- **write_and_run**: Create block with name, write code, execute (most common)",
             "- **create_block**: Create block with name without executing (for multi-block setup)",
-            "- **edit_current_block**: Edit the focused block",
+            "- **edit_current_block**: Edit the focused block (full replace)",
+            "- **edit_block_lines**: Edit specific lines in a block (replace/insert/delete by line range)",
+            "- **get_block_code**: Read the full code of any block by index",
+            "- **search_in_code**: Find text across all blocks",
             "- **rename_block**: Rename a block (changes the DataFrame variable name)",
             "- **get_execution_results**: See output and DataFrame after execution",
+            "- **inspect_variable**: Read the value of a variable already in memory (no re-execution needed)",
+            "- **get_dataframe_info**: Get column names, types, shape of a DataFrame in memory",
             "- **notify_user**: Show a notification to the user",
             "- **run_all_blocks**: Execute ALL blocks in sequence",
+            "",
+            "## EDITING CODE",
+            "- To REPLACE entire block: use **edit_current_block** or **edit_block**",
+            "- To EDIT specific lines: use **edit_block_lines** with mode='replace', 'insert', or 'delete'",
+            "- To READ a block's code: use **get_block_code** (returns full code, not truncated)",
+            "- To FIND code: use **search_in_code** to locate variables/functions across blocks",
+            "",
+            "## ACCESSING DATA IN MEMORY",
+            "- Use **inspect_variable** to see a variable's value without re-executing",
+            "- Use **get_dataframe_info** to see DataFrame structure (columns, types, nulls)",
+            "- Use **get_variables** to list all variables in the session",
+            "- Use **get_execution_results** to see the last execution output",
             "",
             "## WORKFLOW",
             "1. 'think' to plan",
@@ -1633,8 +1650,11 @@ class CopilotChatPanel(QWidget):
                 # Highlight the main tools
                 parts.append("## PREFERRED TOOLS:")
                 parts.append("  - **write_and_run**: Creates block with name, writes code, executes")
-                parts.append("  - **edit_current_block**: BEST for editing user's current block")
+                parts.append("  - **edit_current_block**: BEST for editing user's current block (full replace)")
+                parts.append("  - **edit_block_lines**: BEST for small edits (replace/insert/delete specific lines)")
+                parts.append("  - **get_block_code**: Read the full code of any block by index")
                 parts.append("  - **get_execution_results**: See output and DataFrame after execution")
+                parts.append("  - **inspect_variable**: Read variable value already in memory")
                 parts.append("  - **notify_user**: Alert the user when task is done")
                 parts.append("")
                 

@@ -222,6 +222,7 @@ class TestMCPToolRegistry:
         mock_block = MagicMock()
         mock_block.get_language.return_value = "python"
         mock_block.get_code.return_value = "x = 1"
+        mock_block.get_block_name.return_value = "block1"
 
         mock_editor = MagicMock(spec=["add_block", "blocks", "focused_block"])
         mock_editor.blocks = [mock_block]
@@ -245,6 +246,7 @@ class TestMCPToolRegistry:
         assert context["is_connected"] is True
         assert len(context["blocks"]) == 1
         assert context["blocks"][0]["language"] == "python"
+        assert context["blocks"][0]["name"] == "block1"
 
     def test_inspect_variable_returns_value(self):
         """inspect_variable should return the actual value of a variable."""
@@ -320,6 +322,239 @@ class TestMCPToolRegistry:
         assert "col_a" in text
         assert "col_b" in text
         assert "3 rows" in text
+
+    # === Tests for new tools ===
+
+    def _make_mock_with_code(self, code, language="python", name="test_block"):
+        """Helper to create a mock block with code."""
+        mock_block = MagicMock()
+        mock_block.get_code.return_value = code
+        mock_block.get_language.return_value = language
+        mock_block.get_block_name.return_value = name
+        mock_block.language = language
+        return mock_block
+
+    def _make_mock_env(self, blocks):
+        """Helper to create a mock environment with blocks."""
+        mock_editor = MagicMock(spec=["add_block", "blocks", "focused_block"])
+        mock_editor.blocks = blocks
+        mock_editor.focused_block = blocks[0] if blocks else None
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        return mock_editor
+
+    def test_edit_block_lines_replace(self):
+        """edit_block_lines in replace mode should replace specific lines."""
+        code = "line1\nline2\nline3\nline4\nline5"
+        mock_block = self._make_mock_with_code(code)
+        self._make_mock_env([mock_block])
+
+        result = self.registry.execute("edit_block_lines", {
+            "block_index": 0,
+            "start_line": 2,
+            "end_line": 3,
+            "new_code": "replaced_line2\nreplaced_line3",
+            "mode": "replace",
+        })
+
+        assert "content" in result
+        assert "Replaced lines 2-3" in result["content"][0]["text"]
+        # Verify the set_code call
+        new_code = mock_block.set_code.call_args[0][0]
+        assert "line1\nreplaced_line2\nreplaced_line3\nline4\nline5" == new_code
+
+    def test_edit_block_lines_insert(self):
+        """edit_block_lines in insert mode should insert before the specified line."""
+        code = "line1\nline2\nline3"
+        mock_block = self._make_mock_with_code(code)
+        self._make_mock_env([mock_block])
+
+        result = self.registry.execute("edit_block_lines", {
+            "block_index": 0,
+            "start_line": 2,
+            "new_code": "inserted_a\ninserted_b",
+            "mode": "insert",
+        })
+
+        assert "content" in result
+        assert "Inserted 2 lines" in result["content"][0]["text"]
+        new_code = mock_block.set_code.call_args[0][0]
+        assert "line1\ninserted_a\ninserted_b\nline2\nline3" == new_code
+
+    def test_edit_block_lines_delete(self):
+        """edit_block_lines in delete mode should remove specified lines."""
+        code = "line1\nline2\nline3\nline4\nline5"
+        mock_block = self._make_mock_with_code(code)
+        self._make_mock_env([mock_block])
+
+        result = self.registry.execute("edit_block_lines", {
+            "block_index": 0,
+            "start_line": 2,
+            "end_line": 4,
+            "mode": "delete",
+        })
+
+        assert "content" in result
+        assert "Deleted lines 2-4" in result["content"][0]["text"]
+        new_code = mock_block.set_code.call_args[0][0]
+        assert "line1\nline5" == new_code
+
+    def test_edit_block_lines_invalid_range(self):
+        """edit_block_lines with invalid line range should return error."""
+        code = "line1\nline2"
+        mock_block = self._make_mock_with_code(code)
+        self._make_mock_env([mock_block])
+
+        result = self.registry.execute("edit_block_lines", {
+            "block_index": 0,
+            "start_line": 5,
+            "mode": "replace",
+        })
+        assert "error" in result
+        assert "out of range" in result["error"]
+
+    def test_edit_block_lines_missing_params(self):
+        """edit_block_lines without required params should return error."""
+        mock_mw = MagicMock()
+        self.registry.set_main_window(mock_mw)
+
+        result = self.registry.execute("edit_block_lines", {"block_index": 0})
+        assert "error" in result
+        assert "start_line" in result["error"]
+
+    def test_get_block_code_returns_full_code(self):
+        """get_block_code should return full code without truncation."""
+        long_code = "\n".join([f"line_{i} = {i}" for i in range(200)])
+        mock_block = self._make_mock_with_code(long_code, name="my_data")
+        self._make_mock_env([mock_block])
+
+        result = self.registry.execute("get_block_code", {"block_index": 0})
+
+        assert "content" in result
+        text = result["content"][0]["text"]
+        assert "my_data" in text
+        assert "line_199" in text  # Full code, not truncated
+        assert "200 lines" in text
+
+    def test_get_block_code_invalid_index(self):
+        """get_block_code with invalid index should return error."""
+        mock_block = self._make_mock_with_code("x = 1")
+        self._make_mock_env([mock_block])
+
+        result = self.registry.execute("get_block_code", {"block_index": 5})
+        assert "error" in result
+        assert "out of range" in result["error"]
+
+    def test_get_block_code_missing_index(self):
+        """get_block_code without block_index should return error."""
+        mock_mw = MagicMock()
+        self.registry.set_main_window(mock_mw)
+
+        result = self.registry.execute("get_block_code", {})
+        assert "error" in result
+        assert "block_index" in result["error"]
+
+    def test_search_in_code_finds_matches(self):
+        """search_in_code should find matching lines across blocks."""
+        block1 = self._make_mock_with_code("import pandas as pd\ndf = pd.read_csv('data.csv')")
+        block2 = self._make_mock_with_code("SELECT * FROM vendas\nWHERE valor > 100", language="sql")
+        self._make_mock_env([block1, block2])
+
+        result = self.registry.execute("search_in_code", {"query": "pandas"})
+
+        assert "content" in result
+        text = result["content"][0]["text"]
+        assert "1 matches" in text or "1 match" in text
+        assert "Block 0" in text
+
+    def test_search_in_code_case_insensitive(self):
+        """search_in_code should be case-insensitive."""
+        block = self._make_mock_with_code("SELECT * FROM Vendas")
+        self._make_mock_env([block])
+
+        result = self.registry.execute("search_in_code", {"query": "vendas"})
+
+        assert "content" in result
+        assert "1 match" in result["content"][0]["text"]
+
+    def test_search_in_code_no_matches(self):
+        """search_in_code with no matches should inform the user."""
+        block = self._make_mock_with_code("x = 1")
+        self._make_mock_env([block])
+
+        result = self.registry.execute("search_in_code", {"query": "nonexistent"})
+
+        assert "content" in result
+        assert "No matches" in result["content"][0]["text"]
+
+    def test_search_in_code_empty_query(self):
+        """search_in_code with empty query should return error."""
+        mock_mw = MagicMock()
+        self.registry.set_main_window(mock_mw)
+
+        result = self.registry.execute("search_in_code", {"query": ""})
+        assert "error" in result
+
+    def test_get_context_includes_block_name(self):
+        """get_context should include block name in block info."""
+        mock_session = MagicMock()
+        mock_session.session_id = "sess1"
+        mock_session.title = "Script 1"
+        mock_session.connection_name = ""
+        mock_session.is_connected = False
+
+        mock_block = MagicMock()
+        mock_block.get_language.return_value = "sql"
+        mock_block.get_code.return_value = "SELECT 1"
+        mock_block.get_block_name.return_value = "vendas"
+
+        mock_editor = MagicMock(spec=["add_block", "blocks", "focused_block"])
+        mock_editor.blocks = [mock_block]
+        mock_editor.focused_block = mock_block
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = mock_session
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("get_context", {})
+
+        assert "content" in result
+        context = json.loads(result["content"][0]["text"])
+        assert context["blocks"][0]["name"] == "vendas"
+
+    def test_get_all_code_includes_block_names(self):
+        """get_all_code should include block names."""
+        block1 = self._make_mock_with_code("SELECT * FROM vendas", language="sql", name="vendas")
+        block2 = self._make_mock_with_code("print(vendas.head())", language="python", name="analise")
+        self._make_mock_env([block1, block2])
+
+        result = self.registry.execute("get_all_code", {})
+
+        assert "content" in result
+        text = result["content"][0]["text"]
+        assert "'vendas'" in text
+        assert "'analise'" in text
+
+    def test_new_tools_are_registered(self):
+        """New tools should appear in tools list."""
+        tools = self.registry.list_tools()
+        tool_names = [t["name"] for t in tools]
+        assert "edit_block_lines" in tool_names
+        assert "get_block_code" in tool_names
+        assert "search_in_code" in tool_names
 
 
 # ==================== MCPServer Tests ====================
