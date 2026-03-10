@@ -4970,6 +4970,13 @@ class MainWindow(DockingMainWindow):
             # Atualizar OE para mostrar a conexao efetiva desta aba
             self._update_oe_for_session(widget)
 
+            # Switch Copilot chat context to this tab
+            if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
+                tab_name = self.session_tabs.tabText(index).strip()
+                self._copilot_chat_panel.switch_tab_context(
+                    widget.session.session_id, tab_name
+                )
+
             # Restaurar contexto de arquivo da aba selecionada
             if hasattr(widget, "file_path") and widget.file_path:
                 self._original_file_path = widget.file_path

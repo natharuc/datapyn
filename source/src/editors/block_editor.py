@@ -241,14 +241,17 @@ class BlockEditor(QWidget):
                 new_block = self.add_block()
                 new_block.focus_editor()
 
-    def _execute_block(self, block: CodeBlock):
-        """Run a specific block"""
+    def execute_block(self, block: CodeBlock):
+        """Run a specific block (public API for MCP tools and internal use)."""
         code = block.get_code().strip()
         if not code:
             return
 
         lang = block.get_language()
         self._execute_code(code, lang, block)
+
+    # Keep private alias for backward compatibility
+    _execute_block = execute_block
 
     def _execute_code(self, code: str, language: str, block: CodeBlock):
         """Emit appropriate execution signal"""

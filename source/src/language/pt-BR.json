@@ -421,9 +421,11 @@
     "tooltip_remove": "Remover bloco",
     "status_waiting": "Aguardando",
     "status_running": "Executando",
+    "status_running_elapsed": "{status} {elapsed}",
     "status_cancelled": "Cancelado",
     "status_error": "Erro",
-    "drag_label": "[{lang}] Bloco"
+    "drag_label": "[{lang}] Bloco",
+    "copilot_editing": "Copilot editando..."
   },
 
   "find_replace": {
@@ -842,7 +844,21 @@
     "install_gh_cli": "Instalar GitHub CLI",
     "installing_gh_cli": "Instalando GitHub CLI...",
     "gh_cli_installed": "GitHub CLI instalado com sucesso! Agora clique em **Entrar** para autenticar.",
-    "gh_cli_install_failed": "Falha ao instalar o GitHub CLI: {error}\nVoce pode instalar manualmente em https://cli.github.com/"
+    "gh_cli_install_failed": "Falha ao instalar o GitHub CLI: {error}\nVoce pode instalar manualmente em https://cli.github.com/",
+    "thinking": "Pensando",
+    "thinking_complete": "Pensou por {seconds}s",
+    "copilot_editing": "Copilot",
+    "tool_processing": "Processando...",
+    "tool_using_one": "Usando 1 ferramenta...",
+    "tool_using_many": "Usando {count} ferramentas...",
+    "tool_used_one": "Usou 1 ferramenta",
+    "tool_used_many": "Usou {count} ferramentas",
+    "tool_running": "executando...",
+    "tool_ok": "ok",
+    "tool_error": "erro",
+    "chat_context_tab": "Aba: {name}",
+    "new_chat": "Novo Chat",
+    "chat_history": "Historico"
   },
 
   "copilot_download": {

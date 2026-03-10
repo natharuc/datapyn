@@ -19,7 +19,7 @@ from datetime import datetime
 
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
-from src.editors import BlockEditor
+from src.editors.block_editor import BlockEditor
 from src.language import S
 # from src.ui.components.bottom_tabs import BottomTabs  # Removed - using global panels
 

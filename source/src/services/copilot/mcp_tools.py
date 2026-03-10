@@ -16,7 +16,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Callable
 
-from PyQt6.QtCore import QObject
+from PyQt6.QtCore import QObject, QEventLoop, QTimer
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,15 @@ class MCPToolRegistry(QObject):
         # THINK tool - most important, should be used first
         self._register(MCPTool(
             name="think",
-            description="Use this tool to PLAN and REASON about your approach BEFORE taking any action. Think step by step about: 1) What the user wants 2) How many blocks you need 3) The data flow (what SQL queries, what Python processing). This helps you avoid creating/deleting blocks repeatedly.",
+            description=(
+                "Use this tool to PLAN and REASON about your approach BEFORE taking any action. "
+                "Think step by step about: 1) What the user wants 2) Which TOOL CATEGORY to use: "
+                "- run_silent_query for quick invisible SQL checks "
+                "- write_and_run/create_block for visible code the user should see "
+                "- read_output/inspect_variable to understand current state "
+                "- fix_and_run to fix errors in existing blocks "
+                "3) The data flow (what SQL queries, what Python processing)."
+            ),
             parameters={
                 "thought": {
                     "type": "string",
@@ -217,7 +225,7 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="execute_block",
-            description="RUN/EXECUTE a code block and GET THE RESULT. This actually runs the Python or SQL code and returns the output (printed text, dataframes, query results, errors). Use after create_block or edit_block to see results.",
+            description="RUN a code block by index and WAIT for it to finish. Returns the ACTUAL OUTPUT: printed text, DataFrame preview, query results, or errors. ALWAYS use this after create_block or edit_block to verify the code works. For SQL blocks, the result DataFrame is saved as a variable with the block's name.",
             parameters={
                 "block_index": {
                     "type": "integer",
@@ -229,7 +237,7 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="run_current_block",
-            description="RUN the currently focused block and GET THE RESULT. Same as execute_block but for the active block.",
+            description="RUN the currently focused/active block and WAIT for it to finish. Returns the ACTUAL OUTPUT: printed text, DataFrame preview, errors. Use this when the user asks you to 'run this', 'execute', or 'test' without specifying which block.",
             parameters={},
             handler=self._run_current_block,
         ))
@@ -279,7 +287,7 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="get_block_result",
-            description="GET the output/result from a previously executed block. Use to check what a block printed, returned, or if it had errors.",
+            description="GET the output from the last execution: printed text, DataFrame in the results grid, and any errors. Use this to check results when you didn't run the block yourself (e.g., user ran it manually).",
             parameters={
                 "block_index": {
                     "type": "integer",
@@ -292,7 +300,7 @@ class MCPToolRegistry(QObject):
         # Most useful tool - does everything in one call
         self._register(MCPTool(
             name="write_and_run",
-            description="CREATE a new block, WRITE code, and EXECUTE immediately. IMPORTANT: The block NAME becomes the DataFrame variable. Example: name='vendas' with SQL query creates `vendas` DataFrame accessible in Python blocks.",
+            description="CREATE a new block, WRITE code, EXECUTE it, and RETURN the result - all in one call. This is the FASTEST way to run code. The block NAME becomes the DataFrame variable for SQL blocks. Example: name='vendas' with SQL query creates `vendas` DataFrame accessible in Python blocks. Returns the actual execution output.",
             parameters={
                 "language": {
                     "type": "string",
@@ -365,14 +373,14 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="execute_focused",
-            description="EXECUTE the currently focused block and return the result.",
+            description="RUN the currently focused block, WAIT for completion, and RETURN the output. Same as run_current_block. Use when user says 'run this' or 'execute'.",
             parameters={},
             handler=self._execute_focused,
         ))
 
         self._register(MCPTool(
             name="get_focused_result",
-            description="GET the execution result/output from the currently focused block.",
+            description="GET the output/result from the output panel (printed text, DataFrame, errors). Use after manually running a block to see what happened.",
             parameters={},
             handler=self._get_focused_result,
         ))
@@ -419,14 +427,14 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="run_all_blocks",
-            description="EXECUTE all blocks in the current tab/session in sequence (block1, block2, ...). Use this after creating multiple blocks to run the complete analysis workflow. SQL blocks store results as block1, block2 etc. that Python blocks can then use.",
+            description="RUN ALL blocks in sequence, WAIT for all to finish, and RETURN the combined output. Use to re-run the entire analysis pipeline.",
             parameters={},
             handler=self._run_all_blocks,
         ))
 
         self._register(MCPTool(
             name="fix_and_run",
-            description="FIX errors in the focused block and re-execute. Provide the corrected code.",
+            description="REPLACE the code in the focused block with corrected code and RUN it immediately. Returns the execution output. Use when you see an error and want to fix + re-run in one step.",
             parameters={
                 "fixed_code": {
                     "type": "string",
@@ -460,6 +468,63 @@ class MCPToolRegistry(QObject):
             handler=self._move_focus,
         ))
 
+        # === Granular Editing Tools ===
+        self._register(MCPTool(
+            name="edit_block_lines",
+            description="EDIT specific lines in a block without replacing the entire code. Use to replace, insert, or delete a range of lines. Line numbers are 1-based. Modes: 'replace' replaces lines start_line..end_line with new_code, 'insert' inserts new_code BEFORE start_line, 'delete' removes lines start_line..end_line.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block to edit (0-based).",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "First line number to affect (1-based).",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Last line number to affect (1-based, inclusive). Required for 'replace' and 'delete' modes. Ignored for 'insert'.",
+                    "optional": True,
+                },
+                "new_code": {
+                    "type": "string",
+                    "description": "Replacement or insertion text. Required for 'replace' and 'insert' modes. Not used for 'delete'.",
+                    "optional": True,
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Edit mode: 'replace' (default), 'insert', or 'delete'.",
+                    "enum": ["replace", "insert", "delete"],
+                    "optional": True,
+                },
+            },
+            handler=self._edit_block_lines,
+        ))
+
+        self._register(MCPTool(
+            name="get_block_code",
+            description="GET the FULL code from a specific block by index. Unlike get_context (which truncates code to 100 chars), this returns the complete code. Use when you need to read or analyze a block's full content.",
+            parameters={
+                "block_index": {
+                    "type": "integer",
+                    "description": "Index of the block (0-based).",
+                },
+            },
+            handler=self._get_block_code,
+        ))
+
+        self._register(MCPTool(
+            name="search_in_code",
+            description="SEARCH for text or pattern across ALL blocks in the current session. Returns matching lines with block index and line numbers. Use to find where a variable, function, or pattern is used.",
+            parameters={
+                "query": {
+                    "type": "string",
+                    "description": "Text to search for (case-insensitive substring match).",
+                },
+            },
+            handler=self._search_in_code,
+        ))
+
         # === Database Intelligence Tools ===
         self._register(MCPTool(
             name="get_database_schema",
@@ -489,7 +554,11 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="run_silent_query",
-            description="RUN a SQL query silently (without creating a visible block). Returns query results directly. Use for data exploration, counts, or when you need data to answer a question but don't need to show code to user.",
+            description=(
+                "QUICK EXECUTE a SQL query WITHOUT creating a visible block. Returns results directly. "
+                "USE THIS for: data exploration, row counts, checking values, validating queries before "
+                "showing code to user. For code the user should see, use write_and_run with language='sql' instead."
+            ),
             parameters={
                 "query": {
                     "type": "string",
@@ -519,7 +588,7 @@ class MCPToolRegistry(QObject):
         # === Results & Notifications ===
         self._register(MCPTool(
             name="get_execution_results",
-            description="GET the complete execution results: output text (print statements, logs), DataFrame in the results grid (first 50 rows as preview), and any errors. Use this AFTER executing a block to verify it worked and see the data.",
+            description="GET the complete execution output: printed text, DataFrame in the results grid (first 50 rows), and errors. NOTE: execute_block/run_current_block/write_and_run already return results automatically. Use this only when the user ran a block manually and you need to see what happened.",
             parameters={
                 "block_index": {
                     "type": "integer",
@@ -579,6 +648,24 @@ class MCPToolRegistry(QObject):
                 },
             },
             handler=self._get_dataframe_info,
+        ))
+
+        # === Output Reading Tool ===
+        self._register(MCPTool(
+            name="read_output",
+            description=(
+                "READ the last N lines from the output panel. "
+                "USE THIS to quickly check what was printed, see errors, or review execution logs. "
+                "More focused than get_execution_results - returns just the text output."
+            ),
+            parameters={
+                "last_n_lines": {
+                    "type": "integer",
+                    "description": "Number of lines to read from the end (default: 50). Use 0 to read all.",
+                    "optional": True,
+                },
+            },
+            handler=self._read_output,
         ))
 
     def _register(self, tool: MCPTool) -> None:
@@ -768,6 +855,8 @@ class MCPToolRegistry(QObject):
         logger.info(f"create_block: Adding block with language={language}")
         block = block_editor.add_block(language=language)
         if code and block:
+            # Show copilot editing indicator
+            self._signal_copilot_editing(block, block_editor)
             block.set_code(code)
             logger.info(f"create_block: Set code on block")
         
@@ -817,7 +906,12 @@ class MCPToolRegistry(QObject):
                 target_block = blocks[-1]
 
         if target_block:
+            self._signal_copilot_editing(target_block, block_editor)
             target_block.set_code(code)
+            # Move cursor to top of block
+            editor = getattr(target_block, "editor", None)
+            if editor and hasattr(editor, "go_to_line"):
+                editor.go_to_line(0)
             return {"content": [{"type": "text", "text": f"Block updated with {len(code)} characters."}]}
 
         return {"error": "No block found to edit."}
@@ -1016,8 +1110,10 @@ class MCPToolRegistry(QObject):
                         lang = block.get_language() if hasattr(block, "get_language") else "unknown"
                         code = block.get_code() if hasattr(block, "get_code") else ""
                         is_focused = block == block_editor.focused_block
+                        name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{i + 1}"
                         blocks_info.append({
                             "index": i,
+                            "name": name,
                             "language": lang,
                             "code": code[:100] + "..." if len(code) > 100 else code,
                             "is_focused": is_focused,
@@ -1064,6 +1160,30 @@ class MCPToolRegistry(QObject):
                                 context["table_columns"] = tables_with_cols
             except Exception as e:
                 logger.debug(f"Error getting schema from ObjectExplorer: {e}")
+
+        # Add tool usage guide for smart tool selection
+        context["tool_guide"] = {
+            "quick_validation": {
+                "tools": ["run_silent_query"],
+                "when": "Need to check a value, explore data, or run a quick SQL count. No visible block created.",
+            },
+            "visible_code": {
+                "tools": ["write_and_run", "create_block", "edit_block", "execute_block"],
+                "when": "User wants to see the code. Creating analysis, charts, queries. Use write_and_run for one-step create+execute.",
+            },
+            "read_state": {
+                "tools": ["get_context", "get_variables", "inspect_variable", "get_dataframe_info", "read_output", "get_execution_results"],
+                "when": "Need to understand current state: what blocks exist, what variables are set, what DataFrame columns are, what the last output/error was.",
+            },
+            "database": {
+                "tools": ["list_tables", "describe_table", "get_database_schema", "sample_data", "run_silent_query"],
+                "when": "Exploring database structure, checking table contents, running quick queries without blocks.",
+            },
+            "fix_errors": {
+                "tools": ["read_output", "fix_and_run", "edit_block"],
+                "when": "An error occurred. Use read_output to see the error, then fix_and_run to correct the block.",
+            },
+        }
 
         return {"content": [{"type": "text", "text": json.dumps(context, indent=2)}]}
 
@@ -1112,8 +1232,165 @@ class MCPToolRegistry(QObject):
         logger.warning(f"_get_block_editor: No valid editor found on {type(session_widget)}")
         return None
 
+    def _signal_copilot_editing(self, block, block_editor=None):
+        """Show Copilot editing indicator on a block and scroll it into view.
+        
+        Sets the purple sparkle indicator on the block, and ensures
+        the block is visible to the user by scrolling to it.
+        """
+        try:
+            if hasattr(block, "set_copilot_editing"):
+                block.set_copilot_editing(True)
+            # Scroll block into view
+            if block_editor and hasattr(block_editor, "ensureWidgetVisible"):
+                block_editor.ensureWidgetVisible(block)
+        except Exception as e:
+            logger.debug(f"_signal_copilot_editing failed: {e}")
+
+    def _highlight_edited_lines(self, block, start_line, end_line):
+        """Highlight edited lines and move cursor to the edit location.
+        
+        Moves the Monaco editor cursor to the start of the edited region
+        and adds a temporary visual highlight on the affected lines.
+        """
+        try:
+            editor = getattr(block, "editor", None)
+            if not editor:
+                return
+            # Move cursor (go_to_line is 0-based)
+            if hasattr(editor, "go_to_line"):
+                editor.go_to_line(start_line - 1)
+            # Highlight the edited lines (1-based)
+            if hasattr(editor, "highlight_lines"):
+                editor.highlight_lines(start_line, end_line, 2000)
+        except Exception as e:
+            logger.debug(f"_highlight_edited_lines failed: {e}")
+
+    def _get_output_snapshot(self) -> str:
+        """Capture current output panel text (used before execution to diff later)."""
+        mw = self._main_window
+        if not mw:
+            return ""
+        output_panel = getattr(mw, "global_output_panel", None)
+        if output_panel and hasattr(output_panel, "get_text"):
+            return output_panel.get_text() or ""
+        return ""
+
+    def _wait_for_block_execution(self, block, timeout_ms: int = 30000) -> bool:
+        """Wait for a block to finish executing using QEventLoop.
+
+        Polls block._is_running every 100ms. Returns True if execution
+        completed within the timeout, False if timed out.
+        This does NOT block the event loop - QEventLoop.exec() still
+        processes Qt events so the background thread signals are delivered.
+        """
+        if not hasattr(block, "_is_running"):
+            return True
+
+        if not block._is_running:
+            return True
+
+        loop = QEventLoop()
+        elapsed = 0
+        interval = 100
+
+        timer = QTimer()
+        timer.setInterval(interval)
+
+        def _check():
+            nonlocal elapsed
+            elapsed += interval
+            if not block._is_running or elapsed >= timeout_ms:
+                timer.stop()
+                loop.quit()
+
+        timer.timeout.connect(_check)
+        timer.start()
+        loop.exec()
+        timer.stop()
+
+        return not block._is_running
+
+    def _collect_execution_result(self, block, block_index: int, output_before: str) -> Dict[str, Any]:
+        """Collect execution result after a block finished running.
+
+        Reads new output (diff from output_before), the results viewer DataFrame,
+        and block status to build a comprehensive result dict.
+        """
+        parts = []
+
+        # 1. New output text (diff from before execution)
+        output_after = self._get_output_snapshot()
+        new_output = output_after[len(output_before):].strip() if output_after else ""
+        if new_output:
+            # Limit to avoid token overflow
+            if len(new_output) > 5000:
+                new_output = "... (truncated)\n" + new_output[-5000:]
+            parts.append(f"Output:\n```\n{new_output}\n```")
+
+        # 2. DataFrame in results viewer
+        mw = self._main_window
+        results_viewer = getattr(mw, "global_results_viewer", None) if mw else None
+        if results_viewer:
+            current_df = getattr(results_viewer, "current_df", None)
+            if current_df is not None and hasattr(current_df, "empty") and not current_df.empty:
+                rows_total = len(current_df)
+                cols_total = len(current_df.columns)
+                preview_df = current_df.head(30)
+                parts.append(f"Results ({rows_total} rows x {cols_total} columns):\n```\n{preview_df.to_string()}\n```")
+                if rows_total > 30:
+                    parts.append(f"(showing first 30 of {rows_total} rows)")
+
+        # 3. Check for errors via block status
+        has_error = False
+        if hasattr(block, "status_label"):
+            status_text = block.status_label.text()
+            if "error" in status_text.lower() or "erro" in status_text.lower():
+                has_error = True
+
+        if not parts:
+            if has_error:
+                parts.append("Execution finished with errors (check output panel for details).")
+            else:
+                parts.append("Execution completed (no visible output).")
+
+        text = f"Block {block_index} execution finished.\n\n" + "\n\n".join(parts)
+        return {"content": [{"type": "text", "text": text}]}
+
+    def _execute_block_with_result(self, block, block_editor, block_index: int) -> Dict[str, Any]:
+        """Execute a block, wait for completion, and return results.
+
+        This is the unified execution helper used by all execute tools.
+        1. Snapshots output panel text
+        2. Calls block_editor.execute_block(block)
+        3. Waits for block to stop running (up to 30s)
+        4. Collects and returns execution output + DataFrame preview
+        """
+        # Snapshot before
+        output_before = self._get_output_snapshot()
+
+        # Execute
+        try:
+            block_editor.execute_block(block)
+        except Exception as e:
+            return {"error": f"Execution failed: {e}"}
+
+        # Wait for block to finish (processes Qt events meanwhile)
+        completed = self._wait_for_block_execution(block, timeout_ms=30000)
+
+        if not completed:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Block {block_index} execution started but did not finish within 30 seconds. Use get_execution_results to check the output later."
+                }]
+            }
+
+        # Collect results
+        return self._collect_execution_result(block, block_index, output_before)
+
     def _execute_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a block by index."""
+        """Execute a block by index, wait for completion, and return results."""
         block_index = args.get("block_index")
         if block_index is None:
             return {"error": "block_index is required."}
@@ -1131,21 +1408,10 @@ class MCPToolRegistry(QObject):
             return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
 
         target_block = blocks[block_index]
-
-        # Execute the block
-        if hasattr(block_editor, "execute_block"):
-            try:
-                block_editor.execute_block(target_block)
-                return {
-                    "content": [{"type": "text", "text": f"Block {block_index} execution started."}]
-                }
-            except Exception as e:
-                return {"error": f"Execution failed: {e}"}
-
-        return {"error": "Block editor does not support execute_block."}
+        return self._execute_block_with_result(target_block, block_editor, block_index)
 
     def _run_current_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the currently focused block."""
+        """Execute the currently focused block, wait for completion, and return results."""
         session_widget = self._get_active_session_widget()
         if not session_widget:
             return {"error": "No active session."}
@@ -1162,16 +1428,8 @@ class MCPToolRegistry(QObject):
             else:
                 return {"error": "No blocks to execute."}
 
-        if hasattr(block_editor, "execute_block"):
-            try:
-                block_editor.execute_block(focused_block)
-                return {
-                    "content": [{"type": "text", "text": "Current block execution started."}]
-                }
-            except Exception as e:
-                return {"error": f"Execution failed: {e}"}
-
-        return {"error": "Block editor does not support execute_block."}
+        block_index = block_editor.blocks.index(focused_block) if focused_block in block_editor.blocks else -1
+        return self._execute_block_with_result(focused_block, block_editor, block_index)
 
     def _list_connections(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """List all saved database connections."""
@@ -1391,38 +1649,9 @@ class MCPToolRegistry(QObject):
         return {"error": "Block editor does not support remove_block."}
 
     def _get_block_result(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get the last execution result of a block."""
-        block_index = args.get("block_index")
-        if block_index is None:
-            return {"error": "block_index is required."}
-
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks or block_index < 0 or block_index >= len(blocks):
-            return {"error": f"Block index {block_index} out of range."}
-
-        target_block = blocks[block_index]
-
-        # Try to get the result from the block's result panel
-        result_text = ""
-        if hasattr(target_block, "result_panel"):
-            result_panel = target_block.result_panel
-            if hasattr(result_panel, "get_text"):
-                result_text = result_panel.get_text()
-            elif hasattr(result_panel, "toPlainText"):
-                result_text = result_panel.toPlainText()
-
-        if not result_text:
-            result_text = "(no result available)"
-
-        return {"content": [{"type": "text", "text": result_text}]}
+        """Get the last execution result from the output panel."""
+        # Results go to the global output/results panel, not per-block
+        return self._get_execution_results(args)
 
     def _write_and_run(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Create a block, write code, and execute it - all in one step."""
@@ -1459,41 +1688,15 @@ class MCPToolRegistry(QObject):
 
         # 3. Write the code
         logger.info("write_and_run: Setting code...")
+        # Show copilot editing indicator and scroll into view
+        self._signal_copilot_editing(block, block_editor)
         block.set_code(code)
         block_index = len(block_editor.blocks) - 1
         actual_name = block.get_block_name()
         logger.info(f"write_and_run: Block {block_index} ('{actual_name}') created with {len(code)} chars")
 
-        # 4. Execute the block
-        if hasattr(block_editor, "execute_block"):
-            try:
-                logger.info(f"write_and_run: Executing block {block_index}...")
-                block_editor.execute_block(block)
-                logger.info(f"write_and_run: Execution started for block {block_index}")
-                
-                # Build response message
-                msg_parts = [f"Block '{actual_name}' (index {block_index}, {language}) created and execution started."]
-                if language == "sql":
-                    msg_parts.append(f"Result will be stored as DataFrame `{actual_name}`.")
-                msg_parts.append(f"\nCode:\n```{language}\n{code}\n```")
-                msg_parts.append("Use get_execution_results() to see the output after execution completes.")
-                
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "\n".join(msg_parts)
-                    }]
-                }
-            except Exception as e:
-                logger.exception(f"write_and_run: Execution failed: {e}")
-                return {"error": f"Block created but execution failed: {e}"}
-
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"Block {block_index} created with code but could not execute automatically."
-            }]
-        }
+        # 4. Execute the block and wait for results
+        return self._execute_block_with_result(block, block_editor, block_index)
 
     # === Focused Block Tool Implementations ===
 
@@ -1567,7 +1770,12 @@ class MCPToolRegistry(QObject):
         if error:
             return {"error": error}
 
+        self._signal_copilot_editing(block, block_editor)
         block.set_code(code)
+        # Move cursor to top
+        editor = getattr(block, "editor", None)
+        if editor and hasattr(editor, "go_to_line"):
+            editor.go_to_line(0)
         block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
 
         return {
@@ -1578,45 +1786,18 @@ class MCPToolRegistry(QObject):
         }
 
     def _execute_focused(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the currently focused block."""
+        """Execute the currently focused block, wait for completion, and return results."""
         block, block_editor, error = self._get_focused_block()
         if error:
             return {"error": error}
 
         block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
-
-        if hasattr(block_editor, "execute_block"):
-            try:
-                block_editor.execute_block(block)
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Block {block_index} execution started."
-                    }]
-                }
-            except Exception as e:
-                return {"error": f"Execution failed: {e}"}
-
-        return {"error": "Cannot execute block."}
+        return self._execute_block_with_result(block, block_editor, block_index)
 
     def _get_focused_result(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get the result from the currently focused block."""
-        block, block_editor, error = self._get_focused_block()
-        if error:
-            return {"error": error}
-
-        result_text = ""
-        if hasattr(block, "result_panel"):
-            result_panel = block.result_panel
-            if hasattr(result_panel, "get_text"):
-                result_text = result_panel.get_text()
-            elif hasattr(result_panel, "toPlainText"):
-                result_text = result_panel.toPlainText()
-
-        if not result_text:
-            result_text = "(no result available)"
-
-        return {"content": [{"type": "text", "text": result_text}]}
+        """Get the last execution result from the output panel."""
+        # Results go to the global output panel, not per-block
+        return self._get_execution_results(args)
 
     # === Selection Tool Implementations ===
 
@@ -1701,12 +1882,13 @@ class MCPToolRegistry(QObject):
                 code = block.get_code()
             elif hasattr(block, "code"):
                 code = block.code
-            parts.append(f"## Block {i} ({language}):\n```{language}\n{code}\n```")
+            name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{i + 1}"
+            parts.append(f"## Block {i} - '{name}' ({language}):\n```{language}\n{code}\n```")
 
         return {"content": [{"type": "text", "text": "\n\n".join(parts)}]}
 
     def _run_all_blocks(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute all blocks in sequence."""
+        """Execute all blocks in sequence, wait for all, return results."""
         session_widget = self._get_active_session_widget()
         if not session_widget:
             return {"error": "No active session."}
@@ -1719,23 +1901,21 @@ class MCPToolRegistry(QObject):
         if not blocks:
             return {"error": "No blocks to execute."}
 
-        if not hasattr(block_editor, "execute_block"):
-            return {"error": "Block editor does not support execute_block."}
-
-        executed = 0
-        for block in blocks:
+        # Use execute_all_blocks which handles queuing properly
+        if hasattr(block_editor, "execute_all_blocks"):
+            output_before = self._get_output_snapshot()
             try:
-                block_editor.execute_block(block)
-                executed += 1
+                block_editor.execute_all_blocks()
             except Exception as e:
-                logger.error(f"Error executing block: {e}")
+                return {"error": f"Execution failed: {e}"}
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"Started execution of {executed} blocks."
-            }]
-        }
+            # Wait for ALL blocks to finish
+            for block in blocks:
+                self._wait_for_block_execution(block, timeout_ms=30000)
+
+            return self._collect_execution_result(blocks[-1], len(blocks) - 1, output_before)
+
+        return {"error": "Block editor does not support execute_all_blocks."}
 
     def _fix_and_run(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Fix code in the focused block and re-execute."""
@@ -1748,28 +1928,12 @@ class MCPToolRegistry(QObject):
             return {"error": error}
 
         # Update the code
+        self._signal_copilot_editing(block, block_editor)
         block.set_code(fixed_code)
         block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
 
-        # Execute
-        if hasattr(block_editor, "execute_block"):
-            try:
-                block_editor.execute_block(block)
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Block {block_index} fixed and execution started."
-                    }]
-                }
-            except Exception as e:
-                return {"error": f"Code updated but execution failed: {e}"}
-
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"Block {block_index} fixed but could not execute."
-            }]
-        }
+        # Execute and wait for result
+        return self._execute_block_with_result(block, block_editor, block_index)
 
     def _append_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Append code to the end of the focused block."""
@@ -2172,4 +2336,216 @@ class MCPToolRegistry(QObject):
                 "text": f"Notification sent: {title}"
             }]
         }
+
+    # === Granular Editing Tool Implementations ===
+
+    def _edit_block_lines(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit specific lines in a block (replace, insert, or delete)."""
+        block_index = args.get("block_index")
+        start_line = args.get("start_line")
+        end_line = args.get("end_line")
+        new_code = args.get("new_code", "")
+        mode = args.get("mode", "replace")
+
+        if block_index is None or start_line is None:
+            return {"error": "block_index and start_line are required."}
+
+        if mode not in ("replace", "insert", "delete"):
+            return {"error": f"Invalid mode '{mode}'. Use 'replace', 'insert', or 'delete'."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
+
+        target_block = blocks[block_index]
+        current_code = ""
+        if hasattr(target_block, "get_code"):
+            current_code = target_block.get_code()
+        elif hasattr(target_block, "code"):
+            current_code = target_block.code
+
+        lines = current_code.split("\n")
+        total_lines = len(lines)
+
+        if mode == "insert":
+            if start_line < 1 or start_line > total_lines + 1:
+                return {"error": f"start_line {start_line} out of range (1-{total_lines + 1})."}
+        else:
+            if start_line < 1 or start_line > total_lines:
+                return {"error": f"start_line {start_line} out of range (1-{total_lines})."}
+
+        if mode == "replace":
+            if end_line is None:
+                end_line = start_line
+            if end_line < start_line or end_line > total_lines:
+                return {"error": f"end_line {end_line} out of range ({start_line}-{total_lines})."}
+            new_lines = new_code.split("\n") if new_code else []
+            lines[start_line - 1:end_line] = new_lines
+            action = f"Replaced lines {start_line}-{end_line}"
+
+        elif mode == "insert":
+            new_lines = new_code.split("\n") if new_code else []
+            insert_pos = start_line - 1
+            lines[insert_pos:insert_pos] = new_lines
+            action = f"Inserted {len(new_lines)} lines before line {start_line}"
+
+        elif mode == "delete":
+            if end_line is None:
+                end_line = start_line
+            if end_line < start_line or end_line > total_lines:
+                return {"error": f"end_line {end_line} out of range ({start_line}-{total_lines})."}
+            del lines[start_line - 1:end_line]
+            action = f"Deleted lines {start_line}-{end_line}"
+
+        result_code = "\n".join(lines)
+        # Show copilot editing indicator and scroll into view
+        self._signal_copilot_editing(target_block, block_editor)
+        target_block.set_code(result_code)
+        # Highlight the edited region and move cursor there
+        if mode == "replace":
+            highlight_end = start_line + len(new_lines) - 1 if new_lines else start_line
+            self._highlight_edited_lines(target_block, start_line, max(highlight_end, start_line))
+        elif mode == "insert":
+            highlight_end = start_line + len(new_lines) - 1 if new_lines else start_line
+            self._highlight_edited_lines(target_block, start_line, max(highlight_end, start_line))
+        elif mode == "delete":
+            # After deletion, highlight the line where content was removed
+            hl_line = min(start_line, len(lines)) if lines else 1
+            self._highlight_edited_lines(target_block, hl_line, hl_line)
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"{action} in block {block_index}. Block now has {len(lines)} lines."
+            }]
+        }
+
+    def _get_block_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the full code from a specific block by index."""
+        block_index = args.get("block_index")
+        if block_index is None:
+            return {"error": "block_index is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks or block_index < 0 or block_index >= len(blocks):
+            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
+
+        target_block = blocks[block_index]
+        code = ""
+        if hasattr(target_block, "get_code"):
+            code = target_block.get_code()
+        elif hasattr(target_block, "code"):
+            code = target_block.code
+
+        language = target_block.get_language() if hasattr(target_block, "get_language") else "unknown"
+        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index + 1}"
+        total_lines = len(code.split("\n"))
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Block {block_index} ('{name}', {language}, {total_lines} lines):\n```{language}\n{code}\n```"
+            }]
+        }
+
+    def _search_in_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Search for text across all blocks."""
+        query = args.get("query", "")
+        if not query:
+            return {"error": "query is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return {"error": "Block editor not available."}
+
+        blocks = block_editor.blocks
+        if not blocks:
+            return {"content": [{"type": "text", "text": "No blocks in session."}]}
+
+        query_lower = query.lower()
+        matches = []
+        for i, block in enumerate(blocks):
+            code = ""
+            if hasattr(block, "get_code"):
+                code = block.get_code()
+            elif hasattr(block, "code"):
+                code = block.code
+
+            for line_num, line in enumerate(code.split("\n"), start=1):
+                if query_lower in line.lower():
+                    matches.append(f"  Block {i}, line {line_num}: {line.strip()}")
+
+        if not matches:
+            return {"content": [{"type": "text", "text": f"No matches found for '{query}'."}]}
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Found {len(matches)} matches for '{query}':\n" + "\n".join(matches)
+            }]
+        }
+
+    # === Output Reading Tool Implementation ===
+
+    def _read_output(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Read the last N lines from the output panel."""
+        last_n = args.get("last_n_lines", 50)
+        try:
+            last_n = int(last_n)
+            if last_n < 0:
+                last_n = 50
+        except (TypeError, ValueError):
+            last_n = 50
+
+        mw = self._main_window
+        if not mw:
+            return {"error": "Main window not available."}
+
+        output_panel = getattr(mw, "global_output_panel", None)
+        if not output_panel:
+            return {"error": "Output panel not available."}
+
+        text = ""
+        if hasattr(output_panel, "get_text"):
+            text = output_panel.get_text() or ""
+        elif hasattr(output_panel, "text_edit"):
+            text = output_panel.text_edit.toPlainText() or ""
+
+        if not text.strip():
+            return {"content": [{"type": "text", "text": "(output panel is empty)"}]}
+
+        lines = text.strip().split("\n")
+
+        if last_n == 0:
+            # Return all
+            output = "\n".join(lines)
+        else:
+            output = "\n".join(lines[-last_n:])
+            if len(lines) > last_n:
+                output = f"... ({len(lines) - last_n} earlier lines omitted)\n{output}"
+
+        if len(output) > 8000:
+            output = output[-8000:] + "\n... (truncated)"
+
+        return {"content": [{"type": "text", "text": f"Output ({len(lines)} total lines):\n```\n{output}\n```"}]}
 
