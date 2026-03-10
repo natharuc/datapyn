@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.18.0 (2026-03-10)
+
+### Bug Fixes
+
+- Improve edit_block_lines validation and performance
+  ([`c7c29d1`](https://github.com/natharuc/datapyn/commit/c7c29d18b53b9c83fc30ae668b96d342ae846692))
+
+### Features
+
+- Add new MCP tools and improve Copilot integration
+  ([`4835dbf`](https://github.com/natharuc/datapyn/commit/4835dbf2ad190ab36bfdd48941fd396c782bace1))
+
+- Contador de tempo em blocos, remover eval/run-shell, fix WMI hang
+  ([`b4dc950`](https://github.com/natharuc/datapyn/commit/b4dc95070ba459915f92cc5d77a968c45f289f6c))
+
+
 ## v1.17.0 (2026-02-26)
 
 ### Features
