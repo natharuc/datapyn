@@ -873,6 +873,7 @@ class CopilotChatPanel(QWidget):
         self._current_thinking_widget = None  # Legacy - not used with WebView
         self._current_actions_widget = None  # Legacy - not used with WebView
         self._active_tool_calls: dict = {}  # tool_name -> reference
+        self._is_thinking = False  # Tracks collapsible thinking block state
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._current_session_id = None
         self._gh_install_worker = None
@@ -1027,6 +1028,20 @@ class CopilotChatPanel(QWidget):
             }}
         """)
         layout.addWidget(header)
+
+        # === Tab context badge (shows which tab the chat is scoped to) ===
+        self._tab_badge = QLabel()
+        self._tab_badge.setVisible(False)
+        self._tab_badge.setStyleSheet(f"""
+            QLabel {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_secondary};
+                font-size: 11px;
+                padding: 3px 12px;
+                border-bottom: 1px solid {colors.border_default};
+            }}
+        """)
+        layout.addWidget(self._tab_badge)
 
         # === Messages area (WebView-based) ===
         self._setup_chat_webview()
@@ -1333,6 +1348,21 @@ class CopilotChatPanel(QWidget):
         welcome_title = "GitHub Copilot"
         welcome_msg = S.copilot.welcome_message if hasattr(S.copilot, 'welcome_message') else "Sign in to start chatting."
         self._run_chat_js(f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(welcome_msg)})")
+        
+        # Send i18n labels to WebView
+        chat_labels = {
+            "thinking": getattr(S.copilot, 'thinking', 'Thinking'),
+            "thinking_complete": getattr(S.copilot, 'thinking_complete', 'Thought for {seconds}s'),
+            "tool_processing": getattr(S.copilot, 'tool_processing', 'Processing...'),
+            "tool_using_one": getattr(S.copilot, 'tool_using_one', 'Using 1 tool...'),
+            "tool_using_many": getattr(S.copilot, 'tool_using_many', 'Using {count} tools...'),
+            "tool_used_one": getattr(S.copilot, 'tool_used_one', 'Used 1 tool'),
+            "tool_used_many": getattr(S.copilot, 'tool_used_many', 'Used {count} tools'),
+            "tool_running": getattr(S.copilot, 'tool_running', 'running...'),
+            "tool_ok": getattr(S.copilot, 'tool_ok', 'ok'),
+            "tool_error": getattr(S.copilot, 'tool_error', 'error'),
+        }
+        self._run_chat_js(f"setLabels({json.dumps(chat_labels)})")
         
         # Execute pending operations
         for op in self._pending_webview_ops:
@@ -1718,6 +1748,10 @@ class CopilotChatPanel(QWidget):
         """Handle streaming response chunk."""
         # Hide thinking indicator on first chunk
         self._hide_thinking_indicator()
+        # End collapsible thinking block when response starts
+        if self._is_thinking:
+            self._is_thinking = False
+            self._run_chat_js("endThinkingBlock()")
         
         if self._current_stream_id:
             # Stream to existing message
@@ -1735,6 +1769,11 @@ class CopilotChatPanel(QWidget):
         """Handle complete response."""
         self._set_loading(False)
         self._hide_thinking_indicator()
+        
+        # End collapsible thinking block
+        if self._is_thinking:
+            self._is_thinking = False
+            self._run_chat_js("endThinkingBlock()")
         
         # End streaming in WebView
         self._run_chat_js("endStreaming()")
@@ -1768,6 +1807,11 @@ class CopilotChatPanel(QWidget):
         """Handle chat error."""
         self._set_loading(False)
         self._hide_thinking_indicator()
+        
+        # End collapsible thinking block
+        if self._is_thinking:
+            self._is_thinking = False
+            self._run_chat_js("endThinkingBlock()")
         
         # End any streaming
         self._run_chat_js("endStreaming()")
@@ -1830,8 +1874,15 @@ class CopilotChatPanel(QWidget):
             return
         
         logger.debug(f"Thinking: {text[:50]}...")
-        # Thinking is handled via showThinking/hideThinking in WebView
-        # The actual thinking text is not displayed in WebView (keeping it simple)
+        
+        # Start a collapsible thinking block if not already open
+        if not self._is_thinking:
+            self._is_thinking = True
+            self._run_chat_js("startThinkingBlock()")
+        
+        # Append thinking text to the block
+        text_escaped = json.dumps(text)
+        self._run_chat_js(f"appendThinking({text_escaped})")
 
     def _on_models_changed(self, models: list):
         """Handle dynamic model list update from SDK."""
@@ -2093,6 +2144,72 @@ class CopilotChatPanel(QWidget):
     def set_theme_manager(self, theme_manager):
         """Set theme manager for dynamic theming."""
         self.theme_manager = theme_manager
+
+    # === Per-Tab Chat Context ===
+
+    def switch_tab_context(self, tab_id: str, tab_name: str = ""):
+        """Switch chat context to a different tab.
+        
+        Saves current messages for the previous tab and restores messages
+        for the new tab. If no messages exist for the new tab, starts fresh.
+        
+        Args:
+            tab_id: Unique identifier for the tab (e.g. session_id).
+            tab_name: Display name for the tab (shown in header).
+        """
+        if not hasattr(self, "_tab_contexts"):
+            self._tab_contexts: dict = {}  # tab_id -> {messages, session_id, stream_id}
+        
+        current_tab = getattr(self, "_current_tab_id", None)
+        
+        # Save current context
+        if current_tab and current_tab != tab_id:
+            self._tab_contexts[current_tab] = {
+                "messages": self._messages.copy(),
+                "session_id": self._current_session_id,
+                "stream_id": self._current_stream_id,
+            }
+        
+        self._current_tab_id = tab_id
+        
+        # Restore context for new tab if it exists
+        if tab_id in self._tab_contexts:
+            ctx = self._tab_contexts[tab_id]
+            self._messages = ctx["messages"]
+            self._current_session_id = ctx["session_id"]
+            self._current_stream_id = ctx["stream_id"]
+        else:
+            # Fresh context
+            self._messages = []
+            self._current_session_id = None
+            self._current_stream_id = None
+        
+        # End any active thinking/tool states
+        self._is_thinking = False
+        self._active_tool_calls.clear()
+        
+        # Rebuild WebView with restored messages
+        self._run_chat_js("clearMessages()")
+        if self._messages:
+            for msg in self._messages:
+                role = msg["role"]
+                content = msg["content"]
+                role_js = "error" if role == "assistant" and content.startswith("Error:") else role
+                content_escaped = json.dumps(content)
+                msg_id = json.dumps(f"restored_{id(msg) % 10000}")
+                self._run_chat_js(f"addMessage({json.dumps(role_js)}, {content_escaped}, {msg_id})")
+        
+        # Update tab name in header if provided
+        if tab_name:
+            self._update_tab_badge(tab_name)
+    
+    def _update_tab_badge(self, tab_name: str):
+        """Update the tab context badge in the chat header."""
+        label_text = getattr(S.copilot, 'chat_context_tab', 'Tab: {name}').replace('{name}', tab_name)
+        if hasattr(self, '_tab_badge'):
+            self._tab_badge.setText(label_text)
+            self._tab_badge.setVisible(True)
+        # If no badge widget exists yet, we will create it in _setup_ui update
 
     def clear_chat(self):
         """Clear all messages."""

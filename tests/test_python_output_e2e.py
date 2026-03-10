@@ -492,7 +492,7 @@ class TestSessionWidgetFigureRouting:
         from src.ui.components.session_widget import SessionWidget
         from src.core.session import Session
         from src.core.theme_manager import ThemeManager
-        from src.editors import BlockEditor
+        from src.editors.block_editor import BlockEditor
 
         # Criar SessionWidget com mocks
         session = MagicMock(spec=Session)

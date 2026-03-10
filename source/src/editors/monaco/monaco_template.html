@@ -36,6 +36,21 @@
         .monaco-editor .suggest-widget .monaco-list .monaco-scrollable-element {
             min-height: 180px !important;
         }
+        /* Copilot edit highlight - golden glow on edited lines */
+        .copilot-highlight-line {
+            background: rgba(180, 142, 173, 0.18) !important;
+            border-left: 3px solid #b48ead !important;
+            animation: copilotHighlightFade 2s ease-out forwards;
+        }
+        .copilot-highlight-glyph {
+            background: #b48ead;
+            width: 3px !important;
+        }
+        @keyframes copilotHighlightFade {
+            0% { background: rgba(180, 142, 173, 0.25); }
+            70% { background: rgba(180, 142, 173, 0.15); }
+            100% { background: rgba(180, 142, 173, 0.0); }
+        }
     </style>
 </head>
 <body>
@@ -636,6 +651,28 @@
                 editor.setPosition({ lineNumber: line + 1, column: 1 });
                 editor.revealLineInCenter(line + 1);
             }
+        }
+        
+        // Highlight line range with a golden glow that fades after a delay
+        var _highlightDecorations = [];
+        function highlightLines(startLine, endLine, durationMs) {
+            if (!editor) return;
+            durationMs = durationMs || 2000;
+            // startLine/endLine are 1-based
+            _highlightDecorations = editor.deltaDecorations(_highlightDecorations, [
+                {
+                    range: new monaco.Range(startLine, 1, endLine, 1),
+                    options: {
+                        isWholeLine: true,
+                        className: 'copilot-highlight-line',
+                        glyphMarginClassName: 'copilot-highlight-glyph'
+                    }
+                }
+            ]);
+            // Auto-remove after duration
+            setTimeout(function() {
+                _highlightDecorations = editor.deltaDecorations(_highlightDecorations, []);
+            }, durationMs);
         }
         
         function getSelectedText() {

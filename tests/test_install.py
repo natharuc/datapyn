@@ -114,7 +114,10 @@ def test_imports():
 
     print("  - editors...", end=" ")
     try:
-        from src.editors import MonacoEditor, CodeBlock, BlockEditor
+        from src.editors.code_block import CodeBlock
+        from src.editors.block_editor import BlockEditor
+        from src.editors.editor_config import get_code_editor_class
+        MonacoEditor = get_code_editor_class()
 
         print("✅ OK")
     except ImportError as e:

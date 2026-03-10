@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint
+from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint, QTimer
 from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
 import qtawesome as qta
 
@@ -414,10 +414,15 @@ class CodeBlock(QFrame):
         self._resize_start_height = 0
         self._execution_start_time = 0
         self._last_execution_time = None
+        self._execution_tick_timer = QTimer(self)
+        self._execution_tick_timer.setInterval(100)
+        self._execution_tick_timer.timeout.connect(self._update_running_elapsed)
         self._default_language = default_language
         self._connection_name = None  # None = use session connection
         self._database_name = None  # None = use connection default database
         self._block_name = ""  # Block name (namespace prefix)
+        self._is_copilot_editing = False  # Copilot is editing this block
+        self._copilot_editing_timer = None  # Auto-dismiss timer
 
         self._setup_ui()
         self._connect_signals()
@@ -433,6 +438,12 @@ class CodeBlock(QFrame):
         # Set initial height based on language (SQL = larger, Python = smaller)
         initial_height = self.DEFAULT_SQL_HEIGHT if self._default_language == "sql" else self.DEFAULT_PYTHON_HEIGHT
         self._set_editor_height(initial_height)
+
+    def closeEvent(self, event):
+        """Stop timers to prevent callbacks on deleted C++ objects."""
+        self._execution_tick_timer.stop()
+        self._spinner_widget.hide()
+        super().closeEvent(event)
 
     def _setup_ui(self):
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Plain)
@@ -570,6 +581,34 @@ class CodeBlock(QFrame):
             }}
         """)
         control_layout.addWidget(self.status_label)
+
+        # Copilot editing indicator (hidden by default)
+        self._copilot_indicator = QWidget()
+        copilot_ind_layout = QHBoxLayout(self._copilot_indicator)
+        copilot_ind_layout.setContentsMargins(4, 0, 4, 0)
+        copilot_ind_layout.setSpacing(4)
+        self._copilot_icon = qta.IconWidget()
+        self._copilot_icon.setFixedSize(14, 14)
+        copilot_sparkle = qta.icon(
+            "mdi.creation",
+            color="#b48ead",
+        )
+        self._copilot_icon.setIcon(copilot_sparkle)
+        copilot_ind_layout.addWidget(self._copilot_icon)
+        self._copilot_label = QLabel(S.block.copilot_editing)
+        self._copilot_label.setStyleSheet("""
+            QLabel {
+                color: #b48ead;
+                font-size: 11px;
+                font-style: italic;
+                background: transparent;
+                padding: 0;
+            }
+        """)
+        copilot_ind_layout.addWidget(self._copilot_label)
+        self._copilot_indicator.setStyleSheet("background: transparent;")
+        self._copilot_indicator.hide()
+        control_layout.addWidget(self._copilot_indicator)
 
         # Language indicator (hidden, kept for compatibility)
         self.lang_indicator = QFrame()
@@ -908,7 +947,21 @@ class CodeBlock(QFrame):
                 }}
             """)
 
-        if self._is_focused:
+        if self._is_copilot_editing:
+            # Copilot editing: animated purple left border
+            self.setStyleSheet(f"""
+                CodeBlock {{
+                    border-left: 3px solid #b48ead;
+                    border-top: none;
+                    border-right: none;
+                    border-bottom: none;
+                    border-top-left-radius: 4px;
+                    border-bottom-left-radius: 4px;
+                    border-top-right-radius: 0;
+                    border-bottom-right-radius: 0;
+                }}
+            """)
+        elif self._is_focused:
             self.setStyleSheet(f"""
                 CodeBlock {{
                     border-left: 3px solid {color};
@@ -999,6 +1052,47 @@ class CodeBlock(QFrame):
     def is_focused(self) -> bool:
         return self._is_focused
 
+    def set_copilot_editing(self, editing: bool):
+        """Show/hide Copilot editing indicator on this block.
+        
+        When editing=True, shows a pulsing sparkle icon and purple left border.
+        Auto-dismisses after 2 seconds if not explicitly turned off.
+        """
+        from PyQt6.QtCore import QTimer
+        self._is_copilot_editing = editing
+        self._copilot_indicator.setVisible(editing)
+        
+        # Start/stop animation on the icon
+        if editing:
+            animated_icon = qta.icon(
+                "mdi.creation",
+                color="#b48ead",
+                animation=qta.Spin(self._copilot_icon),
+            )
+            self._copilot_icon.setIcon(animated_icon)
+        else:
+            static_icon = qta.icon("mdi.creation", color="#b48ead")
+            self._copilot_icon.setIcon(static_icon)
+        
+        self._update_style()
+        
+        # Cancel any pending auto-dismiss timer
+        if self._copilot_editing_timer is not None:
+            self._copilot_editing_timer.stop()
+            self._copilot_editing_timer = None
+        
+        if editing:
+            # Auto-dismiss after 2 seconds
+            self._copilot_editing_timer = QTimer(self)
+            self._copilot_editing_timer.setSingleShot(True)
+            self._copilot_editing_timer.timeout.connect(
+                lambda: self.set_copilot_editing(False)
+            )
+            self._copilot_editing_timer.start(2000)
+
+    def is_copilot_editing(self) -> bool:
+        return self._is_copilot_editing
+
     def set_waiting(self, waiting: bool):
         """Set waiting in queue state"""
         self._is_waiting = waiting
@@ -1051,7 +1145,11 @@ class CodeBlock(QFrame):
             spin_icon = qta.icon("fa5s.spinner", animation=qta.Spin(self._spinner_widget), color="#f39c12")
             self._spinner_widget.setIcon(spin_icon)
             self._spinner_widget.show()
+            # Start elapsed time counter
+            self._execution_tick_timer.start()
         else:
+            self._execution_tick_timer.stop()
+            self._spinner_widget.setIcon(qta.icon("fa5s.spinner", color="#888"))  # Static icon stops Spin animation
             self._spinner_widget.hide()
             self._update_style()  # Restore play icon with language color
             if self._execution_start_time > 0:
@@ -1083,6 +1181,9 @@ class CodeBlock(QFrame):
         """Set cancelled state"""
         self._is_running = False
         self._is_waiting = False
+        self._execution_tick_timer.stop()
+        self._spinner_widget.setIcon(qta.icon("fa5s.spinner", color="#888"))
+        self._spinner_widget.hide()
         self._update_style()
         self.status_label.setText(S.block.status_cancelled)
         self.status_label.setStyleSheet("""
@@ -1100,6 +1201,9 @@ class CodeBlock(QFrame):
         """Set error state"""
         self._is_running = False
         self._is_waiting = False
+        self._execution_tick_timer.stop()
+        self._spinner_widget.setIcon(qta.icon("fa5s.spinner", color="#888"))
+        self._spinner_widget.hide()
         self._update_style()
         self.status_label.setText(S.block.status_error)
         self.status_label.setStyleSheet("""
@@ -1125,6 +1229,18 @@ class CodeBlock(QFrame):
             mins = int(seconds // 60)
             secs = seconds % 60
             return f"{mins}m {secs:.1f}s"
+
+    def _update_running_elapsed(self):
+        """Update the status label with elapsed time while running."""
+        if not self._is_running or self._execution_start_time <= 0:
+            self._execution_tick_timer.stop()
+            return
+        elapsed = time.time() - self._execution_start_time
+        elapsed_str = self._format_execution_time(elapsed)
+        running_text = getattr(S.block, 'status_running_elapsed', '{status} {elapsed}')
+        self.status_label.setText(
+            running_text.format(status=S.block.status_running, elapsed=elapsed_str)
+        )
 
     def focus_editor(self):
         self.editor.setFocus()

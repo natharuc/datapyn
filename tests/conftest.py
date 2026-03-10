@@ -10,6 +10,32 @@ from unittest.mock import MagicMock, patch
 import tempfile
 import json
 
+# ==================== FIX: WMI hang on Python 3.12 + Windows ==================
+# Python 3.12 changed platform.win32_ver() to use WMI queries instead of registry.
+# WMI can hang indefinitely if the service is unresponsive (common after crashes).
+# sqlalchemy imports platform.machine() at module level, triggering the WMI query.
+# Pre-cache the result or bypass WMI to prevent test hangs.
+import platform
+try:
+    # Try to disable WMI-based queries by pre-caching platform info
+    if sys.platform == "win32" and hasattr(platform, "_wmi_query"):
+        # Monkey-patch _wmi_query to return empty string (avoids WMI hang)
+        platform._wmi_query = lambda *args, **kwargs: ""
+        # Force uname cache with fallback values
+        if not hasattr(platform, "_uname_cache") or platform._uname_cache is None:
+            import struct
+            machine = "AMD64" if struct.calcsize("P") * 8 == 64 else "x86"
+            platform._uname_cache = platform.uname_result(
+                system="Windows",
+                node=os.environ.get("COMPUTERNAME", ""),
+                release="",
+                version="",
+                machine=machine,
+            )
+except Exception:
+    pass  # Not critical, just a performance optimization
+# ==================== END FIX ==================================================
+
 # Configurar WebEngine para testes (desabilitar GPU para evitar erros)
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-software-rasterizer --no-sandbox")
 os.environ.setdefault("QT_OPENGL", "software")

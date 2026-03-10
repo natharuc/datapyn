@@ -593,7 +593,17 @@ class MonacoEditor(QWidget):
     def go_to_line(self, line: int) -> None:
         """Moves cursor to the specified line (0-indexed)."""
         self._run_js_when_ready(f"goToLine({line})")
-    
+
+    def highlight_lines(self, start_line: int, end_line: int, duration_ms: int = 2000) -> None:
+        """Temporarily highlight a range of lines (1-based) with a purple glow.
+        
+        Used to visually indicate lines that Copilot just edited.
+        The highlight fades automatically after duration_ms.
+        """
+        self._run_js_when_ready(
+            f"highlightLines({start_line}, {end_line}, {duration_ms})"
+        )
+
     def get_widget(self) -> QWidget:
         """Returns the Qt widget of the editor."""
         return self

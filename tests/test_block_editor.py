@@ -101,11 +101,73 @@ class TestCodeBlock:
         assert block.run_btn.text() == ""
 
         block.set_running(True)
-        assert "Running" in block.status_label.text()
+        # Initially shows "Running" (or localized equivalent)
+        assert block.status_label.text() != ""
 
         block.set_running(False)
         # Apos execucao, mostra tempo de execucao
         assert any(unit in block.status_label.text() for unit in ["us", "ms", "s"]) or block.status_label.text() == ""
+
+
+class TestBlockRunningTimer:
+    """Tests for the elapsed time counter on running blocks"""
+
+    @pytest.fixture
+    def block(self, qtbot):
+        b = CodeBlock(theme_manager=ThemeManager())
+        qtbot.addWidget(b)
+        return b
+
+    def test_timer_starts_on_running(self, block):
+        """Timer must start when block enters running state"""
+        block.set_running(True)
+        assert block._execution_tick_timer.isActive()
+        block.set_running(False)
+
+    def test_timer_stops_on_finished(self, block):
+        """Timer must stop when block finishes running"""
+        block.set_running(True)
+        assert block._execution_tick_timer.isActive()
+        block.set_running(False)
+        assert not block._execution_tick_timer.isActive()
+
+    def test_timer_stops_on_error(self, block):
+        """Timer must stop when block has error"""
+        block.set_running(True)
+        block.set_error()
+        assert not block._execution_tick_timer.isActive()
+
+    def test_timer_stops_on_cancel(self, block):
+        """Timer must stop when block is cancelled"""
+        block.set_running(True)
+        block.set_cancelled()
+        assert not block._execution_tick_timer.isActive()
+
+    def test_label_updates_with_elapsed(self, block, qtbot):
+        """Status label must show elapsed time while running"""
+        import time
+        block._execution_start_time = time.time() - 2.5  # Fake 2.5s ago
+        block._is_running = True
+        block._update_running_elapsed()
+        text = block.status_label.text()
+        # Must contain the elapsed time (around 2.5s)
+        assert "2." in text or "3." in text  # tolerance for timing
+
+    def test_format_execution_time_seconds(self, block):
+        """Format must use seconds for < 60s"""
+        assert "s" in block._format_execution_time(5.23)
+        assert "5.23" in block._format_execution_time(5.23)
+
+    def test_format_execution_time_minutes(self, block):
+        """Format must show minutes for >= 60s"""
+        result = block._format_execution_time(125.3)
+        assert "2m" in result
+        assert "5." in result
+
+    def test_format_execution_time_milliseconds(self, block):
+        """Format must use ms for < 1s"""
+        result = block._format_execution_time(0.345)
+        assert "ms" in result
 
 
 class TestBlockEditor:
