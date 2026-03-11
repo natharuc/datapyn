@@ -270,6 +270,13 @@ class PackageManagerDialog(QDialog):
         subtitle.setStyleSheet(f"color: {dim_color}; font-size: 11px;")
         header_layout.addWidget(subtitle)
 
+        # --- Venv indicator ---
+        venv_text = S.package_manager.venv_label.format(path=self.service.venv_path)
+        venv_label = QLabel(venv_text)
+        venv_label.setStyleSheet(f"color: {dim_color}; font-size: 10px; font-style: italic;")
+        venv_label.setToolTip(self.service.venv_path)
+        header_layout.addWidget(venv_label)
+
         layout.addLayout(header_layout)
 
         # --- Search bar ---
