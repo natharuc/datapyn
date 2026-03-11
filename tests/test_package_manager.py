@@ -2,6 +2,7 @@
 Testes para o Gerenciador de Pacotes (PackageManagerService e PackageManagerDialog)
 """
 
+import os
 import pytest
 import sys
 import io
@@ -15,6 +16,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from PyQt6.QtWidgets import QMessageBox
 
 from src.services.package_manager_service import PackageManagerService, PackageInfo, PackageOperationResult
+
+
+# Fixture that mocks venv detection for all tests in this module.
+# This prevents tests from depending on a real .venv directory.
+_FAKE_VENV = Path("/fake/venv")
+_FAKE_VENV_PYTHON = str(_FAKE_VENV / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"))
+
+
+@pytest.fixture(autouse=True)
+def _mock_venv(request):
+    # Tests marked with 'real_venv' need the real _find_or_create_venv
+    if "real_venv" in [m.name for m in request.node.iter_markers()]:
+        yield
+        return
+    with patch(
+        "src.services.package_manager_service._find_or_create_venv",
+        return_value=(_FAKE_VENV, _FAKE_VENV_PYTHON),
+    ):
+        yield
 
 
 # ===========================================================================
@@ -408,6 +428,87 @@ class TestUninstallPackage:
         assert result.success is False
 
 
+class TestUninstallRecordFallback:
+    """Testes para fallback de remocao manual quando RECORD esta ausente"""
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_record_error_triggers_manual_uninstall(self, mock_run, tmp_path):
+        """Erro de RECORD aciona remocao manual do site-packages"""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr="error: Cannot uninstall package; `RECORD` file not found at: ...",
+        )
+        svc = PackageManagerService()
+        svc._uv_executable = "/usr/bin/uv"
+        svc._venv_path = tmp_path
+
+        # Criar diretorios simulando pacote no site-packages
+        site_packages = tmp_path / "Lib" / "site-packages"
+        pkg_dir = site_packages / "fastexcel"
+        dist_info = site_packages / "fastexcel-0.19.0.dist-info"
+        pkg_dir.mkdir(parents=True)
+        dist_info.mkdir(parents=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (dist_info / "METADATA").write_text("")
+
+        result = svc.uninstall_package("fastexcel")
+        assert result.success is True
+        assert not pkg_dir.exists()
+        assert not dist_info.exists()
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_record_error_non_uv_does_not_trigger_fallback(self, mock_run):
+        """Erro de RECORD sem uv nao aciona fallback (so pip retorna o erro normal)"""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr="error: RECORD file not found",
+        )
+        svc = PackageManagerService()
+        svc._uv_executable = None
+        result = svc.uninstall_package("fastexcel")
+        assert result.success is False
+        assert "RECORD" in result.error
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_manual_uninstall_no_site_packages(self, mock_run, tmp_path):
+        """Retorna None se site-packages nao existe"""
+        svc = PackageManagerService()
+        svc._venv_path = tmp_path
+        result = svc._manual_uninstall("fastexcel")
+        assert result is None
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_manual_uninstall_no_matching_dirs(self, mock_run, tmp_path):
+        """Retorna None se nenhum diretorio corresponde ao pacote"""
+        svc = PackageManagerService()
+        svc._venv_path = tmp_path
+
+        site_packages = tmp_path / "Lib" / "site-packages"
+        site_packages.mkdir(parents=True)
+        (site_packages / "other_package").mkdir()
+
+        result = svc._manual_uninstall("fastexcel")
+        assert result is None
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_manual_uninstall_removes_hyphenated_package(self, mock_run, tmp_path):
+        """Remove pacotes com hifen no nome (ex: my-package -> my_package)"""
+        svc = PackageManagerService()
+        svc._venv_path = tmp_path
+
+        site_packages = tmp_path / "Lib" / "site-packages"
+        pkg_dir = site_packages / "my_package"
+        dist_info = site_packages / "my_package-1.0.0.dist-info"
+        pkg_dir.mkdir(parents=True)
+        dist_info.mkdir(parents=True)
+
+        result = svc._manual_uninstall("my-package")
+        assert result is not None
+        assert result.success is True
+        assert not pkg_dir.exists()
+        assert not dist_info.exists()
+
+
 # ===========================================================================
 # PackageManagerService - update_package
 # ===========================================================================
@@ -541,6 +642,251 @@ class TestProtectedPackages:
         assert result.success is False
         assert "protected" in result.error
         mock_run.assert_not_called()
+
+
+# ===========================================================================
+# PackageManagerService - venv detection and isolation
+# ===========================================================================
+
+
+class TestVenvDetection:
+    """Testes para deteccao e criacao automatica de venv"""
+
+    @pytest.mark.real_venv
+    def test_find_or_create_venv_uses_active_venv(self, tmp_path):
+        """Quando ja esta dentro de um venv, usa o venv ativo"""
+        from src.services.package_manager_service import _find_or_create_venv, _venv_python_path
+
+        venv_dir = tmp_path / ".venv"
+        venv_python = _venv_python_path(venv_dir)
+        venv_python.parent.mkdir(parents=True, exist_ok=True)
+        venv_python.write_text("")
+
+        with (
+            patch("src.services.package_manager_service.getattr", return_value=False),
+            patch.object(sys, "prefix", str(venv_dir)),
+            patch.object(sys, "base_prefix", "/some/other/path"),
+        ):
+            result_path, result_python = _find_or_create_venv()
+            assert result_path == venv_dir
+            assert result_python == str(venv_python)
+
+    @pytest.mark.real_venv
+    def test_find_or_create_venv_uses_existing_project_venv(self, tmp_path):
+        """Quando .venv existe na raiz do projeto, usa ele"""
+        from src.services.package_manager_service import _find_or_create_venv, _venv_python_path
+
+        venv_dir = tmp_path / ".venv"
+        venv_python = _venv_python_path(venv_dir)
+        venv_python.parent.mkdir(parents=True, exist_ok=True)
+        venv_python.write_text("")
+
+        with (
+            patch("src.services.package_manager_service.getattr", return_value=False),
+            # prefix == base_prefix means NOT inside a venv
+            patch.object(sys, "prefix", sys.base_prefix),
+            patch("src.services.package_manager_service._get_project_root", return_value=tmp_path),
+        ):
+            result_path, result_python = _find_or_create_venv()
+            assert result_path == venv_dir
+            assert result_python == str(venv_python)
+
+    @pytest.mark.real_venv
+    def test_find_or_create_venv_creates_when_missing(self, tmp_path):
+        """Quando .venv nao existe, cria automaticamente"""
+        from src.services.package_manager_service import _find_or_create_venv, _venv_python_path
+
+        venv_dir = tmp_path / ".venv"
+
+        with (
+            patch("src.services.package_manager_service.getattr", return_value=False),
+            patch.object(sys, "prefix", sys.base_prefix),
+            patch("src.services.package_manager_service._get_project_root", return_value=tmp_path),
+            patch("src.services.package_manager_service.subprocess.run") as mock_run,
+        ):
+            # Simulate that uv venv creates the python executable
+            def create_venv_side_effect(*args, **kwargs):
+                venv_python = _venv_python_path(venv_dir)
+                venv_python.parent.mkdir(parents=True, exist_ok=True)
+                venv_python.write_text("")
+                return MagicMock(returncode=0)
+
+            mock_run.side_effect = create_venv_side_effect
+
+            result_path, result_python = _find_or_create_venv()
+            assert result_path == venv_dir
+            # Verify uv/venv creation was called
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args[0][0]
+            assert str(venv_dir) in call_args
+
+    @pytest.mark.real_venv
+    def test_find_or_create_venv_frozen_uses_appdata(self, tmp_path):
+        """Em modo frozen (EXE), cria venv no AppData"""
+        from src.services.package_manager_service import _find_or_create_venv, _venv_python_path
+
+        appdata_venv = tmp_path / "datapyn" / "venv"
+        venv_python = _venv_python_path(appdata_venv)
+        venv_python.parent.mkdir(parents=True, exist_ok=True)
+        venv_python.write_text("")
+
+        with (
+            patch("src.services.package_manager_service.getattr", return_value=True),
+            patch("src.services.package_manager_service._get_appdata_venv_dir", return_value=appdata_venv),
+        ):
+            result_path, result_python = _find_or_create_venv()
+            assert result_path == appdata_venv
+            assert result_python == str(venv_python)
+
+
+class TestBuildCmd:
+    """Testes para _build_cmd com --python apontando para venv"""
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_build_cmd_uv_includes_python_flag(self, mock_run):
+        """Quando uv esta disponivel, _build_cmd inclui --python"""
+        svc = PackageManagerService()
+        svc._uv_executable = "/usr/bin/uv"
+        svc._venv_python = "/fake/venv/bin/python"
+
+        cmd = svc._build_cmd(["install", "flask"])
+        assert "--python" in cmd
+        assert "/fake/venv/bin/python" in cmd
+        assert cmd[0] == "/usr/bin/uv"
+        assert cmd[1] == "pip"
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_build_cmd_pip_fallback_uses_venv_python(self, mock_run):
+        """Sem uv, _build_cmd usa o python do venv"""
+        svc = PackageManagerService()
+        svc._uv_executable = None
+        svc._venv_python = "/fake/venv/bin/python"
+
+        cmd = svc._build_cmd(["install", "flask"])
+        assert cmd[0] == "/fake/venv/bin/python"
+        assert "-m" in cmd
+        assert "pip" in cmd
+        assert "--python" not in cmd
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_build_env_sets_virtual_env(self, mock_run):
+        """_build_env define VIRTUAL_ENV e ajusta PATH"""
+        svc = PackageManagerService()
+        env = svc._build_env()
+        assert env["VIRTUAL_ENV"] == str(svc._venv_path)
+        assert "PYTHONHOME" not in env
+        # PATH deve iniciar com o diretorio Scripts/bin do venv
+        if sys.platform == "win32":
+            expected_dir = str(svc._venv_path / "Scripts")
+        else:
+            expected_dir = str(svc._venv_path / "bin")
+        assert env["PATH"].startswith(expected_dir)
+
+
+class TestVenvProperty:
+    """Testes para a property venv_path do PackageManagerService"""
+
+    def test_venv_path_returns_string(self):
+        """venv_path retorna string com caminho do venv"""
+        svc = PackageManagerService()
+        assert isinstance(svc.venv_path, str)
+        assert len(svc.venv_path) > 0
+
+    def test_venv_path_matches_internal(self):
+        """venv_path retorna o mesmo caminho usado internamente"""
+        svc = PackageManagerService()
+        assert svc.venv_path == str(svc._venv_path)
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_subprocess_receives_env_with_virtual_env(self, mock_run):
+        """subprocess.run recebe env com VIRTUAL_ENV em install_package"""
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        svc = PackageManagerService()
+        svc.install_package("flask")
+        # Verifica que env foi passado ao subprocess.run
+        call_kwargs = mock_run.call_args[1]
+        assert "env" in call_kwargs
+        assert "VIRTUAL_ENV" in call_kwargs["env"]
+
+
+class TestSitePackagesInPath:
+    """Testes para injecao do site-packages no sys.path"""
+
+    def test_ensure_site_packages_adds_to_sys_path(self, tmp_path):
+        """_ensure_site_packages_in_path adiciona site-packages ao sys.path"""
+        svc = PackageManagerService()
+        svc._venv_path = tmp_path
+
+        # Criar site-packages
+        sp = tmp_path / "Lib" / "site-packages"
+        sp.mkdir(parents=True)
+
+        sp_str = str(sp)
+        # Remover do sys.path se ja estiver (cleanup)
+        if sp_str in sys.path:
+            sys.path.remove(sp_str)
+
+        svc._ensure_site_packages_in_path()
+        assert sp_str in sys.path
+
+        # Cleanup
+        sys.path.remove(sp_str)
+
+    def test_ensure_site_packages_noop_if_already_present(self, tmp_path):
+        """_ensure_site_packages_in_path nao duplica se ja esta no sys.path"""
+        svc = PackageManagerService()
+        svc._venv_path = tmp_path
+
+        sp = tmp_path / "Lib" / "site-packages"
+        sp.mkdir(parents=True)
+
+        sp_str = str(sp)
+        sys.path.insert(0, sp_str)
+        count_before = sys.path.count(sp_str)
+
+        svc._ensure_site_packages_in_path()
+        count_after = sys.path.count(sp_str)
+
+        assert count_after == count_before
+
+        # Cleanup
+        while sp_str in sys.path:
+            sys.path.remove(sp_str)
+
+    def test_ensure_site_packages_noop_if_no_site_packages(self, tmp_path):
+        """_ensure_site_packages_in_path nao falha se site-packages nao existe"""
+        svc = PackageManagerService()
+        svc._venv_path = tmp_path
+        # Nao cria site-packages
+        svc._ensure_site_packages_in_path()
+        # Nenhum erro, nada adicionado
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_refresh_import_system_called_after_install(self, mock_run):
+        """_refresh_import_system e chamado apos instalacao bem-sucedida"""
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        svc = PackageManagerService()
+        with patch.object(svc, "_refresh_import_system") as mock_refresh:
+            svc.install_package("flask")
+            mock_refresh.assert_called_once()
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_refresh_import_system_not_called_on_install_failure(self, mock_run):
+        """_refresh_import_system NAO e chamado quando instalacao falha"""
+        mock_run.return_value = MagicMock(returncode=1, stderr="Error")
+        svc = PackageManagerService()
+        with patch.object(svc, "_refresh_import_system") as mock_refresh:
+            svc.install_package("flask")
+            mock_refresh.assert_not_called()
+
+    @patch("src.services.package_manager_service.subprocess.run")
+    def test_refresh_import_system_called_after_uninstall(self, mock_run):
+        """_refresh_import_system e chamado apos desinstalacao bem-sucedida"""
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        svc = PackageManagerService()
+        with patch.object(svc, "_refresh_import_system") as mock_refresh:
+            svc.uninstall_package("flask")
+            mock_refresh.assert_called_once()
 
 
 # ===========================================================================

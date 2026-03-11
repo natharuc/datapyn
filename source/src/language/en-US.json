@@ -694,6 +694,7 @@
   "package_manager": {
     "title": "Package Manager",
     "subtitle": "Search, install and manage Python packages (pip)",
+    "venv_label": "Virtual environment: {path}",
     "placeholder_search": "Enter package name (e.g.: matplotlib, requests, scikit-learn)...",
     "btn_search": "Search",
     "btn_installed": "Installed",

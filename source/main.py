@@ -210,6 +210,16 @@ def main():
 
     splash.set_progress(40, "Initializing application...")
 
+    # Ensure venv site-packages is on sys.path early, so that packages
+    # installed via Package Manager are importable by PythonWorker.
+    # This must happen before MainWindow is created (which may trigger code execution).
+    try:
+        from src.services.package_manager_service import PackageManagerService
+        _pkg_svc = PackageManagerService()
+        del _pkg_svc
+    except Exception:
+        logging.warning("Failed to initialize PackageManagerService for venv path setup")
+
     # Criar janela principal (a parte mais pesada - import deferido)
     from src.ui import MainWindow
     window = MainWindow(splash=splash)

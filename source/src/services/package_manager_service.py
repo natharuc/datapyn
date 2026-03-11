@@ -6,8 +6,10 @@ Responsibilities:
 - Search packages on PyPI
 - Install/uninstall packages
 - Check versions
+- Manage virtual environment for package isolation
 """
 
+import os
 import subprocess
 import sys
 import shutil
@@ -16,7 +18,8 @@ import logging
 import urllib.request
 import urllib.error
 import urllib.parse
-from typing import List, Optional, Dict, Any
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
 from PyQt6.QtCore import QSettings
@@ -28,29 +31,117 @@ logger = logging.getLogger(__name__)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _get_project_root() -> Path:
+    """Return the project root directory (where pyproject.toml lives)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    current = Path(__file__).resolve().parent
+    for _ in range(10):
+        if (current / "pyproject.toml").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return Path.cwd()
+
+
+def _get_appdata_venv_dir() -> Path:
+    """Return venv directory inside user app data (for frozen/EXE mode).
+
+    Windows: %APPDATA%/datapyn/venv
+    macOS:   ~/Library/Application Support/datapyn/venv
+    Linux:   $XDG_DATA_HOME/datapyn/venv  (default ~/.local/share/datapyn/venv)
+    """
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "datapyn" / "venv"
+
+
+def _venv_python_path(venv_path: Path) -> Path:
+    """Return the Python executable path inside a venv."""
+    if sys.platform == "win32":
+        return venv_path / "Scripts" / "python.exe"
+    return venv_path / "bin" / "python"
+
+
+def _find_or_create_venv() -> Tuple[Path, str]:
+    """Locate or create the virtual environment for package operations.
+
+    Strategy:
+    1. If the current process is already running inside a venv
+       (sys.prefix != sys.base_prefix), use that venv.
+    2. In dev mode, look for .venv at the project root.
+    3. In frozen mode (PyInstaller EXE), use %APPDATA%/datapyn/venv.
+    4. If the venv does not exist, create it automatically.
+
+    Returns:
+        Tuple of (venv_root_path, venv_python_executable_path).
+    """
+    is_frozen = getattr(sys, "frozen", False)
+
+    # 1. Already running inside a venv (dev mode)
+    if not is_frozen and sys.prefix != sys.base_prefix:
+        venv_path = Path(sys.prefix)
+        venv_python = _venv_python_path(venv_path)
+        if venv_python.exists():
+            logger.info(f"Using active venv: {venv_path}")
+            return venv_path, str(venv_python)
+
+    # 2/3. Determine target venv directory
+    if is_frozen:
+        venv_path = _get_appdata_venv_dir()
+    else:
+        venv_path = _get_project_root() / ".venv"
+
+    venv_python = _venv_python_path(venv_path)
+
+    if venv_python.exists():
+        logger.info(f"Using existing venv: {venv_path}")
+        return venv_path, str(venv_python)
+
+    # 4. Create venv automatically
+    logger.info(f"Venv not found at {venv_path}, creating automatically...")
+    venv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    uv = shutil.which("uv")
+    try:
+        if uv:
+            subprocess.run(
+                [uv, "venv", str(venv_path)],
+                capture_output=True, text=True, timeout=60,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        else:
+            base_python = shutil.which("python3") or shutil.which("python") or "python"
+            subprocess.run(
+                [base_python, "-m", "venv", str(venv_path)],
+                capture_output=True, text=True, timeout=60,
+                creationflags=CREATE_NO_WINDOW,
+            )
+    except Exception as e:
+        logger.error(f"Failed to create venv: {e}")
+
+    venv_python = _venv_python_path(venv_path)
+    if venv_python.exists():
+        logger.info(f"Venv created successfully: {venv_path}")
+    else:
+        logger.warning(f"Venv python not found after creation attempt: {venv_python}")
+
+    return venv_path, str(venv_python)
+
+
 def _find_uv_executable() -> Optional[str]:
-    """
-    Return uv executable path if available.
-    """
+    """Return uv executable path if available."""
     uv = shutil.which("uv")
     if uv:
         return uv
     return None
 
-
-def _find_python_executable() -> str:
-    """
-    Return Python interpreter path.
-
-    In frozen mode (PyInstaller), sys.executable points to packaged EXE,
-    not to Python. In this case, search for python in system PATH.
-    """
-    if getattr(sys, "frozen", False):
-        python = shutil.which("python") or shutil.which("python3")
-        if python:
-            return python
-        return "python"
-    return sys.executable
 
 
 @dataclass
@@ -96,7 +187,74 @@ class PackageManagerService:
 
     def __init__(self):
         self._uv_executable = _find_uv_executable()
-        self._python_executable = _find_python_executable()
+        self._venv_path, self._venv_python = _find_or_create_venv()
+        self._ensure_site_packages_in_path()
+
+    @property
+    def venv_path(self) -> str:
+        """Return the virtual environment root path as string."""
+        return str(self._venv_path)
+
+    def _get_site_packages_path(self) -> Optional[Path]:
+        """Return the site-packages directory inside the venv."""
+        # Windows layout: Lib/site-packages
+        candidate = self._venv_path / "Lib" / "site-packages"
+        if candidate.exists():
+            return candidate
+        # Linux/macOS layout: lib/pythonX.Y/site-packages
+        for candidate in self._venv_path.glob("lib/python*/site-packages"):
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _ensure_site_packages_in_path(self):
+        """Add the venv site-packages to sys.path so that packages installed
+        via the Package Manager are importable by PythonWorker (exec/eval).
+
+        In dev mode the venv is already active and sys.path is correct.
+        In frozen mode (PyInstaller EXE) the venv lives in AppData and
+        its site-packages is NOT on sys.path by default.
+        """
+        sp = self._get_site_packages_path()
+        if sp is None:
+            return
+        sp_str = str(sp)
+        if sp_str not in sys.path:
+            sys.path.insert(0, sp_str)
+            logger.info(f"Added venv site-packages to sys.path: {sp_str}")
+        # On Windows, native extensions (.pyd) may need DLL search paths.
+        # Add the Scripts directory so that DLLs bundled with packages are found.
+        if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+            scripts_dir = self._venv_path / "Scripts"
+            if scripts_dir.exists():
+                try:
+                    os.add_dll_directory(str(scripts_dir))
+                except OSError:
+                    pass
+
+    def _refresh_import_system(self):
+        """Refresh Python import machinery after installing/uninstalling a package.
+
+        Clears the import finder caches so that newly installed packages
+        are discoverable and uninstalled packages stop being importable.
+        """
+        import importlib
+        importlib.invalidate_caches()
+        # Ensure site-packages is still on sys.path
+        self._ensure_site_packages_in_path()
+
+    def _build_env(self) -> Dict[str, str]:
+        """Build environment dict with VIRTUAL_ENV set and PATH adjusted."""
+        env = os.environ.copy()
+        env["VIRTUAL_ENV"] = str(self._venv_path)
+        if sys.platform == "win32":
+            scripts_dir = str(self._venv_path / "Scripts")
+        else:
+            scripts_dir = str(self._venv_path / "bin")
+        env["PATH"] = scripts_dir + os.pathsep + env.get("PATH", "")
+        # Remove PYTHONHOME if set (can interfere with venv)
+        env.pop("PYTHONHOME", None)
+        return env
 
     # --- Package sources management ---
 
@@ -172,12 +330,13 @@ class PackageManagerService:
         """
         Build command list for pip operations.
         Uses 'uv pip ...' if uv is available, otherwise 'python -m pip ...'.
+        Always targets the managed virtual environment via --python flag.
         Appends --extra-index-url for each configured custom source.
         """
         if self._uv_executable:
-            cmd = [self._uv_executable, "pip"] + pip_args
+            cmd = [self._uv_executable, "pip"] + pip_args + ["--python", self._venv_python]
         else:
-            cmd = [self._python_executable, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
+            cmd = [self._venv_python, "-m", "pip"] + pip_args + ["--disable-pip-version-check"]
 
         # Append extra index URLs (with embedded credentials if configured)
         for source in self.get_sources():
@@ -197,6 +356,7 @@ class PackageManagerService:
                 text=True,
                 timeout=30,
                 creationflags=CREATE_NO_WINDOW,
+                env=self._build_env(),
             )
             if result.returncode != 0:
                 logger.error(f"Error listing packages: {result.stderr}")
@@ -357,6 +517,7 @@ class PackageManagerService:
                 text=True,
                 timeout=15,
                 creationflags=CREATE_NO_WINDOW,
+                env=self._build_env(),
             )
             if result.returncode != 0:
                 return None
@@ -389,9 +550,11 @@ class PackageManagerService:
                 text=True,
                 timeout=120,
                 creationflags=CREATE_NO_WINDOW,
+                env=self._build_env(),
             )
 
             if result.returncode == 0:
+                self._refresh_import_system()
                 return PackageOperationResult(
                     success=True,
                     package_name=package_name,
@@ -446,24 +609,99 @@ class PackageManagerService:
                 text=True,
                 timeout=60,
                 creationflags=CREATE_NO_WINDOW,
+                env=self._build_env(),
             )
 
             if result.returncode == 0:
+                self._refresh_import_system()
                 return PackageOperationResult(
                     success=True,
                     package_name=package_name,
                     operation="uninstall",
                     message=f"Package '{package_name}' removed successfully.",
                 )
-            else:
-                return PackageOperationResult(
-                    success=False,
-                    package_name=package_name,
-                    operation="uninstall",
-                    error=result.stderr or "Unknown error during uninstall.",
+
+            # Packages installed via `uv sync` may lack RECORD files.
+            # When uv fails with a RECORD error, remove the package
+            # directories manually from site-packages as a fallback.
+            stderr = result.stderr or ""
+            if "RECORD" in stderr and self._uv_executable:
+                logger.warning(
+                    f"uv uninstall failed due to missing RECORD for '{package_name}', "
+                    "attempting manual removal from site-packages"
                 )
+                manual_result = self._manual_uninstall(package_name)
+                if manual_result:
+                    return manual_result
+
+            return PackageOperationResult(
+                success=False,
+                package_name=package_name,
+                operation="uninstall",
+                error=stderr or "Unknown error during uninstall.",
+            )
         except Exception as e:
             return PackageOperationResult(success=False, package_name=package_name, operation="uninstall", error=str(e))
+
+    def _manual_uninstall(self, package_name: str) -> Optional[PackageOperationResult]:
+        """Manually remove a package from site-packages when RECORD is missing.
+
+        Packages installed via `uv sync` (from pyproject.toml) do not always
+        write a RECORD file, which causes `uv pip uninstall` to fail. This
+        method finds and removes the package's directories directly.
+
+        Returns a successful PackageOperationResult, or None if removal failed.
+        """
+        import re
+        import shutil as _shutil
+
+        site_packages = self._venv_path / "Lib" / "site-packages"
+        if not site_packages.exists():
+            # Linux/macOS layout
+            for candidate in self._venv_path.glob("lib/python*/site-packages"):
+                site_packages = candidate
+                break
+
+        if not site_packages.exists():
+            logger.error(f"site-packages not found in venv: {self._venv_path}")
+            return None
+
+        # Normalize: PEP 503 - dashes, underscores and dots are equivalent
+        # First replace separators with a single canonical form, then escape, then
+        # replace the canonical form with a character class that matches all variants.
+        canonical = re.sub(r"[-_.]+", "_", package_name.lower())
+        escaped = re.escape(canonical)
+        normalized = escaped.replace("_", "[-_.]+")
+        pattern = re.compile(rf"^{normalized}(-\d|\.dist-info|\.data)", re.IGNORECASE)
+
+        # Also match the top-level package directory (e.g. "fastexcel/")
+        simple_name = canonical
+
+        removed = []
+        for item in site_packages.iterdir():
+            name_lower = item.name.lower()
+            if pattern.match(name_lower) or name_lower == simple_name:
+                try:
+                    if item.is_dir():
+                        _shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                    removed.append(item.name)
+                    logger.info(f"Manually removed: {item}")
+                except Exception as e:
+                    logger.error(f"Failed to remove {item}: {e}")
+
+        if removed:
+            self._refresh_import_system()
+            return PackageOperationResult(
+                success=True,
+                package_name=package_name,
+                operation="uninstall",
+                message=f"Package '{package_name}' removed successfully.",
+            )
+
+        logger.warning(f"No directories found for '{package_name}' in {site_packages}")
+        return None
 
     def update_package(self, package_name: str) -> PackageOperationResult:
         """Update a package to most recent version"""
@@ -475,9 +713,11 @@ class PackageManagerService:
                 text=True,
                 timeout=120,
                 creationflags=CREATE_NO_WINDOW,
+                env=self._build_env(),
             )
 
             if result.returncode == 0:
+                self._refresh_import_system()
                 return PackageOperationResult(
                     success=True,
                     package_name=package_name,
@@ -504,6 +744,7 @@ class PackageManagerService:
                 text=True,
                 timeout=10,
                 creationflags=CREATE_NO_WINDOW,
+                env=self._build_env(),
             )
             return result.returncode == 0
         except Exception:
