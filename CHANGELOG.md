@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.19.0 (2026-03-11)
+
+### Features
+
+- **package-manager**: Add support for virtual environment management
+  ([`b7e1bca`](https://github.com/natharuc/datapyn/commit/b7e1bca01f53dda15caffffad415a36995acad3c))
+
+
 ## v1.18.0 (2026-03-10)
 
 ### Bug Fixes
