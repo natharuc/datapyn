@@ -1435,6 +1435,7 @@ class MainWindow(DockingMainWindow):
         # Connect signals do painel de variaveis
         variables.insert_variable_name.connect(self._on_insert_variable_in_editor)
         variables.delete_variable.connect(self._on_delete_variable)
+        variables.show_in_results.connect(self._on_show_variable_in_results)
 
         r_idx = self._results_stack.addWidget(results)
         o_idx = self._output_stack.addWidget(output)
@@ -5742,6 +5743,29 @@ class MainWindow(DockingMainWindow):
             if var_name in ns:
                 del ns[var_name]
                 current_widget.session.variables_changed.emit(ns)
+
+    def _on_show_variable_in_results(self, var_name: str, value):
+        """Displays a DataFrame or Series in the active session's Results panel"""
+        import pandas as pd
+
+        if isinstance(value, pd.Series):
+            df = value.to_frame(name=var_name)
+        elif isinstance(value, pd.DataFrame):
+            df = value
+        else:
+            return
+
+        current_widget = self._get_current_session_widget()
+        if not current_widget:
+            return
+
+        session_id = current_widget.session.session_id
+        info = self._session_panel_indices.get(session_id)
+        viewer = info["results"] if info else None
+
+        if viewer:
+            viewer.display_dataframe(df, var_name)
+            self.show_panel("results")
 
     def _push_python_namespace(self, namespace: dict):
         """Sends updated Python namespace to code editors.
