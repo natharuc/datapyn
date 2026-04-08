@@ -371,6 +371,7 @@
     "ctx_copy_dtypes": "Copy dtypes",
     "ctx_copy_head": "Copy head(5)",
     "ctx_copy_as_csv": "Copy as CSV",
+    "ctx_show_in_results": "Show in results",
     "ctx_size_info": "Size: {n}",
     "ctx_size_chars": "Size: {n} chars",
     "ctx_remove_variable": "Remove variable"

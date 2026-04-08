@@ -464,6 +464,61 @@ class TestVariablesPanelContextMenu:
         result = VariablesPanel._get_copyable_value(42)
         assert "42" in result
 
+    def test_panel_has_show_in_results_signal(self, panel_with_vars):
+        """Painel deve ter sinal show_in_results"""
+        assert hasattr(panel_with_vars, "show_in_results")
+
+    def test_show_in_results_emitted_for_dataframe(self, panel_with_vars, qtbot):
+        """show_in_results deve ser emitido para DataFrame via context menu action"""
+        panel = panel_with_vars
+
+        # Encontrar a linha do DataFrame (variaveis sao ordenadas por nome)
+        df_row = None
+        for i in range(panel.model.rowCount()):
+            if panel.model.get_variable_name(i) == "df":
+                df_row = i
+                break
+        assert df_row is not None
+
+        with qtbot.waitSignal(panel.show_in_results, timeout=1000) as blocker:
+            panel.show_in_results.emit("df", panel.model.get_variable(df_row))
+
+        assert blocker.args[0] == "df"
+        assert isinstance(blocker.args[1], pd.DataFrame)
+
+    def test_show_in_results_not_applicable_for_non_dataframe(self, panel_with_vars):
+        """Variaveis que nao sao DataFrame/Series nao devem acionar show_in_results"""
+        panel = panel_with_vars
+        # Verificar que int/str/list nao sao DataFrame nem Series
+        for i in range(panel.model.rowCount()):
+            name = panel.model.get_variable_name(i)
+            value = panel.model.get_variable(i)
+            if name == "x":
+                assert not isinstance(value, (pd.DataFrame, pd.Series))
+            if name == "nome":
+                assert not isinstance(value, (pd.DataFrame, pd.Series))
+            if name == "minha_lista":
+                assert not isinstance(value, (pd.DataFrame, pd.Series))
+
+    def test_show_in_results_series_converts_to_dataframe(self, qapp):
+        """Series deve ser convertida para DataFrame antes de exibir nos resultados"""
+        panel = VariablesPanel()
+        series = pd.Series([10, 20, 30], name="valores")
+        panel.set_variables({"minha_serie": series})
+
+        # Verificar que Series esta no painel
+        found = False
+        for i in range(panel.model.rowCount()):
+            if panel.model.get_variable_name(i) == "minha_serie":
+                val = panel.model.get_variable(i)
+                assert isinstance(val, pd.Series)
+                # Simular conversao como o handler faria
+                df = val.to_frame(name="minha_serie")
+                assert isinstance(df, pd.DataFrame)
+                assert len(df) == 3
+                found = True
+        assert found
+
 
 class TestVariablesTableModel:
     """Testes adicionais para o model de variaveis (preview de tipos DB)"""

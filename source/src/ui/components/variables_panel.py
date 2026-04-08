@@ -176,6 +176,7 @@ class VariablesPanel(QWidget):
     variable_double_clicked = pyqtSignal(str, object)  # name, value (to open in viewer)
     insert_variable_name = pyqtSignal(str)  # name (to insert in focused editor)
     delete_variable = pyqtSignal(str)  # name (to remove from namespace)
+    show_in_results = pyqtSignal(str, object)  # name, value (DataFrame/Series to display in results)
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -432,6 +433,13 @@ class VariablesPanel(QWidget):
 
         # Type-specific options
         if isinstance(value, pd.DataFrame):
+            act_show = menu.addAction(S.variables_panel.ctx_show_in_results)
+            act_show.triggered.connect(
+                lambda: self.show_in_results.emit(name, value)
+            )
+
+            menu.addSeparator()
+
             act_shape = menu.addAction(S.variables_panel.ctx_shape_info.format(rows=value.shape[0], cols=value.shape[1]))
             act_shape.setEnabled(False)
 
@@ -454,6 +462,17 @@ class VariablesPanel(QWidget):
             act_csv.triggered.connect(
                 lambda: QApplication.clipboard().setText(value.to_csv(index=False))
             )
+
+        elif isinstance(value, pd.Series):
+            act_show = menu.addAction(S.variables_panel.ctx_show_in_results)
+            act_show.triggered.connect(
+                lambda: self.show_in_results.emit(name, value)
+            )
+
+            menu.addSeparator()
+
+            act_len = menu.addAction(S.variables_panel.ctx_size_info.format(n=len(value)))
+            act_len.setEnabled(False)
 
         elif isinstance(value, (list, dict, tuple)):
             act_len = menu.addAction(S.variables_panel.ctx_size_info.format(n=len(value)))
