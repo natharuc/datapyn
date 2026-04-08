@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.20.0 (2026-04-08)
+
+### Features
+
+- **variables-panel**: Add "Show in results" action for DataFrame/Series
+  ([`e27e6d8`](https://github.com/natharuc/datapyn/commit/e27e6d8dbb6ebff20edc5fd616e40e35790c22ee))
+
+
 ## v1.19.0 (2026-03-11)
 
 ### Features
