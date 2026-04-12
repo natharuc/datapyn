@@ -420,6 +420,8 @@
     "tooltip_cancel": "Cancelar execucao (Esc)",
     "tooltip_run": "Executar (F5)",
     "tooltip_remove": "Remover bloco",
+    "tooltip_maximize": "Maximizar bloco (focar)",
+    "tooltip_restore": "Restaurar todos os blocos",
     "status_waiting": "Aguardando",
     "status_running": "Executando",
     "status_running_elapsed": "{status} {elapsed}",

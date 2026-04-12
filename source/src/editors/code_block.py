@@ -396,6 +396,7 @@ class CodeBlock(QFrame):
     connection_name_changed = pyqtSignal(object, str)  # self, connection_name - when block connection changes
     database_changed = pyqtSignal(object, str)  # self, database_name - when block database changes
     completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
+    maximize_requested = pyqtSignal(object)  # self - toggle maximize/restore
 
     LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00"}
     
@@ -423,6 +424,7 @@ class CodeBlock(QFrame):
         self._block_name = ""  # Block name (namespace prefix)
         self._is_copilot_editing = False  # Copilot is editing this block
         self._copilot_editing_timer = None  # Auto-dismiss timer
+        self._is_maximized = False  # Block is in maximized/focus mode
 
         self._setup_ui()
         self._connect_signals()
@@ -654,6 +656,24 @@ class CodeBlock(QFrame):
         """)
         control_layout.addWidget(self.name_input)
 
+        # Maximize button (expand/collapse icon)
+        self.maximize_btn = QPushButton()
+        self.maximize_btn.setIcon(qta.icon("mdi.arrow-expand", color=colors.text_tertiary))
+        self.maximize_btn.setFixedSize(CTRL_H, CTRL_H)
+        self.maximize_btn.setToolTip(S.block.tooltip_maximize)
+        self.maximize_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.maximize_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: rgba(100, 100, 255, 0.15);
+            }}
+        """)
+        control_layout.addWidget(self.maximize_btn)
+
         # Remove button (discrete X icon)
         self.remove_btn = QPushButton()
         self.remove_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary))
@@ -715,6 +735,7 @@ class CodeBlock(QFrame):
         self.db_panel.database_dropped.connect(self._on_database_dropped)
         self.db_panel.database_selected.connect(self._on_database_selected)
         self.run_btn.clicked.connect(self._on_run_btn_clicked)
+        self.maximize_btn.clicked.connect(lambda: self.maximize_requested.emit(self))
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         self.editor.execute_requested.connect(lambda sel: self.execute_requested.emit(self, sel))
         self.editor.SCN_FOCUSIN.connect(self._on_focus_in)
@@ -733,6 +754,37 @@ class CodeBlock(QFrame):
         self._is_focused = False
         self._update_style()
         self.focus_changed.emit(self, False)
+
+    def set_maximized(self, maximized: bool):
+        """Update visual state for maximized/normal mode."""
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        self._is_maximized = maximized
+        if maximized:
+            self.maximize_btn.setIcon(qta.icon("mdi.arrow-collapse", color=colors.text_tertiary))
+            self.maximize_btn.setToolTip(S.block.tooltip_restore)
+            # Remove fixed height so editor fills all available space
+            self.editor_container.setMinimumHeight(0)
+            self.editor_container.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+            self.editor_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16777215)
+            self.resize_handle.hide()
+            # Remove border-radius for full-screen look
+            self.setStyleSheet(self.styleSheet().replace('border-radius: 8px', 'border-radius: 0px'))
+        else:
+            self.maximize_btn.setIcon(qta.icon("mdi.arrow-expand", color=colors.text_tertiary))
+            self.maximize_btn.setToolTip(S.block.tooltip_maximize)
+            self.editor_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.resize_handle.show()
+            # Restore border-radius
+            self.setStyleSheet(self.styleSheet().replace('border-radius: 0px', 'border-radius: 8px'))
+
+    @property
+    def is_maximized(self) -> bool:
+        return self._is_maximized
 
     def _on_run_btn_clicked(self):
         """Handle run button click - execute or cancel depending on state"""

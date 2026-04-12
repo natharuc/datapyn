@@ -835,6 +835,115 @@ class TestFileDragAndDrop:
         assert "pd.read_json('/path/to/data.json')" in code
         assert "df = " in code
 
+
+class TestBlockMaximize:
+    """Testes da funcionalidade de maximizar bloco"""
+
+    @pytest.fixture
+    def theme_manager(self):
+        return ThemeManager()
+
+    @pytest.fixture
+    def editor(self, theme_manager, qtbot):
+        editor = BlockEditor(theme_manager=theme_manager)
+        qtbot.addWidget(editor)
+        return editor
+
+    def test_maximize_hides_other_blocks(self, editor):
+        """Maximizar um bloco deve esconder todos os outros"""
+        block1 = editor._blocks[0]
+        block2 = editor.add_block(code="SELECT 2")
+        block3 = editor.add_block(code="SELECT 3")
+
+        editor._toggle_maximize_block(block2)
+
+        assert not block2.isHidden()
+        assert block1.isHidden()
+        assert block3.isHidden()
+        assert editor.add_button_container.isHidden()
+
+    def test_maximize_sets_block_state(self, editor):
+        """Maximizar deve marcar o bloco como maximizado"""
+        block = editor._blocks[0]
+        editor.add_block()
+
+        editor._toggle_maximize_block(block)
+
+        assert block.is_maximized
+        assert editor._maximized_block == block
+
+    def test_restore_shows_all_blocks(self, editor):
+        """Restaurar deve mostrar todos os blocos novamente"""
+        block1 = editor._blocks[0]
+        block2 = editor.add_block(code="SELECT 2")
+
+        editor._toggle_maximize_block(block1)
+        editor._toggle_maximize_block(block1)  # Toggle again to restore
+
+        assert not block1.isHidden()
+        assert not block2.isHidden()
+        assert not editor.add_button_container.isHidden()
+        assert not block1.is_maximized
+        assert editor._maximized_block is None
+
+    def test_maximize_different_block_switches(self, editor):
+        """Maximizar outro bloco deve trocar o bloco maximizado"""
+        block1 = editor._blocks[0]
+        block2 = editor.add_block(code="SELECT 2")
+        block3 = editor.add_block(code="SELECT 3")
+
+        editor._toggle_maximize_block(block1)
+        assert block1.is_maximized
+
+        editor._toggle_maximize_block(block2)
+        assert block2.is_maximized
+        assert not block1.is_maximized
+        assert block1.isHidden()
+        assert not block2.isHidden()
+        assert block3.isHidden()
+
+    def test_remove_maximized_block_restores(self, editor):
+        """Remover bloco maximizado deve restaurar os outros"""
+        block1 = editor._blocks[0]
+        block2 = editor.add_block(code="SELECT 2")
+        block3 = editor.add_block(code="SELECT 3")
+
+        editor._toggle_maximize_block(block2)
+        editor.remove_block(block2)
+
+        assert not block1.isHidden()
+        assert not block3.isHidden()
+        assert not editor.add_button_container.isHidden()
+        assert editor._maximized_block is None
+
+    def test_escape_key_restores_maximize(self, editor, qtbot):
+        """Pressionar Escape deve sair do modo maximizado"""
+        from PyQt6.QtTest import QTest
+
+        block1 = editor._blocks[0]
+        block2 = editor.add_block(code="SELECT 2")
+
+        editor._toggle_maximize_block(block1)
+        assert editor._maximized_block is not None
+
+        QTest.keyClick(editor, Qt.Key.Key_Escape)
+
+        assert editor._maximized_block is None
+        assert not block1.isHidden()
+        assert not block2.isHidden()
+
+    def test_is_maximized_property(self, editor):
+        """Propriedade is_maximized do editor deve refletir o estado"""
+        assert not editor.is_maximized
+
+        block = editor._blocks[0]
+        editor.add_block()
+        editor._toggle_maximize_block(block)
+        assert editor.is_maximized
+
+        editor._restore_all_blocks()
+        assert not editor.is_maximized
+
     def test_generate_import_code_xlsx(self, editor):
         """Deve gerar codigo de importacao para XLSX"""
         code = editor._generate_import_code("/path/to/data.xlsx")

@@ -1308,7 +1308,7 @@ class CopilotChatPanel(QWidget):
         
         # Enable JavaScript
         settings = self._chat_webview.page().settings()
-        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         
         # Setup QWebChannel for Python <-> JS communication
@@ -1566,164 +1566,43 @@ class CopilotChatPanel(QWidget):
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with current editor context and available tools."""
-        parts = [
-            "You are an AI coding assistant in DataPyn, a Python/SQL data analysis IDE.",
-            "",
-            "## CRITICAL: HOW DATAPYN DATA FLOW WORKS",
-            "",
-            "### Block Names = Variable Names",
-            "Every block has a NAME. When a SQL block executes, the result DataFrame is stored with that name.",
-            "",
-            "Example:",
-            "- Block named 'vendas' with SQL `SELECT * FROM sales` -> Creates DataFrame `vendas`",
-            "- Block named 'clientes' with SQL `SELECT * FROM customers` -> Creates DataFrame `clientes`",
-            "- Python block can use: `vendas.head()`, `clientes['name']`, `pd.merge(vendas, clientes, ...)`",
-            "",
-            "### ALWAYS give semantic names to SQL blocks!",
-            "- GOOD: name='vendas', name='produtos', name='pedidos'",
-            "- BAD: no name (defaults to 'block1', 'block2' which is confusing)",
-            "",
-            "### Multi-block workflow example:",
-            "```",
-            "### Block 'vendas' (SQL)",
-            "SELECT produto, SUM(valor) as total FROM pedidos GROUP BY produto",
-            "",
-            "### Block 'grafico' (Python)",
-            "import matplotlib.pyplot as plt",
-            "# 'vendas' is the DataFrame from the SQL block above!",
-            "plt.bar(vendas['produto'], vendas['total'])",
-            "plt.title('Vendas por Produto')",
-            "plt.show()",
-            "```",
-            "",
-            "## PLANNING FIRST - THINK BEFORE ACTING",
-            "Before creating ANY block:",
-            "1. Use 'think' tool to plan your approach",
-            "2. Determine how many blocks you need (SQL for data, Python for visualization)",
-            "3. Choose semantic names for each block",
-            "4. Create blocks ONE AT A TIME with proper names",
-            "",
-            "## VERIFYING RESULTS",
-            "After executing a block, use 'get_execution_results' to:",
-            "- See the output panel (print statements, logs)",
-            "- See the DataFrame in the results grid (preview)",
-            "- Verify the execution worked correctly",
-            "",
-            "## NOTIFYING THE USER",
-            "Use 'notify_user' when:",
-            "- Task is complete ('Analysis done!', success=True)",
-            "- Need user attention ('Please check the chart', success=True)",
-            "- Found an issue ('Error in query', success=False)",
-            "",
-            "## NEVER DELETE BLOCKS",
-            "- If you made a mistake, use 'edit_current_block' to FIX it",
-            "- NEVER use delete_block unless the user explicitly asks",
-            "",
-            "## CRITICAL RULES",
-            "1. THINK FIRST: Always use 'think' tool before acting",
-            "2. NAME BLOCKS: Always provide a semantic 'name' parameter for SQL blocks",
-            "3. ONE BLOCK AT A TIME: Create/edit ONE block per tool call",
-            "4. VERIFY: Use 'get_execution_results' after execution to check results",
-            "5. COMPLETE CODE: Put ENTIRE code in ONE block",
-            "6. NO DELETE: Never delete blocks unless explicitly asked",
-            "",
-            "## MAIN TOOLS",
-            "- **think**: ALWAYS use first to plan",
-            "- **write_and_run**: Create block with name, write code, execute (most common)",
-            "- **create_block**: Create block with name without executing (for multi-block setup)",
-            "- **edit_current_block**: Edit the focused block (full replace)",
-            "- **edit_block_lines**: Edit specific lines in a block (replace/insert/delete by line range)",
-            "- **get_block_code**: Read the full code of any block by index",
-            "- **search_in_code**: Find text across all blocks",
-            "- **rename_block**: Rename a block (changes the DataFrame variable name)",
-            "- **get_execution_results**: See output and DataFrame after execution",
-            "- **inspect_variable**: Read the value of a variable already in memory (no re-execution needed)",
-            "- **get_dataframe_info**: Get column names, types, shape of a DataFrame in memory",
-            "- **notify_user**: Show a notification to the user",
-            "- **run_all_blocks**: Execute ALL blocks in sequence",
-            "",
-            "## EDITING CODE",
-            "- To REPLACE entire block: use **edit_current_block** or **edit_block**",
-            "- To EDIT specific lines: use **edit_block_lines** with mode='replace', 'insert', or 'delete'",
-            "- To READ a block's code: use **get_block_code** (returns full code, not truncated)",
-            "- To FIND code: use **search_in_code** to locate variables/functions across blocks",
-            "",
-            "## ACCESSING DATA IN MEMORY",
-            "- Use **inspect_variable** to see a variable's value without re-executing",
-            "- Use **get_dataframe_info** to see DataFrame structure (columns, types, nulls)",
-            "- Use **get_variables** to list all variables in the session",
-            "- Use **get_execution_results** to see the last execution output",
-            "",
-            "## WORKFLOW",
-            "1. 'think' to plan",
-            "2. 'write_and_run' with name='dados' to create SQL block",
-            "3. 'get_execution_results' to verify",
-            "4. 'write_and_run' with name='grafico' to create Python block using 'dados'",
-            "5. 'get_execution_results' to verify",
-            "6. 'notify_user' when done",
-            "",
-            "## SUPPORTED LANGUAGES",
-            "- **sql**: Database queries -> result stored as DataFrame with block name",
-            "- **python**: Data analysis, pandas, matplotlib, numpy, etc.",
-            "",
-            "## RULES",
-            "- ONLY use tools listed below. 'view', 'grep', 'read_file' DO NOT EXIST.",
-            "- Respond in the user's language.",
-            "",
-        ]
+        from src.services.copilot.system_prompt import (
+            SYSTEM_PROMPT_TEMPLATE, build_tools_list, build_context_section,
+        )
 
-        # Add available tools information with descriptions - VERY EXPLICIT
+        # Build tools list
+        tools_list = ""
         if self._mcp_server:
             try:
                 tools = self._mcp_server.tool_registry.list_tools()
-                
-                # Highlight the main tools
-                parts.append("## PREFERRED TOOLS:")
-                parts.append("  - **write_and_run**: Creates block with name, writes code, executes")
-                parts.append("  - **edit_current_block**: BEST for editing user's current block (full replace)")
-                parts.append("  - **edit_block_lines**: BEST for small edits (replace/insert/delete specific lines)")
-                parts.append("  - **get_block_code**: Read the full code of any block by index")
-                parts.append("  - **get_execution_results**: See output and DataFrame after execution")
-                parts.append("  - **inspect_variable**: Read variable value already in memory")
-                parts.append("  - **notify_user**: Alert the user when task is done")
-                parts.append("")
-                
-                parts.append("## ALL AVAILABLE TOOLS:")
-                tool_info = []
-                for t in tools:
-                    name = t.get("name", "")
-                    desc = t.get("description", "")
-                    tool_info.append(f"  - {name}: {desc}")
-                parts.extend(tool_info)
-                parts.append("")
-                parts.append(f"Total: {len(tools)} tools available")
-                parts.append("")
+                tools_list = build_tools_list(tools)
             except Exception as e:
                 logger.debug(f"Error listing tools: {e}")
 
-        # Add context from MCP if available
+        # Build context section
+        context_json = ""
+        schema_text = ""
         if self._mcp_server:
-            # Get editor context (blocks, session info)
             try:
                 context_result = self._mcp_server.tool_registry.execute("get_context", {})
                 if "content" in context_result:
-                    context_text = context_result["content"][0].get("text", "")
-                    if context_text and context_text != "{}":
-                        parts.append(f"## Current Editor Context:\n```json\n{context_text}\n```")
+                    context_json = context_result["content"][0].get("text", "")
             except Exception as e:
                 logger.debug(f"Error getting editor context: {e}")
 
-            # Get database schema if connected
             try:
                 schema_result = self._mcp_server.tool_registry.execute("read_schema", {})
                 if "content" in schema_result:
                     schema_text = schema_result["content"][0].get("text", "")
-                    if schema_text and "No schema" not in schema_text:
-                        parts.append(f"## Database Schema:\n{schema_text}")
             except Exception as e:
                 logger.debug(f"Error getting schema: {e}")
 
-        return "\n".join(parts)
+        context_section = build_context_section(context_json, schema_text)
+
+        return SYSTEM_PROMPT_TEMPLATE.format(
+            tools_list=tools_list,
+            context_section=context_section,
+        )
 
     def _add_message(self, role: str, content: str):
         """Add a message to the chat."""
@@ -1849,9 +1728,24 @@ class CopilotChatPanel(QWidget):
         """Handle tool call from Copilot - show in WebView."""
         logger.info(f"Tool called: {tool_name}({arguments})")
         
-        # Show tool use in WebView
+        # Build a short summary of the arguments for display
+        arg_summary = ""
+        if arguments:
+            parts = []
+            for key, val in arguments.items():
+                if key in ("thought",):
+                    continue  # Skip verbose params
+                val_str = str(val)
+                if len(val_str) > 40:
+                    val_str = val_str[:37] + "..."
+                parts.append(f'{key}={val_str}')
+            if parts:
+                arg_summary = ", ".join(parts[:3])
+
+        # Show tool use in WebView with argument summary
         tool_name_escaped = json.dumps(tool_name)
-        self._run_chat_js(f"addToolUse({tool_name_escaped})")
+        arg_summary_escaped = json.dumps(arg_summary)
+        self._run_chat_js(f"addToolUse({tool_name_escaped}, {arg_summary_escaped})")
         
         # Track by name for later result update
         self._active_tool_calls[tool_name] = True
@@ -1863,10 +1757,25 @@ class CopilotChatPanel(QWidget):
         """Handle tool execution result."""
         logger.info(f"Tool result: {tool_name} -> {result[:100]}...")
         
-        # Update tool status in WebView
+        # Build short result preview (first meaningful line, max 80 chars)
+        result_preview = ""
         is_error = "error" in result.lower()[:100]
+        if result:
+            # Get first non-empty, non-decoration line
+            for line in result.split("\n"):
+                line = line.strip()
+                if line and not line.startswith("```") and not line.startswith("##"):
+                    result_preview = line[:80]
+                    if len(line) > 80:
+                        result_preview += "..."
+                    break
+
+        # Update tool status in WebView
         tool_name_escaped = json.dumps(tool_name)
-        self._run_chat_js(f"updateToolStatus({tool_name_escaped}, 'done', {str(is_error).lower()})")
+        result_preview_escaped = json.dumps(result_preview)
+        self._run_chat_js(
+            f"updateToolStatus({tool_name_escaped}, 'done', {str(is_error).lower()}, {result_preview_escaped})"
+        )
 
     def _on_thinking(self, text: str):
         """Handle reasoning/thinking text from Copilot."""

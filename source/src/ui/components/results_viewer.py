@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
 )
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer, QThread
-from PyQt6.QtGui import QColor, QImage, QPixmap, QFont
+from PyQt6.QtGui import QColor, QImage, QPixmap, QFont, QKeySequence, QShortcut
 import pandas as pd
 import json
 from typing import Optional
@@ -342,6 +342,10 @@ class ResultsViewer(QWidget):
         # Page 0 - Table
         self.table_view = QTableView()
         self._apply_table_style()
+
+        # Ctrl+C shortcut on the table view to copy selection
+        copy_shortcut = QShortcut(QKeySequence.StandardKey.Copy, self.table_view)
+        copy_shortcut.activated.connect(self._copy_selection_to_clipboard)
 
         self.model = PandasModel(theme_manager=self.theme_manager)
         self.table_view.setModel(self.model)
@@ -1239,6 +1243,64 @@ class ResultsViewer(QWidget):
             text = self.current_df.to_string(index=False)
             QApplication.instance().clipboard().setText(text)
             self._show_clipboard_success("Table")
+
+    def _copy_selection_to_clipboard(self):
+        """Copy selected cells/rows/columns from the table view to clipboard.
+
+        Builds a tab-separated text from the selection, preserving the
+        row/column structure. Includes column headers when full columns
+        are selected.
+        """
+        from PyQt6.QtWidgets import QApplication
+
+        selection = self.table_view.selectionModel()
+        if not selection or not selection.hasSelection():
+            self._copy_to_clipboard()
+            return
+
+        indexes = selection.selectedIndexes()
+        if not indexes:
+            self._copy_to_clipboard()
+            return
+
+        # Collect unique rows/cols and sort
+        rows = sorted(set(idx.row() for idx in indexes))
+        cols = sorted(set(idx.column() for idx in indexes))
+
+        # Build header line with column names
+        lines = []
+        if self.current_df is not None:
+            col_names = [str(self.current_df.columns[c]) for c in cols]
+            lines.append("\t".join(col_names))
+
+        # Build index set for fast lookup
+        selected_set = set((idx.row(), idx.column()) for idx in indexes)
+
+        # Build data rows
+        for row in rows:
+            cells = []
+            for col in cols:
+                if (row, col) in selected_set:
+                    idx = self.model.index(row, col)
+                    value = self.model.data(idx, Qt.ItemDataRole.DisplayRole)
+                    cells.append(str(value) if value is not None else "")
+                else:
+                    cells.append("")
+            lines.append("\t".join(cells))
+
+        text = "\n".join(lines)
+        QApplication.instance().clipboard().setText(text)
+
+        n_rows = len(rows)
+        n_cols = len(cols)
+        self._show_clipboard_success(f"{n_rows} x {n_cols}")
+
+    def keyPressEvent(self, event):
+        """Handle Ctrl+C to copy selected cells from the grid."""
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self._copy_selection_to_clipboard()
+            return
+        super().keyPressEvent(event)
 
     def _save_image(self):
         """Save displayed image to file"""

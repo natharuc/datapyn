@@ -696,11 +696,12 @@ class TestMCPToolExecuteBlock:
         assert "error" in result
 
     def test_execute_block_no_index(self, qapp):
-        """execute_block without block_index should return error."""
-        registry, _, _ = self._make_registry_with_session()
+        """execute_block without block_index should use focused block."""
+        registry, block, block_editor = self._make_registry_with_session()
 
         result = registry._execute_block({})
-        assert "error" in result
+        assert "content" in result
+        block_editor.execute_block.assert_called_once_with(block)
 
     def test_run_current_block_uses_focused(self, qapp):
         """run_current_block should execute the focused block."""
@@ -837,13 +838,13 @@ class TestReadOutput:
         assert "line0" in text
         assert "line9" in text
 
-    def test_read_output_tool_registered(self, qapp):
-        """read_output should be registered as a tool."""
+    def test_get_execution_results_tool_registered(self, qapp):
+        """get_execution_results should be registered as a tool."""
         from src.services.copilot.mcp_tools import MCPToolRegistry
         registry = MCPToolRegistry(parent=None)
 
         tools = {t["function"]["name"] for t in registry.list_tools_openai()}
-        assert "read_output" in tools
+        assert "get_execution_results" in tools
 
     def test_read_output_total_line_count(self, qapp):
         """read_output should include total line count."""
@@ -899,26 +900,25 @@ class TestToolGuideInContext:
         assert "tool_guide" in context
 
     def test_tool_guide_has_categories(self, qapp):
-        """tool_guide should have the expected categories."""
+        """tool_guide should mention key workflow guidance."""
         registry = self._make_registry()
         result = registry._get_context({})
         context = json.loads(result["content"][0]["text"])
         guide = context["tool_guide"]
 
-        expected_categories = [
-            "quick_validation", "visible_code", "read_state",
-            "database", "fix_errors",
-        ]
-        for cat in expected_categories:
-            assert cat in guide, f"Missing category: {cat}"
-            assert "tools" in guide[cat]
-            assert "when" in guide[cat]
+        assert isinstance(guide, str)
+        assert "block_map" in guide
+        assert "edit_block" in guide
+        assert "block_name" in guide
+        assert "write_and_run" in guide
+        assert "run_silent" in guide
 
-    def test_tool_guide_quick_validation_has_run_silent_query(self, qapp):
-        """quick_validation category should include run_silent_query."""
+    def test_tool_guide_mentions_edit_vs_create(self, qapp):
+        """tool_guide should emphasize editing existing blocks over creating new ones."""
         registry = self._make_registry()
         result = registry._get_context({})
         context = json.loads(result["content"][0]["text"])
         guide = context["tool_guide"]
 
-        assert "run_silent_query" in guide["quick_validation"]["tools"]
+        assert "UPDATE" in guide
+        assert "CREATE" in guide

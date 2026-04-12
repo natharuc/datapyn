@@ -76,22 +76,17 @@ class MCPToolRegistry(QObject):
 
     def _register_tools(self) -> None:
         """Register all available tools."""
-        # THINK tool - most important, should be used first
+        # === META ===
         self._register(MCPTool(
             name="think",
             description=(
-                "Use this tool to PLAN and REASON about your approach BEFORE taking any action. "
-                "Think step by step about: 1) What the user wants 2) Which TOOL CATEGORY to use: "
-                "- run_silent_query for quick invisible SQL checks "
-                "- write_and_run/create_block for visible code the user should see "
-                "- read_output/inspect_variable to understand current state "
-                "- fix_and_run to fix errors in existing blocks "
-                "3) The data flow (what SQL queries, what Python processing)."
+                "Plan and reason about your approach BEFORE acting. "
+                "Decide: silent tools for exploration, visible tools for user-facing code."
             ),
             parameters={
                 "thought": {
                     "type": "string",
-                    "description": "Your reasoning about how to approach the task. Be specific: mention tables, columns, SQL queries, Python libraries you'll use.",
+                    "description": "Your reasoning about how to approach the task.",
                 },
             },
             handler=self._think,
@@ -99,7 +94,7 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="create_tab",
-            description="Create a new editor tab (session) in DataPyn.",
+            description="Create a new editor tab (session).",
             parameters={
                 "title": {
                     "type": "string",
@@ -110,21 +105,196 @@ class MCPToolRegistry(QObject):
         ))
 
         self._register(MCPTool(
-            name="create_block",
-            description="CREATE a new code block and WRITE code into it. IMPORTANT: The block NAME becomes the DataFrame variable name. Example: block named 'vendas' with SQL creates DataFrame `vendas` that Python can use.",
+            name="notify_user",
+            description="Show a toast notification. Use when task is complete or needs attention.",
+            parameters={
+                "title": {
+                    "type": "string",
+                    "description": "Short title (e.g., 'Analysis Complete').",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The notification message.",
+                },
+                "success": {
+                    "type": "boolean",
+                    "description": "True for success (green), False for error (red). Default: True.",
+                    "optional": True,
+                },
+            },
+            handler=self._notify_user,
+        ))
+
+        # === OBSERVE (read state) ===
+        self._register(MCPTool(
+            name="get_context",
+            description="Get current state: all blocks (with full code, name, language, index), connection, variables, schema. Use FIRST to orient yourself.",
+            parameters={},
+            handler=self._get_context,
+        ))
+
+        self._register(MCPTool(
+            name="get_block_code",
+            description="Get the FULL code of a block by name or index. If neither given, returns focused block.",
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name (e.g., 'vendas'). Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based). Use block_name instead when possible.",
+                    "optional": True,
+                },
+            },
+            handler=self._get_block_code,
+        ))
+
+        self._register(MCPTool(
+            name="get_execution_results",
+            description="Get execution output: printed text, DataFrame preview, errors. Use after running a block.",
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name. Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based). Omit to get last execution results.",
+                    "optional": True,
+                },
+            },
+            handler=self._get_execution_results,
+        ))
+
+        self._register(MCPTool(
+            name="get_variables",
+            description="List all Python variables in the session namespace with types and shapes.",
+            parameters={},
+            handler=self._get_variables,
+        ))
+
+        self._register(MCPTool(
+            name="inspect_variable",
+            description="Get the actual VALUE of a variable (DataFrame: first N rows, others: repr).",
+            parameters={
+                "name": {
+                    "type": "string",
+                    "description": "Variable name (e.g., 'vendas', 'df').",
+                },
+                "max_rows": {
+                    "type": "integer",
+                    "description": "Max rows for DataFrames (default: 20).",
+                    "optional": True,
+                },
+            },
+            handler=self._inspect_variable,
+        ))
+
+        self._register(MCPTool(
+            name="get_dataframe_info",
+            description="Get DataFrame structure: columns, dtypes, shape, nulls, sample values.",
+            parameters={
+                "name": {
+                    "type": "string",
+                    "description": "DataFrame variable name.",
+                },
+            },
+            handler=self._get_dataframe_info,
+        ))
+
+        self._register(MCPTool(
+            name="get_selection",
+            description="Get the currently selected text in the focused block.",
+            parameters={},
+            handler=self._get_selection,
+        ))
+
+        self._register(MCPTool(
+            name="search_in_code",
+            description="Search for text across ALL blocks. Returns matching lines with block index and line numbers.",
+            parameters={
+                "query": {
+                    "type": "string",
+                    "description": "Text to search for (case-insensitive).",
+                },
+            },
+            handler=self._search_in_code,
+        ))
+
+        # === EXECUTE SILENTLY (invisible to user) ===
+        self._register(MCPTool(
+            name="run_silent_query",
+            description=(
+                "Execute SQL WITHOUT creating a visible block. Returns results directly. "
+                "Use for: row counts, checking values, exploring data, validating queries."
+            ),
+            parameters={
+                "query": {
+                    "type": "string",
+                    "description": "SQL query to execute.",
+                },
+            },
+            handler=self._run_silent_query,
+        ))
+
+        self._register(MCPTool(
+            name="run_silent_python",
+            description=(
+                "Execute Python WITHOUT creating a visible block. Runs in session namespace "
+                "(accesses existing DataFrames/variables). Returns stdout + result. "
+                "Use for: data exploration, calculations, type checks, testing code."
+            ),
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "Python code to execute. Use print() for output.",
+                },
+            },
+            handler=self._run_silent_python,
+        ))
+
+        # === EXECUTE VISIBLY (user sees the block) ===
+        self._register(MCPTool(
+            name="write_and_run",
+            description="Create a new block, write code, execute, and return results - all in one call. Block NAME becomes the DataFrame variable for SQL. MOST COMMON tool.",
             parameters={
                 "language": {
                     "type": "string",
-                    "description": "Block language: 'python' for data analysis/pandas/matplotlib, 'sql' for database queries.",
+                    "description": "'python' or 'sql'.",
                     "enum": ["python", "sql", "cross"],
                 },
                 "code": {
                     "type": "string",
-                    "description": "The actual code to write in the block. SQL queries or Python code with imports.",
+                    "description": "Complete executable code.",
                 },
                 "name": {
                     "type": "string",
-                    "description": "REQUIRED: Semantic name for the block (e.g., 'vendas', 'clientes', 'grafico'). This becomes the DataFrame variable name for SQL blocks. Use snake_case, no spaces.",
+                    "description": "Semantic block name (e.g., 'vendas', 'grafico'). For SQL: becomes DataFrame variable.",
+                    "optional": True,
+                },
+            },
+            handler=self._write_and_run,
+        ))
+
+        self._register(MCPTool(
+            name="create_block",
+            description="Create a new block and write code WITHOUT executing. Use for multi-block setup before running all.",
+            parameters={
+                "language": {
+                    "type": "string",
+                    "description": "'python' or 'sql'.",
+                    "enum": ["python", "sql", "cross"],
+                },
+                "code": {
+                    "type": "string",
+                    "description": "Code to write in the block.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Semantic block name. For SQL: becomes DataFrame variable.",
                     "optional": True,
                 },
             },
@@ -132,28 +302,191 @@ class MCPToolRegistry(QObject):
         ))
 
         self._register(MCPTool(
-            name="edit_block",
-            description="MODIFY/REWRITE the code in an existing block. Use this to fix errors, improve code, or completely replace the content. The new code you provide will replace the current code in the block.",
+            name="execute_block",
+            description="Run an existing block by name or index and return results. If neither given, runs focused block.",
             parameters={
-                "code": {
+                "block_name": {
                     "type": "string",
-                    "description": "The new code to write in the block. This REPLACES all existing code.",
+                    "description": "Block name (e.g., 'vendas'). Preferred over block_index.",
+                    "optional": True,
                 },
                 "block_index": {
                     "type": "integer",
-                    "description": "Index of the block to edit (0-based). Use get_context to see block indices.",
+                    "description": "Block index (0-based). Use block_name instead when possible.",
+                    "optional": True,
+                },
+            },
+            handler=self._execute_block,
+        ))
+
+        self._register(MCPTool(
+            name="run_all_blocks",
+            description="Execute ALL blocks in sequence and return combined results.",
+            parameters={},
+            handler=self._run_all_blocks,
+        ))
+
+        # === EDIT (modify existing blocks) ===
+        self._register(MCPTool(
+            name="edit_block",
+            description="Replace ALL code in an existing block. Identify by name or index. If neither given, edits focused block. PREFER this over create_block when the block already exists.",
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "New code (replaces entire block content).",
+                },
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name (e.g., 'vendas'). Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based). Use block_name instead when possible.",
+                    "optional": True,
                 },
             },
             handler=self._edit_block,
         ))
 
+        # === EDIT continued ===
+        self._register(MCPTool(
+            name="edit_block_lines",
+            description="Edit specific lines in a block. Modes: 'replace' (default), 'insert', 'delete'. Line numbers are 1-based.",
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name. Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based).",
+                    "optional": True,
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "First line number (1-based).",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Last line (1-based, inclusive). For 'replace' and 'delete'.",
+                    "optional": True,
+                },
+                "new_code": {
+                    "type": "string",
+                    "description": "Replacement or insertion text.",
+                    "optional": True,
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Edit mode.",
+                    "enum": ["replace", "insert", "delete"],
+                    "optional": True,
+                },
+            },
+            handler=self._edit_block_lines,
+        ))
+
+        self._register(MCPTool(
+            name="replace_selection",
+            description="Replace selected text with new code. If nothing selected, inserts at cursor.",
+            parameters={
+                "code": {
+                    "type": "string",
+                    "description": "The code to insert/replace.",
+                },
+            },
+            handler=self._replace_selection,
+        ))
+
+        self._register(MCPTool(
+            name="rename_block",
+            description="Rename a block. For SQL blocks, the name becomes the DataFrame variable.",
+            parameters={
+                "name": {
+                    "type": "string",
+                    "description": "New name (snake_case).",
+                },
+                "block_name": {
+                    "type": "string",
+                    "description": "Current block name to rename. Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based). Omit to rename focused block.",
+                    "optional": True,
+                },
+            },
+            handler=self._rename_block,
+        ))
+
+        self._register(MCPTool(
+            name="set_block_language",
+            description="Change the language of a block.",
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name (e.g., 'vendas'). Preferred over block_index.",
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based).",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "New language.",
+                    "enum": ["python", "sql", "cross"],
+                },
+            },
+            handler=self._set_block_language,
+        ))
+
+        self._register(MCPTool(
+            name="delete_block",
+            description="Delete a block by name or index. NEVER delete unless user explicitly asks.",
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name to delete. Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based).",
+                    "optional": True,
+                },
+            },
+            handler=self._delete_block,
+        ))
+
+        self._register(MCPTool(
+            name="move_focus",
+            description="Move focus to a specific block by name or index.",
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name. Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based).",
+                    "optional": True,
+                },
+            },
+            handler=self._move_focus,
+        ))
+
+        # === DATABASE ===
         self._register(MCPTool(
             name="connect_database",
             description="Connect the current session to a saved database connection.",
             parameters={
                 "connection_name": {
                     "type": "string",
-                    "description": "Name of the saved connection to use.",
+                    "description": "Name of the saved connection.",
                 },
             },
             handler=self._connect_database,
@@ -161,7 +494,7 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="create_connection",
-            description="Create and save a new database connection configuration.",
+            description="Create and save a new database connection.",
             parameters={
                 "name": {
                     "type": "string",
@@ -174,11 +507,11 @@ class MCPToolRegistry(QObject):
                 },
                 "host": {
                     "type": "string",
-                    "description": "Database host address.",
+                    "description": "Database host.",
                 },
                 "port": {
                     "type": "integer",
-                    "description": "Database port number.",
+                    "description": "Database port.",
                 },
                 "database": {
                     "type": "string",
@@ -194,52 +527,14 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="open_connection",
-            description="Open a saved connection in a NEW TAB. Creates a fresh tab and connects to the specified database. Use this when user wants to start working with a different database without losing current work.",
+            description="Open a saved connection in a NEW tab.",
             parameters={
                 "connection_name": {
                     "type": "string",
-                    "description": "Name of the saved connection to open in new tab.",
+                    "description": "Connection name to open.",
                 },
             },
             handler=self._open_connection,
-        ))
-
-        self._register(MCPTool(
-            name="read_schema",
-            description="Read the loaded database schema (tables, columns, types).",
-            parameters={
-                "connection_name": {
-                    "type": "string",
-                    "description": "Connection name to read schema from. Uses current connection if not provided.",
-                },
-            },
-            handler=self._read_schema,
-        ))
-
-        self._register(MCPTool(
-            name="get_context",
-            description="GET CURRENT STATE: all blocks with their code, languages, indices, current connection, available tables. Use this first to understand what code exists and what block indices to use.",
-            parameters={},
-            handler=self._get_context,
-        ))
-
-        self._register(MCPTool(
-            name="execute_block",
-            description="RUN a code block by index and WAIT for it to finish. Returns the ACTUAL OUTPUT: printed text, DataFrame preview, query results, or errors. ALWAYS use this after create_block or edit_block to verify the code works. For SQL blocks, the result DataFrame is saved as a variable with the block's name.",
-            parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block to execute (0-based). Block 0 is the first block.",
-                },
-            },
-            handler=self._execute_block,
-        ))
-
-        self._register(MCPTool(
-            name="run_current_block",
-            description="RUN the currently focused/active block and WAIT for it to finish. Returns the ACTUAL OUTPUT: printed text, DataFrame preview, errors. Use this when the user asks you to 'run this', 'execute', or 'test' without specifying which block.",
-            parameters={},
-            handler=self._run_current_block,
         ))
 
         self._register(MCPTool(
@@ -250,272 +545,58 @@ class MCPToolRegistry(QObject):
         ))
 
         self._register(MCPTool(
-            name="get_variables",
-            description="Get all Python variables available in the current session's namespace.",
-            parameters={},
-            handler=self._get_variables,
-        ))
-
-        self._register(MCPTool(
-            name="set_block_language",
-            description="Change the language of a block.",
+            name="read_schema",
+            description="Read the database schema (tables, columns, types).",
             parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block (0-based).",
-                },
-                "language": {
+                "connection_name": {
                     "type": "string",
-                    "description": "New language: python, sql, or cross.",
-                    "enum": ["python", "sql", "cross"],
-                },
-            },
-            handler=self._set_block_language,
-        ))
-
-        self._register(MCPTool(
-            name="delete_block",
-            description="Delete a block by index.",
-            parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block to delete (0-based).",
-                },
-            },
-            handler=self._delete_block,
-        ))
-
-        self._register(MCPTool(
-            name="get_block_result",
-            description="GET the output from the last execution: printed text, DataFrame in the results grid, and any errors. Use this to check results when you didn't run the block yourself (e.g., user ran it manually).",
-            parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block (0-based).",
-                },
-            },
-            handler=self._get_block_result,
-        ))
-
-        # Most useful tool - does everything in one call
-        self._register(MCPTool(
-            name="write_and_run",
-            description="CREATE a new block, WRITE code, EXECUTE it, and RETURN the result - all in one call. This is the FASTEST way to run code. The block NAME becomes the DataFrame variable for SQL blocks. Example: name='vendas' with SQL query creates `vendas` DataFrame accessible in Python blocks. Returns the actual execution output.",
-            parameters={
-                "language": {
-                    "type": "string",
-                    "description": "'python' for data analysis/pandas/matplotlib, 'sql' for database queries.",
-                    "enum": ["python", "sql", "cross"],
-                },
-                "code": {
-                    "type": "string",
-                    "description": "Complete executable code. Python: include imports, use print() for output. SQL: write the query.",
-                },
-                "name": {
-                    "type": "string",
-                    "description": "REQUIRED: Semantic name for the block (e.g., 'vendas', 'clientes', 'grafico'). For SQL blocks, this becomes the DataFrame variable name. Use snake_case, no spaces.",
+                    "description": "Connection name. Uses current if omitted.",
                     "optional": True,
                 },
             },
-            handler=self._write_and_run,
+            handler=self._read_schema,
         ))
 
-        # Rename block tool
         self._register(MCPTool(
-            name="rename_block",
-            description="RENAME a block. The name determines the DataFrame variable name for SQL blocks. Example: renaming to 'vendas' means the SQL result becomes `vendas` DataFrame.",
+            name="list_tables",
+            description="List all tables in the connected database.",
+            parameters={},
+            handler=self._list_tables,
+        ))
+
+        self._register(MCPTool(
+            name="describe_table",
+            description="Describe a table: columns, types, and nullability.",
             parameters={
-                "name": {
+                "table_name": {
                     "type": "string",
-                    "description": "New name for the block (e.g., 'vendas', 'clientes'). Use snake_case, no spaces.",
+                    "description": "Table name.",
                 },
-                "block_index": {
+            },
+            handler=self._describe_table,
+        ))
+
+        self._register(MCPTool(
+            name="sample_data",
+            description="Get sample rows from a table.",
+            parameters={
+                "table_name": {
+                    "type": "string",
+                    "description": "Table name.",
+                },
+                "limit": {
                     "type": "integer",
-                    "description": "Index of the block to rename (0-based). If omitted, renames the focused block.",
+                    "description": "Number of rows (default: 5).",
                     "optional": True,
                 },
             },
-            handler=self._rename_block,
+            handler=self._sample_data,
         ))
 
-        # === Focused Block Tools ===
+        # === DATABASE Intelligence (legacy alias kept) ===
         self._register(MCPTool(
-            name="get_focused_code",
-            description="GET the code from the currently focused block. Use this to see what code the user is working on right now.",
-            parameters={},
-            handler=self._get_focused_code,
-        ))
-
-        self._register(MCPTool(
-            name="edit_focused_code",
-            description="EDIT/REPLACE the code in the currently focused block. Use to fix errors, improve code, or rewrite what the user is working on.",
-            parameters={
-                "code": {
-                    "type": "string",
-                    "description": "The new code to write. This REPLACES all existing code in the focused block.",
-                },
-            },
-            handler=self._edit_focused_code,
-        ))
-
-        # Alias for edit_focused_code - more intuitive name
-        self._register(MCPTool(
-            name="edit_current_block",
-            description="EDIT the current/focused block. Use this to modify the user's existing code instead of creating a new block. Preferred when user wants to change existing code.",
-            parameters={
-                "code": {
-                    "type": "string",
-                    "description": "The new code to write. This REPLACES all existing code in the current block.",
-                },
-            },
-            handler=self._edit_focused_code,
-        ))
-
-        self._register(MCPTool(
-            name="execute_focused",
-            description="RUN the currently focused block, WAIT for completion, and RETURN the output. Same as run_current_block. Use when user says 'run this' or 'execute'.",
-            parameters={},
-            handler=self._execute_focused,
-        ))
-
-        self._register(MCPTool(
-            name="get_focused_result",
-            description="GET the output/result from the output panel (printed text, DataFrame, errors). Use after manually running a block to see what happened.",
-            parameters={},
-            handler=self._get_focused_result,
-        ))
-
-        # === Selection Tools ===
-        self._register(MCPTool(
-            name="get_selection",
-            description="GET the currently selected text in the focused block. Returns empty if nothing is selected.",
-            parameters={},
-            handler=self._get_selection,
-        ))
-
-        self._register(MCPTool(
-            name="replace_selection",
-            description="REPLACE the selected text with new code. If nothing is selected, inserts at cursor position.",
-            parameters={
-                "code": {
-                    "type": "string",
-                    "description": "The code to insert/replace.",
-                },
-            },
-            handler=self._replace_selection,
-        ))
-
-        self._register(MCPTool(
-            name="insert_at_cursor",
-            description="INSERT code at the current cursor position in the focused block.",
-            parameters={
-                "code": {
-                    "type": "string",
-                    "description": "The code to insert.",
-                },
-            },
-            handler=self._insert_at_cursor,
-        ))
-
-        # === Batch/Multi-block Tools ===
-        self._register(MCPTool(
-            name="get_all_code",
-            description="GET all blocks with their code, language, and index. Use to understand the full session.",
-            parameters={},
-            handler=self._get_all_code,
-        ))
-
-        self._register(MCPTool(
-            name="run_all_blocks",
-            description="RUN ALL blocks in sequence, WAIT for all to finish, and RETURN the combined output. Use to re-run the entire analysis pipeline.",
-            parameters={},
-            handler=self._run_all_blocks,
-        ))
-
-        self._register(MCPTool(
-            name="fix_and_run",
-            description="REPLACE the code in the focused block with corrected code and RUN it immediately. Returns the execution output. Use when you see an error and want to fix + re-run in one step.",
-            parameters={
-                "fixed_code": {
-                    "type": "string",
-                    "description": "The corrected code to replace the current code.",
-                },
-            },
-            handler=self._fix_and_run,
-        ))
-
-        self._register(MCPTool(
-            name="append_code",
-            description="APPEND code to the end of the focused block (adds after existing code).",
-            parameters={
-                "code": {
-                    "type": "string",
-                    "description": "The code to append.",
-                },
-            },
-            handler=self._append_code,
-        ))
-
-        self._register(MCPTool(
-            name="move_focus",
-            description="MOVE focus to a specific block by index.",
-            parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block to focus (0-based).",
-                },
-            },
-            handler=self._move_focus,
-        ))
-
-        # === Granular Editing Tools ===
-        self._register(MCPTool(
-            name="edit_block_lines",
-            description="EDIT specific lines in a block without replacing the entire code. Use to replace, insert, or delete a range of lines. Line numbers are 1-based. Modes: 'replace' replaces lines start_line..end_line with new_code, 'insert' inserts new_code BEFORE start_line, 'delete' removes lines start_line..end_line.",
-            parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block to edit (0-based).",
-                },
-                "start_line": {
-                    "type": "integer",
-                    "description": "First line number to affect (1-based).",
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "Last line number to affect (1-based, inclusive). Required for 'replace' and 'delete' modes. Ignored for 'insert'.",
-                    "optional": True,
-                },
-                "new_code": {
-                    "type": "string",
-                    "description": "Replacement or insertion text. Required for 'replace' and 'insert' modes. Not used for 'delete'.",
-                    "optional": True,
-                },
-                "mode": {
-                    "type": "string",
-                    "description": "Edit mode: 'replace' (default), 'insert', or 'delete'.",
-                    "enum": ["replace", "insert", "delete"],
-                    "optional": True,
-                },
-            },
-            handler=self._edit_block_lines,
-        ))
-
-        self._register(MCPTool(
-            name="get_block_code",
-            description="GET the FULL code from a specific block by index. Unlike get_context (which truncates code to 100 chars), this returns the complete code. Use when you need to read or analyze a block's full content.",
-            parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block (0-based).",
-                },
-            },
-            handler=self._get_block_code,
-        ))
-
-        self._register(MCPTool(
-            name="search_in_code",
-            description="SEARCH for text or pattern across ALL blocks in the current session. Returns matching lines with block index and line numbers. Use to find where a variable, function, or pattern is used.",
+            name="get_database_schema",
+            description="Get complete database schema (all tables and columns). Same as read_schema.",
             parameters={
                 "query": {
                     "type": "string",
@@ -583,89 +664,6 @@ class MCPToolRegistry(QObject):
                 },
             },
             handler=self._sample_data,
-        ))
-
-        # === Results & Notifications ===
-        self._register(MCPTool(
-            name="get_execution_results",
-            description="GET the complete execution output: printed text, DataFrame in the results grid (first 50 rows), and errors. NOTE: execute_block/run_current_block/write_and_run already return results automatically. Use this only when the user ran a block manually and you need to see what happened.",
-            parameters={
-                "block_index": {
-                    "type": "integer",
-                    "description": "Index of the block to get results from (0-based). If omitted, gets results from the last executed block.",
-                    "optional": True,
-                },
-            },
-            handler=self._get_execution_results,
-        ))
-
-        self._register(MCPTool(
-            name="notify_user",
-            description="SHOW a notification to get the user's attention. Use when: task is complete, need user input, or found something important. Shows a toast popup in the corner of the screen.",
-            parameters={
-                "title": {
-                    "type": "string",
-                    "description": "Short title for the notification (e.g., 'Analysis Complete', 'Action Required').",
-                },
-                "message": {
-                    "type": "string",
-                    "description": "The notification message with details.",
-                },
-                "success": {
-                    "type": "boolean",
-                    "description": "True for success (green), False for error/warning (red). Default: True.",
-                    "optional": True,
-                },
-            },
-            handler=self._notify_user,
-        ))
-
-        # === Variable Inspection ===
-        self._register(MCPTool(
-            name="inspect_variable",
-            description="GET the actual VALUE of a Python variable in the session namespace. Returns the variable's data (for DataFrames: first 20 rows as text, for other types: string representation). Use to see what data a variable contains.",
-            parameters={
-                "name": {
-                    "type": "string",
-                    "description": "Name of the variable to inspect (e.g., 'vendas', 'df', 'results').",
-                },
-                "max_rows": {
-                    "type": "integer",
-                    "description": "For DataFrames: maximum rows to return (default: 20).",
-                    "optional": True,
-                },
-            },
-            handler=self._inspect_variable,
-        ))
-
-        self._register(MCPTool(
-            name="get_dataframe_info",
-            description="GET detailed info about a DataFrame: columns, dtypes, shape, null counts, sample values. Use to understand DataFrame structure before analysis.",
-            parameters={
-                "name": {
-                    "type": "string",
-                    "description": "Name of the DataFrame variable.",
-                },
-            },
-            handler=self._get_dataframe_info,
-        ))
-
-        # === Output Reading Tool ===
-        self._register(MCPTool(
-            name="read_output",
-            description=(
-                "READ the last N lines from the output panel. "
-                "USE THIS to quickly check what was printed, see errors, or review execution logs. "
-                "More focused than get_execution_results - returns just the text output."
-            ),
-            parameters={
-                "last_n_lines": {
-                    "type": "integer",
-                    "description": "Number of lines to read from the end (default: 50). Use 0 to read all.",
-                    "optional": True,
-                },
-            },
-            handler=self._read_output,
         ))
 
     def _register(self, tool: MCPTool) -> None:
@@ -878,73 +876,31 @@ class MCPToolRegistry(QObject):
         }
 
     def _edit_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Edit code in a block."""
+        """Edit code in a block. Resolved by name, index, or focused block."""
         code = args.get("code", "")
-        block_index = args.get("block_index")
-        mw = self._main_window
 
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
+        target_block, block_editor, idx, error = self._resolve_block(args)
+        if error:
+            return {"error": error}
 
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks:
-            return {"error": "No blocks in the current session."}
-
-        if block_index is not None:
-            if 0 <= block_index < len(blocks):
-                target_block = blocks[block_index]
-            else:
-                return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
-        else:
-            target_block = block_editor.focused_block
-            if not target_block and blocks:
-                target_block = blocks[-1]
-
-        if target_block:
-            self._signal_copilot_editing(target_block, block_editor)
-            target_block.set_code(code)
-            # Move cursor to top of block
-            editor = getattr(target_block, "editor", None)
-            if editor and hasattr(editor, "go_to_line"):
-                editor.go_to_line(0)
-            return {"content": [{"type": "text", "text": f"Block updated with {len(code)} characters."}]}
-
-        return {"error": "No block found to edit."}
+        self._signal_copilot_editing(target_block, block_editor)
+        target_block.set_code(code)
+        # Move cursor to top of block
+        editor = getattr(target_block, "editor", None)
+        if editor and hasattr(editor, "go_to_line"):
+            editor.go_to_line(0)
+        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{idx}"
+        return {"content": [{"type": "text", "text": f"Block {idx} ('{name}') updated with {len(code)} characters."}]}
 
     def _rename_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Rename a block. The name determines the DataFrame variable name for SQL blocks."""
         name = args.get("name", "")
-        block_index = args.get("block_index")
-
         if not name:
             return {"error": "name is required."}
 
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks:
-            return {"error": "No blocks in the current session."}
-
-        if block_index is not None:
-            if 0 <= block_index < len(blocks):
-                target_block = blocks[block_index]
-            else:
-                return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
-        else:
-            target_block = block_editor.focused_block
-            if not target_block and blocks:
-                target_block = blocks[-1]
+        target_block, block_editor, idx, error = self._resolve_block(args)
+        if error:
+            return {"error": error}
 
         if target_block:
             old_name = target_block.get_block_name()
@@ -1106,17 +1062,19 @@ class MCPToolRegistry(QObject):
                 
                 for i, block in enumerate(blocks):
                     try:
-                        # Use get_language() method, not language attribute
                         lang = block.get_language() if hasattr(block, "get_language") else "unknown"
                         code = block.get_code() if hasattr(block, "get_code") else ""
                         is_focused = block == block_editor.focused_block
                         name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{i + 1}"
+                        # Return full code (up to 800 chars) for orientation
+                        code_preview = code[:800] + "..." if len(code) > 800 else code
                         blocks_info.append({
                             "index": i,
                             "name": name,
                             "language": lang,
-                            "code": code[:100] + "..." if len(code) > 100 else code,
-                            "is_focused": is_focused,
+                            "lines": len(code.split("\n")),
+                            "focused": is_focused,
+                            "code": code_preview,
                         })
                     except Exception as e:
                         logger.warning(f"Error getting block {i} info: {e}")
@@ -1127,6 +1085,12 @@ class MCPToolRegistry(QObject):
                             "is_focused": False,
                         })
                 context["blocks"] = blocks_info
+                context["total_blocks"] = len(blocks_info)
+                # Quick reference: name -> index mapping
+                if blocks_info:
+                    context["block_map"] = {
+                        b["name"]: b["index"] for b in blocks_info
+                    }
             else:
                 logger.warning("_get_context: No block_editor on session_widget!")
                 context["blocks"] = []
@@ -1162,28 +1126,40 @@ class MCPToolRegistry(QObject):
                 logger.debug(f"Error getting schema from ObjectExplorer: {e}")
 
         # Add tool usage guide for smart tool selection
-        context["tool_guide"] = {
-            "quick_validation": {
-                "tools": ["run_silent_query"],
-                "when": "Need to check a value, explore data, or run a quick SQL count. No visible block created.",
-            },
-            "visible_code": {
-                "tools": ["write_and_run", "create_block", "edit_block", "execute_block"],
-                "when": "User wants to see the code. Creating analysis, charts, queries. Use write_and_run for one-step create+execute.",
-            },
-            "read_state": {
-                "tools": ["get_context", "get_variables", "inspect_variable", "get_dataframe_info", "read_output", "get_execution_results"],
-                "when": "Need to understand current state: what blocks exist, what variables are set, what DataFrame columns are, what the last output/error was.",
-            },
-            "database": {
-                "tools": ["list_tables", "describe_table", "get_database_schema", "sample_data", "run_silent_query"],
-                "when": "Exploring database structure, checking table contents, running quick queries without blocks.",
-            },
-            "fix_errors": {
-                "tools": ["read_output", "fix_and_run", "edit_block"],
-                "when": "An error occurred. Use read_output to see the error, then fix_and_run to correct the block.",
-            },
-        }
+        context["tool_guide"] = (
+            "IMPORTANT: Check block_map above before creating blocks. "
+            "If a block with that name/purpose exists, use edit_block(block_name=...) to UPDATE it. "
+            "Only use write_and_run to CREATE new blocks. "
+            "Use block_name (not block_index) to target blocks. "
+            "Use run_silent_query/run_silent_python for exploration (invisible to user)."
+        )
+
+        # Add namespace variables summary
+        if session_widget:
+            namespace = getattr(session_widget, "namespace", None)
+            if namespace is None:
+                session_obj = self._get_active_session()
+                if session_obj:
+                    namespace = getattr(session_obj, "namespace", None)
+            if namespace:
+                variables = {}
+                for name, value in namespace.items():
+                    if name.startswith("_") or isinstance(value, type) or callable(value):
+                        continue
+                    if name in ("pd", "np", "plt"):
+                        continue
+                    try:
+                        type_name = type(value).__name__
+                        if hasattr(value, "shape"):
+                            variables[name] = f"{type_name}{value.shape}"
+                        elif hasattr(value, "__len__"):
+                            variables[name] = f"{type_name}(len={len(value)})"
+                        else:
+                            variables[name] = type_name
+                    except Exception:
+                        variables[name] = "?"
+                if variables:
+                    context["variables"] = variables
 
         return {"content": [{"type": "text", "text": json.dumps(context, indent=2)}]}
 
@@ -1231,6 +1207,70 @@ class MCPToolRegistry(QObject):
         
         logger.warning(f"_get_block_editor: No valid editor found on {type(session_widget)}")
         return None
+
+    def _resolve_block(self, args: Dict[str, Any], require=False):
+        """Resolve a block by name, index, or focused block.
+
+        Lookup order:
+        1. block_name  -- find block whose name matches (case-insensitive)
+        2. block_index -- 0-based integer index
+        3. focused / last block (if neither is given and require=False)
+
+        Returns:
+            (block, block_editor, block_index, error_string)
+        """
+        block_name = args.get("block_name")
+        block_index = args.get("block_index")
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return None, None, -1, "No active session."
+
+        block_editor = self._get_block_editor(session_widget)
+        if not block_editor:
+            return None, None, -1, "Block editor not available."
+
+        blocks = block_editor.blocks
+        if not blocks:
+            return None, block_editor, -1, "No blocks in the current session."
+
+        # 1. Resolve by name
+        if block_name is not None:
+            name_lower = str(block_name).strip().lower()
+            for i, blk in enumerate(blocks):
+                blk_name = ""
+                if hasattr(blk, "get_block_name"):
+                    blk_name = blk.get_block_name()
+                if blk_name.lower() == name_lower:
+                    return blk, block_editor, i, None
+            # Not found -- build helpful error
+            available = [
+                f"  [{i}] '{blk.get_block_name() if hasattr(blk, 'get_block_name') else '?'}'"
+                for i, blk in enumerate(blocks)
+            ]
+            return None, block_editor, -1, (
+                f"No block named '{block_name}'. "
+                f"Available blocks:\n" + "\n".join(available)
+            )
+
+        # 2. Resolve by index
+        if block_index is not None:
+            if 0 <= block_index < len(blocks):
+                return blocks[block_index], block_editor, block_index, None
+            return None, block_editor, -1, (
+                f"Block index {block_index} out of range (0-{len(blocks) - 1})."
+            )
+
+        # 3. No identifier -- use focused or last block
+        if require:
+            return None, block_editor, -1, (
+                "block_name or block_index is required."
+            )
+        target, be2, error = self._get_focused_block()
+        if error:
+            return None, block_editor, -1, error
+        idx = blocks.index(target) if target in blocks else -1
+        return target, block_editor, idx, None
 
     def _signal_copilot_editing(self, block, block_editor=None):
         """Show Copilot editing indicator on a block and scroll it into view.
@@ -1390,24 +1430,11 @@ class MCPToolRegistry(QObject):
         return self._collect_execution_result(block, block_index, output_before)
 
     def _execute_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a block by index, wait for completion, and return results."""
-        block_index = args.get("block_index")
-        if block_index is None:
-            return {"error": "block_index is required."}
+        """Execute a block by name, index, or focused block, wait for completion, and return results."""
+        target_block, block_editor, block_index, error = self._resolve_block(args)
+        if error:
+            return {"error": error}
 
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks or block_index < 0 or block_index >= len(blocks):
-            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
-
-        target_block = blocks[block_index]
         return self._execute_block_with_result(target_block, block_editor, block_index)
 
     def _run_current_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1594,56 +1621,32 @@ class MCPToolRegistry(QObject):
 
     def _set_block_language(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Change the language of a block."""
-        block_index = args.get("block_index")
         language = args.get("language", "python")
 
-        if block_index is None:
-            return {"error": "block_index is required."}
+        target_block, block_editor, block_index, error = self._resolve_block(args, require=True)
+        if error:
+            return {"error": error}
 
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks or block_index < 0 or block_index >= len(blocks):
-            return {"error": f"Block index {block_index} out of range."}
-
-        target_block = blocks[block_index]
         if hasattr(target_block, "set_language"):
+            name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index}"
             target_block.set_language(language)
             return {
-                "content": [{"type": "text", "text": f"Block {block_index} language changed to {language}."}]
+                "content": [{"type": "text", "text": f"Block {block_index} ('{name}') language changed to {language}."}]
             }
 
         return {"error": "Block does not support set_language."}
 
     def _delete_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Delete a block by index."""
-        block_index = args.get("block_index")
-        if block_index is None:
-            return {"error": "block_index is required."}
-
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks or block_index < 0 or block_index >= len(blocks):
-            return {"error": f"Block index {block_index} out of range."}
+        """Delete a block by name or index."""
+        target_block, block_editor, block_index, error = self._resolve_block(args, require=True)
+        if error:
+            return {"error": error}
 
         if hasattr(block_editor, "remove_block"):
-            target_block = blocks[block_index]
+            name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index}"
             block_editor.remove_block(target_block)
             return {
-                "content": [{"type": "text", "text": f"Block {block_index} deleted."}]
+                "content": [{"type": "text", "text": f"Block {block_index} ('{name}') deleted."}]
             }
 
         return {"error": "Block editor does not support remove_block."}
@@ -1964,24 +1967,10 @@ class MCPToolRegistry(QObject):
         }
 
     def _move_focus(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Move focus to a specific block."""
-        block_index = args.get("block_index")
-        if block_index is None:
-            return {"error": "block_index is required."}
-
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks or block_index < 0 or block_index >= len(blocks):
-            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
-
-        target_block = blocks[block_index]
+        """Move focus to a specific block by name or index."""
+        target_block, block_editor, block_index, error = self._resolve_block(args, require=True)
+        if error:
+            return {"error": error}
 
         # Try to focus the block
         if hasattr(block_editor, "focus_block"):
@@ -1991,10 +1980,11 @@ class MCPToolRegistry(QObject):
         elif hasattr(target_block, "editor") and hasattr(target_block.editor, "setFocus"):
             target_block.editor.setFocus()
 
+        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index}"
         return {
             "content": [{
                 "type": "text",
-                "text": f"Focused block {block_index}."
+                "text": f"Focused block {block_index} ('{name}')."
             }]
         }
 
@@ -2203,6 +2193,97 @@ class MCPToolRegistry(QObject):
         except Exception as e:
             return {"error": f"Query error: {str(e)}"}
 
+    def _run_silent_python(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute Python code without creating a visible block.
+
+        Runs in the active session's namespace so existing DataFrames
+        and variables are accessible. Captures stdout and returns it
+        along with the result of the last expression (if any).
+        """
+        code = args.get("code", "")
+        if not code:
+            return {"error": "code is required."}
+
+        session_widget = self._get_active_session_widget()
+        if not session_widget:
+            return {"error": "No active session."}
+
+        # Get session namespace
+        session = self._get_active_session()
+        namespace = {}
+        if session and hasattr(session, "namespace"):
+            namespace = session.namespace.copy()
+
+        # Inject standard libraries
+        try:
+            import pandas as _pd
+            namespace.setdefault("pd", _pd)
+        except ImportError:
+            pass
+        try:
+            import numpy as _np
+            namespace.setdefault("np", _np)
+        except ImportError:
+            pass
+
+        # Execute with stdout capture
+        import io
+        import sys
+        import traceback
+
+        stdout_capture = io.StringIO()
+        old_stdout = sys.stdout
+        result_value = None
+
+        try:
+            sys.stdout = stdout_capture
+
+            # Try as expression first (returns a value)
+            try:
+                compiled = compile(code, "<silent>", "eval")
+                result_value = eval(compiled, namespace)
+            except SyntaxError:
+                # Execute as statements
+                compiled = compile(code, "<silent>", "exec")
+                exec(compiled, namespace)
+
+            # Update session namespace with new variables
+            if session and hasattr(session, "update_namespace"):
+                session.update_namespace(namespace)
+
+        except Exception:
+            error_text = traceback.format_exc()
+            return {"error": f"Python error:\n{error_text}"}
+        finally:
+            sys.stdout = old_stdout
+
+        # Build result
+        parts = []
+        stdout_text = stdout_capture.getvalue().strip()
+        if stdout_text:
+            if len(stdout_text) > 5000:
+                stdout_text = stdout_text[:5000] + "\n... (truncated)"
+            parts.append(f"Output:\n```\n{stdout_text}\n```")
+
+        if result_value is not None:
+            try:
+                # Format DataFrames nicely
+                if hasattr(result_value, "to_string") and hasattr(result_value, "shape"):
+                    preview = result_value.head(30).to_string()
+                    parts.append(f"Result ({type(result_value).__name__} {result_value.shape}):\n```\n{preview}\n```")
+                else:
+                    val_str = repr(result_value)
+                    if len(val_str) > 3000:
+                        val_str = val_str[:3000] + "..."
+                    parts.append(f"Result: {val_str}")
+            except Exception:
+                parts.append(f"Result: {type(result_value).__name__}")
+
+        if not parts:
+            parts.append("Code executed successfully (no output).")
+
+        return {"content": [{"type": "text", "text": "\n\n".join(parts)}]}
+
     def _sample_data(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Get sample rows from a table."""
         table_name = args.get("table_name", "")
@@ -2341,31 +2422,20 @@ class MCPToolRegistry(QObject):
 
     def _edit_block_lines(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Edit specific lines in a block (replace, insert, or delete)."""
-        block_index = args.get("block_index")
         start_line = args.get("start_line")
         end_line = args.get("end_line")
         new_code = args.get("new_code", "")
         mode = args.get("mode", "replace")
 
-        if block_index is None or start_line is None:
-            return {"error": "block_index and start_line are required."}
+        if start_line is None:
+            return {"error": "start_line is required."}
 
         if mode not in ("replace", "insert", "delete"):
             return {"error": f"Invalid mode '{mode}'. Use 'replace', 'insert', or 'delete'."}
 
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks or block_index < 0 or block_index >= len(blocks):
-            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
-
-        target_block = blocks[block_index]
+        target_block, block_editor, block_index, error = self._resolve_block(args, require=True)
+        if error:
+            return {"error": error}
         current_code = ""
         if hasattr(target_block, "get_code"):
             current_code = target_block.get_code()
@@ -2421,32 +2491,20 @@ class MCPToolRegistry(QObject):
             hl_line = min(start_line, len(lines)) if lines else 1
             self._highlight_edited_lines(target_block, hl_line, hl_line)
 
+        block_name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index}"
         return {
             "content": [{
                 "type": "text",
-                "text": f"{action} in block {block_index}. Block now has {len(lines)} lines."
+                "text": f"{action} in block {block_index} ('{block_name}'). Block now has {len(lines)} lines."
             }]
         }
 
     def _get_block_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get the full code from a specific block by index."""
-        block_index = args.get("block_index")
-        if block_index is None:
-            return {"error": "block_index is required."}
+        """Get the full code from a block by name, index, or focused block."""
+        target_block, block_editor, block_index, error = self._resolve_block(args)
+        if error:
+            return {"error": error}
 
-        session_widget = self._get_active_session_widget()
-        if not session_widget:
-            return {"error": "No active session."}
-
-        block_editor = self._get_block_editor(session_widget)
-        if not block_editor:
-            return {"error": "Block editor not available."}
-
-        blocks = block_editor.blocks
-        if not blocks or block_index < 0 or block_index >= len(blocks):
-            return {"error": f"Block index {block_index} out of range (0-{len(blocks) - 1})."}
-
-        target_block = blocks[block_index]
         code = ""
         if hasattr(target_block, "get_code"):
             code = target_block.get_code()
