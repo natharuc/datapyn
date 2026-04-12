@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.21.0 (2026-04-12)
+
+### Features
+
+- Copilot identifica blocos por nome + system prompt melhorado
+  ([`15c74f4`](https://github.com/natharuc/datapyn/commit/15c74f49d3c9b18d4e0009f9459c983d63dc413d))
+
+- Maximizar bloco (focus mode) + CTRL+C copia selecao no grid
+  ([`1f98f7e`](https://github.com/natharuc/datapyn/commit/1f98f7ebda7fdf0fe5d1d05580916db3bc684fc4))
+
+
 ## v1.20.0 (2026-04-08)
 
 ### Features
