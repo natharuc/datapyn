@@ -418,6 +418,8 @@
     "tooltip_cancel": "Cancel execution (Esc)",
     "tooltip_run": "Run (F5)",
     "tooltip_remove": "Remove block",
+    "tooltip_maximize": "Maximize block (focus)",
+    "tooltip_restore": "Restore all blocks",
     "status_waiting": "Waiting",
     "status_running": "Running",
     "status_running_elapsed": "{status} {elapsed}",

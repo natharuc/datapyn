@@ -94,6 +94,8 @@ class BlockEditor(QWidget):
         self._lsp_client = None  # LSP client for inline completions
         self._database_context = ""  # Database schema context for SQL completions
         self._sql_schema = {}  # Cached SQL schema for completions
+        self._maximized_block: Optional[CodeBlock] = None  # Block in maximized/focus mode
+        self._maximized_block: Optional[CodeBlock] = None  # Block in maximized/focus mode
 
         self._setup_ui()
 
@@ -202,6 +204,11 @@ class BlockEditor(QWidget):
         # Ctrl+Enter - Run all blocks
         if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.execute_all_blocks()
+            return
+
+        # Escape - restore from maximized mode
+        if event.key() == Qt.Key.Key_Escape and self._maximized_block:
+            self._restore_all_blocks()
             return
 
         super().keyPressEvent(event)
@@ -442,6 +449,7 @@ class BlockEditor(QWidget):
         block.completion_log.connect(self.completion_log.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
         block.language_changed.connect(lambda b, lang: self._on_block_language_changed(b, lang))
+        block.maximize_requested.connect(self._toggle_maximize_block)
         
         # Connect cursor position change (if editor supports it)
         if hasattr(block.editor, 'cursor_changed'):
@@ -492,6 +500,11 @@ class BlockEditor(QWidget):
 
         index = self._blocks.index(block)
         was_first = (index == 0)
+
+        # If removing the maximized block, restore all first
+        if self._maximized_block == block:
+            self._restore_all_blocks()
+
         self._blocks.remove(block)
 
         # Remove from layout
@@ -514,6 +527,68 @@ class BlockEditor(QWidget):
             self._last_focused_block = None
 
         self.content_changed.emit()
+
+    def _toggle_maximize_block(self, block: CodeBlock):
+        """Toggle maximize/restore for a block."""
+        if self._maximized_block == block:
+            self._restore_all_blocks()
+        else:
+            self._maximize_block(block)
+
+    def _maximize_block(self, block: CodeBlock):
+        """Maximize a single block, hiding all others."""
+        if block not in self._blocks:
+            return
+
+        # Restore previous maximized block if any
+        if self._maximized_block:
+            self._maximized_block.set_maximized(False)
+
+        self._maximized_block = block
+
+        # Save original editor height for restoration
+        self._saved_editor_height = block.editor_container.height()
+
+        # Hide all other blocks and the add button
+        for b in self._blocks:
+            if b != block:
+                b.hide()
+        self.add_button_container.hide()
+
+        # Set maximized state on the target block
+        block.set_maximized(True)
+        block.show()
+
+        # Remove layout alignment and margins so block fills all space
+        self.blocks_layout.setAlignment(Qt.AlignmentFlag(0))
+        self.blocks_layout.setContentsMargins(0, 0, 0, 0)
+        self.blocks_layout.setSpacing(0)
+        block.focus_editor()
+
+    def _restore_all_blocks(self):
+        """Restore all blocks from maximized mode."""
+        if self._maximized_block:
+            # Restore original editor height
+            saved = getattr(self, '_saved_editor_height', 0)
+            if saved > 0:
+                self._maximized_block.editor_container.setFixedHeight(saved)
+            self._maximized_block.set_maximized(False)
+            self._maximized_block = None
+
+        # Show all blocks
+        for b in self._blocks:
+            b.show()
+        self.add_button_container.show()
+
+        # Restore top alignment, margins and spacing
+        self.blocks_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.blocks_layout.setContentsMargins(8, 8, 8, 8)
+        self.blocks_layout.setSpacing(12)
+
+    @property
+    def is_maximized(self) -> bool:
+        """Whether a block is currently maximized."""
+        return self._maximized_block is not None
 
     def clear_blocks(self):
         """Remove all blocks and add an empty one"""
