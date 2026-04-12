@@ -65,6 +65,11 @@ chat_templates_dir = os.path.join(ROOT_DIR, 'source', 'src', 'ui', 'components')
 chat_datas = [(f, os.path.join('src', 'ui', 'components'))
               for f in glob.glob(os.path.join(chat_templates_dir, 'chat_template*.html'))]
 
+# Bundled JS libraries for chat WebView (highlight.js, marked.js)
+js_assets_dir = os.path.join(ROOT_DIR, 'source', 'src', 'ui', 'assets', 'js')
+js_assets_datas = [(f, os.path.join('src', 'ui', 'assets', 'js'))
+                   for f in glob.glob(os.path.join(js_assets_dir, '*'))]
+
 # Copilot SDK CLI binary (copilot.exe for Windows)
 # The SDK requires the CLI to be available at runtime
 import site
@@ -82,7 +87,7 @@ if os.path.isdir(_copilot_bin):
     for f in glob.glob(os.path.join(_copilot_bin, '*')):
         copilot_cli_datas.append((f, os.path.join('copilot', 'bin')))
 
-datas = assets_datas + language_datas + monaco_datas + chat_datas + copilot_cli_datas + [
+datas = assets_datas + language_datas + monaco_datas + chat_datas + js_assets_datas + copilot_cli_datas + [
     # pyproject.toml para leitura de versao
     (os.path.join(ROOT_DIR, 'pyproject.toml'), '.'),
 ] + _mariadb_datas

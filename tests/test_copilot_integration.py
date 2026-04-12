@@ -453,14 +453,18 @@ class TestMCPToolRegistry:
         assert "error" in result
         assert "out of range" in result["error"]
 
-    def test_get_block_code_missing_index(self):
-        """get_block_code without block_index should return error."""
-        mock_mw = MagicMock()
-        self.registry.set_main_window(mock_mw)
+    def test_get_block_code_uses_focused_when_no_index(self):
+        """get_block_code without block_index should use focused block."""
+        code = "x = 42\ny = 10"
+        mock_block = self._make_mock_with_code(code, name="focused_block")
+        self._make_mock_env([mock_block])
 
         result = self.registry.execute("get_block_code", {})
-        assert "error" in result
-        assert "block_index" in result["error"]
+
+        assert "content" in result
+        text = result["content"][0]["text"]
+        assert "focused_block" in text
+        assert "x = 42" in text
 
     def test_search_in_code_finds_matches(self):
         """search_in_code should find matching lines across blocks."""
@@ -535,18 +539,55 @@ class TestMCPToolRegistry:
         context = json.loads(result["content"][0]["text"])
         assert context["blocks"][0]["name"] == "vendas"
 
-    def test_get_all_code_includes_block_names(self):
-        """get_all_code should include block names."""
-        block1 = self._make_mock_with_code("SELECT * FROM vendas", language="sql", name="vendas")
-        block2 = self._make_mock_with_code("print(vendas.head())", language="python", name="analise")
-        self._make_mock_env([block1, block2])
+    def test_run_silent_python_basic(self):
+        """run_silent_python should execute code and return output."""
+        mock_widget = MagicMock()
+        mock_widget.namespace = {"x": 10}
+        mock_widget.editor = MagicMock()
 
-        result = self.registry.execute("get_all_code", {})
+        mock_session = MagicMock()
+        mock_session.namespace = {"x": 10}
+        mock_session.update_namespace = MagicMock()
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = mock_session
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("run_silent_python", {"code": "print(x + 5)"})
 
         assert "content" in result
         text = result["content"][0]["text"]
-        assert "'vendas'" in text
-        assert "'analise'" in text
+        assert "15" in text
+
+    def test_run_silent_python_error(self):
+        """run_silent_python should capture errors."""
+        mock_widget = MagicMock()
+        mock_widget.namespace = {}
+        mock_widget.editor = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.namespace = {}
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = mock_session
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("run_silent_python", {"code": "1/0"})
+
+        assert "error" in result
+        assert "ZeroDivisionError" in result["error"]
+
+    def test_run_silent_python_missing_code(self):
+        """run_silent_python without code should error."""
+        mock_mw = MagicMock()
+        self.registry.set_main_window(mock_mw)
+
+        result = self.registry.execute("run_silent_python", {})
+        assert "error" in result
 
     def test_new_tools_are_registered(self):
         """New tools should appear in tools list."""
@@ -555,6 +596,123 @@ class TestMCPToolRegistry:
         assert "edit_block_lines" in tool_names
         assert "get_block_code" in tool_names
         assert "search_in_code" in tool_names
+        assert "run_silent_python" in tool_names
+        assert "run_silent_query" in tool_names
+        assert "write_and_run" in tool_names
+
+    # === Tests for _resolve_block (block_name support) ===
+
+    def test_resolve_block_by_name(self):
+        """Tools should resolve blocks by name (case-insensitive)."""
+        block1 = self._make_mock_with_code("SELECT 1", "sql", "vendas")
+        block2 = self._make_mock_with_code("SELECT 2", "sql", "clientes")
+        self._make_mock_env([block1, block2])
+
+        result = self.registry.execute("get_block_code", {"block_name": "clientes"})
+        assert "content" in result
+        assert "SELECT 2" in result["content"][0]["text"]
+
+    def test_resolve_block_by_name_case_insensitive(self):
+        """Block name resolution should be case-insensitive."""
+        block = self._make_mock_with_code("SELECT * FROM sales", "sql", "Vendas")
+        self._make_mock_env([block])
+
+        result = self.registry.execute("get_block_code", {"block_name": "VENDAS"})
+        assert "content" in result
+        assert "SELECT * FROM sales" in result["content"][0]["text"]
+
+    def test_resolve_block_by_name_not_found(self):
+        """Resolving a non-existent block name should return error with available blocks."""
+        block = self._make_mock_with_code("x = 1", "python", "analise")
+        self._make_mock_env([block])
+
+        result = self.registry.execute("get_block_code", {"block_name": "inexistente"})
+        assert "error" in result
+        assert "analise" in result["error"]
+
+    def test_resolve_block_by_index_fallback(self):
+        """When block_name is not given, block_index should still work."""
+        block1 = self._make_mock_with_code("code_a", "python", "a")
+        block2 = self._make_mock_with_code("code_b", "python", "b")
+        self._make_mock_env([block1, block2])
+
+        result = self.registry.execute("get_block_code", {"block_index": 1})
+        assert "content" in result
+        assert "code_b" in result["content"][0]["text"]
+
+    def test_edit_block_by_name(self):
+        """edit_block should work with block_name."""
+        block = self._make_mock_with_code("old code", "python", "transformacao")
+        self._make_mock_env([block])
+
+        result = self.registry.execute("edit_block", {
+            "block_name": "transformacao",
+            "code": "new code",
+        })
+        assert "content" in result
+        assert "transformacao" in result["content"][0]["text"]
+        block.set_code.assert_called_once_with("new code")
+
+    def test_edit_block_lines_by_name(self):
+        """edit_block_lines should work with block_name."""
+        code = "line1\nline2\nline3"
+        block = self._make_mock_with_code(code, "python", "grafico")
+        self._make_mock_env([block])
+
+        result = self.registry.execute("edit_block_lines", {
+            "block_name": "grafico",
+            "start_line": 2,
+            "end_line": 2,
+            "new_code": "replaced",
+            "mode": "replace",
+        })
+        assert "content" in result
+        assert "grafico" in result["content"][0]["text"]
+        new_code = block.set_code.call_args[0][0]
+        assert new_code == "line1\nreplaced\nline3"
+
+    def test_execute_block_by_name(self):
+        """execute_block should work with block_name."""
+        block = self._make_mock_with_code("print('hi')", "python", "output")
+        block._is_running = False
+        editor = self._make_mock_env([block])
+        editor.execute_block = MagicMock()
+
+        result = self.registry.execute("execute_block", {"block_name": "output"})
+        assert "content" in result
+        editor.execute_block.assert_called_once_with(block)
+
+    def test_get_context_includes_block_map(self):
+        """get_context should include block_map for quick name->index lookup."""
+        mock_session = MagicMock()
+        mock_session.session_id = "sess1"
+        mock_session.title = "Test"
+        mock_session.connection_name = ""
+        mock_session.is_connected = False
+
+        block1 = self._make_mock_with_code("SELECT 1", "sql", "vendas")
+        block2 = self._make_mock_with_code("x = 1", "python", "analise")
+
+        mock_editor = MagicMock(spec=["add_block", "blocks", "focused_block"])
+        mock_editor.blocks = [block1, block2]
+        mock_editor.focused_block = block1
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = mock_session
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("get_context", {})
+
+        context = json.loads(result["content"][0]["text"])
+        assert "block_map" in context
+        assert context["block_map"]["vendas"] == 0
+        assert context["block_map"]["analise"] == 1
+        assert context["total_blocks"] == 2
 
 
 # ==================== MCPServer Tests ====================
