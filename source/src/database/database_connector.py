@@ -327,15 +327,50 @@ class DatabaseConnector:
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
 
+    @staticmethod
+    def _split_sql_batches(query: str) -> list:
+        """Split SQL script into batches separated by GO statements.
+
+        GO is a batch separator used by SQL Server tools (SSMS, sqlcmd).
+        It is NOT a T-SQL statement - pyodbc does not understand it.
+        Each batch must be executed separately.
+
+        Handles:
+        - GO on its own line (with optional whitespace)
+        - Case-insensitive (GO, go, Go)
+        - GO with repeat count (GO 5) - split but count ignored
+        - Windows (CRLF) and Unix (LF) line endings
+        - Does NOT match GO inside identifiers (ALGO, category)
+
+        Args:
+            query: Full SQL script potentially containing GO separators
+
+        Returns:
+            List of non-empty batch strings
+        """
+        import re
+
+        # Pattern: line that contains only GO (optionally followed by a number)
+        # \b ensures we don't match inside words like ALGO, category
+        # Must be on its own line (possibly with whitespace)
+        batches = re.split(
+            r"^\s*\bGO\b\s*(?:\d+)?\s*$",
+            query,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+        # Strip whitespace and filter empty batches
+        return [b.strip() for b in batches if b.strip()]
+
     def execute_query(self, query: str) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """
         Execute SQL query and return DataFrame or list of DataFrames
 
         Supports multiple SQL commands. For queries with multiple SELECTs,
         returns a list of DataFrames (one for each SELECT).
+        For SQL Server, GO batch separators are handled correctly.
 
         Args:
-            query: SQL query to execute (can contain multiple commands)
+            query: SQL query to execute (can contain multiple commands and GO separators)
 
         Returns:
             Union[pd.DataFrame, List[pd.DataFrame]]: Query result or list of results
@@ -354,19 +389,19 @@ class DatabaseConnector:
                 # Update current database
                 self.connection_params["database"] = new_db
 
-            # Remove GO commands (SQL Server)
-            query_clean = query.replace("GO\n", "\n").replace("GO ", " ")
-
-            # For SQL Server, execute as batch and capture results
+            # For SQL Server, split on GO and execute each batch separately
             if self.db_type == "sqlserver":
-                return self._execute_mssql_batch(query_clean)
+                batches = self._split_sql_batches(query)
+                if not batches:
+                    return pd.DataFrame({"Result": ["No SQL commands to execute."]})
+                return self._execute_mssql_batches(batches)
 
             # For Databricks, use specific method with cursor access for cancellation
             if self.db_type == "databricks":
-                return self._execute_databricks_query(query_clean)
+                return self._execute_databricks_query(query)
 
             # For other databases, use legacy logic
-            return self._execute_generic_query(query_clean)
+            return self._execute_generic_query(query)
 
         except Exception as e:
             logger.error(f"Error executing query: {str(e)}")
@@ -410,149 +445,158 @@ class DatabaseConnector:
         except Exception as e:
             logger.warning(f"Error cancelling query: {e}")
 
-    def _execute_mssql_batch(self, query: str) -> pd.DataFrame:
-        """Execute SQL Server batch and return last result"""
+    def _execute_mssql_batches(self, batches: list) -> Union[pd.DataFrame, List[pd.DataFrame]]:
+        """Execute multiple SQL Server batches on the same connection.
+
+        Each batch (separated by GO in the original script) is executed
+        as a separate cursor.execute() call. The same raw connection is
+        reused so that temp tables (#tables), temp procedures, and session
+        state persist across batches.
+
+        Like SSMS, if a batch fails the remaining batches still execute.
+        Errors are collected and reported together at the end.
+
+        Args:
+            batches: List of SQL batch strings (already split on GO)
+
+        Returns:
+            Union[pd.DataFrame, List[pd.DataFrame]]: Results from all batches
+        """
         import pyodbc
 
         self._cancelled = False
-        last_error = None  # Declare BEFORE try to be accessible in finally
         cursor = None
         raw_conn = None
+        dataframes = []
+        errors = []
 
         try:
-            # Use raw pyodbc connection to access nextset()
             raw_conn = self.engine.raw_connection()
-            self._active_raw_conn = raw_conn  # Expose for cancellation
-            cursor = raw_conn.cursor()
-            self._active_cursor = cursor  # Expose cursor for cancellation
+            self._active_raw_conn = raw_conn
 
-            # CRITICAL: Ensure this pool connection is in the correct database.
-            # SQLAlchemy pool can return any connection, and a previous USE
-            # command may have been executed in another pool connection.
+            # Set database context once at the start
             current_db = self.connection_params.get("database", "")
             if current_db:
                 try:
-                    cursor.execute(f"USE [{current_db}]")
-                    # Consume possible result set from USE
-                    while cursor.nextset():
+                    init_cursor = raw_conn.cursor()
+                    init_cursor.execute(f"USE [{current_db}]")
+                    while init_cursor.nextset():
                         pass
+                    init_cursor.close()
                 except Exception as e:
                     logger.warning(f"Failed to set database [{current_db}]: {e}")
 
-            # Execute complete query
-            cursor.execute(query)
+            for batch_idx, batch in enumerate(batches, start=1):
+                if self._cancelled:
+                    logger.info("Execution cancelled between batches")
+                    break
 
-            # Capture all result sets
-            dataframes = []
-            result_set_count = 0
+                logger.info(f"Executing batch {batch_idx}/{len(batches)} ({len(batch)} chars)")
 
-            # Process all result sets in a loop
-            while True:
-                result_set_count += 1
+                cursor = raw_conn.cursor()
+                self._active_cursor = cursor
 
+                batch_error = None
                 try:
-                    if cursor.description:  # Has columns (is a SELECT)
-                        # Preserve original column case
-                        columns = [col[0] for col in cursor.description]
-                        rows = cursor.fetchall()
-                        logger.info(f"Result set {result_set_count}: {len(rows)} rows, columns: {columns}")
-                        if rows:
-                            df = pd.DataFrame.from_records(rows, columns=columns)
-                            dataframes.append(df)
-                    else:
-                        logger.info(f"Result set {result_set_count}: no description (doesn't return data)")
+                    cursor.execute(batch)
                 except pyodbc.Error as e:
-                    last_error = str(e)
-                    logger.error(f"PYODBC error in result set {result_set_count}: {last_error}")
-                    break  # Stop on error
-                except Exception as e:
-                    last_error = str(e)
-                    logger.error(f"GENERIC error in result set {result_set_count}: {last_error}")
-                    break  # Stop on error
+                    batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                    logger.warning(batch_error)
+                    errors.append(batch_error)
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                    cursor = None
+                    continue  # Continue to next batch (like SSMS)
 
-                # Try next result set
-                try:
-                    logger.info(f"Trying nextset after result set {result_set_count}...")
-                    has_next = cursor.nextset()
-                    logger.info(f"nextset returned: {has_next}")
-
-                    # CRITICAL: pyodbc DOESN'T throw exception in nextset() when there's an error!
-                    # The error stays in cursor.messages - we need to check BEFORE continuing
-                    if hasattr(cursor, "messages") and cursor.messages:
-                        logger.info(f"Messages after nextset: {cursor.messages}")
-                        for msg in cursor.messages:
-                            # Messages are tuples: (sql_state, message)
-                            if len(msg) >= 2:
-                                sql_state = msg[0]
-                                error_msg = msg[1]
-                                logger.info(f"SQL State: {sql_state}, Message: {error_msg}")
-
-                                # SQL error states start with class 01-99 (except 01 which is warning)
-                                # 42S02 = Invalid object name
-                                # 42000 = Syntax error
-                                if sql_state and sql_state != "01000":  # 01000 is informational
-                                    last_error = error_msg
-                                    logger.error(f"SQL ERROR detected in messages: {last_error}")
-                                    break
-
-                    if last_error:
-                        break  # Stop if error found in messages
-
-                    if not has_next:
+                # Collect all result sets from this batch
+                while True:
+                    try:
+                        if cursor.description:
+                            columns = [col[0] for col in cursor.description]
+                            rows = cursor.fetchall()
+                            if rows:
+                                df = pd.DataFrame.from_records(rows, columns=columns)
+                                dataframes.append(df)
+                    except pyodbc.Error as e:
+                        batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                         break
-                except pyodbc.Error as e:
-                    # Error trying next result set - could be SQL error
-                    last_error = str(e)
-                    logger.error(f"PYODBC error processing nextset: {last_error}")
-                    break
-                except Exception as e:
-                    last_error = str(e)
-                    logger.error(f"GENERIC error processing nextset: {last_error}")
-                    break
+                    except Exception as e:
+                        batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        break
 
-            # If there was an error, throw exception to report to user
-            if last_error:
-                raise Exception(last_error)
+                    try:
+                        has_next = cursor.nextset()
 
-            # Commit
+                        # Check cursor.messages for deferred errors
+                        if hasattr(cursor, "messages") and cursor.messages:
+                            for msg in cursor.messages:
+                                if len(msg) >= 2:
+                                    sql_state, error_msg = msg[0], msg[1]
+                                    if sql_state and sql_state != "01000":
+                                        batch_error = f"Batch {batch_idx}/{len(batches)}: {error_msg}"
+                                        break
+
+                        if batch_error:
+                            break
+                        if not has_next:
+                            break
+                    except pyodbc.Error as e:
+                        batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        break
+                    except Exception as e:
+                        batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        break
+
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                cursor = None
+
+                if batch_error:
+                    logger.warning(batch_error)
+                    errors.append(batch_error)
+                    # Continue to next batch (like SSMS)
+
+            # Commit after all batches (even if some failed)
             raw_conn.commit()
 
-            logger.info(f"Total result sets: {result_set_count}, DataFrames captured: {len(dataframes)}")
+            logger.info(
+                f"Executed {len(batches)} batch(es): "
+                f"{len(dataframes)} result set(s), {len(errors)} error(s)."
+            )
 
-            # If captured multiple results, return list of DataFrames
+            # Build error summary if there were failures
+            if errors:
+                error_summary = "\n".join(errors)
+                if dataframes:
+                    # Append error info as an extra DataFrame so the user sees both results and errors
+                    error_df = pd.DataFrame({"Error": errors})
+                    dataframes.append(error_df)
+                else:
+                    raise Exception(error_summary)
+
             if len(dataframes) > 1:
-                logger.info(f"Returning list with {len(dataframes)} DataFrames")
                 return dataframes
-
-            # If captured single result, return directly
             if dataframes:
-                logger.info(f"Returning single DataFrame with {len(dataframes[0])} rows")
                 return dataframes[0]
 
-            # No results - return success message
-            rows_affected = cursor.rowcount
-            if rows_affected >= 0:
-                msg = f"Command executed successfully. {rows_affected} row(s) affected."
-            else:
-                msg = "Command executed successfully."
-
-            logger.info(msg)
-            return pd.DataFrame({"Result": [msg]})
+            return pd.DataFrame({"Result": ["Command(s) executed successfully."]})
 
         except Exception as e:
-            logger.error(f"Error executing SQL Server batch: {str(e)}")
-            raise  # Re-throw error for user to see
+            logger.error(f"Error executing SQL Server batches: {str(e)}")
+            raise
 
         finally:
-            self._active_raw_conn = None  # Clear reference
-            self._active_cursor = None  # Clear cursor reference
-            # Close cursor and connection
+            self._active_raw_conn = None
+            self._active_cursor = None
             if cursor:
                 try:
                     cursor.close()
                 except Exception:
                     pass
-
             if raw_conn:
                 try:
                     raw_conn.close()

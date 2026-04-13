@@ -354,7 +354,7 @@ class TestUseDatabasePersistence:
         assert use_match.group(1) == "esim"
 
     def test_mssql_batch_sends_use_before_query(self):
-        """_execute_mssql_batch deve enviar USE antes da query"""
+        """_execute_mssql_batches deve enviar USE antes da query"""
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
@@ -367,20 +367,22 @@ class TestUseDatabasePersistence:
         mock_cursor.fetchall.return_value = [(1, "a")]
         mock_cursor.nextset.return_value = False
 
+        mock_init_cursor = MagicMock()
+        mock_init_cursor.nextset.return_value = False
+
         mock_raw_conn = MagicMock()
-        mock_raw_conn.cursor.return_value = mock_cursor
+        mock_raw_conn.cursor.side_effect = [mock_init_cursor, mock_cursor]
 
         mock_engine = MagicMock()
         mock_engine.raw_connection.return_value = mock_raw_conn
         connector.engine = mock_engine
 
-        connector._execute_mssql_batch("SELECT 1")
+        connector._execute_mssql_batches(["SELECT 1"])
 
-        # Deve ter executado USE [esim] antes da query principal
-        calls = mock_cursor.execute.call_args_list
-        assert len(calls) >= 2, f"Deveria ter chamado execute ao menos 2 vezes (USE + query), mas chamou {len(calls)}"
-        assert "USE [esim]" in calls[0][0][0]
-        assert "SELECT 1" in calls[1][0][0]
+        # init_cursor deve ter executado USE [esim]
+        mock_init_cursor.execute.assert_called_once_with("USE [esim]")
+        # batch cursor deve ter executado a query
+        mock_cursor.execute.assert_called_once_with("SELECT 1")
 
     @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
     def test_checkout_event_registered_for_sqlserver(self, _mock_drivers):
@@ -403,3 +405,196 @@ class TestUseDatabasePersistence:
 
                 # Deve ter registrado evento "checkout" no pool
                 mock_event.listens_for.assert_called_once_with(mock_engine, "checkout")
+
+
+class TestSplitSqlBatches:
+    """Testes para split de batches SQL no separador GO"""
+
+    def _split(self, query):
+        from database.database_connector import DatabaseConnector
+        return DatabaseConnector._split_sql_batches(query)
+
+    def test_single_batch_no_go(self):
+        """Query sem GO deve retornar um unico batch"""
+        result = self._split("SELECT 1")
+        assert result == ["SELECT 1"]
+
+    def test_two_batches_separated_by_go(self):
+        """Duas queries separadas por GO"""
+        sql = "SELECT 1\nGO\nSELECT 2"
+        result = self._split(sql)
+        assert len(result) == 2
+        assert result[0] == "SELECT 1"
+        assert result[1] == "SELECT 2"
+
+    def test_go_case_insensitive(self):
+        """GO deve ser case-insensitive"""
+        sql = "SELECT 1\ngo\nSELECT 2\nGo\nSELECT 3"
+        result = self._split(sql)
+        assert len(result) == 3
+
+    def test_go_with_leading_whitespace(self):
+        """GO com espacos antes deve funcionar"""
+        sql = "SELECT 1\n   GO\nSELECT 2"
+        result = self._split(sql)
+        assert len(result) == 2
+
+    def test_go_with_trailing_whitespace(self):
+        """GO com espacos depois deve funcionar"""
+        sql = "SELECT 1\nGO   \nSELECT 2"
+        result = self._split(sql)
+        assert len(result) == 2
+
+    def test_go_with_repeat_count(self):
+        """GO N (repeat count) deve ser tratado como separador"""
+        sql = "INSERT INTO t VALUES(1)\nGO 5\nSELECT 1"
+        result = self._split(sql)
+        assert len(result) == 2
+
+    def test_go_does_not_match_inside_identifier(self):
+        """GO dentro de palavras como ALGO, category nao deve separar"""
+        sql = "SELECT ALGO FROM category WHERE gopher = 1"
+        result = self._split(sql)
+        assert len(result) == 1
+        assert "ALGO" in result[0]
+        assert "category" in result[0]
+        assert "gopher" in result[0]
+
+    def test_go_crlf_line_endings(self):
+        """GO com line endings Windows (CRLF) deve funcionar"""
+        sql = "SELECT 1\r\nGO\r\nSELECT 2"
+        result = self._split(sql)
+        assert len(result) == 2
+
+    def test_empty_batches_filtered(self):
+        """Batches vazios entre GOs consecutivos devem ser ignorados"""
+        sql = "SELECT 1\nGO\n\nGO\nSELECT 2"
+        result = self._split(sql)
+        assert len(result) == 2
+
+    def test_go_at_end_of_script(self):
+        """GO no final do script nao deve gerar batch vazio"""
+        sql = "SELECT 1\nGO"
+        result = self._split(sql)
+        assert len(result) == 1
+        assert result[0] == "SELECT 1"
+
+    def test_go_at_start_of_script(self):
+        """GO no inicio do script nao deve gerar batch vazio"""
+        sql = "GO\nSELECT 1"
+        result = self._split(sql)
+        assert len(result) == 1
+
+    def test_complex_tsql_script(self):
+        """Script T-SQL complexo com CREATE PROCEDURE entre GOs"""
+        sql = (
+            "USE Gecon;\n"
+            "GO\n"
+            "DECLARE @x INT = 1\n"
+            "SELECT @x\n"
+            "GO\n"
+            "CREATE PROCEDURE #MyProc AS SELECT 1\n"
+            "GO\n"
+            "EXEC #MyProc\n"
+            "GO\n"
+        )
+        result = self._split(sql)
+        assert len(result) == 4
+        assert "USE Gecon" in result[0]
+        assert "DECLARE @x" in result[1]
+        assert "CREATE PROCEDURE" in result[2]
+        assert "EXEC #MyProc" in result[3]
+
+    def test_go_not_in_string_literal(self):
+        """GO sozinho na linha sempre separa (mesmo conceito do SSMS)"""
+        # In SSMS, GO on its own line always separates regardless of context
+        sql = "SELECT 'some text'\nGO\nSELECT 2"
+        result = self._split(sql)
+        assert len(result) == 2
+
+
+class TestMssqlBatchesExecution:
+    """Testes para execucao de multiplos batches SQL Server"""
+
+    def test_multiple_batches_executed_sequentially(self):
+        """Cada batch deve ser executado em sequencia na mesma conexao"""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.connection_params = {}
+
+        mock_cursor1 = MagicMock()
+        mock_cursor1.description = None
+        mock_cursor1.nextset.return_value = False
+
+        mock_cursor2 = MagicMock()
+        mock_cursor2.description = [("col1",)]
+        mock_cursor2.fetchall.return_value = [(42,)]
+        mock_cursor2.nextset.return_value = False
+
+        mock_raw_conn = MagicMock()
+        mock_raw_conn.cursor.side_effect = [mock_cursor1, mock_cursor2]
+
+        mock_engine = MagicMock()
+        mock_engine.raw_connection.return_value = mock_raw_conn
+        connector.engine = mock_engine
+
+        result = connector._execute_mssql_batches(["CREATE TABLE #t (id INT)", "SELECT * FROM #t"])
+
+        mock_cursor1.execute.assert_called_once_with("CREATE TABLE #t (id INT)")
+        mock_cursor2.execute.assert_called_once_with("SELECT * FROM #t")
+
+    def test_batch_error_continues_and_reports(self):
+        """Erro num batch deve continuar executando os demais (como SSMS)"""
+        import pyodbc
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.connection_params = {}
+
+        # First batch fails, second succeeds
+        mock_cursor_bad = MagicMock()
+        mock_cursor_bad.execute.side_effect = pyodbc.Error("42000", "Syntax error")
+
+        mock_cursor_ok = MagicMock()
+        mock_cursor_ok.description = [("col1",)]
+        mock_cursor_ok.fetchall.return_value = [(1,)]
+        mock_cursor_ok.nextset.return_value = False
+
+        mock_raw_conn = MagicMock()
+        mock_raw_conn.cursor.side_effect = [mock_cursor_bad, mock_cursor_ok]
+
+        mock_engine = MagicMock()
+        mock_engine.raw_connection.return_value = mock_raw_conn
+        connector.engine = mock_engine
+
+        # Should NOT raise - continues past the error
+        result = connector._execute_mssql_batches(["BAD SQL", "SELECT 1"])
+        # Second batch produced a result, plus error DataFrame appended
+        assert isinstance(result, list)
+        # At least one result DF and one error DF
+        assert len(result) >= 2
+
+    def test_all_batches_fail_raises_error(self):
+        """Se todos os batches falharem, deve levantar excecao"""
+        import pyodbc
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.connection_params = {}
+
+        mock_cursor = MagicMock()
+        mock_cursor.execute.side_effect = pyodbc.Error("42000", "Syntax error")
+
+        mock_raw_conn = MagicMock()
+        mock_raw_conn.cursor.return_value = mock_cursor
+
+        mock_engine = MagicMock()
+        mock_engine.raw_connection.return_value = mock_raw_conn
+        connector.engine = mock_engine
+
+        with pytest.raises(Exception, match="Batch 1/2"):
+            connector._execute_mssql_batches(["BAD SQL", "ALSO BAD"])
