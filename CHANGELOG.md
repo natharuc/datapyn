@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.21.1 (2026-04-13)
+
+### Bug Fixes
+
+- Suporte correto a GO como separador de batches SQL Server
+  ([`66b8507`](https://github.com/natharuc/datapyn/commit/66b850762a4607ed617ea882e247098eac000d95))
+
+
 ## v1.21.0 (2026-04-12)
 
 ### Features
