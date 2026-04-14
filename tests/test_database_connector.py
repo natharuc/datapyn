@@ -598,3 +598,109 @@ class TestMssqlBatchesExecution:
 
         with pytest.raises(Exception, match="Batch 1/2"):
             connector._execute_mssql_batches(["BAD SQL", "ALSO BAD"])
+
+
+class TestDatabricksOAuthRetry:
+    """Testes para retry automatico quando OAuth token do Databricks expira"""
+
+    @patch("database.database_connector._get_oauth_token_cache_path")
+    @patch("database.database_connector.create_engine")
+    def test_retry_on_expired_oauth_token(self, mock_create_engine, mock_cache_path):
+        """Deve limpar cache e reconectar quando token OAuth expira"""
+        from database.database_connector import DatabaseConnector
+
+        # First engine raises KeyError('access_token') on connect,
+        # second engine succeeds
+        mock_conn_fail = MagicMock()
+        mock_conn_fail.__enter__ = MagicMock(side_effect=KeyError("access_token"))
+        mock_conn_fail.__exit__ = MagicMock(return_value=False)
+
+        mock_conn_ok = MagicMock()
+        mock_conn_ok.__enter__ = MagicMock(return_value=mock_conn_ok)
+        mock_conn_ok.__exit__ = MagicMock(return_value=False)
+
+        mock_engine_fail = MagicMock()
+        mock_engine_fail.connect.return_value = mock_conn_fail
+
+        mock_engine_ok = MagicMock()
+        mock_engine_ok.connect.return_value = mock_conn_ok
+
+        mock_create_engine.side_effect = [mock_engine_fail, mock_engine_ok]
+
+        # Mock cache path that exists
+        mock_path = MagicMock()
+        mock_path.exists.return_value = True
+        mock_cache_path.return_value = mock_path
+
+        connector = DatabaseConnector()
+        result = connector.connect(
+            "databricks", "my-workspace.databricks.com", 443, "",
+            username="", password="",
+            http_path="/sql/1.0/warehouses/abc"
+        )
+
+        assert result is True
+        # Cache file should have been deleted
+        mock_path.unlink.assert_called_once()
+        # Engine should have been created twice (original + retry)
+        assert mock_create_engine.call_count == 2
+        # First engine should have been disposed
+        mock_engine_fail.dispose.assert_called_once()
+
+    @patch("database.database_connector.create_engine")
+    def test_non_databricks_keyerror_propagates(self, mock_create_engine):
+        """KeyError que nao e de OAuth Databricks deve propagar normalmente"""
+        from database.database_connector import DatabaseConnector
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(side_effect=KeyError("something_else"))
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn
+        mock_create_engine.return_value = mock_engine
+
+        connector = DatabaseConnector()
+        with pytest.raises(KeyError, match="something_else"):
+            connector.connect(
+                "databricks", "host.databricks.com", 443, "",
+                username="", password="",
+                http_path="/sql/1.0/warehouses/abc"
+            )
+
+    @patch("database.database_connector._get_oauth_token_cache_path")
+    @patch("database.database_connector.create_engine")
+    def test_retry_works_even_without_cache_file(self, mock_create_engine, mock_cache_path):
+        """Retry deve funcionar mesmo se arquivo de cache nao existir"""
+        from database.database_connector import DatabaseConnector
+
+        mock_conn_fail = MagicMock()
+        mock_conn_fail.__enter__ = MagicMock(side_effect=KeyError("access_token"))
+        mock_conn_fail.__exit__ = MagicMock(return_value=False)
+
+        mock_conn_ok = MagicMock()
+        mock_conn_ok.__enter__ = MagicMock(return_value=mock_conn_ok)
+        mock_conn_ok.__exit__ = MagicMock(return_value=False)
+
+        mock_engine_fail = MagicMock()
+        mock_engine_fail.connect.return_value = mock_conn_fail
+
+        mock_engine_ok = MagicMock()
+        mock_engine_ok.connect.return_value = mock_conn_ok
+
+        mock_create_engine.side_effect = [mock_engine_fail, mock_engine_ok]
+
+        # Cache file does NOT exist
+        mock_path = MagicMock()
+        mock_path.exists.return_value = False
+        mock_cache_path.return_value = mock_path
+
+        connector = DatabaseConnector()
+        result = connector.connect(
+            "databricks", "my-workspace.databricks.com", 443, "",
+            username="", password="",
+            http_path="/sql/1.0/warehouses/abc"
+        )
+
+        assert result is True
+        mock_path.unlink.assert_not_called()

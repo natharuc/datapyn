@@ -129,8 +129,28 @@ class DatabaseConnector:
                             pass  # Silence - USE in batch will catch error
 
             # Test connection
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+            try:
+                with self.engine.connect() as conn:
+                    conn.execute(text("SELECT 1"))
+            except KeyError as e:
+                # Databricks OAuth: cached refresh token expired/invalid.
+                # The SDK raises KeyError('access_token') when the server
+                # response to a token refresh lacks the expected field.
+                # Delete stale cache and retry to trigger fresh browser OAuth.
+                if db_type == "databricks" and "access_token" in str(e):
+                    logger.warning("Databricks OAuth token expired. Clearing cache and retrying...")
+                    cache_path = _get_oauth_token_cache_path(host)
+                    if cache_path.exists():
+                        cache_path.unlink()
+                        logger.info(f"Deleted stale OAuth cache: {cache_path}")
+                    self.engine.dispose()
+                    self.engine = create_engine(
+                        connection_string, pool_pre_ping=True, connect_args=connect_args
+                    )
+                    with self.engine.connect() as conn:
+                        conn.execute(text("SELECT 1"))
+                else:
+                    raise
 
             self.db_type = db_type
             self.connection_params = {"host": host, "port": port, "database": database, "username": username}
