@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.21.2 (2026-04-14)
+
+### Bug Fixes
+
+- Retry automatico quando OAuth token do Databricks expira
+  ([`09e57b3`](https://github.com/natharuc/datapyn/commit/09e57b38f8dc2b45741145fbb8219b3ce91c3da5))
+
+
 ## v1.21.1 (2026-04-13)
 
 ### Bug Fixes
