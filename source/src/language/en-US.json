@@ -426,7 +426,8 @@
     "status_cancelled": "Cancelled",
     "status_error": "Error",
     "drag_label": "[{lang}] Block",
-    "copilot_editing": "Copilot editing..."
+    "copilot_editing": "Copilot editing...",
+    "tooltip_active": "Enable/disable block (inactive blocks are skipped on execute all)"
   },
 
   "find_replace": {
