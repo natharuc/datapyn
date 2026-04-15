@@ -285,7 +285,7 @@ class BlockEditor(QWidget):
 
         for index, block in enumerate(self._blocks):
             code = block.get_code().strip()
-            if code:
+            if code and block.is_active():
                 # Tuple: (language, code, block, block_name, connection_name, database_name)
                 queue.append((block.get_language(), code, block, block.get_block_name(), block.get_connection_name(), block.get_database_name()))
                 self._execution_queue_blocks.append(block)

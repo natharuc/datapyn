@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint, QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint, QTimer, QSize
 from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
 import qtawesome as qta
 
@@ -425,6 +425,7 @@ class CodeBlock(QFrame):
         self._is_copilot_editing = False  # Copilot is editing this block
         self._copilot_editing_timer = None  # Auto-dismiss timer
         self._is_maximized = False  # Block is in maximized/focus mode
+        self._is_active = True  # Block is active (included in execute all)
 
         self._setup_ui()
         self._connect_signals()
@@ -631,6 +632,17 @@ class CodeBlock(QFrame):
         self.db_panel.setMinimumWidth(80)
         self.db_panel.setMaximumWidth(180)
         control_layout.addWidget(self.db_panel)
+
+        # Active toggle switch
+        self.active_toggle = QPushButton()
+        self.active_toggle.setCheckable(True)
+        self.active_toggle.setChecked(True)
+        self.active_toggle.setFixedSize(36, 20)
+        self.active_toggle.setToolTip(S.block.tooltip_active)
+        self.active_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_active_toggle_style()
+        self.active_toggle.toggled.connect(self._on_active_toggled)
+        control_layout.addWidget(self.active_toggle)
 
         # Block name field (becomes dataframe variable name for SQL)
         self.name_input = QLineEdit()
@@ -1036,7 +1048,64 @@ class CodeBlock(QFrame):
                 }
             """)
 
+    def _update_active_toggle_style(self):
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        if self._is_active:
+            self.active_toggle.setStyleSheet(f"""
+                QPushButton {{
+                    background: {colors.interactive_primary};
+                    border: none;
+                    border-radius: 10px;
+                }}
+                QPushButton::indicator {{ width: 0; height: 0; }}
+            """)
+            self.active_toggle.setIcon(qta.icon("mdi.circle", color="white", scale_factor=0.6))
+            self.active_toggle.setIconSize(QSize(16, 16))
+            self.active_toggle.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        else:
+            self.active_toggle.setStyleSheet(f"""
+                QPushButton {{
+                    background: {colors.bg_tertiary};
+                    border: 1px solid {colors.border_default};
+                    border-radius: 10px;
+                }}
+                QPushButton::indicator {{ width: 0; height: 0; }}
+            """)
+            self.active_toggle.setIcon(qta.icon("mdi.circle", color=colors.text_tertiary, scale_factor=0.6))
+            self.active_toggle.setIconSize(QSize(16, 16))
+            self.active_toggle.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+
+    def _on_active_toggled(self, checked: bool):
+        self._is_active = checked
+        self._update_active_toggle_style()
+        self._update_inactive_visual()
+
+    def _update_inactive_visual(self):
+        opacity = 1.0 if self._is_active else 0.45
+        self.editor_container.setEnabled(self._is_active)
+        # Dim the editor when inactive
+        effect = self.editor_container.graphicsEffect()
+        if not self._is_active:
+            from PyQt6.QtWidgets import QGraphicsOpacityEffect
+            opacity_effect = QGraphicsOpacityEffect(self.editor_container)
+            opacity_effect.setOpacity(0.45)
+            self.editor_container.setGraphicsEffect(opacity_effect)
+        else:
+            self.editor_container.setGraphicsEffect(None)
+
     # === Public API ===
+
+    def is_active(self) -> bool:
+        """Return whether this block is active (included in execute all)"""
+        return self._is_active
+
+    def set_active(self, active: bool):
+        """Set active state"""
+        self._is_active = active
+        self.active_toggle.setChecked(active)
+        self._update_active_toggle_style()
+        self._update_inactive_visual()
 
     def get_language(self) -> str:
         return self.lang_combo.currentData()
@@ -1307,6 +1376,7 @@ class CodeBlock(QFrame):
             "code": self.get_code(),
             "height": self.editor_container.height(),
             "block_name": self.get_block_name(),
+            "is_active": self._is_active,
         }
         if self._connection_name:
             data["connection_name"] = self._connection_name
@@ -1338,6 +1408,9 @@ class CodeBlock(QFrame):
         # Restore custom database
         if "database_name" in data and data["database_name"]:
             block.set_database_name(data["database_name"])
+        # Restore active state
+        if "is_active" in data:
+            block.set_active(data["is_active"])
         return block
 
     # === Drag ===

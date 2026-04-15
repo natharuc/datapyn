@@ -1194,3 +1194,126 @@ class TestBlockMaximize:
         blocks = editor.get_blocks()
         for i, original_code in enumerate(initial_blocks):
             assert blocks[i].get_code() == original_code
+
+
+class TestBlockActiveToggle:
+    """Testes do toggle ativo/inativo nos blocos"""
+
+    @pytest.fixture
+    def theme_manager(self):
+        return ThemeManager()
+
+    @pytest.fixture
+    def block(self, theme_manager, qtbot):
+        block = CodeBlock(theme_manager=theme_manager)
+        qtbot.addWidget(block)
+        return block
+
+    def test_block_active_by_default(self, block):
+        """Bloco deve ser ativo por padrao"""
+        assert block.is_active() is True
+        assert block.active_toggle.isChecked() is True
+
+    def test_set_active_false(self, block):
+        """Deve desativar o bloco"""
+        block.set_active(False)
+        assert block.is_active() is False
+        assert block.active_toggle.isChecked() is False
+
+    def test_set_active_true(self, block):
+        """Deve reativar o bloco"""
+        block.set_active(False)
+        block.set_active(True)
+        assert block.is_active() is True
+        assert block.active_toggle.isChecked() is True
+
+    def test_toggle_click_changes_state(self, block):
+        """Clicar no toggle deve mudar o estado"""
+        block.active_toggle.setChecked(False)
+        assert block.is_active() is False
+        block.active_toggle.setChecked(True)
+        assert block.is_active() is True
+
+    def test_inactive_block_editor_disabled(self, block):
+        """Editor deve ficar desabilitado quando bloco inativo"""
+        block.set_active(False)
+        assert block.editor_container.isEnabled() is False
+        block.set_active(True)
+        assert block.editor_container.isEnabled() is True
+
+    def test_to_dict_saves_active_state(self, block):
+        """to_dict deve salvar estado ativo"""
+        block.set_active(False)
+        data = block.to_dict()
+        assert data["is_active"] is False
+
+        block.set_active(True)
+        data = block.to_dict()
+        assert data["is_active"] is True
+
+    def test_from_dict_restores_active_state(self, theme_manager, qtbot):
+        """from_dict deve restaurar estado inativo"""
+        data = {"language": "sql", "code": "SELECT 1", "is_active": False}
+        block = CodeBlock.from_dict(data, theme_manager)
+        qtbot.addWidget(block)
+        assert block.is_active() is False
+
+    def test_from_dict_defaults_active_true(self, theme_manager, qtbot):
+        """from_dict sem is_active deve manter bloco ativo (compatibilidade)"""
+        data = {"language": "sql", "code": "SELECT 1"}
+        block = CodeBlock.from_dict(data, theme_manager)
+        qtbot.addWidget(block)
+        assert block.is_active() is True
+
+    @pytest.fixture
+    def _no_focus_editor(self, monkeypatch):
+        """Prevent QScintilla from grabbing focus (avoids test hang)"""
+        monkeypatch.setattr(CodeBlock, "focus_editor", lambda self: None)
+
+    @pytest.fixture
+    def editor(self, qtbot, _no_focus_editor):
+        theme = ThemeManager()
+        editor = BlockEditor(theme_manager=theme)
+        qtbot.addWidget(editor)
+        return editor
+
+    def test_execute_all_skips_inactive(self, editor, qtbot):
+        """Execute all deve pular blocos inativos"""
+        editor.add_block("sql")
+        editor.add_block("sql")
+        editor.add_block("sql")
+
+        blocks = editor.get_blocks()
+        blocks[0].set_code("SELECT 1")
+        blocks[1].set_code("SELECT 2")
+        blocks[2].set_code("SELECT 3")
+
+        # Desativar o bloco do meio
+        blocks[1].set_active(False)
+
+        # Capturar a queue emitida
+        emitted_queue = []
+        editor.execute_queue.connect(lambda q: emitted_queue.extend(q))
+        editor.execute_all_blocks()
+
+        # Deve ter apenas 2 blocos na queue (0 e 2)
+        assert len(emitted_queue) == 2
+        assert emitted_queue[0][1] == "SELECT 1"  # code of first block
+        assert emitted_queue[1][1] == "SELECT 3"  # code of third block
+
+    def test_execute_all_skips_all_inactive(self, editor, qtbot):
+        """Se todos os blocos estao inativos, nada deve ser executado"""
+        editor.add_block("sql")
+        editor.add_block("sql")
+
+        blocks = editor.get_blocks()
+        blocks[0].set_code("SELECT 1")
+        blocks[1].set_code("SELECT 2")
+        blocks[0].set_active(False)
+        blocks[1].set_active(False)
+
+        emitted_queue = []
+        editor.execute_queue.connect(lambda q: emitted_queue.extend(q))
+        editor.execute_all_blocks()
+
+        assert len(emitted_queue) == 0

@@ -428,7 +428,8 @@
     "status_cancelled": "Cancelado",
     "status_error": "Erro",
     "drag_label": "[{lang}] Bloco",
-    "copilot_editing": "Copilot editando..."
+    "copilot_editing": "Copilot editando...",
+    "tooltip_active": "Ativar/desativar bloco (blocos inativos sao pulados ao executar todos)"
   },
 
   "find_replace": {
