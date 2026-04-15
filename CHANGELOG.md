@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.22.0 (2026-04-15)
+
+### Bug Fixes
+
+- **ci**: Remover cache pip e adicionar fallback para WiX path
+  ([`7931a4c`](https://github.com/natharuc/datapyn/commit/7931a4cd73882b14ba9a7479572a770bc0820c17))
+
+### Features
+
+- Toggle ativo/inativo nos blocos de codigo
+  ([`fbed70b`](https://github.com/natharuc/datapyn/commit/fbed70b36ca3eb1632e227c18687620c3c4d463c))
+
+
 ## v1.21.2 (2026-04-14)
 
 ### Bug Fixes
