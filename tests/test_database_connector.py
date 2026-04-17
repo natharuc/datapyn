@@ -545,6 +545,251 @@ class TestMssqlBatchesExecution:
         mock_cursor1.execute.assert_called_once_with("CREATE TABLE #t (id INT)")
         mock_cursor2.execute.assert_called_once_with("SELECT * FROM #t")
 
+
+class TestSplitSqlStatements:
+    """Tests for _split_sql_statements - DELIMITER-aware SQL splitting"""
+
+    def _split(self, query):
+        from database.database_connector import DatabaseConnector
+        return DatabaseConnector._split_sql_statements(query)
+
+    # --- Basic splitting on semicolon ---
+
+    def test_single_statement_no_semicolon(self):
+        """Single statement without trailing semicolon"""
+        result = self._split("SELECT 1")
+        assert result == ["SELECT 1"]
+
+    def test_single_statement_with_semicolon(self):
+        """Single statement with trailing semicolon"""
+        result = self._split("SELECT 1;")
+        assert result == ["SELECT 1"]
+
+    def test_multiple_statements(self):
+        """Multiple statements separated by semicolons"""
+        result = self._split("SELECT 1; SELECT 2; SELECT 3;")
+        assert result == ["SELECT 1", "SELECT 2", "SELECT 3"]
+
+    def test_empty_input(self):
+        """Empty string returns empty list"""
+        result = self._split("")
+        assert result == []
+
+    def test_whitespace_only(self):
+        """Whitespace-only input returns empty list"""
+        result = self._split("   \n\n  ")
+        assert result == []
+
+    # --- DELIMITER support ---
+
+    def test_delimiter_create_function(self):
+        """MySQL CREATE FUNCTION with DELIMITER $$ should be one statement"""
+        query = """DELIMITER $$
+
+CREATE FUNCTION SENHA_HASH(p_senha VARCHAR(255))
+RETURNS CHAR(41)
+DETERMINISTIC
+BEGIN
+    RETURN CONCAT(
+        '*',
+        UPPER(
+            SHA1(
+                UNHEX(
+                    SHA1(p_senha)
+                )
+            )
+        )
+    );
+END$$
+
+DELIMITER ;"""
+        result = self._split(query)
+        assert len(result) == 1
+        assert result[0].startswith("CREATE FUNCTION")
+        assert "END" in result[0]
+        # Semicolons inside the body must NOT split the statement
+        assert "SHA1(p_senha)" in result[0]
+
+    def test_delimiter_create_procedure(self):
+        """MySQL CREATE PROCEDURE with DELIMITER // should be one statement"""
+        query = """DELIMITER //
+
+CREATE PROCEDURE sp_test(IN p_id INT)
+BEGIN
+    DECLARE v_name VARCHAR(100);
+    SELECT name INTO v_name FROM users WHERE id = p_id;
+    SELECT v_name;
+END//
+
+DELIMITER ;"""
+        result = self._split(query)
+        assert len(result) == 1
+        assert "CREATE PROCEDURE" in result[0]
+        assert "DECLARE v_name" in result[0]
+
+    def test_delimiter_with_statements_before_and_after(self):
+        """DELIMITER block with regular statements before and after"""
+        query = """DROP FUNCTION IF EXISTS my_func;
+
+DELIMITER $$
+
+CREATE FUNCTION my_func(x INT) RETURNS INT
+DETERMINISTIC
+BEGIN
+    RETURN x * 2;
+END$$
+
+DELIMITER ;
+
+SELECT my_func(5);"""
+        result = self._split(query)
+        assert len(result) == 3
+        assert result[0] == "DROP FUNCTION IF EXISTS my_func"
+        assert result[1].startswith("CREATE FUNCTION")
+        assert result[2] == "SELECT my_func(5)"
+
+    def test_delimiter_multiple_routines(self):
+        """Multiple routines in one script with same DELIMITER block"""
+        query = """DELIMITER $$
+
+CREATE FUNCTION f1() RETURNS INT
+DETERMINISTIC
+BEGIN
+    RETURN 1;
+END$$
+
+CREATE FUNCTION f2() RETURNS INT
+DETERMINISTIC
+BEGIN
+    RETURN 2;
+END$$
+
+DELIMITER ;"""
+        result = self._split(query)
+        assert len(result) == 2
+        assert "f1" in result[0]
+        assert "f2" in result[1]
+
+    def test_delimiter_case_insensitive(self):
+        """DELIMITER directive should be case-insensitive"""
+        query = """delimiter $$
+CREATE FUNCTION f() RETURNS INT
+BEGIN
+    RETURN 1;
+END$$
+delimiter ;"""
+        result = self._split(query)
+        assert len(result) == 1
+        assert "CREATE FUNCTION" in result[0]
+
+    # --- String literals ---
+
+    def test_semicolon_inside_string_literal(self):
+        """Semicolons inside string literals should not split"""
+        result = self._split("SELECT 'hello; world';")
+        assert len(result) == 1
+        assert "'hello; world'" in result[0]
+
+    def test_semicolon_inside_double_quoted_string(self):
+        """Semicolons inside double-quoted strings should not split"""
+        result = self._split('SELECT "val;ue";')
+        assert len(result) == 1
+        assert '"val;ue"' in result[0]
+
+    def test_escaped_quotes_in_string(self):
+        """Escaped quotes inside strings should be handled"""
+        result = self._split("SELECT 'it''s a test; really';")
+        assert len(result) == 1
+        assert "'it''s a test; really'" in result[0]
+
+    # --- Comments ---
+
+    def test_semicolon_in_line_comment(self):
+        """Semicolons in -- comments should not split"""
+        result = self._split("-- this is a comment; not a split\nSELECT 1;")
+        assert len(result) == 1
+        assert "SELECT 1" in result[0]
+
+    def test_semicolon_in_block_comment(self):
+        """Semicolons in /* */ comments should not split"""
+        result = self._split("/* comment; here */\nSELECT 1;")
+        assert len(result) == 1
+        assert "SELECT 1" in result[0]
+
+    def test_hash_comment_mysql(self):
+        """MySQL # comments should be handled"""
+        result = self._split("# comment; here\nSELECT 1;")
+        assert len(result) == 1
+        assert "SELECT 1" in result[0]
+
+    # --- Edge cases ---
+
+    def test_delimiter_pipe_pipe(self):
+        """DELIMITER with || as delimiter"""
+        query = """DELIMITER ||
+CREATE TRIGGER t1 BEFORE INSERT ON tbl
+FOR EACH ROW
+BEGIN
+    SET NEW.created = NOW();
+END||
+DELIMITER ;"""
+        result = self._split(query)
+        assert len(result) == 1
+        assert "CREATE TRIGGER" in result[0]
+
+    def test_no_trailing_delimiter_semicolon(self):
+        """Script without final DELIMITER ; should still work"""
+        query = """DELIMITER $$
+CREATE FUNCTION f() RETURNS INT
+BEGIN
+    RETURN 1;
+END$$"""
+        result = self._split(query)
+        assert len(result) == 1
+        assert "CREATE FUNCTION" in result[0]
+
+    def test_regular_multiline_query(self):
+        """Regular multi-line query without DELIMITER should work normally"""
+        query = """CREATE TABLE users (
+    id INT PRIMARY KEY,
+    name VARCHAR(100)
+);
+
+INSERT INTO users VALUES (1, 'test');"""
+        result = self._split(query)
+        assert len(result) == 2
+        assert "CREATE TABLE" in result[0]
+        assert "INSERT INTO" in result[1]
+
+    def test_delimiter_with_trailing_semicolon(self):
+        """DELIMITER $$; (user typo with semicolon) should still work"""
+        query = "DELIMITER $$;\n\nCREATE FUNCTION f() RETURNS INT\nBEGIN\n    RETURN 1;\nEND$$\n\nDELIMITER ;"
+        result = self._split(query)
+        assert len(result) == 1
+        assert result[0].startswith("CREATE FUNCTION")
+        assert "END" in result[0]
+        # DELIMITER directive must NOT appear in the output
+        assert "DELIMITER" not in result[0]
+
+    def test_delimiter_with_trailing_semicolon_crlf(self):
+        """DELIMITER $$; with Windows \\r\\n line endings"""
+        query = "DELIMITER $$;\r\n\r\nCREATE FUNCTION SENHA_HASH(p_senha VARCHAR(255))\r\nRETURNS CHAR(41)\r\nDETERMINISTIC\r\nBEGIN\r\n    RETURN CONCAT(\r\n        '*',\r\n        UPPER(\r\n            SHA1(\r\n                UNHEX(\r\n                    SHA1(p_senha)\r\n                )\r\n            )\r\n        )\r\n    );\r\nEND$$\r\n\r\nDELIMITER ;"
+        result = self._split(query)
+        assert len(result) == 1
+        assert "CREATE FUNCTION SENHA_HASH" in result[0]
+        assert "DELIMITER" not in result[0]
+        assert "SHA1(p_senha)" in result[0]
+
+    def test_only_delimiter_directives_returns_empty(self):
+        """Only DELIMITER directives with no actual SQL returns empty list"""
+        query = "DELIMITER $$\nDELIMITER ;"
+        result = self._split(query)
+        assert result == []
+
+
+class TestMssqlBatchErrorHandling:
+    """Tests for MSSQL batch error handling"""
+
     def test_batch_error_continues_and_reports(self):
         """Erro num batch deve continuar executando os demais (como SSMS)"""
         import pyodbc

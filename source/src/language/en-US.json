@@ -42,7 +42,13 @@
   "toolbar": {
     "new_tab": " New Tab",
     "connection": " Connection",
-    "run": " Run (F5)"
+    "run": " Run (F5)",
+    "run_timer": "Periodic execution",
+    "run_timer_stop": "Stop periodic execution",
+    "run_timer_running": "Repeating {seconds}s after each execution",
+    "run_timer_title": "Periodic Execution",
+    "run_timer_label": "Wait X seconds after completion and run again:",
+    "run_timer_start": "Start"
   },
 
   "dock": {
@@ -189,6 +195,7 @@
     "python": "Python",
     "cross_syntax": "Cross-Syntax",
     "complete_rows": "Complete! {rows} rows returned",
+    "complete_blocks_rows": "Complete! {blocks} blocks executed - {rows} rows returned",
     "complete_queries": "Complete! {count} queries executed",
     "chart_data": "Chart + data generated!",
     "result_displayed": "Result displayed!",
@@ -308,7 +315,27 @@
     "showing_limited": " (showing {showing})",
     "exporting": "Exporting...",
     "export_success": "Export complete!",
-    "export_failed": "Export failed"
+    "export_failed": "Export failed",
+    "ctx_copy": "Copy",
+    "ctx_copy_with_headers": "Copy with Headers",
+    "ctx_select_all": "Select All"
+  },
+
+  "export_settings": {
+    "dialog_title": "Export Settings",
+    "tooltip_btn": "Export settings",
+    "label_copy_with_tab": "Copy separator:",
+    "copy_sep_tab": "Tab (Excel)",
+    "copy_sep_comma": "Comma",
+    "copy_sep_semicolon": "Semicolon",
+    "label_open_folder": "Open folder after export:",
+    "label_copy_format": "Copy All format:",
+    "copy_format_text": "Formatted text",
+    "copy_format_csv": "CSV (with delimiter)",
+    "label_null_display": "NULL display:",
+    "null_empty": "(empty)",
+    "null_text": "NULL",
+    "null_none": "None"
   },
 
   "csv_export": {
@@ -347,7 +374,16 @@
     "ctx_use_catalog": "Use catalog '{name}'",
     "ctx_use_schema": "Use schema '{name}'",
     "ctx_copy_db_name": "Copy name",
-    "btn_insert_to_editor": "Insert into editor"
+    "ctx_count_rows": "Count rows (COUNT)",
+    "ctx_select_all_columns": "SELECT with all columns",
+    "ctx_where_clause": "WHERE clause",
+    "ctx_group_by": "GROUP BY clause",
+    "ctx_order_by": "ORDER BY clause",
+    "btn_insert_to_editor": "Insert into editor",
+    "header_connection": "{connection} - {database}",
+    "header_no_database": "{connection}",
+    "schema_error": "Error loading schema",
+    "not_null": "NOT NULL"
   },
 
   "variables_panel": {

@@ -59,6 +59,7 @@ class MainToolbar(QToolBar):
     new_connection_clicked = pyqtSignal()
     new_tab_clicked = pyqtSignal()
     run_clicked = pyqtSignal()
+    run_timer_clicked = pyqtSignal()
     copilot_clicked = pyqtSignal()
     workspace_switch_requested = pyqtSignal(str)  # path
     workspace_settings_requested = pyqtSignal()  # open settings on workspace tab
@@ -126,6 +127,13 @@ class MainToolbar(QToolBar):
         self.btn_run.setIcon(qta.icon("mdi.play", color=_ICON_COLOR))
         self.btn_run.clicked.connect(self.run_clicked.emit)
         self.addWidget(self.btn_run)
+
+        # Run Timer (repeat execution at interval)
+        self.btn_run_timer = QPushButton()
+        self.btn_run_timer.setIcon(qta.icon("mdi.timer", color=_ICON_COLOR))
+        self.btn_run_timer.setToolTip(S.toolbar.run_timer)
+        self.btn_run_timer.clicked.connect(self.run_timer_clicked.emit)
+        self.addWidget(self.btn_run_timer)
 
         self.addSeparator()
 
@@ -250,6 +258,27 @@ class MainToolbar(QToolBar):
         path = self.workspace_combo.itemData(index)
         if path:
             self.workspace_switch_requested.emit(path)
+
+    def set_timer_running(self, running: bool, interval_secs: int = 0):
+        """Update the timer button appearance based on running state."""
+        if running:
+            self.btn_run_timer.setIcon(qta.icon("mdi.timer-off", color="#f44336"))
+            self.btn_run_timer.setToolTip(S.toolbar.run_timer_stop)
+            self.btn_run_timer.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(244, 67, 54, 0.15);
+                    color: #f44336;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(244, 67, 54, 0.30);
+                }
+            """)
+        else:
+            self.btn_run_timer.setIcon(qta.icon("mdi.timer", color=_ICON_COLOR))
+            self.btn_run_timer.setToolTip(S.toolbar.run_timer)
+            self.btn_run_timer.setStyleSheet("")
 
     def apply_theme(self):
         pass

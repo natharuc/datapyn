@@ -192,6 +192,7 @@ class SessionWidget(QWidget):
 
         # Notification aggregation: accumulate results per queue run
         self._queue_total_rows: int = 0
+        self._queue_last_rows: int = 0
         self._queue_blocks_done: int = 0
         self._queue_had_error: bool = False
         self._queue_last_error: str = ""
@@ -530,6 +531,7 @@ class SessionWidget(QWidget):
         # Reset notification counters for single-block execution
         if self._queue_blocks_done == 0:
             self._queue_total_rows = 0
+            self._queue_last_rows = 0
             self._queue_had_error = False
             self._queue_last_error = ""
             self._queue_last_type = ""
@@ -632,6 +634,7 @@ class SessionWidget(QWidget):
                 self.session.finish_execution(True, S.session_widget.status_sql_multi.format(count=len(df)))
                 self.status_changed.emit(S.session_widget.status_sql_multi.format(count=len(df)))
                 self._queue_total_rows += total_rows
+                self._queue_last_rows = len(last_df)
                 self._queue_blocks_done += 1
                 self._queue_last_type = "sql"
             else:
@@ -643,6 +646,7 @@ class SessionWidget(QWidget):
                 self.session.finish_execution(True, S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
                 self.status_changed.emit(S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
                 self._queue_total_rows += rows
+                self._queue_last_rows = rows
                 self._queue_blocks_done += 1
                 self._queue_last_type = "sql"
 
@@ -693,6 +697,7 @@ class SessionWidget(QWidget):
         # Reset notification counters for single-block execution
         if self._queue_blocks_done == 0:
             self._queue_total_rows = 0
+            self._queue_last_rows = 0
             self._queue_had_error = False
             self._queue_last_error = ""
             self._queue_last_type = ""
@@ -812,6 +817,9 @@ class SessionWidget(QWidget):
             self.session.finish_execution(True, S.session_widget.status_python_done)
             self._queue_blocks_done += 1
             self._queue_last_type = "python"
+            if has_dataframe_result and result is not None:
+                self._queue_last_rows = len(result)
+                self._queue_total_rows += len(result)
 
         # Process next in queue if exists
         self._is_executing = False
@@ -830,21 +838,24 @@ class SessionWidget(QWidget):
             self.execution_finished.emit(title, msg, False)
         else:
             # Build a meaningful message based on what ran
-            if self._queue_last_type == "sql":
+            rows_str = f"{self._queue_last_rows:,}"
+            if self._queue_blocks_done > 1:
+                title = S.notification.sql_query if self._queue_last_type == "sql" else S.notification.python
+                msg = S.notification.complete_blocks_rows.format(
+                    blocks=self._queue_blocks_done, rows=rows_str
+                )
+            elif self._queue_last_type == "sql":
                 title = S.notification.sql_query
-                msg = S.notification.complete_rows.format(rows=f"{self._queue_total_rows:,}")
+                msg = S.notification.complete_rows.format(rows=rows_str)
             else:
                 title = S.notification.python
-                msg = S.notification.executed
-
-            # If multiple blocks ran, mention that
-            if self._queue_blocks_done > 1:
-                msg = f"{self._queue_blocks_done} blocks - {msg}"
+                msg = S.notification.complete_rows.format(rows=rows_str)
 
             self.execution_finished.emit(title, msg, True)
 
         # Reset counters
         self._queue_total_rows = 0
+        self._queue_last_rows = 0
         self._queue_blocks_done = 0
         self._queue_had_error = False
         self._queue_last_error = ""
@@ -864,6 +875,7 @@ class SessionWidget(QWidget):
 
         # Reset notification tracking for this queue run
         self._queue_total_rows = 0
+        self._queue_last_rows = 0
         self._queue_blocks_done = 0
         self._queue_had_error = False
         self._queue_last_error = ""
