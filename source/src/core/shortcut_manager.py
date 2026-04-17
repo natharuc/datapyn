@@ -20,7 +20,7 @@ class ShortcutManager:
         "execute_sql": "F5",
         "execute_all": "Ctrl+F5",
         "execute_block_advance": "Shift+Return",
-        "clear_results": "Ctrl+Shift+C",
+        "clear_results": "Ctrl+Shift+L",
         # Arquivo
         "open_file": "Ctrl+O",
         "save_file": "Ctrl+S",
@@ -44,6 +44,12 @@ class ShortcutManager:
         "reload_schema": "Ctrl+Shift+T",
         # Ferramentas
         "settings": "Ctrl+,",
+        # Results grid
+        "copy_with_headers": "Ctrl+Shift+C",
+        # View / Layout
+        "exit_app": "Ctrl+Q",
+        "restore_view": "Ctrl+Shift+R",
+        "reset_layout": "Ctrl+Shift+Alt+R",
         # Editor (atalhos internos do QScintilla)
         "editor_newline": "",
         "editor_duplicate_line": "Ctrl+D",

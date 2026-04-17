@@ -24,9 +24,11 @@ from PyQt6.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QSpinBox,
+    QMenu,
+    QAbstractButton,
 )
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer, QThread
-from PyQt6.QtGui import QColor, QImage, QPixmap, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QImage, QPixmap, QFont, QKeySequence, QShortcut, QAction
 import pandas as pd
 import json
 from typing import Optional
@@ -145,6 +147,95 @@ class CSVExportDialog(QDialog):
 
     def get_open_folder(self) -> bool:
         return self.open_folder_check.isChecked()
+
+
+class ExportSettingsDialog(QDialog):
+    """Dialog for global export settings"""
+
+    SETTINGS_KEY = "DataPyn/ExportSettings"
+
+    def __init__(self, parent=None, theme_manager: ThemeManager = None):
+        super().__init__(parent)
+        self.theme_manager = theme_manager or ThemeManager()
+        self.setWindowTitle(S.export_settings.dialog_title)
+        self.setMinimumWidth(380)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self._setup_ui()
+        self._load_settings()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        # Copy separator
+        self.copy_sep_combo = QComboBox()
+        self.copy_sep_combo.addItem(S.export_settings.copy_sep_tab, "\t")
+        self.copy_sep_combo.addItem(S.export_settings.copy_sep_comma, ",")
+        self.copy_sep_combo.addItem(S.export_settings.copy_sep_semicolon, ";")
+        form.addRow(S.export_settings.label_copy_with_tab, self.copy_sep_combo)
+
+        # NULL display
+        self.null_combo = QComboBox()
+        self.null_combo.addItem(S.export_settings.null_empty, "")
+        self.null_combo.addItem(S.export_settings.null_text, "NULL")
+        self.null_combo.addItem(S.export_settings.null_none, "None")
+        form.addRow(S.export_settings.label_null_display, self.null_combo)
+
+        # Open folder after export
+        self.open_folder_check = QCheckBox()
+        self.open_folder_check.setChecked(True)
+        form.addRow(S.export_settings.label_open_folder, self.open_folder_check)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Ok
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
+
+    def _load_settings(self):
+        settings = QSettings("DataPyn", "ExportSettings")
+
+        sep = settings.value("copy_separator", "\t")
+        idx = self.copy_sep_combo.findData(sep)
+        if idx >= 0:
+            self.copy_sep_combo.setCurrentIndex(idx)
+
+        null_val = settings.value("null_display", "")
+        idx = self.null_combo.findData(null_val)
+        if idx >= 0:
+            self.null_combo.setCurrentIndex(idx)
+
+        self.open_folder_check.setChecked(settings.value("open_folder", True, type=bool))
+
+    def _save_settings(self):
+        settings = QSettings("DataPyn", "ExportSettings")
+        settings.setValue("copy_separator", self.copy_sep_combo.currentData())
+        settings.setValue("null_display", self.null_combo.currentData())
+        settings.setValue("open_folder", self.open_folder_check.isChecked())
+
+    def accept(self):
+        self._save_settings()
+        super().accept()
+
+    @staticmethod
+    def get_settings() -> dict:
+        """Read current export settings without opening the dialog."""
+        settings = QSettings("DataPyn", "ExportSettings")
+        return {
+            "copy_separator": settings.value("copy_separator", "\t"),
+            "null_display": settings.value("null_display", ""),
+            "open_folder": settings.value("open_folder", True, type=bool),
+        }
 
 
 class PandasModel(QAbstractTableModel):
@@ -329,6 +420,26 @@ class ResultsViewer(QWidget):
         self.row_limit_spin.valueChanged.connect(self._on_row_limit_changed)
         self.toolbar.addWidget(self.row_limit_spin)
 
+        # Export settings button
+        self.btn_export_settings = QPushButton()
+        self.btn_export_settings.setIcon(qta.icon("mdi.cog", color=colors_tk.text_secondary))
+        self.btn_export_settings.setToolTip(S.export_settings.tooltip_btn)
+        self.btn_export_settings.setFixedSize(26, 26)
+        self.btn_export_settings.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                padding: 2px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors_tk.bg_secondary};
+                border-color: {colors_tk.border_default};
+            }}
+        """)
+        self.btn_export_settings.clicked.connect(self._open_export_settings)
+        self.toolbar.addWidget(self.btn_export_settings)
+
         layout.addWidget(self.toolbar)
 
         # Save image button (hidden by default)
@@ -346,6 +457,22 @@ class ResultsViewer(QWidget):
         # Ctrl+C shortcut on the table view to copy selection
         copy_shortcut = QShortcut(QKeySequence.StandardKey.Copy, self.table_view)
         copy_shortcut.activated.connect(self._copy_selection_to_clipboard)
+
+        # Context menu on right-click (viewport + headers + corner)
+        self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_view.customContextMenuRequested.connect(self._show_grid_context_menu)
+        self.table_view.horizontalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_view.horizontalHeader().customContextMenuRequested.connect(
+            self._show_header_context_menu
+        )
+        self.table_view.verticalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_view.verticalHeader().customContextMenuRequested.connect(
+            self._show_header_context_menu
+        )
+        corner = self.table_view.findChild(QAbstractButton)
+        if corner:
+            corner.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            corner.customContextMenuRequested.connect(self._show_header_context_menu)
 
         self.model = PandasModel(theme_manager=self.theme_manager)
         self.table_view.setModel(self.model)
@@ -584,6 +711,15 @@ class ResultsViewer(QWidget):
         # Reaplicar exibicao com novo limite
         if self.current_df is not None:
             self.display_dataframe(self.current_df, self._current_var_name())
+
+    def _open_export_settings(self):
+        """Open the export settings dialog."""
+        dialog = ExportSettingsDialog(self, theme_manager=self.theme_manager)
+        dialog.exec()
+
+    def _get_export_settings(self) -> dict:
+        """Get current export settings."""
+        return ExportSettingsDialog.get_settings()
 
     def _current_var_name(self) -> str:
         """Extrai nome da variavel do info_label atual."""
@@ -1047,18 +1183,22 @@ class ResultsViewer(QWidget):
             # Excel in clipboard - tab-separated format that Excel understands
             from PyQt6.QtWidgets import QApplication
 
-            excel_text = self.current_df.to_csv(index=False, sep="\t")
+            excel_text = self.current_df.to_csv(index=False, sep="\t", header=True)
             QApplication.instance().clipboard().setText(excel_text)
             self._show_clipboard_success("Excel (tab)")
             return
 
         # Export to file
+        es = self._get_export_settings()
         filename, _ = QFileDialog.getSaveFileName(self, S.results.save_excel_title, "", S.results.filter_excel)
         if filename:
             if not filename.lower().endswith(".xlsx"):
                 filename += ".xlsx"
             # Export in background
-            self._start_export_background(filename, "excel")
+            self._start_export_background(
+                filename, "excel",
+                open_folder=es["open_folder"],
+            )
 
     def _export_json(self):
         """Export to JSON (clipboard or file)"""
@@ -1076,12 +1216,17 @@ class ResultsViewer(QWidget):
             return
 
         # Export to file
+        es = self._get_export_settings()
         filename, _ = QFileDialog.getSaveFileName(self, S.results.save_json_title, "", S.results.filter_json)
         if filename:
             if not filename.lower().endswith(".json"):
                 filename += ".json"
             # Export in background
-            self._start_export_background(filename, "json", orient="records", indent=2, force_ascii=False)
+            self._start_export_background(
+                filename, "json",
+                orient="records", indent=2, force_ascii=False,
+                open_folder=es["open_folder"],
+            )
 
     def _export_sql(self):
         """Export DataFrame as SQL INSERT statements (clipboard or file)"""
@@ -1235,43 +1380,50 @@ class ResultsViewer(QWidget):
             self._export_thread.deleteLater()
             self._export_thread = None
 
-    def _copy_to_clipboard(self):
+    def _copy_to_clipboard(self, include_headers: bool = False):
         """Copy formatted data to clipboard"""
         from PyQt6.QtWidgets import QApplication
 
         if self.current_df is not None:
-            text = self.current_df.to_string(index=False)
+            es = self._get_export_settings()
+            sep = es["copy_separator"]
+            text = self.current_df.to_csv(index=False, sep=sep, header=include_headers)
+            # Remove trailing newline from to_csv
+            if text.endswith("\n"):
+                text = text[:-1]
             QApplication.instance().clipboard().setText(text)
             self._show_clipboard_success("Table")
 
-    def _copy_selection_to_clipboard(self):
+    def _copy_selection_to_clipboard(self, include_headers: bool = False):
         """Copy selected cells/rows/columns from the table view to clipboard.
 
-        Builds a tab-separated text from the selection, preserving the
-        row/column structure. Includes column headers when full columns
-        are selected.
+        Builds a separated text from the selection, preserving the
+        row/column structure.
         """
         from PyQt6.QtWidgets import QApplication
 
         selection = self.table_view.selectionModel()
         if not selection or not selection.hasSelection():
-            self._copy_to_clipboard()
+            self._copy_to_clipboard(include_headers=include_headers)
             return
 
         indexes = selection.selectedIndexes()
         if not indexes:
-            self._copy_to_clipboard()
+            self._copy_to_clipboard(include_headers=include_headers)
             return
 
         # Collect unique rows/cols and sort
         rows = sorted(set(idx.row() for idx in indexes))
         cols = sorted(set(idx.column() for idx in indexes))
 
+        es = self._get_export_settings()
+        sep = es["copy_separator"]
+
         # Build header line with column names
         lines = []
-        if self.current_df is not None:
+        if include_headers and self.current_df is not None:
             col_names = [str(self.current_df.columns[c]) for c in cols]
-            lines.append("\t".join(col_names))
+            lines.append(sep.join(col_names))
 
         # Build index set for fast lookup
         selected_set = set((idx.row(), idx.column()) for idx in indexes)
@@ -1286,7 +1438,7 @@ class ResultsViewer(QWidget):
                     cells.append(str(value) if value is not None else "")
                 else:
                     cells.append("")
-            lines.append("\t".join(cells))
+            lines.append(sep.join(cells))
 
         text = "\n".join(lines)
         QApplication.instance().clipboard().setText(text)
@@ -1294,6 +1446,95 @@ class ResultsViewer(QWidget):
         n_rows = len(rows)
         n_cols = len(cols)
         self._show_clipboard_success(f"{n_rows} x {n_cols}")
+
+    def _show_header_context_menu(self, pos):
+        """Show context menu when right-clicking on column/row headers."""
+        header = self.sender()
+        if header is None or self.current_df is None:
+            return
+        # Reuse the same menu, but map from header coordinates
+        self._show_grid_context_menu(pos, widget=header)
+
+    def _show_grid_context_menu(self, pos, widget=None):
+        """Show context menu on the results grid."""
+        if self.current_df is None:
+            return
+
+        if widget is None:
+            widget = self.table_view.viewport()
+
+        from src.design_system.tokens import get_colors
+        from src.core.shortcut_manager import ShortcutManager
+        colors_tk = get_colors()
+
+        # Read configurable shortcut for "copy with headers"
+        sm = ShortcutManager()
+        copy_headers_key = sm.get_shortcut("copy_with_headers") or "Ctrl+Shift+C"
+
+        menu = QMenu(self)
+
+        # Copy (no headers)
+        act_copy = QAction(
+            qta.icon("mdi.content-copy", color=colors_tk.text_primary),
+            S.results.ctx_copy,
+            menu,
+        )
+        act_copy.setShortcut(QKeySequence.StandardKey.Copy)
+        act_copy.triggered.connect(lambda: self._copy_selection_to_clipboard(include_headers=False))
+        menu.addAction(act_copy)
+
+        # Copy with headers
+        act_copy_headers = QAction(
+            qta.icon("mdi.table-headers-eye", color=colors_tk.text_primary),
+            S.results.ctx_copy_with_headers,
+            menu,
+        )
+        act_copy_headers.setShortcut(copy_headers_key)
+        act_copy_headers.triggered.connect(lambda: self._copy_selection_to_clipboard(include_headers=True))
+        menu.addAction(act_copy_headers)
+
+        menu.addSeparator()
+
+        # Select All
+        act_select_all = QAction(
+            qta.icon("mdi.select-all", color=colors_tk.text_primary),
+            S.results.ctx_select_all,
+            menu,
+        )
+        act_select_all.setShortcut(QKeySequence.StandardKey.SelectAll)
+        act_select_all.triggered.connect(self.table_view.selectAll)
+        menu.addAction(act_select_all)
+
+        menu.addSeparator()
+
+        # Export CSV
+        act_csv = QAction(
+            qta.icon("mdi.file-delimited", color=colors_tk.info),
+            S.results.btn_csv,
+            menu,
+        )
+        act_csv.triggered.connect(self._export_csv)
+        menu.addAction(act_csv)
+
+        # Export Excel
+        act_excel = QAction(
+            qta.icon("mdi.file-excel", color=colors_tk.success),
+            S.results.btn_excel,
+            menu,
+        )
+        act_excel.triggered.connect(self._export_excel)
+        menu.addAction(act_excel)
+
+        # Export JSON
+        act_json = QAction(
+            qta.icon("mdi.code-json", color=colors_tk.warning),
+            S.results.btn_json,
+            menu,
+        )
+        act_json.triggered.connect(self._export_json)
+        menu.addAction(act_json)
+
+        menu.exec(widget.mapToGlobal(pos))
 
     def keyPressEvent(self, event):
         """Handle Ctrl+C to copy selected cells from the grid."""

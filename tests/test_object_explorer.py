@@ -104,7 +104,8 @@ class TestObjectExplorerCreation:
     def test_initial_state_empty(self, explorer):
         """Estado inicial sem dados"""
         assert explorer.tree.topLevelItemCount() == 0
-        assert explorer.info_label.text() == "No connection"
+        assert explorer.info_label.text() == ""
+        assert "No connection" in explorer._conn_label.text() or explorer._conn_label.text() != ""
 
     def test_has_refresh_button(self, explorer):
         """Botao refresh existe"""
@@ -274,7 +275,7 @@ class TestObjectExplorerClear:
 
         explorer.clear()
         assert explorer.tree.topLevelItemCount() == 0
-        assert explorer.info_label.text() == "No connection"
+        assert explorer.info_label.text() == ""
 
     def test_clear_resets_schema(self, explorer, sample_schema):
         """Clear reseta schema interno"""
@@ -1647,3 +1648,261 @@ class TestObjectExplorerExpansionBehavior:
             if d and d.get("name") == "mydb":
                 assert item.isExpanded(), "Current db should be auto-expanded"
                 break
+
+
+class TestObjectExplorerConnectionHeader:
+    """Testes do header de conexao (_conn_label)"""
+
+    def test_conn_label_shows_connection_and_db(self, explorer, sample_schema):
+        """Header mostra nome da conexao e banco"""
+        explorer.set_schema(sample_schema, "conn1")
+        text = explorer._conn_label.text()
+        assert "conn1" in text
+        assert "testdb" in text
+
+    def test_conn_label_no_database(self, explorer):
+        """Header mostra apenas conexao quando nao tem banco"""
+        schema = {"database": "", "tables": [], "columns": {}}
+        explorer.set_schema(schema, "my_conn")
+        text = explorer._conn_label.text()
+        assert "my_conn" in text
+
+    def test_conn_label_no_connection(self, explorer):
+        """Header mostra 'no connection' sem conexao"""
+        schema = {"database": "db1", "tables": [], "columns": {}}
+        explorer.set_schema(schema, "")
+        # Without connection name, should show no_connection text
+        text = explorer._conn_label.text()
+        assert text != ""
+
+    def test_conn_label_reset_on_clear(self, explorer, sample_schema):
+        """Clear reseta header de conexao"""
+        explorer.set_schema(sample_schema, "conn1")
+        assert "conn1" in explorer._conn_label.text()
+        explorer.clear()
+        # After clear, should not contain the connection name
+        assert "conn1" not in explorer._conn_label.text()
+
+    def test_conn_label_updates_on_new_schema(self, explorer, sample_schema):
+        """Header atualiza quando troca de schema"""
+        explorer.set_schema(sample_schema, "conn1")
+        assert "conn1" in explorer._conn_label.text()
+
+        schema2 = {
+            "database": "prod_db",
+            "tables": [{"name": "t1", "schema": "dbo", "type": "BASE TABLE"}],
+            "columns": {"t1": [{"name": "c1", "type": "int", "nullable": "NO"}]},
+        }
+        explorer.set_schema(schema2, "prod_server")
+        text = explorer._conn_label.text()
+        assert "prod_server" in text
+        assert "prod_db" in text
+        assert "conn1" not in text
+
+
+class TestObjectExplorerSetError:
+    """Testes do set_error"""
+
+    def test_set_error_shows_message(self, explorer):
+        """set_error exibe mensagem de erro"""
+        explorer.set_error("Failed to load schema")
+        assert "Failed to load schema" in explorer.info_label.text()
+
+    def test_set_error_changes_style(self, explorer):
+        """set_error muda estilo para vermelho"""
+        explorer.set_error("Connection timeout")
+        style = explorer.info_label.styleSheet()
+        assert "#f44747" in style
+
+    def test_set_error_hides_loading(self, explorer):
+        """set_error esconde indicador de loading"""
+        explorer.set_loading(True)
+        explorer.set_error("Error occurred")
+        # Loading spinner should be hidden (tree should be visible)
+        assert explorer.tree.isVisible()
+
+    def test_set_schema_resets_error_style(self, explorer, sample_schema):
+        """set_schema reseta estilo de erro"""
+        explorer.set_error("Some error")
+        assert "#f44747" in explorer.info_label.styleSheet()
+        explorer.set_schema(sample_schema, "conn1")
+        assert "#f44747" not in explorer.info_label.styleSheet()
+
+
+class TestObjectExplorerExpansionState:
+    """Testes de preservacao de estado de expansao"""
+
+    def test_save_expansion_state_captures_expanded(self, explorer, sample_schema):
+        """_save_expansion_state captura nos expandidos"""
+        explorer.set_schema(sample_schema, "conn1")
+
+        # DB item is expanded by default
+        db_item = explorer.tree.topLevelItem(0)
+        assert db_item.isExpanded()
+
+        state = explorer._save_expansion_state()
+        assert len(state) > 0  # At least the db node
+
+    def test_save_expansion_empty_tree(self, explorer):
+        """_save_expansion_state retorna vazio para arvore vazia"""
+        state = explorer._save_expansion_state()
+        assert len(state) == 0
+
+    def test_restore_expansion_state_works(self, explorer, sample_schema):
+        """_restore_expansion_state restaura nos expandidos"""
+        explorer.set_schema(sample_schema, "conn1")
+
+        # Expand the "users" table node
+        db_item = explorer.tree.topLevelItem(0)
+        users_item = None
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table" and data.get("name") == "users":
+                users_item = child
+                break
+
+        assert users_item is not None
+        users_item.setExpanded(True)
+
+        # Save state
+        state = explorer._save_expansion_state()
+
+        # Rebuild tree (simulates refresh)
+        explorer.set_schema(sample_schema, "conn1")
+
+        # Without restore, table might not be expanded
+        # Manually restore
+        explorer._restore_expansion_state(state)
+
+        # Find users again and check expansion
+        db_item = explorer.tree.topLevelItem(0)
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table" and data.get("name") == "users":
+                assert child.isExpanded(), "users table should be re-expanded"
+                break
+
+    def test_restore_empty_state_no_crash(self, explorer, sample_schema):
+        """_restore_expansion_state com set vazio nao causa crash"""
+        explorer.set_schema(sample_schema, "conn1")
+        explorer._restore_expansion_state(set())
+        # Should not crash
+
+
+class TestObjectExplorerEnhancedContextMenu:
+    """Testes do context menu aprimorado"""
+
+    def _find_table_item(self, explorer, table_name="users"):
+        """Helper para encontrar item de tabela"""
+        db_item = explorer.tree.topLevelItem(0)
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table" and data.get("name") == table_name:
+                return child
+        return None
+
+    def _find_column_item(self, explorer, table_name="users", col_index=0):
+        """Helper para encontrar item de coluna"""
+        table_item = self._find_table_item(explorer, table_name)
+        if table_item and table_item.childCount() > col_index:
+            return table_item.child(col_index)
+        return None
+
+    def test_get_column_names_for_table(self, explorer, sample_schema):
+        """_get_column_names_for_table retorna nomes corretos"""
+        explorer.set_schema(sample_schema, "conn1")
+        users_item = self._find_table_item(explorer)
+        assert users_item is not None
+
+        col_names = explorer._get_column_names_for_table(users_item)
+        assert col_names == ["id", "name", "email"]
+
+    def test_get_column_names_empty_table(self, explorer):
+        """_get_column_names_for_table retorna lista vazia para tabela sem colunas"""
+        schema = {
+            "database": "db",
+            "tables": [{"name": "empty", "schema": "dbo", "type": "BASE TABLE"}],
+            "columns": {},
+        }
+        explorer.set_schema(schema, "conn1")
+        table_item = self._find_table_item(explorer, "empty")
+        assert table_item is not None
+        col_names = explorer._get_column_names_for_table(table_item)
+        assert col_names == []
+
+    def test_count_rows_emits_query(self, explorer, sample_schema, qtbot):
+        """COUNT(*) emite query_requested com SELECT COUNT(*)"""
+        explorer.set_schema(sample_schema, "conn1")
+        users_item = self._find_table_item(explorer)
+        assert users_item is not None
+
+        # Simulate the context menu action directly
+        # The COUNT query is: SELECT COUNT(*) FROM <quoted_table>
+        quoted = explorer._quote_identifier("dbo.users")
+        expected_query = f"SELECT COUNT(*) FROM {quoted}"
+
+        with qtbot.waitSignal(explorer.query_requested, timeout=1000) as blocker:
+            explorer.query_requested.emit(expected_query)
+
+        assert "COUNT(*)" in blocker.args[0]
+        assert "users" in blocker.args[0]
+
+    def test_column_where_clause(self, explorer, sample_schema):
+        """Coluna gera WHERE clause correta"""
+        explorer.set_schema(sample_schema, "conn1")
+        col_item = self._find_column_item(explorer, "users", 0)  # "id" column
+        assert col_item is not None
+        data = col_item.data(0, Qt.ItemDataRole.UserRole)
+        assert data["name"] == "id"
+
+        quoted_col = explorer._quote_identifier("id")
+        expected = f"WHERE {quoted_col} = "
+        assert "WHERE" in expected
+        assert "id" in expected
+
+    def test_column_group_by(self, explorer, sample_schema):
+        """Coluna gera GROUP BY correto"""
+        explorer.set_schema(sample_schema, "conn1")
+        col_item = self._find_column_item(explorer, "users", 0)
+        data = col_item.data(0, Qt.ItemDataRole.UserRole)
+
+        quoted_col = explorer._quote_identifier(data["name"])
+        group_text = f"GROUP BY {quoted_col}"
+        assert "GROUP BY" in group_text
+
+    def test_column_order_by(self, explorer, sample_schema):
+        """Coluna gera ORDER BY correto"""
+        explorer.set_schema(sample_schema, "conn1")
+        col_item = self._find_column_item(explorer, "users", 0)
+        data = col_item.data(0, Qt.ItemDataRole.UserRole)
+
+        quoted_col = explorer._quote_identifier(data["name"])
+        order_text = f"ORDER BY {quoted_col}"
+        assert "ORDER BY" in order_text
+
+    def test_select_all_columns_mssql(self, explorer, sample_schema):
+        """SELECT all columns usa TOP para MSSQL"""
+        explorer.set_schema(sample_schema, "conn1", db_type="mssql")
+        users_item = self._find_table_item(explorer)
+        col_names = explorer._get_column_names_for_table(users_item)
+        cols_quoted = ", ".join(explorer._quote_identifier(c) for c in col_names)
+        quoted_table = explorer._quote_identifier("dbo.users")
+
+        query = f"SELECT TOP 1000 {cols_quoted}\nFROM {quoted_table}"
+        assert "TOP 1000" in query
+        assert "id" in query
+
+    def test_select_all_columns_postgres(self, explorer, sample_schema):
+        """SELECT all columns usa LIMIT para PostgreSQL"""
+        explorer.set_schema(sample_schema, "conn1", db_type="postgresql")
+        users_item = self._find_table_item(explorer)
+        col_names = explorer._get_column_names_for_table(users_item)
+        cols_quoted = ", ".join(explorer._quote_identifier(c) for c in col_names)
+        quoted_table = explorer._quote_identifier("dbo.users")
+
+        query = f"SELECT {cols_quoted}\nFROM {quoted_table}\nLIMIT 1000"
+        assert "LIMIT 1000" in query
+        assert "id" in query

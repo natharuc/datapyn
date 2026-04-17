@@ -154,3 +154,50 @@ class TestShortcutManagerEdgeCases:
         # Customizacao do usuario deve prevalecer sobre defaults
         assert new_manager.get_shortcut("execute_sql") == "F6"
         assert new_manager.get_shortcut("execute_all") == "Ctrl+Shift+F5"
+
+
+class TestNoDuplicateDefaults:
+    """Ensures no duplicate key sequences exist in DEFAULT_SHORTCUTS."""
+
+    def test_no_duplicate_shortcuts_in_defaults(self, shortcut_manager):
+        """No two actions should share the same default shortcut."""
+        from PyQt6.QtGui import QKeySequence
+
+        shortcuts = shortcut_manager.get_all_shortcuts()
+        seen = {}
+        for action, key_str in shortcuts.items():
+            if not key_str:
+                continue
+            normalized = QKeySequence(key_str).toString()
+            if normalized in seen:
+                pytest.fail(
+                    f"Duplicate shortcut '{normalized}': "
+                    f"used by '{seen[normalized]}' and '{action}'"
+                )
+            seen[normalized] = action
+
+    def test_clear_results_not_ctrl_shift_c(self, shortcut_manager):
+        """clear_results must not conflict with copy_with_headers."""
+        clear_key = shortcut_manager.get_shortcut("clear_results")
+        copy_hdr_key = shortcut_manager.get_shortcut("copy_with_headers")
+        assert clear_key != copy_hdr_key, (
+            f"clear_results ({clear_key}) must differ from "
+            f"copy_with_headers ({copy_hdr_key})"
+        )
+
+    def test_new_actions_registered(self, shortcut_manager):
+        """New configurable actions should exist in defaults."""
+        shortcuts = shortcut_manager.get_all_shortcuts()
+        assert "copy_with_headers" in shortcuts
+        assert "exit_app" in shortcuts
+        assert "restore_view" in shortcuts
+        assert "reset_layout" in shortcuts
+
+    def test_copy_with_headers_default(self, shortcut_manager):
+        """copy_with_headers should default to Ctrl+Shift+C."""
+        assert shortcut_manager.get_shortcut("copy_with_headers") == "Ctrl+Shift+C"
+
+    def test_detect_duplicates_returns_empty(self, shortcut_manager):
+        """detect_duplicates() should return empty dict for defaults."""
+        dupes = shortcut_manager.detect_duplicates()
+        assert dupes == {}, f"Found duplicates in defaults: {dupes}"

@@ -457,6 +457,7 @@ class MainWindow(DockingMainWindow):
 
         self._schema_service = SchemaService()
         self._schema_service.schema_loaded.connect(self._on_schema_loaded)
+        self._schema_service.schema_error.connect(self._on_schema_error)
         # Lazy loading signals for Object Explorer
         self._schema_service.schemas_loaded.connect(self._on_schemas_loaded)
         self._schema_service.tables_loaded.connect(self._on_tables_loaded)
@@ -1099,6 +1100,11 @@ class MainWindow(DockingMainWindow):
 
         # Invalidate cache and reload OE for this block's connection (per-session)
         self._schema_service.invalidate_cache(connection_name, session_id=sid)
+        
+        # Reset OE tracking so reload is not skipped
+        if hasattr(self, "_oe_current_connection") and sid:
+            self._oe_current_connection.pop(sid, None)
+        
         connector = self.connection_manager.get_connection(connection_name)
         if connector and connector.is_connected():
             self._load_schema_with_loading(connector, connection_name, session_id=sid)
@@ -1125,6 +1131,11 @@ class MainWindow(DockingMainWindow):
 
         # --- Schema reload (invalidate since database changed) ---
         self._schema_service.invalidate_cache(connection_name, session_id=sid)
+        
+        # Reset OE tracking so next schema load updates the explorer
+        if hasattr(self, "_oe_current_connection") and sid:
+            self._oe_current_connection.pop(sid, None)
+        
         # Note: connection_changed signal will trigger _on_session_connection_changed which loads schema
 
         if hasattr(widget, "connection_changed"):
@@ -1924,7 +1935,9 @@ class MainWindow(DockingMainWindow):
         file_menu.addSeparator()
 
         exit_action = QAction(S.menu.exit, self)
-        exit_action.setShortcut(QKeySequence.StandardKey.Quit)  # Keep system default Quit
+        _exit_key = self.shortcut_manager.get_shortcut("exit_app")
+        if _exit_key:
+            exit_action.setShortcut(QKeySequence(_exit_key))
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
@@ -2041,13 +2054,17 @@ class MainWindow(DockingMainWindow):
 
         # Restore default view
         restore_action = QAction(S.menu.restore_default_view, self)
-        restore_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        _restore_key = self.shortcut_manager.get_shortcut("restore_view")
+        if _restore_key:
+            restore_action.setShortcut(QKeySequence(_restore_key))
         restore_action.triggered.connect(self._restore_default_layout)
         view_menu.addAction(restore_action)
 
         # Reset layout completely (clears saved settings)
         reset_layout_action = QAction(S.menu.complete_layout_reset, self)
-        reset_layout_action.setShortcut(QKeySequence("Ctrl+Shift+Alt+R"))
+        _reset_key = self.shortcut_manager.get_shortcut("reset_layout")
+        if _reset_key:
+            reset_layout_action.setShortcut(QKeySequence(_reset_key))
         reset_layout_action.triggered.connect(self._reset_layout_completely)
         view_menu.addAction(reset_layout_action)
 
@@ -2125,6 +2142,7 @@ class MainWindow(DockingMainWindow):
         self.main_toolbar.new_connection_clicked.connect(self._new_connection)
         self.main_toolbar.new_tab_clicked.connect(self._new_session)
         self.main_toolbar.run_clicked.connect(self._execute_from_toolbar)
+        self.main_toolbar.run_timer_clicked.connect(self._toggle_run_timer)
         self.main_toolbar.copilot_clicked.connect(self._toggle_copilot_dock)
         self.main_toolbar.workspace_switch_requested.connect(self._on_workspace_switch)
         self.main_toolbar.workspace_settings_requested.connect(self._show_workspace_settings)
@@ -2560,6 +2578,67 @@ class MainWindow(DockingMainWindow):
         # Toolbar run button executes only the focused block
         if hasattr(editor, "execute_focused_block"):
             editor.execute_focused_block()
+
+    def _toggle_run_timer(self):
+        """Toggle periodic execution of all blocks."""
+        if not hasattr(self, "_run_timer"):
+            self._run_timer = QTimer(self)
+            self._run_timer.setSingleShot(True)
+            self._run_timer.timeout.connect(self._run_timer_fire)
+            self._run_timer_interval = 0
+            self._run_timer_active = False
+
+        if self._run_timer_active:
+            self._run_timer_active = False
+            self._run_timer.stop()
+            self.main_toolbar.set_timer_running(False)
+            self.main_statusbar.action_label.setText("")
+            return
+
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDialogButtonBox
+        dialog = QDialog(self)
+        dialog.setWindowTitle(S.toolbar.run_timer_title)
+        dialog.setFixedWidth(320)
+        dlg_layout = QVBoxLayout(dialog)
+
+        lbl = QLabel(S.toolbar.run_timer_label)
+        dlg_layout.addWidget(lbl)
+
+        spin = QSpinBox()
+        spin.setRange(1, 86400)
+        spin.setValue(self._run_timer_interval if self._run_timer_interval > 0 else 30)
+        spin.setSuffix("s")
+        dlg_layout.addWidget(spin)
+
+        buttons = QDialogButtonBox()
+        start_btn = buttons.addButton(S.toolbar.run_timer_start, QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dlg_layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        interval = spin.value()
+        self._run_timer_interval = interval
+        self._run_timer_active = True
+        self.main_toolbar.set_timer_running(True, interval)
+        self.main_statusbar.action_label.setText(
+            S.toolbar.run_timer_running.format(seconds=interval)
+        )
+        # Run immediately on start
+        self._execute_all_blocks()
+
+    def _run_timer_fire(self):
+        """Called when the post-execution delay expires. Runs all blocks again."""
+        if self._run_timer_active:
+            self._execute_all_blocks()
+
+    def _run_timer_schedule_next(self):
+        """Schedule the next timer execution after current run finishes."""
+        if hasattr(self, "_run_timer_active") and self._run_timer_active:
+            self._run_timer.start(self._run_timer_interval * 1000)
 
     def _create_statusbar(self):
         """Creates the status bar using MainStatusBar"""
@@ -3629,6 +3708,9 @@ class MainWindow(DockingMainWindow):
         if tab_index >= 0:
             self._mark_tab_running(False, tab_index)
             self._stop_execution_timer()
+
+        # Schedule next run if periodic timer is active
+        self._run_timer_schedule_next()
 
     def _on_execution_finished_notification(self, title: str, message: str, success: bool, widget):
         """
@@ -5343,6 +5425,15 @@ class MainWindow(DockingMainWindow):
             lines.append(f"  ... +{len(tables) - 30} more tables")
         
         return "\n".join(lines)
+
+    def _on_schema_error(self, error_msg: str):
+        """Handle schema loading error — show feedback in OE panel."""
+        sid = self._get_active_session_id()
+        if sid and hasattr(self, "_session_explorers"):
+            explorer = self._session_explorers.get(sid)
+            if explorer:
+                explorer.set_error(S.object_explorer.schema_error)
+        self.statusBar().showMessage(f"Schema: {error_msg}", 5000)
 
     def _update_oe_for_session(self, widget):
         """Update Object Explorer to show the effective connection for a session/tab.

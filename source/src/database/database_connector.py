@@ -714,10 +714,140 @@ class DatabaseConnector:
             clean.startswith("EXPLAIN")
         )
 
+    @staticmethod
+    def _split_sql_statements(query: str) -> list:
+        """Split SQL script into individual statements, handling DELIMITER.
+
+        MySQL's DELIMITER directive is a client-side command that changes
+        the statement terminator. The MySQL server does NOT understand it.
+        This parser handles DELIMITER changes so that stored procedures,
+        functions, and triggers with semicolons in their body are sent
+        as a single statement to the server.
+
+        Handles:
+        - DELIMITER changes (e.g., DELIMITER $$ ... DELIMITER ;)
+        - String literals (single and double quotes) - delimiters inside
+          strings are ignored
+        - Single-line comments (-- and #)
+        - Multi-line comments (/* ... */)
+        - Escaped quotes inside strings
+
+        Args:
+            query: Full SQL script, possibly containing DELIMITER directives
+
+        Returns:
+            List of non-empty SQL statements (without DELIMITER lines)
+        """
+        import re
+
+        statements = []
+        delimiter = ";"
+        current = []
+        i = 0
+        text = query
+
+        while i < len(text):
+            c = text[i]
+
+            # -- single-line comment
+            if c == "-" and i + 1 < len(text) and text[i + 1] == "-":
+                end = text.find("\n", i)
+                if end == -1:
+                    current.append(text[i:])
+                    i = len(text)
+                else:
+                    current.append(text[i : end + 1])
+                    i = end + 1
+                continue
+
+            # # single-line comment (MySQL specific)
+            if c == "#":
+                end = text.find("\n", i)
+                if end == -1:
+                    current.append(text[i:])
+                    i = len(text)
+                else:
+                    current.append(text[i : end + 1])
+                    i = end + 1
+                continue
+
+            # /* multi-line comment */
+            if c == "/" and i + 1 < len(text) and text[i + 1] == "*":
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    current.append(text[i:])
+                    i = len(text)
+                else:
+                    current.append(text[i : end + 2])
+                    i = end + 2
+                continue
+
+            # String literals (single or double quotes)
+            if c in ("'", '"'):
+                quote = c
+                j = i + 1
+                while j < len(text):
+                    if text[j] == "\\" :
+                        j += 2  # skip escaped char
+                        continue
+                    if text[j] == quote:
+                        if j + 1 < len(text) and text[j + 1] == quote:
+                            j += 2  # escaped quote ('')
+                            continue
+                        break
+                    j += 1
+                current.append(text[i : j + 1])
+                i = j + 1
+                continue
+
+            # Check for DELIMITER directive at start of line
+            if c in ("D", "d"):
+                # Look backwards to verify we're at start of line
+                # (handle both \n and \r\n line endings)
+                at_line_start = (
+                    i == 0
+                    or text[i - 1] == "\n"
+                    or (text[i - 1] == "\r" and (i < 2 or text[i - 2] == "\n"))
+                )
+                if at_line_start:
+                    match = re.match(
+                        r"DELIMITER\s+(\S+?)\s*;?\s*(?:\r?\n|$)",
+                        text[i:],
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        # Flush any accumulated content as a statement
+                        stmt = "".join(current).strip()
+                        if stmt:
+                            statements.append(stmt)
+                        current = []
+                        delimiter = match.group(1)
+                        i += match.end()
+                        continue
+
+            # Check for current delimiter
+            if text[i : i + len(delimiter)] == delimiter:
+                stmt = "".join(current).strip()
+                if stmt:
+                    statements.append(stmt)
+                current = []
+                i += len(delimiter)
+                continue
+
+            current.append(c)
+            i += 1
+
+        # Flush remaining content
+        stmt = "".join(current).strip()
+        if stmt:
+            statements.append(stmt)
+
+        return statements
+
     def _execute_generic_query(self, query: str) -> pd.DataFrame:
         """Execute generic query for non-MSSQL databases"""
-        # Split by semicolon to detect multiple commands
-        commands = [cmd.strip() for cmd in query.split(";") if cmd.strip()]
+        # Split statements with DELIMITER-awareness
+        commands = self._split_sql_statements(query)
 
         if len(commands) > 1:
             # Multiple commands - execute all and capture SELECT results
@@ -754,17 +884,18 @@ class DatabaseConnector:
             msg = "Commands executed successfully."
             logger.info(msg)
             return pd.DataFrame({"Result": [msg]})
-        else:
-            # Single command - detect query type
-            if self._is_select_query(query):
+        elif len(commands) == 1:
+            # Single command - use the cleaned statement (DELIMITER stripped)
+            cmd = commands[0]
+            if self._is_select_query(cmd):
                 # SELECT query - use read_sql and let errors propagate
-                df = pd.read_sql(query, self.engine)
+                df = pd.read_sql(cmd, self.engine)
                 logger.info(f"Query executed successfully. Rows returned: {len(df)}")
                 return df
             else:
                 # Non-SELECT - execute as statement
                 with self.engine.connect() as conn:
-                    result = conn.execute(text(query))
+                    result = conn.execute(text(cmd))
                     conn.commit()
                     rows_affected = result.rowcount
 
@@ -775,6 +906,9 @@ class DatabaseConnector:
 
                     logger.info(msg)
                     return pd.DataFrame({"Result": [msg]})
+        else:
+            # No commands (empty input or only DELIMITER directives)
+            return pd.DataFrame({"Result": ["No SQL commands to execute."]})
 
     def execute_statement(self, statement: str) -> int:
         """

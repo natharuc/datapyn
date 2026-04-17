@@ -171,9 +171,16 @@ class ObjectExplorerPanel(QWidget):
         toolbar_layout.setContentsMargins(8, 5, 8, 5)
         toolbar_layout.setSpacing(8)
 
-        # Info label
-        self.info_label = QLabel(S.object_explorer.no_connection)
-        self.info_label.setStyleSheet("color: #808080;")
+        # Connection header (shows connection name + database)
+        self._conn_label = QLabel(S.object_explorer.no_connection)
+        self._conn_label.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 12px;")
+        toolbar_layout.addWidget(self._conn_label)
+
+        toolbar_layout.addStretch()
+
+        # Info label (stats: tables, columns count)
+        self.info_label = QLabel("")
+        self.info_label.setStyleSheet("color: #808080; font-size: 11px;")
         toolbar_layout.addWidget(self.info_label)
 
         toolbar_layout.addStretch()
@@ -412,6 +419,59 @@ class ObjectExplorerPanel(QWidget):
                 self._spinner_widget.hide()
             self.tree.show()
 
+    def set_error(self, message: str):
+        """Show error state in the OE panel (replaces loading spinner)."""
+        self.set_loading(False)
+        self.info_label.setText(message)
+        self.info_label.setStyleSheet("color: #f44747; font-size: 11px;")
+
+    def _save_expansion_state(self) -> set:
+        """Save the set of expanded node paths (type:name) before tree rebuild."""
+        expanded = set()
+
+        def _walk(item, path_prefix=""):
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data:
+                node_type = data.get("type", "")
+                node_name = data.get("name", "")
+                path = f"{path_prefix}/{node_type}:{node_name}"
+            else:
+                path = f"{path_prefix}/{item.text(0)}"
+
+            if item.isExpanded():
+                expanded.add(path)
+
+            for i in range(item.childCount()):
+                _walk(item.child(i), path)
+
+        for i in range(self.tree.topLevelItemCount()):
+            _walk(self.tree.topLevelItem(i))
+
+        return expanded
+
+    def _restore_expansion_state(self, expanded_paths: set):
+        """Restore expansion state for nodes that still exist."""
+        if not expanded_paths:
+            return
+
+        def _walk(item, path_prefix=""):
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data:
+                node_type = data.get("type", "")
+                node_name = data.get("name", "")
+                path = f"{path_prefix}/{node_type}:{node_name}"
+            else:
+                path = f"{path_prefix}/{item.text(0)}"
+
+            if path in expanded_paths:
+                item.setExpanded(True)
+
+            for i in range(item.childCount()):
+                _walk(item.child(i), path)
+
+        for i in range(self.tree.topLevelItemCount()):
+            _walk(self.tree.topLevelItem(i))
+
     def set_schema(self, schema: dict, connection_name: str = "", db_type: str = ""):
         """Set the schema to be displayed in the tree.
 
@@ -427,11 +487,26 @@ class ObjectExplorerPanel(QWidget):
             return
         
         self.set_loading(False)  # Hide loading when schema arrives
+        self.info_label.setStyleSheet("color: #808080; font-size: 11px;")  # Reset error style
         self._current_schema = schema
         self._current_connection = connection_name
         self._db_type = db_type.lower() if db_type else ""
         if schema:
             self._all_databases = schema.get("databases", [])
+        
+        # Update connection header
+        db_name = schema.get("database", "") if schema else ""
+        if connection_name and db_name:
+            self._conn_label.setText(S.object_explorer.header_connection.format(
+                connection=connection_name, database=db_name
+            ))
+        elif connection_name:
+            self._conn_label.setText(S.object_explorer.header_no_database.format(
+                connection=connection_name
+            ))
+        else:
+            self._conn_label.setText(S.object_explorer.no_connection)
+        
         self._build_tree(schema)
 
     def clear(self):
@@ -441,7 +516,8 @@ class ObjectExplorerPanel(QWidget):
         self._current_connection = ""
         self._db_type = ""
         self._all_databases = []
-        self.info_label.setText(S.object_explorer.no_connection)
+        self._conn_label.setText(S.object_explorer.no_connection)
+        self.info_label.setText("")
         self.search_input.clear()
 
     def _quote_identifier(self, identifier: str) -> str:
@@ -486,10 +562,14 @@ class ObjectExplorerPanel(QWidget):
 
     def _do_build_tree(self, schema: dict):
         """Internal tree building implementation."""
+        # Save expansion state before clearing
+        expanded_paths = self._save_expansion_state()
+        
         self.tree.clear()
 
         if not schema:
-            self.info_label.setText(S.object_explorer.no_connection)
+            self._conn_label.setText(S.object_explorer.no_connection)
+            self.info_label.setText("")
             return
 
         tables = schema.get("tables", [])
@@ -537,6 +617,9 @@ class ObjectExplorerPanel(QWidget):
             self.info_label.setText(S.object_explorer.info_dbs_tables.format(dbs=db_count, tables=table_count))
         else:
             self.info_label.setText(S.object_explorer.info_tables_cols.format(tables=table_count, cols=col_count))
+
+        # Restore expansion state
+        self._restore_expansion_state(expanded_paths)
 
     def _build_tree_databricks(self, tables, columns, current_catalog, all_catalogs, filter_text):
         """Build tree for Databricks 3-level namespace: Catalog > Schema > Table > Columns
@@ -1125,6 +1208,16 @@ class ObjectExplorerPanel(QWidget):
         drag.setMimeData(mime_data)
         drag.exec(Qt.DropAction.CopyAction)
 
+    def _get_column_names_for_table(self, table_item: QTreeWidgetItem) -> list:
+        """Get column names from a table tree item's children."""
+        names = []
+        for i in range(table_item.childCount()):
+            child = table_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "column":
+                names.append(data.get("name", ""))
+        return [n for n in names if n]
+
     def _on_context_menu(self, pos):
         """Menu de contexto"""
         item = self.tree.itemAt(pos)
@@ -1207,6 +1300,28 @@ class ObjectExplorerPanel(QWidget):
                 lambda _, q=qualified: QApplication.clipboard().setText(q)
             )
 
+            menu.addSeparator()
+
+            # COUNT(*)
+            count_query = f"SELECT COUNT(*) FROM {quoted}"
+            act_count = menu.addAction(S.object_explorer.ctx_count_rows)
+            act_count.triggered.connect(
+                lambda _, q=count_query: self.query_requested.emit(q)
+            )
+
+            # SELECT with all columns (from table's children)
+            col_names = self._get_column_names_for_table(item)
+            if col_names:
+                cols_quoted = ", ".join(self._quote_identifier(c) for c in col_names)
+                if self._db_type in ("mysql", "mariadb", "postgres", "postgresql", "sqlite", "databricks"):
+                    select_all_cols = f"SELECT {cols_quoted}\nFROM {quoted}\nLIMIT 1000"
+                else:
+                    select_all_cols = f"SELECT TOP 1000 {cols_quoted}\nFROM {quoted}"
+                act_all_cols = menu.addAction(S.object_explorer.ctx_select_all_columns)
+                act_all_cols.triggered.connect(
+                    lambda _, q=select_all_cols: self.query_requested.emit(q)
+                )
+
         elif item_type == "column":
             table_name = data.get("table", "")
             col_type = data.get("data_type", "")
@@ -1231,6 +1346,24 @@ class ObjectExplorerPanel(QWidget):
             # Type info (disabled)
             act_type_info = menu.addAction(S.object_explorer.ctx_type_info.format(type=col_type))
             act_type_info.setEnabled(False)
+
+            menu.addSeparator()
+
+            # WHERE clause
+            quoted_col = self._quote_identifier(name)
+            where_text = f"WHERE {quoted_col} = "
+            act_where = menu.addAction(S.object_explorer.ctx_where_clause)
+            act_where.triggered.connect(lambda _, t=where_text: self.insert_text_requested.emit(t))
+
+            # GROUP BY clause
+            group_text = f"GROUP BY {quoted_col}"
+            act_group = menu.addAction(S.object_explorer.ctx_group_by)
+            act_group.triggered.connect(lambda _, t=group_text: self.insert_text_requested.emit(t))
+
+            # ORDER BY clause
+            order_text = f"ORDER BY {quoted_col}"
+            act_order = menu.addAction(S.object_explorer.ctx_order_by)
+            act_order.triggered.connect(lambda _, t=order_text: self.insert_text_requested.emit(t))
 
         elif item_type == "database":
             # Switch to this database

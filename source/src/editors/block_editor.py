@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QSpacerItem,
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
-from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent
+from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent, QKeySequence
 from typing import List, Optional
 import os
 import qtawesome as qta
@@ -195,14 +195,24 @@ class BlockEditor(QWidget):
         self.blocks_layout.addWidget(self.add_button_container)
 
     def keyPressEvent(self, event: QKeyEvent):
-        """Intercept keys for execution shortcuts"""
-        # F5 - Run (focused block selection, or whole block, or all)
-        if event.key() == Qt.Key.Key_F5 and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+        """Intercept keys for execution shortcuts (reads from ShortcutManager)"""
+        from src.core.shortcut_manager import ShortcutManager
+        sm = ShortcutManager()
+
+        # Build QKeySequence from event (PyQt6 enums need .value for int conversion)
+        modifiers = event.modifiers()
+        mod_val = modifiers.value if hasattr(modifiers, 'value') else int(modifiers)
+        key_seq = QKeySequence(mod_val | event.key())
+
+        # Execute SQL (default F5)
+        exec_key = sm.get_shortcut("execute_sql")
+        if exec_key and key_seq.matches(QKeySequence(exec_key)) == QKeySequence.SequenceMatch.ExactMatch:
             self._execute_smart()
             return
 
-        # Ctrl+Enter - Run all blocks
-        if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+        # Execute All (default Ctrl+F5 / Ctrl+Enter)
+        exec_all_key = sm.get_shortcut("execute_all")
+        if exec_all_key and key_seq.matches(QKeySequence(exec_all_key)) == QKeySequence.SequenceMatch.ExactMatch:
             self.execute_all_blocks()
             return
 

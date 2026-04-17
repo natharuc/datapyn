@@ -44,7 +44,13 @@
   "toolbar": {
     "new_tab": " Nova Aba",
     "connection": " Conexao",
-    "run": " Executar (F5)"
+    "run": " Executar (F5)",
+    "run_timer": "Execucao periodica",
+    "run_timer_stop": "Parar execucao periodica",
+    "run_timer_running": "Repetindo {seconds}s apos cada execucao",
+    "run_timer_title": "Execucao Periodica",
+    "run_timer_label": "Aguardar X segundos apos o termino e executar novamente:",
+    "run_timer_start": "Iniciar"
   },
 
   "dock": {
@@ -191,6 +197,7 @@
     "python": "Python",
     "cross_syntax": "Cross-Syntax",
     "complete_rows": "Concluido! {rows} linhas retornadas",
+    "complete_blocks_rows": "Concluido! {blocks} blocos executados - {rows} linhas retornadas",
     "complete_queries": "Concluido! {count} consultas executadas",
     "chart_data": "Grafico + dados gerados!",
     "result_displayed": "Resultado exibido!",
@@ -310,7 +317,27 @@
     "export_table_no_connection": "Nenhuma conexao ativa disponivel.\n\nConecte-se a um banco de dados primeiro.",
     "exporting": "Exportando...",
     "export_success": "Exportacao concluida!",
-    "export_failed": "Falha na exportacao"
+    "export_failed": "Falha na exportacao",
+    "ctx_copy": "Copiar",
+    "ctx_copy_with_headers": "Copiar com Cabecalho",
+    "ctx_select_all": "Selecionar Tudo"
+  },
+
+  "export_settings": {
+    "dialog_title": "Configuracoes de Exportacao",
+    "tooltip_btn": "Configuracoes de exportacao",
+    "label_copy_with_tab": "Separador ao copiar:",
+    "copy_sep_tab": "Tab (Excel)",
+    "copy_sep_comma": "Virgula",
+    "copy_sep_semicolon": "Ponto e virgula",
+    "label_open_folder": "Abrir pasta apos exportar:",
+    "label_copy_format": "Formato do Copiar Tudo:",
+    "copy_format_text": "Texto formatado",
+    "copy_format_csv": "CSV (com delimitador)",
+    "label_null_display": "Exibicao de NULL:",
+    "null_empty": "(vazio)",
+    "null_text": "NULL",
+    "null_none": "None"
   },
 
   "csv_export": {
@@ -349,7 +376,16 @@
     "ctx_use_catalog": "Usar catalogo '{name}'",
     "ctx_use_schema": "Usar schema '{name}'",
     "ctx_copy_db_name": "Copiar nome",
-    "btn_insert_to_editor": "Inserir no editor"
+    "ctx_count_rows": "Contar linhas (COUNT)",
+    "ctx_select_all_columns": "SELECT com todas as colunas",
+    "ctx_where_clause": "Clausula WHERE",
+    "ctx_group_by": "Clausula GROUP BY",
+    "ctx_order_by": "Clausula ORDER BY",
+    "btn_insert_to_editor": "Inserir no editor",
+    "header_connection": "{connection} - {database}",
+    "header_no_database": "{connection}",
+    "schema_error": "Erro ao carregar schema",
+    "not_null": "NOT NULL"
   },
 
   "variables_panel": {

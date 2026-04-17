@@ -1234,13 +1234,18 @@ class SettingsDialog(QDialog):
             "open_file": "Open File",
             "save_file": "Save File",
             "save_as": "Save As...",
+            "export_script": "Export as Script",
             # Sessions
             "new_tab": "New Tab",
+            "new_session": "New Session",
             "close_tab": "Close Tab",
             "add_block": "Add Block",
             # Editing
             "find": "Find",
             "replace": "Replace",
+            "format_code": "Format Code",
+            # Autocomplete
+            "force_autocomplete": "Force Autocomplete",
             # Connections
             "manage_connections": "Manage Connections",
             "new_connection": "New Connection",
@@ -1248,6 +1253,12 @@ class SettingsDialog(QDialog):
             "reload_schema": "Reload SQL Schema",
             # Tools
             "settings": "Settings",
+            # Results grid
+            "copy_with_headers": "Copy with Headers (Grid)",
+            # View / Layout
+            "exit_app": "Exit Application",
+            "restore_view": "Restore Default View",
+            "reset_layout": "Reset Layout Completely",
             # Editor (QScintilla)
             "editor_newline": "[Editor] Newline (Shift+Enter)",
             "editor_duplicate_line": "[Editor] Duplicate Line/Selection",
