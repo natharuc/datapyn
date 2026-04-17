@@ -435,6 +435,8 @@ class MainWindow(DockingMainWindow):
         self.shortcut_manager = ShortcutManager()
         self.shortcut_manager.detect_duplicates()  # Log any duplicate shortcuts
         self.workspace_manager = WorkspaceManager()
+        from src.core.recent_files_manager import RecentFilesManager
+        self.recent_files_manager = RecentFilesManager()
         self.theme_manager = ThemeManager()
         self.theme_manager.set_editor_theme("monokai")  # Specific theme for code editors
         self.session_manager = SessionManager()  # New: Session manager
@@ -1922,6 +1924,14 @@ class MainWindow(DockingMainWindow):
         # Shortcut managed by ShortcutManager (Ctrl+Shift+S)
         save_as_action.triggered.connect(self._save_file_as)
         file_menu.addAction(save_as_action)
+
+        file_menu.addSeparator()
+
+        # Open Recent submenu
+        self._recent_menu = file_menu.addMenu(S.menu.open_recent)
+        if HAS_QTAWESOME:
+            self._recent_menu.setIcon(qta.icon("mdi.history", color="#b0b0b0"))
+        self._update_recent_menu()
 
         file_menu.addSeparator()
 
@@ -3847,6 +3857,51 @@ class MainWindow(DockingMainWindow):
             # All files (including .dpw) open as single tab
             self._open_code_file(filename)
 
+    def _update_recent_menu(self):
+        """Refresh the Open Recent submenu with current entries."""
+        self._recent_menu.clear()
+        recent = self.recent_files_manager.get_recent()
+
+        if not recent:
+            empty_action = QAction(S.menu.open_recent_empty, self)
+            empty_action.setEnabled(False)
+            self._recent_menu.addAction(empty_action)
+            return
+
+        for entry in recent:
+            path = entry.get("path", "")
+            label = entry.get("name", path)
+            action = QAction(label, self)
+            action.setToolTip(path)
+            action.triggered.connect(
+                lambda _checked, p=path: self._open_recent_file(p)
+            )
+            self._recent_menu.addAction(action)
+
+        self._recent_menu.addSeparator()
+        clear_action = QAction(S.menu.open_recent_clear, self)
+        if HAS_QTAWESOME:
+            clear_action.setIcon(qta.icon("mdi.delete-sweep", color="#b0b0b0"))
+        clear_action.triggered.connect(self._clear_recent_files)
+        self._recent_menu.addAction(clear_action)
+
+    def _open_recent_file(self, filepath: str):
+        """Open a file from the recent files list."""
+        import os
+        if not os.path.exists(filepath):
+            QMessageBox.warning(
+                self,
+                S.dialogs.error,
+                S.dialogs.error_opening_file.format(error=f"File not found: {filepath}"),
+            )
+            return
+        self._open_code_file(filepath)
+
+    def _clear_recent_files(self):
+        """Clear the recent files history."""
+        self.recent_files_manager.clear()
+        self._update_recent_menu()
+
     def _open_code_file(self, filename: str):
         """Opens code file in new tab with complete panels"""
         try:
@@ -3975,6 +4030,10 @@ class MainWindow(DockingMainWindow):
 
             self.main_statusbar.show_save_feedback(S.status.file_opened.format(filename=filename))
             self.main_statusbar.set_file_info(filename)
+
+            # Track recently opened file
+            self.recent_files_manager.add(filename)
+            self._update_recent_menu()
 
             # 9. Update window title with context
             self._update_window_title()
