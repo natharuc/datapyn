@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.24.0 (2026-04-17)
+
+### Features
+
+- Add Open Recent submenu to File menu
+  ([`d0e29a2`](https://github.com/natharuc/datapyn/commit/d0e29a22a674abaa791f1f7f4811195ed6234626))
+
+
 ## v1.23.0 (2026-04-17)
 
 ### Features
