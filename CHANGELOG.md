@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.23.0 (2026-04-17)
+
+### Features
+
+- Run timer, DELIMITER-aware SQL split, OE improvements, configurable shortcuts
+  ([`2b14ec2`](https://github.com/natharuc/datapyn/commit/2b14ec2473bdd6f5d32f5a9c778aead666fe863d))
+
+
 ## v1.22.0 (2026-04-15)
 
 ### Bug Fixes
