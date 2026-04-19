@@ -938,9 +938,9 @@ class SessionsMixin:
                 break
 
         # === CARREGAR SCHEMA ===
-        # This is the central place for schema loading when connection changes.
-        # Invalidate cache only if database changed, otherwise load from cache.
-        # Only load schema if we have a real connector (not a Mock in tests)
+        # Always invalidate cache when this handler fires, because
+        # connection_changed can mean a database switch (USE {db}).
+        # Without invalidation, load_schema returns stale cached data.
         from src.database.database_connector import DatabaseConnector
         if (session.connector 
             and isinstance(session.connector, DatabaseConnector)
@@ -950,6 +950,8 @@ class SessionsMixin:
                 self._oe_current_connection = {}
             self._oe_current_connection[session.session_id] = connection_name
 
+            # Invalidate so load_schema fetches fresh data for the new database
+            self._schema_service.invalidate_cache(connection_name, session_id=session.session_id)
             self._load_schema_with_loading(session.connector, connection_name, session_id=session.session_id)
 
         # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
