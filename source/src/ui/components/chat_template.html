@@ -547,10 +547,22 @@
             position: relative;
         }
 
-        .copy-btn {
+        .code-action-btns {
             position: absolute;
             top: 6px;
             right: 6px;
+            display: flex;
+            gap: 4px;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+            z-index: 1;
+        }
+
+        .code-block-wrapper:hover .code-action-btns {
+            opacity: 1;
+        }
+
+        .copy-btn, .insert-btn {
             background: var(--bg-tertiary);
             color: var(--text-secondary);
             border: 1px solid var(--border-default);
@@ -558,17 +570,10 @@
             padding: 2px 8px;
             font-size: 10px;
             cursor: pointer;
-            opacity: 0;
-            transition: opacity 0.15s ease;
-            z-index: 1;
             font-family: inherit;
         }
 
-        .code-block-wrapper:hover .copy-btn {
-            opacity: 1;
-        }
-
-        .copy-btn:hover {
+        .copy-btn:hover, .insert-btn:hover {
             background: var(--accent-primary);
             color: white;
         }
@@ -576,7 +581,11 @@
         .copy-btn.copied {
             background: #4ec9b0;
             color: #1e1e1e;
-            opacity: 1;
+        }
+
+        .insert-btn.inserted {
+            background: #4ec9b0;
+            color: #1e1e1e;
         }
     </style>
 </head>
@@ -663,7 +672,10 @@
                         }
                     }
                     return '<div class="code-block-wrapper">' +
-                        '<button class="copy-btn" onclick="copyCode(this)">Copy</button>' +
+                        '<div class="code-action-btns">' +
+                        '<button class="insert-btn" onclick="insertCode(this)">' + (labels.insert || 'Insert') + '</button>' +
+                        '<button class="copy-btn" onclick="copyCode(this)">' + (labels.copy || 'Copy') + '</button>' +
+                        '</div>' +
                         '<pre><code' + langClass + '>' + highlighted + '</code></pre>' +
                         '</div>';
                 }
@@ -675,17 +687,34 @@
         }
 
         function copyCode(btn) {
-            var codeEl = btn.parentElement.querySelector('code');
+            var wrapper = btn.closest('.code-block-wrapper');
+            var codeEl = wrapper ? wrapper.querySelector('code') : null;
             if (!codeEl) return;
             var text = codeEl.textContent;
             navigator.clipboard.writeText(text).then(function() {
-                btn.textContent = 'Copied!';
+                btn.textContent = labels.copied || 'Copied!';
                 btn.classList.add('copied');
                 setTimeout(function() {
-                    btn.textContent = 'Copy';
+                    btn.textContent = labels.copy || 'Copy';
                     btn.classList.remove('copied');
                 }, 1500);
             });
+        }
+
+        function insertCode(btn) {
+            var wrapper = btn.closest('.code-block-wrapper');
+            var codeEl = wrapper ? wrapper.querySelector('code') : null;
+            if (!codeEl) return;
+            var text = codeEl.textContent;
+            if (pyBridge && pyBridge.insertCode) {
+                pyBridge.insertCode(text);
+                btn.textContent = labels.inserted || 'Inserted!';
+                btn.classList.add('inserted');
+                setTimeout(function() {
+                    btn.textContent = labels.insert || 'Insert';
+                    btn.classList.remove('inserted');
+                }, 1500);
+            }
         }
 
         function getTimestamp() {

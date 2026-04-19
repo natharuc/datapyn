@@ -1035,32 +1035,5 @@ class TestCopilotChatPanel:
         assert panel._current_session_id == "session1"
 
 
-# ==================== ChatMessageWidget Tests ====================
-
-
-class TestChatMessageWidget:
-    """Tests for individual chat message widgets."""
-
-    def test_user_message(self, qtbot):
-        """User messages should display correctly."""
-        from src.ui.components.copilot_chat_panel import ChatMessageWidget
-        widget = ChatMessageWidget("user", "Hello")
-        qtbot.addWidget(widget)
-        assert widget.role == "user"
-        assert widget.content == "Hello"
-
-    def test_assistant_message(self, qtbot):
-        """Assistant messages should display correctly."""
-        from src.ui.components.copilot_chat_panel import ChatMessageWidget
-        widget = ChatMessageWidget("assistant", "Hi there!")
-        qtbot.addWidget(widget)
-        assert widget.role == "assistant"
-        assert widget.content == "Hi there!"
-
-    def test_append_content(self, qtbot):
-        """append_content should update message text (streaming)."""
-        from src.ui.components.copilot_chat_panel import ChatMessageWidget
-        widget = ChatMessageWidget("assistant", "Hello")
-        qtbot.addWidget(widget)
-        widget.append_content(" World")
-        assert widget.content == "Hello World"
+# ChatMessageWidget tests removed - class was removed in dead code cleanup
+# (chat rendering now uses WebView exclusively)

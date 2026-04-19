@@ -161,6 +161,14 @@ class ConnectionsManagerDialog(QDialog):
         btn_new_conn.clicked.connect(self._new_connection)
         toolbar_layout.addWidget(btn_new_conn)
 
+        btn_import_export = QPushButton(S.connections_manager.btn_import_export)
+        btn_import_export.setObjectName("toolbarBtn")
+        if HAS_QTAWESOME:
+            btn_import_export.setIcon(qta.icon("mdi.code-json", color="white"))
+        btn_import_export.setStyleSheet(toolbar_btn_style)
+        btn_import_export.clicked.connect(self._open_import_export)
+        toolbar_layout.addWidget(btn_import_export)
+
         toolbar_layout.addStretch()
         left_layout.addLayout(toolbar_layout)
 
@@ -590,6 +598,19 @@ class ConnectionsManagerDialog(QDialog):
                 groups[self.selected_group]["color"] = color.name()
                 self.connection_manager._save_configs()
                 self._load_connections()
+
+    def _open_import_export(self):
+        """Opens the JSON import/export dialog."""
+        from .connection_import_export_dialog import ConnectionImportExportDialog
+
+        dialog = ConnectionImportExportDialog(
+            connection_manager=self.connection_manager,
+            theme_manager=self.theme_manager,
+            parent=self,
+        )
+        dialog.exec()
+        if dialog.imported:
+            self._load_connections()
 
     def _new_connection(self):
         """Creates a new connection"""

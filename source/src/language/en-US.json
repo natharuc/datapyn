@@ -608,7 +608,19 @@
     "dialog_confirm_replace_msg": "Connection '{name}' already exists. Do you want to replace it?",
     "dialog_confirm_delete_title": "Confirm Deletion",
     "dialog_confirm_delete_conn": "Do you really want to delete connection '{name}'?",
-    "dialog_confirm_delete_group": "Do you really want to delete group '{name}'?\nConnections inside it will be moved to root."
+    "dialog_confirm_delete_group": "Do you really want to delete group '{name}'?\nConnections inside it will be moved to root.",
+    "btn_import_export": "Import / Export",
+    "import_export_title": "Import / Export Connections",
+    "import_export_description": "Edit the JSON below to import or export connections.\nPasswords are NOT included for security.",
+    "import_export_save": "Save",
+    "import_export_cancel": "Cancel",
+    "import_export_copy": "Copy",
+    "import_export_invalid_json": "Invalid JSON: {error}",
+    "import_export_invalid_structure": "Invalid structure: JSON must contain 'connections' (object) and optionally 'groups' (object).",
+    "import_export_invalid_connection": "Connection '{name}' is invalid: required field '{field}' is missing.",
+    "import_export_success": "{count} connection(s) imported successfully!",
+    "import_export_confirm_title": "Confirm Import",
+    "import_export_confirm_msg": "This will import {count} connection(s) and {groups} group(s).\nExisting connections with the same name will be replaced.\nDo you want to continue?"
   },
 
   "connection_edit": {
@@ -898,6 +910,10 @@
     "tool_running": "running...",
     "tool_ok": "ok",
     "tool_error": "error",
+    "copy_code": "Copy",
+    "copied_code": "Copied!",
+    "insert_code": "Insert",
+    "inserted_code": "Inserted!",
     "chat_context_tab": "Tab: {name}",
     "new_chat": "New Chat",
     "chat_history": "Chat History"
