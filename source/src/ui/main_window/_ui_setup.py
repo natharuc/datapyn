@@ -1079,7 +1079,9 @@ class UISetupMixin:
                 base_path = sys._MEIPASS
             else:
                 # In development, go to project root
-                base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+                # __file__ is source/src/ui/main_window/_ui_setup.py
+                # Need 5 levels up: _ui_setup.py -> main_window/ -> ui/ -> src/ -> source/ -> project root
+                base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
             pyproject_path = os.path.join(base_path, "pyproject.toml")
 
