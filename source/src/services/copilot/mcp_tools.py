@@ -68,11 +68,22 @@ class MCPToolRegistry(QObject):
         super().__init__(parent)
         self._tools: Dict[str, MCPTool] = {}
         self._main_window = None
+        self._pinned_session_id: Optional[str] = None  # Per-tab tool isolation
         self._register_tools()
 
     def set_main_window(self, main_window) -> None:
         """Set reference to the main window for tool operations."""
         self._main_window = main_window
+
+    def pin_session(self, session_id: str):
+        """Pin tools to a specific session (tab). While pinned,
+        _get_active_session_widget returns that session's widget
+        regardless of which tab is visually active."""
+        self._pinned_session_id = session_id
+
+    def unpin_session(self):
+        """Remove session pinning. Tools will use currentIndex() again."""
+        self._pinned_session_id = None
 
     def _register_tools(self) -> None:
         """Register all available tools."""
@@ -1173,8 +1184,22 @@ class MCPToolRegistry(QObject):
         return None
 
     def _get_active_session_widget(self) -> Optional[Any]:
-        """Get the active session widget."""
+        """Get the active session widget.
+        If a session is pinned (during chat), returns that session's widget
+        regardless of which tab is visually focused."""
         mw = self._main_window
+        if not mw:
+            logger.warning("_get_active_session_widget: No main_window")
+            return None
+
+        # If pinned, find widget by session_id (tab-safe)
+        if self._pinned_session_id and hasattr(mw, "_session_widgets"):
+            widget = mw._session_widgets.get(self._pinned_session_id)
+            if widget:
+                logger.info(f"_get_active_session_widget: pinned to {self._pinned_session_id}")
+                return widget
+
+        # Fallback: use current tab
         if hasattr(mw, "session_tabs") and mw.session_tabs:
             idx = mw.session_tabs.currentIndex()
             widget = mw.session_tabs.widget(idx) if idx >= 0 else None

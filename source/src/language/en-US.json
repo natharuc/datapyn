@@ -898,6 +898,10 @@
     "tool_running": "running...",
     "tool_ok": "ok",
     "tool_error": "error",
+    "copy_code": "Copy",
+    "copied_code": "Copied!",
+    "insert_code": "Insert",
+    "inserted_code": "Inserted!",
     "chat_context_tab": "Tab: {name}",
     "new_chat": "New Chat",
     "chat_history": "Chat History"

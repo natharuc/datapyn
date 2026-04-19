@@ -302,5 +302,142 @@ def test_file_path_preserved_on_duplicate(main_window, temp_sql_file):
     assert new_widget.file_path == temp_sql_file
 
 
+class TestFileContextPerTab:
+    """Tests that file context (path, type) is per-tab and not leaked across tabs."""
+
+    def test_new_tab_does_not_inherit_file_path(self, main_window, temp_sql_file):
+        """Creating a new tab should NOT carry over the previous tab's file_path."""
+        # Setup: open file in tab A
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+
+        widget_a = main_window._get_current_session_widget()
+        widget_a.file_path = temp_sql_file
+        widget_a._original_file_type = "sql"
+        main_window._sync_file_context_from_widget()
+
+        assert main_window._original_file_path == temp_sql_file
+
+        # Action: create new tab (tab B)
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+
+        widget_b = main_window._get_current_session_widget()
+
+        # Verify: tab B has no file_path, global is cleared
+        assert widget_b is not widget_a
+        assert widget_b.file_path is None
+        assert main_window._original_file_path is None
+
+    def test_switch_tab_restores_file_path(self, main_window, temp_sql_file, temp_python_file):
+        """Switching tabs should restore the file_path of the target tab."""
+        # Create tab A with SQL file
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+        widget_a = main_window._get_current_session_widget()
+        widget_a.file_path = temp_sql_file
+        widget_a._original_file_type = "sql"
+        idx_a = main_window.session_tabs.currentIndex()
+
+        # Create tab B with Python file
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+        widget_b = main_window._get_current_session_widget()
+        widget_b.file_path = temp_python_file
+        widget_b._original_file_type = "python"
+
+        # Switch back to tab A
+        main_window.session_tabs.setCurrentIndex(idx_a)
+        QApplication.processEvents()
+        QTest.qWait(100)
+
+        # Verify: global should point to tab A's file
+        assert main_window._original_file_path == temp_sql_file
+        assert main_window._original_file_type == "sql"
+
+    def test_close_tab_syncs_to_remaining(self, main_window, temp_sql_file, temp_python_file):
+        """Closing a tab should sync global to the now-active tab."""
+        # Create tab A with SQL file
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+        widget_a = main_window._get_current_session_widget()
+        widget_a.file_path = temp_sql_file
+        widget_a._original_file_type = "sql"
+        idx_a = main_window.session_tabs.currentIndex()
+
+        # Create tab B with Python file
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+        widget_b = main_window._get_current_session_widget()
+        widget_b.file_path = temp_python_file
+        widget_b._original_file_type = "python"
+        idx_b = main_window.session_tabs.currentIndex()
+
+        # Close tab B — tab A should become active
+        main_window._close_session_tab(idx_b)
+        QApplication.processEvents()
+        QTest.qWait(100)
+
+        # Verify: global should now point to tab A's file
+        assert main_window._original_file_path == temp_sql_file
+        assert main_window._original_file_type == "sql"
+
+    def test_save_uses_widget_file_path(self, main_window, temp_sql_file):
+        """_save_intelligently should use the current widget's file_path, not global."""
+        import os
+
+        # Create tab A with SQL file
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+        widget_a = main_window._get_current_session_widget()
+        widget_a.file_path = temp_sql_file
+        widget_a._original_file_type = "sql"
+
+        # Set content
+        blocks = widget_a.editor.get_blocks()
+        blocks[0].set_language("sql")
+        blocks[0].editor.set_text("SELECT 42")
+        QApplication.processEvents()
+
+        # Sabotage: set global to a DIFFERENT path (simulates stale global)
+        main_window._original_file_path = "C:\\nonexistent\\wrong_file.sql"
+
+        # Save should use widget_a.file_path (temp_sql_file), not the global
+        main_window._save_intelligently()
+        QApplication.processEvents()
+
+        # Verify the correct file was written
+        with open(temp_sql_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "SELECT 42" in content
+
+    def test_detect_context_uses_widget_type(self, main_window, temp_sql_file):
+        """_detect_file_context should read from widget, not global."""
+        main_window._new_session()
+        QApplication.processEvents()
+        QTest.qWait(100)
+
+        widget = main_window._get_current_session_widget()
+        widget._original_file_type = "workspace"
+
+        # Sabotage: global says "sql" but widget says "workspace"
+        main_window._original_file_type = "sql"
+
+        blocks = widget.editor.get_blocks()
+        blocks[0].set_language("sql")
+        blocks[0].editor.set_text("SELECT 1")
+
+        # With only 1 SQL block, but widget says workspace -> should return workspace
+        context = main_window._detect_file_context()
+        assert context == "workspace"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

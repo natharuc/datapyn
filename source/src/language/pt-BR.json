@@ -900,6 +900,10 @@
     "tool_running": "executando...",
     "tool_ok": "ok",
     "tool_error": "erro",
+    "copy_code": "Copiar",
+    "copied_code": "Copiado!",
+    "insert_code": "Inserir",
+    "inserted_code": "Inserido!",
     "chat_context_tab": "Aba: {name}",
     "new_chat": "Novo Chat",
     "chat_history": "Historico"

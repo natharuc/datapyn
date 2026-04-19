@@ -249,7 +249,7 @@ class TestLogging:
 
     def test_show_error_displays_message_box(self, main_window, qtbot):
         """_show_error deve exibir QMessageBox.Critical"""
-        with patch("src.ui.main_window.QMessageBox") as mock_msgbox:
+        with patch("src.ui.main_window._connections.QMessageBox") as mock_msgbox:
             mock_instance = Mock()
             mock_msgbox.return_value = mock_instance
 
@@ -264,7 +264,7 @@ class TestLogging:
 
     def test_show_info_displays_message_box(self, main_window, qtbot):
         """_show_info deve exibir QMessageBox.Information"""
-        with patch("src.ui.main_window.QMessageBox") as mock_msgbox:
+        with patch("src.ui.main_window._connections.QMessageBox") as mock_msgbox:
             mock_instance = Mock()
             mock_msgbox.return_value = mock_instance
 

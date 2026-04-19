@@ -7,7 +7,7 @@ Contains all session components:
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QLabel
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 import pandas as pd
 import sys
@@ -168,6 +168,7 @@ class SessionWidget(QWidget):
     completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based) - for statusbar
     block_focused = pyqtSignal(object)  # CodeBlock that gained focus (for OE tracking)
+    periodic_changed = pyqtSignal(bool)  # True=started, False=stopped - for tab icon
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -200,6 +201,15 @@ class SessionWidget(QWidget):
 
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
+
+        # Per-tab file context (authoritative source of truth for save operations)
+        self.file_path: Optional[str] = None
+        self._original_file_type: Optional[str] = None
+
+        # Per-tab periodic execution
+        self._periodic_timer: Optional[QTimer] = None
+        self._periodic_interval: int = 0  # seconds
+        self._periodic_active: bool = False
 
         self._setup_ui()
         self._connect_signals()
@@ -409,6 +419,11 @@ class SessionWidget(QWidget):
 
         # Connect session signals
         self.session.variables_changed.connect(self._update_variables_view)
+
+        # Chain periodic timer after execution finishes
+        self.execution_finished.connect(
+            lambda title, msg, success: self.schedule_next_periodic()
+        )
 
     def _format_log(self, log_type: str, message: str = "") -> str:
         """Format log message with timestamp and type"""
@@ -1255,10 +1270,60 @@ class SessionWidget(QWidget):
         if self._loading_overlay and self._loading_overlay.isVisible():
             self._loading_overlay.resize(self.size())
 
+    # === PERIODIC EXECUTION ===
+
+    def start_periodic(self, interval_seconds: int):
+        """Start periodic execution on this tab with the given interval."""
+        if self._periodic_timer is None:
+            self._periodic_timer = QTimer(self)
+            self._periodic_timer.setSingleShot(True)
+            self._periodic_timer.timeout.connect(self._periodic_fire)
+
+        self._periodic_interval = interval_seconds
+        self._periodic_active = True
+        self.periodic_changed.emit(True)
+        # Execute immediately, then schedule_next_periodic will chain after completion
+        self._execute_all()
+
+    def stop_periodic(self):
+        """Stop periodic execution on this tab."""
+        if not self._periodic_active:
+            return
+        self._periodic_active = False
+        if self._periodic_timer:
+            self._periodic_timer.stop()
+        self.periodic_changed.emit(False)
+
+    def schedule_next_periodic(self):
+        """Schedule the next periodic execution (called after execution finishes)."""
+        if self._periodic_active and self._periodic_timer:
+            self._periodic_timer.start(self._periodic_interval * 1000)
+
+    def _periodic_fire(self):
+        """Called when the periodic timer fires. Runs all blocks again."""
+        if self._periodic_active:
+            self._execute_all()
+
+    def _execute_all(self):
+        """Execute all blocks in this tab (used by periodic timer)."""
+        if self.editor:
+            self.editor.execute_all_blocks()
+
+    @property
+    def is_periodic_active(self) -> bool:
+        return self._periodic_active
+
+    @property
+    def periodic_interval(self) -> int:
+        return self._periodic_interval
+
     # === CLEANUP ===
 
     def cleanup(self):
         """Clean resources"""
+        # Stop periodic timer if running
+        self.stop_periodic()
+
         try:
             if self._sql_thread and self._sql_thread.isRunning():
                 self._sql_thread.quit()

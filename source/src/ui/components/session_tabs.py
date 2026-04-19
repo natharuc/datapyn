@@ -4,7 +4,7 @@ Session tabs
 Manages session tabs in the IDE.
 """
 
-from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit
+from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit, QToolButton
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QAction, QPainter, QPen, QMovie, QIcon, QPixmap
 import qtawesome as qta
@@ -286,14 +286,30 @@ class SessionTabs(QTabWidget):
         self.setDocumentMode(True)
 
     def _setup_close_button(self, index):
-        """Configure X icon on tab close button - elegant and compact"""
+        """Configure tab right-side widget: [timer icon] [close button]"""
         from src.design_system.tokens import get_colors
-        from PyQt6.QtWidgets import QToolButton
+        from PyQt6.QtWidgets import QToolButton, QWidget, QHBoxLayout
         from PyQt6.QtCore import Qt
         
         colors = get_colors()
 
-        # Create compact and subtle custom button with X icon
+        # Container for timer icon + close button
+        container = QWidget()
+        container_layout = QHBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(2)
+
+        # Timer icon (hidden by default)
+        timer_icon = QToolButton()
+        timer_icon.setIcon(qta.icon("mdi.timer", color="#4ec9b0", scale_factor=0.55))
+        timer_icon.setFixedSize(18, 18)
+        timer_icon.setStyleSheet("QToolButton { background: transparent; border: none; }")
+        timer_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+        timer_icon.setVisible(False)
+        timer_icon.setObjectName("timer_icon")
+        container_layout.addWidget(timer_icon)
+
+        # Close button
         close_btn = QToolButton()
         close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.6))
         close_btn.setFixedSize(20, 20)
@@ -325,17 +341,43 @@ class SessionTabs(QTabWidget):
         # IMPORTANT: Find index dynamically at click time
         # because indices change when tabs are removed
         def request_close():
-            # Find current index of this tab by button
             for i in range(self.count()):
                 btn = self.tabBar().tabButton(i, QTabBar.ButtonPosition.RightSide)
-                if btn == close_btn:
+                if btn == container:
                     self.tabCloseRequested.emit(i)
                     return
 
         close_btn.clicked.connect(request_close)
 
-        # Replace default button
-        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, close_btn)
+        # Timer icon click: stop periodic on that tab
+        def toggle_timer():
+            for i in range(self.count()):
+                btn = self.tabBar().tabButton(i, QTabBar.ButtonPosition.RightSide)
+                if btn == container:
+                    widget = self.widget(i)
+                    if hasattr(widget, "stop_periodic"):
+                        widget.stop_periodic()
+                    return
+
+        timer_icon.clicked.connect(toggle_timer)
+
+        container_layout.addWidget(close_btn)
+
+        # Replace default button with container
+        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, container)
+
+    def set_tab_timer_icon(self, index: int, visible: bool, interval: int = 0):
+        """Show or hide the timer icon on a tab."""
+        container = self.tabBar().tabButton(index, QTabBar.ButtonPosition.RightSide)
+        if not container:
+            return
+        timer_icon = container.findChild(QToolButton, "timer_icon")
+        if timer_icon:
+            timer_icon.setVisible(visible)
+            if visible and interval > 0:
+                timer_icon.setToolTip(f"{interval}s")
+            else:
+                timer_icon.setToolTip("")
 
     def _setup_style(self):
         """Configure style - modern, clean"""

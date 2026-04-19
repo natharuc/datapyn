@@ -241,7 +241,12 @@ class TestGhCliInstallWorker:
         results = []
         worker.finished.connect(lambda s, m: results.append((s, m)))
 
-        with patch("shutil.which", return_value="/usr/bin/gh"):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "copilot"
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", return_value=mock_result):
             worker.run()
 
         assert len(results) == 1

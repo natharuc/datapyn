@@ -164,6 +164,7 @@ class ChatBridge(QObject):
     
     # Signals emitted when JS calls our slots
     web_view_ready = pyqtSignal()
+    insert_code_requested = pyqtSignal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -173,421 +174,15 @@ class ChatBridge(QObject):
         """Called when the WebView chat is fully loaded."""
         self.web_view_ready.emit()
 
-
-class ChatMessageWidget(QFrame):
-    """A single chat message bubble with proper alignment (user right, assistant left)."""
-
-    def __init__(self, role: str, content: str, parent=None):
-        super().__init__(parent)
-        self.role = role
-        self.content = content
-        self._timestamp = datetime.now()
-        self._setup_ui()
-
-    def _setup_ui(self):
-        colors = get_colors()
-
-        # Outer layout to handle alignment
-        outer_layout = QHBoxLayout(self)
-        outer_layout.setContentsMargins(4, 2, 4, 2)
-        outer_layout.setSpacing(0)
-
-        # Create the bubble frame
-        bubble = QFrame()
-        bubble.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        bubble_layout = QVBoxLayout(bubble)
-        bubble_layout.setContentsMargins(12, 8, 12, 8)
-        bubble_layout.setSpacing(4)
-
-        # Content label (no role label - cleaner look)
-        content_label = QLabel(self.content)
-        content_label.setWordWrap(True)
-        content_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
-        )
-        # Expanding width to fill bubble, Minimum height for content
-        content_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        content_label.setMinimumWidth(50)  # Prevent complete collapse
-        content_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_primary};
-                background: transparent;
-                font-size: 13px;
-            }}
-        """)
-        bubble_layout.addWidget(content_label)
-        self._content_label = content_label
-
-        # Timestamp label
-        time_str = self._timestamp.strftime("%H:%M")
-        time_label = QLabel(time_str)
-        time_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_tertiary};
-                background: transparent;
-                font-size: 10px;
-            }}
-        """)
-        bubble_layout.addWidget(time_label)
-        self._time_label = time_label
-
-        # Style the bubble based on role
-        if self.role == "user":
-            # User messages: right aligned, primary color accent
-            outer_layout.addStretch()
-            outer_layout.addWidget(bubble)
-            bubble.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {colors.interactive_primary};
-                    border-radius: {RADIUS.radius_md}px;
-                }}
-            """)
-            content_label.setStyleSheet(f"""
-                QLabel {{
-                    color: white;
-                    background: transparent;
-                    font-size: 13px;
-                }}
-            """)
-            time_label.setStyleSheet(f"""
-                QLabel {{
-                    color: rgba(255, 255, 255, 0.6);
-                    background: transparent;
-                    font-size: 10px;
-                }}
-            """)
-            time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-            # Spacer takes ~15% on left, bubble takes rest
-            outer_layout.setStretch(0, 15)  # stretch spacer
-            outer_layout.setStretch(1, 85)  # bubble
-        else:
-            # Assistant messages: left aligned, secondary background
-            outer_layout.addWidget(bubble)
-            outer_layout.addStretch()
-            bubble.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {colors.bg_secondary};
-                    border-radius: {RADIUS.radius_md}px;
-                    border: none;
-                }}
-            """)
-            # Bubble takes ~85%, spacer takes ~15%
-            outer_layout.setStretch(0, 85)  # bubble
-            outer_layout.setStretch(1, 15)  # stretch spacer
-
-        # Main widget fills available width
-        self.setStyleSheet("ChatMessageWidget { background: transparent; border: none; }")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-
-    def append_content(self, text: str):
-        """Append text to the message content (for streaming)."""
-        self.content += text
-        self._content_label.setText(self.content)
-        self._content_label.adjustSize()
-        self.adjustSize()
+    @pyqtSlot(str)
+    def insertCode(self, code: str):
+        """Called from JS when user clicks Insert button on a code block."""
+        self.insert_code_requested.emit(code)
 
 
-class ThinkingIndicatorWidget(QFrame):
-    """Animated thinking indicator widget - left aligned like assistant messages."""
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._dot_count = 0
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._animate)
-        self._setup_ui()
-        self._timer.start(400)  # Animation speed
-
-    def _setup_ui(self):
-        colors = get_colors()
-
-        # Outer layout for left alignment
-        outer_layout = QHBoxLayout(self)
-        outer_layout.setContentsMargins(4, 4, 4, 4)
-        outer_layout.setSpacing(0)
-
-        # Bubble frame
-        bubble = QFrame()
-        bubble_layout = QHBoxLayout(bubble)
-        bubble_layout.setContentsMargins(12, 8, 12, 8)
-        bubble_layout.setSpacing(4)
-
-        # Thinking text with animated dots
-        self._thinking_label = QLabel("thinking")
-        self._thinking_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_tertiary};
-                font-size: 13px;
-                font-style: italic;
-                background: transparent;
-            }}
-        """)
-        bubble_layout.addWidget(self._thinking_label)
-
-        # Style the bubble
-        bubble.setStyleSheet(f"""
-            QFrame {{
-                background-color: {colors.bg_secondary};
-                border-radius: {RADIUS.radius_md}px;
-                border: 1px solid {colors.border_muted};
-            }}
-        """)
-
-        outer_layout.addWidget(bubble)
-        outer_layout.addStretch()
-
-        self.setStyleSheet("ThinkingIndicatorWidget { background: transparent; }")
-
-    def _animate(self):
-        """Animate the dots."""
-        self._dot_count = (self._dot_count + 1) % 4
-        dots = "." * self._dot_count
-        self._thinking_label.setText(f"thinking{dots}")
-
-    def stop(self):
-        """Stop the animation."""
-        self._timer.stop()
-
-
-class ThinkingContentWidget(QFrame):
-    """Collapsible widget to show Copilot's reasoning/thinking text."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._content = ""
-        self._expanded = False
-        self._setup_ui()
-
-    def _setup_ui(self):
-        colors = get_colors()
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(2)
-
-        # Header row with toggle button
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(4)
-
-        # Disclosure triangle
-        self._toggle_btn = QPushButton("\u25B6")  # Right triangle (collapsed)
-        self._toggle_btn.setFixedSize(20, 20)
-        self._toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                border: none;
-                background: transparent;
-                color: {colors.text_tertiary};
-                font-size: 10px;
-            }}
-            QPushButton:hover {{
-                color: {colors.text_secondary};
-            }}
-        """)
-        self._toggle_btn.clicked.connect(self._toggle)
-        header_layout.addWidget(self._toggle_btn)
-
-        # Label
-        self._header_label = QLabel("Thinking...")
-        self._header_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_tertiary};
-                font-size: 11px;
-                font-style: italic;
-                background: transparent;
-            }}
-        """)
-        header_layout.addWidget(self._header_label)
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
-
-        # Collapsible content
-        self._content_label = QLabel()
-        self._content_label.setWordWrap(True)
-        self._content_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_tertiary};
-                background: rgba(128, 128, 128, 0.1);
-                border: 1px solid {colors.border_muted};
-                border-radius: 4px;
-                padding: 8px;
-                font-size: 11px;
-            }}
-        """)
-        self._content_label.hide()
-        layout.addWidget(self._content_label)
-
-        self.setStyleSheet("ThinkingContentWidget { background: transparent; }")
-
-    def _toggle(self):
-        self._expanded = not self._expanded
-        self._content_label.setVisible(self._expanded)
-        self._toggle_btn.setText("\u25BC" if self._expanded else "\u25B6")
-
-    def append_content(self, text: str):
-        """Append thinking text."""
-        self._content += text
-        self._content_label.setText(self._content)
-        # Update header with preview
-        preview = self._content[:50].replace("\n", " ")
-        if len(self._content) > 50:
-            preview += "..."
-        self._header_label.setText(f"Thinking: {preview}")
-
-    def set_complete(self):
-        """Mark thinking as complete."""
-        self._header_label.setText(f"Thought ({len(self._content)} chars)")
-
-
-class ToolCallWidget(QFrame):
-    """Collapsible widget showing all tool calls in a single unified widget."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._actions: list = []  # [{name, widget, status}]
-        self._expanded = False
-        self._setup_ui()
-
-    def _setup_ui(self):
-        colors = get_colors()
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(2)
-
-        # Header row - "Pensando..." with toggle
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(4)
-
-        # Disclosure triangle
-        self._toggle_btn = QPushButton("\u25B6")
-        self._toggle_btn.setFixedSize(20, 20)
-        self._toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                border: none;
-                background: transparent;
-                color: {colors.text_tertiary};
-                font-size: 10px;
-            }}
-            QPushButton:hover {{
-                color: {colors.text_secondary};
-            }}
-        """)
-        self._toggle_btn.clicked.connect(self._toggle)
-        header_layout.addWidget(self._toggle_btn)
-
-        # Animated dots label
-        self._header_label = QLabel("Pensando...")
-        self._header_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_tertiary};
-                font-size: 11px;
-                font-style: italic;
-                background: transparent;
-            }}
-        """)
-        header_layout.addWidget(self._header_label)
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
-
-        # Scrollable actions list (hidden by default)
-        self._scroll = QScrollArea()
-        self._scroll.setMaximumHeight(150)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet(f"""
-            QScrollArea {{
-                background: transparent;
-                border: none;
-            }}
-        """)
-        self._scroll.hide()
-
-        self._actions_container = QWidget()
-        self._actions_layout = QVBoxLayout(self._actions_container)
-        self._actions_layout.setContentsMargins(20, 4, 4, 4)
-        self._actions_layout.setSpacing(2)
-        self._scroll.setWidget(self._actions_container)
-        layout.addWidget(self._scroll)
-
-        self.setStyleSheet("ToolCallWidget { background: transparent; }")
-
-        # Animation timer for dots
-        self._dot_count = 0
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._animate_dots)
-        self._timer.start(400)
-
-    def _animate_dots(self):
-        """Animate the dots in 'Pensando...' header."""
-        if not self._actions:  # Only animate when no actions yet
-            return
-        self._dot_count = (self._dot_count + 1) % 4
-        dots = "." * self._dot_count
-        pending = sum(1 for a in self._actions if a.get("status") == "running")
-        if pending > 0:
-            self._header_label.setText(S.copilot.actions_running.format(count=len(self._actions)))
-
-    def _toggle(self):
-        self._expanded = not self._expanded
-        self._scroll.setVisible(self._expanded)
-        self._toggle_btn.setText("\u25BC" if self._expanded else "\u25B6")
-
-    def add_action(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
-        """Add a new action to the list."""
-        colors = get_colors()
-        
-        # Create row for this action
-        row = QFrame()
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 2, 0, 2)
-        row_layout.setSpacing(4)
-        
-        # Tool name
-        name_label = QLabel(f"<span style='color:#569cd6;font-family:Consolas;'>{tool_name}</span>")
-        row_layout.addWidget(name_label)
-        
-        # Status
-        status_label = QLabel(S.copilot.action_running)
-        status_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic;")
-        row_layout.addWidget(status_label)
-        row_layout.addStretch()
-        
-        self._actions_layout.addWidget(row)
-        self._actions.append({
-            "name": tool_name,
-            "id": tool_call_id,
-            "status": "running",
-            "row": row,
-            "status_label": status_label,
-        })
-        
-        # Update header
-        self._header_label.setText(S.copilot.actions_running.format(count=len(self._actions)))
-
-    def update_action(self, tool_name: str, result: str, is_error: bool = False):
-        """Update action status to done/error."""
-        for action in self._actions:
-            if action["name"] == tool_name and action["status"] == "running":
-                if is_error:
-                    action["status_label"].setText(S.copilot.action_error)
-                    action["status_label"].setStyleSheet("color: #f14c4c; font-size: 10px;")
-                else:
-                    action["status_label"].setText(S.copilot.action_ok)
-                    action["status_label"].setStyleSheet("color: #4ec9b0; font-size: 10px;")
-                action["status"] = "done" if not is_error else "error"
-                break
-        
-        # Check if all done
-        pending = sum(1 for a in self._actions if a.get("status") == "running")
-        if pending == 0:
-            self._header_label.setText(S.copilot.actions_complete.format(count=len(self._actions)))
-            self._timer.stop()
-
-    def set_complete(self):
-        """Mark all actions as complete."""
-        self._header_label.setText(S.copilot.actions_complete.format(count=len(self._actions)))
-        self._timer.stop()
-
+# Legacy widget classes removed (ChatMessageWidget, ThinkingIndicatorWidget,
+# ThinkingContentWidget, ToolCallWidget). Chat rendering uses WebView now.
 
 class ChatInputWidget(QTextEdit):
     """Custom text input that sends on Enter (Shift+Enter for newline)."""
@@ -862,6 +457,7 @@ class CopilotChatPanel(QWidget):
     message_sent = pyqtSignal(str)
     tool_call_requested = pyqtSignal(str, dict)
     thinking_started = pyqtSignal()
+    insert_code_requested = pyqtSignal(str)
 
     def __init__(self, copilot_client=None, mcp_server=None, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -1319,6 +915,7 @@ class CopilotChatPanel(QWidget):
         
         # Connect bridge signals
         self._chat_bridge.web_view_ready.connect(self._on_webview_ready)
+        self._chat_bridge.insert_code_requested.connect(self.insert_code_requested)
         
         # Track WebView ready state
         self._webview_ready = False
@@ -1361,6 +958,10 @@ class CopilotChatPanel(QWidget):
             "tool_running": getattr(S.copilot, 'tool_running', 'running...'),
             "tool_ok": getattr(S.copilot, 'tool_ok', 'ok'),
             "tool_error": getattr(S.copilot, 'tool_error', 'error'),
+            "copy": getattr(S.copilot, 'copy_code', 'Copy'),
+            "copied": getattr(S.copilot, 'copied_code', 'Copied!'),
+            "insert": getattr(S.copilot, 'insert_code', 'Insert'),
+            "inserted": getattr(S.copilot, 'inserted_code', 'Inserted!'),
         }
         self._run_chat_js(f"setLabels({json.dumps(chat_labels)})")
         
@@ -1552,6 +1153,12 @@ class CopilotChatPanel(QWidget):
 
         # Send to Copilot
         if self._copilot_client:
+            # Pin MCP tools to the current tab so tools target it even if user switches tabs
+            if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+                tab_id = getattr(self, "_current_tab_id", None)
+                if tab_id:
+                    self._mcp_server.tool_registry.pin_session(tab_id)
+
             # Clear any previous assistant widget to ensure fresh response
             self._current_assistant_widget = None
             # Add animated thinking indicator
@@ -1648,6 +1255,10 @@ class CopilotChatPanel(QWidget):
         """Handle complete response."""
         self._set_loading(False)
         self._hide_thinking_indicator()
+
+        # Unpin MCP tools session (response is complete)
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
         
         # End collapsible thinking block
         if self._is_thinking:
@@ -1686,6 +1297,10 @@ class CopilotChatPanel(QWidget):
         """Handle chat error."""
         self._set_loading(False)
         self._hide_thinking_indicator()
+
+        # Unpin MCP tools session (stream ended with error)
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
         
         # End collapsible thinking block
         if self._is_thinking:
