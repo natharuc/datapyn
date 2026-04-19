@@ -1287,16 +1287,9 @@ class CodeBlock(QFrame):
                         border-radius: 4px;
                     }
                 """)
-            else:
-                self.status_label.setText("")
-                self.status_label.setStyleSheet("""
-                    QLabel {
-                        color: #888;
-                        font-size: 11px;
-                        padding: 2px 6px;
-                        background: transparent;
-                    }
-                """)
+            elif self._last_execution_time and self._last_execution_time > 0:
+                # Already finished before (double call) - keep existing time
+                pass
 
     def set_cancelled(self):
         """Set cancelled state"""
