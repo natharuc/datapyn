@@ -1270,8 +1270,8 @@ class CodeBlock(QFrame):
             self._execution_tick_timer.start()
         else:
             self._execution_tick_timer.stop()
-            self._spinner_widget.setIcon(qta.icon("fa5s.spinner", color="#888"))  # Static icon stops Spin animation
-            self._spinner_widget.hide()
+            self._spinner_widget.setIcon(qta.icon("fa5s.check", color="#2ecc71"))
+            self._spinner_widget.show()
             self._update_style()  # Restore play icon with language color
             if self._execution_start_time > 0:
                 elapsed = time.time() - self._execution_start_time
