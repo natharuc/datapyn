@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.25.0 (2026-04-19)
+
+### Bug Fixes
+
+- Correct pyproject.toml path after main_window package refactor
+  ([`d5baa6b`](https://github.com/natharuc/datapyn/commit/d5baa6ba006fe0aeb59dd13cd4ea3af67ebf7711))
+
+### Features
+
+- Import/export conexoes + polish tab buttons
+  ([`843e2f3`](https://github.com/natharuc/datapyn/commit/843e2f320b1ee4083a822c0dbc73117353709636))
+
+- Per-tab context, periodic timer, Copilot isolation, insert code, refactor main_window
+  ([`b6377fa`](https://github.com/natharuc/datapyn/commit/b6377fa60e2dd71025177d5c4102f24b31690776))
+
+
 ## v1.24.0 (2026-04-17)
 
 ### Features
