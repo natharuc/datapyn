@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import QThread
+from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import QMessageBox
 
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
