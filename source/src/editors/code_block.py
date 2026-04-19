@@ -1270,8 +1270,8 @@ class CodeBlock(QFrame):
             self._execution_tick_timer.start()
         else:
             self._execution_tick_timer.stop()
-            self._spinner_widget.setIcon(qta.icon("fa5s.spinner", color="#888"))  # Static icon stops Spin animation
-            self._spinner_widget.hide()
+            self._spinner_widget.setIcon(qta.icon("fa5s.check", color="#2ecc71"))
+            self._spinner_widget.show()
             self._update_style()  # Restore play icon with language color
             if self._execution_start_time > 0:
                 elapsed = time.time() - self._execution_start_time
@@ -1287,16 +1287,9 @@ class CodeBlock(QFrame):
                         border-radius: 4px;
                     }
                 """)
-            else:
-                self.status_label.setText("")
-                self.status_label.setStyleSheet("""
-                    QLabel {
-                        color: #888;
-                        font-size: 11px;
-                        padding: 2px 6px;
-                        background: transparent;
-                    }
-                """)
+            elif self._last_execution_time and self._last_execution_time > 0:
+                # Already finished before (double call) - keep existing time
+                pass
 
     def set_cancelled(self):
         """Set cancelled state"""

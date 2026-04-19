@@ -525,6 +525,7 @@ class SessionWidget(QWidget):
 
     def _execute_sql_with_connector(self, connector, query, block_name, connection_name, database_name):
         """Execute SQL query using the given connector (called after connection is ready)."""
+        import re
         conn_label = connection_name or S.session_widget.default_connection_label
 
         # Apply custom database if specified (before executing)
@@ -535,6 +536,32 @@ class SessionWidget(QWidget):
                 self.append_output(S.session_widget.block_connect_error.format(name=database_name, error=e), error=True)
                 self._process_next_in_queue()
                 return
+
+        # Detect USE database command - handle synchronously (fast path)
+        use_match = re.match(
+            r"^\s*USE\s+(?:CATALOG\s+|SCHEMA\s+)?[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$",
+            query, re.IGNORECASE,
+        )
+        if use_match:
+            db_name = use_match.group(1)
+            if hasattr(connector, "db_type") and connector.db_type == "databricks":
+                cat_m = re.match(r"^\s*USE\s+CATALOG\s+", query, re.IGNORECASE)
+                sch_m = re.match(r"^\s*USE\s+SCHEMA\s+", query, re.IGNORECASE)
+                if cat_m:
+                    db_name = f"CATALOG:{db_name}"
+                elif sch_m:
+                    db_name = f"SCHEMA:{db_name}"
+            try:
+                connector.change_database(db_name)
+                conn_name = connection_name or self.session.connection_name
+                if conn_name:
+                    self.connection_changed.emit(conn_name, db_name)
+                self.append_output(self._format_log("SQL", f"Database changed to: {db_name}"))
+                self.status_changed.emit(f"Database: {db_name}")
+            except Exception as e:
+                self.append_output(self._format_log("SQL", f"ERROR: {e}"), error=True)
+            self._process_next_in_queue()
+            return
 
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
             self._execution_queue.append(("sql", query, None, block_name, connection_name, database_name))

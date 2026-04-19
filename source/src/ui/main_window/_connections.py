@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import QThread
+from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import QMessageBox
 
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
@@ -182,7 +182,7 @@ class ConnectionsMixin:
             color = config.get("color", "#007ACC") or "#007ACC"
             for i in range(self.session_tabs.count()):
                 tab_widget = self.session_tabs.widget(i)
-                if isinstance(tab_widget, SessionWidget) and tab_widget == widget:
+                if tab_widget == widget:
                     self.session_tabs.set_tab_connection_color(i, color)
                     break
 

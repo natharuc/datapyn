@@ -136,8 +136,6 @@ class ExecutionMixin:
                     padding: 0 10px;
                 }
             """)
-            # Clears after 5 seconds
-            QTimer.singleShot(5000, self._clear_execution_label)
         self._is_executing = False
 
     def _update_execution_time(self):
