@@ -182,7 +182,7 @@ class ConnectionsMixin:
             color = config.get("color", "#007ACC") or "#007ACC"
             for i in range(self.session_tabs.count()):
                 tab_widget = self.session_tabs.widget(i)
-                if isinstance(tab_widget, SessionWidget) and tab_widget == widget:
+                if tab_widget == widget:
                     self.session_tabs.set_tab_connection_color(i, color)
                     break
 
