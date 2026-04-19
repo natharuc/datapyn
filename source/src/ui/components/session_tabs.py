@@ -41,12 +41,12 @@ class SessionTabBar(QTabBar):
             QTabBar::tab {{
                 background-color: transparent;
                 color: {colors.text_secondary};
-                padding: 10px 20px;
-                padding-right: 32px;
+                padding: 10px 16px;
+                padding-right: 8px;
                 border: none;
                 border-bottom: 2px solid transparent;
                 margin-right: 2px;
-                min-width: 90px;
+                min-width: 80px;
                 font-size: 13px;
             }}
             QTabBar::tab:selected {{
@@ -59,15 +59,6 @@ class SessionTabBar(QTabBar):
             QTabBar::tab:hover:!selected {{
                 background-color: {colors.bg_tertiary};
                 color: {colors.text_primary};
-            }}
-            QTabBar::close-button {{
-                subcontrol-position: right;
-                margin-right: 6px;
-                padding: 0px;
-            }}
-            QTabBar::close-button:hover {{
-                background-color: rgba(220, 80, 80, 0.85);
-                border-radius: {RADIUS.radius_sm}px;
             }}
         """)
 
@@ -286,53 +277,96 @@ class SessionTabs(QTabWidget):
         self.setDocumentMode(True)
 
     def _setup_close_button(self, index):
-        """Configure tab right-side widget: [timer icon] [close button]"""
+        """Configure tab right-side widget: [timer icon] [close button]
+
+        Design matches the code block control bar buttons (26px, rounded,
+        subtle hover with red tint for close, teal tint for timer).
+        """
         from src.design_system.tokens import get_colors
         from PyQt6.QtWidgets import QToolButton, QWidget, QHBoxLayout
-        from PyQt6.QtCore import Qt
-        
+        from PyQt6.QtCore import Qt, QSize
+
         colors = get_colors()
+        BTN_SIZE = 20  # compact for tab bar
+        H_MARGIN = 4   # horizontal margins (2 each side)
 
-        # Container for timer icon + close button
-        container = QWidget()
+        # --- Resizable container ---
+        # QTabBar caches the button sizeHint at setTabButton time, so we
+        # use a wrapper whose sizeHint/minimumSizeHint change dynamically
+        # when the timer icon is shown/hidden.
+        class _TabButtonContainer(QWidget):
+            """Container that reports correct sizeHint depending on
+            whether the timer icon is visible."""
+            def __init__(self, btn_size, h_margin, parent=None):
+                super().__init__(parent)
+                self._btn_size = btn_size
+                self._h_margin = h_margin
+                self._timer_visible = False
+
+            def set_timer_visible(self, visible):
+                self._timer_visible = visible
+                self.updateGeometry()          # tell QTabBar to re-layout
+
+            def sizeHint(self):
+                n = 2 if self._timer_visible else 1
+                w = self._btn_size * n + self._h_margin
+                return QSize(w, self._btn_size)
+
+            def minimumSizeHint(self):
+                return self.sizeHint()
+
+        container = _TabButtonContainer(BTN_SIZE, H_MARGIN)
         container_layout = QHBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(2)
+        container_layout.setContentsMargins(2, 0, 2, 0)
+        container_layout.setSpacing(0)
 
-        # Timer icon (hidden by default)
+        # Timer icon (hidden by default, shown when periodic is active)
         timer_icon = QToolButton()
-        timer_icon.setIcon(qta.icon("mdi.timer", color="#4ec9b0", scale_factor=0.55))
-        timer_icon.setFixedSize(18, 18)
-        timer_icon.setStyleSheet("QToolButton { background: transparent; border: none; }")
-        timer_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+        timer_icon.setIcon(qta.icon("mdi.timer-outline", color="#4ec9b0", scale_factor=0.7))
+        timer_icon.setFixedSize(BTN_SIZE, BTN_SIZE)
         timer_icon.setVisible(False)
         timer_icon.setObjectName("timer_icon")
+        timer_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+        timer_icon.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent;
+                border: none;
+                border-radius: {BTN_SIZE // 2}px;
+                padding: 0px;
+            }}
+            QToolButton:hover {{
+                background: rgba(78, 201, 176, 0.2);
+            }}
+        """)
         container_layout.addWidget(timer_icon)
 
         # Close button
         close_btn = QToolButton()
-        close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.6))
-        close_btn.setFixedSize(20, 20)
+        close_btn.setFixedSize(BTN_SIZE, BTN_SIZE)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.65))
         close_btn.setStyleSheet(f"""
             QToolButton {{
                 background: transparent;
                 border: none;
-                margin: 0px;
-                border-radius: 6px;
+                border-radius: {BTN_SIZE // 2}px;
+                padding: 0px;
             }}
             QToolButton:hover {{
-                background-color: rgba(239, 68, 68, 0.25);
+                background: rgba(239, 68, 68, 0.2);
             }}
         """)
 
-        # Update icon on hover to white
+        # Swap icon color on hover for close button
+        _normal_icon = qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.65)
+        _hover_icon = qta.icon("mdi.close", color="#ef4444", scale_factor=0.65)
+
         def on_hover_enter(event):
-            close_btn.setIcon(qta.icon("mdi.close", color=colors.text_primary, scale_factor=0.55))
+            close_btn.setIcon(_hover_icon)
             QToolButton.enterEvent(close_btn, event)
 
         def on_hover_leave(event):
-            close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.55))
+            close_btn.setIcon(_normal_icon)
             QToolButton.leaveEvent(close_btn, event)
 
         close_btn.enterEvent = on_hover_enter
@@ -367,10 +401,14 @@ class SessionTabs(QTabWidget):
         self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, container)
 
     def set_tab_timer_icon(self, index: int, visible: bool, interval: int = 0):
-        """Show or hide the timer icon on a tab."""
+        """Show or hide the timer icon on a tab.
+
+        Dynamically resizes the container so the tab grows/shrinks to fit.
+        """
         container = self.tabBar().tabButton(index, QTabBar.ButtonPosition.RightSide)
         if not container:
             return
+        from PyQt6.QtWidgets import QToolButton
         timer_icon = container.findChild(QToolButton, "timer_icon")
         if timer_icon:
             timer_icon.setVisible(visible)
@@ -378,6 +416,14 @@ class SessionTabs(QTabWidget):
                 timer_icon.setToolTip(f"{interval}s")
             else:
                 timer_icon.setToolTip("")
+
+        # Tell the container its size changed so QTabBar re-lays out
+        if hasattr(container, "set_timer_visible"):
+            container.set_timer_visible(visible)
+
+        # Force QTabBar to recalculate tab sizes by toggling the button
+        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, None)
+        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, container)
 
     def _setup_style(self):
         """Configure style - modern, clean"""

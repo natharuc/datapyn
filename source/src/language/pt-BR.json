@@ -610,7 +610,19 @@
     "dialog_confirm_replace_msg": "A conexao '{name}' ja existe. Deseja substitui-la?",
     "dialog_confirm_delete_title": "Confirmar Exclusao",
     "dialog_confirm_delete_conn": "Deseja realmente excluir a conexao '{name}'?",
-    "dialog_confirm_delete_group": "Deseja realmente excluir o grupo '{name}'?\nAs conexoes dentro dele serao movidas para a raiz."
+    "dialog_confirm_delete_group": "Deseja realmente excluir o grupo '{name}'?\nAs conexoes dentro dele serao movidas para a raiz.",
+    "btn_import_export": "Importar / Exportar",
+    "import_export_title": "Importar / Exportar Conexoes",
+    "import_export_description": "Edite o JSON abaixo para importar ou exportar conexoes.\nSenhas NAO sao incluidas por seguranca.",
+    "import_export_save": "Salvar",
+    "import_export_cancel": "Cancelar",
+    "import_export_copy": "Copiar",
+    "import_export_invalid_json": "JSON invalido: {error}",
+    "import_export_invalid_structure": "Estrutura invalida: o JSON deve conter 'connections' (objeto) e opcionalmente 'groups' (objeto).",
+    "import_export_invalid_connection": "Conexao '{name}' invalida: campo obrigatorio '{field}' ausente.",
+    "import_export_success": "{count} conexao(oes) importada(s) com sucesso!",
+    "import_export_confirm_title": "Confirmar Importacao",
+    "import_export_confirm_msg": "Isso vai importar {count} conexao(oes) e {groups} grupo(s).\nConexoes existentes com mesmo nome serao substituidas.\nDeseja continuar?"
   },
 
   "connection_edit": {
