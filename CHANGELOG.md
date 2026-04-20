@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v1.26.0 (2026-04-20)
+
+### Bug Fixes
+
+- Import Qt em _connections.py (NameError na troca de banco)
+  ([`5b6c3bc`](https://github.com/natharuc/datapyn/commit/5b6c3bc5290b59eca672c4c05bb677baf4ed04e6))
+
+- Invalidar cache de schema ao trocar banco via USE
+  ([`46daa65`](https://github.com/natharuc/datapyn/commit/46daa65985eb5f7f934202d903c1784c47fd1f20))
+
+- NameError SessionWidget em _connections + USE db intellisense
+  ([`9dedac0`](https://github.com/natharuc/datapyn/commit/9dedac01ee017eb4006aa1d2fda300f35fea61f5))
+
+- Preservar tempo de execucao quando set_running(False) chamado 2x
+  ([`41d1735`](https://github.com/natharuc/datapyn/commit/41d17357cc52d3156b2bcc944d615ec896480c68))
+
+### Features
+
+- Manter tempo de execucao visivel apos query terminar
+  ([`8d121d7`](https://github.com/natharuc/datapyn/commit/8d121d709dccc7f8a39e223800531027c4ba17f0))
+
+- Mostrar icone check verde no bloco apos execucao
+  ([`4600db2`](https://github.com/natharuc/datapyn/commit/4600db25d6ec4557a929219188e8dbaa619a4dd1))
+
+
 ## v1.25.0 (2026-04-19)
 
 ### Bug Fixes
