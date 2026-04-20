@@ -14,6 +14,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, QElapsedTimer
 from PyQt6.QtWidgets import QMessageBox
 
 from src.ui.main_window._workers import SqlWorker, PythonWorker
+from src.ui.components.toast_notification import ToastManager
 from src.language import S
 
 logger = logging.getLogger(__name__)
