@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.28.0 (2026-04-20)
+
+### Features
+
+- Per-tab custom notifications with result access and color picker
+  ([`9406089`](https://github.com/natharuc/datapyn/commit/9406089ee798712be98067bd42fae92b301b2450))
+
+
 ## v1.27.0 (2026-04-20)
 
 ### Bug Fixes
