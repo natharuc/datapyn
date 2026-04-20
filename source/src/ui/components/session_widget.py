@@ -209,6 +209,9 @@ class SessionWidget(QWidget):
         self.file_path: Optional[str] = None
         self._original_file_type: Optional[str] = None
 
+        # Per-tab custom notification config (lives in memory, persisted via DPW)
+        self._tab_notification_config: Optional[Dict[str, Any]] = None
+
         # Per-tab periodic execution
         self._periodic_timer: Optional[QTimer] = None
         self._periodic_interval: int = 0  # seconds
@@ -225,6 +228,16 @@ class SessionWidget(QWidget):
             self.editor.setText(session.code)
 
         # Connections are selected per block via clickable panel (no need to populate list)
+
+    # --- Per-tab notification config ---
+
+    def get_tab_notification_config(self) -> Optional[Dict[str, Any]]:
+        """Return the per-tab notification config dict, or None."""
+        return self._tab_notification_config
+
+    def set_tab_notification_config(self, config: Optional[Dict[str, Any]]):
+        """Set per-tab notification config (or None to clear)."""
+        self._tab_notification_config = config
 
     def _setup_ui(self):
         """Configure widget UI"""
@@ -872,6 +885,33 @@ class SessionWidget(QWidget):
 
     # === EXECUTION NOTIFICATION ===
 
+    @staticmethod
+    def _resolve_result_refs(template: str, last_result) -> str:
+        """Replace {{result[row][col]}} references with actual values from last_result DataFrame."""
+        import re
+        if last_result is None:
+            return template
+
+        def _replace_match(m):
+            try:
+                row = int(m.group(1))
+                col = int(m.group(2))
+                if hasattr(last_result, 'iloc'):
+                    val = last_result.iloc[row, col]
+                elif isinstance(last_result, list) and row < len(last_result):
+                    row_data = last_result[row]
+                    if isinstance(row_data, (list, tuple)) and col < len(row_data):
+                        val = row_data[col]
+                    else:
+                        return m.group(0)
+                else:
+                    return m.group(0)
+                return str(val)
+            except (IndexError, KeyError, TypeError, ValueError):
+                return m.group(0)
+
+        return re.sub(r'\{\{result\[(\d+)\]\[(\d+)\]\}\}', _replace_match, template)
+
     def _emit_queue_notification(self):
         """Emit a single notification summarizing the entire queue execution."""
         if self._queue_blocks_done == 0:
@@ -900,14 +940,25 @@ class SessionWidget(QWidget):
             "error": self._queue_last_error[:80] if self._queue_last_error else "",
         }
 
+        # Get _last_result for result[N][M] references
+        last_result = self.session.get_variable("_last_result") if hasattr(self.session, 'get_variable') else None
+
         def _render(template: str) -> str:
-            """Replace {{var}} placeholders in template."""
+            """Replace {{var}} placeholders and result[N][M] in template."""
             result = template
             for key, value in tpl_vars.items():
                 result = result.replace("{{" + key + "}}", value)
+            result = self._resolve_result_refs(result, last_result)
             return result
 
-        if self._queue_had_error:
+        # Check for per-tab custom notification config
+        tab_config = self._tab_notification_config
+        if tab_config and tab_config.get("enabled"):
+            title = _render(tab_config.get("title", "{{tab_name}}"))
+            msg = _render(tab_config.get("message", "{{rows}} rows"))
+            success = not self._queue_had_error
+            self.execution_finished.emit(title, msg, success)
+        elif self._queue_had_error:
             default_title = S.settings.notification_default_error_title if hasattr(S.settings, 'notification_default_error_title') else "{{type}}"
             default_msg = S.settings.notification_default_error_msg if hasattr(S.settings, 'notification_default_error_msg') else "Error: {{error}}"
             title = _render(settings.value("notifications/error_title", default_title))

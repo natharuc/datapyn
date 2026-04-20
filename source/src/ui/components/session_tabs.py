@@ -111,7 +111,19 @@ class SessionTabBar(QTabBar):
 
         menu.addSeparator()
 
-        # 6. Close
+        # 6. Customize notification
+        notif_label = (
+            S.session_tabs.ctx_customize_notification
+            if hasattr(S.session_tabs, 'ctx_customize_notification')
+            else "Customize Notification"
+        )
+        notif_action = QAction(qta.icon("mdi.bell-ring-outline"), notif_label, self)
+        notif_action.triggered.connect(lambda: self._customize_notification(index))
+        menu.addAction(notif_action)
+
+        menu.addSeparator()
+
+        # 7. Close
         close_action = QAction(qta.icon("mdi.close"), S.session_tabs.ctx_close, self)
         close_action.triggered.connect(lambda: self._close_tab(index))
         menu.addAction(close_action)
@@ -192,6 +204,23 @@ class SessionTabBar(QTabBar):
         tab_widget = self.parent()
         if tab_widget and hasattr(tab_widget, "duplicate_session"):
             tab_widget.duplicate_session.emit(index)
+
+    def _customize_notification(self, index):
+        """Open per-tab notification config dialog"""
+        tab_widget = self.parent()
+        if not tab_widget:
+            return
+        widget = tab_widget.widget(index)
+        if not widget or not hasattr(widget, 'get_tab_notification_config'):
+            return
+
+        from src.ui.dialogs.tab_notification_dialog import TabNotificationDialog
+        current_config = widget.get_tab_notification_config()
+        dialog = TabNotificationDialog(current_config, parent=self)
+        if dialog.exec() == TabNotificationDialog.DialogCode.Accepted:
+            config = dialog.get_config()
+            if config is not None:
+                widget.set_tab_notification_config(config)
 
     def _close_tab(self, index):
         """Close a tab"""

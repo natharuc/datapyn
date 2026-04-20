@@ -436,6 +436,7 @@
     "ctx_close_all_others": "Fechar Todas as Outras",
     "ctx_rename": "Renomear",
     "ctx_duplicate": "Duplicar",
+    "ctx_customize_notification": "Personalizar Notificacao",
     "ctx_close": "Fechar"
   },
 
@@ -582,6 +583,23 @@
     "notification_default_success_msg": "Concluido! {{rows}} linhas retornadas",
     "notification_default_error_title": "{{type}}",
     "notification_default_error_msg": "Erro: {{error}}"
+  },
+
+  "tab_notification": {
+    "dialog_title": "Notificacao da Aba",
+    "section_config": "CONFIGURACAO DE NOTIFICACAO",
+    "enable_custom": "Ativar notificacao personalizada para esta aba",
+    "section_template": "TEMPLATE DA MENSAGEM",
+    "variables_hint": "Variaveis: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[linha][coluna]}} para acessar valores do resultado (ex: {{result[0][1]}}).",
+    "label_title": "Titulo:",
+    "label_message": "Mensagem:",
+    "label_color": "Cor:",
+    "color_picker_title": "Cor da Notificacao",
+    "default_title": "{{tab_name}}",
+    "default_message": "{{rows}} linhas - {{result[0][0]}}",
+    "btn_save": "Salvar",
+    "btn_cancel": "Cancelar",
+    "badge_active": "Notificacao personalizada ativa"
   },
 
   "connections_manager": {

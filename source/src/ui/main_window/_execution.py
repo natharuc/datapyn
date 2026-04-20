@@ -677,11 +677,24 @@ class ExecutionMixin:
     def _on_execution_finished_notification(self, title: str, message: str, success: bool, widget):
         """
         Envia notificacao apos execucao terminar.
+        Suppresses notification if the user is focused on the originating tab.
         """
         tab_index = self.session_tabs.indexOf(widget)
-        self._send_notification(title, message, success, tab_index)
 
-    def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
+        # Skip notification if user is focused on this tab and window is active
+        if (self.isActiveWindow()
+                and tab_index >= 0
+                and tab_index == self.session_tabs.currentIndex()):
+            return
+
+        # Check per-tab custom notification color
+        color = None
+        tab_config = getattr(widget, '_tab_notification_config', None)
+        if tab_config and tab_config.get("enabled") and tab_config.get("color"):
+            color = tab_config["color"]
+        self._send_notification(title, message, success, tab_index, color=color)
+
+    def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None, color: str = None):
         """
         Envia notificacao in-app (toast) no canto inferior direito.
 
@@ -709,6 +722,7 @@ class ExecutionMixin:
                 success=success,
                 on_click=on_click,
                 sound=sound,
+                color=color,
             )
         except Exception as e:
             logger.error(f"Error sending toast notification: {e}")
