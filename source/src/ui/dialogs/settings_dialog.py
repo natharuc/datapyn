@@ -21,9 +21,10 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QListWidget,
     QListWidgetItem,
+    QLineEdit,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSettings
-from PyQt6.QtGui import QFont, QKeySequence
+from PyQt6.QtGui import QKeySequence
 from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
@@ -114,6 +115,9 @@ class SettingsDialog(QDialog):
         # Copilot tab
         self._setup_copilot_tab()
 
+        # Notifications tab
+        self._setup_notifications_tab()
+
         # Workspace tab
         self._setup_workspace_tab()
 
@@ -121,7 +125,7 @@ class SettingsDialog(QDialog):
 
         # Select initial tab if specified
         if self._initial_tab:
-            tab_map = {"general": 0, "shortcuts": 1, "copilot": 2, "workspace": 3}
+            tab_map = {"general": 0, "shortcuts": 1, "copilot": 2, "notifications": 3, "workspace": 4}
             if self._initial_tab in tab_map:
                 self.tabs.setCurrentIndex(tab_map[self._initial_tab])
 
@@ -185,19 +189,10 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-    def _setup_general_tab(self):
-        """Sets up the General tab with language selector"""
-        general_widget = QWidget()
-        general_layout = QVBoxLayout(general_widget)
-        general_layout.setSpacing(20)
-        general_layout.setContentsMargins(20, 20, 20, 20)
+    # ==================== SHARED STYLE HELPERS ====================
 
-        # Language section
-        from src.design_system.tokens import get_colors
-        colors = get_colors()
-        
-        lang_group = QGroupBox(S.settings.section_language)
-        lang_group.setStyleSheet(f"""
+    def _get_group_style(self, colors) -> str:
+        return f"""
             QGroupBox {{
                 font-weight: bold;
                 font-size: 11px;
@@ -212,20 +207,28 @@ class SettingsDialog(QDialog):
                 left: 10px;
                 padding: 0 6px;
             }}
-        """)
-        lang_layout = QVBoxLayout(lang_group)
-        lang_layout.setSpacing(10)
+        """
 
-        # Language combo
-        lang_row = QHBoxLayout()
-        lang_label = QLabel(S.settings.label_language)
-        lang_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
-        lang_row.addWidget(lang_label)
+    def _get_label_style(self, colors) -> str:
+        return f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;"
 
-        self.lang_combo = QComboBox()
-        self.lang_combo.setFixedWidth(250)
-        self.lang_combo.setStyleSheet(f"""
-            QComboBox {{
+    def _get_hint_style(self, colors) -> str:
+        return f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;"
+
+    def _get_info_box_style(self, colors) -> str:
+        return f"""
+            background-color: {colors.bg_secondary};
+            color: {colors.text_secondary};
+            padding: 8px 8px 8px 12px;
+            border-radius: 4px;
+            border-left: 3px solid {colors.interactive_primary};
+            font-size: 10px;
+            font-weight: normal;
+        """
+
+    def _get_input_style(self, colors) -> str:
+        return f"""
+            QLineEdit, QSpinBox, QComboBox {{
                 background-color: {colors.bg_secondary};
                 color: {colors.text_secondary};
                 border: 1px solid {colors.border_default};
@@ -233,7 +236,10 @@ class SettingsDialog(QDialog):
                 padding: 6px 10px;
                 font-size: 11px;
             }}
-            QComboBox:hover {{
+            QLineEdit:hover, QSpinBox:hover, QComboBox:hover {{
+                border-color: {colors.interactive_primary};
+            }}
+            QLineEdit:focus, QSpinBox:focus {{
                 border-color: {colors.interactive_primary};
             }}
             QComboBox::drop-down {{
@@ -246,9 +252,84 @@ class SettingsDialog(QDialog):
                 selection-background-color: {colors.interactive_primary};
                 border: 1px solid {colors.border_default};
             }}
-        """)
+        """
 
-        # Load available languages
+    def _get_checkbox_style(self, colors) -> str:
+        return f"""
+            QCheckBox {{
+                color: {colors.text_secondary};
+                font-size: 11px;
+                font-weight: normal;
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border: 1px solid {colors.border_default};
+                border-radius: 3px;
+                background-color: {colors.bg_secondary};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {colors.interactive_primary};
+                border-color: {colors.interactive_primary};
+            }}
+            QCheckBox::indicator:hover {{
+                border-color: {colors.interactive_primary};
+            }}
+        """
+
+    def _make_group(self, title: str, colors) -> QGroupBox:
+        group = QGroupBox(title)
+        group.setStyleSheet(self._get_group_style(colors))
+        return group
+
+    def _make_label(self, text: str, colors, fixed_width: int = 0) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(self._get_label_style(colors))
+        if fixed_width:
+            lbl.setFixedWidth(fixed_width)
+        return lbl
+
+    def _make_hint(self, text: str, colors) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(self._get_hint_style(colors))
+        return lbl
+
+    def _make_info_box(self, text: str, colors) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(self._get_info_box_style(colors))
+        return lbl
+
+    def _make_field_row(self, label_text: str, widget, colors, label_width: int = 130) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        lbl = self._make_label(label_text, colors, fixed_width=label_width)
+        row.addWidget(lbl)
+        row.addWidget(widget)
+        return row
+
+    # ==================== TAB SETUP ====================
+
+    def _setup_general_tab(self):
+        """Sets up the General tab with language selector"""
+        general_widget = QWidget()
+        general_layout = QVBoxLayout(general_widget)
+        general_layout.setSpacing(16)
+        general_layout.setContentsMargins(20, 20, 20, 20)
+
+        colors = get_colors()
+        input_style = self._get_input_style(colors)
+
+        # --- Language section ---
+        lang_group = self._make_group(S.settings.section_language, colors)
+        lang_layout = QVBoxLayout(lang_group)
+        lang_layout.setSpacing(8)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.setFixedWidth(250)
+        self.lang_combo.setStyleSheet(input_style)
+
         languages = get_available_languages()
         current_idx = 0
         for i, lang in enumerate(languages):
@@ -257,48 +338,19 @@ class SettingsDialog(QDialog):
                 current_idx = i
         self.lang_combo.setCurrentIndex(current_idx)
 
-        lang_row.addWidget(self.lang_combo)
-        lang_row.addStretch()
-        lang_layout.addLayout(lang_row)
-
-        # Restart hint
-        hint_label = QLabel(S.settings.language_restart_hint)
-        hint_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
-        lang_layout.addWidget(hint_label)
-
+        lang_layout.addLayout(
+            self._make_field_row(S.settings.label_language, self.lang_combo, colors, label_width=150)
+        )
+        lang_layout.addWidget(self._make_hint(S.settings.language_restart_hint, colors))
         general_layout.addWidget(lang_group)
 
-        # Display section - Grid row limit
-        display_group = QGroupBox(
-            S.settings.section_display if hasattr(S.settings, 'section_display') else "DISPLAY"
+        # --- Display section ---
+        display_group = self._make_group(
+            S.settings.section_display if hasattr(S.settings, 'section_display') else "DISPLAY",
+            colors,
         )
-        display_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: bold;
-                font-size: 11px;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 20px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-            }}
-        """)
         display_layout = QVBoxLayout(display_group)
-        display_layout.setSpacing(10)
-
-        # Row limit
-        row_limit_row = QHBoxLayout()
-        row_limit_label = QLabel(
-            S.settings.label_grid_row_limit if hasattr(S.settings, 'label_grid_row_limit')
-            else "Default grid display limit (rows):"
-        )
-        row_limit_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
-        row_limit_row.addWidget(row_limit_label)
+        display_layout.setSpacing(8)
 
         self.grid_row_limit_spin = QSpinBox()
         self.grid_row_limit_spin.setRange(10, 1000000)
@@ -306,113 +358,52 @@ class SettingsDialog(QDialog):
         settings = QSettings("DataPyn", "DataPyn")
         self.grid_row_limit_spin.setValue(int(settings.value("grid/display_row_limit", 100)))
         self.grid_row_limit_spin.setFixedWidth(120)
-        self.grid_row_limit_spin.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {colors.bg_secondary};
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-            QSpinBox:hover {{
-                border-color: {colors.interactive_primary};
-            }}
-        """)
-        row_limit_row.addWidget(self.grid_row_limit_spin)
-        row_limit_row.addStretch()
-        display_layout.addLayout(row_limit_row)
+        self.grid_row_limit_spin.setStyleSheet(input_style)
 
-        # Hint
-        display_hint = QLabel(
-            S.settings.grid_row_limit_hint if hasattr(S.settings, 'grid_row_limit_hint')
-            else "Only affects display. Exports always include all data."
+        display_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_grid_row_limit if hasattr(S.settings, 'label_grid_row_limit')
+                else "Default grid display limit (rows):",
+                self.grid_row_limit_spin, colors, label_width=250,
+            )
         )
-        display_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
-        display_layout.addWidget(display_hint)
-
+        display_layout.addWidget(self._make_hint(
+            S.settings.grid_row_limit_hint if hasattr(S.settings, 'grid_row_limit_hint')
+            else "Only affects display. Exports always include all data.",
+            colors,
+        ))
         general_layout.addWidget(display_group)
 
-        # Editor section - Monaco Editor info
-        editor_group = QGroupBox(
-            S.settings.section_editor if hasattr(S.settings, 'section_editor') else "CODE EDITOR"
+        # --- Editor section ---
+        editor_group = self._make_group(
+            S.settings.section_editor if hasattr(S.settings, 'section_editor') else "CODE EDITOR",
+            colors,
         )
-        editor_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: bold;
-                font-size: 11px;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 20px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-            }}
-        """)
         editor_layout = QVBoxLayout(editor_group)
-        editor_layout.setSpacing(10)
+        editor_layout.setSpacing(8)
 
-        # Monaco Editor info
-        editor_info = QLabel(
+        editor_layout.addWidget(self._make_label(
             S.settings.editor_monaco if hasattr(S.settings, 'editor_monaco')
-            else "Monaco Editor with Copilot inline completions"
-        )
-        editor_info.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
-        editor_layout.addWidget(editor_info)
-
-        # Editor hint
-        editor_hint = QLabel(
-            "Powered by Monaco (VS Code editor engine)"
-        )
-        editor_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
-        editor_layout.addWidget(editor_hint)
-
+            else "Monaco Editor with Copilot inline completions",
+            colors,
+        ))
+        editor_layout.addWidget(self._make_hint("Powered by Monaco (VS Code editor engine)", colors))
         general_layout.addWidget(editor_group)
-        general_layout.addStretch()
 
+        general_layout.addStretch()
         self.tabs.addTab(general_widget, S.settings.tab_general)
 
     def _setup_shortcuts_tab(self):
         """Sets up the Shortcuts tab"""
         shortcuts_widget = QWidget()
         shortcuts_layout = QVBoxLayout(shortcuts_widget)
-        shortcuts_layout.setSpacing(15)
+        shortcuts_layout.setSpacing(16)
         shortcuts_layout.setContentsMargins(20, 20, 20, 20)
 
-        # Header
-        header_layout = QVBoxLayout()
-        header_layout.setSpacing(5)
-
-        title = QLabel(S.settings.header_shortcuts)
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        header_layout.addWidget(title)
-
-        subtitle = QLabel(S.settings.subtitle_shortcuts)
-        from src.design_system.tokens import get_colors
         colors = get_colors()
-        subtitle.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px;")
-        header_layout.addWidget(subtitle)
 
-        shortcuts_layout.addLayout(header_layout)
-
-        # Instructions
-        instructions = QLabel(S.settings.tip_shortcuts)
-        instructions.setStyleSheet(f"""
-            background-color: {colors.bg_secondary};
-            color: {colors.text_secondary};
-            padding: 10px;
-            border-radius: 4px;
-            border-left: 3px solid {colors.interactive_primary};
-            font-size: 10px;
-        """)
-        shortcuts_layout.addWidget(instructions)
+        # Info box
+        shortcuts_layout.addWidget(self._make_info_box(S.settings.tip_shortcuts, colors))
 
         # Shortcuts table
         self.table = QTableWidget()
@@ -426,12 +417,12 @@ class SettingsDialog(QDialog):
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
         self.table.cellDoubleClicked.connect(self._edit_shortcut)
-
-        # Table style
         self.table.setStyleSheet(f"""
             QTableWidget {{
                 gridline-color: {colors.border_default};
                 font-size: 11px;
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
             }}
             QTableWidget::item {{
                 padding: 8px;
@@ -447,7 +438,6 @@ class SettingsDialog(QDialog):
                 font-weight: bold;
             }}
         """)
-
         shortcuts_layout.addWidget(self.table)
 
         self.tabs.addTab(shortcuts_widget, S.settings.tab_shortcuts)
@@ -456,46 +446,27 @@ class SettingsDialog(QDialog):
         """Sets up the Copilot tab with Chat and Autocomplete settings."""
         copilot_widget = QWidget()
         copilot_layout = QVBoxLayout(copilot_widget)
-        copilot_layout.setSpacing(20)
+        copilot_layout.setSpacing(16)
         copilot_layout.setContentsMargins(20, 20, 20, 20)
 
         colors = get_colors()
         self._copilot_settings = get_copilot_settings()
 
-        # ========================
-        # COPILOT CHAT SECTION
-        # ========================
-        chat_group = QGroupBox(
+        # --- Copilot Chat section ---
+        chat_group = self._make_group(
             S.settings.section_copilot_chat if hasattr(S.settings, 'section_copilot_chat')
-            else "COPILOT CHAT"
+            else "COPILOT CHAT",
+            colors,
         )
-        chat_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: bold;
-                font-size: 11px;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 20px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-            }}
-        """)
         chat_layout = QVBoxLayout(chat_group)
-        chat_layout.setSpacing(10)
+        chat_layout.setSpacing(8)
 
-        # Chat status row
         chat_status_row = QHBoxLayout()
-        chat_status_label = QLabel(
-            S.settings.copilot_status if hasattr(S.settings, 'copilot_status')
-            else "Status:"
-        )
-        chat_status_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
-        chat_status_row.addWidget(chat_status_label)
+        chat_status_row.setSpacing(8)
+        chat_status_row.addWidget(self._make_label(
+            S.settings.copilot_status if hasattr(S.settings, 'copilot_status') else "Status:",
+            colors,
+        ))
 
         self._chat_status_value = QLabel()
         self._chat_status_value.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;")
@@ -503,58 +474,35 @@ class SettingsDialog(QDialog):
         chat_status_row.addWidget(self._chat_status_value)
         chat_status_row.addStretch()
 
-        # Chat login/logout button
         self._chat_auth_btn = QPushButton()
         self._chat_auth_btn.setFixedHeight(28)
         self._chat_auth_btn.setFixedWidth(100)
         self._update_chat_button_state()
         self._chat_auth_btn.clicked.connect(self._on_chat_auth_clicked)
         chat_status_row.addWidget(self._chat_auth_btn)
-
         chat_layout.addLayout(chat_status_row)
 
-        # Chat auto-connect hint
         chat_hint = QLabel(self._get_chat_auth_hint())
-        chat_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
+        chat_hint.setStyleSheet(self._get_hint_style(colors))
         chat_layout.addWidget(chat_hint)
         self._chat_hint_label = chat_hint
-
         copilot_layout.addWidget(chat_group)
 
-        # ========================
-        # AUTOCOMPLETE SECTION
-        # ========================
-        lsp_group = QGroupBox(
+        # --- Autocomplete section ---
+        lsp_group = self._make_group(
             S.settings.section_copilot_autocomplete if hasattr(S.settings, 'section_copilot_autocomplete')
-            else "AUTOCOMPLETE"
+            else "AUTOCOMPLETE",
+            colors,
         )
-        lsp_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: bold;
-                font-size: 11px;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 20px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-            }}
-        """)
         lsp_layout = QVBoxLayout(lsp_group)
-        lsp_layout.setSpacing(10)
+        lsp_layout.setSpacing(8)
 
-        # LSP status row
         lsp_status_row = QHBoxLayout()
-        lsp_status_label = QLabel(
-            S.settings.copilot_status if hasattr(S.settings, 'copilot_status')
-            else "Status:"
-        )
-        lsp_status_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
-        lsp_status_row.addWidget(lsp_status_label)
+        lsp_status_row.setSpacing(8)
+        lsp_status_row.addWidget(self._make_label(
+            S.settings.copilot_status if hasattr(S.settings, 'copilot_status') else "Status:",
+            colors,
+        ))
 
         self._lsp_status_value = QLabel()
         self._lsp_status_value.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;")
@@ -562,23 +510,20 @@ class SettingsDialog(QDialog):
         lsp_status_row.addWidget(self._lsp_status_value)
         lsp_status_row.addStretch()
 
-        # LSP login/logout button
         self._lsp_auth_btn = QPushButton()
         self._lsp_auth_btn.setFixedHeight(28)
         self._lsp_auth_btn.setFixedWidth(100)
         self._update_lsp_button_state()
         self._lsp_auth_btn.clicked.connect(self._on_lsp_auth_clicked)
         lsp_status_row.addWidget(self._lsp_auth_btn)
-
         lsp_layout.addLayout(lsp_status_row)
 
-        # LSP auto-connect hint
         lsp_hint = QLabel(self._get_lsp_auth_hint())
-        lsp_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
+        lsp_hint.setStyleSheet(self._get_hint_style(colors))
         lsp_layout.addWidget(lsp_hint)
         self._lsp_hint_label = lsp_hint
-
         copilot_layout.addWidget(lsp_group)
+
         copilot_layout.addStretch()
 
         tab_title = S.settings.tab_copilot if hasattr(S.settings, 'tab_copilot') else "Copilot"
@@ -762,114 +707,157 @@ class SettingsDialog(QDialog):
         self._update_lsp_button_state()
         self._lsp_hint_label.setText(self._get_lsp_auth_hint())
 
+    def _setup_notifications_tab(self):
+        """Sets up the Notifications tab with toggle and template config."""
+        colors = get_colors()
+        settings = QSettings("DataPyn", "DataPyn")
+        input_style = self._get_input_style(colors)
+        checkbox_style = self._get_checkbox_style(colors)
+
+        notif_widget = QWidget()
+        notif_layout = QVBoxLayout(notif_widget)
+        notif_layout.setSpacing(16)
+        notif_layout.setContentsMargins(20, 20, 20, 20)
+
+        # --- General notification settings ---
+        general_group = self._make_group(S.settings.section_notifications, colors)
+        general_layout = QVBoxLayout(general_group)
+        general_layout.setSpacing(8)
+
+        self.notif_enabled_cb = QCheckBox(S.settings.label_notifications_enabled)
+        self.notif_enabled_cb.setChecked(
+            settings.value("notifications/enabled", True, type=bool)
+        )
+        self.notif_enabled_cb.setStyleSheet(checkbox_style)
+        general_layout.addWidget(self.notif_enabled_cb)
+
+        self.notif_sound_cb = QCheckBox(S.settings.label_notifications_sound)
+        self.notif_sound_cb.setChecked(
+            settings.value("notifications/sound", True, type=bool)
+        )
+        self.notif_sound_cb.setStyleSheet(checkbox_style)
+        general_layout.addWidget(self.notif_sound_cb)
+
+        notif_layout.addWidget(general_group)
+
+        # --- Template settings ---
+        template_group = self._make_group(S.settings.section_notification_template, colors)
+        template_layout = QVBoxLayout(template_group)
+        template_layout.setSpacing(10)
+
+        # Available variables hint
+        template_layout.addWidget(self._make_info_box(
+            S.settings.notification_variables_hint, colors,
+        ))
+
+        # Default templates from translations
+        default_success_title = S.settings.notification_default_success_title
+        default_success_msg = S.settings.notification_default_success_msg
+        default_error_title = S.settings.notification_default_error_title
+        default_error_msg = S.settings.notification_default_error_msg
+
+        # Success title
+        self.notif_success_title = QLineEdit()
+        self.notif_success_title.setText(
+            settings.value("notifications/success_title", default_success_title)
+        )
+        self.notif_success_title.setStyleSheet(input_style)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_success_title, self.notif_success_title, colors)
+        )
+
+        # Success message
+        self.notif_success_msg = QLineEdit()
+        self.notif_success_msg.setText(
+            settings.value("notifications/success_message", default_success_msg)
+        )
+        self.notif_success_msg.setStyleSheet(input_style)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_success_message, self.notif_success_msg, colors)
+        )
+
+        # Error title
+        self.notif_error_title = QLineEdit()
+        self.notif_error_title.setText(
+            settings.value("notifications/error_title", default_error_title)
+        )
+        self.notif_error_title.setStyleSheet(input_style)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_error_title, self.notif_error_title, colors)
+        )
+
+        # Error message
+        self.notif_error_msg = QLineEdit()
+        self.notif_error_msg.setText(
+            settings.value("notifications/error_message", default_error_msg)
+        )
+        self.notif_error_msg.setStyleSheet(input_style)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_error_message, self.notif_error_msg, colors)
+        )
+
+        notif_layout.addWidget(template_group)
+        notif_layout.addStretch()
+
+        tab_title = S.settings.tab_notifications if hasattr(S.settings, 'tab_notifications') else "Notifications"
+        self.tabs.addTab(notif_widget, tab_title)
+
     def _setup_workspace_tab(self):
         """Setup Workspace tab for workspace/profile management."""
         from src.core.workspace_service import get_workspace_service
         colors = get_colors()
-        
+
         workspace_widget = QWidget()
         workspace_layout = QVBoxLayout(workspace_widget)
-        workspace_layout.setSpacing(15)
-        workspace_layout.setContentsMargins(15, 15, 15, 15)
-        
-        # Store workspace service reference
+        workspace_layout.setSpacing(16)
+        workspace_layout.setContentsMargins(20, 20, 20, 20)
+
         self._workspace_service = get_workspace_service()
-        
-        # ========================
-        # CURRENT WORKSPACE SECTION
-        # ========================
-        current_group = QGroupBox(
+
+        # --- Current workspace section ---
+        current_group = self._make_group(
             S.settings.section_workspace_current if hasattr(S.settings, 'section_workspace_current')
-            else "CURRENT WORKSPACE"
+            else "CURRENT WORKSPACE",
+            colors,
         )
-        current_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: bold;
-                font-size: 11px;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 20px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-            }}
-        """)
         current_layout = QVBoxLayout(current_group)
         current_layout.setSpacing(8)
-        
-        # Workspace name
-        name_row = QHBoxLayout()
-        name_label = QLabel(
-            S.settings.workspace_name if hasattr(S.settings, 'workspace_name')
-            else "Name:"
-        )
-        name_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
-        name_label.setFixedWidth(60)
-        name_row.addWidget(name_label)
-        
+
         self._workspace_name_label = QLabel(self._workspace_service.current_workspace_name)
         self._workspace_name_label.setStyleSheet(f"color: {colors.text_primary}; font-size: 12px; font-weight: bold;")
-        name_row.addWidget(self._workspace_name_label)
-        name_row.addStretch()
-        current_layout.addLayout(name_row)
-        
-        # Workspace path
-        path_row = QHBoxLayout()
-        path_label = QLabel(
-            S.settings.workspace_path if hasattr(S.settings, 'workspace_path')
-            else "Folder:"
+        current_layout.addLayout(
+            self._make_field_row(
+                S.settings.workspace_name if hasattr(S.settings, 'workspace_name') else "Name:",
+                self._workspace_name_label, colors, label_width=60,
+            )
         )
-        path_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;")
-        path_label.setFixedWidth(60)
-        path_row.addWidget(path_label)
-        
+
         self._workspace_path_label = QLabel(str(self._workspace_service.current_workspace))
         self._workspace_path_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-weight: normal;")
         self._workspace_path_label.setWordWrap(True)
-        path_row.addWidget(self._workspace_path_label, 1)
-        current_layout.addLayout(path_row)
-        
-        # Hint
-        hint_label = QLabel(
+        current_layout.addLayout(
+            self._make_field_row(
+                S.settings.workspace_path if hasattr(S.settings, 'workspace_path') else "Folder:",
+                self._workspace_path_label, colors, label_width=60,
+            )
+        )
+
+        current_layout.addWidget(self._make_hint(
             S.settings.workspace_hint if hasattr(S.settings, 'workspace_hint')
-            else "All configurations are stored in this folder"
-        )
-        hint_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
-        current_layout.addWidget(hint_label)
-        
+            else "All configurations are stored in this folder",
+            colors,
+        ))
         workspace_layout.addWidget(current_group)
-        
-        # ========================
-        # SAVED WORKSPACES SECTION
-        # ========================
-        saved_group = QGroupBox(
+
+        # --- Saved workspaces section ---
+        saved_group = self._make_group(
             S.settings.section_workspaces if hasattr(S.settings, 'section_workspaces')
-            else "SAVED WORKSPACES"
+            else "SAVED WORKSPACES",
+            colors,
         )
-        saved_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: bold;
-                font-size: 11px;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 20px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-            }}
-        """)
         saved_layout = QVBoxLayout(saved_group)
         saved_layout.setSpacing(10)
-        
-        # Workspace list
+
         self._workspace_list = QListWidget()
         self._workspace_list.setFixedHeight(120)
         self._workspace_list.setStyleSheet(f"""
@@ -891,20 +879,17 @@ class SettingsDialog(QDialog):
                 background-color: {colors.bg_elevated};
             }}
         """)
-        
-        # Store colors for button state updates (must be before _refresh_workspace_list)
+
         self._workspace_colors = colors
-        
         self._refresh_workspace_list()
         saved_layout.addWidget(self._workspace_list)
-        
+
         # Buttons row
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        
+
         add_btn = QPushButton(
-            S.settings.workspace_add if hasattr(S.settings, 'workspace_add')
-            else "Add..."
+            S.settings.workspace_add if hasattr(S.settings, 'workspace_add') else "Add..."
         )
         add_btn.setFixedHeight(28)
         add_btn.setStyleSheet(f"""
@@ -922,10 +907,9 @@ class SettingsDialog(QDialog):
         """)
         add_btn.clicked.connect(self._on_add_workspace)
         btn_row.addWidget(add_btn)
-        
+
         duplicate_btn = QPushButton(
-            S.settings.workspace_duplicate if hasattr(S.settings, 'workspace_duplicate')
-            else "Duplicate..."
+            S.settings.workspace_duplicate if hasattr(S.settings, 'workspace_duplicate') else "Duplicate..."
         )
         duplicate_btn.setFixedHeight(28)
         duplicate_btn.setStyleSheet(f"""
@@ -944,33 +928,28 @@ class SettingsDialog(QDialog):
         """)
         duplicate_btn.clicked.connect(self._on_duplicate_workspace)
         btn_row.addWidget(duplicate_btn)
-        
+
         self._remove_btn = QPushButton(
-            S.settings.workspace_remove if hasattr(S.settings, 'workspace_remove')
-            else "Remove"
+            S.settings.workspace_remove if hasattr(S.settings, 'workspace_remove') else "Remove"
         )
         self._remove_btn.setFixedHeight(28)
         self._remove_btn.clicked.connect(self._on_remove_workspace)
         btn_row.addWidget(self._remove_btn)
-        
-        # Connect list selection to update button state
+
         self._workspace_list.currentItemChanged.connect(self._update_remove_button_state)
-        
+
         btn_row.addStretch()
         saved_layout.addLayout(btn_row)
-        
-        # Switch hint
-        switch_hint = QLabel(
+
+        saved_layout.addWidget(self._make_hint(
             S.settings.workspace_switch_hint if hasattr(S.settings, 'workspace_switch_hint')
-            else "Switching workspace requires restarting the app"
-        )
-        switch_hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-style: italic; font-weight: normal;")
-        saved_layout.addWidget(switch_hint)
-        
+            else "Switching workspace requires restarting the app",
+            colors,
+        ))
+
         workspace_layout.addWidget(saved_group)
         workspace_layout.addStretch()
-        
-        # Add tab
+
         tab_title = S.settings.tab_workspace if hasattr(S.settings, 'tab_workspace') else "Workspace"
         self.tabs.addTab(workspace_widget, tab_title)
     
@@ -1389,6 +1368,14 @@ class SettingsDialog(QDialog):
 
         # Save grid display row limit
         settings.setValue("grid/display_row_limit", self.grid_row_limit_spin.value())
+
+        # Save notification settings
+        settings.setValue("notifications/enabled", self.notif_enabled_cb.isChecked())
+        settings.setValue("notifications/sound", self.notif_sound_cb.isChecked())
+        settings.setValue("notifications/success_title", self.notif_success_title.text())
+        settings.setValue("notifications/success_message", self.notif_success_msg.text())
+        settings.setValue("notifications/error_title", self.notif_error_title.text())
+        settings.setValue("notifications/error_message", self.notif_error_msg.text())
 
         # Save shortcuts
         for row in range(self.table.rowCount()):

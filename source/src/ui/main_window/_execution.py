@@ -14,6 +14,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, QElapsedTimer
 from PyQt6.QtWidgets import QMessageBox
 
 from src.ui.main_window._workers import SqlWorker, PythonWorker
+from src.ui.components.toast_notification import ToastManager
 from src.language import S
 
 logger = logging.getLogger(__name__)
@@ -675,21 +676,9 @@ class ExecutionMixin:
 
     def _on_execution_finished_notification(self, title: str, message: str, success: bool, widget):
         """
-        Decide se deve enviar notificacao apos execucao terminar.
-
-        Regras:
-        - Nao notifica se o usuario esta focado na aba que executou
-          (janela ativa + aba visivel)
-        - Notifica se a janela esta minimizada ou se outra aba esta selecionada
+        Envia notificacao apos execucao terminar.
         """
         tab_index = self.session_tabs.indexOf(widget)
-        current_tab = self.session_tabs.currentIndex()
-        is_active_window = self.isActiveWindow() and not self.isMinimized()
-
-        # Skip notification if user is looking at the executing tab
-        if is_active_window and current_tab == tab_index:
-            return
-
         self._send_notification(title, message, success, tab_index)
 
     def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
@@ -703,6 +692,13 @@ class ExecutionMixin:
             tab_index: Indice da aba que originou (foca nela ao clicar)
         """
         try:
+            from PyQt6.QtCore import QSettings
+            settings = QSettings("DataPyn", "DataPyn")
+            if not settings.value("notifications/enabled", True, type=bool):
+                return
+
+            sound = settings.value("notifications/sound", True, type=bool)
+
             on_click = None
             if tab_index is not None:
                 on_click = lambda idx=tab_index: self._focus_window_and_tab(idx)
@@ -712,6 +708,7 @@ class ExecutionMixin:
                 message=message,
                 success=success,
                 on_click=on_click,
+                sound=sound,
             )
         except Exception as e:
             logger.error(f"Error sending toast notification: {e}")

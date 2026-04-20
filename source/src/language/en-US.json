@@ -564,7 +564,22 @@
     "workspace_switch_new_instance": "Open New Instance",
     "workspace_switch_new_instance_tooltip": "Keeps current open and opens another DataPyn with the new workspace",
     "workspace_restart_title": "Restart Required",
-    "workspace_restart_message": "The application needs to restart to switch workspaces. Restart now?"
+    "workspace_restart_message": "The application needs to restart to switch workspaces. Restart now?",
+    "tab_notifications": "Notifications",
+    "section_notifications": "NOTIFICATIONS",
+    "label_notifications_enabled": "Show notifications after execution",
+    "label_notifications_sound": "Play notification sound",
+    "section_notification_template": "MESSAGE TEMPLATE",
+    "label_success_title": "Success title:",
+    "label_success_message": "Success message:",
+    "label_error_title": "Error title:",
+    "label_error_message": "Error message:",
+    "notification_variables_hint": "Available variables: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}, {{elapsed}}",
+    "notification_preview_label": "Preview:",
+    "notification_default_success_title": "{{type}}",
+    "notification_default_success_msg": "Complete! {{rows}} rows returned",
+    "notification_default_error_title": "{{type}}",
+    "notification_default_error_msg": "Error: {{error}}"
   },
 
   "connections_manager": {
