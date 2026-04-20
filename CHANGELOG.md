@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.27.0 (2026-04-20)
+
+### Bug Fixes
+
+- Import ToastManager em _execution.py (notificacoes quebradas)
+  ([`a59d3ea`](https://github.com/natharuc/datapyn/commit/a59d3ea602633ec5718afbdec0a01b60e7c8d335))
+
+- Notificacoes sempre exibidas apos execucao
+  ([`2c7c63c`](https://github.com/natharuc/datapyn/commit/2c7c63caf82017ab44bf148017e99524b5bd470a))
+
+### Features
+
+- Notification config + settings dialog refactor
+  ([`883173c`](https://github.com/natharuc/datapyn/commit/883173c7ce5cab32c2771ca013e126389859dd60))
+
+
 ## v1.26.0 (2026-04-20)
 
 ### Bug Fixes
