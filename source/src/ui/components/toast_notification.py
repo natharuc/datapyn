@@ -74,6 +74,7 @@ class ToastNotification(QWidget):
         duration: int = 0,
         parent: QWidget = None,
         on_click=None,
+        color: str = None,
     ):
         # Top-level window (no parent) so it shows above everything,
         # even when the main window is minimized or unfocused.
@@ -81,6 +82,7 @@ class ToastNotification(QWidget):
         self._on_click = on_click
         self._duration = duration or (self.DURATION_DEFAULT if success else self.DURATION_ERROR)
         self._success = success
+        self._custom_color = color
 
         self.setFixedWidth(self.WIDTH)
         self.setMinimumHeight(self.MIN_HEIGHT)
@@ -98,11 +100,18 @@ class ToastNotification(QWidget):
 
     def _build_ui(self, title: str, message: str, success: bool):
         """Build the toast UI."""
-        # Colors
-        bg = "#1e8a3e" if success else "#c0392b"
-        bg_hover = "#22a347" if success else "#d44637"
-        border_color = "#27ae60" if success else "#e74c3c"
-        icon_char = "\u2713" if success else "\u2717"  # checkmark / cross
+        # Colors - custom color overrides default
+        if self._custom_color:
+            bg = self._custom_color
+            # Derive hover/border from custom color
+            bg_hover = self._custom_color + "dd"
+            border_color = self._custom_color
+            icon_char = "\u2713" if success else "\u2717"
+        else:
+            bg = "#1e8a3e" if success else "#c0392b"
+            bg_hover = "#22a347" if success else "#d44637"
+            border_color = "#27ae60" if success else "#e74c3c"
+            icon_char = "\u2713" if success else "\u2717"  # checkmark / cross
 
         self.setStyleSheet(f"""
             ToastNotification {{
@@ -270,6 +279,7 @@ class ToastManager:
         success: bool = True,
         on_click=None,
         sound: bool = True,
+        color: str = None,
     ):
         """
         Show a toast notification.
@@ -280,12 +290,13 @@ class ToastManager:
             success: True for green/success, False for red/error.
             on_click: Optional callback when user clicks the toast.
             sound: Whether to play a notification sound.
+            color: Optional custom background color (hex string).
         """
         if _manager is None:
             logger.debug("ToastManager not initialized - skipping notification")
             return
 
-        _manager._show(title, message, success, on_click, sound)
+        _manager._show(title, message, success, on_click, sound, color)
 
     def _show(
         self,
@@ -294,6 +305,7 @@ class ToastManager:
         success: bool,
         on_click,
         sound: bool,
+        color: str = None,
     ):
         """Internal: create and show a toast."""
         toast = ToastNotification(
@@ -302,6 +314,7 @@ class ToastManager:
             success=success,
             parent=self._parent,
             on_click=on_click,
+            color=color,
         )
         toast.closed.connect(self._on_toast_closed)
 

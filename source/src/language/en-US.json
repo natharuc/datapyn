@@ -434,6 +434,7 @@
     "ctx_close_all_others": "Close All Others",
     "ctx_rename": "Rename",
     "ctx_duplicate": "Duplicate",
+    "ctx_customize_notification": "Customize Notification",
     "ctx_close": "Close"
   },
 
@@ -580,6 +581,23 @@
     "notification_default_success_msg": "Complete! {{rows}} rows returned",
     "notification_default_error_title": "{{type}}",
     "notification_default_error_msg": "Error: {{error}}"
+  },
+
+  "tab_notification": {
+    "dialog_title": "Tab Notification",
+    "section_config": "NOTIFICATION CONFIG",
+    "enable_custom": "Enable custom notification for this tab",
+    "section_template": "MESSAGE TEMPLATE",
+    "variables_hint": "Variables: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[row][col]}} to access query result values (e.g. {{result[0][1]}}).",
+    "label_title": "Title:",
+    "label_message": "Message:",
+    "label_color": "Color:",
+    "color_picker_title": "Notification Color",
+    "default_title": "{{tab_name}}",
+    "default_message": "{{rows}} rows - {{result[0][0]}}",
+    "btn_save": "Save",
+    "btn_cancel": "Cancel",
+    "badge_active": "Custom notification active"
   },
 
   "connections_manager": {

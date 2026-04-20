@@ -174,6 +174,10 @@ class FileIOMixin:
                     blocks_data = dpw_data.get("blocks", [])
                     if blocks_data:
                         widget.editor.from_list(blocks_data)
+                    # Restore per-tab notification config
+                    notif_config = dpw_data.get("notification_config")
+                    if notif_config:
+                        widget.set_tab_notification_config(notif_config)
                 except json.JSONDecodeError:
                     # Fallback: treat as single SQL block
                     blocks = widget.editor.get_blocks()
@@ -546,6 +550,11 @@ class FileIOMixin:
                 "version": "1.0",
                 "blocks": blocks_data
             }
+
+            # Persist per-tab notification config if set
+            tab_notif = current_widget.get_tab_notification_config()
+            if tab_notif and tab_notif.get("enabled"):
+                dpw_content["notification_config"] = tab_notif
 
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(dpw_content, f, indent=2, ensure_ascii=False)
