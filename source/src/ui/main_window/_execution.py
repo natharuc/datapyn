@@ -692,6 +692,13 @@ class ExecutionMixin:
             tab_index: Indice da aba que originou (foca nela ao clicar)
         """
         try:
+            from PyQt6.QtCore import QSettings
+            settings = QSettings("DataPyn", "DataPyn")
+            if not settings.value("notifications/enabled", True, type=bool):
+                return
+
+            sound = settings.value("notifications/sound", True, type=bool)
+
             on_click = None
             if tab_index is not None:
                 on_click = lambda idx=tab_index: self._focus_window_and_tab(idx)
@@ -701,6 +708,7 @@ class ExecutionMixin:
                 message=message,
                 success=success,
                 on_click=on_click,
+                sound=sound,
             )
         except Exception as e:
             logger.error(f"Error sending toast notification: {e}")

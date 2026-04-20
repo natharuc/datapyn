@@ -566,7 +566,22 @@
     "workspace_switch_new_instance": "Abrir Nova Instancia",
     "workspace_switch_new_instance_tooltip": "Mantem o atual aberto e abre outro DataPyn com o novo workspace",
     "workspace_restart_title": "Reiniciar Necessario",
-    "workspace_restart_message": "O aplicativo precisa reiniciar para trocar de workspace. Deseja reiniciar agora?"
+    "workspace_restart_message": "O aplicativo precisa reiniciar para trocar de workspace. Deseja reiniciar agora?",
+    "tab_notifications": "Notificacoes",
+    "section_notifications": "NOTIFICACOES",
+    "label_notifications_enabled": "Mostrar notificacoes apos execucao",
+    "label_notifications_sound": "Tocar som de notificacao",
+    "section_notification_template": "TEMPLATE DA MENSAGEM",
+    "label_success_title": "Titulo (sucesso):",
+    "label_success_message": "Mensagem (sucesso):",
+    "label_error_title": "Titulo (erro):",
+    "label_error_message": "Mensagem (erro):",
+    "notification_variables_hint": "Variaveis disponiveis: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}, {{elapsed}}",
+    "notification_preview_label": "Preview:",
+    "notification_default_success_title": "{{type}}",
+    "notification_default_success_msg": "Concluido! {{rows}} linhas retornadas",
+    "notification_default_error_title": "{{type}}",
+    "notification_default_error_msg": "Erro: {{error}}"
   },
 
   "connections_manager": {

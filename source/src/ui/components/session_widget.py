@@ -198,6 +198,9 @@ class SessionWidget(QWidget):
         self._queue_had_error: bool = False
         self._queue_last_error: str = ""
         self._queue_last_type: str = ""  # "sql", "python", "cross"
+        self._queue_last_block_name: str = ""
+        self._queue_last_connection: str = ""
+        self._queue_last_database: str = ""
 
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
@@ -874,25 +877,47 @@ class SessionWidget(QWidget):
         if self._queue_blocks_done == 0:
             return
 
+        from PyQt6.QtCore import QSettings
+        settings = QSettings("DataPyn", "DataPyn")
+
+        # Resolve type label
+        if self._queue_last_type == "sql":
+            type_label = S.notification.sql_query
+        elif self._queue_last_type == "python":
+            type_label = S.notification.python
+        else:
+            type_label = S.notification.cross_syntax if hasattr(S.notification, 'cross_syntax') else "Cross-Syntax"
+
+        # Build template variables
+        tpl_vars = {
+            "rows": f"{self._queue_last_rows:,}",
+            "blocks": str(self._queue_blocks_done),
+            "tab_name": self.session.title or "",
+            "block_name": self._queue_last_block_name or "",
+            "connection": self._queue_last_connection or "",
+            "database": self._queue_last_database or "",
+            "type": type_label,
+            "error": self._queue_last_error[:80] if self._queue_last_error else "",
+        }
+
+        def _render(template: str) -> str:
+            """Replace {{var}} placeholders in template."""
+            result = template
+            for key, value in tpl_vars.items():
+                result = result.replace("{{" + key + "}}", value)
+            return result
+
         if self._queue_had_error:
-            title = S.notification.sql_query if self._queue_last_type == "sql" else S.notification.python
-            msg = S.notification.error.format(error=self._queue_last_error)
+            default_title = S.settings.notification_default_error_title if hasattr(S.settings, 'notification_default_error_title') else "{{type}}"
+            default_msg = S.settings.notification_default_error_msg if hasattr(S.settings, 'notification_default_error_msg') else "Error: {{error}}"
+            title = _render(settings.value("notifications/error_title", default_title))
+            msg = _render(settings.value("notifications/error_message", default_msg))
             self.execution_finished.emit(title, msg, False)
         else:
-            # Build a meaningful message based on what ran
-            rows_str = f"{self._queue_last_rows:,}"
-            if self._queue_blocks_done > 1:
-                title = S.notification.sql_query if self._queue_last_type == "sql" else S.notification.python
-                msg = S.notification.complete_blocks_rows.format(
-                    blocks=self._queue_blocks_done, rows=rows_str
-                )
-            elif self._queue_last_type == "sql":
-                title = S.notification.sql_query
-                msg = S.notification.complete_rows.format(rows=rows_str)
-            else:
-                title = S.notification.python
-                msg = S.notification.complete_rows.format(rows=rows_str)
-
+            default_title = S.settings.notification_default_success_title if hasattr(S.settings, 'notification_default_success_title') else "{{type}}"
+            default_msg = S.settings.notification_default_success_msg if hasattr(S.settings, 'notification_default_success_msg') else "Complete! {{rows}} rows returned"
+            title = _render(settings.value("notifications/success_title", default_title))
+            msg = _render(settings.value("notifications/success_message", default_msg))
             self.execution_finished.emit(title, msg, True)
 
         # Reset counters
@@ -902,6 +927,9 @@ class SessionWidget(QWidget):
         self._queue_had_error = False
         self._queue_last_error = ""
         self._queue_last_type = ""
+        self._queue_last_block_name = ""
+        self._queue_last_connection = ""
+        self._queue_last_database = ""
 
     # === EXECUTION QUEUE ===
 
@@ -922,6 +950,9 @@ class SessionWidget(QWidget):
         self._queue_had_error = False
         self._queue_last_error = ""
         self._queue_last_type = ""
+        self._queue_last_block_name = ""
+        self._queue_last_connection = ""
+        self._queue_last_database = ""
 
         # Add all to queue
         self._execution_queue.extend(queue)
@@ -1024,6 +1055,16 @@ class SessionWidget(QWidget):
             database_name = None
 
         # Execute according to language
+        # Track context for notification templates
+        if block_name:
+            self._queue_last_block_name = block_name
+        if connection_name:
+            self._queue_last_connection = connection_name
+        elif self.session.connection_name:
+            self._queue_last_connection = self.session.connection_name
+        if database_name:
+            self._queue_last_database = database_name
+
         if language == "sql":
             self._on_execute_sql(code, block_name=block_name, connection_name=connection_name, database_name=database_name)
         elif language == "python":
