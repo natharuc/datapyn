@@ -675,21 +675,9 @@ class ExecutionMixin:
 
     def _on_execution_finished_notification(self, title: str, message: str, success: bool, widget):
         """
-        Decide se deve enviar notificacao apos execucao terminar.
-
-        Regras:
-        - Nao notifica se o usuario esta focado na aba que executou
-          (janela ativa + aba visivel)
-        - Notifica se a janela esta minimizada ou se outra aba esta selecionada
+        Envia notificacao apos execucao terminar.
         """
         tab_index = self.session_tabs.indexOf(widget)
-        current_tab = self.session_tabs.currentIndex()
-        is_active_window = self.isActiveWindow() and not self.isMinimized()
-
-        # Skip notification if user is looking at the executing tab
-        if is_active_window and current_tab == tab_index:
-            return
-
         self._send_notification(title, message, success, tab_index)
 
     def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None):
