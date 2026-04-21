@@ -421,13 +421,18 @@
   "output_panel": {
     "btn_clear": "Limpar",
     "btn_copy": "Copiar",
+    "filter_errors": "Erros",
     "level_ok": "[OK]",
     "level_warning": "[AVISO]",
     "level_error": "[ERRO]",
     "level_debug": "[DEBUG]",
     "dialog_log_detail": "Detalhe do Log",
-    "btn_copy_detail": "Copiar",
-    "btn_close_detail": "Fechar"
+    "detail_code": "Codigo Executado",
+    "detail_error": "Erro / Traceback",
+    "detail_output": "Saida",
+    "btn_copy_detail": "Copiar Erro",
+    "btn_close_detail": "Fechar",
+    "btn_resolve_copilot": "Resolver com Copilot"
   },
 
   "session_tabs": {

@@ -361,6 +361,13 @@ class BlockEditor(QWidget):
         """Return currently executing block"""
         return self._current_executing_block
 
+    def get_current_block_index(self) -> Optional[int]:
+        """Return index of the currently executing block, or focused block as fallback."""
+        block = self._current_executing_block or self.get_focused_block()
+        if block and block in self._blocks:
+            return self._blocks.index(block)
+        return None
+
     # === Autocomplete Management ===
     
     def update_python_completions_all(self):
@@ -628,6 +635,29 @@ class BlockEditor(QWidget):
     def get_focused_block(self) -> Optional[CodeBlock]:
         """Return currently focused block"""
         return self._focused_block
+
+    def focus_block_at_line(self, block_index: int, line_number: int = 1, column: int = 0):
+        """Focus a block by index and scroll to a specific line/column.
+
+        Used by the Output panel to navigate to error locations.
+        """
+        if block_index < 0 or block_index >= len(self._blocks):
+            return
+        block = self._blocks[block_index]
+        # Ensure block is visible (expand if minimized)
+        if hasattr(block, 'is_minimized') and block.is_minimized:
+            block.toggle_minimize()
+        # Scroll to make the block visible
+        self.scroll_area.ensureWidgetVisible(block)
+        # Focus the editor
+        if hasattr(block, 'editor'):
+            block.editor.setFocus()
+            # Go to line/column (0-based in QScintilla)
+            if hasattr(block.editor, 'setCursorPosition'):
+                line_0 = max(0, line_number - 1)
+                col_0 = max(0, column - 1) if column > 0 else 0
+                block.editor.setCursorPosition(line_0, col_0)
+        self.block_focused.emit(block)
 
     def get_last_focused_block(self) -> Optional[CodeBlock]:
         """Return last block that had focus (even if not currently focused).

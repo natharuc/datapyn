@@ -742,15 +742,13 @@ class ExecutionMixin:
 
     def _log_info(self, message: str):
         """Adds message to log with timestamp (without showing panel)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
         if self.global_output_panel:
-            self.global_output_panel.text_edit.append(f"[{timestamp}] {message}")
+            self.global_output_panel.log(message)
 
     def _log(self, message: str):
         """Adds message to log with timestamp and shows output panel"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
         if self.global_output_panel:
-            self.global_output_panel.text_edit.append(f"[{timestamp}] {message}")
+            self.global_output_panel.log(message)
 
         # Mostrar painel de output
         self.show_panel("output")
@@ -759,17 +757,10 @@ class ExecutionMixin:
         """Shows error in Output in red and switches to the Output panel"""
         if not self.global_output_panel:
             return
-        # Adiciona timestamp e erro em vermelho usando HTML
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
-        error_html = f'<span style="color: #ff6b6b; font-weight: bold;">[{timestamp}] {error_msg}</span>'
-        self.global_output_panel.text_edit.append(error_html)
+        self.global_output_panel.error(error_msg)
 
         # Mostrar painel de output
         self.show_panel("output")
-
-        # Scroll para o final
-        scrollbar = self.global_output_panel.text_edit.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
 
     def _update_variables_view(self):
         """Updates variable visualization in memory"""
@@ -798,5 +789,5 @@ class ExecutionMixin:
                 variables.clear()
             output = self.global_output_panel
             if output:
-                output.text_edit.clear()
+                output.clear()
             self.action_label.setText(S.status.results_cleared)
