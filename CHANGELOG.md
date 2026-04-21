@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.29.0 (2026-04-21)
+
+### Features
+
+- Output panel interativo com navegacao por linha e coluna
+  ([`4754fc9`](https://github.com/natharuc/datapyn/commit/4754fc978ba999aec90ed91e0f91dcdb1770e5ee))
+
+
 ## v1.28.0 (2026-04-20)
 
 ### Features
