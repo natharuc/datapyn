@@ -16,6 +16,7 @@ import logging
 from io import StringIO
 from typing import Optional, Dict, Any
 from datetime import datetime
+import time
 
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
@@ -202,6 +203,14 @@ class SessionWidget(QWidget):
         self._queue_last_connection: str = ""
         self._queue_last_database: str = ""
 
+        # Per-execution context tracking (for structured LogEntry)
+        self._execution_start_time: float = 0.0
+        self._current_query: str = ""
+        self._current_code: str = ""
+        self._current_block_index: Optional[int] = None
+        self._current_connection_name_exec: str = ""
+        self._current_database_name_exec: str = ""
+
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
 
@@ -376,6 +385,18 @@ class SessionWidget(QWidget):
             output = main_window.global_output_panel if main_window else None
         if output:
             output.log(text)
+
+    def _log_entry(self, entry):
+        """Log a structured LogEntry to this session's output panel."""
+        info = self._get_own_panels()
+        output = info["output"] if info else None
+        if not output:
+            main_window = self._get_main_window()
+            output = main_window.global_output_panel if main_window else None
+        if output:
+            output.add_entry(entry)
+            if entry.level == "error":
+                self._show_output()
 
     def _clear_output(self):
         """Limpa output desta sessao"""
@@ -598,6 +619,13 @@ class SessionWidget(QWidget):
         self.status_changed.emit(S.session_widget.executing_sql.format(conn_label=conn_label))
         self.execution_started.emit()  # Notify main_window to show running indicator
 
+        # Track execution context for structured logs
+        self._execution_start_time = time.time()
+        self._current_query = query
+        self._current_block_index = self.editor.get_current_block_index()
+        self._current_connection_name_exec = connection_name or self.session.connection_name or ""
+        self._current_database_name_exec = database_name or ""
+
         # Criar worker e thread
         self._sql_thread = QThread()
         self._sql_worker = SessionSqlWorker(connector, query)
@@ -655,8 +683,27 @@ class SessionWidget(QWidget):
         current_block = self.editor.get_current_executing_block()
         self.editor.mark_execution_finished(current_block)
 
+        # Compute execution duration
+        duration_ms = (time.time() - self._execution_start_time) * 1000 if self._execution_start_time else None
+
         if error:
-            self.append_output(self._format_log("SQL", f"ERROR: {error}"), error=True)
+            from src.ui.components.output_panel import LogEntry, parse_error_position
+            err_line, err_col = parse_error_position(error, self._current_query, "SQL")
+            entry = LogEntry(
+                level="error",
+                log_type="SQL",
+                message=f"ERROR: {error.split(chr(10))[0][:120]}",
+                detail=error,
+                block_index=self._current_block_index,
+                block_name=self._current_block_name or "",
+                line_number=err_line,
+                column_number=err_col,
+                duration_ms=duration_ms,
+                code_snippet=self._current_query,
+                connection_name=self._current_connection_name_exec,
+                database_name=self._current_database_name_exec,
+            )
+            self._log_entry(entry)
             self.session.finish_execution(False, f"Error: {error[:50]}...")
             self.status_changed.emit(S.session_widget.status_sql_error)
             self._queue_had_error = True
@@ -675,13 +722,24 @@ class SessionWidget(QWidget):
             if isinstance(df, list):
                 # Multiple DataFrames - create variables
                 total_rows = sum(len(d) for d in df)
-                self.append_output(self._format_log("SQL", S.session_widget.sql_multi_result.format(count=len(df), rows=f"{total_rows:,}")))
+                from src.ui.components.output_panel import LogEntry
+                msg = S.session_widget.sql_multi_result.format(count=len(df), rows=f"{total_rows:,}")
+                entry = LogEntry(
+                    level="success", log_type="SQL", message=msg,
+                    block_index=self._current_block_index,
+                    block_name=self._current_block_name or "",
+                    duration_ms=duration_ms,
+                    code_snippet=self._current_query,
+                    connection_name=self._current_connection_name_exec,
+                    database_name=self._current_database_name_exec,
+                )
+                self._log_entry(entry)
 
                 # Create variables: test, test1, test2, ...
                 for i, dataframe in enumerate(df):
                     var_name = var_base if i == 0 else f"{var_base}{i}"
                     self.session.set_variable(var_name, dataframe)
-                    self.append_output(self._format_log("SQL", S.session_widget.sql_var_rows.format(var_name=var_name, rows=f"{len(dataframe):,}")))
+                    self._log(S.session_widget.sql_var_rows.format(var_name=var_name, rows=f"{len(dataframe):,}"))
 
                 # Display only last DataFrame in grid
                 last_df = df[-1]
@@ -699,7 +757,18 @@ class SessionWidget(QWidget):
                 # Single DataFrame
                 rows = len(df) if df is not None else 0
                 var_name = var_base
-                self.append_output(self._format_log("SQL", S.session_widget.sql_single_result.format(rows=f"{rows:,}", var_name=var_name)))
+                from src.ui.components.output_panel import LogEntry
+                msg = S.session_widget.sql_single_result.format(rows=f"{rows:,}", var_name=var_name)
+                entry = LogEntry(
+                    level="success", log_type="SQL", message=msg,
+                    block_index=self._current_block_index,
+                    block_name=self._current_block_name or "",
+                    duration_ms=duration_ms,
+                    code_snippet=self._current_query,
+                    connection_name=self._current_connection_name_exec,
+                    database_name=self._current_database_name_exec,
+                )
+                self._log_entry(entry)
                 self._set_results(df, var_name)
                 self.session.finish_execution(True, S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
                 self.status_changed.emit(S.session_widget.status_sql_rows.format(rows=f"{rows:,}"))
@@ -763,6 +832,13 @@ class SessionWidget(QWidget):
         self.session.start_execution("python")
         self.status_changed.emit(S.session_widget.executing_python)
         self.execution_started.emit()  # Notify main_window to show running indicator
+
+        # Track execution context for structured logs
+        self._execution_start_time = time.time()
+        self._current_code = code
+        self._current_block_index = self.editor.get_current_block_index()
+        self._current_connection_name_exec = ""
+        self._current_database_name_exec = ""
         
         # Prepare namespace with df if exists
         namespace = self.session.namespace.copy()
@@ -818,8 +894,25 @@ class SessionWidget(QWidget):
         current_block = self.editor.get_current_executing_block()
         self.editor.mark_execution_finished(current_block)
 
+        # Compute execution duration
+        duration_ms = (time.time() - self._execution_start_time) * 1000 if self._execution_start_time else None
+
         if error:
-            self.append_output(self._format_log("PYTHON", f"ERROR:\n{error}"), error=True)
+            from src.ui.components.output_panel import LogEntry, parse_error_position
+            err_line, err_col = parse_error_position(error, self._current_code, "PYTHON")
+            entry = LogEntry(
+                level="error",
+                log_type="PYTHON",
+                message=f"ERROR: {error.split(chr(10))[-2] if chr(10) in error else error[:120]}",
+                detail=error,
+                block_index=self._current_block_index,
+                block_name=self._current_block_name or "",
+                line_number=err_line,
+                column_number=err_col,
+                duration_ms=duration_ms,
+                code_snippet=self._current_code,
+            )
+            self._log_entry(entry)
             self.session.finish_execution(False, S.session_widget.status_python_error)
             self.status_changed.emit(S.session_widget.status_python_error)
             self._queue_had_error = True

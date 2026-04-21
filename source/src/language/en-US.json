@@ -419,13 +419,18 @@
   "output_panel": {
     "btn_clear": "Clear",
     "btn_copy": "Copy",
+    "filter_errors": "Errors",
     "level_ok": "[OK]",
     "level_warning": "[WARNING]",
     "level_error": "[ERROR]",
     "level_debug": "[DEBUG]",
     "dialog_log_detail": "Log Detail",
-    "btn_copy_detail": "Copy",
-    "btn_close_detail": "Close"
+    "detail_code": "Executed Code",
+    "detail_error": "Error / Traceback",
+    "detail_output": "Output",
+    "btn_copy_detail": "Copy Error",
+    "btn_close_detail": "Close",
+    "btn_resolve_copilot": "Resolve with Copilot"
   },
 
   "session_tabs": {

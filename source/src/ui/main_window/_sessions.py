@@ -557,6 +557,17 @@ class SessionsMixin:
         # Criar paineis por sessao (Results, Output, Variables)
         self._create_session_panels(session.session_id)
 
+        # Connect output panel signals (navigate + Copilot resolve)
+        panels = self._session_panel_indices.get(session.session_id)
+        if panels and panels.get("output"):
+            out_panel = panels["output"]
+            out_panel.navigate_to_block.connect(
+                lambda block_idx, line, col, w=widget: w.editor.focus_block_at_line(block_idx, line, col)
+            )
+            out_panel.resolve_with_copilot.connect(
+                lambda ctx: self._resolve_with_copilot(ctx)
+            )
+
         # Definir file_path no widget se disponivel na sessao
         if hasattr(session, "file_path") and session.file_path:
             widget.file_path = session.file_path
@@ -826,6 +837,32 @@ class SessionsMixin:
 
         # Atualizar titulo da janela quando muda de aba
         self._update_window_title()
+
+    def _resolve_with_copilot(self, context: dict):
+        """Send error context to the Copilot chat panel for resolution."""
+        if not hasattr(self, "_copilot_chat_panel") or not self._copilot_chat_panel:
+            return
+        panel = self._copilot_chat_panel
+        # Build a prompt from the error context
+        parts = []
+        block_name = context.get("block_name") or f"Block {(context.get('block_index') or 0) + 1}"
+        lang = context.get("log_type", "SQL")
+        parts.append(f"I got an error in {block_name} ({lang}):")
+        code = context.get("code", "")
+        if code:
+            parts.append(f"```{lang.lower()}\n{code}\n```")
+        err = context.get("error", "")
+        if err:
+            parts.append(f"Error:\n```\n{err}\n```")
+        parts.append("Help me fix it.")
+        prompt = "\n\n".join(parts)
+        # Set text in input and trigger send
+        panel._input.setPlainText(prompt)
+        panel._on_send()
+        # Show the Copilot chat dock
+        if hasattr(self, "copilot_chat_dock"):
+            self.copilot_chat_dock.show()
+            self.copilot_chat_dock.raise_()
 
     def _on_session_focused(self, session):
         """Callback when a session is focused"""
