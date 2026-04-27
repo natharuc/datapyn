@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.29.2 (2026-04-27)
+
+### Bug Fixes
+
+- Refine per-tab notification delivery
+  ([`168e0b5`](https://github.com/natharuc/datapyn/commit/168e0b5f7a4aa7a56cd4b03b229dbd0a874a0150))
+
+
 ## v1.29.1 (2026-04-27)
 
 ### Bug Fixes
