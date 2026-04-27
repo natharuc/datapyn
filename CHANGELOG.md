@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.29.1 (2026-04-27)
+
+### Bug Fixes
+
+- Support python results in tab notifications
+  ([`2cdd644`](https://github.com/natharuc/datapyn/commit/2cdd6440643939cfae733aef1d989c5ff52a009c))
+
+
 ## v1.29.0 (2026-04-21)
 
 ### Features
