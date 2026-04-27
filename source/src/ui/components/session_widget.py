@@ -27,6 +27,11 @@ from src.language import S
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_TAB_NOTIFICATION_COLOR = "#1e8a3e"
+DEFAULT_TAB_NOTIFICATION_RULE_COLOR = "#d64545"
+INTERNAL_NOTIFICATION_NAMESPACE_KEYS = {"_last_result"}
+
+
 class SessionConnectionWorker(QObject):
     """Worker to connect to database in background"""
 
@@ -219,7 +224,15 @@ class SessionWidget(QWidget):
         self._original_file_type: Optional[str] = None
 
         # Per-tab custom notification config (lives in memory, persisted via DPW)
-        self._tab_notification_config: Optional[Dict[str, Any]] = None
+        self._tab_notification_config: Optional[Dict[str, Any]] = self._normalize_tab_notification_config(
+            getattr(session, "notification_config", None)
+        )
+        self._last_notification_delivery: Dict[str, Any] = {
+            "send_external": False,
+            "color": None,
+            "is_tab_custom": False,
+            "suppressed": False,
+        }
 
         # Per-tab periodic execution
         self._periodic_timer: Optional[QTimer] = None
@@ -246,7 +259,126 @@ class SessionWidget(QWidget):
 
     def set_tab_notification_config(self, config: Optional[Dict[str, Any]]):
         """Set per-tab notification config (or None to clear)."""
-        self._tab_notification_config = config
+        self._tab_notification_config = self._normalize_tab_notification_config(config)
+        self.session.notification_config = self._tab_notification_config
+
+    @staticmethod
+    def _normalize_tab_notification_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(rule, dict):
+            return {
+                "enabled": False,
+                "left": "",
+                "operator": "equals",
+                "value": "",
+                "action": "suppress",
+                "action_value": DEFAULT_TAB_NOTIFICATION_RULE_COLOR,
+            }
+
+        return {
+            "enabled": bool(rule.get("enabled", True)),
+            "left": str(rule.get("left", "")),
+            "operator": str(rule.get("operator", "equals")),
+            "value": str(rule.get("value", "")),
+            "action": str(rule.get("action", "suppress")),
+            "action_value": str(rule.get("action_value", DEFAULT_TAB_NOTIFICATION_RULE_COLOR)),
+        }
+
+    @classmethod
+    def _normalize_tab_notification_config(cls, config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not config:
+            return None
+
+        raw_rules = config.get("rules") if isinstance(config, dict) else None
+        rules = []
+        if isinstance(raw_rules, list):
+            rules = [cls._normalize_tab_notification_rule(rule) for rule in raw_rules]
+
+        return {
+            "enabled": bool(config.get("enabled", False)),
+            "title": str(config.get("title", "{{tab_name}}")),
+            "message": str(config.get("message", "{{rows}} rows")),
+            "color": str(config.get("color", DEFAULT_TAB_NOTIFICATION_COLOR)),
+            "rules": rules,
+        }
+
+    @staticmethod
+    def _try_parse_number(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        try:
+            return float(text.replace(",", ""))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _notification_rule_matches(cls, left: str, operator: str, right: str) -> bool:
+        normalized_operator = (operator or "equals").strip().lower()
+        left_text = "" if left is None else str(left)
+        right_text = "" if right is None else str(right)
+        left_value = left_text.strip()
+        right_value = right_text.strip()
+
+        if normalized_operator in {"equals", "eq", "=="}:
+            return left_value.casefold() == right_value.casefold()
+        if normalized_operator in {"not_equals", "ne", "!=", "not equals"}:
+            return left_value.casefold() != right_value.casefold()
+        if normalized_operator in {"contains", "includes"}:
+            return right_value.casefold() in left_value.casefold()
+        if normalized_operator in {"not_contains", "does not contain"}:
+            return right_value.casefold() not in left_value.casefold()
+        if normalized_operator in {"is_empty", "empty"}:
+            return left_value == ""
+        if normalized_operator in {"is_not_empty", "not_empty"}:
+            return left_value != ""
+        if normalized_operator in {"greater_than", "gt", ">"}:
+            left_number = cls._try_parse_number(left_value)
+            right_number = cls._try_parse_number(right_value)
+            return left_number is not None and right_number is not None and left_number > right_number
+        if normalized_operator in {"less_than", "lt", "<"}:
+            left_number = cls._try_parse_number(left_value)
+            right_number = cls._try_parse_number(right_value)
+            return left_number is not None and right_number is not None and left_number < right_number
+        return False
+
+    def _evaluate_tab_notification_rules(self, config: Dict[str, Any], renderer) -> Dict[str, Any]:
+        result = {
+            "matched": False,
+            "suppress": False,
+            "color": None,
+            "rule": None,
+        }
+
+        for rule in config.get("rules", []):
+            if not rule.get("enabled", True):
+                continue
+
+            left = renderer(rule.get("left", ""))
+            right = renderer(rule.get("value", ""))
+            if not self._notification_rule_matches(left, rule.get("operator", "equals"), right):
+                continue
+
+            action = str(rule.get("action", "suppress")).strip().lower()
+            result["matched"] = True
+            result["rule"] = rule
+
+            if action == "set_color":
+                color_value = str(rule.get("action_value", "")).strip()
+                if color_value:
+                    result["color"] = color_value
+                continue
+
+            if action == "suppress":
+                result["suppress"] = True
+                return result
+
+        return result
 
     def _setup_ui(self):
         """Configure widget UI"""
@@ -841,7 +973,7 @@ class SessionWidget(QWidget):
         self._current_database_name_exec = ""
         
         # Prepare namespace with df if exists
-        namespace = self.session.namespace.copy()
+        namespace = self._filter_internal_notification_namespace(self.session.namespace)
         namespace["pd"] = pd
 
         # Inject database variables for direct access in Python code
@@ -967,7 +1099,9 @@ class SessionWidget(QWidget):
 
             # Update session namespace
             if updated_namespace:
-                self.session.update_namespace(updated_namespace)
+                self.session.update_namespace(
+                    self._filter_internal_notification_namespace(updated_namespace)
+                )
 
             self.session.finish_execution(True, S.session_widget.status_python_done)
             self._queue_blocks_done += 1
@@ -1001,6 +1135,18 @@ class SessionWidget(QWidget):
         normalized = self._normalize_notification_result(result)
         if normalized is not None:
             self.session.set_variable("_last_result", normalized)
+
+    @staticmethod
+    def _filter_internal_notification_namespace(namespace: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Remove internal notification keys from Python execution namespaces."""
+        if not isinstance(namespace, dict):
+            return {}
+
+        return {
+            key: value
+            for key, value in namespace.items()
+            if key not in INTERNAL_NOTIFICATION_NAMESPACE_KEYS
+        }
 
     @staticmethod
     def _resolve_result_refs(template: str, last_result) -> str:
@@ -1068,24 +1214,41 @@ class SessionWidget(QWidget):
             result = self._resolve_result_refs(result, last_result)
             return result
 
+        delivery = {
+            "send_external": False,
+            "color": None,
+            "is_tab_custom": False,
+            "suppressed": False,
+        }
+
         # Check for per-tab custom notification config
         tab_config = self._tab_notification_config
         if tab_config and tab_config.get("enabled"):
             title = _render(tab_config.get("title", "{{tab_name}}"))
             msg = _render(tab_config.get("message", "{{rows}} rows"))
             success = not self._queue_had_error
+            rule_result = self._evaluate_tab_notification_rules(tab_config, _render)
+            delivery = {
+                "send_external": not bool(rule_result.get("suppress", False)),
+                "color": rule_result.get("color") or tab_config.get("color"),
+                "is_tab_custom": True,
+                "suppressed": bool(rule_result.get("suppress", False)),
+            }
+            self._last_notification_delivery = delivery
             self.execution_finished.emit(title, msg, success)
         elif self._queue_had_error:
             default_title = S.settings.notification_default_error_title if hasattr(S.settings, 'notification_default_error_title') else "{{type}}"
             default_msg = S.settings.notification_default_error_msg if hasattr(S.settings, 'notification_default_error_msg') else "Error: {{error}}"
             title = _render(settings.value("notifications/error_title", default_title))
             msg = _render(settings.value("notifications/error_message", default_msg))
+            self._last_notification_delivery = delivery
             self.execution_finished.emit(title, msg, False)
         else:
             default_title = S.settings.notification_default_success_title if hasattr(S.settings, 'notification_default_success_title') else "{{type}}"
             default_msg = S.settings.notification_default_success_msg if hasattr(S.settings, 'notification_default_success_msg') else "Complete! {{rows}} rows returned"
             title = _render(settings.value("notifications/success_title", default_title))
             msg = _render(settings.value("notifications/success_message", default_msg))
+            self._last_notification_delivery = delivery
             self.execution_finished.emit(title, msg, True)
 
         # Reset counters
@@ -1335,6 +1498,7 @@ class SessionWidget(QWidget):
         """Sync widget state to session"""
         self.session.code = self.get_code()  # Compatibilidade
         self.session.blocks = self.editor.to_list()  # Novo: blocos
+        self.session.notification_config = self.get_tab_notification_config()
         # Sync file_path and file type
         if hasattr(self, "file_path") and self.file_path:
             self.session.file_path = self.file_path
@@ -1347,6 +1511,8 @@ class SessionWidget(QWidget):
             self.editor.from_list(self.session.blocks)
         elif self.session.code:
             self.set_code(self.session.code)
+
+        self.set_tab_notification_config(getattr(self.session, "notification_config", None))
 
     def _on_file_dropped(self, file_path: str):
         """Open import dialog when data file is dropped on editor"""

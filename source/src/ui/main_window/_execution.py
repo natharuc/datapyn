@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import QMessageBox
 from src.ui.main_window._workers import SqlWorker, PythonWorker
 from src.ui.components.toast_notification import ToastManager
 from src.language import S
+from src.services.notification_delivery_service import get_notification_delivery_service
 
 logger = logging.getLogger(__name__)
 
@@ -680,18 +681,30 @@ class ExecutionMixin:
         Suppresses notification if the user is focused on the originating tab.
         """
         tab_index = self.session_tabs.indexOf(widget)
+        delivery = getattr(widget, "_last_notification_delivery", None) or {}
+        tab_is_focused = (
+            self.isActiveWindow()
+            and tab_index >= 0
+            and tab_index == self.session_tabs.currentIndex()
+        )
 
-        # Skip notification if user is focused on this tab and window is active
-        if (self.isActiveWindow()
-                and tab_index >= 0
-                and tab_index == self.session_tabs.currentIndex()):
+        if delivery.get("suppressed") or tab_is_focused:
             return
 
+        if delivery.get("send_external"):
+            get_notification_delivery_service(self).deliver(
+                title=title,
+                message=message,
+                success=success,
+                channels={"telegram": True, "email": True},
+            )
+
         # Check per-tab custom notification color
-        color = None
-        tab_config = getattr(widget, '_tab_notification_config', None)
-        if tab_config and tab_config.get("enabled") and tab_config.get("color"):
-            color = tab_config["color"]
+        color = delivery.get("color")
+        if not color:
+            tab_config = getattr(widget, '_tab_notification_config', None)
+            if tab_config and tab_config.get("enabled") and tab_config.get("color"):
+                color = tab_config["color"]
         self._send_notification(title, message, success, tab_index, color=color)
 
     def _send_notification(self, title: str, message: str, success: bool = True, tab_index: int = None, color: str = None):

@@ -8,6 +8,7 @@ Tests for notification configuration system:
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 from PyQt6.QtCore import QSettings
+from PyQt6.QtWidgets import QMessageBox
 
 
 # ==================== TEMPLATE RENDERING TESTS ====================
@@ -109,6 +110,16 @@ class TestNotificationSettings:
             "notifications/success_message",
             "notifications/error_title",
             "notifications/error_message",
+            "notifications/telegram/enabled",
+            "notifications/telegram/chat_id",
+            "notifications/email/enabled",
+            "notifications/email/host",
+            "notifications/email/port",
+            "notifications/email/use_tls",
+            "notifications/email/use_ssl",
+            "notifications/email/username",
+            "notifications/email/from",
+            "notifications/email/to",
         ]
         originals = {k: settings.value(k) for k in keys}
         for k in keys:
@@ -167,10 +178,27 @@ class TestNotificationSettingsDialog:
         from src.ui.dialogs.settings_dialog import SettingsDialog
         from src.core import ShortcutManager
 
+        settings = QSettings("DataPyn", "DataPyn")
+        original_enabled = settings.value("notifications/enabled")
+        original_sound = settings.value("notifications/sound")
+        settings.remove("notifications/enabled")
+        settings.remove("notifications/sound")
+
         sm = ShortcutManager()
-        dlg = SettingsDialog(shortcut_manager=sm)
-        qtbot.addWidget(dlg)
-        return dlg
+        with patch("src.services.notification_delivery_service.keyring.get_password", return_value=""):
+            dlg = SettingsDialog(shortcut_manager=sm)
+            qtbot.addWidget(dlg)
+            yield dlg
+
+        if original_enabled is not None:
+            settings.setValue("notifications/enabled", original_enabled)
+        else:
+            settings.remove("notifications/enabled")
+
+        if original_sound is not None:
+            settings.setValue("notifications/sound", original_sound)
+        else:
+            settings.remove("notifications/sound")
 
     def test_notifications_tab_exists(self, dialog):
         """The Notifications tab is present in the dialog."""
@@ -198,6 +226,19 @@ class TestNotificationSettingsDialog:
         assert hasattr(dialog, 'notif_success_msg')
         assert hasattr(dialog, 'notif_error_title')
         assert hasattr(dialog, 'notif_error_msg')
+
+    def test_transport_fields_exist(self, dialog):
+        """Telegram and email transport fields are available in the notifications tab."""
+        assert hasattr(dialog, 'notif_telegram_enabled_cb')
+        assert hasattr(dialog, 'notif_telegram_token')
+        assert hasattr(dialog, 'notif_telegram_chat_id')
+        assert hasattr(dialog, 'notif_email_enabled_cb')
+        assert hasattr(dialog, 'notif_email_host')
+        assert hasattr(dialog, 'notif_email_port')
+        assert hasattr(dialog, 'notif_email_username')
+        assert hasattr(dialog, 'notif_email_password')
+        assert hasattr(dialog, 'notif_email_from')
+        assert hasattr(dialog, 'notif_email_to')
 
     def test_template_fields_have_defaults(self, dialog):
         """Template fields have non-empty default values."""
@@ -233,6 +274,38 @@ class TestNotificationSettingsDialog:
                      "notifications/success_title", "notifications/success_message",
                      "notifications/error_title", "notifications/error_message"]:
             settings.remove(key)
+
+    def test_save_notification_transports(self, dialog):
+        """Saving settings persists transport fields and stores secrets via helper."""
+        dialog.notif_telegram_enabled_cb.setChecked(True)
+        dialog.notif_telegram_token.setText("telegram-secret")
+        dialog.notif_telegram_chat_id.setText("12345")
+        dialog.notif_email_enabled_cb.setChecked(True)
+        dialog.notif_email_host.setText("smtp.example.com")
+        dialog.notif_email_port.setValue(2525)
+        dialog.notif_email_use_tls.setChecked(True)
+        dialog.notif_email_use_ssl.setChecked(False)
+        dialog.notif_email_username.setText("mailer")
+        dialog.notif_email_password.setText("smtp-secret")
+        dialog.notif_email_from.setText("from@example.com")
+        dialog.notif_email_to.setText("to@example.com")
+
+        with patch("src.ui.dialogs.settings_dialog.set_notification_secret") as set_secret, \
+                patch("src.ui.dialogs.settings_dialog.QMessageBox.information"), \
+                patch("src.ui.dialogs.settings_dialog.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+            dialog._save_all()
+
+        settings = QSettings("DataPyn", "DataPyn")
+        assert settings.value("notifications/telegram/enabled", False, type=bool) is True
+        assert settings.value("notifications/telegram/chat_id") == "12345"
+        assert settings.value("notifications/email/enabled", False, type=bool) is True
+        assert settings.value("notifications/email/host") == "smtp.example.com"
+        assert settings.value("notifications/email/port", 0, type=int) == 2525
+        assert settings.value("notifications/email/username") == "mailer"
+        assert settings.value("notifications/email/from") == "from@example.com"
+        assert settings.value("notifications/email/to") == "to@example.com"
+        set_secret.assert_any_call("telegram_bot_token", "telegram-secret")
+        set_secret.assert_any_call("email_password", "smtp-secret")
 
 
 # ==================== NOTIFICATION DISABLED TEST ====================
@@ -289,3 +362,77 @@ class TestNotificationDisabled:
 
         # Cleanup
         settings.remove("notifications/sound")
+
+    def test_finished_notification_skips_toast_when_suppressed(self):
+        """Per-tab delivery payload can suppress the toast without affecting cleanup flow."""
+        from src.ui.main_window._execution import ExecutionMixin
+
+        mixin = MagicMock()
+        mixin.session_tabs.indexOf.return_value = 0
+        mixin.isActiveWindow.return_value = False
+
+        widget = MagicMock()
+        widget._last_notification_delivery = {"suppressed": True}
+
+        ExecutionMixin._on_execution_finished_notification(mixin, "Title", "Message", True, widget)
+
+        mixin._send_notification.assert_not_called()
+
+    def test_finished_notification_uses_delivery_color(self):
+        """Toast routing prefers the per-tab delivery color payload."""
+        from src.ui.main_window._execution import ExecutionMixin
+
+        mixin = MagicMock()
+        mixin.session_tabs.indexOf.return_value = 2
+        mixin.session_tabs.currentIndex.return_value = 0
+        mixin.isActiveWindow.return_value = False
+
+        widget = MagicMock()
+        widget._last_notification_delivery = {"color": "#ff0000"}
+
+        ExecutionMixin._on_execution_finished_notification(mixin, "Title", "Message", True, widget)
+
+        mixin._send_notification.assert_called_once_with("Title", "Message", True, 2, color="#ff0000")
+
+    def test_finished_notification_skips_external_delivery_when_origin_tab_is_focused(self):
+        """Focused tabs do not dispatch external delivery when the local toast is skipped."""
+        from src.ui.main_window._execution import ExecutionMixin
+
+        mixin = MagicMock()
+        mixin.session_tabs.indexOf.return_value = 1
+        mixin.session_tabs.currentIndex.return_value = 1
+        mixin.isActiveWindow.return_value = True
+
+        widget = MagicMock()
+        widget._last_notification_delivery = {"send_external": True, "color": None}
+
+        service = MagicMock()
+        with patch("src.ui.main_window._execution.get_notification_delivery_service", return_value=service):
+            ExecutionMixin._on_execution_finished_notification(mixin, "Title", "Message", True, widget)
+
+        service.deliver.assert_not_called()
+        mixin._send_notification.assert_not_called()
+
+    def test_finished_notification_dispatches_external_delivery_when_origin_tab_is_not_focused(self):
+        """External delivery still runs when the originating tab is not focused."""
+        from src.ui.main_window._execution import ExecutionMixin
+
+        mixin = MagicMock()
+        mixin.session_tabs.indexOf.return_value = 1
+        mixin.session_tabs.currentIndex.return_value = 0
+        mixin.isActiveWindow.return_value = True
+
+        widget = MagicMock()
+        widget._last_notification_delivery = {"send_external": True, "color": None}
+
+        service = MagicMock()
+        with patch("src.ui.main_window._execution.get_notification_delivery_service", return_value=service):
+            ExecutionMixin._on_execution_finished_notification(mixin, "Title", "Message", True, widget)
+
+        service.deliver.assert_called_once_with(
+            title="Title",
+            message="Message",
+            success=True,
+            channels={"telegram": True, "email": True},
+        )
+        mixin._send_notification.assert_called_once()

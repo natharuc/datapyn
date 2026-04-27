@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
+    QFormLayout,
     QTableWidget,
     QTableWidgetItem,
     QPushButton,
@@ -19,6 +20,8 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QSpinBox,
     QCheckBox,
+    QScrollArea,
+    QFrame,
     QListWidget,
     QListWidgetItem,
     QLineEdit,
@@ -30,6 +33,13 @@ from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
 from src.design_system.tokens import get_colors, RADIUS
 from src.services.copilot.copilot_settings import get_copilot_settings
+from src.services.notification_delivery_service import (
+    EMAIL_PASSWORD_KEY,
+    TELEGRAM_TOKEN_KEY,
+    get_notification_delivery_service,
+    load_notification_transport_settings,
+    set_notification_secret,
+)
 
 
 class SettingsDialog(QDialog):
@@ -56,8 +66,12 @@ class SettingsDialog(QDialog):
         self.theme_manager = theme_manager or ThemeManager()
         self._original_language = S.language_code
         self._initial_tab = initial_tab
+        self._pending_notification_test = None
+        self._notification_delivery_service = get_notification_delivery_service(self)
         self._setup_ui()
         self._load_shortcuts()
+        self._notification_delivery_service.delivery_succeeded.connect(self._on_notification_delivery_success)
+        self._notification_delivery_service.delivery_failed.connect(self._on_notification_delivery_failure)
 
     def _setup_ui(self):
         """Sets up the UI with tabs"""
@@ -711,13 +725,29 @@ class SettingsDialog(QDialog):
         """Sets up the Notifications tab with toggle and template config."""
         colors = get_colors()
         settings = QSettings("DataPyn", "DataPyn")
+        transport = load_notification_transport_settings()
         input_style = self._get_input_style(colors)
         checkbox_style = self._get_checkbox_style(colors)
 
+        notif_scroll = QScrollArea()
+        notif_scroll.setWidgetResizable(True)
+        notif_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        notif_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
         notif_widget = QWidget()
+        notif_scroll.setWidget(notif_widget)
+
         notif_layout = QVBoxLayout(notif_widget)
         notif_layout.setSpacing(16)
         notif_layout.setContentsMargins(20, 20, 20, 20)
+
+        def _make_form_layout() -> QFormLayout:
+            form = QFormLayout()
+            form.setHorizontalSpacing(12)
+            form.setVerticalSpacing(10)
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            return form
 
         # --- General notification settings ---
         general_group = self._make_group(S.settings.section_notifications, colors)
@@ -744,6 +774,7 @@ class SettingsDialog(QDialog):
         template_group = self._make_group(S.settings.section_notification_template, colors)
         template_layout = QVBoxLayout(template_group)
         template_layout.setSpacing(10)
+        template_form = _make_form_layout()
 
         # Available variables hint
         template_layout.addWidget(self._make_info_box(
@@ -762,9 +793,7 @@ class SettingsDialog(QDialog):
             settings.value("notifications/success_title", default_success_title)
         )
         self.notif_success_title.setStyleSheet(input_style)
-        template_layout.addLayout(
-            self._make_field_row(S.settings.label_success_title, self.notif_success_title, colors)
-        )
+        template_form.addRow(self._make_label(S.settings.label_success_title, colors), self.notif_success_title)
 
         # Success message
         self.notif_success_msg = QLineEdit()
@@ -772,9 +801,7 @@ class SettingsDialog(QDialog):
             settings.value("notifications/success_message", default_success_msg)
         )
         self.notif_success_msg.setStyleSheet(input_style)
-        template_layout.addLayout(
-            self._make_field_row(S.settings.label_success_message, self.notif_success_msg, colors)
-        )
+        template_form.addRow(self._make_label(S.settings.label_success_message, colors), self.notif_success_msg)
 
         # Error title
         self.notif_error_title = QLineEdit()
@@ -782,9 +809,7 @@ class SettingsDialog(QDialog):
             settings.value("notifications/error_title", default_error_title)
         )
         self.notif_error_title.setStyleSheet(input_style)
-        template_layout.addLayout(
-            self._make_field_row(S.settings.label_error_title, self.notif_error_title, colors)
-        )
+        template_form.addRow(self._make_label(S.settings.label_error_title, colors), self.notif_error_title)
 
         # Error message
         self.notif_error_msg = QLineEdit()
@@ -792,15 +817,217 @@ class SettingsDialog(QDialog):
             settings.value("notifications/error_message", default_error_msg)
         )
         self.notif_error_msg.setStyleSheet(input_style)
-        template_layout.addLayout(
-            self._make_field_row(S.settings.label_error_message, self.notif_error_msg, colors)
-        )
+        template_form.addRow(self._make_label(S.settings.label_error_message, colors), self.notif_error_msg)
+        template_layout.addLayout(template_form)
 
         notif_layout.addWidget(template_group)
+
+        telegram_group = self._make_group(S.settings.section_notification_telegram, colors)
+        telegram_layout = QVBoxLayout(telegram_group)
+        telegram_layout.setSpacing(10)
+        telegram_form = _make_form_layout()
+
+        self.notif_telegram_enabled_cb = QCheckBox(S.settings.label_notifications_telegram_enabled)
+        self.notif_telegram_enabled_cb.setChecked(
+            settings.value("notifications/telegram/enabled", False, type=bool)
+        )
+        self.notif_telegram_enabled_cb.setStyleSheet(checkbox_style)
+        telegram_layout.addWidget(self.notif_telegram_enabled_cb)
+
+        self.notif_telegram_token = QLineEdit()
+        self.notif_telegram_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.notif_telegram_token.setText(transport["telegram"]["bot_token"])
+        self.notif_telegram_token.setStyleSheet(input_style)
+        telegram_form.addRow(self._make_label(S.settings.label_notification_telegram_token, colors), self.notif_telegram_token)
+
+        self.notif_telegram_chat_id = QLineEdit()
+        self.notif_telegram_chat_id.setText(transport["telegram"]["chat_id"])
+        self.notif_telegram_chat_id.setStyleSheet(input_style)
+        telegram_form.addRow(self._make_label(S.settings.label_notification_telegram_chat_id, colors), self.notif_telegram_chat_id)
+        telegram_layout.addLayout(telegram_form)
+
+        self.notif_telegram_status = self._make_hint("", colors)
+        telegram_layout.addWidget(self.notif_telegram_status)
+
+        telegram_btn_row = QHBoxLayout()
+        telegram_btn_row.addStretch()
+        self.notif_telegram_test_btn = QPushButton(S.settings.btn_notification_test_telegram)
+        self.notif_telegram_test_btn.clicked.connect(self._send_test_telegram_notification)
+        telegram_btn_row.addWidget(self.notif_telegram_test_btn)
+        telegram_layout.addLayout(telegram_btn_row)
+
+        notif_layout.addWidget(telegram_group)
+
+        email_group = self._make_group(S.settings.section_notification_email, colors)
+        email_layout = QVBoxLayout(email_group)
+        email_layout.setSpacing(10)
+        email_form = _make_form_layout()
+
+        self.notif_email_enabled_cb = QCheckBox(S.settings.label_notifications_email_enabled)
+        self.notif_email_enabled_cb.setChecked(
+            settings.value("notifications/email/enabled", False, type=bool)
+        )
+        self.notif_email_enabled_cb.setStyleSheet(checkbox_style)
+        email_layout.addWidget(self.notif_email_enabled_cb)
+
+        self.notif_email_host = QLineEdit()
+        self.notif_email_host.setText(transport["email"]["host"])
+        self.notif_email_host.setStyleSheet(input_style)
+        email_form.addRow(self._make_label(S.settings.label_notification_email_host, colors), self.notif_email_host)
+
+        self.notif_email_port = QSpinBox()
+        self.notif_email_port.setRange(1, 65535)
+        self.notif_email_port.setValue(transport["email"]["port"])
+        self.notif_email_port.setStyleSheet(input_style)
+        email_form.addRow(self._make_label(S.settings.label_notification_email_port, colors), self.notif_email_port)
+
+        self.notif_email_use_tls = QCheckBox(S.settings.label_notification_email_use_tls)
+        self.notif_email_use_tls.setChecked(transport["email"]["use_tls"])
+        self.notif_email_use_tls.setStyleSheet(checkbox_style)
+        self.notif_email_use_tls.toggled.connect(self._on_notification_email_tls_toggled)
+
+        self.notif_email_use_ssl = QCheckBox(S.settings.label_notification_email_use_ssl)
+        self.notif_email_use_ssl.setChecked(transport["email"]["use_ssl"])
+        self.notif_email_use_ssl.setStyleSheet(checkbox_style)
+        self.notif_email_use_ssl.toggled.connect(self._on_notification_email_ssl_toggled)
+
+        email_security = QWidget()
+        email_security_layout = QHBoxLayout(email_security)
+        email_security_layout.setContentsMargins(0, 0, 0, 0)
+        email_security_layout.setSpacing(12)
+        email_security_layout.addWidget(self.notif_email_use_tls)
+        email_security_layout.addWidget(self.notif_email_use_ssl)
+        email_security_layout.addStretch()
+        email_form.addRow(self._make_label(S.settings.label_notification_email_security, colors), email_security)
+
+        self.notif_email_username = QLineEdit()
+        self.notif_email_username.setText(transport["email"]["username"])
+        self.notif_email_username.setStyleSheet(input_style)
+        email_form.addRow(self._make_label(S.settings.label_notification_email_username, colors), self.notif_email_username)
+
+        self.notif_email_password = QLineEdit()
+        self.notif_email_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.notif_email_password.setText(transport["email"]["password"])
+        self.notif_email_password.setStyleSheet(input_style)
+        email_form.addRow(self._make_label(S.settings.label_notification_email_password, colors), self.notif_email_password)
+
+        self.notif_email_from = QLineEdit()
+        self.notif_email_from.setText(transport["email"]["from_address"])
+        self.notif_email_from.setStyleSheet(input_style)
+        email_form.addRow(self._make_label(S.settings.label_notification_email_from, colors), self.notif_email_from)
+
+        self.notif_email_to = QLineEdit()
+        self.notif_email_to.setText(transport["email"]["to"])
+        self.notif_email_to.setStyleSheet(input_style)
+        email_form.addRow(self._make_label(S.settings.label_notification_email_to, colors), self.notif_email_to)
+        email_layout.addLayout(email_form)
+
+        self.notif_email_status = self._make_hint("", colors)
+        email_layout.addWidget(self.notif_email_status)
+
+        email_btn_row = QHBoxLayout()
+        email_btn_row.addStretch()
+        self.notif_email_test_btn = QPushButton(S.settings.btn_notification_test_email)
+        self.notif_email_test_btn.clicked.connect(self._send_test_email_notification)
+        email_btn_row.addWidget(self.notif_email_test_btn)
+        email_layout.addLayout(email_btn_row)
+
+        notif_layout.addWidget(email_group)
         notif_layout.addStretch()
 
+        self._refresh_notification_transport_status()
+
         tab_title = S.settings.tab_notifications if hasattr(S.settings, 'tab_notifications') else "Notifications"
-        self.tabs.addTab(notif_widget, tab_title)
+        self.tabs.addTab(notif_scroll, tab_title)
+
+    def _persist_notification_transport_settings(self):
+        settings = QSettings("DataPyn", "DataPyn")
+        settings.setValue("notifications/telegram/enabled", self.notif_telegram_enabled_cb.isChecked())
+        settings.setValue("notifications/telegram/chat_id", self.notif_telegram_chat_id.text().strip())
+        set_notification_secret(TELEGRAM_TOKEN_KEY, self.notif_telegram_token.text().strip())
+
+        settings.setValue("notifications/email/enabled", self.notif_email_enabled_cb.isChecked())
+        settings.setValue("notifications/email/host", self.notif_email_host.text().strip())
+        settings.setValue("notifications/email/port", self.notif_email_port.value())
+        settings.setValue("notifications/email/use_tls", self.notif_email_use_tls.isChecked())
+        settings.setValue("notifications/email/use_ssl", self.notif_email_use_ssl.isChecked())
+        settings.setValue("notifications/email/username", self.notif_email_username.text().strip())
+        settings.setValue("notifications/email/from", self.notif_email_from.text().strip())
+        settings.setValue("notifications/email/to", self.notif_email_to.text().strip())
+        set_notification_secret(EMAIL_PASSWORD_KEY, self.notif_email_password.text())
+
+    def _refresh_notification_transport_status(self):
+        transport = load_notification_transport_settings()
+
+        if transport["telegram"]["configured"]:
+            self.notif_telegram_status.setText(S.settings.notification_telegram_status_ready)
+        else:
+            self.notif_telegram_status.setText(S.settings.notification_telegram_status_missing)
+
+        if transport["email"]["configured"]:
+            self.notif_email_status.setText(S.settings.notification_email_status_ready)
+        else:
+            self.notif_email_status.setText(S.settings.notification_email_status_missing)
+
+    def _on_notification_email_ssl_toggled(self, checked: bool):
+        if checked and self.notif_email_use_tls.isChecked():
+            self.notif_email_use_tls.setChecked(False)
+
+    def _on_notification_email_tls_toggled(self, checked: bool):
+        if checked and self.notif_email_use_ssl.isChecked():
+            self.notif_email_use_ssl.setChecked(False)
+
+    def _send_test_telegram_notification(self):
+        self._persist_notification_transport_settings()
+        self._refresh_notification_transport_status()
+        transport = load_notification_transport_settings()
+        if not transport["telegram"]["enabled"] or not transport["telegram"]["configured"]:
+            QMessageBox.warning(self, S.dialogs.warning, S.settings.notification_test_failure.format(channel=S.settings.notification_channel_telegram, error=S.settings.notification_telegram_status_missing))
+            return
+
+        self._pending_notification_test = "telegram"
+        self._notification_delivery_service.send_test_telegram(
+            title=S.settings.notification_test_title,
+            message=S.settings.notification_test_message,
+        )
+
+    def _send_test_email_notification(self):
+        self._persist_notification_transport_settings()
+        self._refresh_notification_transport_status()
+        transport = load_notification_transport_settings()
+        if not transport["email"]["enabled"] or not transport["email"]["configured"]:
+            QMessageBox.warning(self, S.dialogs.warning, S.settings.notification_test_failure.format(channel=S.settings.notification_channel_email, error=S.settings.notification_email_status_missing))
+            return
+
+        self._pending_notification_test = "email"
+        self._notification_delivery_service.send_test_email(
+            title=S.settings.notification_test_title,
+            message=S.settings.notification_test_message,
+        )
+
+    def _on_notification_delivery_success(self, channel: str, _detail: str):
+        if self._pending_notification_test != channel:
+            return
+
+        self._pending_notification_test = None
+        channel_label = S.settings.notification_channel_telegram if channel == "telegram" else S.settings.notification_channel_email
+        QMessageBox.information(
+            self,
+            S.settings.success_title,
+            S.settings.notification_test_success.format(channel=channel_label),
+        )
+
+    def _on_notification_delivery_failure(self, channel: str, error_text: str):
+        if self._pending_notification_test != channel:
+            return
+
+        self._pending_notification_test = None
+        channel_label = S.settings.notification_channel_telegram if channel == "telegram" else S.settings.notification_channel_email
+        QMessageBox.warning(
+            self,
+            S.dialogs.warning,
+            S.settings.notification_test_failure.format(channel=channel_label, error=error_text),
+        )
 
     def _setup_workspace_tab(self):
         """Setup Workspace tab for workspace/profile management."""
@@ -1376,6 +1603,8 @@ class SettingsDialog(QDialog):
         settings.setValue("notifications/success_message", self.notif_success_msg.text())
         settings.setValue("notifications/error_title", self.notif_error_title.text())
         settings.setValue("notifications/error_message", self.notif_error_msg.text())
+        self._persist_notification_transport_settings()
+        self._refresh_notification_transport_status()
 
         # Save shortcuts
         for row in range(self.table.rowCount()):
