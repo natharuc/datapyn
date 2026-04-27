@@ -58,6 +58,7 @@ class Session(QObject):
         self._last_status = S.session.status_ready
         self._code = ""  # Compatibility
         self._blocks: list = []  # Lista de blocos [{language, code}]
+        self.notification_config: Optional[Dict[str, Any]] = None
 
         # Workers ativos (threads)
         self._active_threads: list = []
@@ -249,6 +250,7 @@ class Session(QObject):
             "connection_name": self._connection_name,
             "code": self._code,  # Compatibility
             "blocks": self._blocks,  # New: list of blocks
+            "notification_config": self.notification_config,
             "created_at": self.created_at.isoformat(),
             "file_path": getattr(self, "file_path", None),  # Original file path
             "original_file_type": getattr(self, "original_file_type", None),  # File type (sql/py/dpw)
@@ -263,6 +265,7 @@ class Session(QObject):
         session._connection_name = data.get("connection_name")
         session._code = data.get("code", "")
         session._blocks = data.get("blocks", [])
+        session.notification_config = data.get("notification_config")
         session.file_path = data.get("file_path")  # Restore file path
         session.original_file_type = data.get("original_file_type")  # Restore file type
         if data.get("created_at"):

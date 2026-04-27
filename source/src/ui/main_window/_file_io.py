@@ -551,9 +551,10 @@ class FileIOMixin:
                 "blocks": blocks_data
             }
 
-            # Persist per-tab notification config if set
+            # Persist per-tab notification config whenever the tab has one,
+            # even if notifications are currently disabled.
             tab_notif = current_widget.get_tab_notification_config()
-            if tab_notif and tab_notif.get("enabled"):
+            if tab_notif is not None:
                 dpw_content["notification_config"] = tab_notif
 
             with open(file_path, "w", encoding="utf-8") as f:
