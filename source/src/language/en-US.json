@@ -593,7 +593,7 @@
     "section_config": "NOTIFICATION CONFIG",
     "enable_custom": "Enable custom notification for this tab",
     "section_template": "MESSAGE TEMPLATE",
-    "variables_hint": "Variables: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[row][col]}} to access query result values (e.g. {{result[0][1]}}).",
+    "variables_hint": "Variables: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[row][col]}} to access tabular result values (e.g. {{result[0][1]}}).",
     "label_title": "Title:",
     "label_message": "Message:",
     "label_color": "Color:",

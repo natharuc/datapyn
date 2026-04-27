@@ -595,7 +595,7 @@
     "section_config": "CONFIGURACAO DE NOTIFICACAO",
     "enable_custom": "Ativar notificacao personalizada para esta aba",
     "section_template": "TEMPLATE DA MENSAGEM",
-    "variables_hint": "Variaveis: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[linha][coluna]}} para acessar valores do resultado (ex: {{result[0][1]}}).",
+    "variables_hint": "Variaveis: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[linha][coluna]}} para acessar valores tabulares do resultado (ex: {{result[0][1]}}).",
     "label_title": "Titulo:",
     "label_message": "Mensagem:",
     "label_color": "Cor:",

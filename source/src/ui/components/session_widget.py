@@ -745,7 +745,7 @@ class SessionWidget(QWidget):
                 last_df = df[-1]
                 last_var_name = f"{var_base}{len(df) - 1}" if len(df) > 1 else var_base
                 self._set_results(last_df, last_var_name)
-                self.session.set_variable("_last_result", last_df)
+                self._update_last_notification_result(last_df)
 
                 self.session.finish_execution(True, S.session_widget.status_sql_multi.format(count=len(df)))
                 self.status_changed.emit(S.session_widget.status_sql_multi.format(count=len(df)))
@@ -779,7 +779,7 @@ class SessionWidget(QWidget):
 
                 # Save in session namespace
                 self.session.set_variable(var_name, df)
-                self.session.set_variable("_last_result", df)
+                self._update_last_notification_result(df)
 
             # Clear block_name after use
             self._current_block_name = None
@@ -924,6 +924,10 @@ class SessionWidget(QWidget):
             has_dataframe_result = False
             has_figures = bool(figures)
             has_output = bool(output)
+            notification_result = self._normalize_notification_result(result)
+
+            if notification_result is not None:
+                self._update_last_notification_result(notification_result)
 
             # 1. Logs/print -> Output
             if output:
@@ -968,15 +972,35 @@ class SessionWidget(QWidget):
             self.session.finish_execution(True, S.session_widget.status_python_done)
             self._queue_blocks_done += 1
             self._queue_last_type = "python"
-            if has_dataframe_result and result is not None:
-                self._queue_last_rows = len(result)
-                self._queue_total_rows += len(result)
+            if notification_result is not None:
+                self._queue_last_rows = len(notification_result)
+                self._queue_total_rows += len(notification_result)
 
         # Process next in queue if exists
         self._is_executing = False
         self._process_next_in_queue()
 
     # === EXECUTION NOTIFICATION ===
+
+    @staticmethod
+    def _normalize_notification_result(result) -> Optional[pd.DataFrame]:
+        """Convert supported results into a tabular value for notification templates."""
+        if result is None:
+            return None
+
+        if isinstance(result, pd.DataFrame):
+            return result
+
+        if isinstance(result, pd.Series):
+            return result.to_frame(name=result.name or "value")
+
+        return None
+
+    def _update_last_notification_result(self, result):
+        """Persist the last tabular result used by {{result[row][col]}} templates."""
+        normalized = self._normalize_notification_result(result)
+        if normalized is not None:
+            self.session.set_variable("_last_result", normalized)
 
     @staticmethod
     def _resolve_result_refs(template: str, last_result) -> str:
