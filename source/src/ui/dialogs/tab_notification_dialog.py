@@ -110,7 +110,7 @@ class TabNotificationDialog(QDialog):
         # Variables hint
         hint_text = (
             S.tab_notification.variables_hint if hasattr(S, 'tab_notification')
-            else "Variables: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[row][col]}} to access query result values (e.g. {{result[0][1]}})."
+            else "Variables: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}. Use {{result[row][col]}} to access tabular result values (e.g. {{result[0][1]}})."
         )
         hint_label = QLabel(hint_text)
         hint_label.setWordWrap(True)

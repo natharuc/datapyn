@@ -215,6 +215,59 @@ class TestSessionWidgetTabNotification:
         widget.set_tab_notification_config(None)
         assert widget.get_tab_notification_config() is None
 
+    def test_python_dataframe_result_updates_last_result(self, widget):
+        """Python DataFrame results feed {{result[row][col]}} notifications."""
+        widget._process_next_in_queue = MagicMock()
+        df = pd.DataFrame({"value": [42]})
+
+        widget._on_python_finished(df, "", "", {}, [])
+
+        stored = widget.session.get_variable("_last_result")
+        assert stored is not None
+        assert stored.equals(df)
+        assert widget._queue_last_rows == 1
+
+    def test_python_series_result_updates_last_result(self, widget):
+        """Python Series results are normalized so notifications can index them."""
+        widget._process_next_in_queue = MagicMock()
+        series = pd.Series([10, 20], name="value")
+
+        widget._on_python_finished(series, "", "", {}, [])
+
+        stored = widget.session.get_variable("_last_result")
+        assert stored is not None
+        assert isinstance(stored, pd.DataFrame)
+        assert list(stored.columns) == ["value"]
+        assert stored.iloc[1, 0] == 20
+        assert widget._queue_last_rows == 2
+
+    def test_python_chart_and_dataframe_updates_last_result(self, widget):
+        """Chart-producing Python blocks still keep the tabular result for notifications."""
+        widget._process_next_in_queue = MagicMock()
+        df = pd.DataFrame({"value": [99]})
+
+        widget._on_python_finished(df, "", "", {}, [object()])
+
+        stored = widget.session.get_variable("_last_result")
+        assert stored is not None
+        assert stored.equals(df)
+        assert widget._queue_last_rows == 1
+
+    def test_python_notification_renders_result_reference(self, widget, qtbot):
+        """Per-tab notifications render {{result[row][col]}} after Python execution."""
+        widget.set_tab_notification_config({
+            "enabled": True,
+            "title": "{{tab_name}}",
+            "message": "Value: {{result[0][0]}}",
+            "color": "#1e8a3e",
+        })
+        df = pd.DataFrame({"value": [42]})
+
+        with qtbot.waitSignal(widget.execution_finished, timeout=1000) as blocker:
+            widget._on_python_finished(df, "", "", {}, [])
+
+        assert blocker.args == ["TestTab", "Value: 42", True]
+
 
 # ==================== DPW PERSISTENCE ====================
 
