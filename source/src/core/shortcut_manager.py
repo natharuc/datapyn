@@ -35,6 +35,7 @@ class ShortcutManager:
         "find": "Ctrl+F",
         "replace": "Ctrl+H",
         "format_code": "Ctrl+Shift+F",
+        "show_entity_info": "Alt+F1",
         # Autocompletar
         "force_autocomplete": "Ctrl+.",
         # Conexoes

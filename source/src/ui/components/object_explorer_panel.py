@@ -546,6 +546,112 @@ class ObjectExplorerPanel(QWidget):
         
         return ".".join(quoted_parts)
 
+    def _get_column_display_type(self, column_info: dict) -> str:
+        return str(
+            column_info.get("display_type")
+            or column_info.get("data_type")
+            or column_info.get("type")
+            or ""
+        )
+
+    def _format_column_label(self, column_info: dict) -> str:
+        col_name = column_info.get("name", "")
+        col_type = self._get_column_display_type(column_info)
+        nullable = str(column_info.get("nullable", "YES"))
+
+        display = f"{col_name}  ({col_type})" if col_type else str(col_name)
+        if nullable.upper() == "NO":
+            display += f"  {S.object_explorer.not_null}"
+        return display
+
+    def _get_item_qualified_name(self, data: dict) -> str:
+        catalog = data.get("catalog", "")
+        schema_name = data.get("schema", "")
+        name = data.get("name", "")
+
+        if catalog and schema_name:
+            return f"{catalog}.{schema_name}.{name}"
+        if schema_name:
+            return f"{schema_name}.{name}"
+        return str(name)
+
+    def _get_cached_columns_for_table(self, table_data: dict) -> list:
+        if not self._current_schema:
+            return []
+
+        columns = self._current_schema.get("columns", {})
+        table_key = table_data.get("key", "")
+        schema_name = table_data.get("schema", "")
+        table_name = table_data.get("name", "")
+
+        lookup_keys = [key for key in (
+            table_key,
+            f"{schema_name}.{table_name}" if schema_name else "",
+            table_name,
+        ) if key]
+
+        for lookup_key in lookup_keys:
+            if lookup_key in columns:
+                return columns.get(lookup_key, [])
+        return []
+
+    def _get_column_metadata_for_table(self, table_item: QTreeWidgetItem) -> list:
+        table_data = table_item.data(0, Qt.ItemDataRole.UserRole) or {}
+        cached_columns = self._get_cached_columns_for_table(table_data)
+        if cached_columns:
+            return cached_columns
+
+        columns = []
+        for index in range(table_item.childCount()):
+            child = table_item.child(index)
+            child_data = child.data(0, Qt.ItemDataRole.UserRole)
+            if child_data and child_data.get("type") == "column":
+                columns.append(
+                    {
+                        "name": child_data.get("name", ""),
+                        "display_type": child_data.get("display_type", ""),
+                        "type": child_data.get("data_type", ""),
+                        "nullable": child_data.get("nullable", "YES"),
+                    }
+                )
+        return columns
+
+    def _build_create_table_script(self, table_item: QTreeWidgetItem) -> str:
+        table_data = table_item.data(0, Qt.ItemDataRole.UserRole) or {}
+        qualified_name = self._get_item_qualified_name(table_data)
+        quoted_name = self._quote_identifier(qualified_name)
+        columns = self._get_column_metadata_for_table(table_item)
+
+        if columns:
+            column_lines = []
+            for column in columns:
+                col_name = column.get("name", "")
+                col_type = self._get_column_display_type(column)
+                nullable = "NOT NULL" if str(column.get("nullable", "YES")).upper() == "NO" else "NULL"
+                column_lines.append(
+                    f"    {self._quote_identifier(col_name)} {col_type} {nullable}".rstrip()
+                )
+            body = ",\n".join(column_lines)
+        else:
+            body = "    -- Expand the table to load column metadata and regenerate this script."
+
+        return f"CREATE TABLE {quoted_name} (\n{body}\n);"
+
+    def _build_drop_and_create_script(self, table_item: QTreeWidgetItem) -> str:
+        table_data = table_item.data(0, Qt.ItemDataRole.UserRole) or {}
+        qualified_name = self._get_item_qualified_name(table_data)
+        quoted_name = self._quote_identifier(qualified_name)
+
+        if self._db_type in ("mssql", "sqlserver", ""):
+            drop_statement = (
+                f"IF OBJECT_ID(N'{qualified_name}', N'U') IS NOT NULL\n"
+                f"    DROP TABLE {quoted_name};"
+            )
+        else:
+            drop_statement = f"DROP TABLE IF EXISTS {quoted_name};"
+
+        return f"{drop_statement}\n\n{self._build_create_table_script(table_item)}"
+
     def _build_tree(self, schema: dict):
         """Build tree from schema.
 
@@ -884,35 +990,20 @@ class ObjectExplorerPanel(QWidget):
 
                 for col in table_columns:
                     col_name = col.get("name", "")
-                    col_type = col.get("type", "")
-                    nullable = col.get("nullable", "YES")
+                    col_type = self._get_column_display_type(col)
 
                     # Quando filtro ativo, filtrar colunas individualmente
                     if filter_text and filter_text not in col_name.lower() and filter_text not in col_type.lower():
                         continue
 
-                    display = f"{col_name}  ({col_type})"
-                    if nullable.upper() == "NO":
-                        display += "  NOT NULL"
-
-                    col_item = QTreeWidgetItem(table_item, [display])
-                    col_item.setData(
-                        0, Qt.ItemDataRole.UserRole,
-                        {
-                            "type": "column",
-                            "name": col_name,
-                            "data_type": col_type,
-                            "nullable": nullable,
-                            "table": table_name,
-                            "table_key": table_key,
-                            "schema": table_schema,
-                        },
+                    self._add_column_item(
+                        table_item,
+                        col,
+                        table_name=table_name,
+                        table_key=table_key,
+                        table_schema=table_schema,
+                        catalog=catalog,
                     )
-
-                    if HAS_QTAWESOME:
-                        col_item.setIcon(0, qta.icon("mdi.table-column", color="#888888"))
-
-                    col_item.setForeground(0, QColor("#b0b0b0"))
 
                 # Expandir tabela se filtro ativo e ha match
                 if filter_text:
@@ -942,6 +1033,42 @@ class ObjectExplorerPanel(QWidget):
         placeholder.setForeground(0, QColor("#808080"))
         if HAS_QTAWESOME:
             placeholder.setIcon(0, qta.icon("mdi.loading", color="#808080"))
+
+    def _add_column_item(
+        self,
+        table_item: QTreeWidgetItem,
+        column_info: dict,
+        table_name: str,
+        table_key: str = "",
+        table_schema: str = "",
+        catalog: str = "",
+    ):
+        col_name = column_info.get("name", "")
+        col_type = column_info.get("type", "")
+        display_type = self._get_column_display_type(column_info)
+        nullable = column_info.get("nullable", "YES")
+
+        col_item = QTreeWidgetItem(table_item, [self._format_column_label(column_info)])
+        col_item.setData(
+            0,
+            Qt.ItemDataRole.UserRole,
+            {
+                "type": "column",
+                "name": col_name,
+                "data_type": col_type,
+                "display_type": display_type,
+                "nullable": nullable,
+                "table": table_name,
+                "table_key": table_key,
+                "schema": table_schema,
+                "catalog": catalog,
+            },
+        )
+
+        if HAS_QTAWESOME:
+            col_item.setIcon(0, qta.icon("mdi.table-column", color="#888888"))
+
+        col_item.setForeground(0, QColor("#b0b0b0"))
 
     def _has_placeholder_child(self, item: QTreeWidgetItem) -> bool:
         """Check if item has a placeholder child (needs lazy loading)."""
@@ -1110,25 +1237,14 @@ class ObjectExplorerPanel(QWidget):
             if table_item:
                 self._remove_placeholder_children(table_item)
                 for col in columns:
-                    col_name = col.get("name", "")
-                    col_type = col.get("type", "")
-                    nullable = col.get("nullable", "YES")
-
-                    display = f"{col_name}  ({col_type})"
-                    if nullable.upper() == "NO":
-                        display += "  NOT NULL"
-
-                    col_item = QTreeWidgetItem(table_item, [display])
-                    col_item.setData(0, Qt.ItemDataRole.UserRole, {
-                        "type": "column",
-                        "name": col_name,
-                        "data_type": col_type,
-                        "table": table_name,
-                    })
-
-                    if HAS_QTAWESOME:
-                        col_item.setIcon(0, qta.icon("mdi.table-column", color="#9cdcfe"))
-                    col_item.setForeground(0, QColor("#b0b0b0"))
+                    self._add_column_item(
+                        table_item,
+                        col,
+                        table_name=table_name,
+                        table_key=f"{schema_name}.{table_name}" if schema_name else table_name,
+                        table_schema=schema_name,
+                        catalog=catalog_name,
+                    )
                 return
 
     def _on_double_click(self, item: QTreeWidgetItem, column: int):
@@ -1259,17 +1375,10 @@ class ObjectExplorerPanel(QWidget):
             """)
 
         if item_type == "table":
-            # Build qualified name
-            # For Databricks, use full namespace: catalog.schema.table
             catalog_name = data.get("catalog", "")
-            if catalog_name and schema_name:
-                # Databricks: catalog.schema.table
-                qualified = f"{catalog_name}.{schema_name}.{name}"
-            elif schema_name:
-                qualified = f"{schema_name}.{name}"
-            else:
-                qualified = name
+            qualified = self._get_item_qualified_name(data)
             quoted = self._quote_identifier(qualified)
+            is_view = "VIEW" in str(data.get("table_type", "")).upper()
             
             # Build query based on database type
             if self._db_type in ("mysql", "mariadb", "postgres", "postgresql", "sqlite", "databricks"):
@@ -1302,6 +1411,21 @@ class ObjectExplorerPanel(QWidget):
 
             menu.addSeparator()
 
+            if not is_view:
+                commands_menu = menu.addMenu(S.object_explorer.ctx_commands_menu)
+
+                act_create = commands_menu.addAction(S.object_explorer.ctx_command_create_table)
+                act_create.triggered.connect(
+                    lambda _, script=self._build_create_table_script(item): self.insert_text_requested.emit(script)
+                )
+
+                act_drop_create = commands_menu.addAction(S.object_explorer.ctx_command_drop_create)
+                act_drop_create.triggered.connect(
+                    lambda _, script=self._build_drop_and_create_script(item): self.insert_text_requested.emit(script)
+                )
+
+                menu.addSeparator()
+
             # COUNT(*)
             count_query = f"SELECT COUNT(*) FROM {quoted}"
             act_count = menu.addAction(S.object_explorer.ctx_count_rows)
@@ -1324,7 +1448,7 @@ class ObjectExplorerPanel(QWidget):
 
         elif item_type == "column":
             table_name = data.get("table", "")
-            col_type = data.get("data_type", "")
+            col_type = data.get("display_type") or data.get("data_type", "")
 
             # Insert name in editor
             act_insert = menu.addAction(S.object_explorer.ctx_insert_name)

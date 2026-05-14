@@ -247,9 +247,15 @@ class BlockDatabasePanel(QFrame):
         colors = get_colors()
         
         self._database_name = database_name
+        display_name = database_name
+        if isinstance(display_name, str):
+            if display_name.startswith("CATALOG:"):
+                display_name = display_name[8:]
+            elif display_name.startswith("SCHEMA:"):
+                display_name = display_name[7:]
 
         if database_name:
-            self.name_label.setText(database_name)
+            self.name_label.setText(display_name)
             self.name_label.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: 500;")
             self.icon_label.setPixmap(qta.icon("mdi.database", color=colors.info).pixmap(16, 16))
         else:
@@ -424,6 +430,8 @@ class CodeBlock(QFrame):
         self._block_name = ""  # Block name (namespace prefix)
         self._is_copilot_editing = False  # Copilot is editing this block
         self._copilot_editing_timer = None  # Auto-dismiss timer
+        self._copilot_animation = None
+        self._spinner_animation = None
         self._is_maximized = False  # Block is in maximized/focus mode
         self._is_active = True  # Block is active (included in execute all)
 
@@ -444,9 +452,42 @@ class CodeBlock(QFrame):
 
     def closeEvent(self, event):
         """Stop timers to prevent callbacks on deleted C++ objects."""
-        self._execution_tick_timer.stop()
-        self._spinner_widget.hide()
+        self.cleanup()
         super().closeEvent(event)
+
+    def cleanup(self):
+        try:
+            self._execution_tick_timer.stop()
+        except RuntimeError:
+            pass
+
+        if self._copilot_editing_timer is not None:
+            try:
+                self._copilot_editing_timer.stop()
+            except RuntimeError:
+                pass
+            self._copilot_editing_timer = None
+
+        for animation_name in ("_copilot_animation", "_spinner_animation"):
+            animation = getattr(self, animation_name, None)
+            if animation is not None:
+                try:
+                    animation.stop()
+                except RuntimeError:
+                    pass
+                setattr(self, animation_name, None)
+
+        try:
+            self._spinner_widget.hide()
+        except RuntimeError:
+            pass
+
+        editor = getattr(self, "editor", None)
+        if editor is not None and hasattr(editor, "cleanup"):
+            try:
+                editor.cleanup()
+            except RuntimeError:
+                pass
 
     def _setup_ui(self):
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Plain)
@@ -1185,13 +1226,19 @@ class CodeBlock(QFrame):
         
         # Start/stop animation on the icon
         if editing:
+            if self._copilot_animation is not None:
+                self._copilot_animation.stop()
+            self._copilot_animation = qta.Spin(self._copilot_icon)
             animated_icon = qta.icon(
                 "mdi.creation",
                 color="#b48ead",
-                animation=qta.Spin(self._copilot_icon),
+                animation=self._copilot_animation,
             )
             self._copilot_icon.setIcon(animated_icon)
         else:
+            if self._copilot_animation is not None:
+                self._copilot_animation.stop()
+                self._copilot_animation = None
             static_icon = qta.icon("mdi.creation", color="#b48ead")
             self._copilot_icon.setIcon(static_icon)
         
@@ -1263,13 +1310,19 @@ class CodeBlock(QFrame):
                 }
             """)
             # Show animated spinner
-            spin_icon = qta.icon("fa5s.spinner", animation=qta.Spin(self._spinner_widget), color="#f39c12")
+            if self._spinner_animation is not None:
+                self._spinner_animation.stop()
+            self._spinner_animation = qta.Spin(self._spinner_widget)
+            spin_icon = qta.icon("fa5s.spinner", animation=self._spinner_animation, color="#f39c12")
             self._spinner_widget.setIcon(spin_icon)
             self._spinner_widget.show()
             # Start elapsed time counter
             self._execution_tick_timer.start()
         else:
             self._execution_tick_timer.stop()
+            if self._spinner_animation is not None:
+                self._spinner_animation.stop()
+                self._spinner_animation = None
             self._spinner_widget.setIcon(qta.icon("fa5s.check", color="#2ecc71"))
             self._spinner_widget.show()
             self._update_style()  # Restore play icon with language color
@@ -1296,6 +1349,9 @@ class CodeBlock(QFrame):
         self._is_running = False
         self._is_waiting = False
         self._execution_tick_timer.stop()
+        if self._spinner_animation is not None:
+            self._spinner_animation.stop()
+            self._spinner_animation = None
         self._spinner_widget.setIcon(qta.icon("fa5s.spinner", color="#888"))
         self._spinner_widget.hide()
         self._update_style()
@@ -1316,6 +1372,9 @@ class CodeBlock(QFrame):
         self._is_running = False
         self._is_waiting = False
         self._execution_tick_timer.stop()
+        if self._spinner_animation is not None:
+            self._spinner_animation.stop()
+            self._spinner_animation = None
         self._spinner_widget.setIcon(qta.icon("fa5s.spinner", color="#888"))
         self._spinner_widget.hide()
         self._update_style()

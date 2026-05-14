@@ -749,6 +749,7 @@ class UISetupMixin:
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
             "format_code": self._format_current_block,
+            "show_entity_info": self._show_selected_entity_info,
             # Autocompletar
             "force_autocomplete": self._force_autocomplete,
             # Conexoes
@@ -803,6 +804,7 @@ class UISetupMixin:
             "find": self._find_in_editor,
             "replace": self._replace_in_editor,
             "format_code": self._format_current_block,
+            "show_entity_info": self._show_selected_entity_info,
             # Autocompletar
             "force_autocomplete": self._force_autocomplete,
             # Conexoes
@@ -1137,6 +1139,9 @@ class UISetupMixin:
 
     def _check_for_updates_silent(self):
         """Silently checks for updates on startup"""
+        if getattr(self, "_is_closing", False):
+            return
+
         if not self.auto_update_service.is_auto_update_enabled():
             return
 

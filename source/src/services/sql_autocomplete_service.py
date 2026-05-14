@@ -16,7 +16,8 @@ Uses sqlglot for advanced parsing of:
 
 import logging
 import re
-from typing import Dict, List, Optional, Tuple, Set
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 try:
     import sqlglot
     from sqlglot import exp
+    from sqlglot.optimizer.scope import traverse_scope
     HAS_SQLGLOT = True
 except ImportError:
     HAS_SQLGLOT = False
@@ -37,6 +39,8 @@ CAT_TABLE = "table"
 CAT_COLUMN = "column"
 CAT_DATABASE = "database"
 CAT_FUNCTION = "function"
+CAT_VARIABLE = "variable"
+CAT_ROUTINE = "routine"
 
 # Context constants
 CTX_TABLE = "table"         # Expects table names (FROM, JOIN, INTO, UPDATE, etc.)
@@ -44,6 +48,7 @@ CTX_COLUMN = "column"       # Expects column names (SELECT, WHERE, ON, etc.)
 CTX_DOT = "dot"             # After "something." - resolve to table/alias columns
 CTX_DATABASE = "database"   # Expects database names (USE)
 CTX_DEFAULT = "default"     # Keywords + tables
+CTX_ROUTINE = "routine"     # After EXEC/EXECUTE/CALL - expects procedure/function names
 
 SQL_KEYWORDS = [
     "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "BETWEEN",
@@ -91,6 +96,28 @@ _COLUMN_CONTEXT_KW = {
 _RE_LINE_COMMENT = re.compile(r"--[^\n]*", re.DOTALL)
 _RE_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _RE_STRING_LITERAL = re.compile(r"'[^']*'")
+_RE_GO_BATCH = re.compile(r"(?im)^[ \t]*GO(?:[ \t]+--[^\n]*)?[ \t]*$")
+_RE_SQL_TOKEN = re.compile(
+    r"""
+    \[[^\]]+\]
+    |`[^`]+`
+    |"[^"]+"
+    |@@?[A-Za-z_][\w$]*
+    |##?[A-Za-z_][\w$]*
+    |[A-Za-z_][\w$]*
+    |[,().]
+    """,
+    re.VERBOSE,
+)
+_RE_DOT_CONTEXT = re.compile(
+    r'((?:@@?[A-Za-z_][\w$]*|##?[A-Za-z_][\w$]*|[A-Za-z_][\w$]*|\[[^\]]+\]|`[^`]+`|"[^"]+")'
+    r'(?:\.(?:@@?[A-Za-z_][\w$]*|##?[A-Za-z_][\w$]*|[A-Za-z_][\w$]*|\[[^\]]+\]|`[^`]+`|"[^"]+"))*)'
+    r'\.\s*(?:[@#A-Za-z_][\w$]*)?$',
+    re.IGNORECASE,
+)
+
+CURSOR_PLACEHOLDER = "__datapyn_cursor__"
+DEFAULT_SCHEMA_PRIORITY = ("dbo", "public")
 
 # Regex for alias detection in FROM/JOIN clauses
 # Matches: table_name AS alias, table_name alias (not a keyword)
@@ -280,6 +307,23 @@ class SqlContextParser:
         return result
 
 
+@dataclass
+class StatementContext:
+    """Current SQL statement slices around the cursor."""
+
+    previous_sql: str
+    statement_before_cursor: str
+    statement_after_cursor: str
+
+    @property
+    def current_statement(self) -> str:
+        return f"{self.statement_before_cursor}{self.statement_after_cursor}"
+
+    @property
+    def cursor_offset(self) -> int:
+        return len(self.statement_before_cursor)
+
+
 class SqlAutoCompleteService:
     """
     Context-aware SQL autocomplete service.
@@ -293,58 +337,62 @@ class SqlAutoCompleteService:
     def __init__(self):
         self._schema: dict = {}
         self._keywords_lower = {kw.lower() for kw in SQL_KEYWORDS}
-        self._context_parser = SqlContextParser()
+        self._schema_db_type = ""
+        self._table_entries: List[dict[str, Any]] = []
+        self._table_lookup: dict[str, List[dict[str, Any]]] = {}
 
     def set_schema(self, schema: Optional[dict]) -> None:
-        """Update the database schema used for completions.
-
-        Args:
-            schema: dict with {tables: [...], columns: {...}, database: str, databases: [str]}
-        """
+        """Update the database schema used for completions."""
         self._schema = schema if schema else {}
+        self._schema_db_type = str(self._schema.get("db_type", "") or "").lower()
+        self._rebuild_schema_index()
 
     def get_schema(self) -> dict:
         """Return current schema dict."""
         return self._schema
 
-    def get_completions(
-        self, text: str, cursor_line: int, cursor_col: int
-    ) -> List[Tuple[str, str, str]]:
-        """
-        Get contextual completions at cursor position.
-
-        Args:
-            text: Full SQL text of the editor.
-            cursor_line: 0-based line number of cursor.
-            cursor_col: 0-based column of cursor.
-
-        Returns:
-            List of (name, category, detail) tuples.
-        """
+    def get_completions(self, text: str, cursor_line: int, cursor_col: int) -> List[Tuple[str, str, str]]:
+        """Get contextual completions at the cursor position."""
         text_before = self._text_before_cursor(text, cursor_line, cursor_col)
         if not text_before.strip():
             return self._keyword_completions()
 
-        # Strip comments and string literals for cleaner parsing
-        cleaned = self._strip_noise(text_before)
-
-        # Detect context
-        context, context_arg = self._detect_context(cleaned)
-
-        return self._build_completions(context, context_arg, text)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+        statement_context = self._statement_context(text, cursor_line, cursor_col)
+        cleaned_before = self._strip_noise(statement_context.statement_before_cursor)
+        context, context_arg = self._detect_context(cleaned_before)
+        analysis = self._analyze_context(statement_context, context)
+        return self._build_completions(context, context_arg, analysis)
 
     @staticmethod
     def _text_before_cursor(text: str, line: int, col: int) -> str:
         """Extract text from start up to cursor position."""
         lines = text.split("\n")
+        if not lines:
+            return ""
+
+        line = max(0, line)
+        col = max(0, col)
         if line >= len(lines):
             return text
+
         result_lines = lines[:line]
         result_lines.append(lines[line][:col])
+        return "\n".join(result_lines)
+
+    @staticmethod
+    def _text_after_cursor(text: str, line: int, col: int) -> str:
+        """Extract text from cursor position to the end."""
+        lines = text.split("\n")
+        if not lines:
+            return ""
+
+        line = max(0, line)
+        col = max(0, col)
+        if line >= len(lines):
+            return ""
+
+        result_lines = [lines[line][col:]]
+        result_lines.extend(lines[line + 1 :])
         return "\n".join(result_lines)
 
     @staticmethod
@@ -355,107 +403,1095 @@ class SqlAutoCompleteService:
         text = _RE_STRING_LITERAL.sub("''", text)
         return text
 
+    @staticmethod
+    def _normalize_batches(text: str) -> str:
+        """Treat T-SQL GO batch separators like semicolons."""
+        return _RE_GO_BATCH.sub(";", text)
+
+    def _statement_context(self, text: str, line: int, col: int) -> StatementContext:
+        """Get the current statement and all finished statements before it."""
+        before_cursor = self._normalize_batches(self._text_before_cursor(text, line, col))
+        after_cursor = self._normalize_batches(self._text_after_cursor(text, line, col))
+
+        before_parts = before_cursor.split(";")
+        statement_before = before_parts[-1]
+        previous_sql = ";".join(before_parts[:-1]).strip()
+        statement_after = after_cursor.split(";", 1)[0]
+
+        return StatementContext(
+            previous_sql=previous_sql,
+            statement_before_cursor=statement_before,
+            statement_after_cursor=statement_after,
+        )
+
+    @staticmethod
+    def _strip_identifier_quotes(value: Any) -> str:
+        text = str(value or "").strip()
+        for left, right in (("[", "]"), ("`", "`"), ('"', '"')):
+            while text.startswith(left) and text.endswith(right) and len(text) >= 2:
+                text = text[1:-1].strip()
+        return text
+
+    @classmethod
+    def _split_identifier_parts(cls, value: Any) -> List[str]:
+        text = str(value or "").strip()
+        if not text:
+            return []
+
+        parts: List[str] = []
+        current: List[str] = []
+        quote_char = ""
+        bracket_depth = 0
+
+        for char in text:
+            if quote_char:
+                current.append(char)
+                if char == quote_char:
+                    quote_char = ""
+                continue
+
+            if char in {'"', "`"}:
+                quote_char = char
+                current.append(char)
+                continue
+
+            if char == "[":
+                bracket_depth += 1
+                current.append(char)
+                continue
+
+            if char == "]" and bracket_depth:
+                bracket_depth -= 1
+                current.append(char)
+                continue
+
+            if char == "." and bracket_depth == 0:
+                part = cls._strip_identifier_quotes("".join(current))
+                if part:
+                    parts.append(part)
+                current = []
+                continue
+
+            current.append(char)
+
+        tail = cls._strip_identifier_quotes("".join(current))
+        if tail:
+            parts.append(tail)
+        return parts
+
+    @classmethod
+    def _normalize_name(cls, value: Any) -> str:
+        return cls._strip_identifier_quotes(value).lower()
+
+    @classmethod
+    def _normalize_relation_key(cls, value: Any) -> str:
+        parts = cls._split_identifier_parts(value)
+        if not parts:
+            return cls._normalize_name(value)
+        return ".".join(cls._normalize_name(part) for part in parts if part)
+
+    def _clone_columns(self, columns: Any) -> List[dict[str, Any]]:
+        cloned: List[dict[str, Any]] = []
+        for column in columns or []:
+            if isinstance(column, dict):
+                cloned.append(dict(column))
+            else:
+                cloned.append({"name": str(column), "type": ""})
+        return cloned
+
+    def _make_relation(
+        self,
+        display_name: str,
+        columns: List[dict[str, Any]],
+        source_type: str,
+        detail: str,
+        preferred_qualifier: str = "",
+        lookup_names: Optional[Set[str]] = None,
+    ) -> dict[str, Any]:
+        names = {self._normalize_relation_key(display_name)}
+        if preferred_qualifier:
+            names.add(self._normalize_relation_key(preferred_qualifier))
+        if lookup_names:
+            names.update({name for name in lookup_names if name})
+        return {
+            "display_name": display_name,
+            "columns": self._clone_columns(columns),
+            "source_type": source_type,
+            "detail": detail,
+            "preferred_qualifier": preferred_qualifier or display_name,
+            "lookup_names": names,
+        }
+
+    def _clone_relation(
+        self,
+        relation: dict[str, Any],
+        *,
+        preferred_qualifier: str = "",
+        extra_lookup_names: Optional[Set[str]] = None,
+    ) -> dict[str, Any]:
+        cloned = self._make_relation(
+            relation["display_name"],
+            relation.get("columns", []),
+            relation.get("source_type", ""),
+            relation.get("detail", ""),
+            preferred_qualifier=preferred_qualifier or relation.get("preferred_qualifier", ""),
+            lookup_names=set(relation.get("lookup_names", set())),
+        )
+        if extra_lookup_names:
+            cloned["lookup_names"].update(extra_lookup_names)
+        return cloned
+
+    def _rebuild_schema_index(self) -> None:
+        self._table_entries = []
+        self._table_lookup = {}
+
+        columns_map = self._schema.get("columns", {}) or {}
+        registered_keys: Set[str] = set()
+
+        for table in self._schema.get("tables", []) or []:
+            if isinstance(table, dict):
+                table_name = str(table.get("name", "") or "")
+                schema_name = str(table.get("schema", "") or "")
+                table_key = str(table.get("key") or (f"{schema_name}.{table_name}" if schema_name else table_name))
+                table_type = str(table.get("type", "TABLE") or "TABLE")
+            else:
+                table_name = str(table)
+                schema_name = ""
+                table_key = table_name
+                table_type = "TABLE"
+
+            if not table_name:
+                continue
+
+            entry_columns = self._clone_columns(columns_map.get(table_key) or columns_map.get(table_name) or [])
+            self._register_table_entry(
+                name=table_name,
+                schema_name=schema_name,
+                table_key=table_key,
+                table_type=table_type,
+                columns=entry_columns,
+            )
+            registered_keys.add(self._normalize_relation_key(table_key))
+
+        for table_key, cols in columns_map.items():
+            normalized_key = self._normalize_relation_key(table_key)
+            if normalized_key in registered_keys:
+                continue
+            parts = self._split_identifier_parts(table_key)
+            table_name = parts[-1] if parts else str(table_key)
+            schema_name = parts[-2] if len(parts) >= 2 else ""
+            self._register_table_entry(
+                name=table_name,
+                schema_name=schema_name,
+                table_key=str(table_key),
+                table_type="TABLE",
+                columns=self._clone_columns(cols),
+            )
+
+    def _register_table_entry(
+        self,
+        *,
+        name: str,
+        schema_name: str,
+        table_key: str,
+        table_type: str,
+        columns: List[dict[str, Any]],
+    ) -> None:
+        display_detail = f"{schema_name}.{name}" if schema_name else name
+        parts = self._split_identifier_parts(table_key)
+        lookup_names = {self._normalize_relation_key(name), self._normalize_relation_key(table_key)}
+        if schema_name:
+            lookup_names.add(self._normalize_relation_key(f"{schema_name}.{name}"))
+        for index in range(len(parts)):
+            suffix = ".".join(parts[index:])
+            lookup_names.add(self._normalize_relation_key(suffix))
+
+        entry = {
+            "name": name,
+            "schema": schema_name,
+            "key": table_key,
+            "type": table_type,
+            "detail": display_detail,
+            "columns": self._clone_columns(columns),
+            "lookup_names": lookup_names,
+        }
+        self._table_entries.append(entry)
+        for lookup_name in lookup_names:
+            self._table_lookup.setdefault(lookup_name, []).append(entry)
+
+    def _preferred_dialects(self) -> List[Optional[str]]:
+        db_type = self._schema_db_type
+        primary = {
+            "sqlserver": "tsql",
+            "mssql": "tsql",
+            "mysql": "mysql",
+            "mariadb": "mysql",
+            "postgresql": "postgres",
+            "databricks": "databricks",
+        }.get(db_type)
+
+        dialects: List[Optional[str]] = []
+        for dialect in (primary, None, "tsql", "mysql", "postgres", "spark"):
+            if dialect not in dialects:
+                dialects.append(dialect)
+        return dialects
+
+    def _parse_statement(self, sql: str):
+        if not HAS_SQLGLOT or not sql.strip():
+            return None
+
+        for dialect in self._preferred_dialects():
+            try:
+                parsed = sqlglot.parse_one(sql, dialect=dialect, error_level="ignore")
+                if parsed is not None:
+                    return parsed
+            except Exception:
+                continue
+        return None
+
+    def _split_sql_statements(self, sql: str) -> List[str]:
+        normalized = self._normalize_batches(sql)
+        return [statement.strip() for statement in normalized.split(";") if statement.strip()]
+
+    def _tokenize_with_depth(self, text: str) -> List[Tuple[str, int]]:
+        tokens: List[Tuple[str, int]] = []
+        depth = 0
+        for match in _RE_SQL_TOKEN.finditer(text):
+            token = match.group(0)
+            if token == "(":
+                tokens.append((token, depth))
+                depth += 1
+                continue
+            if token == ")":
+                depth = max(depth - 1, 0)
+                tokens.append((token, depth))
+                continue
+            tokens.append((token, depth))
+        return tokens
+
     def _detect_context(self, cleaned_text: str) -> Tuple[str, Optional[str]]:
-        """
-        Determine what type of completions to show based on text before cursor.
-
-        Returns:
-            (context_type, context_arg) where context_arg is table/alias name for DOT context.
-        """
+        """Determine what type of completions to show based on text before cursor."""
         stripped = cleaned_text.rstrip()
+        if not stripped:
+            return CTX_DEFAULT, None
 
-        # Check for dot context: "something." at the end
-        dot_match = re.search(r"(\w+)\.\s*(\w*)$", stripped)
-        if dot_match and stripped.rstrip().endswith("."):
-            prefix = dot_match.group(1)
-            return CTX_DOT, prefix
+        dot_match = _RE_DOT_CONTEXT.search(stripped)
+        if dot_match:
+            return CTX_DOT, dot_match.group(1)
 
-        # Also handle partial word after dot: "t.col_na"
-        dot_partial = re.search(r"(\w+)\.(\w+)$", stripped)
-        if dot_partial:
-            prefix = dot_partial.group(1)
-            return CTX_DOT, prefix
+        variable_tail = re.search(r"@\w*$", stripped)
+        if variable_tail:
+            parent_context, _ = self._detect_context(stripped[: variable_tail.start()])
+            return (CTX_COLUMN if parent_context == CTX_DEFAULT else parent_context), None
 
-        # Tokenize: find the last significant keyword/phrase
-        # Normalize whitespace
-        normalized = re.sub(r"\s+", " ", stripped).upper().strip()
+        normalized = re.sub(r"\s+", " ", stripped).upper()
+        if normalized.endswith(("ORDER BY", "GROUP BY", "PARTITION BY")):
+            return CTX_COLUMN, None
+        if normalized.endswith(
+            (
+                "INNER JOIN",
+                "LEFT JOIN",
+                "RIGHT JOIN",
+                "FULL JOIN",
+                "CROSS JOIN",
+                "LEFT OUTER JOIN",
+                "RIGHT OUTER JOIN",
+                "FULL OUTER JOIN",
+            )
+        ):
+            return CTX_TABLE, None
 
-        # Check multi-word keywords first (ORDER BY, GROUP BY, etc.)
-        for multi_kw in ("ORDER BY", "GROUP BY", "PARTITION BY",
-                         "INNER JOIN", "LEFT JOIN", "RIGHT JOIN",
-                         "FULL JOIN", "CROSS JOIN",
-                         "LEFT OUTER JOIN", "RIGHT OUTER JOIN",
-                         "FULL OUTER JOIN"):
-            pattern = re.escape(multi_kw) + r"(?:\s+\w+\s*,)*\s*(?:\w+\.?\w*\s*,\s*)*\s*\w*$"
-            if re.search(pattern, normalized):
-                if multi_kw in _TABLE_CONTEXT_KW:
-                    return CTX_TABLE, None
-                if multi_kw in _COLUMN_CONTEXT_KW:
-                    return CTX_COLUMN, None
-
-        # Check single keywords - find the last relevant keyword
-        # Split by non-identifier chars, walk backwards
-        tokens = re.findall(r"\w+", normalized)
+        tokens = self._tokenize_with_depth(stripped)
         if not tokens:
             return CTX_DEFAULT, None
 
-        # Walk backwards to find last context-setting keyword
-        for i in range(len(tokens) - 1, -1, -1):
-            tk = tokens[i]
+        current_depth = tokens[-1][1]
+        words = [
+            token.upper()
+            for token, depth in tokens
+            if depth == current_depth and token not in {".", "(", ")", ","} and token.strip()
+        ]
 
-            # USE -> database context
-            if tk == "USE":
+        if not words:
+            return CTX_DEFAULT, None
+
+        for index in range(len(words) - 1, -1, -1):
+            token = words[index]
+            if token == "USE":
                 return CTX_DATABASE, None
 
-            # Check if this token + next form a multi-word kw
-            if i < len(tokens) - 1:
-                pair = tk + " " + tokens[i + 1]
+            if token in {"EXEC", "EXECUTE", "CALL"}:
+                if index == len(words) - 1:
+                    return CTX_ROUTINE, None
+
+            if index >= 2:
+                triple = f"{words[index - 2]} {words[index - 1]} {token}"
+                if triple in _TABLE_CONTEXT_KW:
+                    return CTX_TABLE, None
+                if triple in _COLUMN_CONTEXT_KW:
+                    return CTX_COLUMN, None
+
+            if index >= 1:
+                pair = f"{words[index - 1]} {token}"
                 if pair in _TABLE_CONTEXT_KW:
                     return CTX_TABLE, None
                 if pair in _COLUMN_CONTEXT_KW:
                     return CTX_COLUMN, None
 
-            if tk in {"FROM", "JOIN", "INTO", "UPDATE", "TABLE", "TRUNCATE"}:
+            if token in _TABLE_CONTEXT_KW:
                 return CTX_TABLE, None
-
-            if tk in {"SELECT", "WHERE", "ON", "SET", "HAVING", "AND", "OR"}:
+            if token in _COLUMN_CONTEXT_KW or token in {"VALUES", "WHEN"}:
                 return CTX_COLUMN, None
 
-            # After comma in SELECT clause -> column context
-            # After comma in FROM clause -> table context
-            if tk == ",":
-                # Need to find what clause we're in
-                continue
-
-            # If we hit a table-context keyword before, these are values after
-            # e.g., SELECT a, b, c FROM  -> after FROM
-            # If we already passed the last keyword, stop
-            if tk in self._keywords_lower or tk in {k.upper() for k in self._keywords_lower}:
-                # It's a keyword but not context-setting, continue looking
-                continue
-
-        # Default: keywords + tables
         return CTX_DEFAULT, None
 
-    def _build_completions(
-        self, context: str, context_arg: Optional[str], full_text: str
-    ) -> List[Tuple[str, str, str]]:
-        """Build completion list based on detected context."""
+    def _analyze_context(self, statement_context: StatementContext, context: str) -> dict[str, Any]:
+        script_state = self._collect_script_state(statement_context.previous_sql)
+        scope_sources: List[dict[str, Any]] = []
+        scope_lookup: dict[str, dict[str, Any]] = {}
+        cte_sources: List[dict[str, Any]] = []
+        cte_lookup: dict[str, dict[str, Any]] = {}
+
+        current_statement = statement_context.current_statement
+        if current_statement.strip():
+            parsed_analysis = self._analyze_current_statement(
+                current_statement,
+                statement_context.cursor_offset,
+                context,
+                script_state,
+            )
+            scope_sources = parsed_analysis["scope_sources"]
+            scope_lookup = parsed_analysis["scope_lookup"]
+            cte_sources = parsed_analysis["cte_sources"]
+            cte_lookup = parsed_analysis["cte_lookup"]
+
+        return {
+            "script_state": script_state,
+            "scope_sources": scope_sources,
+            "scope_lookup": scope_lookup,
+            "cte_sources": cte_sources,
+            "cte_lookup": cte_lookup,
+        }
+
+    def _inject_cursor_placeholder(self, statement_sql: str, cursor_offset: int, context: str) -> str:
+        before = statement_sql[:cursor_offset]
+        after = statement_sql[cursor_offset:]
 
         if context == CTX_DOT:
-            return self._dot_completions(context_arg, full_text)
+            dot_match = _RE_DOT_CONTEXT.search(before.rstrip())
+            if dot_match:
+                start = dot_match.start(0)
+                prefix = dot_match.group(1)
+                remainder = re.sub(r"^[@#A-Za-z_][\w$]*", "", after, count=1)
+                return f"{statement_sql[:start]}{prefix}.{CURSOR_PLACEHOLDER}{remainder}"
 
+        token_start = cursor_offset
+        token_end = cursor_offset
+
+        left_match = re.search(r"[@#A-Za-z_][\w$]*$", before)
+        if left_match:
+            token_start = left_match.start()
+
+        right_match = re.match(r"^[@#A-Za-z_][\w$]*", after)
+        if right_match:
+            token_end = cursor_offset + right_match.end()
+
+        placeholder = CURSOR_PLACEHOLDER
+        if before[token_start:cursor_offset].startswith("@") or after[: max(token_end - cursor_offset, 0)].startswith("@"):
+            placeholder = f"@{CURSOR_PLACEHOLDER}"
+
+        return f"{statement_sql[:token_start]}{placeholder}{statement_sql[token_end:]}"
+
+    def _scope_has_cursor(self, scope) -> bool:
+        for column in getattr(scope, "columns", []):
+            if self._normalize_name(column.name) == CURSOR_PLACEHOLDER:
+                return True
+            if self._normalize_name(getattr(column, "table", "")) == CURSOR_PLACEHOLDER:
+                return True
+
+        for table in getattr(scope, "tables", []):
+            if self._normalize_name(getattr(table, "name", "")) == CURSOR_PLACEHOLDER:
+                return True
+            if self._normalize_name(getattr(table, "db", "")) == CURSOR_PLACEHOLDER:
+                return True
+
+        return False
+
+    def _analyze_current_statement(
+        self,
+        statement_sql: str,
+        cursor_offset: int,
+        context: str,
+        script_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        parsed = self._parse_statement(self._inject_cursor_placeholder(statement_sql, cursor_offset, context))
+        if parsed is None or not HAS_SQLGLOT:
+            fallback_sources, fallback_lookup = self._fallback_scope_relations(statement_sql, script_state)
+            return {
+                "scope_sources": fallback_sources,
+                "scope_lookup": fallback_lookup,
+                "cte_sources": [],
+                "cte_lookup": {},
+            }
+
+        scopes = list(traverse_scope(parsed))
+        output_cache: dict[int, List[dict[str, Any]]] = {}
+        cte_sources, cte_lookup = self._collect_cte_sources(scopes, script_state, output_cache)
+
+        target_scope = None
+        for scope in scopes:
+            if self._scope_has_cursor(scope):
+                target_scope = scope
+                break
+        if target_scope is None and scopes:
+            target_scope = scopes[-1]
+
+        scope_sources: List[dict[str, Any]] = []
+        scope_lookup: dict[str, dict[str, Any]] = {}
+        if target_scope is not None:
+            scope_sources, scope_lookup = self._resolve_scope_sources(target_scope, script_state, output_cache)
+
+        update_relation = self._resolve_update_target(parsed, script_state)
+        if update_relation is not None:
+            self._append_relation(scope_sources, scope_lookup, update_relation)
+
+        return {
+            "scope_sources": scope_sources,
+            "scope_lookup": scope_lookup,
+            "cte_sources": cte_sources,
+            "cte_lookup": cte_lookup,
+        }
+
+    def _collect_cte_sources(
+        self,
+        scopes,
+        script_state: dict[str, Any],
+        output_cache: dict[int, List[dict[str, Any]]],
+    ) -> Tuple[List[dict[str, Any]], dict[str, dict[str, Any]]]:
+        relations: List[dict[str, Any]] = []
+        lookup: dict[str, dict[str, Any]] = {}
+        seen: Set[str] = set()
+
+        for scope in scopes:
+            cte_alias_columns = {
+                self._normalize_name(cte.alias): list(cte.alias_column_names or [])
+                for cte in getattr(scope, "ctes", [])
+                if getattr(cte, "alias", "")
+            }
+            for cte in getattr(scope, "ctes", []):
+                cte_name = str(getattr(cte, "alias", "") or "")
+                normalized_name = self._normalize_name(cte_name)
+                if not cte_name or normalized_name in seen:
+                    continue
+                source_scope = scope.sources.get(cte_name) or scope.sources.get(normalized_name)
+                if not hasattr(source_scope, "expression"):
+                    continue
+                columns = self._scope_output_columns(source_scope, script_state, output_cache)
+                alias_columns = cte_alias_columns.get(normalized_name) or []
+                if alias_columns:
+                    columns = self._override_column_names(columns, alias_columns)
+                relation = self._make_relation(
+                    cte_name,
+                    columns,
+                    "cte",
+                    f"CTE - {cte_name}",
+                    preferred_qualifier=cte_name,
+                )
+                self._append_relation(relations, lookup, relation)
+                seen.add(normalized_name)
+
+        return relations, lookup
+
+    def _resolve_scope_sources(
+        self,
+        scope,
+        script_state: dict[str, Any],
+        output_cache: dict[int, List[dict[str, Any]]],
+    ) -> Tuple[List[dict[str, Any]], dict[str, dict[str, Any]]]:
+        relations: List[dict[str, Any]] = []
+        lookup: dict[str, dict[str, Any]] = {}
+        cte_names = {
+            self._normalize_name(cte.alias)
+            for cte in getattr(scope, "ctes", [])
+            if getattr(cte, "alias", "")
+        }
+        cte_alias_columns = {
+            self._normalize_name(cte.alias): list(cte.alias_column_names or [])
+            for cte in getattr(scope, "ctes", [])
+            if getattr(cte, "alias", "")
+        }
+
+        for alias, selected in getattr(scope, "selected_sources", {}).items():
+            source_expression, source_object = selected
+            relation = self._relation_from_source(
+                alias,
+                source_expression,
+                source_object,
+                script_state,
+                output_cache,
+                cte_names,
+                cte_alias_columns,
+            )
+            if relation is None:
+                continue
+            self._append_relation(relations, lookup, relation)
+
+        return relations, lookup
+
+    def _append_relation(
+        self,
+        relations: List[dict[str, Any]],
+        lookup: dict[str, dict[str, Any]],
+        relation: dict[str, Any],
+    ) -> None:
+        relation_key = (
+            relation.get("display_name", "").lower(),
+            relation.get("preferred_qualifier", "").lower(),
+            relation.get("source_type", ""),
+        )
+        if not any(
+            (
+                existing.get("display_name", "").lower(),
+                existing.get("preferred_qualifier", "").lower(),
+                existing.get("source_type", ""),
+            )
+            == relation_key
+            for existing in relations
+        ):
+            relations.append(relation)
+
+        for lookup_name in relation.get("lookup_names", set()):
+            lookup[lookup_name] = relation
+
+    def _relation_from_source(
+        self,
+        alias: str,
+        source_expression,
+        source_object,
+        script_state: dict[str, Any],
+        output_cache: dict[int, List[dict[str, Any]]],
+        cte_names: Set[str],
+        cte_alias_columns: dict[str, List[str]],
+    ) -> Optional[dict[str, Any]]:
+        alias_name = str(alias or "")
+
+        if isinstance(source_object, exp.Table):
+            return self._relation_from_table_expression(source_object, alias_name, script_state)
+
+        if hasattr(source_object, "expression"):
+            source_name = ""
+            if isinstance(source_expression, exp.Table):
+                source_name = self._table_identifier_from_expression(source_expression) or source_expression.name
+
+            columns = self._scope_output_columns(source_object, script_state, output_cache)
+            normalized_source_name = self._normalize_relation_key(source_name)
+            if normalized_source_name in cte_alias_columns and cte_alias_columns[normalized_source_name]:
+                columns = self._override_column_names(columns, cte_alias_columns[normalized_source_name])
+
+            source_type = "cte" if normalized_source_name in cte_names else "subquery"
+            detail_label = "CTE" if source_type == "cte" else "Subquery"
+            display_name = source_name or alias_name or detail_label.lower()
+
+            lookup_names = {self._normalize_relation_key(alias_name), self._normalize_relation_key(display_name)}
+            if isinstance(source_expression, exp.Table) and source_expression.name:
+                lookup_names.add(self._normalize_relation_key(source_expression.name))
+                if source_expression.db:
+                    lookup_names.add(self._normalize_relation_key(f"{source_expression.db}.{source_expression.name}"))
+
+            return self._make_relation(
+                display_name,
+                columns,
+                source_type,
+                f"{detail_label} - {display_name}",
+                preferred_qualifier=alias_name or display_name,
+                lookup_names=lookup_names,
+            )
+
+        return None
+
+    def _resolve_update_target(self, parsed, script_state: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if not isinstance(parsed, exp.Update):
+            return None
+        table_expression = parsed.this if isinstance(parsed.this, exp.Table) else None
+        if table_expression is None:
+            return None
+        return self._relation_from_table_expression(table_expression, "", script_state)
+
+    def _scope_output_columns(
+        self,
+        scope,
+        script_state: dict[str, Any],
+        output_cache: dict[int, List[dict[str, Any]]],
+    ) -> List[dict[str, Any]]:
+        scope_id = id(scope)
+        if scope_id in output_cache:
+            return self._clone_columns(output_cache[scope_id])
+
+        output_cache[scope_id] = []
+        source_relations, _ = self._resolve_scope_sources(scope, script_state, output_cache)
+
+        columns: List[dict[str, Any]] = []
+        for expression in getattr(scope.expression, "expressions", []) or []:
+            columns.extend(self._expression_output_columns(expression, source_relations))
+
+        output_cache[scope_id] = self._dedupe_columns(columns)
+        return self._clone_columns(output_cache[scope_id])
+
+    def _expression_output_columns(
+        self,
+        expression,
+        source_relations: List[dict[str, Any]],
+    ) -> List[dict[str, Any]]:
+        if isinstance(expression, exp.Alias):
+            alias_name = str(expression.alias or "").strip()
+            if alias_name and self._normalize_name(alias_name) != CURSOR_PLACEHOLDER:
+                inferred_type = self._expression_type_hint(expression.this, source_relations)
+                return [{"name": alias_name, "type": inferred_type, "display_type": inferred_type}]
+            return []
+
+        if isinstance(expression, exp.Star):
+            return self._expand_star_columns("", source_relations)
+
+        if isinstance(expression, exp.Column):
+            if self._normalize_name(expression.name) == CURSOR_PLACEHOLDER:
+                return []
+            if expression.name == "*":
+                return self._expand_star_columns(getattr(expression, "table", ""), source_relations)
+            inferred_type = self._expression_type_hint(expression, source_relations)
+            return [{"name": expression.name, "type": inferred_type, "display_type": inferred_type}]
+
+        return []
+
+    def _expand_star_columns(self, qualifier: str, source_relations: List[dict[str, Any]]) -> List[dict[str, Any]]:
+        normalized_qualifier = self._normalize_relation_key(qualifier)
+        columns: List[dict[str, Any]] = []
+        for relation in source_relations:
+            if normalized_qualifier and normalized_qualifier not in relation.get("lookup_names", set()):
+                continue
+            columns.extend(self._clone_columns(relation.get("columns", [])))
+        return columns
+
+    def _expression_type_hint(self, expression, source_relations: List[dict[str, Any]]) -> str:
+        if isinstance(expression, exp.Column):
+            target_column = self._find_column_definition(
+                source_relations,
+                getattr(expression, "table", ""),
+                expression.name,
+            )
+            if target_column is not None:
+                return str(target_column.get("display_type") or target_column.get("type") or "")
+        return ""
+
+    def _find_column_definition(
+        self,
+        relations: List[dict[str, Any]],
+        qualifier: str,
+        column_name: str,
+    ) -> Optional[dict[str, Any]]:
+        normalized_column = self._normalize_name(column_name)
+        normalized_qualifier = self._normalize_relation_key(qualifier)
+
+        for relation in relations:
+            if normalized_qualifier and normalized_qualifier not in relation.get("lookup_names", set()):
+                continue
+            for column in relation.get("columns", []):
+                if self._normalize_name(column.get("name", "")) == normalized_column:
+                    return column
+        return None
+
+    def _dedupe_columns(self, columns: List[dict[str, Any]]) -> List[dict[str, Any]]:
+        seen: Set[str] = set()
+        deduped: List[dict[str, Any]] = []
+        for column in columns:
+            normalized_name = self._normalize_name(column.get("name", ""))
+            if not normalized_name or normalized_name in seen:
+                continue
+            seen.add(normalized_name)
+            deduped.append(column)
+        return deduped
+
+    def _override_column_names(self, columns: List[dict[str, Any]], alias_names: List[str]) -> List[dict[str, Any]]:
+        renamed: List[dict[str, Any]] = []
+        for index, alias_name in enumerate(alias_names):
+            base = dict(columns[index]) if index < len(columns) else {"type": "", "display_type": ""}
+            base["name"] = alias_name
+            renamed.append(base)
+        return self._dedupe_columns(renamed)
+
+    def _collect_script_state(self, previous_sql: str) -> dict[str, Any]:
+        state = {
+            "relation_sources": [],
+            "relation_lookup": {},
+            "variables": {},
+        }
+        if not previous_sql.strip():
+            return state
+
+        for statement in self._split_sql_statements(previous_sql):
+            parsed = self._parse_statement(statement)
+            if parsed is None:
+                continue
+
+            if isinstance(parsed, exp.Create):
+                self._register_create_relation(parsed, state)
+                continue
+
+            if isinstance(parsed, exp.Declare):
+                self._register_declared_symbols(parsed, state)
+                continue
+
+            if isinstance(parsed, exp.Select) and getattr(parsed, "args", {}).get("into") is not None:
+                self._register_select_into_relation(parsed, state)
+
+        return state
+
+    def _register_state_relation(self, state: dict[str, Any], relation: dict[str, Any]) -> None:
+        state["relation_sources"] = [
+            existing
+            for existing in state["relation_sources"]
+            if existing.get("display_name", "").lower() != relation.get("display_name", "").lower()
+        ]
+        state["relation_sources"].append(relation)
+
+        for lookup_name, existing in list(state["relation_lookup"].items()):
+            if existing.get("display_name", "").lower() == relation.get("display_name", "").lower():
+                del state["relation_lookup"][lookup_name]
+        for lookup_name in relation.get("lookup_names", set()):
+            state["relation_lookup"][lookup_name] = relation
+
+    def _register_create_relation(self, parsed, state: dict[str, Any]) -> None:
+        schema_expression = parsed.this if isinstance(parsed.this, exp.Schema) else None
+        table_expression = None
+        if isinstance(schema_expression, exp.Schema) and isinstance(schema_expression.this, exp.Table):
+            table_expression = schema_expression.this
+        elif isinstance(parsed.this, exp.Table):
+            table_expression = parsed.this
+
+        if table_expression is None:
+            return
+
+        is_temporary = self._table_is_temporary(table_expression)
+        properties = getattr(parsed, "args", {}).get("properties")
+        if not is_temporary and properties is not None:
+            for prop in getattr(properties, "expressions", []) or []:
+                if isinstance(prop, exp.TemporaryProperty):
+                    is_temporary = True
+                    break
+        if not is_temporary:
+            return
+
+        relation_name = self._table_identifier_from_expression(table_expression)
+        if not relation_name:
+            return
+
+        columns: List[dict[str, Any]] = []
+        if isinstance(schema_expression, exp.Schema):
+            columns = self._column_defs_to_columns(getattr(schema_expression, "expressions", []) or [])
+
+        create_expression = getattr(parsed, "args", {}).get("expression")
+        if create_expression is not None and not columns and isinstance(create_expression, exp.Select):
+            columns = self._select_output_columns(create_expression, state)
+
+        relation = self._make_relation(
+            relation_name,
+            columns,
+            "temporary",
+            f"Temporary table - {relation_name}",
+            preferred_qualifier=relation_name,
+            lookup_names=self._relation_lookup_names(relation_name),
+        )
+        self._register_state_relation(state, relation)
+
+    def _register_declared_symbols(self, parsed, state: dict[str, Any]) -> None:
+        for item in getattr(parsed, "expressions", []) or []:
+            variable_names = []
+            for parameter in getattr(item, "this", []) or []:
+                variable_name = self._parameter_identifier(parameter)
+                if variable_name:
+                    variable_names.append(variable_name)
+            if not variable_names:
+                continue
+
+            kind = getattr(item, "kind", None) or getattr(item, "args", {}).get("kind")
+            if isinstance(kind, exp.Schema):
+                columns = self._column_defs_to_columns(getattr(kind, "expressions", []) or [])
+                relation_name = variable_names[0]
+                relation = self._make_relation(
+                    relation_name,
+                    columns,
+                    "table_variable",
+                    f"Table variable - {relation_name}",
+                    preferred_qualifier=relation_name,
+                    lookup_names=self._relation_lookup_names(relation_name),
+                )
+                self._register_state_relation(state, relation)
+                continue
+
+            type_detail = kind.sql() if kind is not None else ""
+            for variable_name in variable_names:
+                state["variables"][self._normalize_name(variable_name)] = type_detail
+
+    def _register_select_into_relation(self, parsed, state: dict[str, Any]) -> None:
+        into_expression = getattr(parsed, "args", {}).get("into")
+        table_expression = into_expression.this if into_expression is not None else None
+        if not isinstance(table_expression, exp.Table):
+            return
+        if not self._table_is_temporary(table_expression):
+            return
+
+        relation_name = self._table_identifier_from_expression(table_expression)
+        if not relation_name:
+            return
+
+        columns = self._select_output_columns(parsed, state)
+        relation = self._make_relation(
+            relation_name,
+            columns,
+            "temporary",
+            f"Temporary table - {relation_name}",
+            preferred_qualifier=relation_name,
+            lookup_names=self._relation_lookup_names(relation_name),
+        )
+        self._register_state_relation(state, relation)
+
+    def _column_defs_to_columns(self, column_defs) -> List[dict[str, Any]]:
+        columns: List[dict[str, Any]] = []
+        for column_def in column_defs:
+            if not isinstance(column_def, exp.ColumnDef):
+                continue
+            kind = getattr(column_def, "kind", None)
+            display_type = kind.sql() if kind is not None else ""
+            columns.append(
+                {
+                    "name": column_def.name,
+                    "type": display_type,
+                    "display_type": display_type,
+                }
+            )
+        return columns
+
+    def _select_output_columns(self, select_expression, state: dict[str, Any]) -> List[dict[str, Any]]:
+        if not HAS_SQLGLOT:
+            return []
+
+        output_cache: dict[int, List[dict[str, Any]]] = {}
+        scopes = list(traverse_scope(select_expression))
+        if not scopes:
+            return []
+        return self._scope_output_columns(scopes[-1], state, output_cache)
+
+    def _parameter_identifier(self, parameter) -> str:
+        if isinstance(parameter, exp.Parameter) and getattr(parameter, "this", None) is not None:
+            inner = parameter.this
+            if hasattr(inner, "name") and inner.name:
+                return f"@{inner.name}"
+            if hasattr(inner, "this") and inner.this:
+                return f"@{inner.this}"
+        return ""
+
+    def _table_is_temporary(self, table_expression) -> bool:
+        if not isinstance(table_expression, exp.Table):
+            return False
+        table_this = table_expression.this
+        if isinstance(table_this, exp.Parameter):
+            return False
+        args = getattr(table_this, "args", {})
+        return bool(args.get("temporary") or args.get("global_"))
+
+    def _table_identifier_from_expression(self, table_expression) -> str:
+        if not isinstance(table_expression, exp.Table):
+            return ""
+
+        table_this = table_expression.this
+        if isinstance(table_this, exp.Parameter):
+            variable_name = self._parameter_identifier(table_this)
+            return variable_name
+
+        name = str(getattr(table_expression, "name", "") or "")
+        if not name:
+            return ""
+
+        args = getattr(table_this, "args", {})
+        if args.get("global_"):
+            return f"##{name}"
+        if args.get("temporary"):
+            return f"#{name}"
+
+        parts = [part for part in (table_expression.catalog, table_expression.db, name) if part]
+        return ".".join(parts)
+
+    def _relation_lookup_names(self, identifier: str) -> Set[str]:
+        lookup_names = {self._normalize_relation_key(identifier)}
+        clean_identifier = identifier
+        if identifier.startswith("##"):
+            clean_identifier = identifier[2:]
+        elif identifier.startswith("#"):
+            clean_identifier = identifier[1:]
+        lookup_names.add(self._normalize_relation_key(clean_identifier))
+        return {name for name in lookup_names if name}
+
+    def _relation_from_table_expression(
+        self,
+        table_expression,
+        alias_name: str,
+        script_state: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        relation_identifier = self._table_identifier_from_expression(table_expression)
+        lookup_names = self._relation_lookup_names(relation_identifier)
+        if table_expression.db:
+            lookup_names.add(self._normalize_relation_key(f"{table_expression.db}.{table_expression.name}"))
+        if table_expression.name:
+            lookup_names.add(self._normalize_relation_key(table_expression.name))
+        if alias_name:
+            lookup_names.add(self._normalize_relation_key(alias_name))
+
+        for lookup_name in lookup_names:
+            scripted_relation = script_state["relation_lookup"].get(lookup_name)
+            if scripted_relation is not None:
+                return self._clone_relation(
+                    scripted_relation,
+                    preferred_qualifier=alias_name or scripted_relation.get("preferred_qualifier", ""),
+                    extra_lookup_names=lookup_names,
+                )
+
+        entry = self._find_schema_entry(table_expression.name, table_expression.db, table_expression.catalog)
+        if entry is None:
+            return None
+
+        relation = self._make_relation(
+            entry["detail"],
+            entry.get("columns", []),
+            "table",
+            f'{entry["type"]} - {entry["detail"]}',
+            preferred_qualifier=alias_name or entry["name"],
+            lookup_names=set(entry.get("lookup_names", set())) | lookup_names,
+        )
+        return relation
+
+    def _find_schema_entry(self, table_name: str, schema_name: str = "", catalog_name: str = "") -> Optional[dict[str, Any]]:
+        lookup_candidates = []
+        if catalog_name and schema_name:
+            lookup_candidates.append(self._normalize_relation_key(f"{catalog_name}.{schema_name}.{table_name}"))
+        if schema_name:
+            lookup_candidates.append(self._normalize_relation_key(f"{schema_name}.{table_name}"))
+        lookup_candidates.append(self._normalize_relation_key(table_name))
+
+        candidates: List[dict[str, Any]] = []
+        for lookup_name in lookup_candidates:
+            candidates.extend(self._table_lookup.get(lookup_name, []))
+
+        if not candidates:
+            return None
+
+        normalized_schema = self._normalize_name(schema_name)
+
+        def sort_key(entry: dict[str, Any]) -> Tuple[int, int, str]:
+            entry_schema = self._normalize_name(entry.get("schema", ""))
+            if normalized_schema and entry_schema == normalized_schema:
+                return (0, 0, entry["detail"])
+            if entry_schema in DEFAULT_SCHEMA_PRIORITY:
+                return (1, DEFAULT_SCHEMA_PRIORITY.index(entry_schema), entry["detail"])
+            if not entry_schema:
+                return (2, 0, entry["detail"])
+            return (3, 0, entry["detail"])
+
+        return sorted(candidates, key=sort_key)[0]
+
+    def _fallback_scope_relations(
+        self,
+        statement_sql: str,
+        script_state: dict[str, Any],
+    ) -> Tuple[List[dict[str, Any]], dict[str, dict[str, Any]]]:
+        relations: List[dict[str, Any]] = []
+        lookup: dict[str, dict[str, Any]] = {}
+        aliases = self._fallback_resolve_aliases(statement_sql)
+
+        for alias_name, target_name in aliases.items():
+            scripted_relation = script_state["relation_lookup"].get(self._normalize_relation_key(target_name))
+            if scripted_relation is not None:
+                self._append_relation(
+                    relations,
+                    lookup,
+                    self._clone_relation(
+                        scripted_relation,
+                        preferred_qualifier=alias_name if alias_name != target_name else scripted_relation.get("preferred_qualifier", ""),
+                        extra_lookup_names={self._normalize_relation_key(alias_name)},
+                    ),
+                )
+                continue
+
+            entry = self._find_schema_entry(target_name)
+            if entry is None:
+                continue
+            relation = self._make_relation(
+                entry["detail"],
+                entry.get("columns", []),
+                "table",
+                f'{entry["type"]} - {entry["detail"]}',
+                preferred_qualifier=alias_name,
+                lookup_names=set(entry.get("lookup_names", set())) | {self._normalize_relation_key(alias_name)},
+            )
+            self._append_relation(relations, lookup, relation)
+
+        return relations, lookup
+
+    def _fallback_resolve_aliases(self, sql: str) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        for match in _RE_TABLE_REF.finditer(sql):
+            schema_name = self._strip_identifier_quotes(match.group(1) or "")
+            table_name = self._strip_identifier_quotes(match.group(2) or "")
+            alias_name = self._strip_identifier_quotes(match.group(3) or "")
+            if not table_name:
+                continue
+            bare_table = table_name
+            full_table = f"{schema_name}.{table_name}" if schema_name else table_name
+            result[bare_table.lower()] = bare_table
+            if alias_name and alias_name.upper() not in {kw.upper() for kw in SQL_KEYWORDS}:
+                result[alias_name.lower()] = bare_table
+            if schema_name:
+                result[full_table.lower()] = bare_table
+        return result
+
+    def _build_completions(
+        self,
+        context: str,
+        context_arg: Optional[str],
+        analysis: dict[str, Any],
+    ) -> List[Tuple[str, str, str]]:
+        if context == CTX_DOT:
+            return self._dot_completions(context_arg or "", analysis)
         if context == CTX_TABLE:
-            return self._table_completions()
-
+            return self._table_completions(analysis)
         if context == CTX_COLUMN:
-            return self._column_completions(full_text)
-
+            return self._column_completions(analysis)
         if context == CTX_DATABASE:
             return self._database_completions()
+        if context == CTX_ROUTINE:
+            return self._routine_completions()
+        return (
+            self._keyword_completions()
+            + self._table_completions(analysis)
+            + self._variable_completions(analysis)
+            + self._routine_completions()
+        )
 
-        # CTX_DEFAULT: keywords + tables
-        return self._keyword_completions() + self._table_completions()
+    def _routine_completions(self) -> List[Tuple[str, str, str]]:
+        """Return procedure/function completions from the schema routines list."""
+        result: List[Tuple[str, str, str]] = []
+        seen: Set[str] = set()
+        for routine in self._schema.get("routines", []) or []:
+            name = str(routine.get("name", "") or "")
+            if not name:
+                continue
+            normalized = self._normalize_name(name)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            routine_type = str(routine.get("type", "PROCEDURE") or "PROCEDURE").upper()
+            schema_name = str(routine.get("schema", "") or "")
+            detail = f"{routine_type} - {schema_name}.{name}" if schema_name else f"{routine_type} - {name}"
+            result.append((name, CAT_ROUTINE, detail))
+        return result
 
     def _keyword_completions(self) -> List[Tuple[str, str, str]]:
         """Return SQL keyword completions (both UPPER and lower case)."""
@@ -466,214 +1502,217 @@ class SqlAutoCompleteService:
             upper = kw.upper()
             if upper not in seen:
                 seen.add(upper)
-                cat = CAT_FUNCTION if upper in func_set else CAT_KEYWORD
-                result.append((upper, cat, ""))
-                result.append((upper.lower(), cat, ""))
+                category = CAT_FUNCTION if upper in func_set else CAT_KEYWORD
+                result.append((upper, category, ""))
+                result.append((upper.lower(), category, ""))
         return result
 
-    def _table_completions(self) -> List[Tuple[str, str, str]]:
-        """Return table name completions from schema."""
-        tables = self._schema.get("tables", [])
-        result = []
-        for t in tables:
-            name = t["name"] if isinstance(t, dict) else str(t)
-            schema_name = t.get("schema", "") if isinstance(t, dict) else ""
-            ttype = t.get("type", "TABLE") if isinstance(t, dict) else "TABLE"
-            detail = f"{schema_name}.{name}" if schema_name else name
-            result.append((name, CAT_TABLE, f"{ttype} - {detail}"))
-        return result
+    def _table_completions(self, analysis: Optional[dict[str, Any]] = None) -> List[Tuple[str, str, str]]:
+        """Return table-like completions from schema, CTEs, temp tables and table variables."""
+        result: List[Tuple[str, str, str]] = []
+        seen: Set[str] = set()
 
-    def _column_completions(self, full_text: str) -> List[Tuple[str, str, str]]:
-        """Return column completions from tables mentioned in FROM/JOIN clauses."""
-        columns = self._schema.get("columns", {})
-        result = []
-        seen = set()
+        def append_table(label: str, detail: str) -> None:
+            normalized_label = self._normalize_name(label)
+            if not normalized_label or normalized_label in seen:
+                return
+            seen.add(normalized_label)
+            result.append((label, CAT_TABLE, detail))
 
-        # Extract tables from FROM/JOIN clauses
-        tables_in_query = self._extract_tables_from_query(full_text)
-        
-        # Also resolve aliases to get real table names
-        aliases = self._resolve_aliases(full_text)
-        
-        # Build set of table names to include
-        relevant_tables = set()
-        for t in tables_in_query:
-            relevant_tables.add(t.lower())
-            # If it's an alias, add the real table too
-            real_table = aliases.get(t.lower())
-            if real_table and real_table not in ("__cte__", "__subquery__"):
-                relevant_tables.add(real_table.lower())
-        
-        # Add real table names from aliases
-        for alias, table in aliases.items():
-            if table not in ("__cte__", "__subquery__"):
-                relevant_tables.add(table.lower())
-        
-        # If no tables found, maybe user is still typing - show all columns
-        if not relevant_tables:
-            return self._all_columns_flat()
-        
-        # Get columns only from relevant tables
-        for table_name, cols in columns.items():
-            if table_name.lower() not in relevant_tables:
-                continue
-                
-            for col in cols:
-                cname = col["name"] if isinstance(col, dict) else str(col)
-                ctype = col.get("type", "") if isinstance(col, dict) else ""
+        if analysis:
+            for relation in analysis.get("cte_sources", []):
+                label = relation["display_name"]
+                append_table(label, relation.get("detail", "CTE"))
 
-                key = cname.lower()
-                if key not in seen:
-                    seen.add(key)
-                    detail = f"{table_name}.{cname} ({ctype})" if ctype else f"{table_name}.{cname}"
-                    result.append((cname, CAT_COLUMN, detail))
+            script_state = analysis.get("script_state", {})
+            for relation in script_state.get("relation_sources", []):
+                label = relation["display_name"]
+                append_table(label, relation.get("detail", ""))
 
-        # Also suggest qualified table.column for tables in query
-        for table_name, cols in columns.items():
-            if table_name.lower() not in relevant_tables:
-                continue
-            for col in cols:
-                cname = col["name"] if isinstance(col, dict) else str(col)
-                ctype = col.get("type", "") if isinstance(col, dict) else ""
-                qualified = f"{table_name}.{cname}"
-                if qualified.lower() not in seen:
-                    result.append((qualified, CAT_COLUMN, ctype))
+        for entry in self._table_entries:
+            append_table(entry["name"], f'{entry["type"]} - {entry["detail"]}')
 
         return result
 
-    def _extract_tables_from_query(self, text: str) -> List[str]:
-        """Extract table names from FROM and JOIN clauses."""
-        tables = []
-        
-        # Clean the text
-        cleaned = self._strip_noise(text.upper())
-        
-        # Pattern: FROM table_name [AS alias] or FROM table_name alias
-        from_pattern = r'\bFROM\s+(\w+)'
-        for match in re.finditer(from_pattern, cleaned, re.IGNORECASE):
-            tables.append(match.group(1))
-        
-        # Pattern: JOIN table_name [AS alias]
-        join_pattern = r'\bJOIN\s+(\w+)'
-        for match in re.finditer(join_pattern, cleaned, re.IGNORECASE):
-            tables.append(match.group(1))
-        
-        # Pattern: UPDATE table_name
-        update_pattern = r'\bUPDATE\s+(\w+)'
-        for match in re.finditer(update_pattern, cleaned, re.IGNORECASE):
-            tables.append(match.group(1))
-        
-        # Pattern: INSERT INTO table_name
-        insert_pattern = r'\bINTO\s+(\w+)'
-        for match in re.finditer(insert_pattern, cleaned, re.IGNORECASE):
-            tables.append(match.group(1))
-        
-        return tables
+    def _column_completions(self, analysis: dict[str, Any]) -> List[Tuple[str, str, str]]:
+        """Return column completions from the visible scope, plus variables."""
+        scope_sources = analysis.get("scope_sources", [])
+        if not scope_sources:
+            return self._all_columns_flat() + self._variable_completions(analysis)
 
-    def _dot_completions(
-        self, prefix: str, full_text: str
-    ) -> List[Tuple[str, str, str]]:
-        """
-        Return columns for the table/alias/CTE/subquery before the dot.
+        result: List[Tuple[str, str, str]] = []
+        seen_names: Set[str] = set()
+        seen_qualified: Set[str] = set()
 
-        Args:
-            prefix: The identifier before the dot (table name, alias, CTE, or subquery).
-            full_text: Complete SQL text for alias resolution.
-        """
-        columns = self._schema.get("columns", {})
-        prefix_lower = prefix.lower()
+        for relation in scope_sources:
+            qualifier = relation.get("preferred_qualifier") or relation.get("display_name")
+            for column in relation.get("columns", []):
+                column_name = str(column.get("name", "") or "")
+                if not column_name:
+                    continue
+                detail_name = relation.get("display_name", qualifier)
+                display_type = str(column.get("display_type") or column.get("type") or "")
+                unqualified_key = self._normalize_name(column_name)
+                qualified_label = f"{qualifier}.{column_name}" if qualifier else column_name
+                qualified_key = self._normalize_relation_key(qualified_label)
 
-        # First resolve aliases (including CTEs and subqueries)
-        aliases = self._resolve_aliases(full_text)
-        real_target = aliases.get(prefix_lower)
+                if unqualified_key and unqualified_key not in seen_names:
+                    seen_names.add(unqualified_key)
+                    detail = f"{detail_name}.{column_name}"
+                    if display_type:
+                        detail = f"{detail} ({display_type})"
+                    result.append((column_name, CAT_COLUMN, detail))
 
-        # Check if it's a CTE
-        if real_target == "__cte__":
-            cte_cols = self._context_parser.get_cte_columns(prefix_lower)
-            if cte_cols:
-                return [(col, CAT_COLUMN, "CTE column") for col in cte_cols]
-            # CTE with unknown columns - return empty (no fallback to all columns)
+                if qualifier and qualified_key not in seen_qualified:
+                    seen_qualified.add(qualified_key)
+                    result.append((qualified_label, CAT_COLUMN, display_type))
+
+        return result + self._variable_completions(analysis)
+
+    def _dot_completions(self, prefix: str, analysis: dict[str, Any]) -> List[Tuple[str, str, str]]:
+        """Return columns for the table, alias, CTE, subquery or temp relation before the dot."""
+        normalized_prefix = self._normalize_relation_key(prefix)
+
+        relation = analysis.get("scope_lookup", {}).get(normalized_prefix)
+        if relation is None:
+            relation = analysis.get("cte_lookup", {}).get(normalized_prefix)
+        if relation is None:
+            relation = analysis.get("script_state", {}).get("relation_lookup", {}).get(normalized_prefix)
+        if relation is None:
+            entry = self._find_schema_entry(prefix)
+            if entry is not None:
+                relation = self._make_relation(
+                    entry["detail"],
+                    entry.get("columns", []),
+                    "table",
+                    f'{entry["type"]} - {entry["detail"]}',
+                    preferred_qualifier=prefix,
+                    lookup_names=set(entry.get("lookup_names", set())),
+                )
+
+        if relation is None:
+            logger.debug("No columns found for prefix: %s", prefix)
             return []
 
-        # Check if it's a subquery alias
-        if real_target == "__subquery__":
-            subq_cols = self._context_parser.get_subquery_columns(prefix_lower)
-            if subq_cols:
-                return [(col, CAT_COLUMN, "Subquery column") for col in subq_cols]
-            # Subquery with unknown columns - return empty
-            return []
-
-        # Direct match: prefix is a table name
-        if prefix in columns:
-            return self._columns_of(prefix)
-
-        # Case-insensitive match for table name
-        for table_name in columns:
-            if table_name.lower() == prefix_lower:
-                return self._columns_of(table_name)
-
-        # Alias points to a real table
-        if real_target and real_target in columns:
-            return self._columns_of(real_target)
-
-        # Case-insensitive alias->table
-        if real_target:
-            for table_name in columns:
-                if table_name.lower() == real_target.lower():
-                    return self._columns_of(table_name)
-
-        # No match - return empty list (don't flood with all columns)
-        logger.debug(f"No columns found for prefix: {prefix}")
-        return []
-
-    def _columns_of(self, table_name: str) -> List[Tuple[str, str, str]]:
-        """Return columns of a specific table."""
-        columns = self._schema.get("columns", {})
-        cols = columns.get(table_name, [])
         result = []
-        for col in cols:
-            cname = col["name"] if isinstance(col, dict) else str(col)
-            ctype = col.get("type", "") if isinstance(col, dict) else ""
-            result.append((cname, CAT_COLUMN, ctype))
+        for column in relation.get("columns", []):
+            column_name = str(column.get("name", "") or "")
+            if not column_name:
+                continue
+            display_type = str(column.get("display_type") or column.get("type") or "")
+            detail = display_type or relation.get("detail", "")
+            result.append((column_name, CAT_COLUMN, detail))
         return result
 
     def _all_columns_flat(self) -> List[Tuple[str, str, str]]:
         """Return all columns from all tables plus table names (fallback for SELECT without FROM)."""
-        columns = self._schema.get("columns", {})
-        tables = self._schema.get("tables", [])
-        result = []
-        seen = set()
-        
-        # Include table names for qualification (e.g., SELECT users.id)
-        for t in tables:
-            name = t["name"] if isinstance(t, dict) else str(t)
-            if name.lower() not in seen:
-                seen.add(name.lower())
-                result.append((name, CAT_TABLE, ""))
-        
-        # Include all columns
-        for table_name, cols in columns.items():
-            for col in cols:
-                cname = col["name"] if isinstance(col, dict) else str(col)
-                ctype = col.get("type", "") if isinstance(col, dict) else ""
-                key = cname.lower()
-                if key not in seen:
-                    seen.add(key)
-                    detail = f"{ctype} ({table_name})" if ctype else table_name
-                    result.append((cname, CAT_COLUMN, detail))
+        result: List[Tuple[str, str, str]] = []
+        seen: Set[str] = set()
+
+        for entry in self._table_entries:
+            normalized_name = self._normalize_name(entry["name"])
+            if normalized_name in seen:
+                continue
+            seen.add(normalized_name)
+            result.append((entry["name"], CAT_TABLE, f'{entry["type"]} - {entry["detail"]}'))
+
+        for entry in self._table_entries:
+            for column in entry.get("columns", []):
+                column_name = str(column.get("name", "") or "")
+                normalized_column = self._normalize_name(column_name)
+                if not normalized_column or normalized_column in seen:
+                    continue
+                seen.add(normalized_column)
+                display_type = str(column.get("display_type") or column.get("type") or "")
+                detail = entry["detail"]
+                if display_type:
+                    detail = f"{detail} ({display_type})"
+                result.append((column_name, CAT_COLUMN, detail))
+
         return result
+
+    def _variable_completions(self, analysis: Optional[dict[str, Any]]) -> List[Tuple[str, str, str]]:
+        """Return declared SQL variables visible before the cursor."""
+        if not analysis:
+            return []
+        variables = analysis.get("script_state", {}).get("variables", {})
+        return [
+            (name, CAT_VARIABLE, detail)
+            for name, detail in sorted(variables.items(), key=lambda item: item[0])
+        ]
 
     def _database_completions(self) -> List[Tuple[str, str, str]]:
         """Return database name completions."""
         databases = self._schema.get("databases", [])
         return [(db, CAT_DATABASE, "") for db in databases]
 
-    def _resolve_aliases(self, text: str) -> Dict[str, str]:
-        """
-        Parse SQL to build alias->table_name mapping including CTEs and subqueries.
+    def _extract_tables_from_query(self, text: str) -> List[str]:
+        """Extract visible table-like names from the current statement."""
+        aliases = self._resolve_aliases(text)
+        table_names = []
+        for target in aliases.values():
+            if target in {"__cte__", "__subquery__"}:
+                continue
+            if target not in table_names:
+                table_names.append(target)
+        return table_names
 
-        Returns:
-            Dict mapping alias/CTE name (lowercase) -> real table name or '__cte__'/'__subquery__'.
-        """
-        schema_columns = self._schema.get("columns", {})
-        return self._context_parser.parse(text, schema_columns)
+    def _columns_of(self, table_name: str) -> List[Tuple[str, str, str]]:
+        """Return columns of a specific table or temp relation."""
+        relation = None
+        entry = self._find_schema_entry(table_name)
+        if entry is not None:
+            relation = self._make_relation(
+                entry["detail"],
+                entry.get("columns", []),
+                "table",
+                f'{entry["type"]} - {entry["detail"]}',
+                preferred_qualifier=table_name,
+            )
+
+        if relation is None:
+            return []
+
+        return [
+            (str(column.get("name", "") or ""), CAT_COLUMN, str(column.get("display_type") or column.get("type") or ""))
+            for column in relation.get("columns", [])
+            if column.get("name")
+        ]
+
+    def _resolve_aliases(self, text: str) -> Dict[str, str]:
+        """Parse SQL and build alias mappings for tables, CTEs and subqueries."""
+        result: Dict[str, str] = {}
+
+        for statement in self._split_sql_statements(text):
+            parsed = self._parse_statement(statement)
+            if parsed is None or not HAS_SQLGLOT:
+                continue
+
+            scopes = list(traverse_scope(parsed))
+            for scope in scopes:
+                cte_names = {
+                    self._normalize_name(cte.alias)
+                    for cte in getattr(scope, "ctes", [])
+                    if getattr(cte, "alias", "")
+                }
+                for cte_name in cte_names:
+                    result[cte_name] = "__cte__"
+
+                for alias_name, selected in getattr(scope, "selected_sources", {}).items():
+                    source_expression, source_object = selected
+                    normalized_alias = self._normalize_name(alias_name)
+                    if isinstance(source_object, exp.Table):
+                        bare_name = self._table_identifier_from_expression(source_object) or source_object.name
+                        if bare_name:
+                            result[normalized_alias] = bare_name
+                            if source_object.name:
+                                result[self._normalize_name(source_object.name)] = source_object.name
+                    elif hasattr(source_object, "expression"):
+                        source_name = ""
+                        if isinstance(source_expression, exp.Table):
+                            source_name = source_expression.name
+                        result[normalized_alias] = "__cte__" if self._normalize_name(source_name) in cte_names else "__subquery__"
+
+        if result:
+            return result
+        return self._fallback_resolve_aliases(text)

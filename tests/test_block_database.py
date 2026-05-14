@@ -56,6 +56,14 @@ class TestBlockDatabasePanel:
         assert panel.get_database_name() == "testdb"
         assert panel.name_label.text() == "testdb"
 
+    def test_panel_preserves_databricks_override_token(self, qapp):
+        """Databricks prefixes devem ser preservados internamente e limpos na UI."""
+        panel = BlockDatabasePanel()
+        panel.set_database("SCHEMA:analytics")
+
+        assert panel.get_database_name() == "SCHEMA:analytics"
+        assert panel.name_label.text() == "analytics"
+
     def test_panel_set_database_none_resets(self, qapp):
         """set_database(None) should return to default"""
         panel = BlockDatabasePanel()

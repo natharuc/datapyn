@@ -118,8 +118,8 @@ class ConnectionsMixin:
 
         # Update only this block's database panel
         if block and hasattr(block, "db_panel"):
-            block._database_name = display_name
-            block.db_panel.set_database(display_name)
+            block._database_name = database_name
+            block.db_panel.set_database(database_name)
 
         # Get session_id for per-session cache
         sid = ""
@@ -203,8 +203,8 @@ class ConnectionsMixin:
                     # Only update blocks using the session connection (no custom connection)
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
                     if not block_conn:
-                        block._database_name = display_name
-                        block.db_panel.set_database(display_name)
+                        block._database_name = database_name
+                        block.db_panel.set_database(database_name)
 
     def _get_effective_connector_info(self):
         """Return (connector, connection_name) for the effective connection.

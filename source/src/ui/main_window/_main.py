@@ -189,6 +189,7 @@ class MainWindow(
         self._original_file_path = None  # Original opened file path (sql/py/dpw)
         self._original_file_type = None  # Tipo: 'sql', 'python', 'workspace'
         self._current_context = "workspace"  # Contexto atual: 'sql', 'python', 'workspace'
+        self._is_closing = False
 
         # Icons
         self.icons = self._setup_icons()
@@ -517,6 +518,10 @@ class MainWindow(
                 if hasattr(widget, "_cancel_requested"):
                     widget._cancel_requested = True
 
+        self._is_closing = True
+        if hasattr(self, "_sessions_to_load"):
+            self._sessions_to_load.clear()
+
         # Save sessions before closing
         self._save_sessions()
 
@@ -528,6 +533,27 @@ class MainWindow(
         if hasattr(self, '_layout_save_timer') and self._layout_save_timer:
             self._layout_save_timer.stop()
 
+        if hasattr(self, "auto_update_service") and self.auto_update_service:
+            self.auto_update_service.cleanup()
+
+        for thread_attr in ("_entity_info_threads", "_connection_threads"):
+            active_threads = list(getattr(self, thread_attr, []))
+            for thread, worker in active_threads:
+                try:
+                    if hasattr(worker, "cancel"):
+                        worker.cancel()
+                except RuntimeError:
+                    pass
+                try:
+                    if thread and thread.isRunning():
+                        thread.quit()
+                        if not thread.wait(3000):
+                            thread.terminate()
+                            thread.wait(1000)
+                except RuntimeError:
+                    pass
+            setattr(self, thread_attr, [])
+
         # Save dock layout before closing
         self._save_dock_layout()
 
@@ -535,14 +561,25 @@ class MainWindow(
         for widget in self._session_widgets.values():
             widget.cleanup()
 
+        # Limpar schema service
+        if hasattr(self, "_schema_service"):
+            self._schema_service.cleanup()
+
+        if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
+            self._copilot_chat_panel.cleanup()
+
+        # Cleanup Copilot auth/LSP before widgets and connections disappear
+        if hasattr(self, "_copilot_auth_service") and self._copilot_auth_service:
+            self._copilot_auth_service.cleanup()
+
+        if hasattr(self, "_lsp_client") and self._lsp_client:
+            self._lsp_client.cleanup()
+            self._lsp_client = None
+
         self.session_manager.cleanup_all()
 
         # Close connections
         self.connection_manager.close_all()
-
-        # Limpar schema service
-        if hasattr(self, "_schema_service"):
-            self._schema_service.cleanup()
 
         # Cleanup Copilot client
         if hasattr(self, "_copilot_client") and self._copilot_client:
@@ -553,3 +590,8 @@ class MainWindow(
             self.docking_manager.cleanup()
 
         event.accept()
+
+    def deleteLater(self):
+        if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
+            self._copilot_chat_panel.cleanup()
+        super().deleteLater()

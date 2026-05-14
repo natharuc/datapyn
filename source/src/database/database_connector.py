@@ -844,6 +844,17 @@ class DatabaseConnector:
 
         return statements
 
+    @staticmethod
+    def _result_to_dataframe(result) -> pd.DataFrame:
+        """Build a DataFrame directly from the DBAPI/SQLAlchemy result rows.
+
+        This avoids pandas SQL readers applying their own dtype inference on top
+        of the values already returned by the database driver.
+        """
+        columns = list(result.keys())
+        rows = result.fetchall()
+        return pd.DataFrame.from_records(rows, columns=columns)
+
     def _execute_generic_query(self, query: str) -> pd.DataFrame:
         """Execute generic query for non-MSSQL databases"""
         # Split statements with DELIMITER-awareness
@@ -858,7 +869,8 @@ class DatabaseConnector:
                     if self._is_select_query(cmd):
                         # Is SELECT - capture result
                         try:
-                            df = pd.read_sql(cmd, self.engine)
+                            result = conn.execute(text(cmd))
+                            df = self._result_to_dataframe(result)
                             logger.info(f"SELECT executed: {len(df)} rows returned")
                             dataframes.append(df)
                         except Exception as e:
@@ -888,8 +900,10 @@ class DatabaseConnector:
             # Single command - use the cleaned statement (DELIMITER stripped)
             cmd = commands[0]
             if self._is_select_query(cmd):
-                # SELECT query - use read_sql and let errors propagate
-                df = pd.read_sql(cmd, self.engine)
+                # SELECT query - fetch rows directly so DB driver values are preserved
+                with self.engine.connect() as conn:
+                    result = conn.execute(text(cmd))
+                    df = self._result_to_dataframe(result)
                 logger.info(f"Query executed successfully. Rows returned: {len(df)}")
                 return df
             else:

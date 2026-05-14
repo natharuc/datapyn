@@ -227,6 +227,59 @@ def clear_layout_settings():
         s.sync()
 
 
+@pytest.fixture(autouse=True)
+def reset_workspace_state_between_tests(isolate_workspace_for_tests):
+    """Remove persisted tab/workspace state so tests do not inherit sessions."""
+    state_files = (
+        isolate_workspace_for_tests / "sessions.json",
+        isolate_workspace_for_tests / "workspace.json",
+    )
+
+    for state_file in state_files:
+        state_file.unlink(missing_ok=True)
+
+    yield
+
+    for state_file in state_files:
+        state_file.unlink(missing_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def cleanup_qt_windows_after_test(qapp):
+    """Close Qt top-level windows left open by tests."""
+    yield
+
+    try:
+        from PyQt6 import sip
+        from PyQt6.QtCore import QCoreApplication, QEvent
+        from PyQt6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        for widget in list(app.topLevelWidgets()):
+            try:
+                if sip.isdeleted(widget):
+                    continue
+                cleanup = getattr(widget, "cleanup", None)
+                if callable(cleanup):
+                    cleanup()
+                if hasattr(widget, "_save_sessions"):
+                    widget._save_sessions = lambda: None
+                widget.close()
+                widget.deleteLater()
+            except RuntimeError:
+                pass
+
+        for _ in range(3):
+            app.processEvents()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            app.processEvents()
+    except Exception:
+        pass
+
+
 # ==================== TESTES COM QSCINTILLA ====================
 # Removido sistema de parametrizacao - agora usa apenas QScintilla
 

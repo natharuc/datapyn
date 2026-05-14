@@ -5,7 +5,7 @@ Tests for Copilot MCP tools, MCP server, and CopilotClient.
 import pytest
 import json
 from unittest.mock import MagicMock, patch
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QObject, QSettings, pyqtSignal
 
 # Shared test data
 MOCK_SCHEMA = {
@@ -76,6 +76,20 @@ class TestMCPToolRegistry:
         assert "Test Tab" in result["content"][0]["text"]
         mock_mw.session_manager.create_session.assert_called_once_with(title="Test Tab")
 
+    def test_create_tab_pins_new_session_for_followup_tools(self):
+        """After creating a tab, later tools in the same turn should target it."""
+        mock_session = MagicMock()
+        mock_session.title = "Produtos"
+        mock_session.session_id = "new-session-id"
+
+        mock_mw = MagicMock()
+        mock_mw.session_manager.create_session.return_value = mock_session
+
+        self.registry.set_main_window(mock_mw)
+        self.registry.execute("create_tab", {"title": "Produtos"})
+
+        assert self.registry._pinned_session_id == "new-session-id"
+
     def test_create_block_without_session_returns_error(self):
         """create_block without active session should return an error."""
         mock_mw = MagicMock()
@@ -107,6 +121,31 @@ class TestMCPToolRegistry:
         assert "sql" in result["content"][0]["text"]
         mock_editor.add_block.assert_called_once_with(language="sql")
         mock_block.set_code.assert_called_once_with("SELECT 1")
+
+    def test_create_block_updates_existing_named_block(self):
+        """create_block should update a named block instead of duplicating it."""
+        mock_block = MagicMock()
+        mock_block.get_block_name.return_value = "produtos"
+        mock_editor = MagicMock(spec=["add_block", "blocks"])
+        mock_editor.blocks = [mock_block]
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("create_block", {
+            "language": "sql",
+            "code": "SELECT * FROM produtos",
+            "name": "produtos",
+        })
+
+        assert "content" in result
+        mock_editor.add_block.assert_not_called()
+        mock_block.set_code.assert_called_once_with("SELECT * FROM produtos")
 
     def test_edit_block_with_index(self):
         """edit_block should update the specified block's code."""
@@ -852,6 +891,60 @@ class TestCopilotClient:
 class TestCopilotChatPanel:
     """Tests for the CopilotChatPanel UI component."""
 
+    class FakeCopilotClient(QObject):
+        chat_response_chunk = pyqtSignal(str)
+        chat_response_complete = pyqtSignal(str)
+        chat_error = pyqtSignal(str)
+        authenticated = pyqtSignal(str)
+        auth_failed = pyqtSignal(str)
+        auth_started = pyqtSignal(str)
+        gh_not_found = pyqtSignal()
+        license_warning = pyqtSignal(str)
+        tool_called = pyqtSignal(str, dict, str)
+        tool_result = pyqtSignal(str, str)
+        thinking = pyqtSignal(str)
+        models_changed = pyqtSignal(list)
+
+        def __init__(self):
+            super().__init__()
+            self.system_message = ""
+            self.is_authenticated = True
+            self.sent_messages = None
+            self.cancel_called = False
+
+        def send_chat(self, messages):
+            self.sent_messages = messages
+
+        def cancel(self):
+            self.cancel_called = True
+
+        def available_models(self):
+            return []
+
+        @property
+        def model(self):
+            return "gpt-4o"
+
+        @model.setter
+        def model(self, value):
+            self._model = value
+
+    def _make_panel_with_fake_client(self, qtbot):
+        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+
+        client = self.FakeCopilotClient()
+        panel = CopilotChatPanel()
+        qtbot.addWidget(panel)
+        panel.set_copilot_client(client)
+
+        registry = MagicMock()
+        registry.list_tools.return_value = []
+        registry._main_window = None
+        server = MagicMock()
+        server.tool_registry = registry
+        panel.set_mcp_server(server)
+        return panel, client, registry
+
     def test_panel_creates(self, qtbot):
         """Panel should be created without errors."""
         from src.ui.components.copilot_chat_panel import CopilotChatPanel
@@ -941,6 +1034,54 @@ class TestCopilotChatPanel:
         panel._input.clear()
         panel._on_send()
         assert len(panel._messages) == 0
+
+    def test_send_passes_static_system_and_contextual_user_prompt(self, qtbot):
+        """Sending should pass static rules separately from hidden turn context."""
+        panel, client, _ = self._make_panel_with_fake_client(qtbot)
+        panel._current_tab_id = "tab_green"
+        panel._current_tab_name = "Green"
+
+        panel._input.setPlainText("lista os produtos da base green")
+        with patch.object(panel, '_run_chat_js'):
+            panel._on_send()
+
+        assert client.sent_messages is not None
+        assert client.sent_messages[0]["role"] == "system"
+        assert "SILENT vs VISIBLE" in client.system_message
+        assert "lista os produtos da base green" in client.sent_messages[-1]["content"]
+        assert '"target_session_id": "tab_green"' in client.sent_messages[-1]["content"]
+        assert panel._messages[-1]["content"] == "lista os produtos da base green"
+
+    def test_send_pins_active_tab_at_submit_time(self, qtbot):
+        """Tool calls should target the tab active when the user sends the prompt."""
+        panel, _, registry = self._make_panel_with_fake_client(qtbot)
+        panel._current_tab_id = "tab_a"
+
+        panel._input.setPlainText("crie a analise")
+        with patch.object(panel, '_run_chat_js'):
+            panel._on_send()
+
+        registry.pin_session.assert_called_once_with("tab_a")
+        assert panel._active_tool_target_id == "tab_a"
+
+    def test_stop_cancels_client_and_unpins_target(self, qtbot):
+        """Stop should cancel the client and clear the pinned tool target."""
+        panel, client, registry = self._make_panel_with_fake_client(qtbot)
+        panel._active_tool_target_id = "tab_a"
+        editor = MagicMock()
+        connector = MagicMock()
+        widget = MagicMock()
+        widget.editor = editor
+        widget.session.connector = connector
+        registry._get_active_session_widget.return_value = widget
+
+        panel._on_stop()
+
+        assert client.cancel_called is True
+        editor.cancel_all_executions.assert_called_once()
+        connector.cancel_query.assert_called_once()
+        registry.unpin_session.assert_called_once()
+        assert panel._active_tool_target_id is None
 
     def test_model_change_updates_client(self, qtbot):
         """Changing the model combo should update the client."""

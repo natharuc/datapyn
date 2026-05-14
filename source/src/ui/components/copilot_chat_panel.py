@@ -27,11 +27,12 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QStyle,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize, QThread, QEvent
 from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
+from PyQt6 import sip
 import sys
 from PyQt6.QtWebChannel import QWebChannel
 from pathlib import Path
@@ -472,7 +473,11 @@ class CopilotChatPanel(QWidget):
         self._is_thinking = False  # Tracks collapsible thinking block state
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._current_session_id = None
+        self._current_tab_id = None
+        self._current_tab_name = ""
+        self._active_tool_target_id = None
         self._gh_install_worker = None
+        self._cleaned_up = False
         self._setup_ui()
         self._connect_signals()
         # Restore last session on startup
@@ -1117,6 +1122,10 @@ class CopilotChatPanel(QWidget):
         """Handle stop button - cancel current operation."""
         if self._copilot_client:
             self._copilot_client.cancel()
+        self._cancel_active_tool_target()
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
         self._set_loading(False)
         self._hide_thinking_indicator()
         # Mark any widgets as complete
@@ -1143,20 +1152,29 @@ class CopilotChatPanel(QWidget):
         # Show loading state
         self._set_loading(True)
 
-        # Build system prompt with context
+        # Build static system prompt and lightweight per-turn context.
         system_prompt = self._build_system_prompt()
+        context_section = self._build_request_context_section()
+
+        from src.services.copilot.system_prompt import build_request_prompt
+        request_prompt = build_request_prompt(text, context_section)
 
         # Prepare messages for API
         api_messages = [{"role": "system", "content": system_prompt}]
-        for msg in self._messages:
+        for msg in self._messages[:-1]:
             api_messages.append({"role": msg["role"], "content": msg["content"]})
+        api_messages.append({"role": "user", "content": request_prompt})
 
         # Send to Copilot
         if self._copilot_client:
+            if hasattr(self._copilot_client, "system_message"):
+                self._copilot_client.system_message = system_prompt
+
             # Pin MCP tools to the current tab so tools target it even if user switches tabs
             if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-                tab_id = getattr(self, "_current_tab_id", None)
+                tab_id = self._resolve_current_tab_id()
                 if tab_id:
+                    self._active_tool_target_id = tab_id
                     self._mcp_server.tool_registry.pin_session(tab_id)
 
             # Clear any previous assistant widget to ensure fresh response
@@ -1172,9 +1190,9 @@ class CopilotChatPanel(QWidget):
         self.message_sent.emit(text)
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt with current editor context and available tools."""
+        """Build stable system prompt with behavior rules and available tools."""
         from src.services.copilot.system_prompt import (
-            SYSTEM_PROMPT_TEMPLATE, build_tools_list, build_context_section,
+            SYSTEM_PROMPT_TEMPLATE, build_tools_list,
         )
 
         # Build tools list
@@ -1186,30 +1204,192 @@ class CopilotChatPanel(QWidget):
             except Exception as e:
                 logger.debug(f"Error listing tools: {e}")
 
-        # Build context section
-        context_json = ""
-        schema_text = ""
-        if self._mcp_server:
-            try:
-                context_result = self._mcp_server.tool_registry.execute("get_context", {})
-                if "content" in context_result:
-                    context_json = context_result["content"][0].get("text", "")
-            except Exception as e:
-                logger.debug(f"Error getting editor context: {e}")
-
-            try:
-                schema_result = self._mcp_server.tool_registry.execute("read_schema", {})
-                if "content" in schema_result:
-                    schema_text = schema_result["content"][0].get("text", "")
-            except Exception as e:
-                logger.debug(f"Error getting schema: {e}")
-
-        context_section = build_context_section(context_json, schema_text)
-
         return SYSTEM_PROMPT_TEMPLATE.format(
             tools_list=tools_list,
-            context_section=context_section,
         )
+
+    def _build_request_context_section(self) -> str:
+        """Build a lightweight context snapshot for a single chat turn."""
+        from src.services.copilot.system_prompt import build_context_section
+
+        try:
+            context_json = json.dumps(self._build_context_snapshot(), indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Error building editor context snapshot: {e}")
+            context_json = "{}"
+        return build_context_section(context_json, "")
+
+    def _build_context_snapshot(self) -> dict:
+        """Return bounded editor state without triggering live database work."""
+        context = {
+            "chat_scope": "workspace_global",
+            "target_session_id": self._resolve_current_tab_id() or "",
+            "target_tab_name": self._current_tab_name or "",
+            "visible_artifact_policy": (
+                "Use silent tools for exploration. Edit existing blocks when possible. "
+                "Create at most one final visible tab/block for a user-facing deliverable."
+            ),
+        }
+
+        mw = self._get_registry_main_window()
+        session_widget = self._get_context_session_widget(mw, context["target_session_id"])
+        session = getattr(session_widget, "session", None) if session_widget else None
+        if session:
+            context["session"] = {
+                "id": getattr(session, "session_id", ""),
+                "title": getattr(session, "title", ""),
+                "connection_name": getattr(session, "connection_name", "") or "",
+                "is_connected": bool(getattr(session, "is_connected", False)),
+            }
+
+        block_editor = getattr(session_widget, "editor", None) if session_widget else None
+        if block_editor:
+            blocks = list(getattr(block_editor, "blocks", []) or [])
+            focused_block = getattr(block_editor, "focused_block", None)
+            block_infos = []
+            for index, block in enumerate(blocks[:20]):
+                try:
+                    code = block.get_code() if hasattr(block, "get_code") else ""
+                    name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{index + 1}"
+                    language = block.get_language() if hasattr(block, "get_language") else "unknown"
+                    preview = code[:600] + "..." if len(code) > 600 else code
+                    block_infos.append({
+                        "index": index,
+                        "name": name,
+                        "language": language,
+                        "focused": block is focused_block,
+                        "lines": len(code.splitlines()) if code else 0,
+                        "code_preview": preview,
+                    })
+                except Exception as e:
+                    logger.debug(f"Error reading block context: {e}")
+            context["blocks"] = block_infos
+            context["total_blocks"] = len(blocks)
+            if len(blocks) > len(block_infos):
+                context["blocks_truncated"] = len(blocks) - len(block_infos)
+            if block_infos:
+                context["block_map"] = {b["name"]: b["index"] for b in block_infos}
+
+        connection_name = context.get("session", {}).get("connection_name", "")
+        schema_summary = self._build_cached_schema_summary(mw, connection_name, context["target_session_id"])
+        if schema_summary:
+            context["cached_schema"] = schema_summary
+
+        variables = self._build_namespace_summary(session_widget, session)
+        if variables:
+            context["variables"] = variables
+
+        return context
+
+    def _get_registry_main_window(self):
+        if not self._mcp_server or not hasattr(self._mcp_server, "tool_registry"):
+            return None
+        return getattr(self._mcp_server.tool_registry, "_main_window", None)
+
+    def _resolve_current_tab_id(self):
+        if self._current_tab_id:
+            return self._current_tab_id
+        mw = self._get_registry_main_window()
+        widget = self._get_context_session_widget(mw, "")
+        session = getattr(widget, "session", None) if widget else None
+        return getattr(session, "session_id", None)
+
+    def _get_context_session_widget(self, mw, session_id: str):
+        if not mw:
+            return None
+        if session_id and hasattr(mw, "_session_widgets"):
+            widget = mw._session_widgets.get(session_id)
+            if widget:
+                return widget
+        if hasattr(mw, "session_tabs") and mw.session_tabs:
+            idx = mw.session_tabs.currentIndex()
+            return mw.session_tabs.widget(idx) if idx >= 0 else None
+        return None
+
+    def _build_cached_schema_summary(self, mw, connection_name: str, session_id: str) -> dict:
+        if not mw or not connection_name:
+            return {}
+        schema_service = getattr(mw, "_schema_service", None)
+        if not schema_service or not hasattr(schema_service, "get_cached_schema"):
+            return {}
+        try:
+            cached = schema_service.get_cached_schema(connection_name, session_id=session_id or "")
+        except TypeError:
+            cached = schema_service.get_cached_schema(connection_name)
+        except Exception as e:
+            logger.debug(f"Error reading cached schema: {e}")
+            return {}
+        if not cached:
+            return {}
+
+        tables = cached.get("tables", []) or []
+        columns = cached.get("columns", {}) or {}
+        table_summaries = []
+        for table in tables[:50]:
+            table_name = table.get("name", "") if isinstance(table, dict) else str(table)
+            table_columns = columns.get(table_name, []) if isinstance(columns, dict) else []
+            column_names = []
+            for column in table_columns[:20]:
+                if isinstance(column, dict):
+                    column_names.append(column.get("name", ""))
+                else:
+                    column_names.append(str(column))
+            table_summaries.append({"name": table_name, "columns": column_names})
+
+        return {
+            "connection_name": connection_name,
+            "database": cached.get("database", ""),
+            "total_tables": len(tables),
+            "tables": table_summaries,
+            "tables_truncated": max(0, len(tables) - len(table_summaries)),
+        }
+
+    def _build_namespace_summary(self, session_widget, session) -> dict:
+        namespace = getattr(session_widget, "namespace", None) if session_widget else None
+        if namespace is None:
+            namespace = getattr(session_widget, "_namespace", None) if session_widget else None
+        if namespace is None:
+            namespace = getattr(session, "namespace", None) if session else None
+        if not namespace:
+            return {}
+
+        variables = {}
+        for name, value in list(namespace.items())[:80]:
+            if name.startswith("_") or name in ("pd", "np", "plt") or callable(value) or isinstance(value, type):
+                continue
+            try:
+                type_name = type(value).__name__
+                if hasattr(value, "shape"):
+                    variables[name] = f"{type_name}{value.shape}"
+                elif hasattr(value, "__len__") and not isinstance(value, (str, bytes)):
+                    variables[name] = f"{type_name}(len={len(value)})"
+                else:
+                    variables[name] = type_name
+            except Exception:
+                variables[name] = "unknown"
+            if len(variables) >= 30:
+                break
+        return variables
+
+    def _cancel_active_tool_target(self):
+        """Cancel visible execution for the chat target if one is active."""
+        if not self._mcp_server or not hasattr(self._mcp_server, "tool_registry"):
+            return
+        registry = self._mcp_server.tool_registry
+        session_widget = registry._get_active_session_widget() if hasattr(registry, "_get_active_session_widget") else None
+        editor = getattr(session_widget, "editor", None) if session_widget else None
+        if editor and hasattr(editor, "cancel_all_executions"):
+            try:
+                editor.cancel_all_executions()
+            except Exception as e:
+                logger.debug(f"Error cancelling active Copilot execution: {e}")
+        session = getattr(session_widget, "session", None) if session_widget else None
+        connector = getattr(session, "connector", None) if session else None
+        if connector and hasattr(connector, "cancel_query"):
+            try:
+                connector.cancel_query()
+            except Exception as e:
+                logger.debug(f"Error cancelling active Copilot query: {e}")
 
     def _add_message(self, role: str, content: str):
         """Add a message to the chat."""
@@ -1259,6 +1439,7 @@ class CopilotChatPanel(QWidget):
         # Unpin MCP tools session (response is complete)
         if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
             self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
         
         # End collapsible thinking block
         if self._is_thinking:
@@ -1301,6 +1482,7 @@ class CopilotChatPanel(QWidget):
         # Unpin MCP tools session (stream ended with error)
         if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
             self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
         
         # End collapsible thinking block
         if self._is_thinking:
@@ -1620,6 +1802,62 @@ class CopilotChatPanel(QWidget):
         # Update models if available
         self._update_models_from_client()
 
+    def cleanup(self):
+        """Release background work and WebEngine resources."""
+        if self._cleaned_up:
+            return
+
+        self._cleaned_up = True
+
+        try:
+            self._on_stop()
+        except RuntimeError:
+            pass
+
+        try:
+            self.set_copilot_client(None)
+        except RuntimeError:
+            pass
+
+        webview = getattr(self, "_chat_webview", None)
+        if webview is not None and not sip.isdeleted(webview):
+            try:
+                webview.stop()
+                page = webview.page()
+                if page is not None and not sip.isdeleted(page):
+                    try:
+                        page.setWebChannel(None)
+                    except (RuntimeError, TypeError):
+                        pass
+                    replacement_page = QWebEnginePage(webview)
+                    webview.setPage(replacement_page)
+                    sip.delete(page)
+                webview.close()
+            except RuntimeError:
+                pass
+            try:
+                sip.delete(webview)
+            except RuntimeError:
+                pass
+
+        self._chat_webview = None
+        self._external_link_page = None
+        self._chat_channel = None
+        self._chat_bridge = None
+
+    def closeEvent(self, event):
+        self.cleanup()
+        super().closeEvent(event)
+
+    def deleteLater(self):
+        self.cleanup()
+        super().deleteLater()
+
+    def event(self, event):
+        if event.type() == QEvent.Type.DeferredDelete:
+            self.cleanup()
+        return super().event(event)
+
     def _on_auth_service_chat_logged_out(self):
         """Handle chat logout from auth service (e.g., logout via Settings)."""
         self._update_auth_state()
@@ -1672,58 +1910,9 @@ class CopilotChatPanel(QWidget):
     # === Per-Tab Chat Context ===
 
     def switch_tab_context(self, tab_id: str, tab_name: str = ""):
-        """Switch chat context to a different tab.
-        
-        Saves current messages for the previous tab and restores messages
-        for the new tab. If no messages exist for the new tab, starts fresh.
-        
-        Args:
-            tab_id: Unique identifier for the tab (e.g. session_id).
-            tab_name: Display name for the tab (shown in header).
-        """
-        if not hasattr(self, "_tab_contexts"):
-            self._tab_contexts: dict = {}  # tab_id -> {messages, session_id, stream_id}
-        
-        current_tab = getattr(self, "_current_tab_id", None)
-        
-        # Save current context
-        if current_tab and current_tab != tab_id:
-            self._tab_contexts[current_tab] = {
-                "messages": self._messages.copy(),
-                "session_id": self._current_session_id,
-                "stream_id": self._current_stream_id,
-            }
-        
+        """Update the active DataPyn target while keeping chat history global."""
         self._current_tab_id = tab_id
-        
-        # Restore context for new tab if it exists
-        if tab_id in self._tab_contexts:
-            ctx = self._tab_contexts[tab_id]
-            self._messages = ctx["messages"]
-            self._current_session_id = ctx["session_id"]
-            self._current_stream_id = ctx["stream_id"]
-        else:
-            # Fresh context
-            self._messages = []
-            self._current_session_id = None
-            self._current_stream_id = None
-        
-        # End any active thinking/tool states
-        self._is_thinking = False
-        self._active_tool_calls.clear()
-        
-        # Rebuild WebView with restored messages
-        self._run_chat_js("clearMessages()")
-        if self._messages:
-            for msg in self._messages:
-                role = msg["role"]
-                content = msg["content"]
-                role_js = "error" if role == "assistant" and content.startswith("Error:") else role
-                content_escaped = json.dumps(content)
-                msg_id = json.dumps(f"restored_{id(msg) % 10000}")
-                self._run_chat_js(f"addMessage({json.dumps(role_js)}, {content_escaped}, {msg_id})")
-        
-        # Update tab name in header if provided
+        self._current_tab_name = tab_name or ""
         if tab_name:
             self._update_tab_badge(tab_name)
     
@@ -1806,6 +1995,9 @@ class CopilotChatPanel(QWidget):
 
     def _restore_last_session(self):
         """Restore the last chat session on startup."""
+        if self._cleaned_up:
+            return
+
         last_id = self._settings.value("last_session_id", "")
         if last_id:
             self._restore_session(last_id)

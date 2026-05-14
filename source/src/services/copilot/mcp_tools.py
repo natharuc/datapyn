@@ -239,8 +239,9 @@ class MCPToolRegistry(QObject):
         self._register(MCPTool(
             name="run_silent_query",
             description=(
-                "Execute SQL WITHOUT creating a visible block. Returns results directly. "
-                "Use for: row counts, checking values, exploring data, validating queries."
+                "Execute SQL WITHOUT creating a visible block or output-panel noise. "
+                "Use for exploration, row counts, checking values, schema/data inspection, "
+                "and validating a query before creating the final visible block."
             ),
             parameters={
                 "query": {
@@ -256,7 +257,8 @@ class MCPToolRegistry(QObject):
             description=(
                 "Execute Python WITHOUT creating a visible block. Runs in session namespace "
                 "(accesses existing DataFrames/variables). Returns stdout + result. "
-                "Use for: data exploration, calculations, type checks, testing code."
+                "Use for data exploration, calculations, type checks, and testing draft logic "
+                "before editing or creating the final visible block."
             ),
             parameters={
                 "code": {
@@ -270,7 +272,11 @@ class MCPToolRegistry(QObject):
         # === EXECUTE VISIBLY (user sees the block) ===
         self._register(MCPTool(
             name="write_and_run",
-            description="Create a new block, write code, execute, and return results - all in one call. Block NAME becomes the DataFrame variable for SQL. MOST COMMON tool.",
+            description=(
+                "Create OR UPDATE the final visible block, write complete code, execute, and return results. "
+                "If a block with the requested name already exists, update and run it instead of creating a duplicate. "
+                "Use only for final user-facing artifacts, not scratch work."
+            ),
             parameters={
                 "language": {
                     "type": "string",
@@ -292,7 +298,11 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="create_block",
-            description="Create a new block and write code WITHOUT executing. Use for multi-block setup before running all.",
+            description=(
+                "Create OR UPDATE one final visible block WITHOUT executing. "
+                "If the named block already exists, update it instead of creating a duplicate. "
+                "Do not use for scratch/intermediate exploration."
+            ),
             parameters={
                 "language": {
                     "type": "string",
@@ -647,9 +657,9 @@ class MCPToolRegistry(QObject):
         self._register(MCPTool(
             name="run_silent_query",
             description=(
-                "QUICK EXECUTE a SQL query WITHOUT creating a visible block. Returns results directly. "
-                "USE THIS for: data exploration, row counts, checking values, validating queries before "
-                "showing code to user. For code the user should see, use write_and_run with language='sql' instead."
+                "QUICK EXECUTE a SQL query WITHOUT creating a visible block or output-panel noise. "
+                "Use for data exploration, row counts, checking values, and validating queries before "
+                "creating/updating the final visible block with write_and_run."
             ),
             parameters={
                 "query": {
@@ -834,6 +844,8 @@ class MCPToolRegistry(QObject):
 
         if hasattr(mw, "session_manager") and mw.session_manager:
             session = mw.session_manager.create_session(title=title)
+            if getattr(session, "session_id", None):
+                self.pin_session(session.session_id)
             logger.info(f"create_tab: Created session id={session.session_id}, title={session.title}")
             return {
                 "content": [{"type": "text", "text": f"Tab created: '{session.title}' (id: {session.session_id})"}]
@@ -861,8 +873,13 @@ class MCPToolRegistry(QObject):
             logger.error(f"create_block: No editor on session_widget {type(session_widget)}")
             return {"error": "Block editor not available."}
 
-        logger.info(f"create_block: Adding block with language={language}")
-        block = block_editor.add_block(language=language)
+        block = self._find_block_by_name(block_editor, name) if name else None
+        updated_existing = block is not None
+        if block:
+            logger.info(f"create_block: Updating existing block name={name}")
+        else:
+            logger.info(f"create_block: Adding block with language={language}")
+            block = block_editor.add_block(language=language)
         if code and block:
             # Show copilot editing indicator
             self._signal_copilot_editing(block, block_editor)
@@ -879,7 +896,8 @@ class MCPToolRegistry(QObject):
         actual_name = block.get_block_name() if block else f"block{block_index + 1}"
         logger.info(f"create_block: Success, total blocks={block_count}, name={actual_name}")
         
-        msg_parts = [f"Block created (language: {language}, index: {block_index}, name: '{actual_name}')"]
+        action = "updated" if updated_existing else "created"
+        msg_parts = [f"Block {action} (language: {language}, index: {block_index}, name: '{actual_name}')"]
         if language == "sql":
             msg_parts.append(f"When executed, the result will be stored as DataFrame `{actual_name}`.")
         return {
@@ -1001,6 +1019,10 @@ class MCPToolRegistry(QObject):
         # Use _connect_new_tab which always creates a new tab
         if hasattr(mw, "_connect_new_tab"):
             mw._connect_new_tab(connection_name)
+            current_widget = mw._get_current_session_widget() if hasattr(mw, "_get_current_session_widget") else None
+            session = getattr(current_widget, "session", None) if current_widget else None
+            if getattr(session, "session_id", None):
+                self.pin_session(session.session_id)
             return {
                 "content": [{"type": "text", "text": f"New tab created and connecting to '{connection_name}'."}]
             }
@@ -1231,6 +1253,20 @@ class MCPToolRegistry(QObject):
             return editor
         
         logger.warning(f"_get_block_editor: No valid editor found on {type(session_widget)}")
+        return None
+
+    def _find_block_by_name(self, block_editor, name: str):
+        """Find a block by semantic name, case-insensitive."""
+        if not block_editor or not name:
+            return None
+        target = str(name).strip().lower()
+        for block in getattr(block_editor, "blocks", []) or []:
+            try:
+                block_name = block.get_block_name() if hasattr(block, "get_block_name") else ""
+                if str(block_name).strip().lower() == target:
+                    return block
+            except Exception:
+                continue
         return None
 
     def _resolve_block(self, args: Dict[str, Any], require=False):
@@ -1702,26 +1738,32 @@ class MCPToolRegistry(QObject):
             logger.error(f"write_and_run: No block_editor on {type(session_widget)}")
             return {"error": "Block editor not available."}
 
-        # 1. Create the block
-        logger.info("write_and_run: Creating block...")
-        block = block_editor.add_block(language=language)
-        if not block:
-            logger.error("write_and_run: add_block returned None")
-            return {"error": "Failed to create block."}
+        block = self._find_block_by_name(block_editor, name) if name else None
+        if block:
+            logger.info(f"write_and_run: Updating existing block '{name}'")
+            if hasattr(block, "set_language"):
+                try:
+                    block.set_language(language)
+                except Exception as e:
+                    logger.debug(f"write_and_run: Could not set language on existing block: {e}")
+        else:
+            logger.info("write_and_run: Creating block...")
+            block = block_editor.add_block(language=language)
+            if not block:
+                logger.error("write_and_run: add_block returned None")
+                return {"error": "Failed to create block."}
 
-        # 2. Set block name if provided
-        if name:
-            block.set_block_name(name)
-            logger.info(f"write_and_run: Set block name to '{name}'")
+            if name:
+                block.set_block_name(name)
+                logger.info(f"write_and_run: Set block name to '{name}'")
 
-        # 3. Write the code
         logger.info("write_and_run: Setting code...")
         # Show copilot editing indicator and scroll into view
         self._signal_copilot_editing(block, block_editor)
         block.set_code(code)
-        block_index = len(block_editor.blocks) - 1
+        block_index = block_editor.blocks.index(block) if block in block_editor.blocks else len(block_editor.blocks) - 1
         actual_name = block.get_block_name()
-        logger.info(f"write_and_run: Block {block_index} ('{actual_name}') created with {len(code)} chars")
+        logger.info(f"write_and_run: Block {block_index} ('{actual_name}') prepared with {len(code)} chars")
 
         # 4. Execute the block and wait for results
         return self._execute_block_with_result(block, block_editor, block_index)

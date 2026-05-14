@@ -19,12 +19,14 @@ class TestShortcutManager:
         assert "save_file" in shortcuts
         assert "open_file" in shortcuts
         assert "new_tab" in shortcuts
+        assert "show_entity_info" in shortcuts
 
     def test_default_shortcut_values(self, shortcut_manager):
         """Atalhos padrão devem ter valores corretos"""
         assert shortcut_manager.get_shortcut("execute_sql") == "F5"
         assert shortcut_manager.get_shortcut("execute_all") == "Ctrl+F5"
         assert shortcut_manager.get_shortcut("new_tab") == "Ctrl+T"
+        assert shortcut_manager.get_shortcut("show_entity_info") == "Alt+F1"
 
     def test_set_shortcut(self, shortcut_manager):
         """Deve permitir alterar atalho"""
@@ -192,6 +194,7 @@ class TestNoDuplicateDefaults:
         assert "exit_app" in shortcuts
         assert "restore_view" in shortcuts
         assert "reset_layout" in shortcuts
+        assert "show_entity_info" in shortcuts
 
     def test_copy_with_headers_default(self, shortcut_manager):
         """copy_with_headers should default to Ctrl+Shift+C."""

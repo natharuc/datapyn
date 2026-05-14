@@ -29,9 +29,11 @@ def main_window(qapp, qtbot, tmp_path):
 
     with (
         patch("src.ui.main_window.ConnectionManager") as MockConnManager,
+        patch("src.ui.main_window._main.ConnectionManager") as MockMainConnManager,
         patch("src.core.session_manager.Path.home", return_value=tmp_path),
     ):
         mock_conn_manager = MockConnManager.return_value
+        MockMainConnManager.return_value = mock_conn_manager
         mock_conn_manager.get_saved_connections.return_value = ["Test Connection"]
         mock_conn_manager.get_connection_config.return_value = {
             "db_type": "mysql",

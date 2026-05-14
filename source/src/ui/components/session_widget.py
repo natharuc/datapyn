@@ -1195,7 +1195,7 @@ class SessionWidget(QWidget):
         tpl_vars = {
             "rows": f"{self._queue_last_rows:,}",
             "blocks": str(self._queue_blocks_done),
-            "tab_name": self.session.title or "",
+            "tab_name": getattr(self.session, "title", "") or "",
             "block_name": self._queue_last_block_name or "",
             "connection": self._queue_last_connection or "",
             "database": self._queue_last_database or "",
@@ -1725,6 +1725,9 @@ class SessionWidget(QWidget):
         """Clean resources"""
         # Stop periodic timer if running
         self.stop_periodic()
+
+        if hasattr(self, "editor") and self.editor:
+            self.editor.cleanup()
 
         try:
             if self._sql_thread and self._sql_thread.isRunning():

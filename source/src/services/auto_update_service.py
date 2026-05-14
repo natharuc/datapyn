@@ -279,10 +279,29 @@ class AutoUpdateService:
 
     def cleanup(self):
         """Clean up resources"""
-        if self._check_thread and self._check_thread.isRunning():
-            self._check_thread.quit()
-            self._check_thread.wait()
+        self._stop_thread("_check_thread")
+        self._stop_thread("_download_thread")
+        self._checker = None
+        self._downloader = None
 
-        if self._download_thread and self._download_thread.isRunning():
-            self._download_thread.quit()
-            self._download_thread.wait()
+    def _stop_thread(self, attr_name: str):
+        thread = getattr(self, attr_name, None)
+        if not thread:
+            return
+
+        try:
+            is_running = thread.isRunning()
+        except RuntimeError:
+            setattr(self, attr_name, None)
+            return
+
+        if is_running:
+            try:
+                thread.quit()
+                if not thread.wait(3000):
+                    thread.terminate()
+                    thread.wait(1000)
+            except RuntimeError:
+                pass
+
+        setattr(self, attr_name, None)

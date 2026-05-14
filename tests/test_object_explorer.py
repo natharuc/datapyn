@@ -1863,6 +1863,48 @@ class TestObjectExplorerEnhancedContextMenu:
         assert "WHERE" in expected
         assert "id" in expected
 
+    def test_create_table_script_uses_detailed_types(self, explorer):
+        """Create Table script usa o tipo detalhado das colunas."""
+        schema = {
+            "database": "testdb",
+            "tables": [{"name": "orders", "schema": "dbo", "type": "BASE TABLE", "key": "dbo.orders"}],
+            "columns": {
+                "dbo.orders": [
+                    {"name": "amount", "type": "decimal", "display_type": "decimal(20,12)", "nullable": "NO"},
+                    {"name": "customer_name", "type": "varchar", "display_type": "varchar(50)", "nullable": "YES"},
+                ]
+            },
+        }
+        explorer.set_schema(schema, "conn1", db_type="mssql")
+
+        orders_item = self._find_table_item(explorer, "orders")
+        assert orders_item is not None
+
+        script = explorer._build_create_table_script(orders_item)
+        assert "CREATE TABLE [dbo].[orders]" in script
+        assert "[amount] decimal(20,12) NOT NULL" in script
+        assert "[customer_name] varchar(50) NULL" in script
+
+    def test_drop_and_create_script_includes_drop_statement(self, explorer):
+        """Drop and Create gera DROP seguido do CREATE TABLE."""
+        schema = {
+            "database": "testdb",
+            "tables": [{"name": "users", "schema": "dbo", "type": "BASE TABLE", "key": "dbo.users"}],
+            "columns": {
+                "dbo.users": [
+                    {"name": "id", "type": "int", "display_type": "int", "nullable": "NO"},
+                ]
+            },
+        }
+        explorer.set_schema(schema, "conn1", db_type="mssql")
+
+        users_item = self._find_table_item(explorer, "users")
+        assert users_item is not None
+
+        script = explorer._build_drop_and_create_script(users_item)
+        assert "DROP TABLE [dbo].[users];" in script
+        assert script.count("CREATE TABLE") == 1
+
     def test_column_group_by(self, explorer, sample_schema):
         """Coluna gera GROUP BY correto"""
         explorer.set_schema(sample_schema, "conn1")

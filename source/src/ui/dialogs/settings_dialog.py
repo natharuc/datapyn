@@ -1432,47 +1432,48 @@ class SettingsDialog(QDialog):
         # Friendly descriptions for ALL shortcuts
         descriptions = {
             # Execution
-            "execute_sql": "Run Current Block",
-            "execute_all": "Run All Blocks",
-            "execute_block_advance": "Run Block & Advance",
-            "clear_results": "Clear Results",
+            "execute_sql": S.settings.shortcut_actions.execute_sql,
+            "execute_all": S.settings.shortcut_actions.execute_all,
+            "execute_block_advance": S.settings.shortcut_actions.execute_block_advance,
+            "clear_results": S.settings.shortcut_actions.clear_results,
             # File
-            "open_file": "Open File",
-            "save_file": "Save File",
-            "save_as": "Save As...",
-            "export_script": "Export as Script",
+            "open_file": S.settings.shortcut_actions.open_file,
+            "save_file": S.settings.shortcut_actions.save_file,
+            "save_as": S.settings.shortcut_actions.save_as,
+            "export_script": S.settings.shortcut_actions.export_script,
             # Sessions
-            "new_tab": "New Tab",
-            "new_session": "New Session",
-            "close_tab": "Close Tab",
-            "add_block": "Add Block",
+            "new_tab": S.settings.shortcut_actions.new_tab,
+            "new_session": S.settings.shortcut_actions.new_session,
+            "close_tab": S.settings.shortcut_actions.close_tab,
+            "add_block": S.settings.shortcut_actions.add_block,
             # Editing
-            "find": "Find",
-            "replace": "Replace",
-            "format_code": "Format Code",
+            "find": S.settings.shortcut_actions.find,
+            "replace": S.settings.shortcut_actions.replace,
+            "format_code": S.settings.shortcut_actions.format_code,
+            "show_entity_info": S.settings.shortcut_actions.show_entity_info,
             # Autocomplete
-            "force_autocomplete": "Force Autocomplete",
+            "force_autocomplete": S.settings.shortcut_actions.force_autocomplete,
             # Connections
-            "manage_connections": "Manage Connections",
-            "new_connection": "New Connection",
+            "manage_connections": S.settings.shortcut_actions.manage_connections,
+            "new_connection": S.settings.shortcut_actions.new_connection,
             # Schema
-            "reload_schema": "Reload SQL Schema",
+            "reload_schema": S.settings.shortcut_actions.reload_schema,
             # Tools
-            "settings": "Settings",
+            "settings": S.settings.shortcut_actions.settings,
             # Results grid
-            "copy_with_headers": "Copy with Headers (Grid)",
+            "copy_with_headers": S.settings.shortcut_actions.copy_with_headers,
             # View / Layout
-            "exit_app": "Exit Application",
-            "restore_view": "Restore Default View",
-            "reset_layout": "Reset Layout Completely",
+            "exit_app": S.settings.shortcut_actions.exit_app,
+            "restore_view": S.settings.shortcut_actions.restore_view,
+            "reset_layout": S.settings.shortcut_actions.reset_layout,
             # Editor (QScintilla)
-            "editor_newline": "[Editor] Newline (Shift+Enter)",
-            "editor_duplicate_line": "[Editor] Duplicate Line/Selection",
-            "editor_cut_line": "[Editor] Cut Line",
-            "editor_transpose_line": "[Editor] Transpose Lines",
-            "editor_lowercase": "[Editor] Lowercase",
-            "editor_uppercase": "[Editor] Uppercase",
-            "editor_delete_line": "[Editor] Delete Line",
+            "editor_newline": S.settings.shortcut_actions.editor_newline,
+            "editor_duplicate_line": S.settings.shortcut_actions.editor_duplicate_line,
+            "editor_cut_line": S.settings.shortcut_actions.editor_cut_line,
+            "editor_transpose_line": S.settings.shortcut_actions.editor_transpose_line,
+            "editor_lowercase": S.settings.shortcut_actions.editor_lowercase,
+            "editor_uppercase": S.settings.shortcut_actions.editor_uppercase,
+            "editor_delete_line": S.settings.shortcut_actions.editor_delete_line,
         }
 
         # Show ALL shortcuts

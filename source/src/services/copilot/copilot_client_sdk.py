@@ -286,6 +286,7 @@ class CopilotWorker(QObject):
         self._cancelled = False
         self._prompt = ""
         self._system_message = ""
+        self._session_signature = None
         self._loop = None  # Persistent event loop
         self._inline_prompt = ""  # For inline completions
 
@@ -561,10 +562,18 @@ class CopilotWorker(QObject):
             for t in self._sdk_tools:
                 logger.info(f"  Tool: {t.name}")
 
-        # Create session if needed (or recreate to update tools)
-        if not self._session:
+        session_signature = self._build_session_signature()
+
+        # Create session if needed, or recreate when stable session config changes.
+        if not self._session or self._session_signature != session_signature:
             logger.info("[CHAT] Creating new session")
+            if self._session:
+                try:
+                    await self._session.abort()
+                except Exception:
+                    pass
             await self._async_create_session()
+            self._session_signature = session_signature
             logger.info("[CHAT] Copilot session created")
 
         if not self._prompt:
@@ -735,6 +744,11 @@ class CopilotWorker(QObject):
         
         self._session = await self._sdk_client.create_session(config)
 
+    def _build_session_signature(self):
+        """Return a stable signature for SDK session configuration."""
+        tool_names = tuple(t.name for t in self._sdk_tools) if self._sdk_tools else ()
+        return (self._model, self._system_message, tool_names)
+
     def _build_sdk_tools(self, SDKTool) -> List[Any]:
         """Build SDK Tool objects from MCP tool definitions."""
         if not self._tool_executor:
@@ -810,6 +824,9 @@ class CopilotWorker(QObject):
         Called in background after authentication to pre-warm the session.
         """
         import asyncio
+
+        if self._cancelled:
+            return
         
         try:
             if not self._loop or self._loop.is_closed():
@@ -822,18 +839,25 @@ class CopilotWorker(QObject):
 
     async def _async_init_session(self):
         """Async session initialization without completion."""
+        if self._cancelled:
+            return
+
         SDKClient, _, EventType, import_err = _try_import_sdk()
         if SDKClient is None:
             return
         
         # Initialize client
         if not self._sdk_client:
+            if self._cancelled:
+                return
             self._sdk_client = SDKClient(_get_sdk_options())
             await self._sdk_client.start()
             logger.info("Copilot SDK client started (pre-init)")
         
         # Create session
         if not self._session:
+            if self._cancelled:
+                return
             config = {
                 "model": "gpt-4o-mini",  # Fast model for completions
                 "streaming": True,
@@ -1157,7 +1181,11 @@ class CopilotClient(QObject):
             messages: List of message dicts with "role" and "content" keys.
                       The last user message is used as the prompt.
         """
-        # Extract prompt from last user message
+        # Extract prompt from last user message and system rules from latest system message.
+        system_messages = [m for m in messages if m.get("role") == "system"]
+        if system_messages:
+            self._system_message = system_messages[-1].get("content", "")
+
         user_messages = [m for m in messages if m.get("role") == "user"]
         if not user_messages:
             self.chat_error.emit("No user message to send")
@@ -1361,6 +1389,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
                 worker.cancel()
                 # Disconnect signals to prevent callbacks
                 worker.complete.disconnect()
+                worker.inline_complete.disconnect()
                 worker.error.disconnect()
                 worker.finished.disconnect()
             except (RuntimeError, TypeError):
@@ -1646,6 +1675,12 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
 
     def cleanup(self) -> None:
         """Clean up all resources."""
+        if self._lsp_client:
+            try:
+                self._lsp_client.cleanup()
+            except Exception:
+                pass
+            self._lsp_client = None
         self._cleanup_worker()
         self._cleanup_session_worker()
         self._cleanup_completion_worker()

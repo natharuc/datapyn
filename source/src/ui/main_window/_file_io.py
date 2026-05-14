@@ -412,6 +412,13 @@ class FileIOMixin:
         """Sync global _original_file_path/_original_file_type from the current widget.
         This ensures the global always matches the active tab."""
         current_widget = self._get_current_session_widget()
+        if (
+            current_widget
+            and hasattr(current_widget, "session")
+            and current_widget.session.session_id not in self._session_widgets
+        ):
+            current_widget = None
+
         if current_widget and hasattr(current_widget, "file_path") and current_widget.file_path:
             self._original_file_path = current_widget.file_path
             self._original_file_type = getattr(current_widget, "_original_file_type", None)
@@ -433,6 +440,9 @@ class FileIOMixin:
             # No current widget - use original type or fallback
             if self._original_file_type in ["sql", "python"]:
                 return self._original_file_type
+            return "workspace"
+
+        if not getattr(current_widget, "file_path", None) and self._original_file_type == "workspace":
             return "workspace"
 
         blocks = current_widget.editor.get_blocks()
@@ -508,6 +518,8 @@ class FileIOMixin:
         # Per-tab source of truth for file path
         current_widget = self._get_current_session_widget()
         widget_file_path = getattr(current_widget, "file_path", None) if current_widget else None
+        if not widget_file_path and self._original_file_path:
+            widget_file_path = self._original_file_path
 
         if context in ["sql", "python"]:
             # Contexto de arquivo unico
@@ -765,6 +777,13 @@ class FileIOMixin:
             if session_widget.session.connection_name:
                 conn_name = session_widget.session.connection_name
                 config = self.connection_manager.get_connection_config(conn_name)
+                if not config:
+                    connector = getattr(session_widget.session, "connector", None)
+                    connector_params = getattr(connector, "connection_params", None)
+                    if isinstance(connector_params, dict) and connector_params:
+                        config = dict(connector_params)
+                        config.setdefault('db_type', getattr(connector, "db_type", "mysql") or "mysql")
+
                 if config:
                     db_type = config.get('db_type', 'mysql')
                     host = config.get('host', 'localhost')
@@ -802,6 +821,11 @@ class FileIOMixin:
 
                     lines.append('')
                     lines.append('# Create connection engine')
+                    lines.append('engine = create_engine(connection_string)')
+                    lines.append('')
+                else:
+                    lines.append(f"# Connection config not found for: {conn_name}")
+                    lines.append("connection_string = ''  # Configure your connection string")
                     lines.append('engine = create_engine(connection_string)')
                     lines.append('')
             else:
