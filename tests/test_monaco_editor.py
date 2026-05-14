@@ -399,3 +399,43 @@ class TestMonacoCompletionIntegration:
         qtbot.addWidget(editor)
         
         assert callable(getattr(editor, "provide_completion", None))
+
+
+class TestMonacoSqlAutocompleteIntegration:
+    """Tests for Monaco SQL autocomplete bridge behavior."""
+
+    def test_sql_completion_uses_zero_based_service_coordinates(self, qtbot):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor._run_js_when_ready = Mock()
+
+        with patch("src.services.sql_autocomplete_service.SqlAutoCompleteService") as service_cls:
+            service = service_cls.return_value
+            service.get_completions.return_value = [("total", "column", "decimal(18,2)")]
+
+            editor._on_sql_completion_requested("SELECT o.", 2, 9)
+
+            service.get_completions.assert_called_once_with("SELECT o.", 1, 8)
+            emitted = editor._run_js_when_ready.call_args[0][0]
+            assert '"label": "total"' in emitted
+            assert '"kind": "field"' in emitted
+
+    def test_sql_context_completion_preserves_variable_kind(self, qtbot):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor._run_js_when_ready = Mock()
+
+        with patch("src.services.sql_autocomplete_service.SqlAutoCompleteService") as service_cls:
+            service = service_cls.return_value
+            service.get_completions.return_value = [("@status", "variable", "VARCHAR(20)")]
+
+            editor._on_sql_context_requested("SELECT @", "@", 1, 8)
+
+            service.get_completions.assert_called_once_with("SELECT @", 0, 7)
+            emitted = editor._run_js_when_ready.call_args[0][0]
+            assert '"label": "@status"' in emitted
+            assert '"kind": "variable"' in emitted

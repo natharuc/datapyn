@@ -199,6 +199,7 @@ def test_all_shortcuts_registered(main_window):
         "add_block",
         # Edição - find/replace gerenciados pelos editores
         # 'find', 'replace' removidos - cada editor tem seus próprios
+        "show_entity_info",
         # Conexões
         "manage_connections",
         "new_connection",

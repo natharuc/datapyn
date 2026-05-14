@@ -471,9 +471,11 @@
         
         // Sort text helper - columns first, then tables, then keywords
         function getSortText(c) {
+            if (c.category === 'variable') return '0' + c.label;
             if (c.category === 'column') return '0' + c.label;
-            if (c.category === 'table') return '1' + c.label;
-            return '2' + c.label;
+            if (c.category === 'routine') return '1' + c.label;
+            if (c.category === 'table') return '2' + c.label;
+            return '3' + c.label;
         }
         
         // Request Python Jedi completions from Python
@@ -745,7 +747,7 @@
         function registerStandardCompletionProviders() {
             // SQL provider - ALWAYS requests from Python (SSMS-style)
             monaco.languages.registerCompletionItemProvider('sql', {
-                triggerCharacters: ['.', ' '],
+                triggerCharacters: ['.', ' ', ',', '(', '=', '@', '#'],
                 provideCompletionItems: async function(model, position, context) {
                     const word = model.getWordUntilPosition(position);
                     const range = {

@@ -256,9 +256,9 @@ class MonacoEditor(QWidget):
             service = SqlAutoCompleteService()
             service.set_schema(self._sql_schema)
             
-            # Get completions for the prefix (alias or table name)
-            # Returns list of (name, category, detail) tuples
-            completions = service._dot_completions(prefix, full_text)
+            # Reuse the main completion path so dot completions honor
+            # cursor scope, aliases, CTEs, subqueries and temp objects.
+            completions = service.get_completions(full_text, line - 1, column - 1)
             
             # Format and send back to JavaScript
             js_completions = []
@@ -270,7 +270,7 @@ class MonacoEditor(QWidget):
                 
                 js_completions.append({
                     'label': name,
-                    'kind': 'field',
+                    'kind': 'variable' if category == 'variable' else 'field',
                     'insertText': name,
                     'detail': detail,
                     'category': category,
@@ -298,7 +298,7 @@ class MonacoEditor(QWidget):
             service.set_schema(self._sql_schema)
             
             # Get context-aware completions
-            completions = service.get_completions(full_text, line - 1, column)
+            completions = service.get_completions(full_text, line - 1, column - 1)
             
             # Format for JavaScript
             js_completions = []
@@ -314,10 +314,14 @@ class MonacoEditor(QWidget):
                     kind = 'keyword'
                 elif category == 'function':
                     kind = 'function'
+                elif category == 'routine':
+                    kind = 'function'
                 elif category == 'table':
                     kind = 'class'
                 elif category == 'column':
                     kind = 'field'
+                elif category == 'variable':
+                    kind = 'variable'
                 elif category == 'database':
                     kind = 'module'
                 

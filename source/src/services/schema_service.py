@@ -16,6 +16,7 @@ import traceback
 logger = logging.getLogger(__name__)
 
 from src.language import S
+from src.services.entity_metadata_service import build_display_data_type
 
 
 class SchemaWorker(QObject):
@@ -41,7 +42,7 @@ class SchemaWorker(QObject):
         """
         try:
             self.progress.emit(S.schema_service.loading)
-            schema = {"tables": [], "columns": {}, "database": "", "databases": []}
+            schema = {"tables": [], "columns": {}, "database": "", "databases": [], "db_type": "", "routines": []}
 
             if self._cancelled:
                 return
@@ -49,6 +50,7 @@ class SchemaWorker(QObject):
             # Get current database
             try:
                 db_type = getattr(self.connector, "db_type", "").lower()
+                schema["db_type"] = db_type
                 if db_type == "databricks":
                     # For Databricks, use get_current_catalog which has proper fallback
                     db_name = self.connector.get_current_catalog() if hasattr(self.connector, "get_current_catalog") else ""
@@ -122,6 +124,7 @@ class SchemaWorker(QObject):
                         col_info = {
                             "name": str(row.get("column_name", "")),
                             "type": str(row.get("data_type", "")) if "data_type" in df.columns else "",
+                            "display_type": build_display_data_type(row, db_type),
                             "nullable": str(row.get("is_nullable", "YES")) if "is_nullable" in df.columns else "YES",
                         }
                         if table_name not in schema["columns"]:
@@ -133,9 +136,33 @@ class SchemaWorker(QObject):
             if self._cancelled:
                 return
 
+            # Get stored procedures and functions
+            try:
+                routines_query = self._get_routines_query()
+                if routines_query:
+                    df = self.connector.execute_query(routines_query)
+                    if df is not None and len(df) > 0:
+                        for _, row in df.iterrows():
+                            if self._cancelled:
+                                return
+                            routine_name = str(row.get("routine_name", row.iloc[0]))
+                            routine_schema = str(row.get("routine_schema", "")) if "routine_schema" in df.columns else ""
+                            routine_type = str(row.get("routine_type", "PROCEDURE")) if "routine_type" in df.columns else "PROCEDURE"
+                            schema["routines"].append({
+                                "name": routine_name,
+                                "schema": routine_schema,
+                                "type": routine_type.upper(),
+                            })
+            except Exception as e:
+                logger.debug(f"Error loading routines: {e}")
+
+            if self._cancelled:
+                return
+
             self.progress.emit(
                 f"Schema loaded: {len(schema['tables'])} tables, "
-                f"{sum(len(v) for v in schema['columns'].values())} columns"
+                f"{sum(len(v) for v in schema['columns'].values())} columns, "
+                f"{len(schema['routines'])} routines"
             )
             self.finished.emit(schema)
 
@@ -211,6 +238,10 @@ class SchemaWorker(QObject):
                        TABLE_NAME as table_name,
                        COLUMN_NAME as column_name,
                        DATA_TYPE as data_type,
+                       CHARACTER_MAXIMUM_LENGTH as character_maximum_length,
+                       NUMERIC_PRECISION as numeric_precision,
+                       NUMERIC_SCALE as numeric_scale,
+                       DATETIME_PRECISION as datetime_precision,
                        IS_NULLABLE as is_nullable,
                        ORDINAL_POSITION as ordinal_position
                 FROM INFORMATION_SCHEMA.COLUMNS
@@ -218,8 +249,9 @@ class SchemaWorker(QObject):
             """
         elif db_type == "postgresql":
             return """
-                SELECT table_schema, table_name, column_name, data_type, is_nullable,
-                       ordinal_position
+                SELECT table_schema, table_name, column_name, data_type, udt_name,
+                       character_maximum_length, numeric_precision, numeric_scale,
+                       datetime_precision, is_nullable, ordinal_position
                 FROM information_schema.columns
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
                 ORDER BY table_schema, table_name, ordinal_position
@@ -240,12 +272,47 @@ class SchemaWorker(QObject):
                 SELECT TABLE_NAME as table_name,
                        COLUMN_NAME as column_name,
                        DATA_TYPE as data_type,
+                       CHARACTER_MAXIMUM_LENGTH as character_maximum_length,
+                       NUMERIC_PRECISION as numeric_precision,
+                       NUMERIC_SCALE as numeric_scale,
+                       DATETIME_PRECISION as datetime_precision,
                        IS_NULLABLE as is_nullable,
                        ORDINAL_POSITION as ordinal_position
                 FROM INFORMATION_SCHEMA.COLUMNS
                 WHERE TABLE_SCHEMA = DATABASE()
                 ORDER BY TABLE_NAME, ORDINAL_POSITION
             """
+
+    def _get_routines_query(self) -> str | None:
+        """Query to get stored procedures and functions."""
+        db_type = getattr(self.connector, "db_type", "").lower()
+
+        if db_type in ("mssql", "sqlserver"):
+            return """
+                SELECT ROUTINE_SCHEMA as routine_schema,
+                       ROUTINE_NAME as routine_name,
+                       ROUTINE_TYPE as routine_type
+                FROM INFORMATION_SCHEMA.ROUTINES
+                ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME
+            """
+        elif db_type == "postgresql":
+            return """
+                SELECT routine_schema, routine_name, routine_type
+                FROM information_schema.routines
+                WHERE routine_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY routine_schema, routine_name
+            """
+        elif db_type in ("mysql", "mariadb"):
+            return """
+                SELECT ROUTINE_SCHEMA as routine_schema,
+                       ROUTINE_NAME as routine_name,
+                       ROUTINE_TYPE as routine_type
+                FROM INFORMATION_SCHEMA.ROUTINES
+                WHERE ROUTINE_SCHEMA = DATABASE()
+                ORDER BY ROUTINE_NAME
+            """
+        # Databricks and others don't have a standard routines view
+        return None
 
 
 class SchemaService(QObject):
@@ -593,11 +660,14 @@ class SchemaService(QObject):
                             columns.append({
                                 "name": col_name,
                                 "type": str(row.get("data_type", row.iloc[1] if len(row) > 1 else "")),
+                                "display_type": build_display_data_type(row, db_type),
                                 "nullable": "YES",  # DESCRIBE doesn't give nullable info
                             })
                 elif db_type in ("mssql", "sqlserver"):
                     query = f"""
-                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+                        SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
+                               NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                               IS_NULLABLE
                         FROM INFORMATION_SCHEMA.COLUMNS
                         WHERE TABLE_SCHEMA = '{_schema_name}' AND TABLE_NAME = '{_table_name}'
                         ORDER BY ORDINAL_POSITION
@@ -608,11 +678,14 @@ class SchemaService(QObject):
                             columns.append({
                                 "name": str(row.get("COLUMN_NAME", row.iloc[0])),
                                 "type": str(row.get("DATA_TYPE", "")),
+                                "display_type": build_display_data_type(row, db_type),
                                 "nullable": str(row.get("IS_NULLABLE", "YES")),
                             })
                 elif db_type == "postgresql":
                     query = f"""
-                        SELECT column_name, data_type, is_nullable
+                        SELECT column_name, data_type, udt_name,
+                               character_maximum_length, numeric_precision,
+                               numeric_scale, datetime_precision, is_nullable
                         FROM information_schema.columns
                         WHERE table_schema = '{_schema_name}' AND table_name = '{_table_name}'
                         ORDER BY ordinal_position
@@ -623,12 +696,15 @@ class SchemaService(QObject):
                             columns.append({
                                 "name": str(row.get("column_name", row.iloc[0])),
                                 "type": str(row.get("data_type", "")),
+                                "display_type": build_display_data_type(row, db_type),
                                 "nullable": str(row.get("is_nullable", "YES")),
                             })
                 else:
                     # MySQL/MariaDB
                     query = f"""
-                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+                        SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
+                               NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                               IS_NULLABLE
                         FROM INFORMATION_SCHEMA.COLUMNS
                         WHERE TABLE_SCHEMA = '{_schema_name}' AND TABLE_NAME = '{_table_name}'
                         ORDER BY ORDINAL_POSITION
@@ -639,6 +715,7 @@ class SchemaService(QObject):
                             columns.append({
                                 "name": str(row.get("COLUMN_NAME", row.iloc[0])),
                                 "type": str(row.get("DATA_TYPE", "")),
+                                "display_type": build_display_data_type(row, db_type),
                                 "nullable": str(row.get("IS_NULLABLE", "YES")),
                             })
 

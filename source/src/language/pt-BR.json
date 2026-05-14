@@ -3,7 +3,6 @@
     "name": "Portugues (Brasil)",
     "code": "pt-BR"
   },
-
   "menu": {
     "file": "&Arquivo",
     "new_tab": "&Nova Aba",
@@ -43,7 +42,6 @@
     "check_updates": "Verificar &Atualizacoes...",
     "about": "&Sobre"
   },
-
   "toolbar": {
     "new_tab": " Nova Aba",
     "connection": " Conexao",
@@ -55,7 +53,6 @@
     "run_timer_label": "Aguardar X segundos apos o termino e executar novamente:",
     "run_timer_start": "Iniciar"
   },
-
   "dock": {
     "connections": "Conexoes",
     "results": "Resultados",
@@ -64,7 +61,6 @@
     "object_explorer": "Explorador de Objetos",
     "copilot": "Copilot Chat"
   },
-
   "status": {
     "ready": "Pronto",
     "connected": "Conectado",
@@ -120,17 +116,14 @@
     "cross_executed": "[Cross-Syntax] Executado com sucesso!",
     "execution_error_generic": "[{type}] Erro na execucao"
   },
-
   "main_window": {
     "window_title": "DataPyn - IDE SQL + Python"
   },
-
   "empty_state": {
     "title": "Nenhum script aberto",
     "subtitle": "Crie uma nova sessao ou arraste um arquivo para comecar",
     "start_button": "Iniciar"
   },
-
   "about": {
     "title": "Sobre o DataPyn",
     "ide_name": "DataPyn IDE",
@@ -141,7 +134,6 @@
     "license": "Licenca: MIT License",
     "built_with": "Construido com Python e PyQt6"
   },
-
   "dialogs": {
     "warning": "Aviso",
     "error": "Erro",
@@ -194,7 +186,6 @@
     "language_restart_title": "Reinicializacao Necessaria",
     "language_restart_msg": "A mudanca de idioma tera efeito apos reiniciar o DataPyn.\n\nReiniciar agora?"
   },
-
   "notification": {
     "sql_query": "Consulta SQL",
     "python": "Python",
@@ -207,7 +198,6 @@
     "executed": "Executado com sucesso!",
     "error": "Erro: {error}..."
   },
-
   "log": {
     "sql_running": "[SQL] Executando consulta...",
     "sql_database": "[SQL] Banco: {name}",
@@ -219,7 +209,6 @@
     "sql_executed": "Executado com sucesso ({rows} linhas retornadas)",
     "schema_loaded": "Schema carregado ({name}): {tables} tabelas, {cols} colunas"
   },
-
   "connection_panel": {
     "section_active": "CONEXAO ATIVA",
     "label_none": "Nenhuma",
@@ -232,7 +221,6 @@
     "ctx_edit": "Editar",
     "error_loading_svg": "Erro ao carregar SVG: {error}"
   },
-
   "session_widget": {
     "connected_to": "Conectado a {name}",
     "connect_failed": "Falha ao conectar a {name}",
@@ -268,7 +256,6 @@
     "conn_dialog_error": "Erro ao abrir dialogo de conexao: {error}",
     "connecting_block": "Conectando a {name}..."
   },
-
   "results": {
     "btn_csv": "CSV",
     "btn_excel": "Excel",
@@ -325,7 +312,6 @@
     "ctx_copy_with_headers": "Copiar com Cabecalho",
     "ctx_select_all": "Selecionar Tudo"
   },
-
   "export_settings": {
     "dialog_title": "Configuracoes de Exportacao",
     "tooltip_btn": "Configuracoes de exportacao",
@@ -342,7 +328,6 @@
     "null_text": "NULL",
     "null_none": "None"
   },
-
   "csv_export": {
     "dialog_title": "Exportar CSV",
     "label_delimiter": "Delimitador:",
@@ -358,7 +343,6 @@
     "label_include_header": "Incluir cabecalho:",
     "label_open_folder": "Abrir pasta apos exportar:"
   },
-
   "object_explorer": {
     "no_connection": "Sem conexao",
     "loading": "Carregando schema...",
@@ -381,6 +365,9 @@
     "ctx_copy_db_name": "Copiar nome",
     "ctx_count_rows": "Contar linhas (COUNT)",
     "ctx_select_all_columns": "SELECT com todas as colunas",
+    "ctx_commands_menu": "Commands",
+    "ctx_command_create_table": "Create Table",
+    "ctx_command_drop_create": "Drop and Create",
     "ctx_where_clause": "Clausula WHERE",
     "ctx_group_by": "Clausula GROUP BY",
     "ctx_order_by": "Clausula ORDER BY",
@@ -390,7 +377,6 @@
     "schema_error": "Erro ao carregar schema",
     "not_null": "NOT NULL"
   },
-
   "variables_panel": {
     "no_variables": "Sem variaveis",
     "one_variable": "1 variavel",
@@ -417,7 +403,6 @@
     "ctx_size_chars": "Tamanho: {n} caracteres",
     "ctx_remove_variable": "Remover variavel"
   },
-
   "output_panel": {
     "btn_clear": "Limpar",
     "btn_copy": "Copiar",
@@ -434,7 +419,6 @@
     "btn_close_detail": "Fechar",
     "btn_resolve_copilot": "Resolver com Copilot"
   },
-
   "session_tabs": {
     "ctx_open_file_location": "Abrir Local do Arquivo",
     "ctx_close_all": "Fechar Todas",
@@ -444,13 +428,11 @@
     "ctx_customize_notification": "Personalizar Notificacao",
     "ctx_close": "Fechar"
   },
-
   "bottom_tabs": {
     "results": "Resultados",
     "output": "Saida",
     "variables": "Variaveis"
   },
-
   "block": {
     "conn_tab_default": "Padrao da Aba",
     "conn_first_block_locked": "O primeiro bloco usa a conexao da aba",
@@ -476,7 +458,6 @@
     "copilot_editing": "Copilot editando...",
     "tooltip_active": "Ativar/desativar bloco (blocos inativos sao pulados ao executar todos)"
   },
-
   "find_replace": {
     "placeholder_find": "Buscar...",
     "tooltip_match_case": "Diferenciar maiusculas/minusculas",
@@ -494,12 +475,10 @@
     "no_results": "Nenhum resultado",
     "replacements_count": "{count} substituicoes"
   },
-
   "block_editor": {
     "tooltip_add_block": "Adicionar bloco",
     "block_marker": "# === Bloco {n} ({lang}) ==="
   },
-
   "settings": {
     "title": "Configuracoes",
     "tab_general": "Geral",
@@ -512,6 +491,40 @@
     "tip_shortcuts": "Dica: Clique duplo em um atalho para editar",
     "header_action": "Acao",
     "header_shortcut": "Atalho",
+    "shortcut_actions": {
+      "execute_sql": "Executar bloco atual",
+      "execute_all": "Executar todos os blocos",
+      "execute_block_advance": "Executar bloco e avancar",
+      "clear_results": "Limpar resultados",
+      "open_file": "Abrir arquivo",
+      "save_file": "Salvar arquivo",
+      "save_as": "Salvar como...",
+      "export_script": "Exportar como script",
+      "new_tab": "Nova aba",
+      "new_session": "Nova sessao",
+      "close_tab": "Fechar aba",
+      "add_block": "Adicionar bloco",
+      "find": "Buscar",
+      "replace": "Substituir",
+      "format_code": "Formatar codigo",
+      "show_entity_info": "Mostrar informacoes da entidade",
+      "force_autocomplete": "Forcar autocomplete",
+      "manage_connections": "Gerenciar conexoes",
+      "new_connection": "Nova conexao",
+      "reload_schema": "Recarregar schema SQL",
+      "settings": "Configuracoes",
+      "copy_with_headers": "Copiar com cabecalho (grid)",
+      "exit_app": "Fechar aplicativo",
+      "restore_view": "Restaurar visualizacao padrao",
+      "reset_layout": "Resetar layout completamente",
+      "editor_newline": "[Editor] Nova linha (Shift+Enter)",
+      "editor_duplicate_line": "[Editor] Duplicar linha/selecao",
+      "editor_cut_line": "[Editor] Recortar linha",
+      "editor_transpose_line": "[Editor] Transpor linhas",
+      "editor_lowercase": "[Editor] Minusculas",
+      "editor_uppercase": "[Editor] Maiusculas",
+      "editor_delete_line": "[Editor] Excluir linha"
+    },
     "btn_restore_defaults": "Restaurar Padroes",
     "btn_cancel": "Cancelar",
     "btn_save": "Salvar",
@@ -616,7 +629,48 @@
     "notification_channel_telegram": "Telegram",
     "notification_channel_email": "Email"
   },
-
+  "entity_info": {
+    "dialog_title": "Informacoes da Entidade",
+    "loading": "Carregando informacoes da entidade...",
+    "no_selection": "Selecione o nome de uma entidade no editor SQL primeiro.",
+    "no_active_sql_block": "Foque em um bloco SQL para abrir as informacoes da entidade.",
+    "no_connection": "Conecte-se a um banco de dados antes de abrir as informacoes da entidade.",
+    "load_error": "Nao foi possivel carregar as informacoes da entidade: {error}",
+    "load_error_status": "Erro ao carregar informacoes da entidade: {error}",
+    "error_subtitle": "Nao foi possivel carregar os detalhes solicitados.",
+    "subtitle_ready": "Conexao: {connection} | Banco: {db_type}",
+    "header_connection": "Conexao ativa: {connection}",
+    "field_type": "Tipo",
+    "field_database": "Banco",
+    "field_catalog": "Catalogo",
+    "field_schema": "Schema",
+    "field_rows": "Linhas",
+    "field_size": "Tamanho",
+    "section_columns": "Colunas",
+    "section_indexes": "Indices",
+    "columns_name": "Nome",
+    "columns_type": "Tipo",
+    "columns_nullable": "Nulo",
+    "columns_default": "Padrao",
+    "indexes_name": "Nome",
+    "indexes_type": "Tipo",
+    "indexes_columns": "Colunas",
+    "nullable_yes": "Sim",
+    "nullable_no": "Nao",
+    "not_available": "Nao disponivel",
+    "no_columns": "Nenhuma coluna encontrada.",
+    "no_indexes": "Nenhum indice encontrado.",
+    "indexes_not_supported": "Informacoes de indice nao estao disponiveis para este banco.",
+    "button_close": "Fechar",
+    "section_parameters": "Parametros",
+    "section_trigger_info": "Informacoes do Trigger",
+    "columns_direction": "Direcao",
+    "no_parameters": "Nenhum parametro encontrado.",
+    "trigger_event": "Evento",
+    "trigger_parent_table": "Tabela",
+    "trigger_timing": "Momento",
+    "section_routine_not_available": "Indice nao disponivel para este tipo de objeto."
+  },
   "tab_notification": {
     "dialog_title": "Notificacao da Aba",
     "section_config": "CONFIGURACAO DE NOTIFICACAO",
@@ -665,7 +719,6 @@
     "btn_cancel": "Cancelar",
     "badge_active": "Notificacao personalizada ativa"
   },
-
   "connections_manager": {
     "title": "Gerenciar Conexoes",
     "btn_new_group": "Novo Grupo",
@@ -721,7 +774,6 @@
     "import_export_confirm_title": "Confirmar Importacao",
     "import_export_confirm_msg": "Isso vai importar {count} conexao(oes) e {groups} grupo(s).\nConexoes existentes com mesmo nome serao substituidas.\nDeseja continuar?"
   },
-
   "connection_edit": {
     "title_new": "Nova Conexao",
     "title_edit": "Editar Conexao: {name}",
@@ -764,14 +816,12 @@
     "validation_name_required": "Nome da conexao e obrigatorio",
     "validation_host_required": "Host e obrigatorio"
   },
-
   "connection_picker": {
     "title": "Selecionar Conexao",
     "header": "SELECIONE UMA CONEXAO",
     "hint": "Clique duplo para selecionar",
     "btn_cancel": "Cancelar"
   },
-
   "export_to_table": {
     "title": "Exportar para Tabela",
     "info_row_col": "{rows} linhas x {cols} colunas",
@@ -802,7 +852,6 @@
     "validation_connection_required": "Selecione uma conexao",
     "validation_no_data": "Sem dados para exportar"
   },
-
   "file_import": {
     "title": "Importar Arquivo",
     "header": "Importar Dados",
@@ -844,7 +893,6 @@
     "checkbox_json_lines": "JSON Lines (um registro por linha)",
     "label_format": "Formato:"
   },
-
   "package_manager": {
     "title": "Gerenciador de Pacotes",
     "subtitle": "Pesquisar, instalar e gerenciar pacotes Python (pip)",
@@ -893,7 +941,6 @@
     "auth_token_placeholder": "PAT, chave de API ou senha",
     "auth_username_invalid": "O campo usuario deve conter um nome de usuario ou email, nao uma URL. Informe apenas o usuario para autenticacao."
   },
-
   "update_dialog": {
     "title": "Atualizacao Disponivel",
     "new_version_label": "Nova versao disponivel: {version}",
@@ -916,7 +963,6 @@
     "checking_connecting": "Conectando ao GitHub...",
     "checking_timeout": "Tempo esgotado."
   },
-
   "mixed_executor": {
     "no_connection": "Nenhuma conexao ativa com o banco de dados",
     "no_query_found": "Nenhuma query encontrada com sintaxe {{ SQL }}",
@@ -927,7 +973,6 @@
     "help_example": "EXEMPLO COMPLETO:",
     "help_shortcut": "ATALHO: Ctrl+Shift+F5"
   },
-
   "workers": {
     "error_sql": "Erro SQL: {msg}",
     "error_connection": "Erro de conexao: {msg}",
@@ -936,7 +981,6 @@
     "error_db_switch": "Erro ao trocar banco: {msg}",
     "error_failed_to_connect": "Falha ao conectar ao banco de dados"
   },
-
   "session": {
     "default_title": "Script",
     "default_title_n": "Script {n}",
@@ -944,19 +988,16 @@
     "status_disconnected": "Desconectado",
     "status_ready": "Pronto"
   },
-
   "schema_service": {
     "loading": "Carregando estrutura do banco...",
     "loaded": "Schema carregado: {tables} tabelas, {cols} colunas"
   },
-
   "docking": {
     "window_title": "DataPyn - Sistema de Docking",
     "menu_view": "&Exibir",
     "menu_reset_layout": "&Resetar Layout",
     "menu_panels": "&Paineis"
   },
-
   "copilot": {
     "title": "Copilot",
     "input_placeholder": "Pergunte ao Copilot... (Enter para enviar, Shift+Enter para nova linha)",
@@ -970,7 +1011,7 @@
     "not_authenticated": "Faca login com o GitHub para usar o Copilot.",
     "auth_instructions": "Para autenticar, insira o codigo **{code}** em:\n{url}\n\n(Codigo copiado para a area de transferencia)",
     "auth_code_instructions": "Insira este codigo no GitHub para autenticar:",
-    "copy_code": "Copiar Codigo",
+    "copy_code": "Copiar",
     "code_copied": "Copiado!",
     "waiting_auth": "Aguardando autenticacao...",
     "auth_success": "Autenticado com sucesso! Voce ja pode conversar com o Copilot.",
@@ -1009,7 +1050,6 @@
     "tool_running": "executando...",
     "tool_ok": "ok",
     "tool_error": "erro",
-    "copy_code": "Copiar",
     "copied_code": "Copiado!",
     "insert_code": "Inserir",
     "inserted_code": "Inserido!",
@@ -1017,7 +1057,6 @@
     "new_chat": "Novo Chat",
     "chat_history": "Historico"
   },
-
   "copilot_download": {
     "title": "Copilot Autocomplete",
     "downloading_title": "Baixando Copilot Engine",

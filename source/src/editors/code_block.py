@@ -247,9 +247,15 @@ class BlockDatabasePanel(QFrame):
         colors = get_colors()
         
         self._database_name = database_name
+        display_name = database_name
+        if isinstance(display_name, str):
+            if display_name.startswith("CATALOG:"):
+                display_name = display_name[8:]
+            elif display_name.startswith("SCHEMA:"):
+                display_name = display_name[7:]
 
         if database_name:
-            self.name_label.setText(database_name)
+            self.name_label.setText(display_name)
             self.name_label.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: 500;")
             self.icon_label.setPixmap(qta.icon("mdi.database", color=colors.info).pixmap(16, 16))
         else:

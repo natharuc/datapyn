@@ -17,11 +17,14 @@ from source.src.services.sql_autocomplete_service import (
     CAT_COLUMN,
     CAT_DATABASE,
     CAT_FUNCTION,
+    CAT_VARIABLE,
+    CAT_ROUTINE,
     CTX_TABLE,
     CTX_COLUMN,
     CTX_DOT,
     CTX_DATABASE,
     CTX_DEFAULT,
+    CTX_ROUTINE,
 )
 
 
@@ -73,6 +76,44 @@ def service(schema):
 def empty_service():
     """SqlAutoCompleteService with no schema."""
     return SqlAutoCompleteService()
+
+
+@pytest.fixture
+def qualified_schema():
+    """Schema with schema-qualified column keys like SQL Server/PostgreSQL."""
+    return {
+        "db_type": "sqlserver",
+        "tables": [
+            {"name": "users", "schema": "dbo", "type": "TABLE"},
+            {"name": "orders", "schema": "sales", "type": "TABLE"},
+            {"name": "audit_log", "schema": "dbo", "type": "TABLE"},
+        ],
+        "columns": {
+            "dbo.users": [
+                {"name": "id", "type": "int", "display_type": "int"},
+                {"name": "name", "type": "varchar", "display_type": "varchar(80)"},
+                {"name": "email", "type": "varchar", "display_type": "varchar(120)"},
+            ],
+            "sales.orders": [
+                {"name": "id", "type": "bigint", "display_type": "bigint"},
+                {"name": "user_id", "type": "int", "display_type": "int"},
+                {"name": "total", "type": "decimal", "display_type": "decimal(18,2)"},
+            ],
+            "dbo.audit_log": [
+                {"name": "id", "type": "bigint", "display_type": "bigint"},
+                {"name": "payload", "type": "nvarchar", "display_type": "nvarchar(max)"},
+            ],
+        },
+        "database": "gecon",
+        "databases": ["gecon", "master"],
+    }
+
+
+@pytest.fixture
+def qualified_service(qualified_schema):
+    svc = SqlAutoCompleteService()
+    svc.set_schema(qualified_schema)
+    return svc
 
 
 # ---- Helper ----
@@ -571,3 +612,161 @@ class TestComplexQueries:
         n = names(result)
         assert "id" in n
         assert "name" in n
+
+
+class TestSchemaQualifiedAutocomplete:
+    """Coverage for SQL Server/PostgreSQL style schema-qualified schemas."""
+
+    def test_alias_resolution_uses_schema_qualified_columns(self, qualified_service):
+        sql = "SELECT u. FROM dbo.users u"
+        result = qualified_service.get_completions(sql, 0, 9)
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+        assert "email" in n
+
+    def test_where_context_merges_columns_from_visible_schema_qualified_sources(self, qualified_service):
+        sql = (
+            "SELECT *\n"
+            "FROM dbo.users u\n"
+            "JOIN sales.orders o ON u.id = o.user_id\n"
+            "WHERE "
+        )
+        result = qualified_service.get_completions(sql, 3, 6)
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+        assert "user_id" in n
+        assert "total" in n
+        assert "u.id" in n
+        assert "o.total" in n
+
+    def test_direct_schema_qualified_dot_lookup_works(self, qualified_service):
+        sql = "SELECT dbo.users."
+        result = qualified_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+        assert "email" in n
+
+
+class TestDerivedAndTemporarySources:
+    """Coverage for CTEs, subqueries, temp tables and variables."""
+
+    def test_cte_alias_columns_are_suggested(self, qualified_service):
+        sql = (
+            "WITH recent_orders AS (\n"
+            "  SELECT o.user_id, o.total FROM sales.orders o\n"
+            ")\n"
+            "SELECT ro. FROM recent_orders ro"
+        )
+        result = qualified_service.get_completions(sql, 3, 10)
+        n = names(result)
+        assert "user_id" in n
+        assert "total" in n
+
+    def test_subquery_star_expands_inner_table_columns(self, qualified_service):
+        sql = "SELECT sq. FROM (SELECT u.* FROM dbo.users u) sq"
+        result = qualified_service.get_completions(sql, 0, 10)
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+        assert "email" in n
+
+    def test_create_temp_table_columns_are_suggested_later(self, qualified_service):
+        sql = (
+            "CREATE TABLE #tmp_users (id INT, name VARCHAR(80));\n"
+            "SELECT t. FROM #tmp_users t"
+        )
+        result = qualified_service.get_completions(sql, 1, 9)
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+
+    def test_select_into_temp_table_infers_projected_columns(self, qualified_service):
+        sql = (
+            "SELECT u.id, u.name INTO #tmp_users FROM dbo.users u;\n"
+            "SELECT t. FROM #tmp_users t"
+        )
+        result = qualified_service.get_completions(sql, 1, 9)
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+
+    def test_table_variable_columns_and_scalar_variables_are_suggested(self, qualified_service):
+        sql = (
+            "DECLARE @tmp TABLE (id INT, total DECIMAL(18,2));\n"
+            "DECLARE @status VARCHAR(20);\n"
+            "SELECT t. FROM @tmp t WHERE @"
+        )
+        dot_result = qualified_service.get_completions(sql, 2, 9)
+        dot_names = names(dot_result)
+        assert "id" in dot_names
+        assert "total" in dot_names
+
+        variable_result = qualified_service.get_completions(sql, 2, len("SELECT t. FROM @tmp t WHERE @"))
+        variable_names = names(variable_result)
+        variable_categories = categories(variable_result)
+        assert "@status" in variable_names
+        assert CAT_VARIABLE in variable_categories
+
+
+# ==============================================================
+# Routine (Procedures / Functions) Autocomplete
+# ==============================================================
+
+class TestRoutineAutocomplete:
+    """Tests for stored procedure and function autocomplete."""
+
+    @pytest.fixture
+    def routine_schema(self):
+        return {
+            "tables": [{"name": "orders", "schema": "dbo", "type": "TABLE"}],
+            "columns": {"orders": [{"name": "id", "type": "int"}, {"name": "status", "type": "varchar"}]},
+            "routines": [
+                {"name": "usp_GetOrders", "schema": "dbo", "type": "PROCEDURE"},
+                {"name": "usp_ProcessOrder", "schema": "dbo", "type": "PROCEDURE"},
+                {"name": "fn_FormatName", "schema": "dbo", "type": "FUNCTION"},
+            ],
+            "db_type": "sqlserver",
+        }
+
+    @pytest.fixture
+    def routine_service(self, routine_schema):
+        svc = SqlAutoCompleteService()
+        svc.set_schema(routine_schema)
+        return svc
+
+    def test_exec_context_returns_ctx_routine(self, routine_service):
+        ctx, arg = routine_service._detect_context("EXEC ")
+        assert ctx == CTX_ROUTINE
+
+    def test_execute_context_returns_ctx_routine(self, routine_service):
+        ctx, arg = routine_service._detect_context("EXECUTE ")
+        assert ctx == CTX_ROUTINE
+
+    def test_exec_completions_includes_procedures(self, routine_service):
+        result = routine_service.get_completions("EXEC ", 0, 5)
+        n = names(result)
+        c = categories(result)
+        assert "usp_GetOrders" in n
+        assert "usp_ProcessOrder" in n
+        assert CAT_ROUTINE in c
+
+    def test_exec_completions_includes_functions(self, routine_service):
+        result = routine_service.get_completions("EXEC ", 0, 5)
+        n = names(result)
+        assert "fn_FormatName" in n
+
+    def test_default_context_includes_routines(self, routine_service):
+        result = routine_service.get_completions("SELECT * FROM orders;\n", 1, 0)
+        n = names(result)
+        c = categories(result)
+        assert "usp_GetOrders" in n
+        assert CAT_ROUTINE in c
+
+    def test_no_routines_in_schema_returns_empty_routine_list(self, service):
+        result = service.get_completions("EXEC ", 0, 5)
+        routine_items = [(name, cat) for name, cat, *_ in result if cat == CAT_ROUTINE]
+        assert routine_items == []
+

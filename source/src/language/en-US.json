@@ -3,7 +3,6 @@
     "name": "English (US)",
     "code": "en-US"
   },
-
   "menu": {
     "file": "&File",
     "new_tab": "&New Tab",
@@ -35,13 +34,14 @@
     "tools": "&Tools",
     "package_manager": "&Package Manager...",
     "shortcut_settings": "&Settings...",
-    "auto_update": "Enable &Auto-Update",    "copilot_submenu": "&Copilot",
+    "auto_update": "Enable &Auto-Update",
+    "copilot_submenu": "&Copilot",
     "copilot_download_lsp": "Download &Language Server...",
-    "copilot_check_status": "Check &Status",    "help": "&Help",
+    "copilot_check_status": "Check &Status",
+    "help": "&Help",
     "check_updates": "Check for &Updates...",
     "about": "&About"
   },
-
   "toolbar": {
     "new_tab": " New Tab",
     "connection": " Connection",
@@ -53,7 +53,6 @@
     "run_timer_label": "Wait X seconds after completion and run again:",
     "run_timer_start": "Start"
   },
-
   "dock": {
     "connections": "Connections",
     "results": "Results",
@@ -62,7 +61,6 @@
     "object_explorer": "Object Explorer",
     "copilot": "Copilot Chat"
   },
-
   "status": {
     "ready": "Ready",
     "connected": "Connected",
@@ -118,17 +116,14 @@
     "cross_executed": "[Cross-Syntax] Executed successfully!",
     "execution_error_generic": "[{type}] Execution error"
   },
-
   "main_window": {
     "window_title": "DataPyn - IDE SQL + Python"
   },
-
   "empty_state": {
     "title": "No script open",
     "subtitle": "Create a new session or drag a file to get started",
     "start_button": "Start"
   },
-
   "about": {
     "title": "About DataPyn",
     "ide_name": "DataPyn IDE",
@@ -139,7 +134,6 @@
     "license": "License: MIT License",
     "built_with": "Built with Python and PyQt6"
   },
-
   "dialogs": {
     "warning": "Warning",
     "error": "Error",
@@ -192,7 +186,6 @@
     "language_restart_title": "Restart Required",
     "language_restart_msg": "Language change will take effect after restarting DataPyn.\n\nRestart now?"
   },
-
   "notification": {
     "sql_query": "SQL Query",
     "python": "Python",
@@ -205,7 +198,6 @@
     "executed": "Executed successfully!",
     "error": "Error: {error}..."
   },
-
   "log": {
     "sql_running": "[SQL] Running query...",
     "sql_database": "[SQL] Database: {name}",
@@ -217,7 +209,6 @@
     "sql_executed": "Executed successfully ({rows} rows returned)",
     "schema_loaded": "Schema loaded ({name}): {tables} tables, {cols} columns"
   },
-
   "connection_panel": {
     "section_active": "ACTIVE CONNECTION",
     "label_none": "None",
@@ -230,7 +221,6 @@
     "ctx_edit": "Edit",
     "error_loading_svg": "Error loading SVG: {error}"
   },
-
   "session_widget": {
     "connected_to": "Connected to {name}",
     "connect_failed": "Failed to connect to {name}",
@@ -266,7 +256,6 @@
     "conn_dialog_error": "Error opening connection dialog: {error}",
     "connecting_block": "Connecting to {name}..."
   },
-
   "results": {
     "btn_csv": "CSV",
     "btn_excel": "Excel",
@@ -323,7 +312,6 @@
     "ctx_copy_with_headers": "Copy with Headers",
     "ctx_select_all": "Select All"
   },
-
   "export_settings": {
     "dialog_title": "Export Settings",
     "tooltip_btn": "Export settings",
@@ -340,7 +328,6 @@
     "null_text": "NULL",
     "null_none": "None"
   },
-
   "csv_export": {
     "dialog_title": "Export CSV",
     "label_delimiter": "Delimiter:",
@@ -356,7 +343,6 @@
     "label_include_header": "Include header:",
     "label_open_folder": "Open folder after export:"
   },
-
   "object_explorer": {
     "no_connection": "No connection",
     "loading": "Loading schema...",
@@ -379,6 +365,9 @@
     "ctx_copy_db_name": "Copy name",
     "ctx_count_rows": "Count rows (COUNT)",
     "ctx_select_all_columns": "SELECT with all columns",
+    "ctx_commands_menu": "Commands",
+    "ctx_command_create_table": "Create Table",
+    "ctx_command_drop_create": "Drop and Create",
     "ctx_where_clause": "WHERE clause",
     "ctx_group_by": "GROUP BY clause",
     "ctx_order_by": "ORDER BY clause",
@@ -388,7 +377,6 @@
     "schema_error": "Error loading schema",
     "not_null": "NOT NULL"
   },
-
   "variables_panel": {
     "no_variables": "No variables",
     "one_variable": "1 variable",
@@ -415,7 +403,6 @@
     "ctx_size_chars": "Size: {n} chars",
     "ctx_remove_variable": "Remove variable"
   },
-
   "output_panel": {
     "btn_clear": "Clear",
     "btn_copy": "Copy",
@@ -432,7 +419,6 @@
     "btn_close_detail": "Close",
     "btn_resolve_copilot": "Resolve with Copilot"
   },
-
   "session_tabs": {
     "ctx_open_file_location": "Open File Location",
     "ctx_close_all": "Close All",
@@ -442,13 +428,11 @@
     "ctx_customize_notification": "Customize Notification",
     "ctx_close": "Close"
   },
-
   "bottom_tabs": {
     "results": "Results",
     "output": "Output",
     "variables": "Variables"
   },
-
   "block": {
     "conn_tab_default": "Tab Default",
     "conn_first_block_locked": "First block uses the tab connection",
@@ -474,7 +458,6 @@
     "copilot_editing": "Copilot editing...",
     "tooltip_active": "Enable/disable block (inactive blocks are skipped on execute all)"
   },
-
   "find_replace": {
     "placeholder_find": "Find...",
     "tooltip_match_case": "Match case",
@@ -492,12 +475,10 @@
     "no_results": "No results",
     "replacements_count": "{count} replacements"
   },
-
   "block_editor": {
     "tooltip_add_block": "Add block",
     "block_marker": "# === Block {n} ({lang}) ==="
   },
-
   "settings": {
     "title": "Settings",
     "tab_general": "General",
@@ -510,6 +491,40 @@
     "tip_shortcuts": "Tip: Double-click a shortcut to edit",
     "header_action": "Action",
     "header_shortcut": "Shortcut",
+    "shortcut_actions": {
+      "execute_sql": "Run current block",
+      "execute_all": "Run all blocks",
+      "execute_block_advance": "Run block and advance",
+      "clear_results": "Clear results",
+      "open_file": "Open file",
+      "save_file": "Save file",
+      "save_as": "Save as...",
+      "export_script": "Export as script",
+      "new_tab": "New tab",
+      "new_session": "New session",
+      "close_tab": "Close tab",
+      "add_block": "Add block",
+      "find": "Find",
+      "replace": "Replace",
+      "format_code": "Format code",
+      "show_entity_info": "Show entity information",
+      "force_autocomplete": "Force autocomplete",
+      "manage_connections": "Manage connections",
+      "new_connection": "New connection",
+      "reload_schema": "Reload SQL schema",
+      "settings": "Settings",
+      "copy_with_headers": "Copy with headers (grid)",
+      "exit_app": "Exit application",
+      "restore_view": "Restore default view",
+      "reset_layout": "Reset layout completely",
+      "editor_newline": "[Editor] New line (Shift+Enter)",
+      "editor_duplicate_line": "[Editor] Duplicate line/selection",
+      "editor_cut_line": "[Editor] Cut line",
+      "editor_transpose_line": "[Editor] Transpose lines",
+      "editor_lowercase": "[Editor] Lowercase",
+      "editor_uppercase": "[Editor] Uppercase",
+      "editor_delete_line": "[Editor] Delete line"
+    },
     "btn_restore_defaults": "Restore Defaults",
     "btn_cancel": "Cancel",
     "btn_save": "Save",
@@ -614,7 +629,48 @@
     "notification_channel_telegram": "Telegram",
     "notification_channel_email": "Email"
   },
-
+  "entity_info": {
+    "dialog_title": "Entity Information",
+    "loading": "Loading entity information...",
+    "no_selection": "Select an entity name in the SQL editor first.",
+    "no_active_sql_block": "Focus a SQL block to open entity information.",
+    "no_connection": "Connect to a database before opening entity information.",
+    "load_error": "Could not load entity information: {error}",
+    "load_error_status": "Error loading entity information: {error}",
+    "error_subtitle": "The requested details could not be loaded.",
+    "subtitle_ready": "Connection: {connection} | Database: {db_type}",
+    "header_connection": "Active connection: {connection}",
+    "field_type": "Type",
+    "field_database": "Database",
+    "field_catalog": "Catalog",
+    "field_schema": "Schema",
+    "field_rows": "Rows",
+    "field_size": "Size",
+    "section_columns": "Columns",
+    "section_indexes": "Indexes",
+    "columns_name": "Name",
+    "columns_type": "Type",
+    "columns_nullable": "Nullable",
+    "columns_default": "Default",
+    "indexes_name": "Name",
+    "indexes_type": "Type",
+    "indexes_columns": "Columns",
+    "nullable_yes": "Yes",
+    "nullable_no": "No",
+    "not_available": "Not available",
+    "no_columns": "No columns found.",
+    "no_indexes": "No indexes found.",
+    "indexes_not_supported": "Index information is not available for this database.",
+    "button_close": "Close",
+    "section_parameters": "Parameters",
+    "section_trigger_info": "Trigger Information",
+    "columns_direction": "Direction",
+    "no_parameters": "No parameters found.",
+    "trigger_event": "Event",
+    "trigger_parent_table": "Table",
+    "trigger_timing": "Timing",
+    "section_routine_not_available": "Index not available for this object type."
+  },
   "tab_notification": {
     "dialog_title": "Tab Notification",
     "section_config": "NOTIFICATION CONFIG",
@@ -663,7 +719,6 @@
     "btn_cancel": "Cancel",
     "badge_active": "Custom notification active"
   },
-
   "connections_manager": {
     "title": "Manage Connections",
     "btn_new_group": "New Group",
@@ -719,7 +774,6 @@
     "import_export_confirm_title": "Confirm Import",
     "import_export_confirm_msg": "This will import {count} connection(s) and {groups} group(s).\nExisting connections with the same name will be replaced.\nDo you want to continue?"
   },
-
   "connection_edit": {
     "title_new": "New Connection",
     "title_edit": "Edit Connection: {name}",
@@ -762,14 +816,12 @@
     "validation_name_required": "Connection name is required",
     "validation_host_required": "Host is required"
   },
-
   "connection_picker": {
     "title": "Select Connection",
     "header": "SELECT A CONNECTION",
     "hint": "Double-click to select",
     "btn_cancel": "Cancel"
   },
-
   "export_to_table": {
     "title": "Export to Table",
     "info_row_col": "{rows} rows x {cols} columns",
@@ -800,7 +852,6 @@
     "validation_connection_required": "Select a connection",
     "validation_no_data": "No data to export"
   },
-
   "file_import": {
     "title": "Import File",
     "header": "Import Data",
@@ -842,7 +893,6 @@
     "checkbox_json_lines": "JSON Lines (one line per record)",
     "label_format": "Format:"
   },
-
   "package_manager": {
     "title": "Package Manager",
     "subtitle": "Search, install and manage Python packages (pip)",
@@ -891,7 +941,6 @@
     "auth_token_placeholder": "PAT, API key or password",
     "auth_username_invalid": "The username field should contain a username or email, not a URL. Enter only the username for authentication."
   },
-
   "update_dialog": {
     "title": "Update Available",
     "new_version_label": "New version available: {version}",
@@ -914,7 +963,6 @@
     "checking_connecting": "Connecting to GitHub...",
     "checking_timeout": "Timed out."
   },
-
   "mixed_executor": {
     "no_connection": "No active database connection",
     "no_query_found": "No query found with {{ SQL }} syntax",
@@ -925,7 +973,6 @@
     "help_example": "FULL EXAMPLE:",
     "help_shortcut": "SHORTCUT: Ctrl+Shift+F5"
   },
-
   "workers": {
     "error_sql": "SQL Error: {msg}",
     "error_connection": "Connection error: {msg}",
@@ -934,7 +981,6 @@
     "error_db_switch": "Database switch error: {msg}",
     "error_failed_to_connect": "Failed to connect to database"
   },
-
   "session": {
     "default_title": "Script",
     "default_title_n": "Script {n}",
@@ -942,19 +988,16 @@
     "status_disconnected": "Disconnected",
     "status_ready": "Ready"
   },
-
   "schema_service": {
     "loading": "Loading database structure...",
     "loaded": "Schema loaded: {tables} tables, {cols} columns"
   },
-
   "docking": {
     "window_title": "DataPyn - Docking System",
     "menu_view": "&View",
     "menu_reset_layout": "&Reset Layout",
     "menu_panels": "&Panels"
   },
-
   "copilot": {
     "title": "Copilot",
     "input_placeholder": "Ask Copilot... (Enter to send, Shift+Enter for new line)",
@@ -968,7 +1011,7 @@
     "not_authenticated": "Please sign in with GitHub to use Copilot.",
     "auth_instructions": "To authenticate, enter the code **{code}** at:\n{url}\n\n(Code copied to clipboard)",
     "auth_code_instructions": "Enter this code on GitHub to authenticate:",
-    "copy_code": "Copy Code",
+    "copy_code": "Copy",
     "code_copied": "Copied!",
     "waiting_auth": "Waiting for authentication...",
     "auth_success": "Authenticated successfully! You can now chat with Copilot.",
@@ -1007,7 +1050,6 @@
     "tool_running": "running...",
     "tool_ok": "ok",
     "tool_error": "error",
-    "copy_code": "Copy",
     "copied_code": "Copied!",
     "insert_code": "Insert",
     "inserted_code": "Inserted!",
@@ -1015,7 +1057,6 @@
     "new_chat": "New Chat",
     "chat_history": "Chat History"
   },
-
   "copilot_download": {
     "title": "Copilot Autocomplete",
     "downloading_title": "Downloading Copilot Engine",

@@ -249,29 +249,87 @@ class TestDatabaseConnectorMocked:
         assert connector.engine is not None
         assert connector.db_type == "mysql"
 
-    @patch("database.database_connector.create_engine")
-    def test_execute_query_returns_dataframe(self, mock_create_engine):
-        """execute_query deve retornar DataFrame"""
+    def test_execute_query_returns_dataframe(self):
+        """execute_query deve retornar DataFrame preservando strings numericas."""
         from database.database_connector import DatabaseConnector
 
-        # Setup mock
         mock_engine = MagicMock()
         mock_connection = MagicMock()
         mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
         mock_engine.connect.return_value.__exit__ = lambda s, *args: None
-        mock_create_engine.return_value = mock_engine
 
         connector = DatabaseConnector()
-        connector.connect("mysql", "localhost", 3306, "testdb", "user", "pass")
+        connector.engine = mock_engine
+        connector.db_type = "mysql"
 
-        # Mock pd.read_sql
-        with patch("pandas.read_sql") as mock_read_sql:
-            mock_read_sql.return_value = pd.DataFrame({"col": [1, 2, 3]})
+        mock_result = MagicMock()
+        mock_result.keys.return_value = ["col"]
+        mock_result.fetchall.return_value = [("001",), ("002",), ("003",)]
+        mock_connection.execute.return_value = mock_result
 
-            result = connector.execute_query("SELECT * FROM test")
+        result = connector.execute_query("SELECT * FROM test")
 
-            assert isinstance(result, pd.DataFrame)
-            assert len(result) == 3
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 3
+        assert result["col"].tolist() == ["001", "002", "003"]
+        assert all(isinstance(value, str) for value in result["col"])
+
+    def test_execute_query_preserves_text_columns_with_nulls(self):
+        """SELECT generico nao deve converter texto numerico em inteiro mesmo com NULL."""
+        from database.database_connector import DatabaseConnector
+
+        mock_engine = MagicMock()
+        mock_connection = MagicMock()
+        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
+        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+
+        connector = DatabaseConnector()
+        connector.engine = mock_engine
+        connector.db_type = "postgresql"
+
+        mock_result = MagicMock()
+        mock_result.keys.return_value = ["external_id"]
+        mock_result.fetchall.return_value = [("123",), (None,), ("045",)]
+        mock_connection.execute.return_value = mock_result
+
+        result = connector.execute_query("SELECT external_id FROM customer")
+
+        assert result["external_id"].iloc[0] == "123"
+        assert pd.isna(result["external_id"].iloc[1])
+        assert result["external_id"].iloc[2] == "045"
+        assert all(isinstance(value, str) for value in result["external_id"].dropna())
+
+    def test_execute_query_multiple_selects_preserve_driver_values(self):
+        """Multiplos SELECTs devem retornar DataFrames sem passar por inferencia do pandas.read_sql."""
+        from database.database_connector import DatabaseConnector
+
+        mock_engine = MagicMock()
+        mock_connection = MagicMock()
+        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
+        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+
+        connector = DatabaseConnector()
+        connector.engine = mock_engine
+        connector.db_type = "mariadb"
+
+        first_result = MagicMock()
+        first_result.keys.return_value = ["code"]
+        first_result.fetchall.return_value = [("0007",)]
+
+        second_result = MagicMock()
+        second_result.keys.return_value = ["reference"]
+        second_result.fetchall.return_value = [("9001",)]
+
+        mock_connection.execute.side_effect = [first_result, second_result]
+
+        result = connector.execute_query("SELECT code FROM first_table; SELECT reference FROM second_table;")
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[0]["code"].tolist() == ["0007"]
+        assert result[1]["reference"].tolist() == ["9001"]
+        assert all(isinstance(value, str) for value in result[0]["code"])
+        assert all(isinstance(value, str) for value in result[1]["reference"])
 
 
 class TestDatabaseConnectorEdgeCases:

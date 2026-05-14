@@ -215,6 +215,95 @@ class SessionsMixin:
         else:
             self.action_label.setText(S.status.code_already_formatted.format(lang=lang.upper()))
 
+    def _show_selected_entity_info(self):
+        """Open the entity information dialog for the selected SQL relation."""
+        widget = self._get_current_session_widget()
+        if not widget or not widget.editor:
+            return
+
+        block = widget.editor.get_focused_block()
+        if not block:
+            self.statusBar().showMessage(S.entity_info.no_active_sql_block, 4000)
+            return
+
+        if getattr(block, "get_language", lambda: "")() != "sql":
+            self.statusBar().showMessage(S.entity_info.no_active_sql_block, 4000)
+            return
+
+        selected_text = (block.get_selected_text() or "").strip().strip(";").strip()
+        if not selected_text:
+            self.statusBar().showMessage(S.entity_info.no_selection, 4000)
+            return
+
+        session = getattr(widget, "session", None)
+        block_connection_name = block.get_connection_name() if hasattr(block, "get_connection_name") else ""
+        connection_name = block_connection_name or getattr(session, "connection_name", "")
+        if not connection_name:
+            self.statusBar().showMessage(S.entity_info.no_connection, 4000)
+            return
+
+        database_override = block.get_database_name() if hasattr(block, "get_database_name") else ""
+        session_connector = getattr(session, "connector", None)
+        existing_connector = None
+        if block_connection_name:
+            candidate = self.connection_manager.get_connection(connection_name)
+            if candidate and self._connector_is_connected(candidate):
+                existing_connector = candidate
+        elif session_connector and self._connector_is_connected(session_connector):
+            existing_connector = session_connector
+
+        connection_config = self.connection_manager.get_connection_config(connection_name)
+        connector = None if connection_config else existing_connector
+
+        if connector is None and connection_config is None and existing_connector is None:
+            self.statusBar().showMessage(S.entity_info.no_connection, 4000)
+            return
+
+        from src.services.entity_metadata_service import EntityMetadataWorker
+        from src.ui.dialogs.entity_info_dialog import EntityInfoDialog
+
+        dialog = EntityInfoDialog(selected_text, self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+        thread = QThread()
+        worker = EntityMetadataWorker(
+            entity_name=selected_text,
+            connector=connector,
+            fallback_connector=existing_connector if connection_config else None,
+            connection_config=connection_config,
+            database_override=database_override,
+        )
+        worker.moveToThread(thread)
+
+        def on_loaded(metadata: dict, dlg=dialog, active_connection=connection_name):
+            try:
+                dlg.populate(metadata, active_connection)
+            except RuntimeError:
+                pass
+
+        def on_error(error_text: str, dlg=dialog):
+            try:
+                dlg.set_error(S.entity_info.load_error.format(error=error_text))
+            except RuntimeError:
+                pass
+            self.statusBar().showMessage(S.entity_info.load_error_status.format(error=error_text), 6000)
+
+        thread.started.connect(worker.run)
+        worker.loaded.connect(on_loaded)
+        worker.error.connect(on_error)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda current_thread=thread: self._cleanup_entity_info_thread(current_thread))
+
+        if not hasattr(self, "_entity_info_threads"):
+            self._entity_info_threads = []
+        self._entity_info_threads.append((thread, worker))
+        thread.start()
+
     def _force_autocomplete(self):
         """Force trigger autocomplete in current block (Ctrl+. shortcut)."""
         widget = self._get_current_session_widget()
@@ -226,6 +315,15 @@ class SessionsMixin:
         if isinstance(widget.editor, BlockEditor):
             widget.editor.force_autocomplete_focused_block()
             logging.info("[MAIN] Force autocomplete triggered via Ctrl+.")
+
+    def _cleanup_entity_info_thread(self, thread):
+        if not hasattr(self, "_entity_info_threads"):
+            return
+        self._entity_info_threads = [
+            (active_thread, worker)
+            for active_thread, worker in self._entity_info_threads
+            if active_thread is not thread
+        ]
 
     def _add_block_to_current_session(self):
         """Adds a new code block in the current session"""
