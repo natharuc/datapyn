@@ -15,12 +15,14 @@ from PyQt6.QtCore import (
     QUrl,
     QTimer,
     QEventLoop,
+    QEvent,
     Qt,
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
+from PyQt6 import sip
 from PyQt6.QtWebChannel import QWebChannel
 
 from .monaco_bridge import MonacoBridge
@@ -82,6 +84,7 @@ class MonacoEditor(QWidget):
         self._is_ready = False
         self._pending_operations = []
         self._read_only = read_only
+        self._cleaned_up = False
         
         # SQL/Python autocomplete data
         self._sql_schema: Dict[str, Any] = {}
@@ -126,6 +129,54 @@ class MonacoEditor(QWidget):
         self.setMinimumSize(200, 80)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocusProxy(self._web_view)
+
+    def cleanup(self):
+        """Release WebEngine resources owned by the editor."""
+        if self._cleaned_up:
+            return
+
+        self._cleaned_up = True
+        self._is_ready = False
+        self._pending_operations.clear()
+
+        web_view = getattr(self, "_web_view", None)
+        if web_view is not None and not sip.isdeleted(web_view):
+            try:
+                web_view.stop()
+                page = web_view.page()
+                if page is not None and not sip.isdeleted(page):
+                    try:
+                        page.setWebChannel(None)
+                    except (RuntimeError, TypeError):
+                        pass
+                    replacement_page = QWebEnginePage(web_view)
+                    web_view.setPage(replacement_page)
+                    sip.delete(page)
+                web_view.close()
+            except RuntimeError:
+                pass
+            try:
+                sip.delete(web_view)
+            except RuntimeError:
+                pass
+
+        self._web_view = None
+        self._page = None
+        self._channel = None
+        self._bridge = None
+
+    def closeEvent(self, event):
+        self.cleanup()
+        super().closeEvent(event)
+
+    def deleteLater(self):
+        self.cleanup()
+        super().deleteLater()
+
+    def event(self, event):
+        if event.type() == QEvent.Type.DeferredDelete:
+            self.cleanup()
+        return super().event(event)
     
     def _setup_channel(self):
         """Setup QWebChannel for Python<->JS communication."""
@@ -199,6 +250,9 @@ class MonacoEditor(QWidget):
     
     def _on_editor_ready(self):
         """Called when Monaco editor is fully loaded."""
+        if self._cleaned_up:
+            return
+
         self._is_ready = True
         
         # Apply pending operations
@@ -387,13 +441,20 @@ class MonacoEditor(QWidget):
 
     def _run_js(self, script: str, callback=None):
         """Execute JavaScript in the Monaco editor."""
+        web_view = getattr(self, "_web_view", None)
+        if self._cleaned_up or web_view is None or sip.isdeleted(web_view):
+            return
+
         if callback:
-            self._web_view.page().runJavaScript(script, callback)
+            web_view.page().runJavaScript(script, callback)
         else:
-            self._web_view.page().runJavaScript(script)
+            web_view.page().runJavaScript(script)
     
     def _run_js_when_ready(self, script: str, callback=None):
         """Execute JS when ready, or queue if not ready yet."""
+        if self._cleaned_up:
+            return
+
         if self._is_ready:
             # Log completion-related JS calls at debug level (less spam)
             if "receiveCompletion" in script:

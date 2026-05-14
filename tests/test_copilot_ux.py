@@ -357,38 +357,34 @@ class TestPerTabChatContext:
             panel = CopilotChatPanel()
         return panel
 
-    def test_switch_to_new_tab_clears(self, panel):
-        """Switching to a new tab should give empty messages."""
+    def test_switch_to_new_tab_keeps_global_messages(self, panel):
+        """Switching tabs should keep the global chat history."""
         with patch.object(panel, '_run_chat_js'):
             panel._messages = [{"role": "user", "content": "hello"}]
             panel.switch_tab_context("tab_2", "Tab 2")
-            assert panel._messages == []
+            assert panel._messages == [{"role": "user", "content": "hello"}]
+            assert panel._current_tab_id == "tab_2"
 
-    def test_switch_back_restores(self, panel):
-        """Switching back to a previous tab should restore messages."""
+    def test_switch_back_does_not_restore_per_tab_history(self, panel):
+        """Chat history should remain global instead of per-tab isolated."""
         with patch.object(panel, '_run_chat_js'):
-            # Start on tab_1 with messages
             panel._messages = [{"role": "user", "content": "hello from tab 1"}]
             panel._current_tab_id = "tab_1"
-            
-            # Switch to tab_2
-            panel.switch_tab_context("tab_2", "Tab 2")
-            assert panel._messages == []
-            
-            # Add message on tab_2
-            panel._messages.append({"role": "user", "content": "hello from tab 2"})
-            
-            # Switch back to tab_1
-            panel.switch_tab_context("tab_1", "Tab 1")
-            assert len(panel._messages) == 1
-            assert panel._messages[0]["content"] == "hello from tab 1"
 
-    def test_switch_resets_thinking_state(self, panel):
-        """Switching tabs should reset thinking state."""
+            panel.switch_tab_context("tab_2", "Tab 2")
+            panel._messages.append({"role": "user", "content": "hello from tab 2"})
+
+            panel.switch_tab_context("tab_1", "Tab 1")
+            assert len(panel._messages) == 2
+            assert panel._messages[0]["content"] == "hello from tab 1"
+            assert panel._messages[1]["content"] == "hello from tab 2"
+
+    def test_switch_keeps_thinking_state(self, panel):
+        """Switching target tabs should not interrupt global chat thinking state."""
         with patch.object(panel, '_run_chat_js'):
             panel._is_thinking = True
             panel.switch_tab_context("tab_new", "New Tab")
-            assert panel._is_thinking is False
+            assert panel._is_thinking is True
 
     def test_tab_badge_updated(self, panel):
         """Switching tabs should update the tab badge label."""
@@ -401,12 +397,12 @@ class TestPerTabChatContext:
         """Tab badge should be hidden initially."""
         assert panel._tab_badge.isHidden()
 
-    def test_webview_cleared_on_switch(self, panel):
-        """Switching tabs should call clearMessages in WebView."""
+    def test_webview_not_cleared_on_switch(self, panel):
+        """Switching tabs should not clear global chat messages in WebView."""
         with patch.object(panel, '_run_chat_js') as mock_js:
             panel.switch_tab_context("tab_1", "Tab 1")
             calls = [c[0][0] for c in mock_js.call_args_list]
-            assert any("clearMessages" in c for c in calls)
+            assert not any("clearMessages" in c for c in calls)
 
 
 # ===== i18n Labels =====
@@ -726,8 +722,13 @@ class TestMCPToolExecuteBlock:
         new_block._is_running = False
         new_block.get_block_name.return_value = "analysis"
         new_block.status_label.text.return_value = "0.2s"
-        block_editor.add_block.return_value = new_block
-        block_editor.blocks = [block, new_block]
+        block_editor.blocks = [block]
+
+        def add_block(language="python"):
+            block_editor.blocks.append(new_block)
+            return new_block
+
+        block_editor.add_block.side_effect = add_block
 
         result = registry._write_and_run({
             "language": "python",
@@ -739,6 +740,21 @@ class TestMCPToolExecuteBlock:
         new_block.set_block_name.assert_called_once_with("analysis")
         new_block.set_code.assert_called_once_with("print('hello')")
         block_editor.execute_block.assert_called_once_with(new_block)
+        assert "content" in result
+
+    def test_write_and_run_updates_existing_named_block(self, qapp):
+        """write_and_run should update/run an existing named block instead of duplicating it."""
+        registry, block, block_editor = self._make_registry_with_session()
+
+        result = registry._write_and_run({
+            "language": "python",
+            "code": "print('updated')",
+            "name": "test_block",
+        })
+
+        block_editor.add_block.assert_not_called()
+        block.set_code.assert_called_once_with("print('updated')")
+        block_editor.execute_block.assert_called_once_with(block)
         assert "content" in result
 
     def test_fix_and_run_updates_and_executes(self, qapp):

@@ -1,10 +1,9 @@
 """
-System prompt template for the Copilot chat integration.
+System prompt helpers for the Copilot chat integration.
 
-The prompt is built dynamically with placeholders for:
-- {tools_list} - categorized tool descriptions
-- {context_json} - current editor state (blocks, connection, schema)
-- {schema_text} - database schema if connected
+The SDK keeps conversation state in a persistent session. To avoid recreating
+that session on every editor change, keep stable behavior rules in the system
+message and inject the current DataPyn state into each user turn.
 """
 
 SYSTEM_PROMPT_TEMPLATE = """\
@@ -29,33 +28,47 @@ All block tools accept `block_name` (preferred) OR `block_index`.
 - Omit both to target the focused block.
 
 ### EDIT vs CREATE (MOST IMPORTANT RULE)
-**Before writing code, ALWAYS call `get_context` to see existing blocks.**
-- If a block with that purpose ALREADY EXISTS -> use `edit_block` to UPDATE it.
-- If no relevant block exists -> use `write_and_run` to CREATE a new one.
-- NEVER create a duplicate block. If the user says "fix the vendas query", edit block "vendas" - do NOT create a new block.
-- NEVER delete and recreate a block. Use `edit_block` instead.
+- The request includes a current context snapshot. Use it before acting.
+- If a block with that purpose ALREADY EXISTS -> UPDATE it. Prefer `edit_block_lines` for small changes.
+- If a block rewrite is clearer and safe -> use `edit_block`, preserving name, language, position, and connection.
+- If no relevant block exists and the user wants a DataPyn deliverable -> create ONE final visible tab/block.
+- NEVER create scratch/intermediate blocks for planning, exploration, validation, or retries.
+- NEVER create a duplicate block. If the user says "fix the vendas query", edit block "vendas".
+- NEVER delete and recreate a block unless the user explicitly asks.
 
 ## SILENT vs VISIBLE
-- **SILENT** (`run_silent_query`, `run_silent_python`): Execute without creating blocks. Use for exploration, counting, checking values. The user does NOT see these.
-- **VISIBLE** (`write_and_run`, `create_block`): Create blocks the user sees. Use when user needs final code/results.
-- **RULE**: For questions ("how many rows?", "what columns?"), ALWAYS use silent tools. NEVER create a block just to answer a question.
+- **SILENT** (`run_silent_query`, `run_silent_python`): Execute without creating blocks or polluting output panels. Use for schema/data exploration, row counts, checking values, and validating draft logic.
+- **VISIBLE** (`write_and_run`, `create_block`, `create_tab`, `open_connection`): Produce a final user-facing artifact in DataPyn.
+- **RULE**: For pure questions ("how many rows?", "what columns?"), use silent tools and answer in chat. Do not create a block just to answer.
+- **RULE**: For actionable deliverables ("lista os produtos da base green", "gera a analise", "monta o grafico"), silently inspect what you need, then create or update at most the final useful tab/block and execute it when helpful.
 
 ## WORKFLOW
-1. `get_context` -> see all blocks with names, indexes, code, and variables.
-2. `think` -> plan: which blocks exist? do I need to EDIT or CREATE?
-3. Silent tools -> explore/validate data if needed.
-4. `edit_block(block_name=..., code=...)` to update existing blocks, or `write_and_run(...)` for new ones.
-5. `get_execution_results` -> verify results.
+1. Read the provided context snapshot first.
+2. `think` briefly: existing block to edit, silent exploration needed, final artifact needed?
+3. Use silent tools to inspect connections, schema, data, and validate logic.
+4. Edit an existing block when possible. Create/open a tab and create ONE final block only for a final deliverable.
+5. Execute automatically when it helps finish the task.
+6. Respond with a concise summary in the user's language. Keep detailed results in DataPyn panels/blocks.
 
 ## RULES
 - Give SQL blocks SEMANTIC NAMES (e.g., "vendas", not "block1").
 - Put COMPLETE code in one block.
 - NEVER delete blocks unless explicitly asked.
+- Keep the visible notebook clean: no scratch blocks, no duplicate blocks, no repeated near-identical retry blocks.
+- If a tool times out or execution is still running, tell the user it is continuing in DataPyn and how to inspect it.
 - Respond in the user's language.
 
-{tools_list}
+{tools_list}\
+"""
 
-{context_section}\
+
+REQUEST_PROMPT_TEMPLATE = """\
+Use this current DataPyn context for the request. It is internal context, not user-visible chat history.
+
+{context_section}
+
+User request:
+{user_prompt}\
 """
 
 
@@ -141,4 +154,12 @@ def build_context_section(context_json: str = "", schema_text: str = "") -> str:
         parts.append(f"## Current Editor State\n```json\n{context_json}\n```")
     if schema_text and "No schema" not in schema_text:
         parts.append(f"## Database Schema\n{schema_text}")
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) if parts else "## Current DataPyn Context\n{}"
+
+
+def build_request_prompt(user_prompt: str, context_section: str = "") -> str:
+    """Build the per-turn prompt sent as the SDK user message."""
+    return REQUEST_PROMPT_TEMPLATE.format(
+        context_section=context_section or "## Current DataPyn Context\n{}",
+        user_prompt=user_prompt,
+    )

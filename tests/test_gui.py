@@ -36,7 +36,7 @@ def qapp():
     """QApplication singleton para todos os testes"""
     app = QApplication.instance()
     if not app:
-        app = QApplication([])
+        app = QApplication(["datapyn-tests"])
     yield app
 
 

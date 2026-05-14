@@ -9,6 +9,7 @@ Errors are silenced - user can force reload manually.
 """
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6 import sip
 from typing import Dict, List, Optional
 import logging
 import traceback
@@ -25,6 +26,7 @@ class SchemaWorker(QObject):
     finished = pyqtSignal(dict)  # {tables: [...], columns: {...}}
     error = pyqtSignal(str)
     progress = pyqtSignal(str)  # progress message
+    completed = pyqtSignal()
 
     def __init__(self, connector):
         super().__init__()
@@ -173,6 +175,11 @@ class SchemaWorker(QObject):
                 self.error.emit(str(e))
             except RuntimeError:
                 pass  # Qt object may have been deleted
+        finally:
+            try:
+                self.completed.emit()
+            except RuntimeError:
+                pass
 
     def _get_databases_query(self) -> str:
         """Query to get list of all server databases"""
@@ -338,6 +345,7 @@ class SchemaService(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._active_threads: list = []  # active threads to keep reference
+        self._shutting_down = False
         # Cache per session: key = "session_id:connection_name" for isolation
         # Each tab can have its own database context (USE CATALOG, etc.)
         self._cache: Dict[str, dict] = {}
@@ -359,6 +367,9 @@ class SchemaService(QObject):
             connection_name: Connection name (for cache)
             session_id: Session ID for per-session cache isolation
         """
+        if self._shutting_down:
+            return
+
         # Cancel previous workers (won't emit signals)
         self._cancel_pending_workers()
 
@@ -376,14 +387,34 @@ class SchemaService(QObject):
 
             # Connect signals
             thread.started.connect(worker.run)
-            worker.finished.connect(lambda schema: self._on_finished(schema, connection_name, session_id))
-            worker.error.connect(self._on_error)
-            worker.progress.connect(self.loading_progress.emit)
+            def handle_finished(schema, service=self):
+                if sip.isdeleted(service) or service._shutting_down:
+                    return
+                service._on_finished(schema, connection_name, session_id)
+
+            def cleanup_thread(service=self, active_thread=thread, active_worker=worker):
+                if sip.isdeleted(service):
+                    return
+                service._cleanup_thread(active_thread, active_worker)
+
+            def handle_error(error, service=self):
+                if sip.isdeleted(service) or service._shutting_down:
+                    return
+                service._on_error(error)
+
+            def handle_progress(message, service=self):
+                if sip.isdeleted(service) or service._shutting_down:
+                    return
+                service.loading_progress.emit(message)
+
+            worker.finished.connect(handle_finished)
+            worker.error.connect(handle_error)
+            worker.progress.connect(handle_progress)
 
             # Safe cleanup: worker and thread are deleted after completion
-            worker.finished.connect(thread.quit)
-            worker.error.connect(thread.quit)
-            thread.finished.connect(lambda: self._cleanup_thread(thread, worker))
+            worker.completed.connect(thread.quit)
+            worker.completed.connect(worker.deleteLater)
+            thread.finished.connect(cleanup_thread)
 
             # Keep reference to avoid garbage collection
             self._active_threads.append((thread, worker))
@@ -394,6 +425,9 @@ class SchemaService(QObject):
 
     def _on_finished(self, schema: dict, connection_name: str, session_id: str = ""):
         """Schema loaded successfully"""
+        if self._shutting_down:
+            return
+
         try:
             if connection_name:
                 cache_key = self._cache_key(connection_name, session_id)
@@ -404,6 +438,9 @@ class SchemaService(QObject):
 
     def _on_error(self, error: str):
         """Error loading schema - silence to not disturb user"""
+        if self._shutting_down:
+            return
+
         logger.warning(f"Error loading schema: {error}")
         try:
             self.schema_error.emit(error)
@@ -462,6 +499,8 @@ class SchemaService(QObject):
 
     def cleanup(self):
         """Clean up resources - wait for threads to finish with timeout"""
+        self._shutting_down = True
+
         # Cancel all workers
         for thread, worker in self._active_threads:
             try:
@@ -759,13 +798,26 @@ class SchemaService(QObject):
                 finally:
                     self.finished.emit()
         
+        def safe_callback(result):
+            if sip.isdeleted(self) or self._shutting_down:
+                return
+            try:
+                callback(result)
+            except RuntimeError:
+                pass
+
+        def cleanup_thread():
+            if sip.isdeleted(self):
+                return
+            self._cleanup_thread(thread, worker)
+
         worker = Worker(func)
         worker.moveToThread(thread)
         
         thread.started.connect(worker.run)
-        worker.result_ready.connect(callback)
+        worker.result_ready.connect(safe_callback)
         worker.finished.connect(thread.quit)
-        thread.finished.connect(lambda: self._cleanup_thread(thread, worker))
+        thread.finished.connect(cleanup_thread)
         
         self._active_threads.append((thread, worker))
         thread.start()

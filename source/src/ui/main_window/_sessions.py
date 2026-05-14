@@ -392,22 +392,40 @@ class SessionsMixin:
                     self.finished.emit(False)
 
         def on_connected(success):
+            if getattr(self, "_is_closing", False):
+                return
+
             if success and color:
                 idx = self.session_tabs.indexOf(widget)
                 if idx >= 0:
                     self.session_tabs.set_tab_connection_color(idx, color)
-            # Cleanup thread
-            thread.quit()
-            thread.wait()
-            thread.deleteLater()
-            worker.deleteLater()
 
         # Create and start background thread
         thread = QThread()
         worker = ConnectionWorker(session, connection_name)
+
+        def cleanup_connection_thread(active_thread=thread, active_worker=worker):
+            if not hasattr(self, "_connection_threads"):
+                return
+            self._connection_threads = [
+                (stored_thread, stored_worker)
+                for stored_thread, stored_worker in self._connection_threads
+                if stored_thread is not active_thread
+            ]
+            try:
+                active_worker.deleteLater()
+            except RuntimeError:
+                pass
+            try:
+                active_thread.deleteLater()
+            except RuntimeError:
+                pass
+
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(on_connected)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(cleanup_connection_thread)
         thread.start()
 
         # Store reference to prevent garbage collection
@@ -493,9 +511,6 @@ class SessionsMixin:
 
     def _show_empty_state(self):
         """Shows empty state when there are no sessions, hiding panels"""
-        if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
-            return  # Ja esta mostrando
-
         # Esconder paineis inferiores (sem sessao, nao faz sentido mostralos)
         if hasattr(self, "results_dock"):
             self.results_dock.hide()
@@ -503,6 +518,9 @@ class SessionsMixin:
             self.output_dock.hide()
         if hasattr(self, "variables_dock"):
             self.variables_dock.hide()
+
+        if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
+            return  # Ja esta mostrando
 
         # Criar widget de estado vazio com suporte a drag-and-drop
         from PyQt6.QtWidgets import QLabel, QPushButton
@@ -642,6 +660,9 @@ class SessionsMixin:
 
     def _create_session_widget(self, session):
         """Creates widget for a session and adds it to a tab"""
+        if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
+            self._hide_empty_state()
+
         widget = SessionWidget(session, theme_manager=self.theme_manager)
         
         # Pass Copilot client to BlockEditor for inline completions (Monaco)
@@ -850,6 +871,7 @@ class SessionsMixin:
                 del self._session_widgets[session_id]
 
             self.session_tabs.removeTab(index)
+            widget.deleteLater()
             self._save_sessions()
 
             # Verificar se nao ha mais sessoes REAIS (ignorar aba do botao +)
@@ -1169,6 +1191,9 @@ class SessionsMixin:
 
     def _load_next_session(self):
         """Loads the next session from the queue"""
+        if getattr(self, "_is_closing", False):
+            return
+
         if not self._sessions_to_load:
             # Focus on active session
             focused = self.session_manager.focused_session

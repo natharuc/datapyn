@@ -526,6 +526,7 @@ class BlockEditor(QWidget):
 
         # Remove from layout
         self.blocks_layout.removeWidget(block)
+        block.cleanup()
         block.deleteLater()
 
         # If first block was removed, lock the new first block
@@ -611,6 +612,7 @@ class BlockEditor(QWidget):
         """Remove all blocks and add an empty one"""
         for block in self._blocks[:]:
             self.blocks_layout.removeWidget(block)
+            block.cleanup()
             block.deleteLater()
         self._blocks.clear()
         self._focused_block = None
@@ -1013,6 +1015,10 @@ class BlockEditor(QWidget):
 
         block.editor.setFocus()
         self.content_changed.emit()
+
+    def cleanup(self):
+        for block in self._blocks[:]:
+            block.cleanup()
 
     def _find_drop_index(self, pos) -> int:
         """Find index where block should be inserted"""

@@ -55,6 +55,7 @@ class CopilotLSPClient(QObject):
         self._process: Optional[subprocess.Popen] = None
         self._reader_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._stopping = False
         
         # Request tracking
         self._request_id = 0
@@ -139,6 +140,8 @@ class CopilotLSPClient(QObject):
                 creationflags=_CREATE_NO_WINDOW,
             )
             
+            self._stopping = False
+
             # Start reader thread
             self._reader_thread = threading.Thread(
                 target=self._read_loop,
@@ -157,23 +160,46 @@ class CopilotLSPClient(QObject):
     
     def stop(self) -> None:
         """Stop the language server."""
-        if self._process:
+        self._stopping = True
+        process = self._process
+
+        if process:
             try:
                 # Send shutdown request
                 self._send_request("shutdown", {})
                 self._send_notification("exit", {})
                 
                 # Give it a moment to close gracefully
-                self._process.wait(timeout=2)
+                process.wait(timeout=2)
             except Exception:
                 pass
+
+            for pipe_name in ("stdin", "stdout", "stderr"):
+                pipe = getattr(process, pipe_name, None)
+                if pipe:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
             
             try:
-                self._process.terminate()
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=2)
+            except Exception:
+                pass
+
+            try:
+                if process.poll() is None:
+                    process.kill()
             except Exception:
                 pass
             
             self._process = None
+
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=2)
+        self._reader_thread = None
         
         self._initialized = False
         self._set_authenticated(False, "stop")
@@ -707,13 +733,13 @@ class CopilotLSPClient(QObject):
     def _read_loop(self) -> None:
         """Background thread loop for reading server responses."""
         try:
-            while self._process and self._process.poll() is None:
+            while not self._stopping and self._process and self._process.poll() is None:
                 try:
                     message = self._read_message()
                     if message:
                         self._handle_message(message)
                 except Exception as e:
-                    if self._process and self._process.poll() is None:
+                    if not self._stopping and self._process and self._process.poll() is None:
                         logger.error(f"[LSP] Read error: {e}")
                     break
         except Exception as e:
@@ -723,13 +749,14 @@ class CopilotLSPClient(QObject):
     
     def _read_message(self) -> Optional[Dict[str, Any]]:
         """Read a single JSON-RPC message from stdout."""
-        if not self._process:
+        process = self._process
+        if not process:
             return None
         
         # Read headers
         headers = {}
         while True:
-            line = self._process.stdout.readline()
+            line = process.stdout.readline()
             if not line:
                 return None
             
@@ -746,7 +773,7 @@ class CopilotLSPClient(QObject):
         if content_length <= 0:
             return None
         
-        content = self._process.stdout.read(content_length)
+        content = process.stdout.read(content_length)
         if not content:
             return None
         

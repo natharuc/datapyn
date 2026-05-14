@@ -149,6 +149,9 @@ class LayoutMixin:
         self.results_dock.hide()
         self.variables_dock.hide()
 
+        if getattr(self, "_empty_state_widget", None):
+            self._show_empty_state()
+
     def _create_session_panels(self, session_id: str):
         """Creates panels (Results, Output, Variables) for a session and adds to stacks."""
         results = ResultsViewer(theme_manager=self.theme_manager)
@@ -381,11 +384,16 @@ class LayoutMixin:
                 if dock.isFloating() and dock.isVisible():
                     dock.setFloating(False)
 
+            if getattr(self, "_empty_state_widget", None):
+                self._show_empty_state()
+
             # Sync view menu after a short delay (docks need to settle)
             QTimer.singleShot(300, self._finish_layout_restore)
 
         except Exception:
             self._setup_default_layout()
+            if getattr(self, "_empty_state_widget", None):
+                self._show_empty_state()
             self._restoring_layout = False
 
     def _finish_layout_restore(self):

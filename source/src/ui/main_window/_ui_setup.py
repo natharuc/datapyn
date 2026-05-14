@@ -1139,6 +1139,9 @@ class UISetupMixin:
 
     def _check_for_updates_silent(self):
         """Silently checks for updates on startup"""
+        if getattr(self, "_is_closing", False):
+            return
+
         if not self.auto_update_service.is_auto_update_enabled():
             return
 
