@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.30.0 (2026-05-14)
+
+### Features
+
+- Entity info for routines/triggers, smarter SQL autocomplete with routines
+  ([`0934bf1`](https://github.com/natharuc/datapyn/commit/0934bf1b71bf7f08012de410f2d7e7429b930feb))
+
+- Improve Copilot chat flow and stabilize Qt lifecycle
+  ([`1b35fd5`](https://github.com/natharuc/datapyn/commit/1b35fd5ef73288a47731b771643c3cf4d052b377))
+
+
 ## v1.29.2 (2026-04-27)
 
 ### Bug Fixes
