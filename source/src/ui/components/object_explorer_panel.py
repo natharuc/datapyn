@@ -144,6 +144,7 @@ class ObjectExplorerPanel(QWidget):
     schemas_requested = pyqtSignal(str)  # catalog_name -> request schemas for this catalog
     tables_requested = pyqtSignal(str, str)  # catalog, schema -> request tables
     columns_requested = pyqtSignal(str, str, str)  # catalog, schema, table -> request columns
+    schema_changed = pyqtSignal(dict)  # current schema after lazy metadata merge
 
     # Placeholder marker for lazy loading
     PLACEHOLDER_TYPE = "__placeholder__"
@@ -581,11 +582,13 @@ class ObjectExplorerPanel(QWidget):
 
         columns = self._current_schema.get("columns", {})
         table_key = table_data.get("key", "")
+        catalog = table_data.get("catalog", "")
         schema_name = table_data.get("schema", "")
         table_name = table_data.get("name", "")
 
         lookup_keys = [key for key in (
             table_key,
+            f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else "",
             f"{schema_name}.{table_name}" if schema_name else "",
             table_name,
         ) if key]
@@ -594,6 +597,113 @@ class ObjectExplorerPanel(QWidget):
             if lookup_key in columns:
                 return columns.get(lookup_key, [])
         return []
+
+    def _make_table_key(self, catalog: str, schema_name: str, table_name: str) -> str:
+        if self._db_type == "databricks" and catalog and schema_name:
+            return f"{catalog}.{schema_name}.{table_name}"
+        if schema_name:
+            return f"{schema_name}.{table_name}"
+        return str(table_name)
+
+    def _schemas_for_catalog(self, catalog: str, tables: list) -> list:
+        schemas = set()
+        catalog_schemas = (self._current_schema or {}).get("catalog_schemas", {})
+        for schema_name in catalog_schemas.get(catalog, []) or []:
+            if schema_name:
+                schemas.add(schema_name)
+
+        current_catalog = (self._current_schema or {}).get("database", "")
+        for table in tables or []:
+            table_catalog = table.get("catalog", current_catalog)
+            if table_catalog == catalog and table.get("schema"):
+                schemas.add(table.get("schema"))
+        return sorted(schemas)
+
+    def _tables_for_catalog(self, tables: list, catalog: str, current_catalog: str) -> list:
+        result = []
+        for table in tables or []:
+            table_catalog = table.get("catalog") or current_catalog
+            if table_catalog == catalog:
+                result.append(table)
+        return result
+
+    def _merge_schemas_into_current_schema(self, catalog_name: str, schemas: list):
+        if not self._current_schema:
+            return
+        catalog_schemas = self._current_schema.setdefault("catalog_schemas", {})
+        existing = set(catalog_schemas.get(catalog_name, []) or [])
+        for schema_name in schemas or []:
+            if schema_name:
+                existing.add(str(schema_name))
+        catalog_schemas[catalog_name] = sorted(existing)
+        self.schema_changed.emit(self._current_schema)
+
+    def _merge_tables_into_current_schema(self, catalog_name: str, schema_name: str, tables: list) -> list:
+        if not self._current_schema:
+            return tables or []
+
+        normalized_tables = []
+        for table in tables or []:
+            if isinstance(table, dict):
+                table_name = str(table.get("name", ""))
+                table_type = str(table.get("type", "TABLE") or "TABLE")
+            else:
+                table_name = str(table)
+                table_type = "TABLE"
+            if not table_name:
+                continue
+            table_schema = str((table.get("schema") if isinstance(table, dict) else "") or schema_name)
+            table_catalog = str((table.get("catalog") if isinstance(table, dict) else "") or catalog_name)
+            table_key = str((table.get("key") if isinstance(table, dict) else "") or self._make_table_key(table_catalog, table_schema, table_name))
+            normalized_tables.append({
+                "name": table_name,
+                "schema": table_schema,
+                "catalog": table_catalog,
+                "key": table_key,
+                "type": table_type,
+            })
+
+        existing_tables = self._current_schema.setdefault("tables", [])
+        replace_keys = {(table.get("catalog", ""), table.get("schema", ""), table.get("name", "")) for table in normalized_tables}
+        replace_table_keys = {table.get("key", "") for table in normalized_tables if table.get("key")}
+        self._current_schema["tables"] = [
+            table for table in existing_tables
+            if (table.get("catalog", ""), table.get("schema", ""), table.get("name", "")) not in replace_keys
+            and table.get("key", "") not in replace_table_keys
+        ]
+        self._current_schema["tables"].extend(normalized_tables)
+        self._merge_schemas_into_current_schema(catalog_name, [schema_name])
+        self.schema_changed.emit(self._current_schema)
+        return normalized_tables
+
+    def _merge_columns_into_current_schema(self, catalog_name: str, schema_name: str, table_name: str, columns: list) -> list:
+        if not self._current_schema:
+            return columns or []
+
+        normalized_columns = []
+        for column in columns or []:
+            if isinstance(column, dict):
+                normalized_columns.append(dict(column))
+            else:
+                normalized_columns.append({"name": str(column), "type": ""})
+
+        table_key = self._make_table_key(catalog_name, schema_name, table_name)
+        columns_map = self._current_schema.setdefault("columns", {})
+        columns_map[table_key] = normalized_columns
+        if self._db_type == "databricks" and schema_name:
+            columns_map[f"{schema_name}.{table_name}"] = normalized_columns
+        elif table_name:
+            columns_map.setdefault(table_name, normalized_columns)
+
+        if not any(
+            table.get("catalog", "") == catalog_name
+            and table.get("schema", "") == schema_name
+            and table.get("name", "") == table_name
+            for table in self._current_schema.setdefault("tables", [])
+        ):
+            self._merge_tables_into_current_schema(catalog_name, schema_name, [{"name": table_name, "schema": schema_name, "catalog": catalog_name}])
+        self.schema_changed.emit(self._current_schema)
+        return normalized_columns
 
     def _get_column_metadata_for_table(self, table_item: QTreeWidgetItem) -> list:
         table_data = table_item.data(0, Qt.ItemDataRole.UserRole) or {}
@@ -766,7 +876,7 @@ class ObjectExplorerPanel(QWidget):
                 # For current catalog, show schemas if we have table data
                 if tables:
                     # Extract unique schemas from tables
-                    schemas = sorted(set(t.get("schema", "") for t in tables if t.get("schema")))
+                    schemas = self._schemas_for_catalog(catalog, tables)
                     for schema_name in schemas:
                         schema_item = QTreeWidgetItem(cat_item, [schema_name])
                         schema_item.setData(0, Qt.ItemDataRole.UserRole, {
@@ -791,15 +901,19 @@ class ObjectExplorerPanel(QWidget):
             schemas_in_tables = set(t.get("schema", "") for t in tables)
             logger.info(f"[OE Databricks] Schemas found in tables: {schemas_in_tables}")
         for catalog in sorted(all_catalogs):
-            is_current = (catalog.lower() == current_catalog.lower()) if current_catalog else False
+            catalog_tables = self._tables_for_catalog(tables, catalog, current_catalog)
 
-            if is_current:
+            if catalog_tables:
                 has_match = any(
                     filter_text in t.get("name", "").lower()
                     or filter_text in t.get("schema", "").lower()
                     or any(filter_text in c.get("name", "").lower()
-                           for c in columns.get(t.get("key", t.get("name", "")), []))
-                    for t in tables
+                           for c in (
+                               columns.get(t.get("key", ""), [])
+                               or columns.get(f"{t.get('schema', '')}.{t.get('name', '')}", [])
+                               or columns.get(t.get("name", ""), [])
+                           ))
+                    for t in catalog_tables
                 )
                 if not has_match and filter_text not in catalog.lower():
                     continue
@@ -818,7 +932,7 @@ class ObjectExplorerPanel(QWidget):
                 cat_item.setFont(0, font)
 
                 # Load full tree when filtering
-                self._add_tables_to_node(cat_item, tables, columns, filter_text, catalog=catalog)
+                self._add_tables_to_node(cat_item, catalog_tables, columns, filter_text, catalog=catalog)
                 cat_item.setExpanded(True)
             else:
                 if filter_text and filter_text not in catalog.lower():
@@ -883,7 +997,11 @@ class ObjectExplorerPanel(QWidget):
                 has_match = any(
                     filter_text in t.get("name", "").lower()
                     or any(filter_text in c.get("name", "").lower()
-                           for c in columns.get(t.get("key", t.get("name", "")), []))
+                           for c in (
+                               columns.get(t.get("key", ""), [])
+                               or columns.get(f"{t.get('schema', '')}.{t.get('name', '')}", [])
+                               or columns.get(t.get("name", ""), [])
+                           ))
                     for t in tables
                 )
                 if not has_match and filter_text not in db.lower():
@@ -950,12 +1068,20 @@ class ObjectExplorerPanel(QWidget):
 
             for table in sorted(schema_tables, key=lambda t: t.get("name", "")):
                 table_name = table.get("name", "")
-                table_key = table.get("key", table_name)
                 table_type = table.get("type", "TABLE")
                 table_schema = table.get("schema", "")
+                table_catalog = table.get("catalog", catalog)
+                table_key = table.get("key") or (
+                    self._make_table_key(table_catalog, table_schema, table_name)
+                    if self._db_type == "databricks" and table_catalog else table_name
+                )
 
                 # Columns use the composite key (schema.table) for lookup
-                table_columns = columns.get(table_key, [])
+                table_columns = (
+                    columns.get(table_key, [])
+                    or columns.get(f"{table_schema}.{table_name}", [])
+                    or columns.get(table_name, [])
+                )
 
                 # Filtro de busca: verificar se tabela ou alguma coluna corresponde
                 if filter_text:
@@ -977,7 +1103,7 @@ class ObjectExplorerPanel(QWidget):
                         "name": table_name,
                         "key": table_key,
                         "schema": table_schema,
-                        "catalog": catalog,
+                        "catalog": table_catalog,
                         "table_type": table_type,
                     },
                 )
@@ -1002,7 +1128,7 @@ class ObjectExplorerPanel(QWidget):
                         table_name=table_name,
                         table_key=table_key,
                         table_schema=table_schema,
-                        catalog=catalog,
+                        catalog=table_catalog,
                     )
 
                 # Expandir tabela se filtro ativo e ha match
@@ -1124,6 +1250,7 @@ class ObjectExplorerPanel(QWidget):
 
     def add_schemas_to_catalog(self, catalog_name: str, schemas: list):
         """Add schemas to a catalog item (lazy loading callback)."""
+        self._merge_schemas_into_current_schema(catalog_name, schemas)
         # Find the catalog item
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
@@ -1143,6 +1270,7 @@ class ObjectExplorerPanel(QWidget):
 
     def add_tables_to_schema(self, catalog_name: str, schema_name: str, tables: list):
         """Add tables to a schema item (lazy loading callback)."""
+        tables = self._merge_tables_into_current_schema(catalog_name, schema_name, tables)
         # Find the schema item
         for i in range(self.tree.topLevelItemCount()):
             cat_item = self.tree.topLevelItem(i)
@@ -1194,9 +1322,11 @@ class ObjectExplorerPanel(QWidget):
             label = f"{table_name} {S.object_explorer.view_suffix}" if is_view else table_name
 
             table_item = QTreeWidgetItem(parent_item, [label])
+            table_key = (table.get("key") if isinstance(table, dict) else "") or self._make_table_key(catalog, table_schema, table_name)
             table_item.setData(0, Qt.ItemDataRole.UserRole, {
                 "type": "table",
                 "name": table_name,
+                "key": table_key,
                 "schema": table_schema,
                 "catalog": catalog,
                 "table_type": table_type,
@@ -1214,6 +1344,7 @@ class ObjectExplorerPanel(QWidget):
 
     def add_columns_to_table(self, catalog_name: str, schema_name: str, table_name: str, columns: list):
         """Add columns to a table item (lazy loading callback)."""
+        columns = self._merge_columns_into_current_schema(catalog_name, schema_name, table_name, columns)
         # Find the table item by traversing the tree
         def find_table(parent):
             for i in range(parent.childCount()):

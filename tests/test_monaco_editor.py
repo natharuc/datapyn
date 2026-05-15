@@ -4,6 +4,7 @@ Tests for Monaco Editor integration.
 Tests the MonacoEditor widget, MonacoBridge, and InlineCompletionService.
 """
 
+import json
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 from PyQt6.QtCore import Qt, QTimer
@@ -120,6 +121,63 @@ class TestMonacoEditorBasic:
         
         assert editor._text_cache == "hello world"
         assert editor.get_text() == "hello world"
+
+    def test_editor_set_text_replaces_pending_text_before_ready(self, qtbot):
+        """Only the latest pending full-text update should remain queued."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+
+        editor.set_text("first value")
+        editor.set_text("second value")
+
+        pending_set_value = [
+            entry for entry in editor._pending_operations if entry[2] == "editor:setValue"
+        ]
+
+        assert editor.get_text() == "second value"
+        assert len(pending_set_value) == 1
+
+    def test_editor_ready_runs_only_latest_pending_text(self, qtbot):
+        """Ready transition should not replay stale queued set_text calls."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor.apply_theme = Mock()
+        editor._run_js = Mock()
+
+        editor.set_text("first value")
+        editor.set_text("second value")
+        editor._on_editor_ready()
+
+        set_value_scripts = [
+            call.args[0]
+            for call in editor._run_js.call_args_list
+            if call.args and call.args[0].startswith("setValue(")
+        ]
+
+        assert set_value_scripts == [f"setValue({json.dumps('second value')})"]
+
+    def test_editor_set_text_keeps_other_pending_operations(self, qtbot):
+        """Coalescing text updates should not discard unrelated queued JS."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor.apply_theme = Mock()
+        editor._run_js = Mock()
+
+        editor.set_language("sql")
+        editor.set_text("first value")
+        editor.set_text("second value")
+        editor._on_editor_ready()
+
+        scripts = [call.args[0] for call in editor._run_js.call_args_list if call.args]
+
+        assert any(script.startswith("setLanguage(") for script in scripts)
+        assert scripts.count(f"setValue({json.dumps('second value')})") == 1
     
     def test_editor_clear_empties_text(self, qtbot):
         """clear should empty the text."""

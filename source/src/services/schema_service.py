@@ -20,6 +20,39 @@ from src.language import S
 from src.services.entity_metadata_service import build_display_data_type
 
 
+def _sql_literal(value: str) -> str:
+    return str(value or "").replace("'", "''")
+
+
+def _quote_databricks_identifier(value: str) -> str:
+    return f"`{str(value or '').replace('`', '``')}`"
+
+
+def _databricks_relation_key(catalog: str, schema: str, table: str) -> str:
+    return ".".join(part for part in (catalog, schema, table) if part)
+
+
+def _row_value(row, *names: str, default=""):
+    for name in names:
+        try:
+            value = row.get(name)
+        except Exception:
+            value = None
+        if value is not None:
+            return value
+
+    try:
+        lowered = {str(key).lower(): key for key in row.index}
+        for name in names:
+            key = lowered.get(name.lower())
+            if key is not None:
+                return row.get(key, default)
+    except Exception:
+        pass
+
+    return default
+
+
 class SchemaWorker(QObject):
     """Worker that loads database schema in background thread"""
 
@@ -44,7 +77,16 @@ class SchemaWorker(QObject):
         """
         try:
             self.progress.emit(S.schema_service.loading)
-            schema = {"tables": [], "columns": {}, "database": "", "databases": [], "db_type": "", "routines": []}
+            schema = {
+                "tables": [],
+                "columns": {},
+                "database": "",
+                "current_schema": "",
+                "current_context": "",
+                "databases": [],
+                "db_type": "",
+                "routines": [],
+            }
 
             if self._cancelled:
                 return
@@ -56,9 +98,18 @@ class SchemaWorker(QObject):
                 if db_type == "databricks":
                     # For Databricks, use get_current_catalog which has proper fallback
                     db_name = self.connector.get_current_catalog() if hasattr(self.connector, "get_current_catalog") else ""
+                    current_schema = self.connector.get_current_schema() if hasattr(self.connector, "get_current_schema") else ""
+                    current_context = (
+                        self.connector.get_current_database_context()
+                        if hasattr(self.connector, "get_current_database_context")
+                        else ""
+                    )
+                    schema["current_schema"] = current_schema or ""
+                    schema["current_context"] = current_context or ""
                     logger.info(f"[SchemaService] Databricks current_catalog: '{db_name}'")
                 else:
                     db_name = self.connector.get_current_database()
+                    schema["current_context"] = db_name or ""
                 schema["database"] = db_name or ""
             except Exception:
                 schema["database"] = ""
@@ -92,15 +143,25 @@ class SchemaWorker(QObject):
                     for _, row in df.iterrows():
                         if self._cancelled:
                             return
-                        table_name = str(row.get("table_name", row.iloc[0]))
-                        table_schema = str(row.get("table_schema", "")) if "table_schema" in df.columns else ""
+                        table_name = str(_row_value(row, "table_name", "TABLE_NAME", default=row.iloc[0]))
+                        table_schema = str(_row_value(row, "table_schema", "TABLE_SCHEMA", default=""))
+                        table_catalog = str(_row_value(row, "table_catalog", "TABLE_CATALOG", default=""))
                         # Build unique key for column matching: schema.table for multi-schema DBs
-                        table_key = f"{table_schema}.{table_name}" if table_schema else table_name
+                        if db_type == "databricks":
+                            table_catalog = table_catalog or schema.get("database", "")
+                            table_key = _databricks_relation_key(table_catalog, table_schema, table_name)
+                            if table_catalog and table_schema:
+                                schema.setdefault("catalog_schemas", {}).setdefault(table_catalog, [])
+                                if table_schema not in schema["catalog_schemas"][table_catalog]:
+                                    schema["catalog_schemas"][table_catalog].append(table_schema)
+                        else:
+                            table_key = f"{table_schema}.{table_name}" if table_schema else table_name
                         table_info = {
                             "name": table_name,
                             "key": table_key,
                             "schema": table_schema,
-                            "type": str(row.get("table_type", "TABLE")) if "table_type" in df.columns else "TABLE",
+                            "catalog": table_catalog,
+                            "type": str(_row_value(row, "table_type", "TABLE_TYPE", default="TABLE")),
                         }
                         schema["tables"].append(table_info)
             except Exception as e:
@@ -117,17 +178,20 @@ class SchemaWorker(QObject):
                     for _, row in df.iterrows():
                         if self._cancelled:
                             return
-                        table_name = str(row.get("table_name", row.iloc[0]))
+                        table_name = str(_row_value(row, "table_name", "TABLE_NAME", default=row.iloc[0]))
                         # Use schema.table_name as key to match table keys
-                        if "table_schema" in df.columns:
-                            table_schema = str(row.get("table_schema", ""))
-                            if table_schema:
-                                table_name = f"{table_schema}.{table_name}"
+                        table_schema = str(_row_value(row, "table_schema", "TABLE_SCHEMA", default=""))
+                        table_catalog = str(_row_value(row, "table_catalog", "TABLE_CATALOG", default=""))
+                        if db_type == "databricks":
+                            table_catalog = table_catalog or schema.get("database", "")
+                            table_name = _databricks_relation_key(table_catalog, table_schema, table_name)
+                        elif table_schema:
+                            table_name = f"{table_schema}.{table_name}"
                         col_info = {
-                            "name": str(row.get("column_name", "")),
-                            "type": str(row.get("data_type", "")) if "data_type" in df.columns else "",
+                            "name": str(_row_value(row, "column_name", "COLUMN_NAME", default="")),
+                            "type": str(_row_value(row, "data_type", "DATA_TYPE", default="")),
                             "display_type": build_display_data_type(row, db_type),
-                            "nullable": str(row.get("is_nullable", "YES")) if "is_nullable" in df.columns else "YES",
+                            "nullable": str(_row_value(row, "is_nullable", "IS_NULLABLE", default="YES")),
                         }
                         if table_name not in schema["columns"]:
                             schema["columns"][table_name] = []
@@ -219,10 +283,10 @@ class SchemaWorker(QObject):
         elif db_type == "databricks":
             # Databricks: Use information_schema from current catalog
             return """
-                SELECT table_schema, table_name, table_type
+                SELECT table_catalog, table_schema, table_name, table_type
                 FROM information_schema.tables
                 WHERE table_schema NOT IN ('information_schema')
-                ORDER BY table_schema, table_name
+                ORDER BY table_catalog, table_schema, table_name
             """
         else:
             # MySQL, MariaDB and others
@@ -267,11 +331,11 @@ class SchemaWorker(QObject):
             # Databricks: Use information_schema from current catalog
             # Include table_schema to differentiate same-named tables in different schemas
             return """
-                SELECT table_schema, table_name, column_name, data_type, is_nullable,
-                       ordinal_position
+              SELECT table_catalog, table_schema, table_name, column_name, data_type,
+                  full_data_type as display_type, is_nullable, ordinal_position
                 FROM information_schema.columns
                 WHERE table_schema NOT IN ('information_schema')
-                ORDER BY table_schema, table_name, ordinal_position
+              ORDER BY table_catalog, table_schema, table_name, ordinal_position
             """
         else:
             # MySQL, MariaDB
@@ -541,7 +605,7 @@ class SchemaService(QObject):
                 schemas = []
                 if db_type == "databricks":
                     # Query schemas from catalog
-                    query = f"SHOW SCHEMAS IN `{catalog_name}`"
+                    query = f"SHOW SCHEMAS IN {_quote_databricks_identifier(catalog_name)}"
                     df = connector.execute_query(query)
                     if df is not None and len(df) > 0:
                         for _, row in df.iterrows():
@@ -572,31 +636,39 @@ class SchemaService(QObject):
                 tables = []
                 
                 if db_type == "databricks":
-                    # Ensure we're in the correct catalog context before querying tables
+                    catalog_ident = _quote_databricks_identifier(catalog_name)
+                    schema_literal = _sql_literal(schema_name)
+                    schema_ident = _quote_databricks_identifier(schema_name)
+
+                    # Query the target catalog directly instead of changing connection context.
                     try:
-                        connector.execute_query(f"USE CATALOG `{catalog_name}`")
-                    except Exception as cat_err:
-                        # Permission denied or catalog not accessible - return empty
-                        logger.debug(f"Cannot switch to catalog {catalog_name}: {cat_err}")
-                        return []
-                    
-                    # Query tables from schema (now in correct catalog context)
-                    try:
-                        query = f"SHOW TABLES IN `{schema_name}`"
+                        query = f"""
+                            SELECT table_name, table_type
+                            FROM {catalog_ident}.information_schema.tables
+                            WHERE table_schema = '{schema_literal}'
+                            ORDER BY table_name
+                        """
                         df = connector.execute_query(query)
-                    except Exception as tbl_err:
-                        # Schema not accessible - return empty
-                        logger.debug(f"Cannot list tables in {catalog_name}.{schema_name}: {tbl_err}")
-                        return []
+                    except Exception as info_err:
+                        logger.debug(f"Cannot query information_schema for {catalog_name}.{schema_name}: {info_err}")
+                        try:
+                            query = f"SHOW TABLES IN {catalog_ident}.{schema_ident}"
+                            df = connector.execute_query(query)
+                        except Exception as tbl_err:
+                            logger.debug(f"Cannot list tables in {catalog_name}.{schema_name}: {tbl_err}")
+                            return []
                     
                     if df is not None and len(df) > 0:
                         for _, row in df.iterrows():
                             # SHOW TABLES returns: database, tableName, isTemporary
-                            table_name = str(row.get("tableName", row.iloc[1] if len(row) > 1 else row.iloc[0]))
+                            table_name = str(_row_value(row, "table_name", "tableName", "TABLE_NAME", default=row.iloc[1] if len(row) > 1 else row.iloc[0]))
+                            table_type = str(_row_value(row, "table_type", "TABLE_TYPE", default="TABLE"))
                             tables.append({
                                 "name": table_name,
                                 "schema": schema_name,
-                                "type": "TABLE",
+                                "catalog": catalog_name,
+                                "key": _databricks_relation_key(catalog_name, schema_name, table_name),
+                                "type": table_type or "TABLE",
                             })
                 elif db_type in ("mssql", "sqlserver"):
                     query = f"""
@@ -675,32 +747,43 @@ class SchemaService(QObject):
                 columns = []
                 
                 if db_type == "databricks":
-                    # Ensure we're in the correct catalog context
+                    catalog_ident = _quote_databricks_identifier(_catalog_name)
+                    schema_ident = _quote_databricks_identifier(_schema_name)
+                    table_ident = _quote_databricks_identifier(_table_name)
+                    schema_literal = _sql_literal(_schema_name)
+                    table_literal = _sql_literal(_table_name)
+
+                    # Query the target catalog directly instead of changing connection context.
                     try:
-                        connector.execute_query(f"USE CATALOG `{_catalog_name}`")
-                    except Exception as cat_err:
-                        logger.debug(f"Cannot switch to catalog {_catalog_name}: {cat_err}")
-                        return []
-                    
-                    # Use DESCRIBE (now in correct catalog context)
-                    try:
-                        query = f"DESCRIBE `{_schema_name}`.`{_table_name}`"
+                        query = f"""
+                            SELECT column_name, data_type, full_data_type as display_type,
+                                   is_nullable, ordinal_position
+                            FROM {catalog_ident}.information_schema.columns
+                            WHERE table_schema = '{schema_literal}'
+                              AND table_name = '{table_literal}'
+                            ORDER BY ordinal_position
+                        """
                         df = connector.execute_query(query)
-                    except Exception as desc_err:
-                        logger.debug(f"Cannot describe {_catalog_name}.{_schema_name}.{_table_name}: {desc_err}")
-                        return []
+                    except Exception as info_err:
+                        logger.debug(f"Cannot query columns for {_catalog_name}.{_schema_name}.{_table_name}: {info_err}")
+                        try:
+                            query = f"DESCRIBE TABLE {catalog_ident}.{schema_ident}.{table_ident}"
+                            df = connector.execute_query(query)
+                        except Exception as desc_err:
+                            logger.debug(f"Cannot describe {_catalog_name}.{_schema_name}.{_table_name}: {desc_err}")
+                            return []
                     
                     if df is not None:
                         for idx, row in df.iterrows():
-                            col_name = str(row.get("col_name", row.iloc[0]))
+                            col_name = str(_row_value(row, "column_name", "col_name", "COLUMN_NAME", default=row.iloc[0]))
                             # Skip metadata rows (start with # or empty)
                             if not col_name or col_name.startswith("#"):
                                 continue
                             columns.append({
                                 "name": col_name,
-                                "type": str(row.get("data_type", row.iloc[1] if len(row) > 1 else "")),
+                                "type": str(_row_value(row, "data_type", "DATA_TYPE", default=row.iloc[1] if len(row) > 1 else "")),
                                 "display_type": build_display_data_type(row, db_type),
-                                "nullable": "YES",  # DESCRIBE doesn't give nullable info
+                                "nullable": str(_row_value(row, "is_nullable", "IS_NULLABLE", default="YES")),
                             })
                 elif db_type in ("mssql", "sqlserver"):
                     query = f"""
@@ -821,3 +904,10 @@ class SchemaService(QObject):
         
         self._active_threads.append((thread, worker))
         thread.start()
+
+    def update_cached_schema(self, connection_name: str, schema: dict, session_id: str = ""):
+        """Replace cached schema for a connection/session after lazy metadata loads."""
+        if not connection_name or not isinstance(schema, dict):
+            return
+        cache_key = self._cache_key(connection_name, session_id)
+        self._cache[cache_key] = schema

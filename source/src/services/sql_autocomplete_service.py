@@ -552,26 +552,42 @@ class SqlAutoCompleteService:
             if isinstance(table, dict):
                 table_name = str(table.get("name", "") or "")
                 schema_name = str(table.get("schema", "") or "")
-                table_key = str(table.get("key") or (f"{schema_name}.{table_name}" if schema_name else table_name))
+                catalog_name = str(table.get("catalog", "") or "")
+                if self._schema_db_type == "databricks" and catalog_name and schema_name:
+                    table_key = str(table.get("key") or f"{catalog_name}.{schema_name}.{table_name}")
+                else:
+                    table_key = str(table.get("key") or (f"{schema_name}.{table_name}" if schema_name else table_name))
                 table_type = str(table.get("type", "TABLE") or "TABLE")
             else:
                 table_name = str(table)
                 schema_name = ""
+                catalog_name = ""
                 table_key = table_name
                 table_type = "TABLE"
 
             if not table_name:
                 continue
 
-            entry_columns = self._clone_columns(columns_map.get(table_key) or columns_map.get(table_name) or [])
+            fallback_column_key = f"{schema_name}.{table_name}" if schema_name else table_name
+            entry_columns = self._clone_columns(
+                columns_map.get(table_key)
+                or columns_map.get(fallback_column_key)
+                or columns_map.get(table_name)
+                or []
+            )
             self._register_table_entry(
                 name=table_name,
                 schema_name=schema_name,
+                catalog_name=catalog_name,
                 table_key=table_key,
                 table_type=table_type,
                 columns=entry_columns,
             )
             registered_keys.add(self._normalize_relation_key(table_key))
+            if schema_name:
+                registered_keys.add(self._normalize_relation_key(f"{schema_name}.{table_name}"))
+            if catalog_name and schema_name:
+                registered_keys.add(self._normalize_relation_key(f"{catalog_name}.{schema_name}.{table_name}"))
 
         for table_key, cols in columns_map.items():
             normalized_key = self._normalize_relation_key(table_key)
@@ -580,9 +596,11 @@ class SqlAutoCompleteService:
             parts = self._split_identifier_parts(table_key)
             table_name = parts[-1] if parts else str(table_key)
             schema_name = parts[-2] if len(parts) >= 2 else ""
+            catalog_name = parts[-3] if len(parts) >= 3 else ""
             self._register_table_entry(
                 name=table_name,
                 schema_name=schema_name,
+                catalog_name=catalog_name,
                 table_key=str(table_key),
                 table_type="TABLE",
                 columns=self._clone_columns(cols),
@@ -593,15 +611,18 @@ class SqlAutoCompleteService:
         *,
         name: str,
         schema_name: str,
+        catalog_name: str,
         table_key: str,
         table_type: str,
         columns: List[dict[str, Any]],
     ) -> None:
-        display_detail = f"{schema_name}.{name}" if schema_name else name
+        display_detail = ".".join(part for part in (catalog_name, schema_name, name) if part)
         parts = self._split_identifier_parts(table_key)
         lookup_names = {self._normalize_relation_key(name), self._normalize_relation_key(table_key)}
         if schema_name:
             lookup_names.add(self._normalize_relation_key(f"{schema_name}.{name}"))
+        if catalog_name and schema_name:
+            lookup_names.add(self._normalize_relation_key(f"{catalog_name}.{schema_name}.{name}"))
         for index in range(len(parts)):
             suffix = ".".join(parts[index:])
             lookup_names.add(self._normalize_relation_key(suffix))
@@ -609,6 +630,7 @@ class SqlAutoCompleteService:
         entry = {
             "name": name,
             "schema": schema_name,
+            "catalog": catalog_name,
             "key": table_key,
             "type": table_type,
             "detail": display_detail,
@@ -618,6 +640,54 @@ class SqlAutoCompleteService:
         self._table_entries.append(entry)
         for lookup_name in lookup_names:
             self._table_lookup.setdefault(lookup_name, []).append(entry)
+
+    def _current_databricks_catalog(self) -> str:
+        catalog_name = self._normalize_name(self._schema.get("database", ""))
+        if catalog_name:
+            return catalog_name
+        current_context = self._split_identifier_parts(self._schema.get("current_context", ""))
+        return self._normalize_name(current_context[0]) if len(current_context) >= 2 else ""
+
+    def _current_databricks_schema(self) -> str:
+        schema_name = self._normalize_name(self._schema.get("current_schema", ""))
+        if schema_name:
+            return schema_name
+        current_context = self._split_identifier_parts(self._schema.get("current_context", ""))
+        return self._normalize_name(current_context[1]) if len(current_context) >= 2 else ""
+
+    def _is_current_databricks_entry(self, entry: dict[str, Any]) -> bool:
+        if self._schema_db_type != "databricks":
+            return False
+
+        current_catalog = self._current_databricks_catalog()
+        current_schema = self._current_databricks_schema()
+        if not current_catalog or not current_schema:
+            return False
+
+        entry_catalog = self._normalize_name(entry.get("catalog", ""))
+        entry_schema = self._normalize_name(entry.get("schema", ""))
+        return entry_catalog == current_catalog and entry_schema == current_schema
+
+    def _databricks_entry_sort_key(self, entry: dict[str, Any]) -> Tuple[int, str]:
+        current_catalog = self._current_databricks_catalog()
+        current_schema = self._current_databricks_schema()
+        entry_catalog = self._normalize_name(entry.get("catalog", ""))
+        entry_schema = self._normalize_name(entry.get("schema", ""))
+
+        if current_catalog and current_schema and entry_catalog == current_catalog and entry_schema == current_schema:
+            return (0, str(entry.get("detail", "")))
+        if current_catalog and entry_catalog == current_catalog:
+            return (1, str(entry.get("detail", "")))
+        return (2, str(entry.get("detail", "")))
+
+    def _databricks_table_label(self, entry: dict[str, Any]) -> str:
+        if self._is_current_databricks_entry(entry):
+            return str(entry.get("name", "") or "")
+
+        name = str(entry.get("name", "") or "")
+        schema_name = str(entry.get("schema", "") or "")
+        catalog_name = str(entry.get("catalog", "") or "")
+        return ".".join(part for part in (catalog_name, schema_name, name) if part)
 
     def _preferred_dialects(self) -> List[Optional[str]]:
         db_type = self._schema_db_type
@@ -1384,16 +1454,31 @@ class SqlAutoCompleteService:
             return None
 
         normalized_schema = self._normalize_name(schema_name)
+        normalized_catalog = self._normalize_name(catalog_name)
+        current_catalog = self._normalize_name(self._schema.get("database", ""))
+        current_schema = self._normalize_name(self._schema.get("current_schema", ""))
 
-        def sort_key(entry: dict[str, Any]) -> Tuple[int, int, str]:
+        def sort_key(entry: dict[str, Any]) -> Tuple[int, int, int, str]:
+            entry_catalog = self._normalize_name(entry.get("catalog", ""))
             entry_schema = self._normalize_name(entry.get("schema", ""))
+            if normalized_catalog and entry_catalog == normalized_catalog:
+                catalog_rank = 0
+            elif current_catalog and entry_catalog == current_catalog:
+                catalog_rank = 1
+            elif not entry_catalog:
+                catalog_rank = 2
+            else:
+                catalog_rank = 3
+
             if normalized_schema and entry_schema == normalized_schema:
-                return (0, 0, entry["detail"])
+                return (catalog_rank, 0, 0, entry["detail"])
+            if self._schema_db_type == "databricks" and current_schema and entry_schema == current_schema:
+                return (catalog_rank, 1, 0, entry["detail"])
             if entry_schema in DEFAULT_SCHEMA_PRIORITY:
-                return (1, DEFAULT_SCHEMA_PRIORITY.index(entry_schema), entry["detail"])
+                return (catalog_rank, 2, DEFAULT_SCHEMA_PRIORITY.index(entry_schema), entry["detail"])
             if not entry_schema:
-                return (2, 0, entry["detail"])
-            return (3, 0, entry["detail"])
+                return (catalog_rank, 3, 0, entry["detail"])
+            return (catalog_rank, 4, 0, entry["detail"])
 
         return sorted(candidates, key=sort_key)[0]
 
@@ -1529,8 +1614,16 @@ class SqlAutoCompleteService:
                 label = relation["display_name"]
                 append_table(label, relation.get("detail", ""))
 
-        for entry in self._table_entries:
-            append_table(entry["name"], f'{entry["type"]} - {entry["detail"]}')
+        entries = self._table_entries
+        if self._schema_db_type == "databricks":
+            entries = sorted(entries, key=self._databricks_entry_sort_key)
+
+        for entry in entries:
+            detail = f'{entry["type"]} - {entry["detail"]}'
+            if self._schema_db_type == "databricks":
+                append_table(self._databricks_table_label(entry), detail)
+            else:
+                append_table(entry["name"], detail)
 
         return result
 
@@ -1591,6 +1684,9 @@ class SqlAutoCompleteService:
                 )
 
         if relation is None:
+            namespace_result = self._databricks_namespace_completions(prefix)
+            if namespace_result:
+                return namespace_result
             logger.debug("No columns found for prefix: %s", prefix)
             return []
 
@@ -1604,17 +1700,70 @@ class SqlAutoCompleteService:
             result.append((column_name, CAT_COLUMN, detail))
         return result
 
+    def _databricks_namespace_completions(self, prefix: str) -> List[Tuple[str, str, str]]:
+        if self._schema_db_type != "databricks":
+            return []
+
+        parts = self._split_identifier_parts(prefix)
+        if not parts:
+            return []
+
+        def table_items(catalog_name: str, schema_name: str) -> List[Tuple[str, str, str]]:
+            result: List[Tuple[str, str, str]] = []
+            seen: Set[str] = set()
+            normalized_catalog = self._normalize_name(catalog_name)
+            normalized_schema = self._normalize_name(schema_name)
+            for entry in self._table_entries:
+                if normalized_catalog and self._normalize_name(entry.get("catalog", "")) != normalized_catalog:
+                    continue
+                if self._normalize_name(entry.get("schema", "")) != normalized_schema:
+                    continue
+                name = entry.get("name", "")
+                normalized_name = self._normalize_name(name)
+                if not normalized_name or normalized_name in seen:
+                    continue
+                seen.add(normalized_name)
+                result.append((name, CAT_TABLE, f'{entry["type"]} - {entry["detail"]}'))
+            return result
+
+        if len(parts) == 1:
+            catalog_name = parts[0]
+            schemas = set()
+            for schema_name in (self._schema.get("catalog_schemas", {}) or {}).get(catalog_name, []) or []:
+                if schema_name:
+                    schemas.add(str(schema_name))
+            for entry in self._table_entries:
+                if self._normalize_name(entry.get("catalog", "")) == self._normalize_name(catalog_name):
+                    schema_name = entry.get("schema", "")
+                    if schema_name:
+                        schemas.add(schema_name)
+            if schemas:
+                return [(schema_name, CAT_DATABASE, f"schema - {catalog_name}.{schema_name}") for schema_name in sorted(schemas)]
+
+            current_catalog = str(self._schema.get("database", "") or "")
+            return table_items(current_catalog, catalog_name)
+
+        if len(parts) == 2:
+            return table_items(parts[0], parts[1])
+
+        return []
+
     def _all_columns_flat(self) -> List[Tuple[str, str, str]]:
         """Return all columns from all tables plus table names (fallback for SELECT without FROM)."""
         result: List[Tuple[str, str, str]] = []
         seen: Set[str] = set()
 
-        for entry in self._table_entries:
-            normalized_name = self._normalize_name(entry["name"])
+        entries = self._table_entries
+        if self._schema_db_type == "databricks":
+            entries = sorted(entries, key=self._databricks_entry_sort_key)
+
+        for entry in entries:
+            table_label = self._databricks_table_label(entry) if self._schema_db_type == "databricks" else entry["name"]
+            normalized_name = self._normalize_name(table_label)
             if normalized_name in seen:
                 continue
             seen.add(normalized_name)
-            result.append((entry["name"], CAT_TABLE, f'{entry["type"]} - {entry["detail"]}'))
+            result.append((table_label, CAT_TABLE, f'{entry["type"]} - {entry["detail"]}'))
 
         for entry in self._table_entries:
             for column in entry.get("columns", []):

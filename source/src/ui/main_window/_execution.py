@@ -13,6 +13,7 @@ import pandas as pd
 from PyQt6.QtCore import Qt, QThread, QTimer, QElapsedTimer
 from PyQt6.QtWidgets import QMessageBox
 
+from src.database.database_connector import get_connector_database_context
 from src.ui.main_window._workers import SqlWorker, PythonWorker
 from src.ui.components.toast_notification import ToastManager
 from src.language import S
@@ -268,6 +269,8 @@ class ExecutionMixin:
                 self.action_label.setText(S.status.sql_switching_database.format(name=database_name))
 
                 connector.change_database(database_name)
+                database_name = get_connector_database_context(connector) or database_name
+                session.database_context = database_name if connector.db_type == "databricks" else ""
 
                 # Update statusbar
                 self._update_connection_status()
@@ -306,7 +309,7 @@ class ExecutionMixin:
 
         # Save current database to detect change via USE within batch
         try:
-            current_db_before = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+            current_db_before = get_connector_database_context(connector)
         except Exception:
             current_db_before = ""
 
@@ -484,7 +487,7 @@ class ExecutionMixin:
 
         connector = session.connector
         try:
-            db_after = connector.get_current_database() if hasattr(connector, "get_current_database") else ""
+            db_after = get_connector_database_context(connector)
         except Exception:
             return
 

@@ -16,6 +16,35 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _build_databricks_context_name(catalog: str, schema: str) -> str:
+    parts = [str(part or "").strip() for part in (catalog, schema)]
+    return ".".join(part for part in parts if part)
+
+
+def get_connector_database_context(connector) -> str:
+    """Return the current database context from a connector or compatible mock."""
+    if connector is None:
+        return ""
+
+    get_context = getattr(connector, "get_current_database_context", None)
+    if callable(get_context):
+        try:
+            value = str(get_context() or "")
+        except Exception:
+            value = ""
+        if value:
+            return value
+
+    get_database = getattr(connector, "get_current_database", None)
+    if callable(get_database):
+        try:
+            return str(get_database() or "")
+        except Exception:
+            return ""
+
+    return ""
+
+
 def _get_oauth_token_cache_path(host: str) -> Path:
     """Get path for OAuth token cache file.
     
@@ -1095,6 +1124,19 @@ class DatabaseConnector:
     def get_current_schema(self) -> str:
         """Return current Databricks schema name"""
         return self.connection_params.get("databricks_schema", "default")
+
+    def get_current_database_context(self) -> str:
+        """Return the current context shown to the user.
+
+        Databricks uses the full catalog.schema context; other databases keep the
+        existing single-database behavior.
+        """
+        if self.db_type == "databricks":
+            current_catalog = self.get_current_catalog()
+            current_schema = self.get_current_schema()
+            context_name = _build_databricks_context_name(current_catalog, current_schema)
+            return context_name or current_catalog or current_schema
+        return self.get_current_database()
 
     def disconnect(self):
         """Disconnect from database"""

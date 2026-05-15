@@ -256,7 +256,7 @@ class MonacoEditor(QWidget):
         self._is_ready = True
         
         # Apply pending operations
-        for operation, args in self._pending_operations:
+        for operation, args, _replace_key in self._pending_operations:
             operation(*args)
         self._pending_operations.clear()
         
@@ -450,7 +450,7 @@ class MonacoEditor(QWidget):
         else:
             web_view.page().runJavaScript(script)
     
-    def _run_js_when_ready(self, script: str, callback=None):
+    def _run_js_when_ready(self, script: str, callback=None, replace_key: str | None = None):
         """Execute JS when ready, or queue if not ready yet."""
         if self._cleaned_up:
             return
@@ -462,8 +462,14 @@ class MonacoEditor(QWidget):
             self._run_js(script, callback)
         else:
             logger.debug(f"[MONACO] Queueing JS (not ready): {script[:40]}...")
+            if replace_key is not None:
+                self._pending_operations = [
+                    (pending_operation, pending_args, pending_key)
+                    for pending_operation, pending_args, pending_key in self._pending_operations
+                    if pending_key != replace_key
+                ]
             self._pending_operations.append(
-                (lambda s=script, cb=callback: self._run_js(s, cb), ())
+                (lambda s=script, cb=callback: self._run_js(s, cb), (), replace_key)
             )
     
     # === ICodeEditor Interface ===
@@ -476,7 +482,7 @@ class MonacoEditor(QWidget):
         """Sets the editor text."""
         self._text_cache = text
         escaped = json.dumps(text)
-        self._run_js_when_ready(f"setValue({escaped})")
+        self._run_js_when_ready(f"setValue({escaped})", replace_key="editor:setValue")
     
     def force_request_completion(self) -> None:
         """Force trigger an inline completion request (Ctrl+. shortcut)."""
