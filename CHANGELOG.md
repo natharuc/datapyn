@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.30.1 (2026-05-15)
+
+### Bug Fixes
+
+- Unify databricks context and stabilize monaco updates
+  ([`13f7480`](https://github.com/natharuc/datapyn/commit/13f74802c8051f69cb47989bfdd89aadf985969f))
+
+
 ## v1.30.0 (2026-05-14)
 
 ### Features
