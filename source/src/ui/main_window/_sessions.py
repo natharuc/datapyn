@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QColor
 
+from src.database.database_connector import get_connector_database_context
 from src.ui.components.session_widget import SessionWidget
 from src.design_system.tokens import get_colors
 from src.language import S
@@ -342,9 +343,15 @@ class SessionsMixin:
             # Capture active session connection BEFORE creating new one
             previous_connection = None
             previous_color = None
+            previous_database_context = ""
             current_widget = self._get_current_session_widget()
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
+                previous_database_context = getattr(current_widget.session, "database_context", "") or ""
+                if not previous_database_context:
+                    previous_database_context = get_connector_database_context(
+                        getattr(current_widget.session, "connector", None)
+                    )
                 if previous_connection:
                     config = self.connection_manager.get_connection_config(previous_connection)
                     if config:
@@ -363,7 +370,7 @@ class SessionsMixin:
             if previous_connection:
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(150, lambda: self._connect_session_background(
-                    widget, session, previous_connection, previous_color
+                    widget, session, previous_connection, previous_color, previous_database_context
                 ))
         finally:
             self._creating_session = False
@@ -371,20 +378,23 @@ class SessionsMixin:
             # (the guard skipped _on_session_tab_changed during creation)
             self._sync_file_context_from_widget()
 
-    def _connect_session_background(self, widget, session, connection_name, color):
+    def _connect_session_background(self, widget, session, connection_name, color, database_context=""):
         """Connect session in a true background thread to avoid UI freeze."""
         from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
         class ConnectionWorker(QObject):
             finished = pyqtSignal(bool)
 
-            def __init__(self, session, connection_name):
+            def __init__(self, session, connection_name, database_context):
                 super().__init__()
                 self._session = session
                 self._connection_name = connection_name
+                self._database_context = database_context
 
             def run(self):
                 try:
+                    if self._database_context:
+                        self._session.database_context = self._database_context
                     result = self._session.connect(self._connection_name)
                     self.finished.emit(result)
                 except Exception as e:
@@ -402,7 +412,7 @@ class SessionsMixin:
 
         # Create and start background thread
         thread = QThread()
-        worker = ConnectionWorker(session, connection_name)
+        worker = ConnectionWorker(session, connection_name, database_context)
 
         def cleanup_connection_thread(active_thread=thread, active_worker=worker):
             if not hasattr(self, "_connection_threads"):
@@ -1001,15 +1011,24 @@ class SessionsMixin:
 
             # Update active connection panel
             config = self.connection_manager.get_connection_config(session.connection_name)
+            current_db = get_connector_database_context(session.connector) or getattr(session, "database_context", "")
             if config:
                 self.connection_panel.set_active_connection(
                     session.connection_name,
                     host=config.get("host", ""),
-                    database=config.get("database", ""),
+                    database=current_db or config.get("database", ""),
                     db_type=config.get("db_type", ""),
                 )
             else:
                 self.connection_panel.set_active_connection(session.connection_name)
+
+            current_widget = self._get_current_session_widget()
+            if current_widget and getattr(current_widget, "session", None) == session and hasattr(current_widget, "editor"):
+                for block in current_widget.editor.get_blocks():
+                    block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+                    if not block_conn:
+                        block._database_name = current_db or None
+                        block.db_panel.set_database(current_db or None)
 
             # Highlight connection in list
             for i in range(self.connections_list.count()):
@@ -1070,7 +1089,8 @@ class SessionsMixin:
         db_type = config.get("db_type", "")
 
         # Usar o banco retornado (pode ter mudado via USE)
-        current_db = database if database else config.get("database", "")
+        current_db = database or get_connector_database_context(getattr(session, "connector", None)) or config.get("database", "")
+        session.database_context = current_db if db_type == "databricks" else ""
 
         # === UPDATE ACTIVE CONNECTIONS PANEL ===
         self.connection_panel.set_active_connection(connection_name, host=host, database=current_db, db_type=db_type)

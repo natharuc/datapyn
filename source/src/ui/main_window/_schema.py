@@ -33,13 +33,19 @@ class SchemaMixin:
         if not connector or not self._connector_is_connected(connector):
             return
 
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        if sid:
+            self._pending_oe_schema_requests = getattr(self, "_pending_oe_schema_requests", {})
+            self._pending_oe_schema_requests[catalog_name] = sid
+
         self._schema_service.load_schemas_for_catalog(
             connector, connection_name, catalog_name
         )
 
     def _on_schemas_loaded(self, catalog_name: str, schemas: list):
         """Callback when schemas are loaded for a catalog."""
-        sid = self._get_active_session_id()
+        pending = getattr(self, "_pending_oe_schema_requests", {})
+        sid = pending.pop(catalog_name, None) or self._get_active_session_id()
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
@@ -52,13 +58,19 @@ class SchemaMixin:
         if not connector or not self._connector_is_connected(connector):
             return
 
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        if sid:
+            self._pending_oe_table_requests = getattr(self, "_pending_oe_table_requests", {})
+            self._pending_oe_table_requests[(catalog_name, schema_name)] = sid
+
         self._schema_service.load_tables_for_schema(
             connector, connection_name, catalog_name, schema_name
         )
 
     def _on_tables_loaded(self, catalog_name: str, schema_name: str, tables: list):
         """Callback when tables are loaded for a schema."""
-        sid = self._get_active_session_id()
+        pending = getattr(self, "_pending_oe_table_requests", {})
+        sid = pending.pop((catalog_name, schema_name), None) or self._get_active_session_id()
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
@@ -71,18 +83,107 @@ class SchemaMixin:
         if not connector or not self._connector_is_connected(connector):
             return
 
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        if sid:
+            self._pending_oe_column_requests = getattr(self, "_pending_oe_column_requests", {})
+            self._pending_oe_column_requests[(catalog_name, schema_name, table_name)] = sid
+
         self._schema_service.load_columns_for_table(
             connector, connection_name, catalog_name, schema_name, table_name
         )
 
     def _on_columns_loaded(self, catalog_name: str, schema_name: str, table_name: str, columns: list):
         """Callback when columns are loaded for a table."""
-        sid = self._get_active_session_id()
+        pending = getattr(self, "_pending_oe_column_requests", {})
+        sid = pending.pop((catalog_name, schema_name, table_name), None) or self._get_active_session_id()
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
         if explorer:
             explorer.add_columns_to_table(catalog_name, schema_name, table_name, columns)
+
+    def _session_id_for_object_explorer_sender(self) -> str:
+        sender = self.sender()
+        if not sender or not hasattr(self, "_session_explorers"):
+            return ""
+        for session_id, explorer in self._session_explorers.items():
+            if explorer is sender:
+                return session_id
+        return ""
+
+    def _on_object_explorer_schema_changed(self, session_id: str, schema: dict):
+        """Refresh editor autocomplete when Object Explorer lazy metadata changes."""
+        if not session_id or not isinstance(schema, dict):
+            return
+
+        explorer = self._session_explorers.get(session_id) if hasattr(self, "_session_explorers") else None
+        if not explorer:
+            return
+
+        connection_name = getattr(explorer, "_current_connection", "") or ""
+        if not connection_name:
+            return
+
+        db_type = getattr(explorer, "_db_type", "") or self._get_connection_db_type(connection_name)
+        self._schema_service.update_cached_schema(connection_name, schema, session_id=session_id)
+        self._apply_schema_to_session_blocks(session_id, connection_name, schema, db_type=db_type)
+
+    def _get_connection_db_type(self, connection_name: str) -> str:
+        config = self.connection_manager.get_connection_config(connection_name) if connection_name else None
+        return config.get("db_type", "") if config else ""
+
+    def _available_databases_from_schema(self, schema: dict, db_type: str = "") -> list:
+        all_databases = list(schema.get("databases", []) or [])
+        if db_type != "databricks":
+            return all_databases
+
+        values = set(all_databases)
+        catalog_schemas = schema.get("catalog_schemas", {}) or {}
+        for catalog, schemas in catalog_schemas.items():
+            for schema_name in schemas or []:
+                if catalog and schema_name:
+                    values.add(f"{catalog}.{schema_name}")
+
+        current_catalog = schema.get("database", "")
+        for table in schema.get("tables", []) or []:
+            catalog = table.get("catalog") or current_catalog
+            schema_name = table.get("schema", "")
+            if catalog and schema_name:
+                values.add(f"{catalog}.{schema_name}")
+
+        return sorted(value for value in values if value)
+
+    def _apply_schema_to_session_blocks(self, session_id: str, connection_name: str, schema: dict, db_type: str = ""):
+        widget = self._session_widgets.get(session_id)
+        if not widget or not hasattr(widget, "editor") or not widget.editor:
+            return
+
+        session_conn = ""
+        if hasattr(widget, "session") and widget.session:
+            session_conn = getattr(widget.session, "connection_name", "") or ""
+
+        available_databases = self._available_databases_from_schema(schema, db_type)
+
+        if session_conn == connection_name and hasattr(widget.editor, "set_sql_schema"):
+            widget.editor.set_sql_schema(schema)
+
+        for block in widget.editor.get_blocks():
+            block_lang = block.get_language() if hasattr(block, "get_language") else ""
+            if block_lang != "sql":
+                continue
+
+            block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+            uses_connection = (block_conn == connection_name) or (not block_conn and session_conn == connection_name)
+            if not uses_connection:
+                continue
+
+            if hasattr(block.editor, "set_sql_schema"):
+                block.editor.set_sql_schema(schema)
+            if hasattr(block, "set_available_databases"):
+                block.set_available_databases(available_databases)
+
+        schema_context = self._build_schema_context(schema, connection_name)
+        widget.editor.set_database_context(schema_context)
 
     def _load_schema_with_loading(self, connector, connection_name: str, session_id: str = ""):
         """Load schema and show loading indicator in Object Explorer.
@@ -201,18 +302,7 @@ class SchemaMixin:
         if conn_config:
             db_type = conn_config.get("db_type", "")
 
-        # Build available databases list - for Databricks use catalog.schema format
-        all_databases = schema.get("databases", [])
-        if db_type == "databricks":
-            current_catalog = schema.get("database", "")
-            tables = schema.get("tables", [])
-            schemas_set = set()
-            for t in tables:
-                table_schema = t.get("schema", "")
-                if table_schema:
-                    schemas_set.add(table_schema)
-            if current_catalog and schemas_set:
-                all_databases = sorted([f"{current_catalog}.{s}" for s in schemas_set])
+        all_databases = self._available_databases_from_schema(schema, db_type)
 
         # Determine which session requested this schema (use signal param OR fallback to tracking dict)
         requesting_sid = session_id
@@ -323,11 +413,17 @@ class SchemaMixin:
         
         for table in tables[:30]:  # Limit to first 30 tables
             table_name = table.get("name", "")
-            table_cols = columns.get(table_name, [])
+            table_schema = table.get("schema", "")
+            table_catalog = table.get("catalog", "")
+            table_key = table.get("key", "")
+            fallback_key = f"{table_schema}.{table_name}" if table_schema else table_name
+            full_key = ".".join(part for part in (table_catalog, table_schema, table_name) if part)
+            table_cols = columns.get(table_key, []) or columns.get(full_key, []) or columns.get(fallback_key, []) or columns.get(table_name, [])
             col_names = [c.get("name", "") for c in table_cols[:10]]  # First 10 cols
             if len(table_cols) > 10:
                 col_names.append(f"... +{len(table_cols) - 10} more")
-            lines.append(f"  {table_name}: {', '.join(col_names)}")
+            display_name = full_key or fallback_key or table_name
+            lines.append(f"  {display_name}: {', '.join(col_names)}")
         
         if len(tables) > 30:
             lines.append(f"  ... +{len(tables) - 30} more tables")
@@ -502,22 +598,7 @@ class SchemaMixin:
         if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
             block.editor.set_sql_schema(schema)
         if hasattr(block, "set_available_databases"):
-            all_databases = schema.get("databases", [])
-            
-            # For Databricks, build catalog.schema combos from tables
-            if db_type == "databricks":
-                current_catalog = schema.get("database", "")
-                tables = schema.get("tables", [])
-                # Extract unique schemas from tables
-                schemas_set = set()
-                for t in tables:
-                    table_schema = t.get("schema", "")
-                    if table_schema:
-                        schemas_set.add(table_schema)
-                # Build catalog.schema list
-                if current_catalog and schemas_set:
-                    all_databases = sorted([f"{current_catalog}.{s}" for s in schemas_set])
-                    
+            all_databases = self._available_databases_from_schema(schema, db_type)
             block.set_available_databases(all_databases)
 
     def _update_oe_for_block_connection(self, block, connection_name: str, schema: dict):
@@ -571,15 +652,24 @@ class SchemaMixin:
             sid = self._get_active_session_id() or ""
 
             thread = QThread()
+            database_name = block.get_database_name() if hasattr(block, "get_database_name") else ""
+            connect_database = database_name or config["database"]
+            database_context = ""
+            if config["db_type"] == "databricks":
+                connect_database = config["database"]
+                database_context = database_name or ""
+
             worker = BlockConnectionWorker(
                 db_type=config["db_type"],
                 host=config["host"],
                 port=config["port"],
-                database=config["database"],
+                database=connect_database,
                 username=config.get("username", ""),
                 password=config.get("password", ""),
                 use_windows_auth=config.get("use_windows_auth", False),
                 trust_server_certificate=config.get("trust_server_certificate", False),
+                http_path=config.get("http_path", ""),
+                database_context=database_context,
             )
             worker.moveToThread(thread)
 
@@ -687,15 +777,23 @@ class SchemaMixin:
 
         # Create connection with the NEW database
         thread = QThread()
+        connect_database = database_name
+        database_context = ""
+        if config["db_type"] == "databricks":
+            connect_database = config["database"]
+            database_context = database_name
+
         worker = BlockConnectionWorker(
             db_type=config["db_type"],
             host=config["host"],
             port=config["port"],
-            database=database_name,  # Use the new database!
+            database=connect_database,
             username=config.get("username", ""),
             password=config.get("password", ""),
             use_windows_auth=config.get("use_windows_auth", False),
             trust_server_certificate=config.get("trust_server_certificate", False),
+            http_path=config.get("http_path", ""),
+            database_context=database_context,
         )
         worker.moveToThread(thread)
 

@@ -718,6 +718,15 @@ class TestRealWorldScenarios:
         assert blocks[1].get_language() == "python"
         assert blocks[1].get_code() == "total = df.sum()"
 
+    def test_session_serialization_preserves_databricks_database_context(self):
+        session = Session(session_id="test-session", title="Test")
+        session.database_context = "mag_bronze.esim"
+
+        session_data = session.serialize()
+        restored = Session.deserialize(session_data)
+
+        assert restored.database_context == "mag_bronze.esim"
+
 
 class TestEdgeCases:
     """Testes de casos extremos"""

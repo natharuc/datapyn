@@ -16,6 +16,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
+from src.database.database_connector import get_connector_database_context
 from src.ui.main_window._workers import _read_file_with_encoding_fallback
 from src.language import S
 
@@ -100,9 +101,15 @@ class FileIOMixin:
             # Capture connection from current tab BEFORE creating new one
             previous_connection = None
             previous_color = None
+            previous_database_context = ""
             current_widget = self._get_current_session_widget()
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
+                previous_database_context = getattr(current_widget.session, "database_context", "") or ""
+                if not previous_database_context:
+                    previous_database_context = get_connector_database_context(
+                        getattr(current_widget.session, "connector", None)
+                    )
                 if previous_connection:
                     config = self.connection_manager.get_connection_config(previous_connection)
                     if config:
@@ -241,7 +248,7 @@ class FileIOMixin:
             if previous_connection:
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(150, lambda: self._connect_session_background(
-                    widget, session, previous_connection, previous_color
+                    widget, session, previous_connection, previous_color, previous_database_context
                 ))
 
         except Exception as e:
@@ -366,7 +373,10 @@ class FileIOMixin:
         """Updates status periodically (no I/O on main thread)."""
         # Check rapido sem I/O - apenas verifica estado do pool
         session = self.session_manager.focused_session
-        if session and session.connector and not session.connector.is_connected():
+        connector = session.connector if session else None
+        is_connected = getattr(connector, "is_connected", None) if connector else None
+        connected = is_connected() if callable(is_connected) else bool(is_connected)
+        if session and connector and not connected:
             session.clear_connection()
             self._update_connection_status()
 

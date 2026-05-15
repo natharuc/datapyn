@@ -249,7 +249,9 @@ class BlockConnectionWorker(BaseWorker):
     def __init__(self, db_type: str, host: str, port: int, database: str,
                  username: str = "", password: str = "",
                  use_windows_auth: bool = False,
-                 trust_server_certificate: bool = False):
+                 trust_server_certificate: bool = False,
+                 http_path: str = "",
+                 database_context: str = ""):
         super().__init__()
         self.db_type = db_type
         self.host = host
@@ -259,6 +261,8 @@ class BlockConnectionWorker(BaseWorker):
         self.password = password
         self.use_windows_auth = use_windows_auth
         self.trust_server_certificate = trust_server_certificate
+        self.http_path = http_path
+        self.database_context = database_context
 
     def run(self):
         """Connect to database"""
@@ -268,16 +272,25 @@ class BlockConnectionWorker(BaseWorker):
             from ..database.database_connector import DatabaseConnector
 
             connector = DatabaseConnector()
+            connect_kwargs = {
+                "db_type": self.db_type,
+                "host": self.host,
+                "port": self.port,
+                "database": self.database,
+                "username": self.username,
+                "password": self.password,
+                "use_windows_auth": self.use_windows_auth,
+                "trust_server_certificate": self.trust_server_certificate,
+            }
+            if self.db_type == "databricks":
+                connect_kwargs["http_path"] = self.http_path
+
             connector.connect(
-                db_type=self.db_type,
-                host=self.host,
-                port=self.port,
-                database=self.database,
-                username=self.username,
-                password=self.password,
-                use_windows_auth=self.use_windows_auth,
-                trust_server_certificate=self.trust_server_certificate,
+                **connect_kwargs
             )
+
+            if self.db_type == "databricks" and self.database_context:
+                connector.change_database(self.database_context)
 
             if connector.is_connected():
                 self.connection_ready.emit(connector)

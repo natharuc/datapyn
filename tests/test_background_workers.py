@@ -251,6 +251,39 @@ class TestBlockConnectionWorker:
             trust_server_certificate=True,
         )
 
+    @patch("src.database.database_connector.DatabaseConnector")
+    def test_worker_applies_databricks_database_context_after_connect(self, mock_connector_cls, qtbot):
+        """Databricks block worker deve aplicar catalog.schema apos conectar."""
+        mock_connector = MagicMock()
+        mock_connector.is_connected.return_value = True
+        mock_connector_cls.return_value = mock_connector
+
+        worker = BlockConnectionWorker(
+            db_type="databricks",
+            host="workspace.cloud.databricks.com",
+            port=443,
+            database="main",
+            username="",
+            password="token",
+            http_path="/sql/1.0/warehouses/abc",
+            database_context="mag_bronze.esim",
+        )
+
+        worker.run()
+
+        mock_connector.connect.assert_called_once_with(
+            db_type="databricks",
+            host="workspace.cloud.databricks.com",
+            port=443,
+            database="main",
+            username="",
+            password="token",
+            use_windows_auth=False,
+            trust_server_certificate=False,
+            http_path="/sql/1.0/warehouses/abc",
+        )
+        mock_connector.change_database.assert_called_once_with("mag_bronze.esim")
+
 
 class TestFileReadWorker:
     """Testes para FileReadWorker"""

@@ -116,6 +116,50 @@ def qualified_service(qualified_schema):
     return svc
 
 
+@pytest.fixture
+def databricks_autocomplete_schema():
+    return {
+        "db_type": "databricks",
+        "database": "main",
+        "current_schema": "default",
+        "current_context": "main.default",
+        "databases": ["main", "hive_metastore"],
+        "catalog_schemas": {
+            "main": ["default", "audit"],
+            "hive_metastore": ["legacy"],
+        },
+        "tables": [
+            {"name": "customers", "schema": "default", "catalog": "main", "key": "main.default.customers", "type": "BASE TABLE"},
+            {"name": "customers", "schema": "audit", "catalog": "main", "key": "main.audit.customers", "type": "BASE TABLE"},
+            {"name": "orders", "schema": "default", "catalog": "main", "key": "main.default.orders", "type": "BASE TABLE"},
+            {"name": "events", "schema": "legacy", "catalog": "hive_metastore", "key": "hive_metastore.legacy.events", "type": "BASE TABLE"},
+        ],
+        "columns": {
+            "main.default.customers": [
+                {"name": "id", "type": "bigint", "display_type": "bigint"},
+                {"name": "name", "type": "string", "display_type": "string"},
+            ],
+            "main.audit.customers": [
+                {"name": "audit_only", "type": "string", "display_type": "string"},
+            ],
+            "main.default.orders": [
+                {"name": "order_id", "type": "bigint", "display_type": "bigint"},
+                {"name": "amount", "type": "double", "display_type": "double"},
+            ],
+            "hive_metastore.legacy.events": [
+                {"name": "event_id", "type": "bigint", "display_type": "bigint"},
+            ],
+        },
+    }
+
+
+@pytest.fixture
+def databricks_service(databricks_autocomplete_schema):
+    svc = SqlAutoCompleteService()
+    svc.set_schema(databricks_autocomplete_schema)
+    return svc
+
+
 # ---- Helper ----
 
 def names(completions):
@@ -648,6 +692,50 @@ class TestSchemaQualifiedAutocomplete:
         assert "id" in n
         assert "name" in n
         assert "email" in n
+
+
+class TestDatabricksAutocomplete:
+    """Coverage for Databricks catalog.schema.table autocomplete."""
+
+    def test_alias_resolution_uses_catalog_qualified_columns(self, databricks_service):
+        sql = "SELECT c. FROM main.default.customers c"
+        result = databricks_service.get_completions(sql, 0, 9)
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+
+    def test_catalog_dot_suggests_schemas(self, databricks_service):
+        sql = "SELECT * FROM main."
+        result = databricks_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        c = categories(result)
+        assert "default" in n
+        assert "audit" in n
+        assert CAT_DATABASE in c
+
+    def test_catalog_schema_dot_suggests_tables(self, databricks_service):
+        sql = "SELECT * FROM main.default."
+        result = databricks_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "customers" in n
+        assert "orders" in n
+
+    def test_table_context_includes_qualified_databricks_tables(self, databricks_service):
+        result = databricks_service.get_completions("SELECT * FROM ", 0, 14)
+        n = names(result)
+        assert "customers" in n
+        assert "orders" in n
+        assert "main.audit.customers" in n
+        assert "hive_metastore.legacy.events" in n
+        assert "main.default.customers" not in n
+
+    def test_bare_table_lookup_prefers_current_catalog_schema(self, databricks_service):
+        sql = "SELECT customers."
+        result = databricks_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+        assert "audit_only" not in n
 
 
 class TestDerivedAndTemporarySources:

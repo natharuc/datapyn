@@ -20,6 +20,7 @@ import time
 
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
+from src.database.database_connector import get_connector_database_context
 from src.editors.block_editor import BlockEditor
 from src.language import S
 # from src.ui.components.bottom_tabs import BottomTabs  # Removed - using global panels
@@ -722,6 +723,8 @@ class SessionWidget(QWidget):
                     db_name = f"SCHEMA:{db_name}"
             try:
                 connector.change_database(db_name)
+                db_name = get_connector_database_context(connector) or db_name
+                self.session.database_context = db_name if getattr(connector, "db_type", "") == "databricks" else ""
                 conn_name = connection_name or self.session.connection_name
                 if conn_name:
                     self.connection_changed.emit(conn_name, db_name)
@@ -770,7 +773,7 @@ class SessionWidget(QWidget):
         self._current_connector = connector
         self._current_connection_name = connection_name or self.session.connection_name
         try:
-            self._db_before_execution = connector.get_current_database() if connector else ""
+            self._db_before_execution = get_connector_database_context(connector)
         except Exception:
             self._db_before_execution = ""
 
@@ -920,12 +923,15 @@ class SessionWidget(QWidget):
             # Compares db before/after execution - only emits if actually changed
             if hasattr(self, "_current_connector") and self._current_connector:
                 try:
-                    db_after = self._current_connector.get_current_database() or ""
+                    db_after = get_connector_database_context(self._current_connector)
                 except Exception:
                     db_after = ""
                 db_before = getattr(self, "_db_before_execution", "")
                 conn_name = getattr(self, "_current_connection_name", "") or self.session.connection_name
                 if db_after and db_before and db_after != db_before and conn_name:
+                    self.session.database_context = (
+                        db_after if getattr(self._current_connector, "db_type", "") == "databricks" else ""
+                    )
                     self.connection_changed.emit(conn_name, db_after)
                     # Update block db_panel if not from a per-block connection
                     current_block = self.editor.get_focused_block()
@@ -1627,10 +1633,9 @@ class SessionWidget(QWidget):
             self.status_changed.emit(message)
             # Emit connection change signal
             if self.session.connection_name and self.session.connector:
-                db = (
-                    self.session.connector.get_current_database()
-                    if hasattr(self.session.connector, "get_current_database")
-                    else ""
+                db = get_connector_database_context(self.session.connector)
+                self.session.database_context = (
+                    db if getattr(self.session.connector, "db_type", "") == "databricks" else ""
                 )
                 self.connection_changed.emit(self.session.connection_name, db)
         else:

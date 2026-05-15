@@ -49,6 +49,7 @@ class Session(QObject):
         # Connection reference (not the object itself)
         self._connection_name: Optional[str] = None
         self._connector = None
+        self._database_context: str = ""
 
         # Python namespace for variables
         self._namespace: Dict[str, Any] = {}
@@ -72,6 +73,14 @@ class Session(QObject):
     @property
     def connector(self):
         return self._connector
+
+    @property
+    def database_context(self) -> str:
+        return self._database_context
+
+    @database_context.setter
+    def database_context(self, value: str):
+        self._database_context = str(value or "")
 
     @property
     def is_connected(self) -> bool:
@@ -104,10 +113,48 @@ class Session(QObject):
 
     # === CONNECTION ===
 
+    def _connector_database_context(self, connector) -> str:
+        get_context = getattr(connector, "get_current_database_context", None)
+        if callable(get_context):
+            try:
+                return str(get_context() or "")
+            except Exception:
+                return ""
+
+        get_database = getattr(connector, "get_current_database", None)
+        if callable(get_database):
+            try:
+                return str(get_database() or "")
+            except Exception:
+                return ""
+
+        return ""
+
+    def _apply_saved_database_context(self, connector):
+        if not connector or str(getattr(connector, "db_type", "") or "").lower() != "databricks":
+            return
+
+        target_context = str(self._database_context or "")
+        if not target_context:
+            return
+
+        current_context = self._connector_database_context(connector)
+        if current_context and current_context.lower() == target_context.lower():
+            return
+
+        try:
+            connector.change_database(target_context)
+        except Exception as exc:
+            logger.warning("Failed to restore Databricks context '%s': %s", target_context, exc)
+
     def set_connection(self, connection_name: str, connector):
         """Sets the connection for this session"""
         self._connection_name = connection_name
         self._connector = connector
+        if str(getattr(connector, "db_type", "") or "").lower() == "databricks":
+            self._database_context = self._connector_database_context(connector)
+        else:
+            self._database_context = ""
         self.connection_changed.emit(connection_name)
         self.status_changed.emit(S.session.status_connected_to.format(name=connection_name))
 
@@ -158,6 +205,7 @@ class Session(QObject):
             )
 
             if connector.is_connected:
+                self._apply_saved_database_context(connector)
                 self.set_connection(connection_name, connector)
                 return True
             else:
@@ -183,6 +231,7 @@ class Session(QObject):
         """Removes the connection from this session"""
         self._connection_name = None
         self._connector = None
+        self._database_context = ""
         self.connection_changed.emit("")
         self.status_changed.emit(S.session.status_disconnected)
 
@@ -248,6 +297,7 @@ class Session(QObject):
             "session_id": self.session_id,
             "title": self.title,
             "connection_name": self._connection_name,
+            "database_context": self._database_context,
             "code": self._code,  # Compatibility
             "blocks": self._blocks,  # New: list of blocks
             "notification_config": self.notification_config,
@@ -263,6 +313,7 @@ class Session(QObject):
         """Creates a session from serialized data"""
         session = cls(session_id=data.get("session_id", ""), title=data.get("title", "Script"))
         session._connection_name = data.get("connection_name")
+        session._database_context = data.get("database_context", "") or ""
         session._code = data.get("code", "")
         session._blocks = data.get("blocks", [])
         session.notification_config = data.get("notification_config")
@@ -284,6 +335,7 @@ class Session(QObject):
             # First try to get existing connection
             connector = connection_manager.get_connection(self._connection_name)
             if connector and connector.is_connected():
+                self._apply_saved_database_context(connector)
                 self._connector = connector
                 self.connection_changed.emit(self._connection_name)
             else:
@@ -304,6 +356,7 @@ class Session(QObject):
                             http_path=config.get("http_path", ""),
                         )
                         if connector:
+                            self._apply_saved_database_context(connector)
                             self._connector = connector
                             self.connection_changed.emit(self._connection_name)
                 except Exception as e:

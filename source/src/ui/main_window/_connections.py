@@ -9,6 +9,7 @@ import logging
 from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import QMessageBox
 
+from src.database.database_connector import get_connector_database_context
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.language import S
@@ -84,8 +85,8 @@ class ConnectionsMixin:
         if block_conn and focused_block:
             # Per-block: only update this block's database, not the whole session
             worker.switch_success.connect(
-                lambda db, b=focused_block, cn=block_conn: self._on_block_database_switch_success(
-                    db, cn, b, current_widget
+                lambda db, b=focused_block, cn=block_conn, conn=connector: self._on_block_database_switch_success(
+                    db, cn, conn, b, current_widget
                 )
             )
         else:
@@ -102,13 +103,13 @@ class ConnectionsMixin:
         thread.start()
 
     def _on_block_database_switch_success(self, database_name: str, connection_name: str,
-                                           block, widget):
+                                           connector, block, widget):
         """Callback when database switch completes for a per-block connection.
         
         Only updates the specific block's database panel and refreshes the OE.
         Does NOT touch the session-level connection or other blocks.
         """
-        display_name = database_name
+        display_name = get_connector_database_context(connector) or database_name
         if display_name.startswith("CATALOG:"):
             display_name = display_name[8:]
         elif display_name.startswith("SCHEMA:"):
@@ -118,8 +119,8 @@ class ConnectionsMixin:
 
         # Update only this block's database panel
         if block and hasattr(block, "db_panel"):
-            block._database_name = database_name
-            block.db_panel.set_database(database_name)
+            block._database_name = display_name
+            block.db_panel.set_database(display_name)
 
         # Get session_id for per-session cache
         sid = ""
@@ -133,7 +134,6 @@ class ConnectionsMixin:
         if hasattr(self, "_oe_current_connection") and sid:
             self._oe_current_connection.pop(sid, None)
         
-        connector = self.connection_manager.get_connection(connection_name)
         if connector and connector.is_connected():
             self._load_schema_with_loading(connector, connection_name, session_id=sid)
 
@@ -144,7 +144,7 @@ class ConnectionsMixin:
         tab color, schema cache, object explorer, and ALL blocks.
         """
         # Clean up prefixed names from Databricks (CATALOG:xxx, SCHEMA:xxx)
-        display_name = database_name
+        display_name = get_connector_database_context(connector) or database_name
         if display_name.startswith("CATALOG:"):
             display_name = display_name[8:]
         elif display_name.startswith("SCHEMA:"):
@@ -203,8 +203,8 @@ class ConnectionsMixin:
                     # Only update blocks using the session connection (no custom connection)
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
                     if not block_conn:
-                        block._database_name = database_name
-                        block.db_panel.set_database(database_name)
+                        block._database_name = display_name
+                        block.db_panel.set_database(display_name)
 
     def _get_effective_connector_info(self):
         """Return (connector, connection_name) for the effective connection.
