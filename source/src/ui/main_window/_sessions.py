@@ -1189,9 +1189,12 @@ class SessionsMixin:
     def _restore_sessions(self):
         """Restores saved sessions - loads incrementally"""
         self._restoring_sessions = True
+        self._pending_session_reconnects = []
+        self._restored_session_reconnects_active = False
+        self._pending_legacy_active_connection = None
 
         # Load sessions from disk
-        self.session_manager.load_sessions(self.connection_manager)
+        self.session_manager.load_sessions(self.connection_manager, reconnect=False)
 
         # Salvar workspace para restaurar geometria depois
         workspace = self.workspace_manager.load_workspace()
@@ -1229,12 +1232,17 @@ class SessionsMixin:
                         focused.connection_name,
                         focused.connection_name,  # usar connection_name no lugar de database_name
                     )
+
+            self._start_restored_session_reconnects()
             return
 
         session = self._sessions_to_load.pop(0)
 
         # Create widget for session
         self._create_session_widget(session)
+
+        if session.connection_name and not session.is_connected:
+            self._queue_restored_session_connection(session.session_id, session.connection_name)
 
         # Processar eventos pendentes da UI
         QApplication.processEvents()
@@ -1270,7 +1278,8 @@ class SessionsMixin:
         # Restore active connection (after UI is ready)
         if workspace.get("active_connection"):
             try:
-                self._reconnect_saved_connection(workspace["active_connection"])
+                self._pending_legacy_active_connection = workspace["active_connection"]
+                self._start_restored_session_reconnects()
             except Exception as e:
                 logger.warning(f"Could not restore connection: {e}")
 
@@ -1278,37 +1287,80 @@ class SessionsMixin:
         del self._pending_workspace_restore
 
     def _reconnect_saved_connection(self, connection_name: str):
-        """Reconnects to saved connection automatically"""
-        config = self.connection_manager.get_connection_config(connection_name)
-        if not config:
+        """Reconnects a legacy saved workspace connection in background."""
+        current_widget = self._get_current_session_widget()
+        if current_widget is None:
+            self._pending_legacy_active_connection = connection_name
             return
 
-        # Get password if necessary
-        password = ""
-        if not config.get("use_windows_auth", False):
-            # Tentar conectar sem senha primeiro (pode ter salvo)
-            password = config.get("password", "")
+        if current_widget.session.connection_name:
+            self._pending_legacy_active_connection = None
+            return
 
-        try:
-            connector = self.connection_manager.create_connection(
-                connection_name,
-                config["db_type"],
-                config["host"],
-                config["port"],
-                config["database"],
-                config.get("username", ""),
-                password,
-                use_windows_auth=config.get("use_windows_auth", False),
-                trust_server_certificate=config.get("trust_server_certificate", False),
-                http_path=config.get("http_path", ""),
-            )
+        self._queue_restored_session_connection(current_widget.session.session_id, connection_name)
+        self._pending_legacy_active_connection = None
+        self._start_restored_session_reconnects()
 
-            self.connection_manager.mark_connection_used(connection_name)
-            self._update_connection_status()
-            self.action_label.setText(S.status.reconnected_to.format(name=connection_name))
+    def _queue_restored_session_connection(self, session_id: str, connection_name: str):
+        """Queues a saved session connection to be restored after the UI is ready."""
+        if not session_id or not connection_name:
+            return
 
-        except Exception as e:
-            logger.error(f"Error reconnecting {connection_name}: {e}")
-            # Does not fail silently - shows in statusbar
-            self.action_label.setText(S.status.reconnection_failed.format(name=connection_name))
+        pending = getattr(self, "_pending_session_reconnects", None)
+        if pending is None:
+            self._pending_session_reconnects = []
+            pending = self._pending_session_reconnects
+
+        item = (session_id, connection_name)
+        if item not in pending:
+            pending.append(item)
+
+    def _start_restored_session_reconnects(self):
+        """Starts background reconnects for restored sessions after tabs are ready."""
+        self._queue_legacy_saved_connection_if_needed()
+
+        if getattr(self, "_restored_session_reconnects_active", False):
+            return
+
+        if not getattr(self, "_pending_session_reconnects", None):
+            return
+
+        self._restored_session_reconnects_active = True
+        QTimer.singleShot(0, self._connect_next_restored_session)
+
+    def _queue_legacy_saved_connection_if_needed(self):
+        """Queues the legacy workspace active connection onto the focused tab."""
+        connection_name = getattr(self, "_pending_legacy_active_connection", None)
+        if not connection_name:
+            return
+
+        current_widget = self._get_current_session_widget()
+        if current_widget is None:
+            return
+
+        if current_widget.session.connection_name:
+            self._pending_legacy_active_connection = None
+            return
+
+        self._queue_restored_session_connection(current_widget.session.session_id, connection_name)
+        self._pending_legacy_active_connection = None
+
+    def _connect_next_restored_session(self):
+        """Dispatches saved session reconnects without blocking startup."""
+        if getattr(self, "_is_closing", False):
+            self._restored_session_reconnects_active = False
+            return
+
+        pending = getattr(self, "_pending_session_reconnects", None) or []
+        while pending:
+            session_id, connection_name = pending.pop(0)
+            widget = self._session_widgets.get(session_id)
+            if widget is None or widget.session.is_connected:
+                continue
+
+            widget.connect_to_database(connection_name)
+            QTimer.singleShot(25, self._connect_next_restored_session)
+            return
+
+        self._restored_session_reconnects_active = False
 

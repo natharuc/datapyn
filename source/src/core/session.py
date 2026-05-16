@@ -326,7 +326,7 @@ class Session(QObject):
                 pass
         return session
 
-    def initialize(self, connection_manager=None):
+    def initialize(self, connection_manager=None, reconnect: bool = True):
         """
         Initializes the session after deserialization.
         Reconnects to the database if necessary.
@@ -338,7 +338,7 @@ class Session(QObject):
                 self._apply_saved_database_context(connector)
                 self._connector = connector
                 self.connection_changed.emit(self._connection_name)
-            else:
+            elif reconnect:
                 # Try to reconnect automatically
                 try:
                     config = connection_manager.get_connection_config(self._connection_name)
