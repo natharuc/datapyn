@@ -28,6 +28,10 @@ def _quote_databricks_identifier(value: str) -> str:
     return f"`{str(value or '').replace('`', '``')}`"
 
 
+def _quote_sqlserver_identifier(value: str) -> str:
+    return f"[{str(value or '').replace(']', ']]')}]"
+
+
 def _databricks_relation_key(catalog: str, schema: str, table: str) -> str:
     return ".".join(part for part in (catalog, schema, table) if part)
 
@@ -634,10 +638,11 @@ class SchemaService(QObject):
             try:
                 db_type = getattr(connector, "db_type", "").lower()
                 tables = []
+                namespace_name = str(catalog_name or "")
+                schema_literal = _sql_literal(schema_name)
                 
                 if db_type == "databricks":
                     catalog_ident = _quote_databricks_identifier(catalog_name)
-                    schema_literal = _sql_literal(schema_name)
                     schema_ident = _quote_databricks_identifier(schema_name)
 
                     # Query the target catalog directly instead of changing connection context.
@@ -671,18 +676,25 @@ class SchemaService(QObject):
                                 "type": table_type or "TABLE",
                             })
                 elif db_type in ("mssql", "sqlserver"):
+                    query_source = "INFORMATION_SCHEMA.TABLES"
+                    if namespace_name:
+                        query_source = f"{_quote_sqlserver_identifier(namespace_name)}.INFORMATION_SCHEMA.TABLES"
+
                     query = f"""
-                        SELECT TABLE_NAME, TABLE_TYPE
-                        FROM INFORMATION_SCHEMA.TABLES
-                        WHERE TABLE_SCHEMA = '{schema_name}'
-                        ORDER BY TABLE_NAME
+                        SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
+                        FROM {query_source}
                     """
+                    if schema_name:
+                        query += f"\n                        WHERE TABLE_SCHEMA = '{schema_literal}'"
+                    query += "\n                        ORDER BY TABLE_SCHEMA, TABLE_NAME\n                    "
                     df = connector.execute_query(query)
                     if df is not None:
                         for _, row in df.iterrows():
+                            table_schema = str(row.get("TABLE_SCHEMA", row.get("table_schema", row.iloc[0] if len(row) > 0 else "")))
                             tables.append({
-                                "name": str(row.get("TABLE_NAME", row.iloc[0])),
-                                "schema": schema_name,
+                                "name": str(row.get("TABLE_NAME", row.get("table_name", row.iloc[1] if len(row) > 1 else row.iloc[0]))),
+                                "schema": table_schema,
+                                "database": namespace_name,
                                 "type": str(row.get("TABLE_TYPE", "TABLE")),
                             })
                 elif db_type == "postgresql":
@@ -700,12 +712,13 @@ class SchemaService(QObject):
                                 "schema": schema_name,
                                 "type": str(row.get("table_type", "TABLE")),
                             })
-                else:
-                    # MySQL/MariaDB - schema = database
+                elif db_type in ("mysql", "mariadb"):
+                    target_database = namespace_name or schema_name
+                    database_literal = _sql_literal(target_database)
                     query = f"""
                         SELECT TABLE_NAME, TABLE_TYPE
                         FROM INFORMATION_SCHEMA.TABLES
-                        WHERE TABLE_SCHEMA = '{schema_name}'
+                        WHERE TABLE_SCHEMA = '{database_literal}'
                         ORDER BY TABLE_NAME
                     """
                     df = connector.execute_query(query)
@@ -713,9 +726,12 @@ class SchemaService(QObject):
                         for _, row in df.iterrows():
                             tables.append({
                                 "name": str(row.get("TABLE_NAME", row.iloc[0])),
-                                "schema": schema_name,
+                                "schema": target_database,
+                                "database": target_database,
                                 "type": str(row.get("TABLE_TYPE", "TABLE")),
                             })
+                else:
+                    return []
 
                 return tables
             except Exception as e:
@@ -745,13 +761,14 @@ class SchemaService(QObject):
             try:
                 db_type = getattr(connector, "db_type", "").lower()
                 columns = []
+                namespace_name = str(_catalog_name or "")
+                schema_literal = _sql_literal(_schema_name)
+                table_literal = _sql_literal(_table_name)
                 
                 if db_type == "databricks":
                     catalog_ident = _quote_databricks_identifier(_catalog_name)
                     schema_ident = _quote_databricks_identifier(_schema_name)
                     table_ident = _quote_databricks_identifier(_table_name)
-                    schema_literal = _sql_literal(_schema_name)
-                    table_literal = _sql_literal(_table_name)
 
                     # Query the target catalog directly instead of changing connection context.
                     try:
@@ -786,12 +803,15 @@ class SchemaService(QObject):
                                 "nullable": str(_row_value(row, "is_nullable", "IS_NULLABLE", default="YES")),
                             })
                 elif db_type in ("mssql", "sqlserver"):
+                    query_source = "INFORMATION_SCHEMA.COLUMNS"
+                    if namespace_name:
+                        query_source = f"{_quote_sqlserver_identifier(namespace_name)}.INFORMATION_SCHEMA.COLUMNS"
                     query = f"""
                         SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
                                NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                IS_NULLABLE
-                        FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_SCHEMA = '{_schema_name}' AND TABLE_NAME = '{_table_name}'
+                        FROM {query_source}
+                        WHERE TABLE_SCHEMA = '{schema_literal}' AND TABLE_NAME = '{table_literal}'
                         ORDER BY ORDINAL_POSITION
                     """
                     df = connector.execute_query(query)
@@ -821,14 +841,15 @@ class SchemaService(QObject):
                                 "display_type": build_display_data_type(row, db_type),
                                 "nullable": str(row.get("is_nullable", "YES")),
                             })
-                else:
-                    # MySQL/MariaDB
+                elif db_type in ("mysql", "mariadb"):
+                    target_database = namespace_name or _schema_name
+                    database_literal = _sql_literal(target_database)
                     query = f"""
                         SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
                                NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                IS_NULLABLE
                         FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_SCHEMA = '{_schema_name}' AND TABLE_NAME = '{_table_name}'
+                        WHERE TABLE_SCHEMA = '{database_literal}' AND TABLE_NAME = '{table_literal}'
                         ORDER BY ORDINAL_POSITION
                     """
                     df = connector.execute_query(query)
@@ -840,6 +861,8 @@ class SchemaService(QObject):
                                 "display_type": build_display_data_type(row, db_type),
                                 "nullable": str(row.get("IS_NULLABLE", "YES")),
                             })
+                else:
+                    return []
 
                 return columns
             except Exception as e:

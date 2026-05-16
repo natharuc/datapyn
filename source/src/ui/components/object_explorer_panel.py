@@ -567,13 +567,18 @@ class ObjectExplorerPanel(QWidget):
 
     def _get_item_qualified_name(self, data: dict) -> str:
         catalog = data.get("catalog", "")
+        database_name = data.get("database", "")
         schema_name = data.get("schema", "")
         name = data.get("name", "")
 
         if catalog and schema_name:
             return f"{catalog}.{schema_name}.{name}"
+        if database_name and schema_name and database_name != schema_name:
+            return f"{database_name}.{schema_name}.{name}"
         if schema_name:
             return f"{schema_name}.{name}"
+        if database_name:
+            return f"{database_name}.{name}"
         return str(name)
 
     def _get_cached_columns_for_table(self, table_data: dict) -> list:
@@ -583,12 +588,15 @@ class ObjectExplorerPanel(QWidget):
         columns = self._current_schema.get("columns", {})
         table_key = table_data.get("key", "")
         catalog = table_data.get("catalog", "")
+        database_name = table_data.get("database", "")
         schema_name = table_data.get("schema", "")
         table_name = table_data.get("name", "")
 
         lookup_keys = [key for key in (
             table_key,
             f"{catalog}.{schema_name}.{table_name}" if catalog and schema_name else "",
+            f"{database_name}.{schema_name}.{table_name}" if database_name and schema_name and database_name != schema_name else "",
+            f"{database_name}.{table_name}" if database_name else "",
             f"{schema_name}.{table_name}" if schema_name else "",
             table_name,
         ) if key]
@@ -598,11 +606,15 @@ class ObjectExplorerPanel(QWidget):
                 return columns.get(lookup_key, [])
         return []
 
-    def _make_table_key(self, catalog: str, schema_name: str, table_name: str) -> str:
+    def _make_table_key(self, catalog: str, schema_name: str, table_name: str, database: str = "") -> str:
         if self._db_type == "databricks" and catalog and schema_name:
             return f"{catalog}.{schema_name}.{table_name}"
+        if database and schema_name and database != schema_name:
+            return f"{database}.{schema_name}.{table_name}"
         if schema_name:
             return f"{schema_name}.{table_name}"
+        if database:
+            return f"{database}.{table_name}"
         return str(table_name)
 
     def _schemas_for_catalog(self, catalog: str, tables: list) -> list:
@@ -653,22 +665,40 @@ class ObjectExplorerPanel(QWidget):
             if not table_name:
                 continue
             table_schema = str((table.get("schema") if isinstance(table, dict) else "") or schema_name)
-            table_catalog = str((table.get("catalog") if isinstance(table, dict) else "") or catalog_name)
-            table_key = str((table.get("key") if isinstance(table, dict) else "") or self._make_table_key(table_catalog, table_schema, table_name))
+            table_catalog = str((table.get("catalog") if isinstance(table, dict) else "") or (catalog_name if self._db_type == "databricks" else ""))
+            table_database = str((table.get("database") if isinstance(table, dict) else "") or (catalog_name if self._db_type != "databricks" else ""))
+            table_key = str(
+                (table.get("key") if isinstance(table, dict) else "")
+                or self._make_table_key(table_catalog, table_schema, table_name, database=table_database)
+            )
             normalized_tables.append({
                 "name": table_name,
                 "schema": table_schema,
                 "catalog": table_catalog,
+                "database": table_database,
                 "key": table_key,
                 "type": table_type,
             })
 
         existing_tables = self._current_schema.setdefault("tables", [])
-        replace_keys = {(table.get("catalog", ""), table.get("schema", ""), table.get("name", "")) for table in normalized_tables}
+        replace_keys = {
+            (
+                table.get("catalog", ""),
+                table.get("database", ""),
+                table.get("schema", ""),
+                table.get("name", ""),
+            )
+            for table in normalized_tables
+        }
         replace_table_keys = {table.get("key", "") for table in normalized_tables if table.get("key")}
         self._current_schema["tables"] = [
             table for table in existing_tables
-            if (table.get("catalog", ""), table.get("schema", ""), table.get("name", "")) not in replace_keys
+            if (
+                table.get("catalog", ""),
+                table.get("database", ""),
+                table.get("schema", ""),
+                table.get("name", ""),
+            ) not in replace_keys
             and table.get("key", "") not in replace_table_keys
         ]
         self._current_schema["tables"].extend(normalized_tables)
@@ -687,21 +717,39 @@ class ObjectExplorerPanel(QWidget):
             else:
                 normalized_columns.append({"name": str(column), "type": ""})
 
-        table_key = self._make_table_key(catalog_name, schema_name, table_name)
+        database_name = catalog_name if self._db_type != "databricks" else ""
+        table_key = self._make_table_key(catalog_name, schema_name, table_name, database=database_name)
         columns_map = self._current_schema.setdefault("columns", {})
         columns_map[table_key] = normalized_columns
         if self._db_type == "databricks" and schema_name:
             columns_map[f"{schema_name}.{table_name}"] = normalized_columns
-        elif table_name:
-            columns_map.setdefault(table_name, normalized_columns)
+        else:
+            if database_name and schema_name and database_name != schema_name:
+                columns_map[f"{database_name}.{schema_name}.{table_name}"] = normalized_columns
+            if database_name:
+                columns_map[f"{database_name}.{table_name}"] = normalized_columns
+            if schema_name:
+                columns_map[f"{schema_name}.{table_name}"] = normalized_columns
+            if table_name:
+                columns_map.setdefault(table_name, normalized_columns)
 
         if not any(
-            table.get("catalog", "") == catalog_name
+            table.get("catalog", "") == (catalog_name if self._db_type == "databricks" else "")
+            and table.get("database", "") == database_name
             and table.get("schema", "") == schema_name
             and table.get("name", "") == table_name
             for table in self._current_schema.setdefault("tables", [])
         ):
-            self._merge_tables_into_current_schema(catalog_name, schema_name, [{"name": table_name, "schema": schema_name, "catalog": catalog_name}])
+            self._merge_tables_into_current_schema(
+                catalog_name,
+                schema_name,
+                [{
+                    "name": table_name,
+                    "schema": schema_name,
+                    "catalog": catalog_name if self._db_type == "databricks" else "",
+                    "database": database_name,
+                }],
+            )
         self.schema_changed.emit(self._current_schema)
         return normalized_columns
 
@@ -1071,14 +1119,22 @@ class ObjectExplorerPanel(QWidget):
                 table_type = table.get("type", "TABLE")
                 table_schema = table.get("schema", "")
                 table_catalog = table.get("catalog", catalog)
+                table_database = table.get("database", "")
                 table_key = table.get("key") or (
-                    self._make_table_key(table_catalog, table_schema, table_name)
-                    if self._db_type == "databricks" and table_catalog else table_name
+                    self._make_table_key(
+                        table_catalog,
+                        table_schema,
+                        table_name,
+                        database=table_database,
+                    )
+                    if (table_catalog or table_database or table_schema) else table_name
                 )
 
-                # Columns use the composite key (schema.table) for lookup
+                # Columns use the composite key for lookup
                 table_columns = (
                     columns.get(table_key, [])
+                    or columns.get(f"{table_database}.{table_schema}.{table_name}", [])
+                    or columns.get(f"{table_database}.{table_name}", [])
                     or columns.get(f"{table_schema}.{table_name}", [])
                     or columns.get(table_name, [])
                 )
@@ -1104,6 +1160,7 @@ class ObjectExplorerPanel(QWidget):
                         "key": table_key,
                         "schema": table_schema,
                         "catalog": table_catalog,
+                        "database": table_database,
                         "table_type": table_type,
                     },
                 )
@@ -1129,6 +1186,7 @@ class ObjectExplorerPanel(QWidget):
                         table_key=table_key,
                         table_schema=table_schema,
                         catalog=table_catalog,
+                        database=table_database,
                     )
 
                 # Expandir tabela se filtro ativo e ha match
@@ -1168,6 +1226,7 @@ class ObjectExplorerPanel(QWidget):
         table_key: str = "",
         table_schema: str = "",
         catalog: str = "",
+        database: str = "",
     ):
         col_name = column_info.get("name", "")
         col_type = column_info.get("type", "")
@@ -1188,6 +1247,7 @@ class ObjectExplorerPanel(QWidget):
                 "table_key": table_key,
                 "schema": table_schema,
                 "catalog": catalog,
+                "database": database,
             },
         )
 
@@ -1231,6 +1291,7 @@ class ObjectExplorerPanel(QWidget):
         item_type = data.get("type", "")
         name = data.get("name", "")
         catalog = data.get("catalog", "")
+        database_name = data.get("database", "")
 
         if item_type == "catalog" and name:
             # Request schemas/tables for this catalog
@@ -1242,8 +1303,11 @@ class ObjectExplorerPanel(QWidget):
         elif item_type == "table" and name:
             # Request columns for this table
             schema_name = data.get("schema", "")
-            cat = catalog or self._current_schema.get("database", "") if self._current_schema else ""
-            self.columns_requested.emit(cat, schema_name, name)
+            if self._db_type == "databricks":
+                namespace_name = catalog or self._current_schema.get("database", "") if self._current_schema else ""
+            else:
+                namespace_name = database_name or catalog
+            self.columns_requested.emit(namespace_name, schema_name, name)
         elif item_type == "database" and name:
             # For non-Databricks, request tables for this database
             self.tables_requested.emit(name, "")
@@ -1292,12 +1356,12 @@ class ObjectExplorerPanel(QWidget):
             # For database items (non-Databricks)
             elif cat_type == "database" and cat_name == catalog_name:
                 self._remove_placeholder_children(cat_item)
-                self._add_table_items(cat_item, tables, "", "")
+                self._add_table_items(cat_item, tables, "", "", database=catalog_name)
                 return
 
     def _add_table_items(
         self, parent_item: QTreeWidgetItem, tables: list,
-        catalog: str = "", schema: str = "", with_column_placeholder: bool = True
+        catalog: str = "", schema: str = "", database: str = "", with_column_placeholder: bool = True
     ):
         """Add table items to a parent node.
         
@@ -1313,22 +1377,32 @@ class ObjectExplorerPanel(QWidget):
                 table_name = table.get("name", "")
                 table_type = table.get("type", "TABLE")
                 table_schema = table.get("schema", schema)
+                table_catalog = table.get("catalog", catalog)
+                table_database = table.get("database", database)
             else:
                 table_name = str(table)
                 table_type = "TABLE"
                 table_schema = schema
+                table_catalog = catalog
+                table_database = database
 
             is_view = "VIEW" in table_type.upper()
             label = f"{table_name} {S.object_explorer.view_suffix}" if is_view else table_name
 
             table_item = QTreeWidgetItem(parent_item, [label])
-            table_key = (table.get("key") if isinstance(table, dict) else "") or self._make_table_key(catalog, table_schema, table_name)
+            table_key = (table.get("key") if isinstance(table, dict) else "") or self._make_table_key(
+                table_catalog,
+                table_schema,
+                table_name,
+                database=table_database,
+            )
             table_item.setData(0, Qt.ItemDataRole.UserRole, {
                 "type": "table",
                 "name": table_name,
                 "key": table_key,
                 "schema": table_schema,
-                "catalog": catalog,
+                "catalog": table_catalog,
+                "database": table_database,
                 "table_type": table_type,
             })
 
@@ -1366,15 +1440,17 @@ class ObjectExplorerPanel(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             table_item = find_table(self.tree.topLevelItem(i))
             if table_item:
+                table_data = table_item.data(0, Qt.ItemDataRole.UserRole) or {}
                 self._remove_placeholder_children(table_item)
                 for col in columns:
                     self._add_column_item(
                         table_item,
                         col,
                         table_name=table_name,
-                        table_key=f"{schema_name}.{table_name}" if schema_name else table_name,
-                        table_schema=schema_name,
-                        catalog=catalog_name,
+                        table_key=table_data.get("key", f"{schema_name}.{table_name}" if schema_name else table_name),
+                        table_schema=table_data.get("schema", schema_name),
+                        catalog=table_data.get("catalog", catalog_name if self._db_type == "databricks" else ""),
+                        database=table_data.get("database", catalog_name if self._db_type != "databricks" else ""),
                     )
                 return
 
@@ -1406,14 +1482,7 @@ class ObjectExplorerPanel(QWidget):
             return
 
         if item_type == "table":
-            catalog = data.get("catalog", "")
-            schema = data.get("schema", "")
-            if catalog and schema:
-                self.insert_text_requested.emit(f"{catalog}.{schema}.{name}")
-            elif schema:
-                self.insert_text_requested.emit(f"{schema}.{name}")
-            else:
-                self.insert_text_requested.emit(name)
+            self.insert_text_requested.emit(self._get_item_qualified_name(data))
         elif item_type == "column":
             self.insert_text_requested.emit(name)
         elif item_type == "schema":
@@ -1526,7 +1595,7 @@ class ObjectExplorerPanel(QWidget):
             menu.addSeparator()
 
             # Insert name in editor (full qualified for Databricks)
-            insert_name = qualified if catalog_name else name
+            insert_name = qualified if qualified != name else name
             act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
             act_insert.triggered.connect(lambda _, n=insert_name: self.insert_text_requested.emit(n))
 
