@@ -264,6 +264,58 @@ class TestObjectExplorerMultipleDatabases:
         explorer.set_schema(multi_db_schema, "conn1")
         assert "3 databases" in explorer.info_label.text()
 
+    def test_multi_db_lazy_table_expansion_uses_target_database(self, explorer, multi_db_schema, qtbot):
+        """Tabela lazy de outro banco pede colunas usando o banco alvo."""
+        explorer.set_schema(multi_db_schema, "conn1", db_type="mysql")
+        explorer.add_tables_to_schema(
+            "production",
+            "",
+            [{"name": "orders", "schema": "production", "database": "production", "type": "BASE TABLE"}],
+        )
+
+        production_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "production":
+                production_item = item
+                break
+
+        assert production_item is not None
+        table_item = production_item.child(0)
+        assert table_item is not None
+        assert table_item.data(0, Qt.ItemDataRole.UserRole)["database"] == "production"
+
+        with qtbot.waitSignal(explorer.columns_requested, timeout=1000) as blocker:
+            explorer._on_item_expanded(table_item)
+
+        assert blocker.args == ["production", "production", "orders"]
+
+    def test_multi_db_lazy_table_insert_uses_database_qualified_name(self, explorer, multi_db_schema, qtbot):
+        """Insercao de tabela lazy usa nome qualificado do banco alvo."""
+        explorer.set_schema(multi_db_schema, "conn1", db_type="mysql")
+        explorer.add_tables_to_schema(
+            "production",
+            "",
+            [{"name": "orders", "schema": "production", "database": "production", "type": "BASE TABLE"}],
+        )
+
+        production_item = None
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "production":
+                production_item = item
+                break
+
+        assert production_item is not None
+        table_item = production_item.child(0)
+
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_insert_clicked(table_item)
+
+        assert blocker.args == ["production.orders"]
+
 
 class TestObjectExplorerClear:
     """Testes de clear"""
