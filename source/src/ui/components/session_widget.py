@@ -23,6 +23,7 @@ from src.core.theme_manager import ThemeManager
 from src.database.database_connector import get_connector_database_context
 from src.editors.block_editor import BlockEditor
 from src.language import S
+from src.utils.sql_parameter_service import validate_and_convert_parameters
 # from src.ui.components.bottom_tabs import BottomTabs  # Removed - using global panels
 
 logger = logging.getLogger(__name__)
@@ -60,14 +61,15 @@ class SessionSqlWorker(QObject):
 
     finished = pyqtSignal(object, str)  # (result_df ou None, error_msg)
 
-    def __init__(self, connector, query):
+    def __init__(self, connector, query, sql_parameters=None):
         super().__init__()
         self.connector = connector
         self.query = query
+        self.sql_parameters = sql_parameters or []
 
     def run(self):
         try:
-            df = self.connector.execute_query(self.query)
+            df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.finished.emit(df, "")
         except Exception as e:
             error_msg = str(e)
@@ -616,7 +618,14 @@ class SessionWidget(QWidget):
         from src.database.connection_manager import ConnectionManager
         return ConnectionManager()
 
-    def _on_execute_sql(self, query: str, block_name: str = None, connection_name: str = None, database_name: str = None):
+    def _on_execute_sql(
+        self,
+        query: str,
+        block_name: str = None,
+        connection_name: str = None,
+        database_name: str = None,
+        sql_parameters: list = None,
+    ):
         """Execute SQL in background
 
         Args:
@@ -633,7 +642,7 @@ class SessionWidget(QWidget):
             if connector and connector.is_connected():
                 # Already connected, proceed directly
                 self._execute_sql_with_connector(
-                    connector, query, block_name, connection_name, database_name
+                    connector, query, block_name, connection_name, database_name, sql_parameters
                 )
             else:
                 # Need auto-connect in background (never block UI)
@@ -646,8 +655,8 @@ class SessionWidget(QWidget):
 
                 thread.started.connect(worker.run)
                 worker.finished.connect(
-                    lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name:
-                        self._on_auto_connect_finished(conn, err, q, bn, cn, dn)
+                    lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name, sp=sql_parameters:
+                        self._on_auto_connect_finished(conn, err, q, bn, cn, dn, sp)
                 )
                 worker.finished.connect(thread.quit)
                 thread.finished.connect(worker.deleteLater)
@@ -670,7 +679,7 @@ class SessionWidget(QWidget):
                 return
             connector = self.session.connector
             self._execute_sql_with_connector(
-                connector, query, block_name, connection_name, database_name
+                connector, query, block_name, connection_name, database_name, sql_parameters
             )
 
     def _cleanup_auto_connect_thread(self, thread):
@@ -680,7 +689,7 @@ class SessionWidget(QWidget):
                 (t, w) for t, w in self._auto_connect_threads if t is not thread
             ]
 
-    def _on_auto_connect_finished(self, connector, error_msg, query, block_name, connection_name, database_name):
+    def _on_auto_connect_finished(self, connector, error_msg, query, block_name, connection_name, database_name, sql_parameters=None):
         """Callback when auto-connect finishes. Proceeds with SQL execution if successful."""
         if not connector or error_msg:
             self.append_output(
@@ -691,9 +700,9 @@ class SessionWidget(QWidget):
             self._process_next_in_queue()
             return
 
-        self._execute_sql_with_connector(connector, query, block_name, connection_name, database_name)
+        self._execute_sql_with_connector(connector, query, block_name, connection_name, database_name, sql_parameters)
 
-    def _execute_sql_with_connector(self, connector, query, block_name, connection_name, database_name):
+    def _execute_sql_with_connector(self, connector, query, block_name, connection_name, database_name, sql_parameters=None):
         """Execute SQL query using the given connector (called after connection is ready)."""
         import re
         conn_label = connection_name or S.session_widget.default_connection_label
@@ -736,8 +745,28 @@ class SessionWidget(QWidget):
             return
 
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
-            self._execution_queue.append(("sql", query, None, block_name, connection_name, database_name))
+            self._execution_queue.append(("sql", query, None, block_name, connection_name, database_name, sql_parameters))
             return
+
+        prepared_parameters = []
+        if sql_parameters:
+            prepared_parameters, parameter_errors = validate_and_convert_parameters(query, sql_parameters)
+            if parameter_errors:
+                message = S.sql_parameters.validation_failed.format(errors="; ".join(parameter_errors))
+                self.append_output(self._format_log("SQL", message), error=True)
+                self.status_changed.emit(S.sql_parameters.status_invalid)
+                current_block = self.editor.get_current_executing_block()
+                if not current_block:
+                    current_block = self.editor.get_focused_block() or self.editor.get_last_focused_block()
+                self.editor.mark_execution_finished(current_block, has_error=True)
+                self.session.finish_execution(False, S.sql_parameters.status_invalid)
+                self._queue_had_error = True
+                self._queue_last_error = message[:80]
+                self._queue_last_type = "sql"
+                self._queue_blocks_done += 1
+                self._is_executing = False
+                self._process_next_in_queue()
+                return
 
         self._is_executing = True
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
@@ -763,7 +792,7 @@ class SessionWidget(QWidget):
 
         # Criar worker e thread
         self._sql_thread = QThread()
-        self._sql_worker = SessionSqlWorker(connector, query)
+        self._sql_worker = SessionSqlWorker(connector, query, prepared_parameters)
         self._sql_worker.moveToThread(self._sql_thread)
 
         # Store block_name to use in callback
@@ -1367,14 +1396,20 @@ class SessionWidget(QWidget):
         # Old: (language, code)
         # Medium: (language, code, block)
         # Legacy: (language, code, block, block_name, connection_name)
-        # Current: (language, code, block, block_name, connection_name, database_name)
-        if len(item) >= 6:
+        # Current: (language, code, block, block_name, connection_name, database_name, sql_parameters)
+        if len(item) >= 7:
+            language, code, block, block_name, connection_name, database_name, sql_parameters = item[:7]
+            if block:
+                self.editor.mark_block_started(block)
+        elif len(item) >= 6:
             language, code, block, block_name, connection_name, database_name = item[:6]
+            sql_parameters = None
             if block:
                 self.editor.mark_block_started(block)
         elif len(item) == 5:
             language, code, block, block_name, connection_name = item[:5]
             database_name = None
+            sql_parameters = None
             if block:
                 self.editor.mark_block_started(block)
         elif len(item) == 3:
@@ -1382,6 +1417,7 @@ class SessionWidget(QWidget):
             block_name = None
             connection_name = None
             database_name = None
+            sql_parameters = None
             if block:
                 self.editor.mark_block_started(block)
         else:
@@ -1390,6 +1426,7 @@ class SessionWidget(QWidget):
             block_name = None
             connection_name = None
             database_name = None
+            sql_parameters = None
 
         # Execute according to language
         # Track context for notification templates
@@ -1403,7 +1440,13 @@ class SessionWidget(QWidget):
             self._queue_last_database = database_name
 
         if language == "sql":
-            self._on_execute_sql(code, block_name=block_name, connection_name=connection_name, database_name=database_name)
+            self._on_execute_sql(
+                code,
+                block_name=block_name,
+                connection_name=connection_name,
+                database_name=database_name,
+                sql_parameters=sql_parameters,
+            )
         elif language == "python":
             self._on_execute_python(code)
         else:

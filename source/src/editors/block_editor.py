@@ -43,7 +43,7 @@ class BlockEditor(QWidget):
     """
 
     # Execution signals
-    execute_sql = pyqtSignal(str, object, object, object)  # query, block_name, connection_name, database_name
+    execute_sql = pyqtSignal(str, object, object, object, object)  # query, block_name, connection_name, database_name, sql_parameters
     execute_python = pyqtSignal(str)  # code
 
     # Signal to run multiple blocks in sequence
@@ -278,7 +278,11 @@ class BlockEditor(QWidget):
             block_name = block.get_block_name()
             connection_name = block.get_connection_name()
             database_name = block.get_database_name()
-            self.execute_sql.emit(code, block_name, connection_name, database_name)
+            get_sql_parameters = getattr(block, "get_sql_parameters_for_query", None)
+            sql_parameters = get_sql_parameters(code) if callable(get_sql_parameters) else []
+            if not isinstance(sql_parameters, list):
+                sql_parameters = []
+            self.execute_sql.emit(code, block_name, connection_name, database_name, sql_parameters)
         elif language == "python":
             self.execute_python.emit(code)
 
@@ -296,8 +300,12 @@ class BlockEditor(QWidget):
         for index, block in enumerate(self._blocks):
             code = block.get_code().strip()
             if code and block.is_active():
-                # Tuple: (language, code, block, block_name, connection_name, database_name)
-                queue.append((block.get_language(), code, block, block.get_block_name(), block.get_connection_name(), block.get_database_name()))
+                get_sql_parameters = getattr(block, "get_sql_parameters_for_query", None)
+                sql_parameters = get_sql_parameters(code) if callable(get_sql_parameters) else []
+                if not isinstance(sql_parameters, list):
+                    sql_parameters = []
+                # Tuple: (language, code, block, block_name, connection_name, database_name, sql_parameters)
+                queue.append((block.get_language(), code, block, block.get_block_name(), block.get_connection_name(), block.get_database_name(), sql_parameters))
                 self._execution_queue_blocks.append(block)
                 block.set_waiting(True)  # Mark as waiting
 
@@ -396,15 +404,15 @@ class BlockEditor(QWidget):
         self._sql_schema = schema
         # Propagate to existing SQL blocks
         for block in self._blocks:
-            if block.get_language() == "sql" and hasattr(block.editor, "set_sql_schema"):
-                block.editor.set_sql_schema(schema)
+            if block.get_language() == "sql" and hasattr(block, "set_sql_schema"):
+                block.set_sql_schema(schema)
     
     def _on_block_language_changed(self, block: CodeBlock, language: str):
         """Handle block language change - update completions."""
         if language == "sql" and self._sql_schema:
             # Block switched to SQL - apply cached schema
-            if hasattr(block.editor, "set_sql_schema"):
-                block.editor.set_sql_schema(self._sql_schema)
+            if hasattr(block, "set_sql_schema"):
+                block.set_sql_schema(self._sql_schema)
         elif language == "python":
             # Block switched to Python - apply namespace
             app_state = ApplicationState.instance()
@@ -450,8 +458,8 @@ class BlockEditor(QWidget):
             block.set_database_context(self._database_context)
         
         # Pass SQL schema for completions (Monaco)
-        if self._sql_schema and language == "sql" and hasattr(block.editor, "set_sql_schema"):
-            block.editor.set_sql_schema(self._sql_schema)
+        if self._sql_schema and language == "sql" and hasattr(block, "set_sql_schema"):
+            block.set_sql_schema(self._sql_schema)
 
         # Connect signals
         # execute_requested runs only that block
@@ -811,6 +819,12 @@ class BlockEditor(QWidget):
             # Restore custom database if exists
             if "database_name" in data and data["database_name"]:
                 block.set_database_name(data["database_name"])
+
+            # Restore SQL parameter definitions for all blocks, including the first one
+            if "sql_parameters" in data and hasattr(block, "set_sql_parameters"):
+                block.set_sql_parameters(data.get("sql_parameters") or [])
+            if "sql_parameters_enabled" in data and hasattr(block, "set_sql_parameters_enabled"):
+                block.set_sql_parameters_enabled(data.get("sql_parameters_enabled", True))
 
     # === Compatibility with UnifiedEditor ===
 

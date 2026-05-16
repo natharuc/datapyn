@@ -152,7 +152,14 @@ def auto_close_dialogs(qtbot, monkeypatch):
 
     def non_blocking_exec(self):
         """exec() nao-bloqueante - fecha automaticamente"""
-        QTimer.singleShot(50, lambda: self.accept() if not self.isHidden() else None)
+        def safe_accept():
+            try:
+                if not self.isHidden():
+                    self.accept()
+            except RuntimeError:
+                pass
+
+        QTimer.singleShot(50, safe_accept)
         qtbot.wait(100)
         return 1  # QDialog.Accepted
 

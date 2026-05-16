@@ -55,14 +55,15 @@ class SqlWorker(QObject):
 
     finished = pyqtSignal(object, str)  # (result_df or None, error_msg or '')
 
-    def __init__(self, connector, query):
+    def __init__(self, connector, query, sql_parameters=None):
         super().__init__()
         self.connector = connector
         self.query = query
+        self.sql_parameters = sql_parameters or []
 
     def run(self):
         try:
-            df = self.connector.execute_query(self.query)
+            df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.finished.emit(df, "")
         except Exception as e:
             self.finished.emit(None, str(e))

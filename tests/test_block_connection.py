@@ -240,15 +240,17 @@ class TestBlockEditorConnection:
 
         # Capturar signal
         emitted = []
-        editor.execute_sql.connect(lambda q, bn, cn: emitted.append((q, bn, cn)))
+        editor.execute_sql.connect(lambda q, bn, cn, dn, sp: emitted.append((q, bn, cn, dn, sp)))
 
         editor._execute_block(block)
 
         assert len(emitted) == 1
-        query, block_name, connection_name = emitted[0]
+        query, block_name, connection_name, database_name, sql_parameters = emitted[0]
         assert query == "SELECT 1"
         assert block_name == block.get_block_name()
         assert connection_name == "TestConn"
+        assert database_name is None
+        assert sql_parameters == []
 
     def test_execute_sql_signal_none_connection(self, qapp):
         """execute_sql sem conexao customizada deve passar None"""
@@ -260,13 +262,14 @@ class TestBlockEditorConnection:
         block.set_code("SELECT 1")
 
         emitted = []
-        editor.execute_sql.connect(lambda q, bi, cn: emitted.append((q, bi, cn)))
+        editor.execute_sql.connect(lambda q, bi, cn, dn, sp: emitted.append((q, bi, cn, dn, sp)))
 
         editor._execute_block(block)
 
         assert len(emitted) == 1
-        _, _, connection_name = emitted[0]
+        _, _, connection_name, _, sql_parameters = emitted[0]
         assert connection_name is None
+        assert sql_parameters == []
 
     def test_execute_all_passes_connection_in_queue(self, qapp):
         """execute_all_blocks deve passar connection_name na fila"""
@@ -362,6 +365,8 @@ class TestConnectionResolution:
                 assert call_args[0][1] == "SELECT 1"  # query
                 assert call_args[0][2] == "bloco1"  # block_name
                 assert call_args[0][3] == "BlockConn"  # connection_name
+                assert call_args[0][4] is None  # database_name
+                assert call_args[0][5] is None  # sql_parameters
 
     def test_on_execute_sql_with_connection_not_connected_starts_thread(self, qapp):
         """_on_execute_sql sem connector conectado deve iniciar thread de auto-connect"""
@@ -576,7 +581,13 @@ class TestQueueProcessing:
 
         with patch.object(widget, "_on_execute_sql") as mock_exec:
             widget._process_next_in_queue()
-            mock_exec.assert_called_once_with("SELECT 1", block_name="bloco1", connection_name="CustomConn", database_name=None)
+            mock_exec.assert_called_once_with(
+                "SELECT 1",
+                block_name="bloco1",
+                connection_name="CustomConn",
+                database_name=None,
+                sql_parameters=None,
+            )
 
     def test_process_queue_6_tuple(self, qapp):
         """_process_next_in_queue deve suportar tuplas de 6 elementos (atual)"""
@@ -591,7 +602,13 @@ class TestQueueProcessing:
 
         with patch.object(widget, "_on_execute_sql") as mock_exec:
             widget._process_next_in_queue()
-            mock_exec.assert_called_once_with("SELECT 1", block_name="bloco1", connection_name="CustomConn", database_name="mydb")
+            mock_exec.assert_called_once_with(
+                "SELECT 1",
+                block_name="bloco1",
+                connection_name="CustomConn",
+                database_name="mydb",
+                sql_parameters=None,
+            )
 
     def test_process_queue_3_tuple(self, qapp):
         """_process_next_in_queue deve suportar tuplas de 3 elementos (legado)"""
@@ -606,7 +623,13 @@ class TestQueueProcessing:
 
         with patch.object(widget, "_on_execute_sql") as mock_exec:
             widget._process_next_in_queue()
-            mock_exec.assert_called_once_with("SELECT 1", block_name=None, connection_name=None, database_name=None)
+            mock_exec.assert_called_once_with(
+                "SELECT 1",
+                block_name=None,
+                connection_name=None,
+                database_name=None,
+                sql_parameters=None,
+            )
 
     def test_process_queue_2_tuple(self, qapp):
         """_process_next_in_queue deve suportar tuplas de 2 elementos (legado)"""

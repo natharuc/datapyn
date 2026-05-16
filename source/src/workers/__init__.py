@@ -45,17 +45,18 @@ class SqlExecutionWorker(BaseWorker):
 
     result_ready = pyqtSignal(object)  # pd.DataFrame ou None
 
-    def __init__(self, connector, query: str):
+    def __init__(self, connector, query: str, sql_parameters=None):
         super().__init__()
         self.connector = connector
         self.query = query
+        self.sql_parameters = sql_parameters or []
 
     def run(self):
         """Run SQL query"""
         self.started.emit()
 
         try:
-            df = self.connector.execute_query(self.query)
+            df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.result_ready.emit(df)
         except Exception as e:
             error_msg = S.workers.error_sql.format(msg=str(e))

@@ -5,6 +5,7 @@ Coordinates entire system: indicators, positioning,
 settings persistence, etc.
 """
 
+from PyQt6 import sip
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QApplication, QMainWindow
 from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, pyqtSignal, QObject, QSettings
 from PyQt6.QtGui import QCursor
@@ -144,19 +145,44 @@ class DockingManager(QObject):
 
     def _adjust_splitter_sizes(self):
         """Adjust splitter sizes based on visible areas"""
-        # Splitter horizontal
-        left_size = 250 if self.left_area.isVisible() else 0
-        right_size = 250 if self.right_area.isVisible() else 0
-        center_size = max(400, self.main_window.width() - left_size - right_size)
+        widgets = (
+            self.main_window,
+            self.left_area,
+            self.right_area,
+            self.top_area,
+            self.bottom_area,
+            self.main_splitter,
+            self.center_splitter,
+        )
+        if not all(self._qt_object_is_alive(widget) for widget in widgets):
+            return
 
-        self.main_splitter.setSizes([left_size, center_size, right_size])
+        try:
+            # Splitter horizontal
+            left_size = 250 if self.left_area.isVisible() else 0
+            right_size = 250 if self.right_area.isVisible() else 0
+            center_size = max(400, self.main_window.width() - left_size - right_size)
 
-        # Splitter vertical
-        top_size = 200 if self.top_area.isVisible() else 0
-        bottom_size = 200 if self.bottom_area.isVisible() else 0
-        center_v_size = max(300, self.main_window.height() - top_size - bottom_size)
+            self.main_splitter.setSizes([left_size, center_size, right_size])
 
-        self.center_splitter.setSizes([top_size, center_v_size, bottom_size])
+            # Splitter vertical
+            top_size = 200 if self.top_area.isVisible() else 0
+            bottom_size = 200 if self.bottom_area.isVisible() else 0
+            center_v_size = max(300, self.main_window.height() - top_size - bottom_size)
+
+            self.center_splitter.setSizes([top_size, center_v_size, bottom_size])
+        except RuntimeError:
+            logger.debug("[DockingManager] Ignoring splitter resize after widget deletion")
+
+    @staticmethod
+    def _qt_object_is_alive(widget: object) -> bool:
+        """Return True when a Qt object can still be safely accessed."""
+        if widget is None:
+            return False
+        try:
+            return not sip.isdeleted(widget)
+        except Exception:
+            return True
 
     def _on_tab_detached(self, title: str, widget: QWidget):
         """When a tab is detached"""

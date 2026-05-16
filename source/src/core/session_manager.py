@@ -181,8 +181,12 @@ class SessionManager(QObject):
             logger.error(f"Error saving sessions: {e}")
             return False
 
-    def load_sessions(self, connection_manager=None) -> bool:
-        """Loads sessions from disk"""
+    def load_sessions(self, connection_manager=None, reconnect: bool = False) -> bool:
+        """Loads sessions from disk.
+
+        By default, saved sessions preserve their connection metadata without
+        blocking the UI on synchronous reconnect attempts during startup.
+        """
         try:
             if not self._sessions_file.exists():
                 # Don't create default session - let UI show empty state
@@ -199,7 +203,7 @@ class SessionManager(QObject):
                 self._sessions[session.session_id] = session
 
                 # Initialize (reconnect if necessary)
-                session.initialize(connection_manager)
+                session.initialize(connection_manager, reconnect=reconnect)
 
             # Clean up sessions that no longer exist in order
             self._session_order = [sid for sid in self._session_order if sid in self._sessions]
