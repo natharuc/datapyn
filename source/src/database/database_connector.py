@@ -12,6 +12,12 @@ import json
 import os
 from pathlib import Path
 
+from src.utils.sql_parameter_service import (
+    prepare_databricks_sql,
+    prepare_generic_sql,
+    prepare_sqlserver_batch,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +416,7 @@ class DatabaseConnector:
         # Strip whitespace and filter empty batches
         return [b.strip() for b in batches if b.strip()]
 
-    def execute_query(self, query: str) -> Union[pd.DataFrame, List[pd.DataFrame]]:
+    def execute_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """
         Execute SQL query and return DataFrame or list of DataFrames
 
@@ -420,6 +426,7 @@ class DatabaseConnector:
 
         Args:
             query: SQL query to execute (can contain multiple commands and GO separators)
+            parameters: Optional custom SQL parameter definitions from a DataPyn SQL block
 
         Returns:
             Union[pd.DataFrame, List[pd.DataFrame]]: Query result or list of results
@@ -443,14 +450,14 @@ class DatabaseConnector:
                 batches = self._split_sql_batches(query)
                 if not batches:
                     return pd.DataFrame({"Result": ["No SQL commands to execute."]})
-                return self._execute_mssql_batches(batches)
+                return self._execute_mssql_batches(batches, parameters=parameters)
 
             # For Databricks, use specific method with cursor access for cancellation
             if self.db_type == "databricks":
-                return self._execute_databricks_query(query)
+                return self._execute_databricks_query(query, parameters=parameters)
 
             # For other databases, use legacy logic
-            return self._execute_generic_query(query)
+            return self._execute_generic_query(query, parameters=parameters)
 
         except Exception as e:
             logger.error(f"Error executing query: {str(e)}")
@@ -494,7 +501,7 @@ class DatabaseConnector:
         except Exception as e:
             logger.warning(f"Error cancelling query: {e}")
 
-    def _execute_mssql_batches(self, batches: list) -> Union[pd.DataFrame, List[pd.DataFrame]]:
+    def _execute_mssql_batches(self, batches: list, parameters: Optional[List[Dict[str, Any]]] = None) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """Execute multiple SQL Server batches on the same connection.
 
         Each batch (separated by GO in the original script) is executed
@@ -547,7 +554,11 @@ class DatabaseConnector:
 
                 batch_error = None
                 try:
-                    cursor.execute(batch)
+                    prepared = prepare_sqlserver_batch(batch, parameters) if parameters else None
+                    if prepared:
+                        cursor.execute(prepared.query, *prepared.params)
+                    else:
+                        cursor.execute(batch)
                 except pyodbc.Error as e:
                     batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                     logger.warning(batch_error)
@@ -652,7 +663,7 @@ class DatabaseConnector:
                 except Exception:
                     pass
 
-    def _execute_databricks_query(self, query: str) -> pd.DataFrame:
+    def _execute_databricks_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> pd.DataFrame:
         """Execute Databricks query with cursor access for cancellation.
         
         Uses raw connection to expose cursor for cancel support.
@@ -669,7 +680,11 @@ class DatabaseConnector:
             self._active_cursor = cursor  # Expose cursor for cancellation
             
             # Execute query
-            cursor.execute(query)
+            if parameters:
+                prepared = prepare_databricks_sql(query, parameters)
+                cursor.execute(prepared.query, prepared.params)
+            else:
+                cursor.execute(query)
             
             # Check if cancelled
             if self._cancelled:
@@ -884,7 +899,7 @@ class DatabaseConnector:
         rows = result.fetchall()
         return pd.DataFrame.from_records(rows, columns=columns)
 
-    def _execute_generic_query(self, query: str) -> pd.DataFrame:
+    def _execute_generic_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> pd.DataFrame:
         """Execute generic query for non-MSSQL databases"""
         # Split statements with DELIMITER-awareness
         commands = self._split_sql_statements(query)
@@ -895,10 +910,14 @@ class DatabaseConnector:
 
             with self.engine.connect() as conn:
                 for cmd in commands:
+                    prepared = prepare_generic_sql(cmd, parameters) if parameters else None
+                    executable_sql = prepared.query if prepared else cmd
+                    executable_params = prepared.params if prepared else {}
+
                     if self._is_select_query(cmd):
                         # Is SELECT - capture result
                         try:
-                            result = conn.execute(text(cmd))
+                            result = conn.execute(text(executable_sql), executable_params)
                             df = self._result_to_dataframe(result)
                             logger.info(f"SELECT executed: {len(df)} rows returned")
                             dataframes.append(df)
@@ -907,7 +926,7 @@ class DatabaseConnector:
                             raise
                     else:
                         # Not SELECT - execute as statement
-                        conn.execute(text(cmd))
+                        conn.execute(text(executable_sql), executable_params)
 
                 conn.commit()
 
@@ -928,17 +947,20 @@ class DatabaseConnector:
         elif len(commands) == 1:
             # Single command - use the cleaned statement (DELIMITER stripped)
             cmd = commands[0]
+            prepared = prepare_generic_sql(cmd, parameters) if parameters else None
+            executable_sql = prepared.query if prepared else cmd
+            executable_params = prepared.params if prepared else {}
             if self._is_select_query(cmd):
                 # SELECT query - fetch rows directly so DB driver values are preserved
                 with self.engine.connect() as conn:
-                    result = conn.execute(text(cmd))
+                    result = conn.execute(text(executable_sql), executable_params)
                     df = self._result_to_dataframe(result)
                 logger.info(f"Query executed successfully. Rows returned: {len(df)}")
                 return df
             else:
                 # Non-SELECT - execute as statement
                 with self.engine.connect() as conn:
-                    result = conn.execute(text(cmd))
+                    result = conn.execute(text(executable_sql), executable_params)
                     conn.commit()
                     rows_affected = result.rowcount
 

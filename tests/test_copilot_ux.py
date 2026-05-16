@@ -498,11 +498,11 @@ class TestBlockEditorExecuteBlock:
         block.get_database_name.return_value = "mydb"
 
         emitted = []
-        editor.execute_sql.connect(lambda q, bn, cn, dn: emitted.append((q, bn, cn, dn)))
+        editor.execute_sql.connect(lambda q, bn, cn, dn, sp: emitted.append((q, bn, cn, dn, sp)))
         editor.execute_block(block)
 
         assert len(emitted) == 1
-        assert emitted[0] == ("SELECT 1", "query1", "myconn", "mydb")
+        assert emitted[0] == ("SELECT 1", "query1", "myconn", "mydb", [])
 
     def test_execute_block_empty_code_noop(self, qapp):
         """execute_block should do nothing for empty code blocks."""

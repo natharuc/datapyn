@@ -313,16 +313,17 @@ class TestBlockEditorDatabaseSignal:
 
         # Capturar signal
         emitted = []
-        editor.execute_sql.connect(lambda q, bn, cn, dn: emitted.append((q, bn, cn, dn)))
+        editor.execute_sql.connect(lambda q, bn, cn, dn, sp: emitted.append((q, bn, cn, dn, sp)))
 
         editor._execute_block(block)
 
         assert len(emitted) == 1
-        query, block_name, connection_name, database_name = emitted[0]
+        query, block_name, connection_name, database_name, sql_parameters = emitted[0]
         assert query == "SELECT 1"
         assert block_name == block.get_block_name()
         assert connection_name is None  # padrao
         assert database_name == "custom_db"
+        assert sql_parameters == []
 
     def test_execute_sql_signal_database_name_none_by_default(self, qapp):
         """execute_sql signal deve emitir database_name=None quando nao definido"""
@@ -334,13 +335,14 @@ class TestBlockEditorDatabaseSignal:
         # Nao definir database_name
 
         emitted = []
-        editor.execute_sql.connect(lambda q, bn, cn, dn: emitted.append((q, bn, cn, dn)))
+        editor.execute_sql.connect(lambda q, bn, cn, dn, sp: emitted.append((q, bn, cn, dn, sp)))
 
         editor._execute_block(block)
 
         assert len(emitted) == 1
-        _, _, _, database_name = emitted[0]
+        _, _, _, database_name, sql_parameters = emitted[0]
         assert database_name is None
+        assert sql_parameters == []
 
     def test_execute_queue_includes_database_name(self, qapp):
         """execute_queue deve incluir database_name na tupla"""
@@ -360,9 +362,11 @@ class TestBlockEditorDatabaseSignal:
         editor.execute_all_blocks()
 
         assert len(queue) == 2
-        # Formato: (language, code, block, block_name, connection_name, database_name)
+        # Formato: (language, code, block, block_name, connection_name, database_name, sql_parameters)
         assert queue[0][5] == "db1"
         assert queue[1][5] == "db2"
+        assert queue[0][6] == []
+        assert queue[1][6] == []
 
 
 # ===== USE Command Syntax =====

@@ -34,6 +34,13 @@ class CopilotLSPClient(QObject):
         initialized: Server has been initialized
         auth_required(str, str): user_code, verification_uri
         authenticated(str): username/status
+
+            try:
+                stdin = getattr(process, "stdin", None)
+                if stdin:
+                    stdin.close()
+            except Exception:
+                pass
         completion_ready(str): inline completion text
         error(str): error message
         status_changed(str): status update (e.g., "SignedIn", "SignedOut")
@@ -162,30 +169,21 @@ class CopilotLSPClient(QObject):
         """Stop the language server."""
         self._stopping = True
         process = self._process
+        reader_thread = self._reader_thread
+        self._process = None
+        self._reader_thread = None
 
         if process:
             try:
                 # Send shutdown request
                 self._send_request("shutdown", {})
                 self._send_notification("exit", {})
-                
-                # Give it a moment to close gracefully
-                process.wait(timeout=2)
             except Exception:
                 pass
-
-            for pipe_name in ("stdin", "stdout", "stderr"):
-                pipe = getattr(process, pipe_name, None)
-                if pipe:
-                    try:
-                        pipe.close()
-                    except Exception:
-                        pass
             
             try:
                 if process.poll() is None:
                     process.terminate()
-                    process.wait(timeout=2)
             except Exception:
                 pass
 
@@ -194,12 +192,16 @@ class CopilotLSPClient(QObject):
                     process.kill()
             except Exception:
                 pass
-            
-            self._process = None
 
-        if self._reader_thread and self._reader_thread.is_alive():
-            self._reader_thread.join(timeout=2)
-        self._reader_thread = None
+            try:
+                stdin = getattr(process, "stdin", None)
+                if stdin:
+                    stdin.close()
+            except Exception:
+                pass
+
+        if reader_thread and reader_thread.is_alive() and reader_thread is not threading.current_thread():
+            reader_thread.join(timeout=0.2)
         
         self._initialized = False
         self._set_authenticated(False, "stop")

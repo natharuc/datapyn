@@ -25,7 +25,13 @@ import qtawesome as qta
 from src.core.theme_manager import ThemeManager
 from src.state.app_state import ApplicationState
 from src.editors.editor_config import get_code_editor_class
+from src.editors.sql_parameters_panel import SqlParametersPanel
 from src.language import S
+from src.utils.sql_parameter_service import (
+    filter_parameters_for_query,
+    merge_parameter_definitions,
+    normalize_parameter_definition,
+)
 
 
 class BlockConnectionPanel(QFrame):
@@ -424,9 +430,16 @@ class CodeBlock(QFrame):
         self._execution_tick_timer = QTimer(self)
         self._execution_tick_timer.setInterval(100)
         self._execution_tick_timer.timeout.connect(self._update_running_elapsed)
+        self._sql_parameter_sync_timer = QTimer(self)
+        self._sql_parameter_sync_timer.setSingleShot(True)
+        self._sql_parameter_sync_timer.setInterval(250)
+        self._sql_parameter_sync_timer.timeout.connect(self.sync_sql_parameters_from_query)
         self._default_language = default_language
         self._connection_name = None  # None = use session connection
         self._database_name = None  # None = use connection default database
+        self._sql_parameters = []  # Custom SQL parameters detected from @name tokens
+        self._sql_parameters_enabled = True  # False = user chose to define variables manually in the query
+        self._sql_schema = {}  # Cached SQL schema for parameter inference/autocomplete
         self._block_name = ""  # Block name (namespace prefix)
         self._is_copilot_editing = False  # Copilot is editing this block
         self._copilot_editing_timer = None  # Auto-dismiss timer
@@ -458,6 +471,11 @@ class CodeBlock(QFrame):
     def cleanup(self):
         try:
             self._execution_tick_timer.stop()
+        except RuntimeError:
+            pass
+
+        try:
+            self._sql_parameter_sync_timer.stop()
         except RuntimeError:
             pass
 
@@ -709,6 +727,24 @@ class CodeBlock(QFrame):
         """)
         control_layout.addWidget(self.name_input)
 
+        self.show_sql_parameters_btn = QPushButton()
+        self.show_sql_parameters_btn.setIcon(qta.icon("mdi.function-variant", color=colors.text_tertiary))
+        self.show_sql_parameters_btn.setFixedSize(CTRL_H, CTRL_H)
+        self.show_sql_parameters_btn.setToolTip(S.sql_parameters.tooltip_show_panel)
+        self.show_sql_parameters_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.show_sql_parameters_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: {colors.bg_elevated};
+            }}
+        """)
+        self.show_sql_parameters_btn.hide()
+        control_layout.addWidget(self.show_sql_parameters_btn)
+
         # Maximize button (expand/collapse icon)
         self.maximize_btn = QPushButton()
         self.maximize_btn.setIcon(qta.icon("mdi.arrow-expand", color=colors.text_tertiary))
@@ -758,10 +794,20 @@ class CodeBlock(QFrame):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(0)
 
+        self.editor_body = QWidget()
+        editor_body_layout = QHBoxLayout(self.editor_body)
+        editor_body_layout.setContentsMargins(0, 0, 0, 0)
+        editor_body_layout.setSpacing(0)
+
+        self.sql_parameters_panel = SqlParametersPanel()
+        self.sql_parameters_panel.hide()
+        editor_body_layout.addWidget(self.sql_parameters_panel)
+
         # Monaco Editor with Copilot inline completions
         EditorClass = get_code_editor_class()
         self.editor = EditorClass(theme_manager=self.theme_manager)
-        editor_layout.addWidget(self.editor.get_widget())
+        editor_body_layout.addWidget(self.editor.get_widget(), 1)
+        editor_layout.addWidget(self.editor_body)
 
         layout.addWidget(self.editor_container, 1)  # stretch=1 to expand
 
@@ -793,6 +839,10 @@ class CodeBlock(QFrame):
         self.editor.execute_requested.connect(lambda sel: self.execute_requested.emit(self, sel))
         self.editor.SCN_FOCUSIN.connect(self._on_focus_in)
         self.editor.SCN_FOCUSOUT.connect(self._on_focus_out)
+        self.editor.textChanged.connect(self._schedule_sql_parameter_sync)
+        self.sql_parameters_panel.parameters_changed.connect(self._on_sql_parameters_panel_changed)
+        self.sql_parameters_panel.close_requested.connect(self._on_sql_parameters_panel_close_requested)
+        self.show_sql_parameters_btn.clicked.connect(lambda: self.set_sql_parameters_enabled(True))
         
         # Setup inline completion service for Copilot
         if hasattr(self.editor, 'completion_requested'):
@@ -919,6 +969,14 @@ class CodeBlock(QFrame):
         """Set database schema context for SQL completions (Monaco only)."""
         if hasattr(self, '_completion_service'):
             self._completion_service.set_database_context(context)
+
+    def set_sql_schema(self, schema: dict):
+        """Set SQL schema for completions and parameter type inference."""
+        self._sql_schema = schema or {}
+        if hasattr(self.editor, "set_sql_schema"):
+            self.editor.set_sql_schema(self._sql_schema)
+        if self.get_language() == "sql":
+            self.sync_sql_parameters_from_query()
     
     def set_python_namespace(self, namespace: dict):
         """Set Python namespace for completions (Monaco only).
@@ -984,6 +1042,7 @@ class CodeBlock(QFrame):
         self.editor.set_language(lang)
         self._update_connection_panel_visibility()
         self._update_style()
+        self._schedule_sql_parameter_sync()
         
         # Update document info for LSP with new language
         self._update_document_info()
@@ -1025,6 +1084,50 @@ class CodeBlock(QFrame):
         is_sql = lang == "sql"
         self.conn_panel.setVisible(is_sql)
         self.db_panel.setVisible(is_sql)
+        if not is_sql:
+            self._refresh_sql_parameter_ui()
+        else:
+            self.sync_sql_parameters_from_query()
+
+    def _schedule_sql_parameter_sync(self):
+        """Debounce parameter detection while the user edits SQL."""
+        if self.get_language() != "sql":
+            self._refresh_sql_parameter_ui()
+            return
+        self._sql_parameter_sync_timer.start()
+
+    def _on_sql_parameters_panel_close_requested(self):
+        self.set_sql_parameters_enabled(False)
+
+    def _on_sql_parameters_panel_changed(self, parameters: list):
+        """Receive edited parameter definitions from the side panel."""
+        self._sql_parameters = [
+            normalize_parameter_definition(parameter, index)
+            for index, parameter in enumerate(parameters or [])
+        ]
+        self._refresh_sql_parameter_ui()
+
+    def _refresh_sql_parameter_ui(self):
+        is_sql = self.get_language() == "sql"
+        has_parameters = bool(self._sql_parameters)
+        self.sql_parameters_panel.setVisible(is_sql and self._sql_parameters_enabled and has_parameters)
+        self.show_sql_parameters_btn.setVisible(is_sql and (not self._sql_parameters_enabled) and has_parameters)
+
+    def sync_sql_parameters_from_query(self):
+        """Detect @parameters in SQL and merge them with existing settings."""
+        if not hasattr(self, "sql_parameters_panel"):
+            return
+        if self.get_language() != "sql":
+            self._refresh_sql_parameter_ui()
+            return
+
+        merged = merge_parameter_definitions(self.get_code(), self._sql_parameters, self._sql_schema)
+        self._sql_parameters = [
+            normalize_parameter_definition(parameter, index)
+            for index, parameter in enumerate(merged)
+        ]
+        self.sql_parameters_panel.set_parameters(self._sql_parameters)
+        self._refresh_sql_parameter_ui()
 
     def _update_style(self):
         lang = self.get_language()
@@ -1163,6 +1266,7 @@ class CodeBlock(QFrame):
 
     def set_code(self, code: str):
         self.editor.set_text(code)
+        self.sync_sql_parameters_from_query()
 
     def get_selected_text(self) -> str:
         return self.editor.get_selected_text()
@@ -1178,6 +1282,36 @@ class CodeBlock(QFrame):
         """Set block name"""
         self._block_name = name
         self.name_input.setText(name)
+
+    def get_sql_parameters(self) -> list:
+        """Return persisted SQL parameter definitions for this block."""
+        self.sync_sql_parameters_from_query()
+        return [dict(parameter) for parameter in self._sql_parameters]
+
+    def is_sql_parameters_enabled(self) -> bool:
+        """Return whether this block uses the custom SQL parameter panel."""
+        return bool(self._sql_parameters_enabled)
+
+    def set_sql_parameters_enabled(self, enabled: bool):
+        """Enable or disable the custom SQL parameter panel for this block."""
+        self._sql_parameters_enabled = bool(enabled)
+        self._refresh_sql_parameter_ui()
+
+    def set_sql_parameters(self, parameters: list):
+        """Set SQL parameter definitions and sync with current SQL text."""
+        self._sql_parameters = [
+            normalize_parameter_definition(parameter, index)
+            for index, parameter in enumerate(parameters or [])
+            if isinstance(parameter, dict)
+        ]
+        self.sync_sql_parameters_from_query()
+
+    def get_sql_parameters_for_query(self, query: str) -> list:
+        """Return parameter definitions used by a full or selected SQL query."""
+        self.sync_sql_parameters_from_query()
+        if not self._sql_parameters_enabled:
+            return []
+        return filter_parameters_for_query(query, self._sql_parameters)
 
     def get_connection_name(self) -> str:
         """Return custom connection name or None (uses tab default)"""
@@ -1439,6 +1573,11 @@ class CodeBlock(QFrame):
                 data["connection_color"] = self.conn_panel._color
         if self._database_name:
             data["database_name"] = self._database_name
+        sql_parameters = self.get_sql_parameters()
+        if sql_parameters:
+            data["sql_parameters"] = sql_parameters
+        if not self._sql_parameters_enabled:
+            data["sql_parameters_enabled"] = False
         return data
 
     @classmethod
@@ -1460,6 +1599,11 @@ class CodeBlock(QFrame):
         # Restore custom database
         if "database_name" in data and data["database_name"]:
             block.set_database_name(data["database_name"])
+        # Restore SQL custom parameters
+        if "sql_parameters" in data:
+            block.set_sql_parameters(data.get("sql_parameters") or [])
+        if "sql_parameters_enabled" in data:
+            block.set_sql_parameters_enabled(data.get("sql_parameters_enabled", True))
         # Restore active state
         if "is_active" in data:
             block.set_active(data["is_active"])

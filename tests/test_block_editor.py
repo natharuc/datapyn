@@ -86,6 +86,116 @@ class TestCodeBlock:
         assert data["language"] == "sql"
         assert data["code"] == "SELECT 1"
 
+    def test_sql_parameters_panel_appears_for_detected_tokens(self, block):
+        """Bloco SQL deve detectar @param e mostrar painel lateral."""
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @pessoaId")
+
+        params = block.get_sql_parameters()
+        assert [param["name"] for param in params] == ["pessoaId"]
+        assert not block.sql_parameters_panel.isHidden()
+
+    def test_sql_parameters_persist_in_block_dict(self, block):
+        """to_dict/from_dict devem preservar parametros SQL customizados."""
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @pessoaId")
+        params = block.get_sql_parameters()
+        params[0]["label"] = "Pessoa"
+        params[0]["sql_type"] = "integer"
+        params[0]["value"] = "55"
+        block.set_sql_parameters(params)
+
+        data = block.to_dict()
+
+        assert data["sql_parameters"][0]["name"] == "pessoaId"
+        assert data["sql_parameters"][0]["label"] == "Pessoa"
+        assert data["sql_parameters"][0]["sql_type"] == "integer"
+        assert data["sql_parameters"][0]["value"] == "55"
+
+    def test_sql_parameters_refresh_from_schema_when_available(self, block):
+        """Schema carregado deve atualizar tipo inferido do parametro."""
+        block.set_language("sql")
+        block.set_code("select * from dbo.pedidos where encerramento = @encerramento")
+
+        block.set_sql_schema(
+            {
+                "columns": {
+                    "dbo.pedidos": [
+                        {"name": "encerramento", "type": "date"},
+                    ]
+                }
+            }
+        )
+
+        params = block.get_sql_parameters()
+        assert params[0]["sql_type"] == "date"
+        assert params[0]["default_value"] == ""
+
+    def test_sql_parameters_panel_can_be_disabled_for_manual_variables(self, block):
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @pessoaId")
+
+        block.sql_parameters_panel.close_btn.click()
+
+        assert block.is_sql_parameters_enabled() is False
+        assert block.sql_parameters_panel.isHidden()
+        assert not block.show_sql_parameters_btn.isHidden()
+        assert block.get_sql_parameters_for_query("select * from pessoa where id = @pessoaId") == []
+
+    def test_sql_parameters_manual_mode_persists_in_block_dict(self, theme_manager, qtbot):
+        block = CodeBlock(theme_manager=theme_manager)
+        qtbot.addWidget(block)
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @pessoaId")
+        block.sql_parameters_panel.close_btn.click()
+
+        data = block.to_dict()
+        restored = CodeBlock.from_dict(data, theme_manager)
+        qtbot.addWidget(restored)
+
+        assert data["sql_parameters_enabled"] is False
+        assert restored.is_sql_parameters_enabled() is False
+        assert restored.sql_parameters_panel.isHidden()
+        assert not restored.show_sql_parameters_btn.isHidden()
+
+    def test_show_parameters_button_reenables_panel(self, block):
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @pessoaId")
+        block.sql_parameters_panel.close_btn.click()
+
+        block.show_sql_parameters_btn.click()
+
+        assert block.is_sql_parameters_enabled() is True
+        assert block.show_sql_parameters_btn.isHidden()
+        assert not block.sql_parameters_panel.isHidden()
+        assert [param["name"] for param in block.get_sql_parameters_for_query(block.get_code())] == ["pessoaId"]
+
+    def test_execute_sql_ignores_custom_parameters_in_manual_mode(self, qapp):
+        editor = BlockEditor()
+        block = editor._blocks[0]
+        block.set_language("sql")
+        block.set_code("declare @id int = 1; select @id")
+        block.sql_parameters_panel.close_btn.click()
+
+        emitted = []
+        editor.execute_sql.connect(lambda q, bn, cn, dn, sp: emitted.append((q, bn, cn, dn, sp)))
+
+        editor._execute_block(block)
+
+        assert len(emitted) == 1
+        assert emitted[0][4] == []
+
+    def test_sql_parameters_for_selected_query_filters_tokens(self, block):
+        """Execucao de selecao deve usar so parametros presentes no SQL selecionado."""
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @id and loja = @loja")
+        params = block.get_sql_parameters()
+
+        selected = block.get_sql_parameters_for_query("select * from pessoa where id = @id")
+
+        assert [param["name"] for param in params] == ["id", "loja"]
+        assert [param["name"] for param in selected] == ["id"]
+
     def test_from_dict_deserialization(self, theme_manager, qtbot):
         """Deve deserializar corretamente"""
         data = {"language": "python", "code": "x = 1"}
@@ -94,6 +204,33 @@ class TestCodeBlock:
 
         assert block.get_language() == "python"
         assert block.get_code() == "x = 1"
+
+    def test_from_dict_restores_sql_parameters(self, theme_manager, qtbot):
+        """from_dict deve restaurar parametros customizados."""
+        data = {
+            "language": "sql",
+            "code": "select * from pessoa where id = @id",
+            "sql_parameters": [
+                {
+                    "id": "sqlparam:id",
+                    "name": "id",
+                    "order": 0,
+                    "sql_type": "integer",
+                    "input_kind": "value",
+                    "value": "9",
+                    "required": True,
+                    "options": [],
+                    "multi_select": False,
+                }
+            ],
+        }
+        block = CodeBlock.from_dict(data, theme_manager)
+        qtbot.addWidget(block)
+
+        params = block.get_sql_parameters()
+        assert params[0]["name"] == "id"
+        assert params[0]["sql_type"] == "integer"
+        assert params[0]["value"] == "9"
 
     def test_running_state(self, block):
         """Deve mudar estado de execucao e mostrar tempo"""
@@ -245,6 +382,25 @@ class TestBlockEditor:
 
         assert blocker.args[0] == "SELECT 1"
 
+    def test_execute_sql_signal_includes_custom_parameters(self, editor, qtbot):
+        """Deve emitir parametros customizados junto com SQL."""
+        block = editor.get_blocks()[0]
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @id")
+        params = block.get_sql_parameters()
+        params[0]["sql_type"] = "integer"
+        params[0]["value"] = "12"
+        block.set_sql_parameters(params)
+
+        with qtbot.waitSignal(editor.execute_sql, timeout=1000) as blocker:
+            editor._execute_block(block)
+
+        emitted_params = blocker.args[4]
+        assert blocker.args[0] == "select * from pessoa where id = @id"
+        assert emitted_params[0]["name"] == "id"
+        assert emitted_params[0]["sql_type"] == "integer"
+        assert emitted_params[0]["value"] == "12"
+
     def test_execute_python_signal(self, editor, qtbot):
         """Deve emitir sinal Python quando bloco é Python"""
         blocks = editor.get_blocks()
@@ -322,6 +478,36 @@ class TestBlockEditor:
         assert blocks[0].get_code() == "SELECT 1"
         assert blocks[1].get_language() == "python"
         assert blocks[1].get_code() == "x = 1"
+
+    def test_from_list_restores_sql_parameter_manual_mode(self, editor):
+        data = [
+            {
+                "language": "sql",
+                "code": "select * from pessoa where id = @id",
+                "sql_parameters": [
+                    {
+                        "id": "sqlparam:id",
+                        "name": "id",
+                        "order": 0,
+                        "sql_type": "integer",
+                        "input_kind": "value",
+                        "value": "",
+                        "default_value": "",
+                        "required": True,
+                        "options": [],
+                        "multi_select": False,
+                    }
+                ],
+                "sql_parameters_enabled": False,
+            }
+        ]
+
+        editor.from_list(data)
+
+        block = editor.get_blocks()[0]
+        assert block.is_sql_parameters_enabled() is False
+        assert block.sql_parameters_panel.isHidden()
+        assert not block.show_sql_parameters_btn.isHidden()
 
 
 class TestBlockEditorExecution:
@@ -639,7 +825,7 @@ class TestRealWorldScenarios:
         # Simula execução - deve usar Python agora
         sql_executed = []
         python_executed = []
-        editor.execute_sql.connect(lambda c: sql_executed.append(c))
+        editor.execute_sql.connect(lambda c, _bn, _cn, _dn, _sp: sql_executed.append(c))
         editor.execute_python.connect(lambda c: python_executed.append(c))
 
         editor._execute_block(blocks[0])

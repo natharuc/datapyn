@@ -79,15 +79,16 @@ class TestBlockNamespace:
 
         editor.execute_all_blocks()
 
-        # Verificar formato da tupla: (language, code, block, block_name, connection_name, database_name)
+        # Verificar formato da tupla: (language, code, block, block_name, connection_name, database_name, sql_parameters)
         assert len(queue) == 2
 
         item1 = queue[0]
-        assert len(item1) == 6
+        assert len(item1) == 7
         assert item1[0] == "sql"  # language
         assert item1[3] == block1.get_block_name()  # block_name
         assert item1[4] is None  # connection_name (padrao)
         assert item1[5] is None  # database_name (padrao)
+        assert item1[6] == []  # sql_parameters
 
         item2 = queue[1]
         assert item2[0] == "sql"
