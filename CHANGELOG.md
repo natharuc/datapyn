@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.30.2 (2026-05-16)
+
+### Bug Fixes
+
+- Stabilize object explorer lazy loading across databases
+  ([`a7603d3`](https://github.com/natharuc/datapyn/commit/a7603d3a579c17652b3e0ff31a1e4029019d86f0))
+
+
 ## v1.30.1 (2026-05-15)
 
 ### Bug Fixes
