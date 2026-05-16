@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.31.0 (2026-05-16)
+
+### Bug Fixes
+
+- Restore saved connections asynchronously on startup
+  ([`e284a97`](https://github.com/natharuc/datapyn/commit/e284a9709e88c050ad1e3d004d319d249527fed0))
+
+### Features
+
+- Add custom SQL parameter workflow
+  ([`4752d09`](https://github.com/natharuc/datapyn/commit/4752d09f475630dedea5c83920f1b5ee1ccfe781))
+
+
 ## v1.30.2 (2026-05-16)
 
 ### Bug Fixes
