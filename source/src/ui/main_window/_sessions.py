@@ -1091,6 +1091,9 @@ class SessionsMixin:
         # Usar o banco retornado (pode ter mudado via USE)
         current_db = database or get_connector_database_context(getattr(session, "connector", None)) or config.get("database", "")
         session.database_context = current_db if db_type == "databricks" else ""
+        current_widget = self._get_current_session_widget()
+        if current_widget and getattr(current_widget, "session", None) == session:
+            self._clear_sql_autocomplete_for_connection(current_widget, connection_name)
 
         # === UPDATE ACTIVE CONNECTIONS PANEL ===
         self.connection_panel.set_active_connection(connection_name, host=host, database=current_db, db_type=db_type)
@@ -1132,7 +1135,6 @@ class SessionsMixin:
             self._load_schema_with_loading(session.connector, connection_name, session_id=session.session_id)
 
         # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
-        current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
             for block in current_widget.editor.get_blocks():
                 if hasattr(block, "db_panel"):

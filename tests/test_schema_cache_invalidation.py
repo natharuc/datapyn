@@ -1,8 +1,11 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from src.database.database_connector import DatabaseConnector
 from src.services.schema_service import SchemaService
+from src.ui.main_window._execution import ExecutionMixin
 from src.ui.main_window._schema import SchemaMixin
+from src.ui.main_window._sessions import SessionsMixin
 
 
 class _DummyStatusBar:
@@ -44,6 +47,8 @@ class _DummyBlock:
         self._connection_name = connection_name
         self._language = language
         self.set_sql_schema = MagicMock()
+        self.db_panel = MagicMock()
+        self._database_name = ""
 
     def get_connection_name(self):
         return self._connection_name
@@ -56,6 +61,84 @@ class _DummyWidget:
     def __init__(self, session_id: str, connection_name: str):
         self.session = SimpleNamespace(session_id=session_id, connection_name=connection_name)
         self.editor = _DummyEditor()
+        self.connection_changed = SimpleNamespace(emit=MagicMock())
+
+
+class _DummyConnectionListItem:
+    def __init__(self, connection_name: str):
+        self._connection_name = connection_name
+
+    def data(self, _role):
+        return self._connection_name
+
+
+class _DummyConnectionsList:
+    def __init__(self, connection_names: list[str]):
+        self._items = [_DummyConnectionListItem(connection_name) for connection_name in connection_names]
+        self.selected_item = None
+
+    def count(self):
+        return len(self._items)
+
+    def item(self, index: int):
+        return self._items[index]
+
+    def setCurrentItem(self, item):
+        self.selected_item = item
+
+
+class _DummySessionTabs:
+    def __init__(self, widgets: list):
+        self._widgets = list(widgets)
+        self.colors = []
+
+    def count(self):
+        return len(self._widgets)
+
+    def widget(self, index: int):
+        return self._widgets[index]
+
+    def set_tab_connection_color(self, index: int, color: str):
+        self.colors.append((index, color))
+
+
+class _DummySessionMainWindow(SchemaMixin, SessionsMixin):
+    def __init__(self, widget, focused_session, explorer=None):
+        self.connection_manager = _DummyConnectionManager()
+        self._session_widgets = {widget.session.session_id: widget}
+        self._session_explorers = {widget.session.session_id: explorer or MagicMock()}
+        self.object_explorer_dock = _DummyDock()
+        self._status_bar = _DummyStatusBar()
+        self.connection_panel = MagicMock()
+        self.connections_list = _DummyConnectionsList([focused_session.connection_name])
+        self.action_label = MagicMock()
+        self.session_manager = SimpleNamespace(focused_session=focused_session)
+        self.session_tabs = _DummySessionTabs([widget])
+        self._schema_service = MagicMock()
+        self._load_schema_with_loading = MagicMock()
+
+    def _log_info(self, _message: str):
+        return None
+
+    def statusBar(self):
+        return self._status_bar
+
+    def _get_current_session_widget(self):
+        return next(iter(self._session_widgets.values()))
+
+
+class _DummyExecutionMainWindow(ExecutionMixin):
+    def __init__(self, session, widget):
+        self.session_manager = SimpleNamespace(focused_session=session)
+        self._schema_service = MagicMock()
+        self._start_execution_timer = MagicMock()
+        self._stop_execution_timer = MagicMock()
+        self._update_connection_status = MagicMock()
+        self._clear_sql_autocomplete_for_connection = MagicMock()
+        self._get_current_session_widget = MagicMock(return_value=widget)
+        self._log_info = MagicMock()
+        self._show_warning = MagicMock()
+        self.action_label = MagicMock()
 
 
 class _DummyMainWindow(SchemaMixin):
@@ -65,6 +148,7 @@ class _DummyMainWindow(SchemaMixin):
         self._session_explorers = {widget.session.session_id: explorer}
         self.object_explorer_dock = _DummyDock()
         self._status_bar = _DummyStatusBar()
+        self._schema_service = MagicMock()
         self.switched_sessions = []
 
     def _log_info(self, _message: str):
@@ -216,3 +300,149 @@ def test_on_tables_loaded_routes_only_matching_pending_request(qapp):
         "controleproducao", "dbo", [{"name": "venda"}]
     )
     assert main_window._pending_oe_table_requests == {}
+
+
+def test_on_session_connection_changed_clears_autocomplete_before_schema_reload(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    connector = DatabaseConnector()
+    connector.db_type = "sqlserver"
+    connector.is_connected = MagicMock(return_value=True)
+    focused_session = widget.session
+    focused_session.connector = connector
+    focused_session.database_context = ""
+    session_block = _DummyBlock(connection_name=None)
+    widget.editor._blocks = [session_block]
+    main_window = _DummySessionMainWindow(widget, focused_session)
+
+    main_window._on_session_connection_changed(focused_session, "Conn", "newdb")
+
+    assert widget.editor._sql_schema == {}
+    widget.editor.set_database_context.assert_called_once_with("")
+    session_block.set_sql_schema.assert_called_once_with({})
+    main_window._schema_service.invalidate_cache.assert_called_once_with("Conn", session_id="sid-1")
+    main_window._load_schema_with_loading.assert_called_once_with(connector, "Conn", session_id="sid-1")
+    session_block.db_panel.set_database.assert_called_once_with("newdb")
+
+
+def test_on_session_connection_changed_ignores_unfocused_session(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    connector = DatabaseConnector()
+    connector.db_type = "sqlserver"
+    connector.is_connected = MagicMock(return_value=True)
+    session = widget.session
+    session.connector = connector
+    other_session = SimpleNamespace(session_id="sid-2", connection_name="Conn")
+    main_window = _DummySessionMainWindow(widget, other_session)
+
+    main_window._on_session_connection_changed(session, "Conn", "newdb")
+
+    widget.editor.set_database_context.assert_not_called()
+    main_window._schema_service.invalidate_cache.assert_not_called()
+    main_window._load_schema_with_loading.assert_not_called()
+
+
+def test_execute_sql_use_command_clears_autocomplete_before_emitting_change(qapp):
+    connector = MagicMock()
+    connector.db_type = "sqlserver"
+    session = SimpleNamespace(
+        is_connected=True,
+        connector=connector,
+        connection_name="Conn",
+        session_id="sid-1",
+        database_context="",
+    )
+    widget = _DummyWidget("sid-1", "Conn")
+    main_window = _DummyExecutionMainWindow(session, widget)
+
+    from unittest.mock import patch
+
+    with patch("src.ui.main_window._execution.get_connector_database_context", return_value="newdb"):
+        main_window._execute_sql("USE newdb")
+
+    connector.change_database.assert_called_once_with("newdb")
+    main_window._clear_sql_autocomplete_for_connection.assert_called_once_with(widget, "Conn")
+    main_window._schema_service.invalidate_cache.assert_called_once_with("Conn", session_id="sid-1")
+    widget.connection_changed.emit.assert_called_once_with("Conn", "newdb")
+
+
+def test_filter_schema_for_active_database_drops_tables_from_other_databases(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    explorer = MagicMock()
+    main_window = _DummyMainWindow(widget, explorer)
+
+    schema = {
+        "database": "db2",
+        "db_type": "sqlserver",
+        "tables": [
+            {"name": "current_users", "schema": "dbo", "database": "db2", "key": "db2.dbo.current_users"},
+            {"name": "legacy_orders", "schema": "dbo", "database": "db1", "key": "db1.dbo.legacy_orders"},
+        ],
+        "columns": {
+            "db2.dbo.current_users": [{"name": "id", "type": "int"}],
+            "dbo.current_users": [{"name": "id", "type": "int"}],
+            "db2.current_users": [{"name": "id", "type": "int"}],
+            "current_users": [{"name": "id", "type": "int"}],
+            "db1.dbo.legacy_orders": [{"name": "legacy_id", "type": "int"}],
+            "db1.legacy_orders": [{"name": "legacy_id", "type": "int"}],
+            "legacy_orders": [{"name": "legacy_id", "type": "int"}],
+        },
+    }
+
+    filtered = main_window._filter_schema_for_active_database(schema, db_type="sqlserver")
+
+    assert [table["name"] for table in filtered["tables"]] == ["current_users"]
+    assert set(filtered["columns"].keys()) == {
+        "db2.dbo.current_users",
+        "dbo.current_users",
+        "db2.current_users",
+        "current_users",
+    }
+
+
+def test_filter_schema_for_active_database_keeps_unscoped_schema_unchanged(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    explorer = MagicMock()
+    main_window = _DummyMainWindow(widget, explorer)
+
+    schema = {
+        "database": "db2",
+        "db_type": "sqlserver",
+        "tables": [
+            {"name": "users", "schema": "dbo", "key": "dbo.users"},
+        ],
+        "columns": {
+            "dbo.users": [{"name": "id", "type": "int"}],
+            "users": [{"name": "id", "type": "int"}],
+        },
+    }
+
+    filtered = main_window._filter_schema_for_active_database(schema, db_type="sqlserver")
+
+    assert filtered is schema
+
+
+def test_object_explorer_schema_changed_applies_only_active_database_to_editor(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    explorer = MagicMock()
+    explorer._current_connection = "Conn"
+    explorer._db_type = "sqlserver"
+    main_window = _DummyMainWindow(widget, explorer)
+
+    schema = {
+        "database": "db2",
+        "db_type": "sqlserver",
+        "tables": [
+            {"name": "current_users", "schema": "dbo", "database": "db2", "key": "db2.dbo.current_users"},
+            {"name": "legacy_orders", "schema": "dbo", "database": "db1", "key": "db1.dbo.legacy_orders"},
+        ],
+        "columns": {
+            "db2.dbo.current_users": [{"name": "id", "type": "int"}],
+            "db1.dbo.legacy_orders": [{"name": "legacy_id", "type": "int"}],
+        },
+    }
+
+    main_window._on_object_explorer_schema_changed("sid-1", schema)
+
+    cached_schema = main_window._schema_service.update_cached_schema.call_args.args[1]
+    assert [table["name"] for table in cached_schema["tables"]] == ["current_users"]
+    widget.editor.set_sql_schema.assert_called_once_with(cached_schema)

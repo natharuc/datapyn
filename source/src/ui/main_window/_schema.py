@@ -143,8 +143,77 @@ class SchemaMixin:
             return
 
         db_type = getattr(explorer, "_db_type", "") or self._get_connection_db_type(connection_name)
-        self._schema_service.update_cached_schema(connection_name, schema, session_id=session_id)
-        self._apply_schema_to_session_blocks(session_id, connection_name, schema, db_type=db_type)
+        editor_schema = self._filter_schema_for_active_database(schema, db_type=db_type)
+        self._schema_service.update_cached_schema(connection_name, editor_schema, session_id=session_id)
+        self._apply_schema_to_session_blocks(session_id, connection_name, editor_schema, db_type=db_type)
+
+    def _filter_schema_for_active_database(self, schema: dict, db_type: str = "") -> dict:
+        """Keep editor/autocomplete schema scoped to the active database.
+
+        Object Explorer can lazy-load other databases in the same session for browsing,
+        but Monaco autocomplete must stay restricted to the current connection database.
+        """
+        if not isinstance(schema, dict):
+            return {}
+
+        normalized_db_type = str(db_type or schema.get("db_type", "") or "").lower()
+        current_database = str(schema.get("database", "") or "")
+        tables = list(schema.get("tables", []) or [])
+
+        if normalized_db_type == "databricks" or not current_database or not tables:
+            return schema
+
+        table_entries = [table for table in tables if isinstance(table, dict)]
+        if not table_entries:
+            return schema
+
+        has_database_scoped_tables = any(str(table.get("database", "") or "") for table in table_entries)
+        if not has_database_scoped_tables:
+            return schema
+
+        filtered_tables = []
+        allowed_column_keys = set()
+        current_database_lower = current_database.lower()
+
+        for table in tables:
+            if not isinstance(table, dict):
+                filtered_tables.append(table)
+                allowed_column_keys.add(str(table or ""))
+                continue
+
+            table_name = str(table.get("name", "") or "")
+            table_schema = str(table.get("schema", "") or "")
+            table_catalog = str(table.get("catalog", "") or "")
+            table_database = str(table.get("database", "") or "")
+            if table_database and table_database.lower() != current_database_lower:
+                continue
+
+            filtered_tables.append(table)
+
+            table_key = str(table.get("key", "") or "")
+            if table_key:
+                allowed_column_keys.add(table_key)
+            if table_name:
+                allowed_column_keys.add(table_name)
+                allowed_column_keys.add(f"{current_database}.{table_name}")
+            if table_schema and table_name:
+                allowed_column_keys.add(f"{table_schema}.{table_name}")
+                if current_database != table_schema:
+                    allowed_column_keys.add(f"{current_database}.{table_schema}.{table_name}")
+            if table_catalog and table_schema and table_name:
+                allowed_column_keys.add(f"{table_catalog}.{table_schema}.{table_name}")
+
+        filtered_columns = {
+            key: value
+            for key, value in (schema.get("columns", {}) or {}).items()
+            if key in allowed_column_keys
+        }
+
+        return {
+            **schema,
+            "tables": filtered_tables,
+            "columns": filtered_columns,
+        }
 
     def _clear_sql_autocomplete_for_connection(self, widget, connection_name: str):
         """Clear Monaco SQL autocomplete for blocks affected by a database switch."""
