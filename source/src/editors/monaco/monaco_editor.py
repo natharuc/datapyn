@@ -683,10 +683,18 @@ class MonacoEditor(QWidget):
     
     def set_sql_schema(self, schema: dict) -> None:
         """Set SQL schema for autocompletion."""
+        schema = schema or {}
         logger.info(f"[MONACO] set_sql_schema called with {len(schema.get('tables', []))} tables")
         self._sql_schema = schema
-        # Register SQL completions in Monaco
-        self.update_sql_completions(schema)
+        if schema:
+            self.update_sql_completions(schema)
+            return
+        self.clear_sql_completions()
+
+    def clear_sql_completions(self) -> None:
+        """Clear Monaco SQL completions so a new schema can be loaded cleanly."""
+        self._sql_schema = {}
+        self.register_completions([])
     
     def set_python_namespace(self, namespace: dict) -> None:
         """Set Python namespace for autocompletion."""
@@ -761,9 +769,7 @@ class MonacoEditor(QWidget):
                 - insertText: Text to insert (optional, defaults to label)
                 - detail: Additional info (optional)
         """
-        if not completions:
-            return
-        completions_json = json.dumps(completions)
+        completions_json = json.dumps(completions or [])
         self._run_js_when_ready(f"registerCompletions({completions_json})")
     
     def update_sql_completions(self, schema: Optional[dict]) -> None:

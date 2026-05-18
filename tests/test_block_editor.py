@@ -196,6 +196,61 @@ class TestCodeBlock:
         assert [param["name"] for param in params] == ["id", "loja"]
         assert [param["name"] for param in selected] == ["id"]
 
+    def test_sql_parameters_are_removed_when_query_token_is_deleted(self, block):
+        block.set_language("sql")
+        block.set_code("select * from pessoa where id = @id")
+
+        block.set_code("select * from pessoa")
+
+        assert block.get_sql_parameters() == []
+        assert block.sql_parameters_panel.isHidden()
+
+    def test_schedule_sql_parameter_sync_removes_orphans_without_waiting(self, block):
+        block._sql_parameters = [
+            {
+                "id": "sqlparam:id",
+                "name": "id",
+                "order": 0,
+                "sql_type": "integer",
+                "input_kind": "value",
+                "value": "1",
+                "required": True,
+                "options": [],
+                "multi_select": False,
+            }
+        ]
+
+        with patch.object(block, "get_code", return_value="select * from pessoa"):
+            with patch.object(block, "sync_sql_parameters_from_query") as sync_mock:
+                with patch.object(block._sql_parameter_sync_timer, "start") as timer_start:
+                    block._schedule_sql_parameter_sync()
+
+        assert sync_mock.call_count == 1
+        timer_start.assert_not_called()
+
+    def test_schedule_sql_parameter_sync_keeps_debounce_when_tokens_still_exist(self, block):
+        block._sql_parameters = [
+            {
+                "id": "sqlparam:id",
+                "name": "id",
+                "order": 0,
+                "sql_type": "integer",
+                "input_kind": "value",
+                "value": "1",
+                "required": True,
+                "options": [],
+                "multi_select": False,
+            }
+        ]
+
+        with patch.object(block, "get_code", return_value="select * from pessoa where id = @id and loja = @loja"):
+            with patch.object(block, "sync_sql_parameters_from_query") as sync_mock:
+                with patch.object(block._sql_parameter_sync_timer, "start") as timer_start:
+                    block._schedule_sql_parameter_sync()
+
+        sync_mock.assert_not_called()
+        assert timer_start.call_count == 1
+
     def test_from_dict_deserialization(self, theme_manager, qtbot):
         """Deve deserializar corretamente"""
         data = {"language": "python", "code": "x = 1"}

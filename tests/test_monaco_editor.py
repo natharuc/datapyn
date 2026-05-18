@@ -462,6 +462,48 @@ class TestMonacoCompletionIntegration:
 class TestMonacoSqlAutocompleteIntegration:
     """Tests for Monaco SQL autocomplete bridge behavior."""
 
+    def test_register_completions_allows_empty_payload_to_clear_state(self, qtbot):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor._run_js_when_ready = Mock()
+
+        editor.register_completions([])
+
+        editor._run_js_when_ready.assert_called_once_with("registerCompletions([])")
+
+    def test_set_sql_schema_empty_clears_monaco_completions(self, qtbot):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor._run_js_when_ready = Mock()
+
+        editor.set_sql_schema({})
+
+        editor._run_js_when_ready.assert_called_once_with("registerCompletions([])")
+
+    def test_set_sql_schema_with_tables_registers_new_schema(self, qtbot):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor._run_js_when_ready = Mock()
+
+        editor.set_sql_schema(
+            {
+                "database": "controleproducao",
+                "tables": [{"name": "venda", "schema": "dbo", "type": "TABLE"}],
+                "columns": {"dbo.venda": [{"name": "id", "type": "int"}]},
+            }
+        )
+
+        emitted = editor._run_js_when_ready.call_args[0][0]
+        assert '"label": "venda"' in emitted
+        assert '"label": "id"' in emitted
+        assert '"label": "SELECT"' in emitted
+
     def test_sql_completion_uses_zero_based_service_coordinates(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor
 

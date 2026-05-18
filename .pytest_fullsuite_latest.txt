@@ -1,0 +1,135 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.0.2, pluggy-1.6.0
+PyQt6 6.10.2 -- Qt runtime 6.10.2 -- Qt compiled 6.10.0
+rootdir: C:\nac\datapyn
+configfile: pytest.ini
+plugins: cov-7.0.0, env-1.3.2, qt-4.5.0, timeout-2.4.0
+timeout: 30.0s
+timeout method: thread
+timeout func_only: False
+collected 1968 items
+
+tests\test_auto_update_service.py ...............                        [  0%]
+tests\test_background_workers.py .................................       [  2%]
+tests\test_block_connection.py ......................................... [  4%]
+................                                                         [  5%]
+tests\test_block_database.py ........................................... [  7%]
+...                                                                      [  7%]
+tests\test_block_editor.py ............................................. [  9%]
+..........................................................               [ 12%]
+tests\test_block_namespace.py ....                                       [ 13%]
+tests\test_code_formatter.py ...........................                 [ 14%]
+tests\test_connection_import_export.py ...............                   [ 15%]
+tests\test_connection_manager.py ..................                      [ 16%]
+tests\test_context_menu.py .....                                         [ 16%]
+tests\test_copilot_auth_service.py ........................              [ 17%]
+tests\test_copilot_integration.py ...................................... [ 19%]
+....................................                                     [ 21%]
+tests\test_copilot_lsp_client.py ...                                     [ 21%]
+tests\test_copilot_tab_isolation.py ....                                 [ 21%]
+tests\test_copilot_ux.py ............................................... [ 24%]
+.........................                                                [ 25%]
+tests\test_database_connector.py ....................................... [ 27%]
+.........................                                                [ 28%]
+tests\test_databricks_metadata.py .....                                  [ 28%]
+tests\test_docking_manager.py ...                                        [ 29%]
+tests\test_editor_system.py ....                                         [ 29%]
+tests\test_editor_theme.py .....                                         [ 29%]
+tests\test_entity_metadata_service.py ...........                        [ 30%]
+tests\test_export_script.py ..................                           [ 30%]
+tests\test_export_to_table.py .......................................... [ 33%]
+........                                                                 [ 33%]
+tests\test_file_import_service.py ...................................... [ 35%]
+.....                                                                    [ 35%]
+tests\test_file_management_feedback.py .........................         [ 36%]
+tests\test_file_operations.py ...........                                [ 37%]
+tests\test_gh_cli_install.py .........................                   [ 38%]
+tests\test_insert_code_chat.py ..........                                [ 39%]
+tests\test_install.py ..                                                 [ 39%]
+tests\test_integration.py ....                                           [ 39%]
+tests\test_jupyter_import.py ..........                                  [ 40%]
+tests\test_language.py ........................                          [ 41%]
+tests\test_monaco_editor.py ......................................       [ 43%]
+tests\test_new_features.py .........................................ss.. [ 45%]
+..........                                                               [ 46%]
+tests\test_new_tab_connection.py ...........                             [ 46%]
+tests\test_notification_config.py .............................          [ 48%]
+tests\test_notification_delivery.py .....                                [ 48%]
+tests\test_object_explorer.py .......................................... [ 50%]
+...........................................................              [ 53%]
+tests\test_output_panel.py ............................................. [ 55%]
+....................                                                     [ 56%]
+tests\test_package_manager.py .......................................... [ 58%]
+........................................................................ [ 62%]
+.....                                                                    [ 62%]
+tests\test_panel_manager.py .................                            [ 63%]
+tests\test_periodic_timer.py .....                                       [ 63%]
+tests\test_python_last_expression.py .............                       [ 64%]
+tests\test_python_output_e2e.py ........................................ [ 66%]
+...................................                                      [ 68%]
+tests\test_recent_files.py ..........                                    [ 68%]
+tests\test_results_manager.py ..............                             [ 69%]
+tests\test_results_viewer.py ...................                         [ 70%]
+tests\test_run_timer.py .........                                        [ 71%]
+tests\test_schema_cache_invalidation.py .........                        [ 71%]
+tests\test_schema_service_multi_db.py ....                               [ 71%]
+tests\test_session_lifecycle.py ..................                       [ 72%]
+tests\test_session_panels_integration.py ...................             [ 73%]
+tests\test_session_restoration.py ........                               [ 74%]
+tests\test_session_restore_async.py ....                                 [ 74%]
+tests\test_settings_dialog.py ...                                        [ 74%]
+tests\test_shortcut_manager.py ..................                        [ 75%]
+tests\test_shortcuts.py ........ss                                       [ 75%]
+tests\test_sql_autocomplete.py ......................................... [ 77%]
+...........................................                              [ 80%]
+tests\test_sql_export.py ............................................... [ 82%]
+....                                                                     [ 82%]
+tests\test_sql_parameters.py ................                            [ 83%]
+tests\test_sql_parameters_panel.py ..............                        [ 84%]
+tests\test_syntax_execution.py ......................................... [ 86%]
+...                                                                      [ 86%]
+tests\test_system_api.py ...........................................     [ 88%]
+tests\test_tab_colors.py .........                                       [ 89%]
+tests\test_tab_notification.py ......................................... [ 91%]
+......                                                                   [ 91%]
+tests\test_toast_notification.py .......................                 [ 92%]
+tests\test_ui_integration.py ........................................... [ 94%]
+..............                                                           [ 95%]
+tests\test_usability.py ................................................ [ 97%]
+.....                                                                    [ 98%]
+tests\test_workspace_manager.py ...........                              [ 98%]
+tests\test_workspace_service.py ........................                 [100%]
+
+============================== warnings summary ===============================
+tests/test_editor_system.py::test_editor_config
+  C:\nac\datapyn\.venv\Lib\site-packages\_pytest\python.py:170: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_editor_system.py::test_editor_config returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_editor_system.py::test_interface
+  C:\nac\datapyn\.venv\Lib\site-packages\_pytest\python.py:170: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_editor_system.py::test_interface returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_editor_system.py::test_implementations
+  C:\nac\datapyn\.venv\Lib\site-packages\_pytest\python.py:170: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_editor_system.py::test_implementations returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_editor_system.py::test_code_block
+  C:\nac\datapyn\.venv\Lib\site-packages\_pytest\python.py:170: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_editor_system.py::test_code_block returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_install.py::test_imports
+  C:\nac\datapyn\.venv\Lib\site-packages\_pytest\python.py:170: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_install.py::test_imports returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========== 1964 passed, 4 skipped, 5 warnings in 264.14s (0:04:24) ===========

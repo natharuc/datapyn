@@ -128,6 +128,7 @@ class ConnectionsMixin:
             sid = widget.session.session_id
 
         # Invalidate cache and reload OE for this block's connection (per-session)
+        self._clear_sql_autocomplete_for_connection(widget, connection_name)
         self._schema_service.invalidate_cache(connection_name, session_id=sid)
         
         # Reset OE tracking so reload is not skipped
@@ -158,6 +159,7 @@ class ConnectionsMixin:
             sid = widget.session.session_id
 
         # --- Schema reload (invalidate since database changed) ---
+        self._clear_sql_autocomplete_for_connection(widget, connection_name)
         self._schema_service.invalidate_cache(connection_name, session_id=sid)
         
         # Reset OE tracking so next schema load updates the explorer

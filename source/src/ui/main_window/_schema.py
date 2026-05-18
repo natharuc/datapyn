@@ -45,7 +45,7 @@ class SchemaMixin:
     def _on_schemas_loaded(self, catalog_name: str, schemas: list):
         """Callback when schemas are loaded for a catalog."""
         pending = getattr(self, "_pending_oe_schema_requests", {})
-        sid = pending.pop(catalog_name, None) or self._get_active_session_id()
+        sid = pending.pop(catalog_name, None)
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
@@ -70,7 +70,7 @@ class SchemaMixin:
     def _on_tables_loaded(self, catalog_name: str, schema_name: str, tables: list):
         """Callback when tables are loaded for a schema."""
         pending = getattr(self, "_pending_oe_table_requests", {})
-        sid = pending.pop((catalog_name, schema_name), None) or self._get_active_session_id()
+        sid = pending.pop((catalog_name, schema_name), None)
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
@@ -95,12 +95,30 @@ class SchemaMixin:
     def _on_columns_loaded(self, catalog_name: str, schema_name: str, table_name: str, columns: list):
         """Callback when columns are loaded for a table."""
         pending = getattr(self, "_pending_oe_column_requests", {})
-        sid = pending.pop((catalog_name, schema_name, table_name), None) or self._get_active_session_id()
+        sid = pending.pop((catalog_name, schema_name, table_name), None)
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
         if explorer:
             explorer.add_columns_to_table(catalog_name, schema_name, table_name, columns)
+
+    def _clear_pending_object_explorer_requests(self, session_id: str):
+        """Drop stale lazy-load requests for a session after a full schema refresh."""
+        if not session_id:
+            return
+
+        for attr_name in (
+            "_pending_oe_schema_requests",
+            "_pending_oe_table_requests",
+            "_pending_oe_column_requests",
+        ):
+            pending = getattr(self, attr_name, None)
+            if not isinstance(pending, dict):
+                continue
+
+            stale_keys = [key for key, pending_session_id in pending.items() if pending_session_id == session_id]
+            for key in stale_keys:
+                pending.pop(key, None)
 
     def _session_id_for_object_explorer_sender(self) -> str:
         sender = self.sender()
@@ -125,8 +143,110 @@ class SchemaMixin:
             return
 
         db_type = getattr(explorer, "_db_type", "") or self._get_connection_db_type(connection_name)
-        self._schema_service.update_cached_schema(connection_name, schema, session_id=session_id)
-        self._apply_schema_to_session_blocks(session_id, connection_name, schema, db_type=db_type)
+        editor_schema = self._filter_schema_for_active_database(schema, db_type=db_type)
+        self._schema_service.update_cached_schema(connection_name, editor_schema, session_id=session_id)
+        self._apply_schema_to_session_blocks(session_id, connection_name, editor_schema, db_type=db_type)
+
+    def _filter_schema_for_active_database(self, schema: dict, db_type: str = "") -> dict:
+        """Keep editor/autocomplete schema scoped to the active database.
+
+        Object Explorer can lazy-load other databases in the same session for browsing,
+        but Monaco autocomplete must stay restricted to the current connection database.
+        """
+        if not isinstance(schema, dict):
+            return {}
+
+        normalized_db_type = str(db_type or schema.get("db_type", "") or "").lower()
+        current_database = str(schema.get("database", "") or "")
+        tables = list(schema.get("tables", []) or [])
+
+        if normalized_db_type == "databricks" or not current_database or not tables:
+            return schema
+
+        table_entries = [table for table in tables if isinstance(table, dict)]
+        if not table_entries:
+            return schema
+
+        has_database_scoped_tables = any(str(table.get("database", "") or "") for table in table_entries)
+        if not has_database_scoped_tables:
+            return schema
+
+        filtered_tables = []
+        allowed_column_keys = set()
+        current_database_lower = current_database.lower()
+
+        for table in tables:
+            if not isinstance(table, dict):
+                filtered_tables.append(table)
+                allowed_column_keys.add(str(table or ""))
+                continue
+
+            table_name = str(table.get("name", "") or "")
+            table_schema = str(table.get("schema", "") or "")
+            table_catalog = str(table.get("catalog", "") or "")
+            table_database = str(table.get("database", "") or "")
+            if table_database and table_database.lower() != current_database_lower:
+                continue
+
+            filtered_tables.append(table)
+
+            table_key = str(table.get("key", "") or "")
+            if table_key:
+                allowed_column_keys.add(table_key)
+            if table_name:
+                allowed_column_keys.add(table_name)
+                allowed_column_keys.add(f"{current_database}.{table_name}")
+            if table_schema and table_name:
+                allowed_column_keys.add(f"{table_schema}.{table_name}")
+                if current_database != table_schema:
+                    allowed_column_keys.add(f"{current_database}.{table_schema}.{table_name}")
+            if table_catalog and table_schema and table_name:
+                allowed_column_keys.add(f"{table_catalog}.{table_schema}.{table_name}")
+
+        filtered_columns = {
+            key: value
+            for key, value in (schema.get("columns", {}) or {}).items()
+            if key in allowed_column_keys
+        }
+
+        return {
+            **schema,
+            "tables": filtered_tables,
+            "columns": filtered_columns,
+        }
+
+    def _clear_sql_autocomplete_for_connection(self, widget, connection_name: str):
+        """Clear Monaco SQL autocomplete for blocks affected by a database switch."""
+        if not widget or not connection_name or not hasattr(widget, "editor") or not widget.editor:
+            return
+
+        editor = widget.editor
+        session_conn = ""
+        if hasattr(widget, "session") and widget.session:
+            session_conn = getattr(widget.session, "connection_name", "") or ""
+
+        if session_conn == connection_name:
+            if hasattr(editor, "_sql_schema"):
+                editor._sql_schema = {}
+            if hasattr(editor, "set_database_context"):
+                editor.set_database_context("")
+
+        get_blocks = getattr(editor, "get_blocks", None)
+        blocks = get_blocks() if callable(get_blocks) else []
+        for block in blocks:
+            block_lang = block.get_language() if hasattr(block, "get_language") else ""
+            if block_lang != "sql":
+                continue
+
+            block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+            should_clear = block_conn == connection_name if block_conn else session_conn == connection_name
+            if not should_clear:
+                continue
+
+            if hasattr(block, "set_sql_schema"):
+                block.set_sql_schema({})
+            elif hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
+                block.editor.set_sql_schema({})
 
     def _get_connection_db_type(self, connection_name: str) -> str:
         config = self.connection_manager.get_connection_config(connection_name) if connection_name else None
@@ -305,9 +425,12 @@ class SchemaMixin:
         all_databases = self._available_databases_from_schema(schema, db_type)
 
         # Determine which session requested this schema (use signal param OR fallback to tracking dict)
-        requesting_sid = session_id
-        if not requesting_sid and hasattr(self, "_pending_schema_sessions"):
-            requesting_sid = self._pending_schema_sessions.get(connection_name)
+        pending_sid = ""
+        if hasattr(self, "_pending_schema_sessions"):
+            pending_sid = self._pending_schema_sessions.get(connection_name, "") or ""
+
+        requesting_sid = session_id or pending_sid
+        self._clear_pending_object_explorer_requests(requesting_sid)
 
         for widget in self._session_widgets.values():
             if not (hasattr(widget, "editor") and widget.editor):
@@ -362,10 +485,8 @@ class SchemaMixin:
         # Update Object Explorer for the session that REQUESTED this schema
         # (not all sessions - each session has its own OE state)
         if hasattr(self, "_session_explorers"):
-            # Find which session requested this schema load
-            requesting_sid = None
-            if hasattr(self, "_pending_schema_sessions"):
-                requesting_sid = self._pending_schema_sessions.pop(connection_name, None)
+            if pending_sid and requesting_sid == pending_sid and hasattr(self, "_pending_schema_sessions"):
+                self._pending_schema_sessions.pop(connection_name, None)
 
             if requesting_sid:
                 # Only update the requesting session's OE
