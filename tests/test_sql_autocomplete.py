@@ -520,6 +520,71 @@ class TestEdgeCases:
         assert "col_a" in n
         assert "col_b" in n
 
+    def test_table_context_ignores_columns_only_alias_entries_when_tables_exist(self):
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "db_type": "sqlserver",
+            "tables": [
+                {"name": "current_users", "schema": "dbo", "type": "TABLE"},
+            ],
+            "columns": {
+                "dbo.current_users": [
+                    {"name": "id", "type": "int"},
+                ],
+                "olddb.dbo.legacy_orders": [
+                    {"name": "legacy_id", "type": "int"},
+                ],
+                "olddb.legacy_orders": [
+                    {"name": "legacy_id", "type": "int"},
+                ],
+            },
+        })
+
+        result = svc.get_completions("SELECT * FROM ", 0, 14)
+        n = names(result)
+        assert "current_users" in n
+        assert "legacy_orders" not in n
+
+    def test_bare_table_dot_lookup_still_uses_canonical_table_entry(self):
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "db_type": "sqlserver",
+            "tables": [
+                {"name": "users", "schema": "dbo", "type": "TABLE"},
+            ],
+            "columns": {
+                "dbo.users": [
+                    {"name": "id", "type": "int"},
+                    {"name": "name", "type": "varchar"},
+                ],
+                "olddb.dbo.legacy_orders": [
+                    {"name": "legacy_id", "type": "int"},
+                ],
+            },
+        })
+
+        result = svc.get_completions("SELECT users.", 0, 13)
+        n = names(result)
+        assert "id" in n
+        assert "name" in n
+        assert "legacy_id" not in n
+
+    def test_columns_only_schema_still_registers_table_entries(self):
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "db_type": "sqlserver",
+            "tables": [],
+            "columns": {
+                "olddb.dbo.legacy_orders": [
+                    {"name": "legacy_id", "type": "int"},
+                ],
+            },
+        })
+
+        result = svc.get_completions("SELECT * FROM ", 0, 14)
+        n = names(result)
+        assert "legacy_orders" in n
+
     def test_cursor_beyond_text(self, service):
         """Cursor position beyond text length should not crash."""
         result = service.get_completions("SELECT", 10, 0)

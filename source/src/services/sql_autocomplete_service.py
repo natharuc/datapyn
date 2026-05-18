@@ -547,6 +547,7 @@ class SqlAutoCompleteService:
 
         columns_map = self._schema.get("columns", {}) or {}
         registered_keys: Set[str] = set()
+        has_canonical_tables = bool(self._schema.get("tables", []) or [])
 
         for table in self._schema.get("tables", []) or []:
             if isinstance(table, dict):
@@ -588,6 +589,9 @@ class SqlAutoCompleteService:
                 registered_keys.add(self._normalize_relation_key(f"{schema_name}.{table_name}"))
             if catalog_name and schema_name:
                 registered_keys.add(self._normalize_relation_key(f"{catalog_name}.{schema_name}.{table_name}"))
+
+        if has_canonical_tables:
+            return
 
         for table_key, cols in columns_map.items():
             normalized_key = self._normalize_relation_key(table_key)

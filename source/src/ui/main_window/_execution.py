@@ -280,6 +280,7 @@ class ExecutionMixin:
                 if connection_name:
                     # Invalidate cache since database changed via USE command (per-session)
                     sid = session.session_id
+                    self._clear_sql_autocomplete_for_connection(current_widget, connection_name)
                     self._schema_service.invalidate_cache(connection_name, session_id=sid)
                     # Signal triggers _on_session_connection_changed which handles:
                     # - Schema reload
@@ -502,6 +503,8 @@ class ExecutionMixin:
         if connection_name:
             # Invalidate cache since database changed (per-session)
             sid = session.session_id
+            current_widget = self._get_current_session_widget()
+            self._clear_sql_autocomplete_for_connection(current_widget, connection_name)
             self._schema_service.invalidate_cache(connection_name, session_id=sid)
             # Signal triggers _on_session_connection_changed which handles:
             # - Schema reload
@@ -509,7 +512,6 @@ class ExecutionMixin:
             # - Tab color update
             # - Block database panels update
             # - Status bar update
-            current_widget = self._get_current_session_widget()
             if current_widget and hasattr(current_widget, "connection_changed"):
                 current_widget.connection_changed.emit(connection_name, db_after)
 

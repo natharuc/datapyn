@@ -46,6 +46,14 @@ class TestSqlParameterParser:
         assert merged[0]["sql_type"] == "integer"
         assert merged[1]["sql_type"] == "text"
 
+    def test_merge_drops_existing_parameters_removed_from_query(self):
+        existing = [_param("id", value="42", sql_type="integer"), _param("name", value="ana", sql_type="text")]
+
+        merged = merge_parameter_definitions("select * from t where id = @id", existing)
+
+        assert [item["name"] for item in merged] == ["id"]
+        assert merged[0]["value"] == "42"
+
     def test_name_heuristics_assign_expected_types(self):
         merged = merge_parameter_definitions(
             "select * from t where data = @data and valor = @valor and nome = @nome"

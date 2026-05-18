@@ -28,6 +28,7 @@ from src.editors.editor_config import get_code_editor_class
 from src.editors.sql_parameters_panel import SqlParametersPanel
 from src.language import S
 from src.utils.sql_parameter_service import (
+    extract_sql_parameter_tokens,
     filter_parameters_for_query,
     merge_parameter_definitions,
     normalize_parameter_definition,
@@ -1094,7 +1095,26 @@ class CodeBlock(QFrame):
         if self.get_language() != "sql":
             self._refresh_sql_parameter_ui()
             return
+        if self._query_removed_tracked_sql_parameters(self.get_code()):
+            self.sync_sql_parameters_from_query()
+            return
         self._sql_parameter_sync_timer.start()
+
+    def _query_removed_tracked_sql_parameters(self, query: str) -> bool:
+        """Return True when the current SQL no longer contains an existing tracked parameter."""
+        if not self._sql_parameters:
+            return False
+
+        tracked_parameter_ids = {
+            normalize_parameter_definition(parameter).get("id")
+            for parameter in self._sql_parameters
+            if isinstance(parameter, dict)
+        }
+        if not tracked_parameter_ids:
+            return False
+
+        query_parameter_ids = {token.id for token in extract_sql_parameter_tokens(query)}
+        return bool(tracked_parameter_ids - query_parameter_ids)
 
     def _on_sql_parameters_panel_close_requested(self):
         self.set_sql_parameters_enabled(False)

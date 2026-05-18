@@ -532,9 +532,16 @@ class SchemaService(QObject):
             connection_name: Connection name (if empty with no session_id, clears all)
             session_id: Session ID for per-session invalidation
         """
-        if connection_name:
+        if connection_name and session_id:
             cache_key = self._cache_key(connection_name, session_id)
             self._cache.pop(cache_key, None)
+        elif connection_name:
+            keys_to_remove = [
+                key for key in self._cache
+                if key == connection_name or key.endswith(f":{connection_name}")
+            ]
+            for key in keys_to_remove:
+                self._cache.pop(key, None)
         elif session_id:
             # Clear all caches for this session
             keys_to_remove = [k for k in self._cache if k.startswith(f"{session_id}:")]
