@@ -2,6 +2,46 @@
 
 <!-- version list -->
 
+## v1.31.0 (2026-05-16)
+
+### Bug Fixes
+
+- Restore saved connections asynchronously on startup
+  ([`e284a97`](https://github.com/natharuc/datapyn/commit/e284a9709e88c050ad1e3d004d319d249527fed0))
+
+### Features
+
+- Add custom SQL parameter workflow
+  ([`4752d09`](https://github.com/natharuc/datapyn/commit/4752d09f475630dedea5c83920f1b5ee1ccfe781))
+
+
+## v1.30.2 (2026-05-16)
+
+### Bug Fixes
+
+- Stabilize object explorer lazy loading across databases
+  ([`a7603d3`](https://github.com/natharuc/datapyn/commit/a7603d3a579c17652b3e0ff31a1e4029019d86f0))
+
+
+## v1.30.1 (2026-05-15)
+
+### Bug Fixes
+
+- Unify databricks context and stabilize monaco updates
+  ([`13f7480`](https://github.com/natharuc/datapyn/commit/13f74802c8051f69cb47989bfdd89aadf985969f))
+
+
+## v1.30.0 (2026-05-14)
+
+### Features
+
+- Entity info for routines/triggers, smarter SQL autocomplete with routines
+  ([`0934bf1`](https://github.com/natharuc/datapyn/commit/0934bf1b71bf7f08012de410f2d7e7429b930feb))
+
+- Improve Copilot chat flow and stabilize Qt lifecycle
+  ([`1b35fd5`](https://github.com/natharuc/datapyn/commit/1b35fd5ef73288a47731b771643c3cf4d052b377))
+
+
 ## v1.29.2 (2026-04-27)
 
 ### Bug Fixes
