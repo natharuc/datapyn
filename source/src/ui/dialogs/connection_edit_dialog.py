@@ -22,6 +22,12 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 
 from src.database import DatabaseConnector
+from src.database.database_connector import (
+    SQLSERVER_AUTH_ENTRA_MFA,
+    SQLSERVER_AUTH_SQL_PASSWORD,
+    SQLSERVER_AUTH_WINDOWS,
+    normalize_sqlserver_auth_mode,
+)
 from src.core.theme_manager import ThemeManager
 from src.language import S
 from src.design_system.tokens import get_colors
@@ -39,7 +45,19 @@ class ConnectionTestWorker(QThread):
 
     finished = pyqtSignal(bool, str)  # success, message
 
-    def __init__(self, db_type, host, port, database, username, password, use_windows_auth=False, trust_server_certificate=True, http_path=""):
+    def __init__(
+        self,
+        db_type,
+        host,
+        port,
+        database,
+        username,
+        password,
+        use_windows_auth=False,
+        sqlserver_auth_mode="",
+        trust_server_certificate=True,
+        http_path="",
+    ):
         super().__init__()
         self.db_type = db_type
         self.host = host
@@ -48,6 +66,7 @@ class ConnectionTestWorker(QThread):
         self.username = username
         self.password = password
         self.use_windows_auth = use_windows_auth
+        self.sqlserver_auth_mode = sqlserver_auth_mode
         self.trust_server_certificate = trust_server_certificate
         self.http_path = http_path
 
@@ -56,6 +75,11 @@ class ConnectionTestWorker(QThread):
             connector = DatabaseConnector()
 
             kwargs = {}
+            if self.db_type == "sqlserver":
+                kwargs["sqlserver_auth_mode"] = normalize_sqlserver_auth_mode(
+                    self.sqlserver_auth_mode,
+                    self.use_windows_auth,
+                )
             if self.use_windows_auth:
                 kwargs["use_windows_auth"] = True
             kwargs["trust_server_certificate"] = self.trust_server_certificate
@@ -67,8 +91,8 @@ class ConnectionTestWorker(QThread):
                 host=self.host,
                 port=self.port,
                 database=self.database,
-                username=self.username if not self.use_windows_auth else "",
-                password=self.password if not self.use_windows_auth else "",
+                username=self.username,
+                password=self.password,
                 **kwargs,
             )
 
@@ -190,7 +214,16 @@ class ConnectionEditDialog(QDialog):
 
         self.chk_windows_auth = QCheckBox(S.connection_edit.checkbox_windows_auth)
         self.chk_windows_auth.stateChanged.connect(self._toggle_windows_auth)
+        self.chk_windows_auth.hide()
         auth_layout.addRow(self.chk_windows_auth)
+
+        self.cmb_sqlserver_auth = QComboBox()
+        self.cmb_sqlserver_auth.addItem(S.connection_edit.combo_auth_sql_password, SQLSERVER_AUTH_SQL_PASSWORD)
+        self.cmb_sqlserver_auth.addItem(S.connection_edit.combo_auth_windows, SQLSERVER_AUTH_WINDOWS)
+        self.cmb_sqlserver_auth.addItem(S.connection_edit.combo_auth_entra_mfa, SQLSERVER_AUTH_ENTRA_MFA)
+        self.cmb_sqlserver_auth.currentIndexChanged.connect(self._on_sqlserver_auth_changed)
+        self.lbl_sqlserver_auth = QLabel(S.connection_edit.label_sqlserver_auth)
+        auth_layout.addRow(self.lbl_sqlserver_auth, self.cmb_sqlserver_auth)
 
         self.txt_username = QLineEdit()
         self.txt_username.setPlaceholderText(S.connection_edit.placeholder_username)
@@ -302,6 +335,7 @@ class ConnectionEditDialog(QDialog):
 
         use_windows_auth = self.config.get("use_windows_auth", False)
         self.chk_windows_auth.setChecked(use_windows_auth)
+        self._set_sqlserver_auth_mode(self.config.get("sqlserver_auth_mode", ""), use_windows_auth)
 
         # Trust Server Certificate (default: False for security)
         trust_cert = self.config.get("trust_server_certificate", False)
@@ -336,20 +370,51 @@ class ConnectionEditDialog(QDialog):
 
         self._toggle_windows_auth_visibility()
 
+    def _on_sqlserver_auth_changed(self, _index=None):
+        """Refresh auth-dependent UI when SQL Server auth mode changes."""
+        self._toggle_windows_auth_visibility()
+
+    def _current_sqlserver_auth_mode(self) -> str:
+        """Return the normalized SQL Server auth mode for the dialog state."""
+        return normalize_sqlserver_auth_mode(
+            self.cmb_sqlserver_auth.currentData(),
+            self.chk_windows_auth.isChecked(),
+        )
+
+    def _set_sqlserver_auth_mode(self, auth_mode: str, use_windows_auth: bool = False):
+        """Apply a SQL Server auth mode to the combo box."""
+        normalized = normalize_sqlserver_auth_mode(auth_mode, use_windows_auth)
+        index = self.cmb_sqlserver_auth.findData(normalized)
+        if index < 0:
+            index = self.cmb_sqlserver_auth.findData(SQLSERVER_AUTH_SQL_PASSWORD)
+        if index >= 0:
+            self.cmb_sqlserver_auth.setCurrentIndex(index)
+
     def _toggle_windows_auth(self):
         """Toggle authentication fields"""
-        is_windows_auth = self.chk_windows_auth.isChecked()
+        db_type = self.cmb_type.currentText()
+        auth_mode = self._current_sqlserver_auth_mode()
+        is_windows_auth = db_type == "sqlserver" and auth_mode == SQLSERVER_AUTH_WINDOWS
+        is_mfa_auth = db_type == "sqlserver" and auth_mode == SQLSERVER_AUTH_ENTRA_MFA
+
+        self.chk_windows_auth.setChecked(is_windows_auth)
         self.txt_username.setEnabled(not is_windows_auth)
-        self.txt_password.setEnabled(not is_windows_auth)
-        self.chk_save_password.setEnabled(not is_windows_auth)
+        self.txt_password.setEnabled(not is_windows_auth and not is_mfa_auth)
+        self.chk_save_password.setEnabled(not is_windows_auth and not is_mfa_auth)
+        if db_type == "sqlserver" and (is_windows_auth or is_mfa_auth):
+            self.chk_save_password.setChecked(False)
 
     def _toggle_windows_auth_visibility(self):
         """Shows/hides Windows Auth and Trust Cert based on database type"""
         db_type = self.cmb_type.currentText()
         is_sqlserver = db_type == "sqlserver"
         is_databricks = db_type == "databricks"
+        auth_mode = self._current_sqlserver_auth_mode()
+        is_mfa_auth = is_sqlserver and auth_mode == SQLSERVER_AUTH_ENTRA_MFA
         
-        self.chk_windows_auth.setVisible(is_sqlserver)
+        self.chk_windows_auth.setVisible(False)
+        self.lbl_sqlserver_auth.setVisible(is_sqlserver)
+        self.cmb_sqlserver_auth.setVisible(is_sqlserver)
         self.chk_trust_cert.setVisible(is_sqlserver)
         if not is_sqlserver:
             self.chk_windows_auth.setChecked(False)
@@ -369,13 +434,17 @@ class ConnectionEditDialog(QDialog):
             self.chk_save_password.setText("Save token")
             self.chk_save_password.setChecked(True)  # Recommend saving token
         else:
-            self.txt_username.setEnabled(not self.chk_windows_auth.isChecked())
-            self.txt_username.setPlaceholderText(S.connection_edit.placeholder_username)
+            self.txt_username.setPlaceholderText(
+                S.connection_edit.placeholder_username_mfa if is_mfa_auth else S.connection_edit.placeholder_username
+            )
             self.lbl_username.setVisible(True)
             self.txt_username.setVisible(True)
             self.lbl_password.setText(S.connection_edit.label_password)
-            self.txt_password.setPlaceholderText(S.connection_edit.placeholder_password)
+            self.txt_password.setPlaceholderText(
+                S.connection_edit.placeholder_password_mfa if is_mfa_auth else S.connection_edit.placeholder_password
+            )
             self.chk_save_password.setText(S.connection_edit.checkbox_save_password)
+            self._toggle_windows_auth()
 
     def _choose_color(self):
         """Chooses color for the connection"""
@@ -402,6 +471,9 @@ class ConnectionEditDialog(QDialog):
 
     def _test_connection(self):
         """Tests the connection with current settings in background"""
+        if not self._validate_inputs(require_name=False):
+            return
+
         # Create loading dialog with cancel button
         db_name = self.txt_database.text() or self.txt_host.text()
         self.loading_dialog = QProgressDialog(self)
@@ -428,6 +500,7 @@ class ConnectionEditDialog(QDialog):
             username=self.txt_username.text(),
             password=self.txt_password.text(),
             use_windows_auth=self.chk_windows_auth.isChecked(),
+            sqlserver_auth_mode=self._current_sqlserver_auth_mode(),
             trust_server_certificate=self.chk_trust_cert.isChecked(),
             http_path=http_path,
         )
@@ -455,37 +528,48 @@ class ConnectionEditDialog(QDialog):
 
     def _on_save(self):
         """Validates and saves"""
-        name = self.txt_name.text().strip()
-
-        if not name:
-            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_name_required)
-            return
-
-        if not self.txt_host.text().strip():
-            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_host_required)
+        if not self._validate_inputs(require_name=True):
             return
 
         self.accept()
 
+    def _validate_inputs(self, require_name: bool) -> bool:
+        """Validate connection fields before save/test."""
+        if require_name and not self.txt_name.text().strip():
+            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_name_required)
+            return False
+
+        if not self.txt_host.text().strip():
+            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_host_required)
+            return False
+
+        return True
+
     def get_result(self):
         """Returns edited name and configuration"""
         name = self.txt_name.text().strip()
+        db_type = self.cmb_type.currentText()
+        sqlserver_auth_mode = self._current_sqlserver_auth_mode() if db_type == "sqlserver" else ""
+        use_windows_auth = db_type == "sqlserver" and sqlserver_auth_mode == SQLSERVER_AUTH_WINDOWS
 
         config = {
-            "db_type": self.cmb_type.currentText(),
+            "db_type": db_type,
             "host": self.txt_host.text().strip(),
             "port": self.spin_port.value(),
             "database": self.txt_database.text().strip(),
             "username": self.txt_username.text().strip(),
-            "use_windows_auth": self.chk_windows_auth.isChecked(),
+            "use_windows_auth": use_windows_auth,
             "trust_server_certificate": self.chk_trust_cert.isChecked(),
             "group": self.cmb_group.currentData(),
             "color": self.selected_color,
             "save_password": self.chk_save_password.isChecked(),
         }
 
+        if db_type == "sqlserver":
+            config["sqlserver_auth_mode"] = sqlserver_auth_mode
+
         # Databricks-specific field
-        if self.cmb_type.currentText() == "databricks":
+        if db_type == "databricks":
             config["http_path"] = self.txt_http_path.text().strip()
 
         if self.chk_save_password.isChecked():

@@ -855,10 +855,16 @@
     "placeholder_database": "Nome do banco (opcional)",
     "section_authentication": "AUTENTICACAO",
     "checkbox_windows_auth": "Usar Autenticacao Windows",
+    "label_sqlserver_auth": "Autenticacao SQL Server:",
+    "combo_auth_sql_password": "Usuario / Senha do SQL Server",
+    "combo_auth_windows": "Autenticacao Windows",
+    "combo_auth_entra_mfa": "Microsoft Entra interativo (MFA)",
     "label_username": "Usuario:",
     "placeholder_username": "Usuario do banco",
+    "placeholder_username_mfa": "Hint opcional de login (usuario@tenant.com)",
     "label_password": "Senha:",
     "placeholder_password": "Senha",
+    "placeholder_password_mfa": "Nao utilizada com MFA interativo",
     "checkbox_save_password": "Salvar senha (nao recomendado)",
     "checkbox_trust_cert": "Confiar no certificado do servidor (TrustServerCertificate)",
     "tooltip_trust_cert": "Ignora a validacao do certificado SSL. Necessario para conexoes com certificados auto-assinados.",
@@ -877,7 +883,9 @@
     "test_success": "Conexao testada com sucesso!",
     "test_error": "Erro: {error}",
     "validation_name_required": "Nome da conexao e obrigatorio",
-    "validation_host_required": "Host e obrigatorio"
+    "validation_host_required": "Host e obrigatorio",
+    "validation_mfa_username_required": "A autenticacao interativa do Microsoft Entra exige o usuario no formato UPN, por exemplo usuario@tenant.com",
+    "error_mfa_dependency_missing": "O suporte a MFA do Microsoft Entra exige o pacote azure-identity. Atualize as dependencias do DataPyn para instala-lo."
   },
   "connection_picker": {
     "title": "Selecionar Conexao",

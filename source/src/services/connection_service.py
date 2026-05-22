@@ -27,6 +27,7 @@ class ConnectionConfig:
     username: str = ""
     password: str = ""
     use_windows_auth: bool = False
+    sqlserver_auth_mode: str = ""
 
 
 class ConnectionService:
@@ -80,6 +81,7 @@ class ConnectionService:
             config.username,
             config.password,
             config.use_windows_auth,
+            config.sqlserver_auth_mode,
         )
 
         # Connect callbacks

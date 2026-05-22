@@ -10,6 +10,7 @@ import logging
 import pyodbc
 import json
 import os
+import struct
 from pathlib import Path
 
 from src.utils.sql_parameter_service import (
@@ -17,9 +18,147 @@ from src.utils.sql_parameter_service import (
     prepare_generic_sql,
     prepare_sqlserver_batch,
 )
+from src.language import S
 
 
 logger = logging.getLogger(__name__)
+
+
+SQLSERVER_AUTH_SQL_PASSWORD = "sql_password"
+SQLSERVER_AUTH_WINDOWS = "windows"
+SQLSERVER_AUTH_ENTRA_MFA = "entra_mfa"
+SQL_COPT_SS_ACCESS_TOKEN = 1256
+SQLSERVER_ENTRA_SCOPE = "https://database.windows.net/.default"
+AZURE_SQL_HOST_SUFFIXES = (
+    ".database.windows.net",
+    ".database.usgovcloudapi.net",
+    ".database.cloudapi.de",
+    ".database.chinacloudapi.cn",
+)
+
+
+def normalize_sqlserver_auth_mode(auth_mode: str = "", use_windows_auth: bool = False) -> str:
+    """Normalize SQL Server auth modes while keeping backward compatibility."""
+    normalized = str(auth_mode or "").strip().lower()
+
+    aliases = {
+        "sql": SQLSERVER_AUTH_SQL_PASSWORD,
+        "sql_password": SQLSERVER_AUTH_SQL_PASSWORD,
+        "sqlserver": SQLSERVER_AUTH_SQL_PASSWORD,
+        "windows": SQLSERVER_AUTH_WINDOWS,
+        "windows_auth": SQLSERVER_AUTH_WINDOWS,
+        "trusted_connection": SQLSERVER_AUTH_WINDOWS,
+        "mfa": SQLSERVER_AUTH_ENTRA_MFA,
+        "entra_mfa": SQLSERVER_AUTH_ENTRA_MFA,
+        "aad_interactive": SQLSERVER_AUTH_ENTRA_MFA,
+        "active_directory_interactive": SQLSERVER_AUTH_ENTRA_MFA,
+        "azure_ad_mfa": SQLSERVER_AUTH_ENTRA_MFA,
+    }
+
+    if normalized:
+        return aliases.get(normalized, SQLSERVER_AUTH_SQL_PASSWORD)
+
+    if use_windows_auth:
+        return SQLSERVER_AUTH_WINDOWS
+
+    return SQLSERVER_AUTH_SQL_PASSWORD
+
+
+def _get_sqlserver_entra_cache_name(host: str) -> str:
+    """Build a stable cache name for SQL Server Entra tokens."""
+    safe_host = host.replace(".", "_").replace(":", "_").replace("/", "_")
+    return f"datapyn_sqlserver_{safe_host}"
+
+
+def _get_sqlserver_auth_record_path(host: str) -> Path:
+    """Get the persisted AuthenticationRecord path for a SQL Server host."""
+    from src.core.workspace_service import get_workspace_service
+
+    config_dir = get_workspace_service().get_config_dir("oauth_cache")
+    return config_dir / f"{_get_sqlserver_entra_cache_name(host)}_auth_record.json"
+
+
+def _read_sqlserver_auth_record(host: str):
+    """Read the cached AuthenticationRecord from disk when available."""
+    record_path = _get_sqlserver_auth_record_path(host)
+    if not record_path.exists():
+        return None
+
+    try:
+        from azure.identity import AuthenticationRecord
+
+        return AuthenticationRecord.deserialize(record_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(f"Failed to read SQL Server auth record: {exc}")
+        return None
+
+
+def _write_sqlserver_auth_record(host: str, authentication_record) -> None:
+    """Persist the AuthenticationRecord for later silent token reuse."""
+    record_path = _get_sqlserver_auth_record_path(host)
+    try:
+        record_path.write_text(authentication_record.serialize(), encoding="utf-8")
+    except Exception as exc:
+        logger.warning(f"Failed to persist SQL Server auth record: {exc}")
+
+
+def _is_azure_sql_host(host: str) -> bool:
+    """Return True when the host is an Azure SQL Database endpoint."""
+    normalized = str(host or "").strip().lower()
+    return normalized.endswith(AZURE_SQL_HOST_SUFFIXES)
+
+
+def _build_sqlserver_access_token_struct(access_token: str) -> bytes:
+    """Pack an access token in the ODBC ACCESSTOKEN structure format."""
+    token_bytes = str(access_token or "").encode("utf-16-le")
+    return struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
+
+
+def _create_sqlserver_mfa_credential(host: str, login_hint: str = "", tenant_id: str = "", authentication_record=None):
+    """Create a browser credential for SQL Server Entra MFA."""
+    try:
+        from azure.identity import InteractiveBrowserCredential, TokenCachePersistenceOptions
+    except ImportError as exc:
+        raise RuntimeError(S.connection_edit.error_mfa_dependency_missing) from exc
+
+    kwargs: dict[str, Any] = {
+        "cache_persistence_options": TokenCachePersistenceOptions(name=_get_sqlserver_entra_cache_name(host)),
+    }
+
+    login_hint = str(login_hint or "").strip()
+    tenant_id = str(tenant_id or "").strip()
+    if login_hint:
+        kwargs["login_hint"] = login_hint
+    if tenant_id:
+        kwargs["tenant_id"] = tenant_id
+    if authentication_record is not None:
+        kwargs["authentication_record"] = authentication_record
+
+    return InteractiveBrowserCredential(**kwargs)
+
+
+def _prepare_sqlserver_mfa_credential(host: str, login_hint: str = "", tenant_id: str = ""):
+    """Create a MFA credential and persist its authentication record on first login."""
+    record = _read_sqlserver_auth_record(host)
+    credential = _create_sqlserver_mfa_credential(
+        host=host,
+        login_hint=login_hint,
+        tenant_id=tenant_id,
+        authentication_record=record,
+    )
+
+    if record is None:
+        record = credential.authenticate(scopes=[SQLSERVER_ENTRA_SCOPE])
+        _write_sqlserver_auth_record(host, record)
+        credential.close()
+        credential = _create_sqlserver_mfa_credential(
+            host=host,
+            login_hint=login_hint,
+            tenant_id=tenant_id,
+            authentication_record=record,
+        )
+
+    return credential
 
 
 def _build_databricks_context_name(catalog: str, schema: str) -> str:
@@ -120,6 +259,8 @@ class DatabaseConnector:
         self._active_raw_conn = None  # Reference for cancellation
         self._active_cursor = None  # Cursor reference for cancellation
         self._cancelled = False  # Cancellation flag
+        self._connection_config: Dict[str, Any] = {}
+        self._sqlserver_mfa_credential = None
 
     def connect(
         self, db_type: str, host: str, port: int, database: str, username: str = "", password: str = "", **kwargs
@@ -140,11 +281,36 @@ class DatabaseConnector:
             bool: True if connected successfully
         """
         try:
+            sqlserver_auth_mode = ""
+            sqlserver_mfa_credential = None
+            if db_type == "sqlserver":
+                sqlserver_auth_mode = normalize_sqlserver_auth_mode(
+                    kwargs.get("sqlserver_auth_mode", ""),
+                    kwargs.get("use_windows_auth", False),
+                )
+                if sqlserver_auth_mode == SQLSERVER_AUTH_ENTRA_MFA:
+                    sqlserver_mfa_credential = _prepare_sqlserver_mfa_credential(
+                        host=host,
+                        login_hint=username,
+                        tenant_id=kwargs.get("tenant_id", ""),
+                    )
+                    self._sqlserver_mfa_credential = sqlserver_mfa_credential
+
             connection_string, connect_args = self._build_connection_string(
                 db_type, host, port, database, username, password, **kwargs
             )
 
             self.engine = create_engine(connection_string, pool_pre_ping=True, connect_args=connect_args)
+
+            if db_type == "sqlserver" and sqlserver_auth_mode == SQLSERVER_AUTH_ENTRA_MFA:
+                credential = sqlserver_mfa_credential
+
+                @event.listens_for(self.engine, "do_connect")
+                def on_do_connect(dialect, connection_record, cargs, cparams):
+                    token = credential.get_token(SQLSERVER_ENTRA_SCOPE)
+                    attrs_before = dict(cparams.get("attrs_before") or {})
+                    attrs_before[SQL_COPT_SS_ACCESS_TOKEN] = _build_sqlserver_access_token_struct(token.token)
+                    cparams["attrs_before"] = attrs_before
 
             # Register pool event to ensure every connection
             # pulled from pool uses correct database (solves problem
@@ -154,6 +320,8 @@ class DatabaseConnector:
 
                 @event.listens_for(self.engine, "checkout")
                 def on_checkout(dbapi_conn, connection_record, connection_proxy):
+                    if not connector_ref._sqlserver_supports_use():
+                        return
                     current_db = connector_ref.connection_params.get("database", "")
                     if current_db:
                         try:
@@ -188,7 +356,22 @@ class DatabaseConnector:
                     raise
 
             self.db_type = db_type
-            self.connection_params = {"host": host, "port": port, "database": database, "username": username}
+            self.connection_params = {
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "sqlserver_supports_use": not _is_azure_sql_host(host) if db_type == "sqlserver" else True,
+            }
+            self._connection_config = {
+                "db_type": db_type,
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "password": password,
+                **kwargs,
+            }
 
             # For Databricks, initialize catalog/schema tracking
             # If user didn't specify a catalog, query Databricks for current catalog/schema
@@ -284,7 +467,10 @@ class DatabaseConnector:
             if not driver:
                 driver = self._get_available_odbc_driver()
 
-            use_windows_auth = kwargs.get("use_windows_auth", False)
+            auth_mode = normalize_sqlserver_auth_mode(
+                kwargs.get("sqlserver_auth_mode", ""),
+                kwargs.get("use_windows_auth", False),
+            )
             trust_cert = kwargs.get("trust_server_certificate", False)
 
             # Detect LocalDB - uses named pipes, not TCP/IP
@@ -294,13 +480,13 @@ class DatabaseConnector:
                 # LocalDB format: SERVER=(localdb)\InstanceName (no port)
                 # LocalDB always uses Windows Authentication
                 server_part = f"SERVER={host}"
-                use_windows_auth = True
+                auth_mode = SQLSERVER_AUTH_WINDOWS
             else:
                 # Standard SQL Server format: SERVER=host,port
                 server_part = f"SERVER={host},{port}"
 
             # Use direct ODBC connection string
-            if use_windows_auth:
+            if auth_mode == SQLSERVER_AUTH_WINDOWS:
                 # Windows Authentication
                 odbc_string = (
                     f"DRIVER={{{driver}}};"
@@ -308,6 +494,15 @@ class DatabaseConnector:
                     f"DATABASE={database};"
                     f"Trusted_Connection=yes"
                 )
+            elif auth_mode == SQLSERVER_AUTH_ENTRA_MFA:
+                # Use an app-managed browser token instead of the driver's interactive mode.
+                parts = [
+                    f"DRIVER={{{driver}}}",
+                    server_part,
+                    f"DATABASE={database}",
+                    "Encrypt=yes",
+                ]
+                odbc_string = ";".join(parts)
             else:
                 # SQL Server Authentication
                 odbc_string = (
@@ -438,11 +633,13 @@ class DatabaseConnector:
             # Detect USE command to update current database
             import re
 
-            use_match = re.search(r"\bUSE\s+[\[`]?(\w+)[\]`]?\s*;?\s*$", query.strip(), re.IGNORECASE | re.MULTILINE)
+            use_match = self._match_use_only_command(query)
             if use_match:
                 new_db = use_match.group(1)
                 logger.info(f"Detected USE command {new_db}")
-                # Update current database
+                if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
+                    self.change_database(new_db)
+                    return pd.DataFrame({"Result": [f"Database changed to: {new_db}"]})
                 self.connection_params["database"] = new_db
 
             # For SQL Server, split on GO and execute each batch separately
@@ -527,12 +724,25 @@ class DatabaseConnector:
         errors = []
 
         try:
+            if not self._sqlserver_supports_use():
+                normalized_batches = []
+                for batch in batches:
+                    use_match = self._match_use_only_command(batch)
+                    if use_match:
+                        self.change_database(use_match.group(1))
+                        continue
+                    normalized_batches.append(batch)
+                batches = normalized_batches
+
+            if not batches:
+                return pd.DataFrame({"Result": ["Command(s) executed successfully."]})
+
             raw_conn = self.engine.raw_connection()
             self._active_raw_conn = raw_conn
 
             # Set database context once at the start
             current_db = self.connection_params.get("database", "")
-            if current_db:
+            if current_db and self._sqlserver_supports_use():
                 try:
                     init_cursor = raw_conn.cursor()
                     init_cursor.execute(f"USE [{current_db}]")
@@ -1038,6 +1248,9 @@ class DatabaseConnector:
                 logger.debug(f"Already on database '{database}', skipping USE")
                 return True
 
+        if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
+            return self._reconnect_sqlserver_database(database)
+
         try:
             use_command = self._build_use_command(database)
             # Log for debugging Databricks catalog/schema issues
@@ -1085,6 +1298,39 @@ class DatabaseConnector:
             else:
                 logger.error(f"Error changing database: {str(e)}")
             raise
+
+    def _sqlserver_supports_use(self) -> bool:
+        """Return whether the current SQL Server target supports USE statements."""
+        if self.db_type != "sqlserver":
+            return False
+        if "sqlserver_supports_use" in self.connection_params:
+            return bool(self.connection_params["sqlserver_supports_use"])
+        return not _is_azure_sql_host(self.connection_params.get("host", ""))
+
+    @staticmethod
+    def _match_use_only_command(command: str):
+        """Return a regex match when the command is a standalone USE statement."""
+        import re
+
+        return re.match(r"^\s*USE\s+[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$", str(command or ""), re.IGNORECASE)
+
+    def _reconnect_sqlserver_database(self, database: str) -> bool:
+        """Reconnect Azure SQL Database connections to switch databases."""
+        reconnect_config = dict(self._connection_config or {})
+        if not reconnect_config:
+            raise RuntimeError("SQL Server reconnect configuration unavailable")
+
+        reconnect_config["database"] = database
+        self.disconnect()
+        return self.connect(
+            reconnect_config.pop("db_type"),
+            reconnect_config.pop("host"),
+            reconnect_config.pop("port"),
+            reconnect_config.pop("database"),
+            reconnect_config.pop("username", ""),
+            reconnect_config.pop("password", ""),
+            **reconnect_config,
+        )
 
     def _build_use_command(self, database: str) -> str:
         """Build the USE command with correct syntax for the current database type.
@@ -1166,6 +1412,12 @@ class DatabaseConnector:
             self.engine.dispose()
             self.engine = None
             logger.info("Disconnected from database")
+        if self._sqlserver_mfa_credential is not None:
+            try:
+                self._sqlserver_mfa_credential.close()
+            except Exception:
+                pass
+            self._sqlserver_mfa_credential = None
 
     def is_connected(self) -> bool:
         """Check if there is an active connection (quick check, no I/O).

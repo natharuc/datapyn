@@ -5,6 +5,9 @@ Testes do DatabaseConnector
 import pytest
 from unittest.mock import MagicMock, call, patch
 import pandas as pd
+from urllib.parse import unquote
+import sys
+import types
 
 
 # Mock para pyodbc.drivers() - no CI Linux nao ha ODBC driver instalado
@@ -181,7 +184,6 @@ class TestDatabaseConnectorConnectionString:
     def test_sqlserver_standard_connection_still_uses_port(self, _mock_drivers):
         """Conexao SQL Server padrao deve continuar usando porta"""
         from database.database_connector import DatabaseConnector
-        from urllib.parse import unquote
 
         connector = DatabaseConnector()
         result, _ = connector._build_connection_string(
@@ -198,6 +200,254 @@ class TestDatabaseConnectorConnectionString:
         assert "SERVER=localhost,1433" in decoded
         assert "UID=user" in decoded
         assert "PWD=pass" in decoded
+
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_sqlserver_mfa_connection_string_uses_interactive_auth(self, _mock_drivers):
+        """Conexao SQL Server com MFA deve usar token Entra no lugar do auth do driver."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, _ = connector._build_connection_string(
+            db_type="sqlserver",
+            host="azure-sql.database.windows.net",
+            port=1433,
+            database="testdb",
+            username="user@tenant.com",
+            password="ignored",
+            sqlserver_auth_mode="entra_mfa",
+        )
+
+        decoded = unquote(result)
+        assert "SERVER=azure-sql.database.windows.net,1433" in decoded
+        assert "Encrypt=yes" in decoded
+        assert "Authentication=ActiveDirectoryInteractive" not in decoded
+        assert "UID=" not in decoded
+        assert "PWD=" not in decoded
+        assert "Trusted_Connection=yes" not in decoded
+
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_sqlserver_mfa_without_username_builds_connection_string(self, _mock_drivers):
+        """MFA deve permitir omitir username e usar a tela Microsoft para escolher a conta."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, _ = connector._build_connection_string(
+            db_type="sqlserver",
+            host="azure-sql.database.windows.net",
+            port=1433,
+            database="testdb",
+            username="",
+            password="",
+            sqlserver_auth_mode="mfa",
+        )
+
+        decoded = unquote(result)
+        assert "Encrypt=yes" in decoded
+        assert "UID=" not in decoded
+        assert "Authentication=" not in decoded
+
+    def test_sqlserver_access_token_struct_uses_utf16le(self):
+        """Struct de access token deve seguir o formato esperado pelo ODBC."""
+        from database.database_connector import _build_sqlserver_access_token_struct
+
+        packed = _build_sqlserver_access_token_struct("abc")
+        expected_payload = "abc".encode("utf-16-le")
+
+        assert packed[:4] == len(expected_payload).to_bytes(4, "little")
+        assert packed[4:] == expected_payload
+
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_connect_sqlserver_mfa_registers_access_token_handler(self, _mock_drivers):
+        """Conexao MFA deve injetar access token via do_connect do SQLAlchemy."""
+        from database.database_connector import (
+            DatabaseConnector,
+            SQLSERVER_ENTRA_SCOPE,
+            SQL_COPT_SS_ACCESS_TOKEN,
+            _build_sqlserver_access_token_struct,
+        )
+
+        connector = DatabaseConnector()
+        mock_credential = MagicMock()
+        mock_credential.get_token.return_value = type("Token", (), {"token": "token-123"})()
+        listeners = {}
+
+        def fake_listens_for(target, name):
+            def decorator(fn):
+                listeners[name] = fn
+                return fn
+            return decorator
+
+        with patch("database.database_connector._create_sqlserver_mfa_credential", return_value=mock_credential):
+            with patch("database.database_connector.create_engine") as mock_create_engine:
+                with patch("database.database_connector.event.listens_for", side_effect=fake_listens_for):
+                    mock_engine = MagicMock()
+                    mock_conn = MagicMock()
+                    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+                    mock_conn.__exit__ = MagicMock(return_value=False)
+                    mock_engine.connect.return_value = mock_conn
+                    mock_create_engine.return_value = mock_engine
+
+                    connector.connect(
+                        "sqlserver",
+                        "azure-sql.database.windows.net",
+                        1433,
+                        "testdb",
+                        username="",
+                        password="",
+                        sqlserver_auth_mode="entra_mfa",
+                    )
+
+        assert "do_connect" in listeners
+        cparams = {}
+        listeners["do_connect"](None, None, [], cparams)
+        mock_credential.get_token.assert_called_once_with(SQLSERVER_ENTRA_SCOPE)
+        assert cparams["attrs_before"][SQL_COPT_SS_ACCESS_TOKEN] == _build_sqlserver_access_token_struct("token-123")
+
+    def test_prepare_sqlserver_mfa_credential_persists_auth_record(self, tmp_path):
+        """Primeira autenticacao MFA deve persistir AuthenticationRecord para reuse silencioso."""
+        from database.database_connector import _prepare_sqlserver_mfa_credential, SQLSERVER_ENTRA_SCOPE
+
+        first_credential = MagicMock()
+        first_record = MagicMock()
+        persisted_credential = MagicMock()
+
+        with patch("database.database_connector._read_sqlserver_auth_record", return_value=None):
+            with patch("database.database_connector._write_sqlserver_auth_record") as mock_write:
+                with patch(
+                    "database.database_connector._create_sqlserver_mfa_credential",
+                    side_effect=[first_credential, persisted_credential],
+                ):
+                    first_credential.authenticate.return_value = first_record
+                    result = _prepare_sqlserver_mfa_credential("azure-sql.database.windows.net")
+
+        first_credential.authenticate.assert_called_once_with(scopes=[SQLSERVER_ENTRA_SCOPE])
+        mock_write.assert_called_once_with("azure-sql.database.windows.net", first_record)
+        first_credential.close.assert_called_once()
+        assert result is persisted_credential
+
+    def test_read_sqlserver_auth_record_deserializes_file(self, tmp_path):
+        """AuthenticationRecord persistido deve ser carregado do disco."""
+        from database.database_connector import _read_sqlserver_auth_record
+
+        auth_record_path = tmp_path / "record.json"
+        auth_record_path.write_text("serialized-record", encoding="utf-8")
+
+        fake_authentication_record = MagicMock()
+        fake_authentication_record.deserialize.return_value = "record"
+        fake_identity_module = types.SimpleNamespace(AuthenticationRecord=fake_authentication_record)
+
+        with patch("database.database_connector._get_sqlserver_auth_record_path", return_value=auth_record_path):
+            with patch.dict(sys.modules, {"azure.identity": fake_identity_module}):
+                result = _read_sqlserver_auth_record("azure-sql.database.windows.net")
+
+        fake_authentication_record.deserialize.assert_called_once_with("serialized-record")
+        assert result == "record"
+
+    def test_azure_sql_change_database_reconnects(self):
+        """Azure SQL Database deve reconectar em vez de emitir USE."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.engine = MagicMock()
+        connector.connection_params = {
+            "host": "tenant.database.windows.net",
+            "port": 1433,
+            "database": "db1",
+            "sqlserver_supports_use": False,
+        }
+        connector._connection_config = {
+            "db_type": "sqlserver",
+            "host": "tenant.database.windows.net",
+            "port": 1433,
+            "database": "db1",
+            "username": "",
+            "password": "",
+            "sqlserver_auth_mode": "entra_mfa",
+        }
+
+        with patch.object(connector, "connect", return_value=True) as mock_connect:
+            with patch.object(connector, "disconnect") as mock_disconnect:
+                assert connector.change_database("db2") is True
+
+        mock_disconnect.assert_called_once()
+        mock_connect.assert_called_once_with(
+            "sqlserver",
+            "tenant.database.windows.net",
+            1433,
+            "db2",
+            "",
+            "",
+            sqlserver_auth_mode="entra_mfa",
+        )
+
+    def test_execute_query_use_on_azure_sql_reconnects(self):
+        """USE isolado em Azure SQL deve virar troca de conexao, sem erro 40508."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.engine = MagicMock()
+        connector.connection_params = {
+            "host": "tenant.database.windows.net",
+            "port": 1433,
+            "database": "db1",
+            "sqlserver_supports_use": False,
+        }
+
+        with patch.object(connector, "change_database", return_value=True) as mock_change:
+            result = connector.execute_query("USE [db2]")
+
+        mock_change.assert_called_once_with("db2")
+        assert result.iloc[0, 0] == "Database changed to: db2"
+
+    def test_azure_sql_batches_skip_init_use(self):
+        """Azure SQL batches nao devem executar USE inicial na raw connection."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.connection_params = {"database": "db1", "sqlserver_supports_use": False}
+
+        mock_cursor = MagicMock()
+        mock_cursor.description = [(
+            "col1",
+        )]
+        mock_cursor.fetchall.return_value = [(1,)]
+        mock_cursor.nextset.return_value = False
+
+        mock_raw_conn = MagicMock()
+        mock_raw_conn.cursor.return_value = mock_cursor
+
+        mock_engine = MagicMock()
+        mock_engine.raw_connection.return_value = mock_raw_conn
+        connector.engine = mock_engine
+
+        result = connector._execute_mssql_batches(["SELECT 1"])
+
+        mock_cursor.execute.assert_called_once_with("SELECT 1")
+        assert result.iloc[0, 0] == 1
+
+    @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
+    def test_sqlserver_legacy_windows_flag_keeps_backward_compatibility(self, _mock_drivers):
+        """Flag antiga de Windows Auth deve continuar funcionando sem auth_mode salvo."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, _ = connector._build_connection_string(
+            db_type="sqlserver",
+            host="localhost",
+            port=1433,
+            database="testdb",
+            username="legacy-user",
+            password="legacy-pass",
+            use_windows_auth=True,
+        )
+
+        decoded = unquote(result)
+        assert "Trusted_Connection=yes" in decoded
+        assert "Authentication=ActiveDirectoryInteractive" not in decoded
+        assert "UID=" not in decoded
 
 
 class TestDatabaseConnectorState:

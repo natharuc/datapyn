@@ -116,6 +116,7 @@ def apply_import(connection_manager, data: dict) -> int:
             color=config.get("color", ""),
             trust_server_certificate=config.get("trust_server_certificate", False),
             http_path=config.get("http_path", ""),
+            sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
         )
         count += 1
 

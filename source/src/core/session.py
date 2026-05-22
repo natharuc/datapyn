@@ -200,6 +200,7 @@ class Session(QObject):
                 username=config.get("username", ""),
                 password=pwd,
                 use_windows_auth=config.get("use_windows_auth", False),
+                sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
                 trust_server_certificate=config.get("trust_server_certificate", False),
                 http_path=config.get("http_path", ""),
             )
@@ -352,6 +353,7 @@ class Session(QObject):
                             config.get("username", ""),
                             config.get("password", ""),
                             use_windows_auth=config.get("use_windows_auth", False),
+                            sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
                             trust_server_certificate=config.get("trust_server_certificate", False),
                             http_path=config.get("http_path", ""),
                         )

@@ -855,10 +855,16 @@
     "placeholder_database": "Database name (optional)",
     "section_authentication": "AUTHENTICATION",
     "checkbox_windows_auth": "Use Windows Authentication",
+    "label_sqlserver_auth": "SQL Server Auth:",
+    "combo_auth_sql_password": "SQL Server Username / Password",
+    "combo_auth_windows": "Windows Authentication",
+    "combo_auth_entra_mfa": "Microsoft Entra Interactive (MFA)",
     "label_username": "Username:",
     "placeholder_username": "Database user",
+    "placeholder_username_mfa": "Optional login hint (user@tenant.com)",
     "label_password": "Password:",
     "placeholder_password": "Password",
+    "placeholder_password_mfa": "Not used with interactive MFA",
     "checkbox_save_password": "Save password (not recommended)",
     "checkbox_trust_cert": "Trust server certificate (TrustServerCertificate)",
     "tooltip_trust_cert": "Skip SSL certificate validation. Required for connections with self-signed certificates.",
@@ -877,7 +883,9 @@
     "test_success": "Connection tested successfully!",
     "test_error": "Error: {error}",
     "validation_name_required": "Connection name is required",
-    "validation_host_required": "Host is required"
+    "validation_host_required": "Host is required",
+    "validation_mfa_username_required": "Microsoft Entra interactive authentication requires the username in UPN format, for example user@tenant.com",
+    "error_mfa_dependency_missing": "Microsoft Entra MFA support requires the azure-identity package. Update DataPyn dependencies to install it."
   },
   "connection_picker": {
     "title": "Select Connection",

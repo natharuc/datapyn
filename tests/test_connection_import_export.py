@@ -74,6 +74,24 @@ class TestExportConnections:
         assert conn["color"] == "#abcdef"
         assert conn["trust_server_certificate"] is True
 
+    def test_export_preserves_sqlserver_auth_mode(self, connection_manager):
+        """Export deve manter o auth mode do SQL Server para round-trip de MFA."""
+        from ui.dialogs.connection_import_export_dialog import export_connections
+
+        connection_manager.save_connection_config(
+            name="Azure SQL MFA",
+            db_type="sqlserver",
+            host="server.database.windows.net",
+            port=1433,
+            database="app",
+            username="user@tenant.com",
+            sqlserver_auth_mode="entra_mfa",
+        )
+
+        result = export_connections(connection_manager)
+        conn = result["connections"]["Azure SQL MFA"]
+        assert conn["sqlserver_auth_mode"] == "entra_mfa"
+
     def test_export_multiple_connections(self, connection_manager):
         """Export all connections."""
         from ui.dialogs.connection_import_export_dialog import export_connections

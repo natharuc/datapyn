@@ -400,6 +400,7 @@ class ConnectionsManagerDialog(QDialog):
             config.get("color", ""),
             config.get("trust_server_certificate", False),
             config.get("http_path", ""),
+            config.get("sqlserver_auth_mode", ""),
         )
 
         # Reloads the tree
@@ -654,6 +655,7 @@ class ConnectionsManagerDialog(QDialog):
                 config.get("color", ""),
                 config.get("trust_server_certificate", False),
                 config.get("http_path", ""),
+                config.get("sqlserver_auth_mode", ""),
             )
 
             self._load_connections()
@@ -703,6 +705,7 @@ class ConnectionsManagerDialog(QDialog):
                 new_config.get("color", ""),
                 new_config.get("trust_server_certificate", False),
                 new_config.get("http_path", ""),
+                new_config.get("sqlserver_auth_mode", ""),
             )
 
             self.selected_connection = new_name
@@ -741,6 +744,7 @@ class ConnectionsManagerDialog(QDialog):
                 config.get("color", ""),
                 config.get("trust_server_certificate", False),
                 config.get("http_path", ""),
+                config.get("sqlserver_auth_mode", ""),
             )
 
             self._load_connections()
