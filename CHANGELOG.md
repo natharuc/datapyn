@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.32.0 (2026-05-18)
+
+### Bug Fixes
+
+- Limitar autocomplete SQL ao banco ativo
+  ([`2b3ed76`](https://github.com/natharuc/datapyn/commit/2b3ed76e2e3bb924b61abf8e85a00a34ea2fc6ac))
+
+
 ## v1.31.0 (2026-05-16)
 
 ### Bug Fixes
