@@ -140,6 +140,7 @@ class TestBlockConnectionWorker:
         assert worker.password == "pass"
         assert worker.use_windows_auth is False
         assert worker.trust_server_certificate is True
+        assert worker.sqlserver_auth_mode == ""
 
     @patch("src.database.database_connector.DatabaseConnector")
     def test_run_success_emits_connection_ready(self, mock_connector_cls, qtbot):
@@ -249,6 +250,36 @@ class TestBlockConnectionWorker:
             password="secret",
             use_windows_auth=True,
             trust_server_certificate=True,
+        )
+
+    @patch("src.database.database_connector.DatabaseConnector")
+    def test_worker_passes_sqlserver_auth_mode_to_connect(self, mock_connector_cls, qtbot):
+        """Worker deve propagar o auth mode do SQL Server para MFA."""
+        mock_connector = MagicMock()
+        mock_connector.is_connected.return_value = True
+        mock_connector_cls.return_value = mock_connector
+
+        worker = BlockConnectionWorker(
+            db_type="sqlserver",
+            host="server.database.windows.net",
+            port=1433,
+            database="db",
+            username="user@tenant.com",
+            sqlserver_auth_mode="entra_mfa",
+        )
+
+        worker.run()
+
+        mock_connector.connect.assert_called_once_with(
+            db_type="sqlserver",
+            host="server.database.windows.net",
+            port=1433,
+            database="db",
+            username="user@tenant.com",
+            password="",
+            use_windows_auth=False,
+            sqlserver_auth_mode="entra_mfa",
+            trust_server_certificate=False,
         )
 
     @patch("src.database.database_connector.DatabaseConnector")

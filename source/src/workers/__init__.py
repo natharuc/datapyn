@@ -87,6 +87,7 @@ class DatabaseConnectionWorker(BaseWorker):
         username: str = "",
         password: str = "",
         use_windows_auth: bool = False,
+        sqlserver_auth_mode: str = "",
     ):
         super().__init__()
         self.connection_manager = connection_manager
@@ -98,12 +99,19 @@ class DatabaseConnectionWorker(BaseWorker):
         self.username = username
         self.password = password
         self.use_windows_auth = use_windows_auth
+        self.sqlserver_auth_mode = sqlserver_auth_mode
 
     def run(self):
         """Connect to database"""
         self.started.emit()
 
         try:
+            create_kwargs = {
+                "use_windows_auth": self.use_windows_auth,
+            }
+            if self.db_type == "sqlserver":
+                create_kwargs["sqlserver_auth_mode"] = self.sqlserver_auth_mode
+
             self.connection_manager.create_connection(
                 self.conn_name,
                 self.db_type,
@@ -112,7 +120,7 @@ class DatabaseConnectionWorker(BaseWorker):
                 self.database,
                 self.username,
                 self.password,
-                use_windows_auth=self.use_windows_auth,
+                **create_kwargs,
             )
             self.connection_success.emit()
         except Exception as e:
@@ -250,6 +258,7 @@ class BlockConnectionWorker(BaseWorker):
     def __init__(self, db_type: str, host: str, port: int, database: str,
                  username: str = "", password: str = "",
                  use_windows_auth: bool = False,
+                 sqlserver_auth_mode: str = "",
                  trust_server_certificate: bool = False,
                  http_path: str = "",
                  database_context: str = ""):
@@ -261,6 +270,7 @@ class BlockConnectionWorker(BaseWorker):
         self.username = username
         self.password = password
         self.use_windows_auth = use_windows_auth
+        self.sqlserver_auth_mode = sqlserver_auth_mode
         self.trust_server_certificate = trust_server_certificate
         self.http_path = http_path
         self.database_context = database_context
@@ -283,6 +293,8 @@ class BlockConnectionWorker(BaseWorker):
                 "use_windows_auth": self.use_windows_auth,
                 "trust_server_certificate": self.trust_server_certificate,
             }
+            if self.db_type == "sqlserver":
+                connect_kwargs["sqlserver_auth_mode"] = self.sqlserver_auth_mode
             if self.db_type == "databricks":
                 connect_kwargs["http_path"] = self.http_path
 

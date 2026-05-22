@@ -186,6 +186,22 @@ class TestConnectionManagerEdgeCases:
         config = connection_manager.get_connection_config("Windows Auth")
         assert config["use_windows_auth"] is True
 
+    def test_sqlserver_mfa_auth_mode_is_persisted(self, connection_manager):
+        """Conexao SQL Server com MFA deve persistir auth mode sem virar Windows Auth."""
+        connection_manager.save_connection_config(
+            name="Azure SQL MFA",
+            db_type="sqlserver",
+            host="server.database.windows.net",
+            port=1433,
+            database="test",
+            username="user@tenant.com",
+            sqlserver_auth_mode="entra_mfa",
+        )
+
+        config = connection_manager.get_connection_config("Azure SQL MFA")
+        assert config["sqlserver_auth_mode"] == "entra_mfa"
+        assert config["use_windows_auth"] is False
+
     def test_databricks_http_path(self, connection_manager):
         """Deve salvar http_path para conexões Databricks"""
         connection_manager.save_connection_config(

@@ -174,6 +174,7 @@ class ConnectionController(QObject):
                 config.get("color", ""),
                 config.get("trust_server_certificate", True),
                 config.get("http_path", ""),
+                config.get("sqlserver_auth_mode", ""),
             )
             
             self.update_connection_status()
@@ -219,6 +220,7 @@ class ConnectionController(QObject):
                 new_config.get("color", ""),
                 new_config.get("trust_server_certificate", True),
                 new_config.get("http_path", ""),
+                new_config.get("sqlserver_auth_mode", ""),
             )
             
             self.update_connection_status()

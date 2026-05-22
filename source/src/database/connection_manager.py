@@ -3,7 +3,7 @@ Multiple database connections manager
 """
 
 from typing import Dict, Optional, List
-from .database_connector import DatabaseConnector
+from .database_connector import DatabaseConnector, normalize_sqlserver_auth_mode, SQLSERVER_AUTH_WINDOWS
 import json
 import os
 from pathlib import Path
@@ -58,8 +58,14 @@ class ConnectionManager:
         color: str = "",
         trust_server_certificate: bool = False,
         http_path: str = "",
+        sqlserver_auth_mode: str = "",
     ):
         """Save a connection configuration"""
+        normalized_sqlserver_auth_mode = ""
+        if db_type == "sqlserver":
+            normalized_sqlserver_auth_mode = normalize_sqlserver_auth_mode(sqlserver_auth_mode, use_windows_auth)
+            use_windows_auth = normalized_sqlserver_auth_mode == SQLSERVER_AUTH_WINDOWS
+
         config = {
             "db_type": db_type,
             "host": host,
@@ -73,6 +79,9 @@ class ConnectionManager:
             "created_at": datetime.now().isoformat(),
             "last_used": None,
         }
+
+        if db_type == "sqlserver":
+            config["sqlserver_auth_mode"] = normalized_sqlserver_auth_mode
 
         # Databricks-specific field
         if db_type == "databricks" and http_path:
@@ -109,6 +118,7 @@ class ConnectionManager:
         color: str = "",
         trust_server_certificate: bool = False,
         http_path: str = "",
+        sqlserver_auth_mode: str = "",
     ):
         """Update an existing connection configuration"""
         if old_name in self.saved_configs.get("connections", {}):
@@ -135,6 +145,7 @@ class ConnectionManager:
                 color,
                 trust_server_certificate,
                 http_path,
+                sqlserver_auth_mode,
             )
 
             # Restore creation date
