@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QSettings, Qt
 
+from .copilot_models import fallback_models, normalize_models, normalize_reasoning_effort, usage_snapshot_for_model
+
 logger = logging.getLogger(__name__)
 
 GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
@@ -30,12 +32,7 @@ COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 # GitHub CLI: "178c6fc778ccc68e1d6a"
 
 # Fallback models if API is unavailable
-DEFAULT_COPILOT_MODELS = [
-    {"id": "gpt-4o", "name": "GPT-4o"},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
-    {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet"},
-    {"id": "o3-mini", "name": "o3-mini"},
-]
+DEFAULT_COPILOT_MODELS = fallback_models()
 
 
 class AuthWorker(QObject):
@@ -157,11 +154,12 @@ class ChatWorker(QObject):
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, copilot_token: str, messages: List[Dict], model: str = "gpt-4o"):
+    def __init__(self, copilot_token: str, messages: List[Dict], model: str = "gpt-4o", reasoning_effort: str = "auto"):
         super().__init__()
         self.copilot_token = copilot_token
         self.messages = messages
         self.model = model
+        self.reasoning_effort = normalize_reasoning_effort(reasoning_effort)
         self._cancelled = False
 
     def cancel(self):
@@ -177,13 +175,17 @@ class ChatWorker(QObject):
             return
 
         try:
+            payload = {
+                "messages": self.messages,
+                "model": self.model,
+                "stream": True,
+            }
+            if self.reasoning_effort != "auto":
+                payload["reasoning_effort"] = self.reasoning_effort
+
             resp = requests.post(
                 COPILOT_CHAT_URL,
-                json={
-                    "messages": self.messages,
-                    "model": self.model,
-                    "stream": True,
-                },
+                json=payload,
                 headers={
                     "Authorization": f"Bearer {self.copilot_token}",
                     "Content-Type": "application/json",
@@ -350,10 +352,10 @@ class ModelsWorker(QObject):
                 model_id = m.get("id", m.get("name", ""))
                 model_name = m.get("name", m.get("id", ""))
                 if model_id:
-                    parsed_models.append({"id": model_id, "name": model_name})
+                    parsed_models.append({"id": model_id, "name": model_name, "multiplier": m.get("multiplier", 1.0)})
 
             if parsed_models:
-                self.models_ready.emit(parsed_models)
+                self.models_ready.emit(normalize_models(parsed_models))
             else:
                 self.models_ready.emit(DEFAULT_COPILOT_MODELS)
 
@@ -384,6 +386,7 @@ class CopilotClient(QObject):
     authenticated = pyqtSignal(str)  # username or status
     auth_failed = pyqtSignal(str)
     models_updated = pyqtSignal(list)  # list of model dicts
+    usage_changed = pyqtSignal(dict)
     chat_response_chunk = pyqtSignal(str)
     chat_response_complete = pyqtSignal(str)
     chat_error = pyqtSignal(str)
@@ -393,7 +396,9 @@ class CopilotClient(QObject):
         self._github_token: str = ""
         self._copilot_token: str = ""
         self._model: str = "gpt-4o"
+        self._reasoning_effort: str = "auto"
         self._available_models: List[Dict[str, str]] = DEFAULT_COPILOT_MODELS.copy()
+        self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
         self._active_threads: list = []
         self._settings = QSettings("DataPyn", "CopilotAuth")
 
@@ -421,10 +426,24 @@ class CopilotClient(QObject):
     @model.setter
     def model(self, value: str):
         self._model = value
+        self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
+        self.usage_changed.emit(self._usage_snapshot)
+
+    @property
+    def reasoning_effort(self) -> str:
+        return self._reasoning_effort
+
+    @reasoning_effort.setter
+    def reasoning_effort(self, value: str):
+        self._reasoning_effort = normalize_reasoning_effort(value)
 
     def available_models(self) -> List[Dict[str, str]]:
         """Return list of available models for the user."""
         return self._available_models
+
+    def usage_snapshot(self) -> Dict[str, Any]:
+        """Return the best available usage snapshot."""
+        return dict(self._usage_snapshot)
 
     def refresh_token_if_needed(self) -> None:
         """Refresh Copilot token if we have a GitHub token but no Copilot token."""
@@ -551,8 +570,10 @@ class CopilotClient(QObject):
 
     def _on_models_ready(self, models: List[Dict[str, str]]) -> None:
         """Models list received from API."""
-        self._available_models = models
-        self.models_updated.emit(models)
+        self._available_models = normalize_models(models)
+        self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
+        self.models_updated.emit(self._available_models)
+        self.usage_changed.emit(self._usage_snapshot)
 
     def _on_auth_error(self, error: str) -> None:
         """Authentication error."""
@@ -578,7 +599,7 @@ class CopilotClient(QObject):
             self.chat_error.emit("Not authenticated. Please sign in first.")
             return
 
-        worker = ChatWorker(self._copilot_token, messages, self._model)
+        worker = ChatWorker(self._copilot_token, messages, self._model, self._reasoning_effort)
         thread = QThread()
         worker.moveToThread(thread)
 

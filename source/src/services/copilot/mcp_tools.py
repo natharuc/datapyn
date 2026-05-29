@@ -180,6 +180,86 @@ class MCPToolRegistry(QObject):
             handler=self._get_execution_results,
         ))
 
+        # === VISUALIZATION / CHARTS ===
+        self._register(MCPTool(
+            name="list_visualizations",
+            description="List existing chart tabs and available result data sources/columns.",
+            parameters={},
+            handler=self._list_visualizations,
+        ))
+
+        self._register(MCPTool(
+            name="create_visualization",
+            description=(
+                "Create a chart tab from the current results grid or a named source_label. "
+                "Supported types: bar, line, scatter, area, pie. Config can include x_column, y_columns, "
+                "aggregation, group_by, stacking, palette, colors, labels, legend, and data-label options."
+            ),
+            parameters={
+                "config": {
+                    "type": "object",
+                    "description": "Visualization config object.",
+                },
+            },
+            handler=self._create_visualization,
+        ))
+
+        self._register(MCPTool(
+            name="edit_visualization",
+            description="Update an existing chart tab by index. Provide only config fields that should change.",
+            parameters={
+                "chart_index": {
+                    "type": "integer",
+                    "description": "Chart index from list_visualizations (0-based).",
+                },
+                "config": {
+                    "type": "object",
+                    "description": "Partial visualization config object.",
+                },
+            },
+            handler=self._edit_visualization,
+        ))
+
+        self._register(MCPTool(
+            name="get_visualization_config",
+            description="Get a single visualization config by index.",
+            parameters={
+                "chart_index": {
+                    "type": "integer",
+                    "description": "Chart index from list_visualizations (0-based).",
+                },
+            },
+            handler=self._get_visualization_config,
+        ))
+
+        self._register(MCPTool(
+            name="delete_visualization",
+            description="Delete a chart tab by index. Only use when the user asks to remove a chart.",
+            parameters={
+                "chart_index": {
+                    "type": "integer",
+                    "description": "Chart index from list_visualizations (0-based).",
+                },
+            },
+            handler=self._delete_visualization,
+        ))
+
+        self._register(MCPTool(
+            name="export_visualization",
+            description="Export a rendered chart image to a local PNG/JPG path.",
+            parameters={
+                "chart_index": {
+                    "type": "integer",
+                    "description": "Chart index from list_visualizations (0-based).",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Destination file path. Adds .png if no extension is provided.",
+                },
+            },
+            handler=self._export_visualization,
+        ))
+
         self._register(MCPTool(
             name="get_variables",
             description="List all Python variables in the session namespace with types and shapes.",
@@ -1195,6 +1275,72 @@ class MCPToolRegistry(QObject):
                     context["variables"] = variables
 
         return {"content": [{"type": "text", "text": json.dumps(context, indent=2)}]}
+
+    def _get_results_viewer(self) -> Optional[Any]:
+        """Return the active/global ResultsViewer used by DataPyn."""
+        mw = self._main_window
+        if not mw:
+            return None
+        viewer = getattr(mw, "global_results_viewer", None)
+        if viewer is not None:
+            return viewer
+        viewer = getattr(mw, "results_viewer", None)
+        return viewer() if callable(viewer) else viewer
+
+    def _json_tool_result(self, payload: Any) -> Dict[str, Any]:
+        return {"content": [{"type": "text", "text": json.dumps(payload, indent=2, default=str)}]}
+
+    def _list_visualizations(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        viewer = self._get_results_viewer()
+        if viewer is None or not hasattr(viewer, "list_visualizations"):
+            return {"error": "Results viewer is not available."}
+        return self._json_tool_result(viewer.list_visualizations())
+
+    def _create_visualization(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        viewer = self._get_results_viewer()
+        if viewer is None or not hasattr(viewer, "create_visualization"):
+            return {"error": "Results viewer is not available."}
+        config = args.get("config", {})
+        return self._json_tool_result(viewer.create_visualization(config))
+
+    def _edit_visualization(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        viewer = self._get_results_viewer()
+        if viewer is None or not hasattr(viewer, "update_visualization"):
+            return {"error": "Results viewer is not available."}
+        chart_index = args.get("chart_index")
+        if chart_index is None:
+            return {"error": "chart_index is required."}
+        return self._json_tool_result(viewer.update_visualization(chart_index, args.get("config", {})))
+
+    def _get_visualization_config(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        viewer = self._get_results_viewer()
+        if viewer is None or not hasattr(viewer, "get_visualization_config"):
+            return {"error": "Results viewer is not available."}
+        chart_index = args.get("chart_index")
+        if chart_index is None:
+            return {"error": "chart_index is required."}
+        return self._json_tool_result(viewer.get_visualization_config(chart_index))
+
+    def _delete_visualization(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        viewer = self._get_results_viewer()
+        if viewer is None or not hasattr(viewer, "delete_visualization"):
+            return {"error": "Results viewer is not available."}
+        chart_index = args.get("chart_index")
+        if chart_index is None:
+            return {"error": "chart_index is required."}
+        return self._json_tool_result(viewer.delete_visualization(chart_index))
+
+    def _export_visualization(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        viewer = self._get_results_viewer()
+        if viewer is None or not hasattr(viewer, "export_visualization"):
+            return {"error": "Results viewer is not available."}
+        chart_index = args.get("chart_index")
+        file_path = args.get("file_path")
+        if chart_index is None:
+            return {"error": "chart_index is required."}
+        if not file_path:
+            return {"error": "file_path is required."}
+        return self._json_tool_result(viewer.export_visualization(chart_index, file_path))
 
     # === Helper methods ===
 

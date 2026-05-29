@@ -2065,6 +2065,150 @@ class ResultsViewer(QWidget):
             return title
         return S.visualization.chart_tab_label.format(n=chart_index + 1)
 
+    def list_visualizations(self) -> dict:
+        """Return chart configs and available tabular sources for assistant tools."""
+        return {
+            "active_index": self._active_chart_index if self._chart_configs else None,
+            "visualizations": [
+                self._visualization_payload(index, config)
+                for index, config in enumerate(self._chart_configs)
+                if isinstance(config, dict)
+            ],
+            "sources": self._visualization_sources_payload(),
+        }
+
+    def get_visualization_config(self, chart_index: int) -> dict:
+        """Return one chart configuration by index."""
+        chart_index = int(chart_index)
+        if not 0 <= chart_index < len(self._chart_configs):
+            raise IndexError("visualization index out of range")
+        return self._visualization_payload(chart_index, self._chart_configs[chart_index])
+
+    def create_visualization(self, config: dict) -> dict:
+        """Create a chart tab from a normalized config and return its metadata."""
+        if not isinstance(config, dict):
+            raise ValueError("config must be an object")
+        source_df, source_label = self._source_dataframe_for_chart(config)
+        if source_df is None:
+            raise ValueError("no dataframe source is available for visualization")
+        normalized = self._normalize_visualization_config(config, source_df, source_label)
+        chart_index = len(self._chart_configs)
+        self._chart_configs.append(normalized)
+        self._add_visualization_tab(normalized, chart_index, make_current=True)
+        self._active_chart_index = chart_index
+        self._persist_view_state()
+        return self._visualization_payload(chart_index, normalized)
+
+    def update_visualization(self, chart_index: int, config: dict) -> dict:
+        """Update an existing chart configuration and rerender its tab."""
+        chart_index = int(chart_index)
+        if not 0 <= chart_index < len(self._chart_configs):
+            raise IndexError("visualization index out of range")
+        if not isinstance(config, dict):
+            raise ValueError("config must be an object")
+
+        merged = dict(self._chart_configs[chart_index])
+        merged.update(config)
+        source_df, source_label = self._source_dataframe_for_chart(merged)
+        if source_df is None:
+            raise ValueError("no dataframe source is available for visualization")
+        normalized = self._normalize_visualization_config(merged, source_df, source_label)
+        self._chart_configs[chart_index] = normalized
+
+        page = next((page for page in self._chart_pages if getattr(page, "_chart_index", -1) == chart_index), None)
+        if page is None:
+            page = self._add_visualization_tab(normalized, chart_index, make_current=True)
+        elif page is not None:
+            page._config = dict(normalized)
+            page._source_df = source_df
+            page._source_label = source_label
+            page._image_bytes = None
+            self._render_visualization_page(page)
+            tab_index = self._result_tabs.indexOf(page)
+            if tab_index >= 0:
+                self._result_tabs.setTabText(tab_index, self._chart_tab_label(chart_index, normalized))
+                self._result_tabs.setCurrentIndex(tab_index)
+
+        self._active_chart_index = chart_index
+        self._persist_view_state()
+        return self._visualization_payload(chart_index, normalized)
+
+    def delete_visualization(self, chart_index: int) -> dict:
+        """Delete a chart by index and return the remaining chart list."""
+        chart_index = int(chart_index)
+        if not 0 <= chart_index < len(self._chart_configs):
+            raise IndexError("visualization index out of range")
+        page = next((page for page in self._chart_pages if getattr(page, "_chart_index", -1) == chart_index), None)
+        if page is not None:
+            tab_index = self._result_tabs.indexOf(page)
+            if tab_index >= 0:
+                self._on_result_tab_close_requested(tab_index)
+            else:
+                self._chart_pages.remove(page)
+                self._dispose_chart_page(page)
+                page.deleteLater()
+                self._remove_chart_config(chart_index)
+        else:
+            self._remove_chart_config(chart_index)
+        return self.list_visualizations()
+
+    def export_visualization(self, chart_index: int, file_path: str) -> dict:
+        """Export a rendered chart image to a path."""
+        chart_index = int(chart_index)
+        if not 0 <= chart_index < len(self._chart_configs):
+            raise IndexError("visualization index out of range")
+        page = next((page for page in self._chart_pages if getattr(page, "_chart_index", -1) == chart_index), None)
+        if page is None:
+            page = self._add_visualization_tab(self._chart_configs[chart_index], chart_index, make_current=False)
+        if page is None:
+            raise ValueError("visualization could not be opened")
+        image_bytes = getattr(page, "_image_bytes", None)
+        if not image_bytes:
+            self._render_visualization_page(page)
+            raise ValueError("visualization is rendering; retry export after the chart appears")
+
+        file_path = os.path.abspath(os.path.expanduser(str(file_path or "").strip()))
+        if not file_path:
+            raise ValueError("file_path is required")
+        if not os.path.splitext(file_path)[1]:
+            file_path += ".png"
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "wb") as image_file:
+            image_file.write(image_bytes)
+        return {"path": file_path, "bytes": len(image_bytes), "visualization": self._visualization_payload(chart_index, self._chart_configs[chart_index])}
+
+    def _visualization_payload(self, chart_index: int, config: dict) -> dict:
+        config = dict(config or {})
+        return {
+            "index": chart_index,
+            "title": self._chart_tab_label(chart_index, config),
+            "config": config,
+            "rendered": any(
+                getattr(page, "_chart_index", -1) == chart_index and bool(getattr(page, "_image_bytes", None))
+                for page in self._chart_pages
+            ),
+        }
+
+    def _visualization_sources_payload(self) -> list:
+        tabs = getattr(self, "_result_tabs", None)
+        if tabs is None:
+            return []
+        sources = []
+        for index in range(tabs.count()):
+            page = tabs.widget(index)
+            if self._is_chart_page(page):
+                continue
+            df = self._primary_df if index == 0 else getattr(page, "_df", None)
+            if df is None:
+                continue
+            sources.append({
+                "label": tabs.tabText(index),
+                "rows": int(len(df)),
+                "columns": [str(column) for column in df.columns],
+                "numeric_columns": [str(column) for column in df.columns if pd.api.types.is_numeric_dtype(df[column])],
+            })
+        return sources
+
     def _remove_chart_config(self, chart_index: int):
         if 0 <= chart_index < len(self._chart_configs):
             self._chart_configs.pop(chart_index)

@@ -26,6 +26,9 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QStyle,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize, QThread, QEvent
 from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics
@@ -45,6 +48,15 @@ from datetime import datetime
 from src.language import S
 from src.design_system.tokens import get_colors, RADIUS
 from src.services.copilot.copilot_settings import get_copilot_settings
+from src.services.copilot.copilot_models import (
+    REASONING_EFFORTS,
+    fallback_models,
+    find_model,
+    model_supported_reasoning_efforts,
+    model_supports_reasoning_effort,
+    normalize_models,
+    usage_snapshot_for_model,
+)
 
 try:
     import qtawesome as qta
@@ -472,6 +484,8 @@ class CopilotChatPanel(QWidget):
         self._active_tool_calls: dict = {}  # tool_name -> reference
         self._is_thinking = False  # Tracks collapsible thinking block state
         self._settings = QSettings("DataPyn", "CopilotChat")
+        self._available_models = fallback_models()
+        self._usage_snapshot = usage_snapshot_for_model(self._available_models, "gpt-4o")
         self._current_session_id = None
         self._current_tab_id = None
         self._current_tab_name = ""
@@ -501,6 +515,10 @@ class CopilotChatPanel(QWidget):
                     self._copilot_client.thinking.disconnect(self._on_thinking)
                 if hasattr(self._copilot_client, 'models_changed'):
                     self._copilot_client.models_changed.disconnect(self._on_models_changed)
+                if hasattr(self._copilot_client, 'models_updated'):
+                    self._copilot_client.models_updated.disconnect(self._on_models_changed)
+                if hasattr(self._copilot_client, 'usage_changed'):
+                    self._copilot_client.usage_changed.disconnect(self._on_usage_changed)
                 if hasattr(self._copilot_client, 'auth_started'):
                     self._copilot_client.auth_started.disconnect(self._on_auth_started)
                 if hasattr(self._copilot_client, 'gh_not_found'):
@@ -524,6 +542,10 @@ class CopilotChatPanel(QWidget):
                 client.thinking.connect(self._on_thinking)
             if hasattr(client, 'models_changed'):
                 client.models_changed.connect(self._on_models_changed)
+            if hasattr(client, 'models_updated'):
+                client.models_updated.connect(self._on_models_changed)
+            if hasattr(client, 'usage_changed'):
+                client.usage_changed.connect(self._on_usage_changed)
             if hasattr(client, 'auth_started'):
                 client.auth_started.connect(self._on_auth_started)
             if hasattr(client, 'gh_not_found'):
@@ -536,6 +558,8 @@ class CopilotChatPanel(QWidget):
             self._update_auth_state()
             # Update model list from client if available
             self._update_models_from_client()
+            if hasattr(client, 'usage_snapshot'):
+                self._on_usage_changed(client.usage_snapshot())
 
     def set_mcp_server(self, server):
         """Set or update the MCP server reference."""
@@ -578,7 +602,7 @@ class CopilotChatPanel(QWidget):
         self._new_chat_btn = QPushButton()
         self._new_chat_btn.setFixedSize(28, 28)
         self._new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._new_chat_btn.setToolTip("New Chat")
+        self._new_chat_btn.setToolTip(S.copilot.new_chat)
         if HAS_QTAWESOME:
             self._new_chat_btn.setIcon(qta.icon("mdi.plus", color=colors.text_primary))
         else:
@@ -599,11 +623,11 @@ class CopilotChatPanel(QWidget):
         self._sessions_btn = QPushButton()
         self._sessions_btn.setFixedSize(28, 28)
         self._sessions_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sessions_btn.setToolTip("Chat History")
+        self._sessions_btn.setToolTip(S.copilot.chat_history)
         if HAS_QTAWESOME:
             self._sessions_btn.setIcon(qta.icon("mdi.history", color=colors.text_primary))
         else:
-            self._sessions_btn.setText("H")
+            self._sessions_btn.setText(S.copilot.chat_history_short)
         self._sessions_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -644,9 +668,19 @@ class CopilotChatPanel(QWidget):
         """)
         layout.addWidget(self._tab_badge)
 
-        # === Messages area (WebView-based) ===
+        # === Messages area with persistent history sidebar ===
+        self._chat_body = QWidget()
+        chat_body_layout = QHBoxLayout(self._chat_body)
+        chat_body_layout.setContentsMargins(0, 0, 0, 0)
+        chat_body_layout.setSpacing(0)
+
+        self._history_sidebar = self._create_history_sidebar()
+        self._history_sidebar.setVisible(False)
+        chat_body_layout.addWidget(self._history_sidebar)
+
         self._setup_chat_webview()
-        layout.addWidget(self._chat_webview, 1)
+        chat_body_layout.addWidget(self._chat_webview, 1)
+        layout.addWidget(self._chat_body, 1)
 
         # === GitHub CLI install bar (hidden by default) ===
         self._gh_install_widget = QWidget()
@@ -714,18 +748,46 @@ class CopilotChatPanel(QWidget):
         self._model_combo = QComboBox()
         self._model_delegate = ModelItemDelegate(self._model_combo)
         self._model_combo.setItemDelegate(self._model_delegate)
-        for model in [
-            {"id": "gpt-4o", "name": "GPT-4o", "multiplier": "1x"},
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": "0.33x"},
-            {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": "1x"},
-            {"id": "o3-mini", "name": "o3-mini", "multiplier": "1x"},
-        ]:
-            idx = self._model_combo.count()
-            self._model_combo.addItem(model["name"], model["id"])
-            self._model_combo.setItemData(idx, model["multiplier"], Qt.ItemDataRole.UserRole + 1)
         self._model_combo.setFixedWidth(220)  # Accommodate model names + multiplier
         self._model_combo.setToolTip(S.copilot.model_tooltip)
         config_layout.addWidget(self._model_combo)
+
+        self._refresh_models_btn = QPushButton()
+        self._refresh_models_btn.setFixedSize(26, 26)
+        self._refresh_models_btn.setToolTip(S.copilot.refresh_models)
+        self._refresh_models_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        if HAS_QTAWESOME:
+            self._refresh_models_btn.setIcon(qta.icon("mdi.refresh", color=colors.text_secondary))
+        else:
+            self._refresh_models_btn.setText(S.copilot.refresh_models_short)
+        self._refresh_models_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_muted};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_secondary_hover};
+                border-color: {colors.border_default};
+            }}
+        """)
+        config_layout.addWidget(self._refresh_models_btn)
+
+        self._effort_combo = QComboBox()
+        self._effort_combo.setFixedWidth(118)
+        self._effort_combo.setToolTip(S.copilot.reasoning_effort_tooltip)
+        effort_labels = {
+            "auto": S.copilot.effort_auto,
+            "low": S.copilot.effort_low,
+            "medium": S.copilot.effort_medium,
+            "high": S.copilot.effort_high,
+            "xhigh": S.copilot.effort_xhigh,
+        }
+        for effort in REASONING_EFFORTS:
+            self._effort_combo.addItem(effort_labels.get(effort, effort), effort)
+        config_layout.addWidget(self._effort_combo)
 
         # Usage label (shows premium requests percentage)
         # Hidden by default - shown when usage data becomes available
@@ -737,7 +799,7 @@ class CopilotChatPanel(QWidget):
                 padding: 0 8px;
             }}
         """)
-        self._usage_label.setVisible(False)  # Hidden until we have data
+        self._usage_label.setVisible(False)  # Hidden until we have data or model metadata
         config_layout.addWidget(self._usage_label)
 
         config_layout.addStretch()
@@ -867,6 +929,7 @@ class CopilotChatPanel(QWidget):
         """
         # Mode combo was removed - always agent mode
         self._model_combo.setStyleSheet(combo_style)
+        self._effort_combo.setStyleSheet(combo_style)
 
         self._auth_btn.setStyleSheet(f"""
             QPushButton {{
@@ -882,6 +945,113 @@ class CopilotChatPanel(QWidget):
             }}
         """)
 
+        self._populate_model_combo(self._available_models)
+        preferred_effort = get_copilot_settings().chat_reasoning_effort
+        effort_index = self._effort_combo.findData(preferred_effort)
+        if effort_index >= 0:
+            self._effort_combo.setCurrentIndex(effort_index)
+        self._update_reasoning_effort_state()
+        self._set_usage_snapshot(self._usage_snapshot)
+        self._refresh_history_sidebar()
+        self._apply_theme()
+
+    def _create_history_sidebar(self):
+        """Create the persistent chat history sidebar."""
+        colors = get_colors()
+        sidebar = QFrame()
+        sidebar.setObjectName("copilotHistorySidebar")
+        sidebar.setMinimumWidth(190)
+        sidebar.setMaximumWidth(260)
+
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        title = QLabel(S.copilot.chat_history)
+        title.setObjectName("copilotHistoryTitle")
+        layout.addWidget(title)
+
+        self._history_search = QLineEdit()
+        self._history_search.setObjectName("copilotHistorySearch")
+        self._history_search.setPlaceholderText(S.copilot.history_search_placeholder)
+        layout.addWidget(self._history_search)
+
+        self._history_list = QListWidget()
+        self._history_list.setObjectName("copilotHistoryList")
+        self._history_list.setFrameShape(QFrame.Shape.NoFrame)
+        self._history_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        layout.addWidget(self._history_list, 1)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(6)
+        self._history_delete_btn = QPushButton(S.copilot.delete_chat)
+        self._history_delete_btn.setEnabled(False)
+        self._history_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        actions.addWidget(self._history_delete_btn)
+        self._history_clear_btn = QPushButton(S.copilot.clear_all)
+        self._history_clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        actions.addWidget(self._history_clear_btn)
+        layout.addLayout(actions)
+
+        self._history_search.textChanged.connect(self._refresh_history_sidebar)
+        self._history_list.itemClicked.connect(self._restore_session_from_item)
+        self._history_list.currentItemChanged.connect(
+            lambda item, _prev: self._history_delete_btn.setEnabled(item is not None)
+        )
+        self._history_delete_btn.clicked.connect(self._delete_selected_history_session)
+        self._history_clear_btn.clicked.connect(self._clear_all_sessions)
+
+        sidebar.setStyleSheet(f"""
+            QFrame#copilotHistorySidebar {{
+                background-color: {colors.bg_secondary};
+                border-right: 1px solid {colors.border_default};
+            }}
+            QLabel#copilotHistoryTitle {{
+                color: {colors.text_primary};
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QLineEdit#copilotHistorySearch {{
+                background-color: {colors.bg_primary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
+                border-radius: 5px;
+                padding: 5px 8px;
+                font-size: 12px;
+            }}
+            QListWidget#copilotHistoryList {{
+                background-color: transparent;
+                color: {colors.text_primary};
+                outline: none;
+            }}
+            QListWidget#copilotHistoryList::item {{
+                border-radius: 5px;
+                padding: 7px 6px;
+                margin: 1px 0;
+            }}
+            QListWidget#copilotHistoryList::item:selected {{
+                background-color: {colors.bg_tertiary};
+            }}
+            QPushButton {{
+                background-color: transparent;
+                color: {colors.text_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: 5px;
+                padding: 5px 8px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+            }}
+            QPushButton:disabled {{
+                color: {colors.text_tertiary};
+                border-color: {colors.border_muted};
+            }}
+        """)
+        return sidebar
+
     def _get_template_path(self) -> Path:
         """Get path to chat template, handling PyInstaller bundle."""
         if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -895,6 +1065,7 @@ class CopilotChatPanel(QWidget):
         """Setup the WebView-based chat messages area."""
         from PyQt6.QtWebEngineCore import QWebEngineSettings
         from PyQt6.QtGui import QColor
+        colors = get_colors()
         
         # Create WebView with custom page for external links
         self._chat_webview = QWebEngineView()
@@ -904,8 +1075,8 @@ class CopilotChatPanel(QWidget):
         self._chat_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         # Set dark background BEFORE loading to avoid white flash
-        self._chat_webview.setStyleSheet("background-color: #1e1e1e;")
-        self._chat_webview.page().setBackgroundColor(QColor("#1e1e1e"))
+        self._chat_webview.setStyleSheet(f"background-color: {colors.bg_primary};")
+        self._chat_webview.page().setBackgroundColor(QColor(colors.bg_primary))
         
         # Enable JavaScript
         settings = self._chat_webview.page().settings()
@@ -933,14 +1104,37 @@ class CopilotChatPanel(QWidget):
         else:
             logger.error(f"Chat template not found: {template_path}")
             # Fallback minimal HTML
+            fallback_text = S.copilot.template_not_found
             self._chat_webview.setHtml("""
                 <!DOCTYPE html>
                 <html>
-                <body style="background:#1e1e1e;color:#ccc;font-family:sans-serif;padding:20px;">
-                    <p>Chat template not found. Please check installation.</p>
+                <body style="background:%s;color:%s;font-family:sans-serif;padding:20px;">
+                    <p>%s</p>
                 </body>
                 </html>
-            """)
+            """ % (colors.bg_primary, colors.text_secondary, fallback_text))
+
+    def _apply_theme(self):
+        """Apply current design-system colors to the native shell and WebView."""
+        colors = get_colors()
+        if hasattr(self, '_chat_webview'):
+            from PyQt6.QtGui import QColor
+            self._chat_webview.setStyleSheet(f"background-color: {colors.bg_primary};")
+            self._chat_webview.page().setBackgroundColor(QColor(colors.bg_primary))
+        theme_payload = {
+            "bg_primary": colors.bg_primary,
+            "bg_secondary": colors.bg_secondary,
+            "bg_tertiary": colors.bg_tertiary,
+            "text_primary": colors.text_primary,
+            "text_secondary": colors.text_secondary,
+            "text_tertiary": colors.text_tertiary,
+            "border_default": colors.border_default,
+            "interactive_primary": colors.interactive_primary,
+            "interactive_primary_hover": colors.interactive_primary_hover,
+            "interactive_secondary": colors.interactive_secondary,
+            "interactive_secondary_hover": colors.interactive_secondary_hover,
+        }
+        self._run_chat_js(f"setTheme({json.dumps(theme_payload)})")
     
     def _on_webview_ready(self):
         """Called when chat WebView is ready."""
@@ -948,27 +1142,29 @@ class CopilotChatPanel(QWidget):
         
         # Set welcome text from translation
         welcome_title = "GitHub Copilot"
-        welcome_msg = S.copilot.welcome_message if hasattr(S.copilot, 'welcome_message') else "Sign in to start chatting."
+        welcome_msg = S.copilot.welcome_message
         self._run_chat_js(f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(welcome_msg)})")
         
         # Send i18n labels to WebView
         chat_labels = {
-            "thinking": getattr(S.copilot, 'thinking', 'Thinking'),
-            "thinking_complete": getattr(S.copilot, 'thinking_complete', 'Thought for {seconds}s'),
-            "tool_processing": getattr(S.copilot, 'tool_processing', 'Processing...'),
-            "tool_using_one": getattr(S.copilot, 'tool_using_one', 'Using 1 tool...'),
-            "tool_using_many": getattr(S.copilot, 'tool_using_many', 'Using {count} tools...'),
-            "tool_used_one": getattr(S.copilot, 'tool_used_one', 'Used 1 tool'),
-            "tool_used_many": getattr(S.copilot, 'tool_used_many', 'Used {count} tools'),
-            "tool_running": getattr(S.copilot, 'tool_running', 'running...'),
-            "tool_ok": getattr(S.copilot, 'tool_ok', 'ok'),
-            "tool_error": getattr(S.copilot, 'tool_error', 'error'),
-            "copy": getattr(S.copilot, 'copy_code', 'Copy'),
-            "copied": getattr(S.copilot, 'copied_code', 'Copied!'),
-            "insert": getattr(S.copilot, 'insert_code', 'Insert'),
-            "inserted": getattr(S.copilot, 'inserted_code', 'Inserted!'),
+            "thinking": S.copilot.thinking,
+            "thinking_complete": S.copilot.thinking_complete,
+            "tool_processing": S.copilot.tool_processing,
+            "tool_using_one": S.copilot.tool_using_one,
+            "tool_using_many": S.copilot.tool_using_many,
+            "tool_used_one": S.copilot.tool_used_one,
+            "tool_used_many": S.copilot.tool_used_many,
+            "tool_running": S.copilot.tool_running,
+            "tool_ok": S.copilot.tool_ok,
+            "tool_error": S.copilot.tool_error,
+            "copy": S.copilot.copy_code,
+            "copied": S.copilot.copied_code,
+            "insert": S.copilot.insert_code,
+            "inserted": S.copilot.inserted_code,
+            "waiting_response": S.copilot.waiting_response,
         }
         self._run_chat_js(f"setLabels({json.dumps(chat_labels)})")
+        self._apply_theme()
         
         # Execute pending operations
         for op in self._pending_webview_ops:
@@ -991,6 +1187,8 @@ class CopilotChatPanel(QWidget):
         self._input.submit_requested.connect(self._on_send)
         self._auth_btn.clicked.connect(self._on_auth_clicked)
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self._effort_combo.currentIndexChanged.connect(self._on_reasoning_effort_changed)
+        self._refresh_models_btn.clicked.connect(self._on_refresh_models_clicked)
         self._new_chat_btn.clicked.connect(self._on_new_chat)
         self._sessions_btn.clicked.connect(self._on_sessions_clicked)
         
@@ -1008,109 +1206,84 @@ class CopilotChatPanel(QWidget):
         self.clear_chat()
 
     def _on_sessions_clicked(self):
-        """Show sessions menu."""
-        colors = get_colors()
-        menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {colors.bg_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                padding: 4px;
-            }}
-            QMenu::item {{
-                padding: 6px 12px;
-                color: {colors.text_primary};
-            }}
-            QMenu::item:selected {{
-                background-color: {colors.bg_tertiary};
-            }}
-        """)
+        """Toggle the persistent chat history sidebar."""
+        self._refresh_history_sidebar()
+        self._history_sidebar.setVisible(not self._history_sidebar.isVisible())
 
+    def _session_display_name(self, session: dict) -> str:
+        name = session.get("name") or session.get("title") or S.copilot.untitled_chat
+        return str(name).strip() or S.copilot.untitled_chat
+
+    def _refresh_history_sidebar(self):
+        """Refresh the visible history list from persisted sessions."""
+        if not hasattr(self, '_history_list'):
+            return
+        query = ""
+        if hasattr(self, '_history_search'):
+            query = self._history_search.text().strip().lower()
+
+        self._history_list.clear()
         sessions = self._get_sessions_list()
-        if not sessions:
-            action = menu.addAction(S.copilot.no_sessions)
-            action.setEnabled(False)
-        else:
-            for session in sessions[:10]:  # Show last 10
-                name = session.get("name", "Untitled")[:35]
-                session_id = session.get("id", "")
+        for session in sessions:
+            name = self._session_display_name(session)
+            if query and query not in name.lower():
+                continue
+            timestamp = str(session.get("timestamp", ""))[:16].replace("T", " ")
+            model = session.get("model", "")
+            label = name
+            details = "  ".join(part for part in (timestamp, model) if part)
+            if details:
+                label = f"{name}\n{details}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, session.get("id", ""))
+            if session.get("id") == self._current_session_id:
+                item.setSelected(True)
+            self._history_list.addItem(item)
 
-                # Create a widget action with session name and delete button
-                widget = QWidget()
-                layout = QHBoxLayout(widget)
-                layout.setContentsMargins(8, 4, 4, 4)
-                layout.setSpacing(4)
+        if self._history_list.count() == 0:
+            item = QListWidgetItem(S.copilot.no_sessions)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._history_list.addItem(item)
+        self._history_delete_btn.setEnabled(self._history_list.currentItem() is not None)
 
-                label = QLabel(name)
-                label.setStyleSheet(f"color: {colors.text_primary}; font-size: 12px;")
-                label.setCursor(Qt.CursorShape.PointingHandCursor)
-                layout.addWidget(label, 1)
+    def _restore_session_from_item(self, item: QListWidgetItem):
+        session_id = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if session_id:
+            self._restore_session(session_id)
 
-                delete_btn = QPushButton()
-                if HAS_QTAWESOME:
-                    delete_btn.setIcon(qta.icon("mdi.delete-outline", color=colors.text_tertiary))
-                else:
-                    delete_btn.setText("x")
-                delete_btn.setFixedSize(20, 20)
-                delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                delete_btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: transparent;
-                        border: none;
-                        border-radius: 2px;
-                    }}
-                    QPushButton:hover {{
-                        background: {colors.bg_tertiary};
-                    }}
-                """)
-                delete_btn.clicked.connect(lambda checked, sid=session_id, m=menu: self._delete_session(sid, m))
-                layout.addWidget(delete_btn)
+    def _delete_selected_history_session(self):
+        item = self._history_list.currentItem() if hasattr(self, '_history_list') else None
+        session_id = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if session_id:
+            self._delete_session(session_id)
 
-                action = QWidgetAction(menu)
-                action.setDefaultWidget(widget)
-                # Connect label click to restore session
-                def make_click_handler(sid, m):
-                    def handler(event):
-                        self._restore_session(sid)
-                        m.close()
-                    return handler
-                label.mousePressEvent = make_click_handler(session_id, menu)
-                menu.addAction(action)
-
-            menu.addSeparator()
-
-            # Delete all option
-            if sessions:
-                clear_action = menu.addAction(S.copilot.clear_all)
-                clear_action.triggered.connect(self._clear_all_sessions)
-
-        menu.exec(self._sessions_btn.mapToGlobal(self._sessions_btn.rect().bottomLeft()))
-
-    def _delete_session(self, session_id: str, menu: QMenu):
+    def _delete_session(self, session_id: str, menu: QMenu = None):
         """Delete a specific session."""
         sessions = self._get_sessions_list()
         sessions = [s for s in sessions if s.get("id") != session_id]
-        self._settings.setValue("sessions", json.dumps(sessions))
+        self._save_sessions_list(sessions)
 
         # If deleting current session, clear it
         if self._current_session_id == session_id:
             self._current_session_id = ""
             self._settings.setValue("last_session_id", "")
 
-        menu.close()
+        if menu is not None:
+            menu.close()
+        self._refresh_history_sidebar()
 
     def _clear_all_sessions(self):
         """Clear all saved sessions."""
         self._settings.setValue("sessions", "[]")
         self._settings.setValue("last_session_id", "")
+        self._refresh_history_sidebar()
 
     def _set_loading(self, loading: bool):
         """Set loading state - disable input while waiting for response."""
         self._send_btn.setEnabled(not loading)
         self._input.setEnabled(not loading)
         if loading:
-            self._send_btn.setToolTip("Waiting for Copilot response...")
+            self._send_btn.setToolTip(getattr(S.copilot, 'waiting_response', S.copilot.send_tooltip))
             self._send_btn.hide()
             self._stop_btn.show()
         else:
@@ -1120,7 +1293,7 @@ class CopilotChatPanel(QWidget):
 
     def _on_stop(self):
         """Handle stop button - cancel current operation."""
-        if self._copilot_client:
+        if self._copilot_client and hasattr(self._copilot_client, "cancel"):
             self._copilot_client.cancel()
         self._cancel_active_tool_target()
         if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
@@ -1592,31 +1765,124 @@ class CopilotChatPanel(QWidget):
 
     def _on_models_changed(self, models: list):
         """Handle dynamic model list update from SDK."""
-        if not models:
-            return
+        self._populate_model_combo(models)
+
+    def _on_refresh_models_clicked(self):
+        """Refresh model and usage metadata from the Copilot client."""
+        self._usage_label.setText(S.copilot.usage_loading)
+        self._usage_label.setVisible(True)
+        if self._copilot_client and hasattr(self._copilot_client, 'refresh_metadata'):
+            self._copilot_client.refresh_metadata()
+        elif self._copilot_client and hasattr(self._copilot_client, 'start_auth'):
+            self._copilot_client.start_auth()
+
+    def _format_multiplier(self, multiplier) -> str:
+        try:
+            value = float(multiplier)
+        except (TypeError, ValueError):
+            value = 1.0
+        if value == int(value):
+            return f"{int(value)}x"
+        return f"{value:.2g}x"
+
+    def _populate_model_combo(self, models: list):
+        """Populate the model combo with normalized model metadata."""
+        normalized = normalize_models(models) or fallback_models()
         current_model = self._model_combo.currentData()
+        if not current_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
+            current_model = self._copilot_client.model
+        self._available_models = normalized
+
+        self._model_combo.blockSignals(True)
         self._model_combo.clear()
-        for model in models:
+        for model in normalized:
             model_id = model.get("id", "")
             model_name = model.get("name", model_id)
-            multiplier = model.get("multiplier", 1.0)
-            # Format multiplier: show as "0.33x", "1x", "2x" etc.
-            if multiplier is not None:
-                if multiplier == int(multiplier):
-                    mult_str = f"{int(multiplier)}x"
-                else:
-                    mult_str = f"{multiplier:.2g}x"
-            else:
-                mult_str = "1x"
-            
             idx = self._model_combo.count()
             self._model_combo.addItem(model_name, model_id)
-            self._model_combo.setItemData(idx, mult_str, Qt.ItemDataRole.UserRole + 1)
-        # Restore selection if possible
-        if current_model:
-            idx = self._model_combo.findData(current_model)
-            if idx >= 0:
-                self._model_combo.setCurrentIndex(idx)
+            self._model_combo.setItemData(idx, self._format_multiplier(model.get("multiplier", 1.0)), Qt.ItemDataRole.UserRole + 1)
+            self._model_combo.setItemData(idx, dict(model), Qt.ItemDataRole.UserRole + 2)
+
+        restore_idx = self._model_combo.findData(current_model) if current_model else -1
+        if restore_idx < 0 and self._model_combo.count() > 0:
+            restore_idx = 0
+        if restore_idx >= 0:
+            self._model_combo.setCurrentIndex(restore_idx)
+        self._model_combo.blockSignals(False)
+
+        selected_model = self._model_combo.currentData()
+        if selected_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
+            self._copilot_client.model = selected_model
+        self._update_reasoning_effort_state()
+        self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, selected_model))
+
+    def _on_usage_changed(self, snapshot: dict):
+        """Update usage display from client/service metadata."""
+        self._set_usage_snapshot(snapshot)
+
+    def _set_usage_snapshot(self, snapshot: dict):
+        """Render the compact usage pill. Never invent quota numbers."""
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        self._usage_snapshot = snapshot
+        if snapshot.get("available"):
+            used = snapshot.get("used")
+            total = snapshot.get("total")
+            remaining = snapshot.get("remaining_percentage")
+            if used is not None and total is not None:
+                text = S.copilot.usage_format.format(used=used, total=total)
+            elif used is not None:
+                text = S.copilot.usage_used_format.format(used=used)
+            elif remaining is not None:
+                text = S.copilot.usage_remaining_format.format(remaining=remaining)
+            else:
+                text = S.copilot.usage_unavailable
+            reset_date = snapshot.get("reset_date")
+            tooltip = S.copilot.usage_tooltip_with_reset.format(reset_date=reset_date) if reset_date else S.copilot.usage_tooltip
+        else:
+            multiplier = self._format_multiplier(snapshot.get("multiplier", 1.0))
+            text = S.copilot.usage_unavailable
+            tooltip = S.copilot.usage_unavailable_tooltip.format(multiplier=multiplier)
+        self._usage_label.setText(text)
+        self._usage_label.setToolTip(tooltip)
+        self._usage_label.setVisible(True)
+
+    def _update_reasoning_effort_state(self):
+        """Enable reasoning effort choices only for supporting models."""
+        model_id = self._model_combo.currentData() or ""
+        supported = model_supports_reasoning_effort(self._available_models, model_id)
+        supported_efforts = model_supported_reasoning_efforts(self._available_models, model_id)
+        self._effort_combo.setEnabled(True)
+        for index in range(self._effort_combo.count()):
+            effort = self._effort_combo.itemData(index)
+            enabled = effort == "auto" or effort in supported_efforts
+            self._effort_combo.model().item(index).setEnabled(enabled)
+        current_effort = self._effort_combo.currentData()
+        if current_effort != "auto" and current_effort not in supported_efforts:
+            model = find_model(self._available_models, model_id) or {}
+            preferred_effort = model.get("default_reasoning_effort") if supported else "auto"
+            if preferred_effort not in supported_efforts:
+                preferred_effort = "auto"
+            effort_idx = self._effort_combo.findData(preferred_effort)
+            if effort_idx >= 0:
+                self._effort_combo.setCurrentIndex(effort_idx)
+        tooltip = S.copilot.reasoning_effort_tooltip
+        if not supported:
+            tooltip = S.copilot.reasoning_effort_unavailable
+        self._effort_combo.setToolTip(tooltip)
+
+    def _on_reasoning_effort_changed(self, index: int):
+        """Persist and apply the selected reasoning effort."""
+        effort = self._effort_combo.currentData() or "auto"
+        model_id = self._model_combo.currentData() or ""
+        supported_efforts = model_supported_reasoning_efforts(self._available_models, model_id)
+        if effort != "auto" and effort not in supported_efforts:
+            auto_idx = self._effort_combo.findData("auto")
+            if auto_idx >= 0:
+                self._effort_combo.setCurrentIndex(auto_idx)
+            return
+        get_copilot_settings().set_chat_reasoning_effort(effort)
+        if self._copilot_client and hasattr(self._copilot_client, 'reasoning_effort'):
+            self._copilot_client.reasoning_effort = effort
 
     def _on_auth_clicked(self):
         """Handle auth button click."""
@@ -1677,16 +1943,7 @@ class CopilotChatPanel(QWidget):
         # Also update legacy setting
         self._settings.setValue("was_authenticated", "false")
         # Reset model combo to defaults
-        self._model_combo.clear()
-        for model in [
-            {"id": "gpt-4o", "name": "GPT-4o", "multiplier": "1x"},
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": "0.33x"},
-            {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": "1x"},
-            {"id": "o3-mini", "name": "o3-mini", "multiplier": "1x"},
-        ]:
-            idx = self._model_combo.count()
-            self._model_combo.addItem(model["name"], model["id"])
-            self._model_combo.setItemData(idx, model["multiplier"], Qt.ItemDataRole.UserRole + 1)
+        self._populate_model_combo(fallback_models())
 
     def _on_auth_required(self, user_code: str, verification_uri: str):
         """Show authentication instructions to the user."""
@@ -1871,29 +2128,7 @@ class CopilotChatPanel(QWidget):
         try:
             models = self._copilot_client.available_models()
             if models and len(models) > 0:
-                current_model = self._model_combo.currentData()
-                self._model_combo.clear()
-                for model in models:
-                    model_id = model.get("id", "")
-                    model_name = model.get("name", model_id)
-                    multiplier = model.get("multiplier", 1.0)
-                    # Format multiplier
-                    if multiplier is not None:
-                        if multiplier == int(multiplier):
-                            mult_str = f"{int(multiplier)}x"
-                        else:
-                            mult_str = f"{multiplier:.2g}x"
-                    else:
-                        mult_str = "1x"
-                    
-                    idx = self._model_combo.count()
-                    self._model_combo.addItem(model_name, model_id)
-                    self._model_combo.setItemData(idx, mult_str, Qt.ItemDataRole.UserRole + 1)
-                # Restore selection if possible
-                if current_model:
-                    idx = self._model_combo.findData(current_model)
-                    if idx >= 0:
-                        self._model_combo.setCurrentIndex(idx)
+                self._populate_model_combo(models)
         except Exception as e:
             logger.debug(f"Could not update models from client: {e}")
 
@@ -1902,10 +2137,13 @@ class CopilotChatPanel(QWidget):
         model_id = self._model_combo.currentData()
         if model_id and self._copilot_client:
             self._copilot_client.model = model_id
+        self._update_reasoning_effort_state()
+        self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, model_id))
 
     def set_theme_manager(self, theme_manager):
         """Set theme manager for dynamic theming."""
         self.theme_manager = theme_manager
+        self._apply_theme()
 
     # === Per-Tab Chat Context ===
 
@@ -1918,7 +2156,7 @@ class CopilotChatPanel(QWidget):
     
     def _update_tab_badge(self, tab_name: str):
         """Update the tab context badge in the chat header."""
-        label_text = getattr(S.copilot, 'chat_context_tab', 'Tab: {name}').replace('{name}', tab_name)
+        label_text = S.copilot.chat_context_tab.replace('{name}', tab_name)
         if hasattr(self, '_tab_badge'):
             self._tab_badge.setText(label_text)
             self._tab_badge.setVisible(True)
@@ -1931,6 +2169,7 @@ class CopilotChatPanel(QWidget):
         self._run_chat_js("clearMessages()")
         self._current_stream_id = None
         self._current_session_id = None
+        self._refresh_history_sidebar()
 
     # === Session Persistence ===
 
@@ -1977,6 +2216,11 @@ class CopilotChatPanel(QWidget):
             "id": session_id,
             "name": session_name,
             "timestamp": datetime.now().isoformat(),
+            "model": self._model_combo.currentData() if hasattr(self, '_model_combo') else "",
+            "reasoning_effort": self._effort_combo.currentData() if hasattr(self, '_effort_combo') else "auto",
+            "target_tab_id": self._current_tab_id,
+            "target_tab_name": self._current_tab_name,
+            "preview": next((msg.get("content", "")[:120] for msg in self._messages if msg.get("role") == "assistant"), ""),
             "messages": self._messages.copy(),
         }
 
@@ -1989,6 +2233,7 @@ class CopilotChatPanel(QWidget):
         # Keep only last 20 sessions
         sessions = sessions[:20]
         self._save_sessions_list(sessions)
+        self._refresh_history_sidebar()
 
         # Save as last session
         self._settings.setValue("last_session_id", session_id)
@@ -2010,9 +2255,19 @@ class CopilotChatPanel(QWidget):
             if session.get("id") == session_id:
                 self.clear_chat()
                 self._current_session_id = session_id
+                model_id = session.get("model", "")
+                if model_id:
+                    index = self._model_combo.findData(model_id)
+                    if index >= 0:
+                        self._model_combo.setCurrentIndex(index)
+                effort = session.get("reasoning_effort", "auto")
+                effort_index = self._effort_combo.findData(effort)
+                if effort_index >= 0:
+                    self._effort_combo.setCurrentIndex(effort_index)
                 messages = session.get("messages", [])
                 for msg in messages:
                     self._add_message(msg["role"], msg["content"])
+                self._refresh_history_sidebar()
                 # Welcome is auto-hidden when messages are added
                 return True
         return False

@@ -15,6 +15,7 @@ Logic:
 
 from PyQt6.QtCore import QSettings
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,50 @@ class CopilotSettingsManager:
         self._settings.remove("chat/was_authenticated")
         self._settings.remove("chat/user_logged_out")
         self._settings.remove("chat/username")
+
+    @property
+    def chat_selected_model(self) -> str:
+        """Get the preferred chat model for this workspace."""
+        return self._settings.value("chat/selected_model", "gpt-4o") or "gpt-4o"
+
+    def set_chat_selected_model(self, model_id: str):
+        """Persist the preferred chat model for this workspace."""
+        self._settings.setValue("chat/selected_model", str(model_id or "gpt-4o"))
+
+    @property
+    def chat_reasoning_effort(self) -> str:
+        """Get the preferred reasoning effort for this workspace."""
+        try:
+            from src.services.copilot.copilot_models import normalize_reasoning_effort
+            return normalize_reasoning_effort(self._settings.value("chat/reasoning_effort", "auto"))
+        except Exception:
+            value = str(self._settings.value("chat/reasoning_effort", "auto") or "auto").lower()
+            return value if value in ("auto", "low", "medium", "high", "xhigh") else "auto"
+
+    def set_chat_reasoning_effort(self, effort: str):
+        """Persist the preferred reasoning effort for this workspace."""
+        try:
+            from src.services.copilot.copilot_models import normalize_reasoning_effort
+            effort = normalize_reasoning_effort(effort)
+        except Exception:
+            effort = "auto"
+        self._settings.setValue("chat/reasoning_effort", effort)
+
+    @property
+    def chat_usage_snapshot(self) -> dict:
+        """Get the last known usage snapshot."""
+        raw = self._settings.value("chat/usage_snapshot", "{}") or "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else {}
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def set_chat_usage_snapshot(self, snapshot: dict):
+        """Persist the last known usage snapshot."""
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        self._settings.setValue("chat/usage_snapshot", json.dumps(snapshot))
     
     # ========================
     # LSP / AUTOCOMPLETE SETTINGS

@@ -37,6 +37,9 @@ class TestMCPToolRegistry:
         assert "open_connection" in tool_names
         assert "read_schema" in tool_names
         assert "get_context" in tool_names
+        assert "list_visualizations" in tool_names
+        assert "create_visualization" in tool_names
+        assert "edit_visualization" in tool_names
 
     def test_list_tools_has_correct_schema(self):
         """Each tool should have name, description, and inputSchema."""
@@ -752,6 +755,193 @@ class TestMCPToolRegistry:
         assert context["block_map"]["vendas"] == 0
         assert context["block_map"]["analise"] == 1
         assert context["total_blocks"] == 2
+
+    def test_list_visualizations_uses_results_viewer(self):
+        """list_visualizations should return the ResultsViewer payload as JSON."""
+        mock_viewer = MagicMock()
+        mock_viewer.list_visualizations.return_value = {
+            "visualizations": [],
+            "sources": [{"label": "df", "columns": ["month", "sales"]}],
+        }
+        mock_mw = MagicMock()
+        mock_mw.global_results_viewer = mock_viewer
+        self.registry.set_main_window(mock_mw)
+
+        result = self.registry.execute("list_visualizations", {})
+
+        assert "content" in result
+        payload = json.loads(result["content"][0]["text"])
+        assert payload["sources"][0]["columns"] == ["month", "sales"]
+        mock_viewer.list_visualizations.assert_called_once_with()
+
+    def test_create_and_edit_visualization_call_results_viewer(self):
+        """create_visualization and edit_visualization should delegate to ResultsViewer."""
+        mock_viewer = MagicMock()
+        mock_viewer.create_visualization.return_value = {"index": 0, "config": {"type": "bar"}}
+        mock_viewer.update_visualization.return_value = {"index": 0, "config": {"type": "line"}}
+        mock_mw = MagicMock()
+        mock_mw.global_results_viewer = mock_viewer
+        self.registry.set_main_window(mock_mw)
+
+        created = self.registry.execute("create_visualization", {"config": {"type": "bar"}})
+        edited = self.registry.execute("edit_visualization", {"chart_index": 0, "config": {"type": "line"}})
+
+        assert json.loads(created["content"][0]["text"])["config"]["type"] == "bar"
+        assert json.loads(edited["content"][0]["text"])["config"]["type"] == "line"
+        mock_viewer.create_visualization.assert_called_once_with({"type": "bar"})
+        mock_viewer.update_visualization.assert_called_once_with(0, {"type": "line"})
+
+    def test_export_visualization_requires_chart_index_and_path(self):
+        """export_visualization should validate required arguments before delegation."""
+        mock_viewer = MagicMock()
+        mock_mw = MagicMock()
+        mock_mw.global_results_viewer = mock_viewer
+        self.registry.set_main_window(mock_mw)
+
+        missing_index = self.registry.execute("export_visualization", {"file_path": "chart.png"})
+        missing_path = self.registry.execute("export_visualization", {"chart_index": 0})
+
+        assert "chart_index" in missing_index["error"]
+        assert "file_path" in missing_path["error"]
+        mock_viewer.export_visualization.assert_not_called()
+
+
+class TestCopilotModelMetadata:
+    """Tests for Copilot model normalization and reasoning effort support."""
+
+    def test_normalize_models_deduplicates_and_keeps_capabilities(self):
+        from src.services.copilot.copilot_models import normalize_models
+
+        models = normalize_models([
+            {"id": "o3", "name": "o3", "supports_reasoning_effort": True, "multiplier": 10},
+            {"id": "o3", "name": "duplicate"},
+        ])
+
+        assert len(models) == 1
+        assert models[0]["id"] == "o3"
+        assert models[0]["supports_reasoning_effort"] is True
+        assert models[0]["multiplier"] == 10.0
+
+    def test_reasoning_effort_aliases_and_model_support(self):
+        from src.services.copilot.copilot_models import (
+            model_supports_reasoning_effort,
+            normalize_reasoning_effort,
+        )
+
+        assert normalize_reasoning_effort("medium-high") == "high"
+        assert normalize_reasoning_effort("x-high") == "xhigh"
+        assert model_supports_reasoning_effort([], "o4-mini") is True
+        assert model_supports_reasoning_effort([], "gpt-4o") is False
+
+    def test_usage_snapshot_for_model_reports_multiplier_without_quota(self):
+        from src.services.copilot.copilot_models import fallback_models, usage_snapshot_for_model
+
+        snapshot = usage_snapshot_for_model(fallback_models(), "o3")
+
+        assert snapshot["available"] is False
+        assert snapshot["model_id"] == "o3"
+        assert snapshot["multiplier"] > 1
+        assert "subscription_url" in snapshot
+
+    def test_normalize_model_reads_sdk_reasoning_metadata(self):
+        from dataclasses import dataclass
+
+        from src.services.copilot.copilot_models import normalize_models
+
+        @dataclass
+        class Supports:
+            reasoning_effort: bool
+
+        @dataclass
+        class Capabilities:
+            supports: Supports
+
+        @dataclass
+        class Billing:
+            multiplier: float
+
+        @dataclass
+        class SDKModel:
+            id: str
+            name: str
+            capabilities: Capabilities
+            billing: Billing
+            supported_reasoning_efforts: list
+            default_reasoning_effort: str
+
+        models = normalize_models([
+            SDKModel(
+                id="claude-sonnet-4.5",
+                name="Claude Sonnet 4.5",
+                capabilities=Capabilities(Supports(reasoning_effort=True)),
+                billing=Billing(multiplier=1.5),
+                supported_reasoning_efforts=["low", "medium"],
+                default_reasoning_effort="medium",
+            )
+        ])
+
+        assert models[0]["supports_reasoning_effort"] is True
+        assert models[0]["supported_reasoning_efforts"] == ["low", "medium"]
+        assert models[0]["default_reasoning_effort"] == "medium"
+        assert models[0]["multiplier"] == 1.5
+
+    def test_usage_snapshot_from_quota_reports_real_premium_usage(self):
+        from dataclasses import dataclass
+
+        from src.services.copilot.copilot_models import fallback_models, usage_snapshot_from_quota
+
+        @dataclass
+        class Quota:
+            entitlement_requests: float
+            used_requests: float
+            remaining_percentage: float
+            overage: float
+            reset_date: str
+            overage_allowed_with_exhausted_quota: bool = False
+
+        @dataclass
+        class QuotaResult:
+            quota_snapshots: dict
+
+        result = QuotaResult({
+            "chat": Quota(1000, 10, 99, 0, "2026-06-01"),
+            "premium_interactions": Quota(300, 42, 86, 0, "2026-06-01"),
+        })
+
+        snapshot = usage_snapshot_from_quota(result, fallback_models(), "o3")
+
+        assert snapshot["available"] is True
+        assert snapshot["quota_key"] == "premium_interactions"
+        assert snapshot["used"] == 42
+        assert snapshot["total"] == 300
+        assert snapshot["remaining_percentage"] == 86
+        assert snapshot["reset_date"] == "2026-06-01"
+
+    def test_usage_snapshot_from_event_reports_partial_usage(self):
+        from dataclasses import dataclass
+
+        from src.services.copilot.copilot_models import fallback_models, usage_snapshot_from_event
+
+        @dataclass
+        class UsageEvent:
+            model: str
+            total_premium_requests: float
+            input_tokens: float
+            output_tokens: float
+            cache_read_tokens: float = 0
+            cache_write_tokens: float = 0
+
+        snapshot = usage_snapshot_from_event(
+            UsageEvent("o3", 1.5, 1200, 300),
+            fallback_models(),
+            "o3",
+        )
+
+        assert snapshot["available"] is True
+        assert snapshot["source"] == "session_event"
+        assert snapshot["status"] == "partial"
+        assert snapshot["used"] == 1.5
+        assert snapshot["input_tokens"] == 1200
 
 
 # ==================== MCPServer Tests ====================
