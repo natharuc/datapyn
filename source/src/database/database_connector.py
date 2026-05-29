@@ -24,6 +24,78 @@ from src.language import S
 logger = logging.getLogger(__name__)
 
 
+def _safe_exception_text(error: BaseException) -> str:
+    try:
+        return str(error)
+    except UnicodeDecodeError as decode_error:
+        return str(decode_error)
+    except Exception:
+        try:
+            return repr(error)
+        except Exception:
+            return error.__class__.__name__
+
+
+def _is_unicode_decode_error(error: BaseException) -> bool:
+    seen = set()
+    current = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, UnicodeDecodeError):
+            return True
+        text_value = _safe_exception_text(current).lower()
+        if "codec can't decode byte" in text_value and ("utf-8" in text_value or "utf8" in text_value):
+            return True
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    return False
+
+
+def _is_direct_unicode_decode_error(error: BaseException) -> bool:
+    if isinstance(error, UnicodeDecodeError):
+        return True
+    text_value = _safe_exception_text(error).lower()
+    return "codec can't decode byte" in text_value and ("utf-8" in text_value or "utf8" in text_value)
+
+
+def _format_sql_error_for_user(error: BaseException, db_type: str = "", query: str = "") -> str:
+    error_text = _safe_exception_text(error)
+    if str(db_type or "").lower() == "postgresql" and _is_postgresql_undefined_relation_error(error_text):
+        hint = _postgresql_identifier_case_hint(query)
+        if hint and hint not in error_text:
+            return f"{error_text}\n\n{hint}"
+    return error_text
+
+
+def _is_postgresql_undefined_relation_error(error_text: str) -> bool:
+    lowered = (error_text or "").lower()
+    return (
+        "undefinedtable" in lowered
+        or "relation" in lowered and "does not exist" in lowered
+        or "relação" in lowered and "não existe" in lowered
+        or "relacao" in lowered and "nao existe" in lowered
+    )
+
+
+def _postgresql_identifier_case_hint(query: str) -> str:
+    import re
+
+    quoted_identifiers = set(re.findall(r'"([^"]+)"', query or ""))
+    candidates = re.findall(
+        r"\b(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)",
+        query or "",
+        flags=re.IGNORECASE,
+    )
+    has_mixed_case_identifier = any(
+        any(char.isupper() for char in part)
+        for candidate in candidates
+        for part in candidate.split(".")
+        if part not in quoted_identifiers
+    )
+    if not has_mixed_case_identifier:
+        return ""
+    return S.workers.postgres_identifier_case_hint
+
+
 SQLSERVER_AUTH_SQL_PASSWORD = "sql_password"
 SQLSERVER_AUTH_WINDOWS = "windows"
 SQLSERVER_AUTH_ENTRA_MFA = "entra_mfa"
@@ -340,7 +412,7 @@ class DatabaseConnector:
                 # The SDK raises KeyError('access_token') when the server
                 # response to a token refresh lacks the expected field.
                 # Delete stale cache and retry to trigger fresh browser OAuth.
-                if db_type == "databricks" and "access_token" in str(e):
+                if db_type == "databricks" and "access_token" in _safe_exception_text(e):
                     logger.warning("Databricks OAuth token expired. Clearing cache and retrying...")
                     cache_path = _get_oauth_token_cache_path(host)
                     if cache_path.exists():
@@ -352,6 +424,38 @@ class DatabaseConnector:
                     )
                     with self.engine.connect() as conn:
                         conn.execute(text("SELECT 1"))
+                else:
+                    raise
+            except Exception as e:
+                if db_type == "postgresql" and _is_unicode_decode_error(e) and not kwargs.get("postgresql_client_encoding"):
+                    retry_error = None
+                    for client_encoding in ("WIN1252", "LATIN1"):
+                        retry_kwargs = dict(kwargs)
+                        retry_kwargs["postgresql_client_encoding"] = client_encoding
+                        retry_connection_string, retry_connect_args = self._build_connection_string(
+                            db_type, host, port, database, username, password, **retry_kwargs
+                        )
+                        retry_engine = create_engine(
+                            retry_connection_string,
+                            pool_pre_ping=True,
+                            connect_args=retry_connect_args,
+                        )
+                        try:
+                            self.engine.dispose()
+                            self.engine = retry_engine
+                            with self.engine.connect() as conn:
+                                conn.execute(text("SELECT 1"))
+                            kwargs["postgresql_client_encoding"] = client_encoding
+                            logger.info("PostgreSQL connection retried with client_encoding=%s", client_encoding)
+                            retry_error = None
+                            break
+                        except Exception as fallback_error:
+                            retry_error = fallback_error
+                            retry_engine.dispose()
+                            if not _is_direct_unicode_decode_error(fallback_error):
+                                raise
+                    if retry_error is not None:
+                        raise retry_error
                 else:
                     raise
 
@@ -401,7 +505,7 @@ class DatabaseConnector:
             return True
 
         except Exception as e:
-            logger.error(f"Database connection error: {str(e)}")
+            logger.error(f"Database connection error: {_safe_exception_text(e)}")
             raise
 
     def _get_available_odbc_driver(self) -> str:
@@ -536,7 +640,11 @@ class DatabaseConnector:
             # Important for Azure PostgreSQL where user is "user@server"
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
-            return f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{host}:{port}/{database}", {}
+            connect_args = {}
+            client_encoding = str(kwargs.get("postgresql_client_encoding", "") or "").strip()
+            if client_encoding:
+                connect_args["client_encoding"] = client_encoding
+            return f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{host}:{port}/{database}", connect_args
 
         elif db_type == "databricks":
             # Databricks SQL Warehouse connection
@@ -969,6 +1077,52 @@ class DatabaseConnector:
         )
 
     @staticmethod
+    def _statement_head(query: str) -> str:
+        """Return SQL without leading comments/whitespace for command detection."""
+        clean = (query or "").strip()
+        while clean.startswith("--") or clean.startswith("/*"):
+            if clean.startswith("--"):
+                line_end = clean.find("\n")
+                clean = "" if line_end == -1 else clean[line_end + 1 :].strip()
+                continue
+            block_end = clean.find("*/", 2)
+            clean = "" if block_end == -1 else clean[block_end + 2 :].strip()
+        return clean
+
+    def _requires_postgresql_autocommit(self, statement: str) -> bool:
+        """PostgreSQL commands that cannot run inside a transaction block."""
+        if self.db_type != "postgresql":
+            return False
+
+        import re
+
+        head = self._statement_head(statement).upper()
+        patterns = (
+            r"^CREATE\s+DATABASE\b",
+            r"^DROP\s+DATABASE\b",
+            r"^VACUUM\b",
+            r"^ALTER\s+SYSTEM\b",
+            r"^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\b",
+            r"^DROP\s+INDEX\s+CONCURRENTLY\b",
+            r"^REINDEX\s+(?:DATABASE|SYSTEM)\b",
+        )
+        return any(re.match(pattern, head) for pattern in patterns)
+
+    def _execute_postgresql_autocommit_statement(self, statement: str, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """Execute PostgreSQL DDL that must run outside a transaction block."""
+        with self.engine.connect() as conn:
+            autocommit_conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            result = autocommit_conn.execute(text(statement), params or {})
+            rows_affected = getattr(result, "rowcount", -1)
+
+        if isinstance(rows_affected, int) and rows_affected >= 0:
+            msg = f"Command executed successfully. {rows_affected} row(s) affected."
+        else:
+            msg = "Command executed successfully."
+        logger.info(msg)
+        return pd.DataFrame({"Result": [msg]})
+
+    @staticmethod
     def _split_sql_statements(query: str) -> list:
         """Split SQL script into individual statements, handling DELIMITER.
 
@@ -1124,7 +1278,10 @@ class DatabaseConnector:
                     executable_sql = prepared.query if prepared else cmd
                     executable_params = prepared.params if prepared else {}
 
-                    if self._is_select_query(cmd):
+                    if self._requires_postgresql_autocommit(cmd):
+                        conn.commit()
+                        result_df = self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
+                    elif self._is_select_query(cmd):
                         # Is SELECT - capture result
                         try:
                             result = conn.execute(text(executable_sql), executable_params)
@@ -1160,6 +1317,8 @@ class DatabaseConnector:
             prepared = prepare_generic_sql(cmd, parameters) if parameters else None
             executable_sql = prepared.query if prepared else cmd
             executable_params = prepared.params if prepared else {}
+            if self._requires_postgresql_autocommit(cmd):
+                return self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
             if self._is_select_query(cmd):
                 # SELECT query - fetch rows directly so DB driver values are preserved
                 with self.engine.connect() as conn:
@@ -1199,6 +1358,9 @@ class DatabaseConnector:
             raise ConnectionError("No active database connection")
 
         try:
+            if self._requires_postgresql_autocommit(statement):
+                result = self._execute_postgresql_autocommit_statement(statement)
+                return 0
             with self.engine.connect() as conn:
                 result = conn.execute(text(statement))
                 conn.commit()

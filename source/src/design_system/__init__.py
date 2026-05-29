@@ -122,6 +122,17 @@ from .effects import (
     shadow_none,
 )
 
+from .tab_controls import (
+    TAB_CLOSE_BUTTON_SIZE,
+    create_tab_close_button,
+    paint_tab_close_control,
+    style_tab_close_button,
+    tab_close_icon,
+    tab_close_rect,
+    tab_close_button_stylesheet,
+    tab_close_subcontrol_stylesheet,
+)
+
 __all__ = [
     # Tokens
     "ColorPalette",
@@ -219,4 +230,13 @@ __all__ = [
     "shadow_lg",
     "shadow_xl",
     "shadow_none",
+    # Tab controls
+    "TAB_CLOSE_BUTTON_SIZE",
+    "create_tab_close_button",
+    "paint_tab_close_control",
+    "style_tab_close_button",
+    "tab_close_icon",
+    "tab_close_rect",
+    "tab_close_button_stylesheet",
+    "tab_close_subcontrol_stylesheet",
 ]

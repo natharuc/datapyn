@@ -16,6 +16,7 @@ from PyQt6.QtCore import (
     QTimer,
     QEventLoop,
     QEvent,
+    QSettings,
     Qt,
 )
 from PyQt6.QtGui import QColor
@@ -68,6 +69,11 @@ class MonacoEditor(QWidget):
     
     # Cursor position signal
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
+
+    SETTINGS_KEY_FONT_SIZE = "editor/code_font_size"
+    DEFAULT_FONT_SIZE = 13
+    MIN_FONT_SIZE = 8
+    MAX_FONT_SIZE = 32
     
     def __init__(
         self,
@@ -85,6 +91,7 @@ class MonacoEditor(QWidget):
         self._pending_operations = []
         self._read_only = read_only
         self._cleaned_up = False
+        self._font_size = self._load_font_size()
         
         # SQL/Python autocomplete data
         self._sql_schema: Dict[str, Any] = {}
@@ -122,6 +129,7 @@ class MonacoEditor(QWidget):
         
         # Make QWebEngineView focusable and accept keyboard input
         self._web_view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._web_view.installEventFilter(self)
         
         layout.addWidget(self._web_view)
         
@@ -177,6 +185,14 @@ class MonacoEditor(QWidget):
         if event.type() == QEvent.Type.DeferredDelete:
             self.cleanup()
         return super().event(event)
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "_web_view", None) and event.type() == QEvent.Type.Wheel:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                if self._handle_zoom_wheel(event.angleDelta().y()):
+                    event.accept()
+                    return True
+        return super().eventFilter(watched, event)
     
     def _setup_channel(self):
         """Setup QWebChannel for Python<->JS communication."""
@@ -262,6 +278,7 @@ class MonacoEditor(QWidget):
         
         # Apply initial theme
         self.apply_theme()
+        self._apply_font_size()
         
         # Apply read-only state
         if self._read_only:
@@ -628,7 +645,48 @@ class MonacoEditor(QWidget):
         """Sets the editor font."""
         escaped_family = json.dumps(family)
         self._run_js_when_ready(f"setFontFamily({escaped_family})")
-        self._run_js_when_ready(f"setFontSize({size})")
+        self.set_font_size(size)
+
+    def set_font_size(self, size: int, persist: bool = True) -> int:
+        """Set and optionally persist the Monaco editor font size."""
+        font_size = self._clamp_font_size(size)
+        self._font_size = font_size
+        if persist:
+            self._save_font_size(font_size)
+        self._apply_font_size()
+        return font_size
+
+    def get_font_size(self) -> int:
+        """Return current Monaco editor font size."""
+        return self._font_size
+
+    def _handle_zoom_wheel(self, delta: int) -> bool:
+        if delta == 0:
+            return False
+        step = 1 if delta > 0 else -1
+        self.set_font_size(self._font_size + step)
+        return True
+
+    def _apply_font_size(self):
+        self._run_js_when_ready(f"setFontSize({self._font_size})", replace_key="editor:fontSize")
+
+    @classmethod
+    def _clamp_font_size(cls, size: int) -> int:
+        try:
+            value = int(size)
+        except (TypeError, ValueError):
+            value = cls.DEFAULT_FONT_SIZE
+        return max(cls.MIN_FONT_SIZE, min(cls.MAX_FONT_SIZE, value))
+
+    @classmethod
+    def _load_font_size(cls) -> int:
+        settings = QSettings("DataPyn", "DataPyn")
+        return cls._clamp_font_size(settings.value(cls.SETTINGS_KEY_FONT_SIZE, cls.DEFAULT_FONT_SIZE))
+
+    @classmethod
+    def _save_font_size(cls, size: int):
+        settings = QSettings("DataPyn", "DataPyn")
+        settings.setValue(cls.SETTINGS_KEY_FONT_SIZE, cls._clamp_font_size(size))
     
     def set_read_only(self, read_only: bool) -> None:
         """Sets if editor is read-only."""

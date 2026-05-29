@@ -75,6 +75,21 @@ class TestMonacoBridge:
 
 class TestMonacoEditorBasic:
     """Basic tests for MonacoEditor widget."""
+
+    @pytest.fixture
+    def editor_zoom_settings(self):
+        from PyQt6.QtCore import QSettings
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        settings = QSettings("DataPyn", "DataPyn")
+        key = MonacoEditor.SETTINGS_KEY_FONT_SIZE
+        previous = settings.value(key, None)
+        settings.remove(key)
+        yield settings
+        if previous is None:
+            settings.remove(key)
+        else:
+            settings.setValue(key, previous)
     
     def test_editor_creates(self, qtbot):
         """Editor should create without errors."""
@@ -178,6 +193,49 @@ class TestMonacoEditorBasic:
 
         assert any(script.startswith("setLanguage(") for script in scripts)
         assert scripts.count(f"setValue({json.dumps('second value')})") == 1
+
+    def test_editor_restores_persisted_font_size(self, qtbot, editor_zoom_settings):
+        """Monaco should restore the saved user zoom/font preference."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor_zoom_settings.setValue(MonacoEditor.SETTINGS_KEY_FONT_SIZE, 18)
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+
+        assert editor.get_font_size() == 18
+
+    def test_editor_font_size_persists_and_updates_monaco(self, qtbot, editor_zoom_settings):
+        """Changing editor zoom should persist and call Monaco's font-size API."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor._is_ready = True
+        editor._run_js = Mock()
+
+        editor.set_font_size(16)
+
+        assert editor_zoom_settings.value(MonacoEditor.SETTINGS_KEY_FONT_SIZE, type=int) == 16
+        editor._run_js.assert_called_with("setFontSize(16)", None)
+
+    def test_editor_zoom_wheel_changes_font_size(self, qtbot, editor_zoom_settings):
+        """Ctrl+wheel handler should zoom in and out in one-point steps."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor._is_ready = True
+        editor._run_js = Mock()
+        editor.set_font_size(13, persist=False)
+
+        assert editor._handle_zoom_wheel(120) is True
+        assert editor.get_font_size() == 14
+        assert editor_zoom_settings.value(MonacoEditor.SETTINGS_KEY_FONT_SIZE, type=int) == 14
+
+        assert editor._handle_zoom_wheel(-120) is True
+        assert editor.get_font_size() == 13
+        assert editor._handle_zoom_wheel(0) is False
     
     def test_editor_clear_empties_text(self, qtbot):
         """clear should empty the text."""

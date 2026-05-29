@@ -185,6 +185,9 @@ class FileIOMixin:
                     notif_config = dpw_data.get("notification_config")
                     if notif_config:
                         widget.set_tab_notification_config(notif_config)
+                    result_view_state = dpw_data.get("result_view_state")
+                    if isinstance(result_view_state, dict):
+                        widget.set_result_view_state(result_view_state)
                 except json.JSONDecodeError:
                     # Fallback: treat as single SQL block
                     blocks = widget.editor.get_blocks()
@@ -566,6 +569,8 @@ class FileIOMixin:
             if not current_widget:
                 return
 
+            current_widget.sync_to_session()
+
             blocks_data = current_widget.editor.to_list()
 
             dpw_content = {
@@ -578,6 +583,10 @@ class FileIOMixin:
             tab_notif = current_widget.get_tab_notification_config()
             if tab_notif is not None:
                 dpw_content["notification_config"] = tab_notif
+
+            result_view_state = current_widget.get_result_view_state()
+            if isinstance(result_view_state, dict) and result_view_state:
+                dpw_content["result_view_state"] = result_view_state
 
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(dpw_content, f, indent=2, ensure_ascii=False)

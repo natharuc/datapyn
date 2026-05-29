@@ -155,6 +155,9 @@ class LayoutMixin:
     def _create_session_panels(self, session_id: str):
         """Creates panels (Results, Output, Variables) for a session and adds to stacks."""
         results = ResultsViewer(theme_manager=self.theme_manager)
+        session = self.session_manager.get_session(session_id) if hasattr(self, "session_manager") else None
+        if session is not None and hasattr(results, "set_session"):
+            results.set_session(session)
         output = OutputPanel(theme_manager=self.theme_manager)
         variables = VariablesPanel(theme_manager=self.theme_manager)
 

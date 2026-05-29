@@ -13,6 +13,7 @@ from typing import Any, Dict
 import pandas as pd
 
 from src.language import S
+from src.database.database_connector import _format_sql_error_for_user
 
 
 class BaseWorker(QObject):
@@ -59,7 +60,8 @@ class SqlExecutionWorker(BaseWorker):
             df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.result_ready.emit(df)
         except Exception as e:
-            error_msg = S.workers.error_sql.format(msg=str(e))
+            db_type = getattr(self.connector, "db_type", "")
+            error_msg = S.workers.error_sql.format(msg=_format_sql_error_for_user(e, db_type, self.query))
             self.error.emit(error_msg)
         finally:
             self.finished.emit()
