@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.34.0 (2026-05-29)
+
+### Features
+
+- Improve Copilot chat
+  ([`0f2866d`](https://github.com/natharuc/datapyn/commit/0f2866d7a5fc17ce1b2c42be098fe1b1627b2e0f))
+
+
 ## v1.33.0 (2026-05-29)
 
 ### Features
