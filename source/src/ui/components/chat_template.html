@@ -52,10 +52,10 @@
             flex: 1;
             overflow-y: auto;
             overflow-x: hidden;
-            padding: 12px;
+            padding: 14px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 10px;
         }
 
         #messages::-webkit-scrollbar {
@@ -107,7 +107,7 @@
         .message {
             display: flex;
             flex-direction: column;
-            max-width: 85%;
+            max-width: 88%;
             animation: fadeIn 0.2s ease-out;
         }
 
@@ -129,7 +129,7 @@
         }
 
         .bubble {
-            padding: 10px 14px;
+            padding: 10px 13px;
             border-radius: var(--radius);
             word-wrap: break-word;
             overflow-wrap: break-word;
@@ -144,6 +144,7 @@
 
         .message.assistant .bubble {
             background-color: var(--assistant-bubble);
+            background-color: color-mix(in srgb, var(--assistant-bubble) 82%, transparent);
             border: 1px solid var(--border-default);
             border-bottom-left-radius: 4px;
         }
@@ -184,7 +185,8 @@
         }
 
         .bubble pre {
-            background-color: #1a1a1a;
+            background-color: var(--bg-primary);
+            background-color: color-mix(in srgb, var(--bg-primary) 88%, black);
             border-radius: 6px;
             padding: 12px;
             margin: 8px 0;
@@ -286,7 +288,7 @@
         /* Collapsible thinking block (reasoning) */
         .thinking-block {
             align-self: flex-start;
-            max-width: 85%;
+            max-width: 88%;
             margin: 4px 0;
             border-radius: var(--radius);
             overflow: hidden;
@@ -323,7 +325,7 @@
         }
 
         .thinking-block-sparkle {
-            color: #b48ead;
+            color: var(--accent-primary);
             font-size: 14px;
             flex-shrink: 0;
         }
@@ -389,8 +391,10 @@
         /* Tool use group - collapsible */
         .tool-group {
             background-color: var(--bg-tertiary);
+            background-color: color-mix(in srgb, var(--bg-tertiary) 88%, transparent);
+            border: 1px solid var(--border-default);
             border-left: 3px solid var(--accent-primary);
-            border-radius: 0 var(--radius) var(--radius) 0;
+            border-radius: 6px;
             margin: 8px 0;
             font-size: 12px;
             color: var(--text-secondary);
@@ -424,17 +428,23 @@
         }
 
         .tool-group-icon {
-            font-size: 14px;
-            animation: spin 2s linear infinite;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.18);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            animation: pulse 1.2s ease-in-out infinite;
         }
 
         .tool-group.complete .tool-group-icon {
             animation: none;
+            box-shadow: none;
         }
 
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.55; }
+            50% { opacity: 1; }
         }
 
         .tool-group-title {
@@ -494,7 +504,7 @@
         }
 
         .tool-item-name {
-            color: #569cd6;
+            color: var(--accent-hover);
             font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
         }
 
@@ -579,13 +589,13 @@
         }
 
         .copy-btn.copied {
-            background: #4ec9b0;
-            color: #1e1e1e;
+            background: var(--accent-primary);
+            color: white;
         }
 
         .insert-btn.inserted {
-            background: #4ec9b0;
-            color: #1e1e1e;
+            background: var(--accent-primary);
+            color: white;
         }
     </style>
 </head>
@@ -593,11 +603,11 @@
     <div id="chat-container">
         <div id="messages">
             <div id="welcome">
-                <h2>Welcome to GitHub Copilot</h2>
-                <p>Sign in with your GitHub account to start chatting. Copilot can help with SQL queries, Python code, and data analysis.</p>
+                <h2></h2>
+                <p></p>
             </div>
             <div id="thinking" class="thinking hidden">
-                <span class="thinking-text">thinking</span>
+                <span class="thinking-text"></span>
                 <div class="thinking-dots">
                     <span></span>
                     <span></span>
@@ -613,16 +623,20 @@
 
         // i18n labels - defaults, overridden by setLabels()
         var labels = {
-            thinking: 'Thinking',
-            thinking_complete: 'Thought for {seconds}s',
-            tool_processing: 'Processing...',
-            tool_using_one: 'Using 1 tool...',
-            tool_using_many: 'Using {count} tools...',
-            tool_used_one: 'Used 1 tool',
-            tool_used_many: 'Used {count} tools',
-            tool_running: 'running...',
-            tool_ok: 'ok',
-            tool_error: 'error'
+            thinking: '',
+            thinking_complete: '',
+            tool_processing: '',
+            tool_using_one: '',
+            tool_using_many: '',
+            tool_used_one: '',
+            tool_used_many: '',
+            tool_running: '',
+            tool_ok: '',
+            tool_error: '',
+            copy: '',
+            copied: '',
+            insert: '',
+            inserted: ''
         };
 
         function setLabels(newLabels) {
@@ -631,6 +645,8 @@
                     labels[key] = newLabels[key];
                 }
             }
+            var thinkingText = document.querySelector('#thinking .thinking-text');
+            if (thinkingText) thinkingText.textContent = labels.thinking || '';
         }
 
         // Initialize QWebChannel
@@ -673,8 +689,8 @@
                     }
                     return '<div class="code-block-wrapper">' +
                         '<div class="code-action-btns">' +
-                        '<button class="insert-btn" onclick="insertCode(this)">' + (labels.insert || 'Insert') + '</button>' +
-                        '<button class="copy-btn" onclick="copyCode(this)">' + (labels.copy || 'Copy') + '</button>' +
+                        '<button class="insert-btn" onclick="insertCode(this)">' + (labels.insert || '') + '</button>' +
+                        '<button class="copy-btn" onclick="copyCode(this)">' + (labels.copy || '') + '</button>' +
                         '</div>' +
                         '<pre><code' + langClass + '>' + highlighted + '</code></pre>' +
                         '</div>';
@@ -692,10 +708,10 @@
             if (!codeEl) return;
             var text = codeEl.textContent;
             navigator.clipboard.writeText(text).then(function() {
-                btn.textContent = labels.copied || 'Copied!';
+                btn.textContent = labels.copied || '';
                 btn.classList.add('copied');
                 setTimeout(function() {
-                    btn.textContent = labels.copy || 'Copy';
+                    btn.textContent = labels.copy || '';
                     btn.classList.remove('copied');
                 }, 1500);
             });
@@ -708,10 +724,10 @@
             var text = codeEl.textContent;
             if (pyBridge && pyBridge.insertCode) {
                 pyBridge.insertCode(text);
-                btn.textContent = labels.inserted || 'Inserted!';
+                btn.textContent = labels.inserted || '';
                 btn.classList.add('inserted');
                 setTimeout(function() {
-                    btn.textContent = labels.insert || 'Insert';
+                    btn.textContent = labels.insert || '';
                     btn.classList.remove('inserted');
                 }, 1500);
             }
@@ -883,7 +899,7 @@
             blockDiv.innerHTML =
                 '<div class="thinking-block-header" onclick="toggleThinkingBlock(\'' + blockDiv.id + '\')">' +
                     '<span class="thinking-block-toggle">&#9654;</span>' +
-                    '<span class="thinking-block-sparkle">&#10024;</span>' +
+                    '<span class="thinking-block-sparkle">*</span>' +
                     '<span class="thinking-block-title">' + labels.thinking + '...</span>' +
                     '<span class="thinking-block-duration"></span>' +
                 '</div>' +
@@ -951,7 +967,7 @@
             groupDiv.innerHTML = `
                 <div class="tool-group-header" onclick="toggleToolGroup('${groupDiv.id}')">
                     <span class="tool-group-toggle">&#9654;</span>
-                    <span class="tool-group-icon">&#9881;</span>
+                    <span class="tool-group-icon"></span>
                     <span class="tool-group-title">${labels.tool_processing}</span>
                     <span class="tool-group-count">0</span>
                 </div>
@@ -1107,7 +1123,10 @@
             if (colors.text_tertiary) root.style.setProperty('--text-tertiary', colors.text_tertiary);
             if (colors.border_default) root.style.setProperty('--border-default', colors.border_default);
             if (colors.accent_primary) root.style.setProperty('--accent-primary', colors.accent_primary);
+            if (colors.interactive_primary) root.style.setProperty('--accent-primary', colors.interactive_primary);
+            if (colors.interactive_primary_hover) root.style.setProperty('--accent-hover', colors.interactive_primary_hover);
             if (colors.user_bubble) root.style.setProperty('--user-bubble', colors.user_bubble);
+            if (colors.interactive_secondary) root.style.setProperty('--assistant-bubble', colors.interactive_secondary);
             if (colors.assistant_bubble) root.style.setProperty('--assistant-bubble', colors.assistant_bubble);
         }
 

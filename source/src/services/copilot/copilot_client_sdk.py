@@ -26,14 +26,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+from .copilot_models import (
+    fallback_models,
+    find_model,
+    model_supported_reasoning_efforts,
+    model_supports_reasoning_effort,
+    normalize_models,
+    normalize_reasoning_effort,
+    usage_snapshot_from_event,
+    usage_snapshot_for_model,
+    usage_snapshot_from_quota,
+)
+from .copilot_settings import get_copilot_settings
+
 # Hide console window on Windows
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 # Default models - will be updated from SDK at runtime
-DEFAULT_MODELS = [
-    {"id": "gpt-4o", "name": "GPT-4o"},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
-]
+DEFAULT_MODELS = fallback_models()
 
 
 def _get_sdk_options():
@@ -267,6 +277,7 @@ class CopilotWorker(QObject):
     auth_started = pyqtSignal(str)  # Login process started with info message
     auth_required = pyqtSignal(str, str)  # Device code and verification URL
     models_ready = pyqtSignal(list)  # List of available models
+    usage_ready = pyqtSignal(dict)  # Account/session usage snapshot
     tool_call = pyqtSignal(str, dict, str)  # tool_name, arguments, tool_call_id
     tool_result = pyqtSignal(str, str)  # tool_name, result
     thinking = pyqtSignal(str)  # Reasoning text
@@ -286,6 +297,8 @@ class CopilotWorker(QObject):
         self._cancelled = False
         self._prompt = ""
         self._system_message = ""
+        self._reasoning_effort = "auto"
+        self._available_models = [dict(model) for model in DEFAULT_MODELS]
         self._session_signature = None
         self._loop = None  # Persistent event loop
         self._inline_prompt = ""  # For inline completions
@@ -298,6 +311,12 @@ class CopilotWorker(QObject):
 
     def set_system_message(self, system_message: str):
         self._system_message = system_message
+
+    def set_reasoning_effort(self, effort: str):
+        self._reasoning_effort = normalize_reasoning_effort(effort)
+
+    def set_available_models(self, models: List[Dict[str, Any]]):
+        self._available_models = normalize_models(models) or [dict(model) for model in DEFAULT_MODELS]
     
     def set_inline_prompt(self, prompt: str):
         """Set prompt for inline completion request."""
@@ -324,6 +343,43 @@ class CopilotWorker(QObject):
             except Exception:
                 pass
 
+    @pyqtSlot()
+    def run_refresh_metadata(self):
+        """Refresh model and quota metadata without sending a chat message."""
+        self._ensure_loop()
+        try:
+            self._loop.run_until_complete(self._async_refresh_metadata())
+        except Exception as e:
+            logger.warning("Failed to refresh Copilot metadata: %s", e)
+
+    async def _async_refresh_metadata(self):
+        """Fetch latest model metadata and quota from the SDK server."""
+        if not self._sdk_client:
+            SDKClient, _, _, import_err = _try_import_sdk()
+            if SDKClient is None:
+                self.error.emit(f"Copilot SDK not available: {import_err}")
+                return
+            self._sdk_client = SDKClient(_get_sdk_options())
+            await self._sdk_client.start()
+
+        models = await self._sdk_client.rpc.models.list()
+        model_list = normalize_models(getattr(models, "models", []))
+        if model_list:
+            self.set_available_models(model_list)
+            self.models_ready.emit(model_list)
+        self.usage_ready.emit(await self._async_usage_snapshot())
+
+    async def _async_usage_snapshot(self) -> Dict[str, Any]:
+        """Fetch account quota and convert it to the UI usage shape."""
+        if not self._sdk_client:
+            return usage_snapshot_for_model(self._available_models, self._model)
+        try:
+            quota = await self._sdk_client.rpc.account.get_quota()
+            return usage_snapshot_from_quota(quota, self._available_models, self._model)
+        except Exception as e:
+            logger.info("Copilot quota is unavailable: %s", e)
+            return usage_snapshot_for_model(self._available_models, self._model)
+
     def run_init(self):
         """Initialize SDK client and verify auth. Keep loop/client alive for session persistence."""
         # Use persistent event loop
@@ -346,12 +402,10 @@ class CopilotWorker(QObject):
                 logger.info(f"SDK returned {len(models)} models")
                 for m in models:
                     logger.info(f"  Model: {m.id} ({m.name})")
-                model_list = [{
-                    "id": m.id,
-                    "name": m.name,
-                    "multiplier": m.billing.multiplier if m.billing else 1.0
-                } for m in models]
+                model_list = normalize_models(models)
+                self.set_available_models(model_list)
                 self.models_ready.emit(model_list)
+                self.usage_ready.emit(self._loop.run_until_complete(self._async_usage_snapshot()))
                 self.auth_ok.emit()
                 # Keep worker alive - emit ready for subsequent chats
                 self.ready.emit()
@@ -365,11 +419,7 @@ class CopilotWorker(QObject):
                         "Chat may not work. Contact your organization admin."
                     )
                 # Emit default models for enterprise accounts that may not list models
-                self.models_ready.emit([
-                    {"id": "gpt-4o", "name": "GPT-4o", "multiplier": 1.0},
-                    {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "multiplier": 1.0},
-                    {"id": "claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "multiplier": 1.0},
-                ])
+                self.models_ready.emit(fallback_models())
                 self.auth_ok.emit()
                 self.ready.emit()
 
@@ -490,12 +540,10 @@ class CopilotWorker(QObject):
                     self._loop.run_until_complete(self._sdk_client.start())
                     try:
                         models = self._loop.run_until_complete(self._sdk_client.list_models())
-                        model_list = [{
-                            "id": m.id,
-                            "name": m.name,
-                            "multiplier": m.billing.multiplier if m.billing else 1.0
-                        } for m in models]
+                        model_list = normalize_models(models)
+                        self.set_available_models(model_list)
                         self.models_ready.emit(model_list)
+                        self.usage_ready.emit(self._loop.run_until_complete(self._async_usage_snapshot()))
                         self.auth_ok.emit()
                         # Keep worker alive for chats
                         self.ready.emit()
@@ -647,6 +695,11 @@ class CopilotWorker(QObject):
                         reasoning_delta = getattr(event.data, "reasoning_text", "") or ""
                         if reasoning_delta:
                             self.thinking.emit(reasoning_delta)
+
+                    elif event_type in (EventType.ASSISTANT_USAGE, EventType.SESSION_USAGE_INFO):
+                        snapshot = usage_snapshot_from_event(event.data, self._available_models, self._model)
+                        if snapshot.get("available"):
+                            self.usage_ready.emit(snapshot)
                     
                     elif event_type == EventType.TOOL_EXECUTION_START:
                         tool_name = getattr(event.data, "tool_name", "") or ""
@@ -687,7 +740,12 @@ class CopilotWorker(QObject):
                     if delta:
                         full_response += delta
                         self.chunk.emit(delta)
+                elif event.type in (EventType.ASSISTANT_USAGE, EventType.SESSION_USAGE_INFO):
+                    snapshot = usage_snapshot_from_event(event.data, self._available_models, self._model)
+                    if snapshot.get("available"):
+                        self.usage_ready.emit(snapshot)
             
+            self.usage_ready.emit(await self._async_usage_snapshot())
             logger.info(f"Chat complete, response length: {len(full_response)} chars")
             if not full_response:
                 logger.warning("Empty response from Copilot - enterprise account may not have chat access")
@@ -741,13 +799,27 @@ class CopilotWorker(QObject):
             config["system_message"] = {
                 "message": self._system_message,
             }
-        
-        self._session = await self._sdk_client.create_session(config)
+
+        applied_effort = self._reasoning_effort
+        supported_efforts = model_supported_reasoning_efforts(self._available_models, self._model)
+        if applied_effort != "auto" and applied_effort in supported_efforts:
+            config["reasoning_effort"] = applied_effort
+        elif applied_effort != "auto":
+            logger.info("Reasoning effort %s is not supported by model %s", applied_effort, self._model)
+
+        try:
+            self._session = await self._sdk_client.create_session(config)
+        except Exception:
+            if config.pop("reasoning_effort", None):
+                logger.warning("SDK rejected reasoning_effort; retrying session without it", exc_info=True)
+                self._session = await self._sdk_client.create_session(config)
+            else:
+                raise
 
     def _build_session_signature(self):
         """Return a stable signature for SDK session configuration."""
         tool_names = tuple(t.name for t in self._sdk_tools) if self._sdk_tools else ()
-        return (self._model, self._system_message, tool_names)
+        return (self._model, self._system_message, self._reasoning_effort, tool_names)
 
     def _build_sdk_tools(self, SDKTool) -> List[Any]:
         """Build SDK Tool objects from MCP tool definitions."""
@@ -1038,17 +1110,21 @@ class CopilotClient(QObject):
     tool_result = pyqtSignal(str, str)
     thinking = pyqtSignal(str)
     models_changed = pyqtSignal(list)
+    usage_changed = pyqtSignal(dict)
     inline_completion_ready = pyqtSignal(str)  # Inline completion result
     gh_not_found = pyqtSignal()  # GitHub CLI not installed
     license_warning = pyqtSignal(str)  # License may not support chat
 
     def __init__(self, parent=None, tool_registry: "MCPToolRegistry" = None):
         super().__init__(parent)
-        self._model = "gpt-4o"
+        settings = get_copilot_settings()
+        self._model = settings.chat_selected_model
+        self._reasoning_effort = settings.chat_reasoning_effort
         self._system_message = ""
         self._is_authenticated = False
         self._username = None  # GitHub username
-        self._available_models = DEFAULT_MODELS.copy()
+        self._available_models = [dict(model) for model in DEFAULT_MODELS]
+        self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
         
         # Thread management - persistent session worker
         self._session_thread: Optional[QThread] = None
@@ -1084,7 +1160,23 @@ class CopilotClient(QObject):
 
     @model.setter
     def model(self, value: str):
-        self._model = value
+        self._model = value or "gpt-4o"
+        get_copilot_settings().set_chat_selected_model(self._model)
+        self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
+        self.usage_changed.emit(self._usage_snapshot)
+
+    @property
+    def reasoning_effort(self) -> str:
+        return self._reasoning_effort
+
+    @reasoning_effort.setter
+    def reasoning_effort(self, value: str):
+        self._reasoning_effort = normalize_reasoning_effort(value)
+        get_copilot_settings().set_chat_reasoning_effort(self._reasoning_effort)
+
+    def model_supports_reasoning_effort(self, model_id: str = "") -> bool:
+        """Return whether a model can use the reasoning effort selector."""
+        return model_supports_reasoning_effort(self._available_models, model_id or self._model)
 
     @property
     def system_message(self) -> str:
@@ -1097,6 +1189,21 @@ class CopilotClient(QObject):
     def available_models(self) -> List[Dict[str, str]]:
         """Return list of available models (updated from SDK)."""
         return self._available_models
+
+    def usage_snapshot(self) -> Dict[str, Any]:
+        """Return the best available usage snapshot."""
+        return dict(self._usage_snapshot)
+
+    def refresh_metadata(self) -> None:
+        """Refresh Copilot model and quota metadata from the SDK server."""
+        if self._session_worker and self._session_thread and self._session_thread.isRunning():
+            QMetaObject.invokeMethod(
+                self._session_worker,
+                "run_refresh_metadata",
+                Qt.ConnectionType.QueuedConnection,
+            )
+            return
+        self.start_auth()
     
     @property
     def lsp_client(self):
@@ -1158,6 +1265,9 @@ class CopilotClient(QObject):
         
         # Create persistent session worker
         self._session_worker = CopilotWorker(self._tool_executor)
+        self._session_worker.set_model(self._model)
+        self._session_worker.set_reasoning_effort(self._reasoning_effort)
+        self._session_worker.set_available_models(self._available_models)
         self._session_thread = QThread()
         self._session_worker.moveToThread(self._session_thread)
         
@@ -1166,6 +1276,7 @@ class CopilotClient(QObject):
         self._session_worker.auth_ok.connect(self._on_auth_success)
         self._session_worker.auth_needed.connect(self._on_auth_needed)
         self._session_worker.models_ready.connect(self._on_models_loaded)
+        self._session_worker.usage_ready.connect(self._on_usage_loaded)
         self._session_worker.error.connect(self._on_init_error)
         self._session_worker.ready.connect(self._on_session_ready)
         self._session_worker.license_warning.connect(self.license_warning.emit)
@@ -1199,6 +1310,8 @@ class CopilotClient(QObject):
         # Use persistent session worker if available
         if self._session_worker and self._session_thread and self._session_thread.isRunning():
             self._session_worker.set_model(self._model)
+            self._session_worker.set_reasoning_effort(self._reasoning_effort)
+            self._session_worker.set_available_models(self._available_models)
             self._session_worker.set_prompt(prompt)
             self._session_worker.set_system_message(self._system_message)
             
@@ -1233,6 +1346,8 @@ class CopilotClient(QObject):
             
             self._worker = CopilotWorker(self._tool_executor)
             self._worker.set_model(self._model)
+            self._worker.set_reasoning_effort(self._reasoning_effort)
+            self._worker.set_available_models(self._available_models)
             self._worker.set_prompt(prompt)
             self._worker.set_system_message(self._system_message)
             
@@ -1247,6 +1362,7 @@ class CopilotClient(QObject):
             self._worker.tool_call.connect(self.tool_called.emit)
             self._worker.tool_result.connect(self.tool_result.emit)
             self._worker.thinking.connect(self.thinking.emit)
+            self._worker.usage_ready.connect(self._on_usage_loaded)
             self._worker.auth_ok.connect(self._on_auth_success)
             self._worker.finished.connect(self._on_worker_finished)
             
@@ -1575,6 +1691,9 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         
         # Create as session worker - it will become persistent on success
         self._session_worker = CopilotWorker(self._tool_executor)
+        self._session_worker.set_model(self._model)
+        self._session_worker.set_reasoning_effort(self._reasoning_effort)
+        self._session_worker.set_available_models(self._available_models)
         self._session_thread = QThread()
         self._session_worker.moveToThread(self._session_thread)
         
@@ -1584,6 +1703,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._session_worker.auth_started.connect(self._on_auth_started)
         self._session_worker.auth_required.connect(self.auth_required.emit)
         self._session_worker.models_ready.connect(self._on_models_loaded)
+        self._session_worker.usage_ready.connect(self._on_usage_loaded)
         self._session_worker.error.connect(self._on_init_error)
         self._session_worker.gh_not_found.connect(self._on_gh_not_found)
         self._session_worker.ready.connect(self._on_session_ready)
@@ -1595,13 +1715,32 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
     def _on_models_loaded(self, models: list):
         logger.info(f"Models loaded: {len(models)} models")
         if models:
-            self._available_models = models
-            self.models_changed.emit(models)
+            self._available_models = normalize_models(models)
+            if not find_model(self._available_models, self._model):
+                self._model = self._available_models[0].get("id", self._model)
+                get_copilot_settings().set_chat_selected_model(self._model)
+            if self._session_worker:
+                self._session_worker.set_model(self._model)
+                self._session_worker.set_available_models(self._available_models)
+            self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
+            get_copilot_settings().set_chat_usage_snapshot(self._usage_snapshot)
+            self.models_changed.emit(self._available_models)
+            self.usage_changed.emit(self._usage_snapshot)
         else:
             # Keep default models for enterprise accounts that may not list models
             logger.warning("No models returned from SDK, keeping defaults")
             # Still emit to update UI
             self.models_changed.emit(self._available_models)
+            self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
+            self.usage_changed.emit(self._usage_snapshot)
+
+    def _on_usage_loaded(self, snapshot: dict):
+        """Handle account/session quota updates from the SDK worker."""
+        if not isinstance(snapshot, dict):
+            return
+        self._usage_snapshot = snapshot
+        get_copilot_settings().set_chat_usage_snapshot(self._usage_snapshot)
+        self.usage_changed.emit(self._usage_snapshot)
 
     def _on_init_error(self, error: str):
         self._is_authenticated = False

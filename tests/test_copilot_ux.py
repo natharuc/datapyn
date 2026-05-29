@@ -257,6 +257,18 @@ class TestChatTemplateThinkingBlock:
         assert "function setLabels" in template_content
         assert "window.setLabels" in template_content
 
+    def test_template_welcome_has_no_visible_hardcoded_copy(self, template_content):
+        """Welcome copy should be injected from translations."""
+        assert "Welcome to GitHub Copilot" not in template_content
+        assert "Sign in with your GitHub account" not in template_content
+        assert "<h2></h2>" in template_content
+
+    def test_template_theme_accepts_design_system_keys(self, template_content):
+        """setTheme should accept native design-system color keys from the panel."""
+        assert "colors.interactive_primary" in template_content
+        assert "colors.interactive_primary_hover" in template_content
+        assert "--accent-hover" in template_content
+
     def test_no_hardcoded_portuguese(self, template_content):
         """Template should not have hardcoded Portuguese strings."""
         # These used to be hardcoded
@@ -343,6 +355,101 @@ class TestChatPanelThinkingState:
             assert mock_js.call_count == 0
 
 
+class TestChatPanelModelControls:
+    """Tests for model list, reasoning effort, usage and session metadata."""
+
+    @pytest.fixture
+    def panel(self, qapp):
+        from PyQt6.QtCore import QSettings
+        settings = QSettings("DataPyn", "CopilotChat")
+        settings.clear()
+        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import CopilotChatPanel
+            panel = CopilotChatPanel()
+        yield panel
+        settings.clear()
+
+    def test_models_changed_populates_combo_and_usage(self, panel):
+        panel._on_models_changed([
+            {"id": "gpt-4o", "name": "GPT-4o", "multiplier": 1},
+            {"id": "o3", "name": "o3", "multiplier": 10, "supports_reasoning_effort": True},
+        ])
+
+        assert panel._model_combo.count() == 2
+        assert panel._model_combo.itemData(1) == "o3"
+        assert not panel._usage_label.isHidden()
+        assert panel._usage_label.text()
+
+    def test_reasoning_effort_falls_back_to_auto_for_unsupported_model(self, panel):
+        panel._on_models_changed([
+            {"id": "gpt-4o", "name": "GPT-4o", "supports_reasoning_effort": False},
+        ])
+        high_index = panel._effort_combo.findData("high")
+        panel._effort_combo.setCurrentIndex(high_index)
+
+        panel._update_reasoning_effort_state()
+
+        assert panel._effort_combo.currentData() == "auto"
+
+    def test_reasoning_effort_uses_model_supported_levels(self, panel):
+        panel._on_models_changed([
+            {
+                "id": "claude-sonnet-4.5",
+                "name": "Claude Sonnet 4.5",
+                "supports_reasoning_effort": True,
+                "supported_reasoning_efforts": ["low", "medium"],
+            },
+        ])
+
+        medium_index = panel._effort_combo.findData("medium")
+        high_index = panel._effort_combo.findData("high")
+        xhigh_index = panel._effort_combo.findData("xhigh")
+
+        assert panel._effort_combo.model().item(medium_index).isEnabled()
+        assert not panel._effort_combo.model().item(high_index).isEnabled()
+        assert not panel._effort_combo.model().item(xhigh_index).isEnabled()
+
+    def test_usage_snapshot_displays_real_quota(self, panel):
+        panel._set_usage_snapshot({
+            "available": True,
+            "used": 12,
+            "total": 300,
+            "reset_date": "2026-06-01",
+        })
+
+        assert panel._usage_label.text() == "12/300 premium"
+        assert "2026-06-01" in panel._usage_label.toolTip()
+
+    def test_refresh_models_button_calls_client_refresh_metadata(self, panel):
+        client = MagicMock()
+        client.refresh_metadata = MagicMock()
+        panel._copilot_client = client
+
+        panel._on_refresh_models_clicked()
+
+        client.refresh_metadata.assert_called_once()
+        assert panel._usage_label.text()
+
+    def test_save_current_session_includes_model_effort_and_tab(self, panel):
+        panel._messages = [
+            {"role": "user", "content": "create a chart"},
+            {"role": "assistant", "content": "done"},
+        ]
+        panel._current_tab_id = "tab-1"
+        panel._current_tab_name = "Sales"
+        effort_index = panel._effort_combo.findData("medium")
+        if effort_index >= 0:
+            panel._effort_combo.setCurrentIndex(effort_index)
+
+        panel._save_current_session()
+        sessions = panel._get_sessions_list()
+
+        assert sessions[0]["model"] == panel._model_combo.currentData()
+        assert sessions[0]["reasoning_effort"] == panel._effort_combo.currentData()
+        assert sessions[0]["target_tab_id"] == "tab-1"
+        assert sessions[0]["target_tab_name"] == "Sales"
+
+
 # ===== Per-Tab Chat Context =====
 
 
@@ -422,6 +529,9 @@ class TestI18nLabels:
             "thinking", "thinking_complete", "tool_processing",
             "tool_using_one", "tool_using_many", "tool_used_one",
             "tool_used_many", "tool_running", "tool_ok", "tool_error",
+            "reasoning_effort_tooltip", "effort_medium", "effort_high",
+            "effort_xhigh", "usage_unavailable", "history_search_placeholder",
+            "refresh_models", "usage_used_format", "usage_tooltip_with_reset",
         ]
         for key in required_keys:
             assert key in copilot, f"Missing copilot.{key} in en-US.json"
@@ -437,6 +547,9 @@ class TestI18nLabels:
             "thinking", "thinking_complete", "tool_processing",
             "tool_using_one", "tool_using_many", "tool_used_one",
             "tool_used_many", "tool_running", "tool_ok", "tool_error",
+            "reasoning_effort_tooltip", "effort_medium", "effort_high",
+            "effort_xhigh", "usage_unavailable", "history_search_placeholder",
+            "refresh_models", "usage_used_format", "usage_tooltip_with_reset",
         ]
         for key in required_keys:
             assert key in copilot, f"Missing copilot.{key} in pt-BR.json"

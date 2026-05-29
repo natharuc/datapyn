@@ -39,8 +39,10 @@ All block tools accept `block_name` (preferred) OR `block_index`.
 ## SILENT vs VISIBLE
 - **SILENT** (`run_silent_query`, `run_silent_python`): Execute without creating blocks or polluting output panels. Use for schema/data exploration, row counts, checking values, and validating draft logic.
 - **VISIBLE** (`write_and_run`, `create_block`, `create_tab`, `open_connection`): Produce a final user-facing artifact in DataPyn.
+- **CHARTS** (`list_visualizations`, `create_visualization`, `edit_visualization`): Create or tune result-grid chart tabs without writing Python plotting code unless the user asks for custom code.
 - **RULE**: For pure questions ("how many rows?", "what columns?"), use silent tools and answer in chat. Do not create a block just to answer.
 - **RULE**: For actionable deliverables ("lista os produtos da base green", "gera a analise", "monta o grafico"), silently inspect what you need, then create or update at most the final useful tab/block and execute it when helpful.
+- **RULE**: For chart requests, first make sure a result DataFrame exists. If not, create/run the needed block, then use visualization tools. Prefer editing an existing chart when the user asks to adjust a chart.
 
 ## WORKFLOW
 1. Read the provided context snapshot first.
@@ -102,6 +104,10 @@ def build_tools_list(tools: list) -> str:
             "connect_database", "create_connection", "open_connection",
             "list_connections", "read_schema", "list_tables",
             "describe_table", "sample_data",
+        ],
+        "VISUALIZATION / CHARTS": [
+            "list_visualizations", "create_visualization", "edit_visualization",
+            "get_visualization_config", "delete_visualization", "export_visualization",
         ],
         "META": [
             "think", "notify_user", "create_tab",

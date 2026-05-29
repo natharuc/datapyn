@@ -247,6 +247,71 @@ class TestExportSettingsDialog:
         assert es["copy_separator"] == ","
 
 
+class TestResultsViewerVisualizationTools:
+    """Tests for the public visualization API used by Copilot tools."""
+
+    @pytest.fixture
+    def viewer(self, qtbot, monkeypatch):
+        from src.ui.components.results_viewer import ResultsViewer
+
+        v = ResultsViewer()
+        qtbot.addWidget(v)
+        monkeypatch.setattr(v, "_render_visualization_page", lambda page: None)
+        return v
+
+    @pytest.fixture
+    def sales_df(self):
+        return pd.DataFrame({
+            "month": ["Jan", "Feb", "Mar"],
+            "sales": [10, 20, 30],
+            "cost": [4, 6, 9],
+        })
+
+    def test_create_visualization_lists_config_and_source(self, viewer, sales_df):
+        viewer.display_dataframe(sales_df, "sales_df")
+
+        created = viewer.create_visualization({
+            "type": "bar",
+            "title": "Sales",
+            "x_column": "month",
+            "y_columns": ["sales"],
+        })
+
+        listing = viewer.list_visualizations()
+        assert created["index"] == 0
+        assert created["config"]["x_column"] == "month"
+        assert listing["visualizations"][0]["config"]["title"] == "Sales"
+        assert listing["sources"][0]["columns"] == ["month", "sales", "cost"]
+        assert listing["sources"][0]["numeric_columns"] == ["sales", "cost"]
+
+    def test_update_visualization_merges_and_normalizes_config(self, viewer, sales_df):
+        viewer.display_dataframe(sales_df, "sales_df")
+        viewer.create_visualization({"type": "bar", "x_column": "month", "y_columns": ["sales"]})
+
+        updated = viewer.update_visualization(0, {
+            "type": "line",
+            "y_columns": ["cost"],
+            "line_width": 50,
+        })
+
+        assert updated["config"]["type"] == "line"
+        assert updated["config"]["x_column"] == "month"
+        assert updated["config"]["y_columns"] == ["cost"]
+        assert updated["config"]["line_width"] == 10
+
+    def test_delete_and_export_visualization(self, viewer, sales_df, tmp_path):
+        viewer.display_dataframe(sales_df, "sales_df")
+        viewer.create_visualization({"type": "bar", "x_column": "month", "y_columns": ["sales"]})
+        viewer._chart_pages[0]._image_bytes = b"png-bytes"
+
+        export = viewer.export_visualization(0, str(tmp_path / "chart"))
+        assert export["bytes"] == len(b"png-bytes")
+        assert os.path.exists(export["path"])
+
+        listing = viewer.delete_visualization(0)
+        assert listing["visualizations"] == []
+
+
 class TestResultsViewerGridStyle:
     """Tests for the compact SQL-result grid style."""
 
@@ -332,7 +397,7 @@ class TestResultsViewerGridStyle:
         assert viewer.get_grid_font_size() == 9
         assert viewer._handle_result_zoom_wheel(0) is False
 
-    def test_primary_result_grid_uses_compact_database_style(self, viewer):
+    def test_primary_result_grid_uses_compact_database_style(self, grid_zoom_settings, viewer):
         """The primary result grid should be dense, bordered and easy to scan."""
         df = pd.DataFrame({"id": [1, 2], "name": ["Alice", None]})
 
@@ -347,7 +412,7 @@ class TestResultsViewerGridStyle:
         assert "padding: 1px 6px" in stylesheet
         assert "font-size: 12px" in stylesheet
 
-    def test_secondary_result_grid_reuses_compact_null_style(self, viewer):
+    def test_secondary_result_grid_reuses_compact_null_style(self, grid_zoom_settings, viewer):
         """Secondary multi-result tabs should keep the same compact/null styling."""
         from PyQt6.QtCore import Qt
 
