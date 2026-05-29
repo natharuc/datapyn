@@ -389,6 +389,21 @@ class ExecutionMixin:
             self._log_info(f"[{execution_type}] Series displayed ({rows:,} rows)")
             return True
 
+        elif isinstance(result, list) and len(result) > 0 and all(isinstance(x, pd.DataFrame) for x in result):
+            # MULTIPLOS DATAFRAMES (batch SQL com varios SELECTs) -> GRID com abas
+            if results_panel:
+                items = [
+                    (S.results.tab_label.format(n=i + 1), df)
+                    for i, df in enumerate(result)
+                ]
+                results_panel.display_dataframes(items)
+            self.show_panel("results")
+            total_rows = sum(len(df) for df in result)
+            self._log_info(
+                f"[{execution_type}] {len(result)} result sets ({total_rows:,} total rows)"
+            )
+            return True
+
         elif isinstance(result, (list, tuple)) and len(result) > 0:
             # LISTA/TUPLA → Tentar converter para DataFrame
             try:

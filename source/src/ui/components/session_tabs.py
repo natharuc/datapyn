@@ -311,12 +311,11 @@ class SessionTabs(QTabWidget):
         Design matches the code block control bar buttons (26px, rounded,
         subtle hover with red tint for close, teal tint for timer).
         """
-        from src.design_system.tokens import get_colors
+        from src.design_system.tab_controls import TAB_CLOSE_BUTTON_SIZE, create_tab_close_button
         from PyQt6.QtWidgets import QToolButton, QWidget, QHBoxLayout
         from PyQt6.QtCore import Qt, QSize
 
-        colors = get_colors()
-        BTN_SIZE = 20  # compact for tab bar
+        BTN_SIZE = TAB_CLOSE_BUTTON_SIZE  # compact for tab bar
         H_MARGIN = 4   # horizontal margins (2 each side)
 
         # --- Resizable container ---
@@ -370,36 +369,7 @@ class SessionTabs(QTabWidget):
         container_layout.addWidget(timer_icon)
 
         # Close button
-        close_btn = QToolButton()
-        close_btn.setFixedSize(BTN_SIZE, BTN_SIZE)
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.65))
-        close_btn.setStyleSheet(f"""
-            QToolButton {{
-                background: transparent;
-                border: none;
-                border-radius: {BTN_SIZE // 2}px;
-                padding: 0px;
-            }}
-            QToolButton:hover {{
-                background: rgba(239, 68, 68, 0.2);
-            }}
-        """)
-
-        # Swap icon color on hover for close button
-        _normal_icon = qta.icon("mdi.close", color=colors.text_tertiary, scale_factor=0.65)
-        _hover_icon = qta.icon("mdi.close", color="#ef4444", scale_factor=0.65)
-
-        def on_hover_enter(event):
-            close_btn.setIcon(_hover_icon)
-            QToolButton.enterEvent(close_btn, event)
-
-        def on_hover_leave(event):
-            close_btn.setIcon(_normal_icon)
-            QToolButton.leaveEvent(close_btn, event)
-
-        close_btn.enterEvent = on_hover_enter
-        close_btn.leaveEvent = on_hover_leave
+        close_btn = create_tab_close_button()
 
         # IMPORTANT: Find index dynamically at click time
         # because indices change when tabs are removed

@@ -320,6 +320,7 @@ class TestDatabaseConnectorAPI:
         result, _connect_args = conn._build_connection_string("postgresql", "localhost", 5432, "testdb", "user", "pass")
 
         assert "postgresql+psycopg2" in result
+        assert "client_encoding" not in result
 
     def test_unsupported_database_raises(self):
         """Banco não suportado deve lançar erro"""

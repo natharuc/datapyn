@@ -26,6 +26,8 @@ from src.database.database_connector import (
     SQLSERVER_AUTH_ENTRA_MFA,
     SQLSERVER_AUTH_SQL_PASSWORD,
     SQLSERVER_AUTH_WINDOWS,
+    _is_unicode_decode_error,
+    _safe_exception_text,
     normalize_sqlserver_auth_mode,
 )
 from src.core.theme_manager import ThemeManager
@@ -100,7 +102,13 @@ class ConnectionTestWorker(QThread):
             self.finished.emit(True, S.connection_edit.test_success)
 
         except Exception as e:
-            self.finished.emit(False, S.connection_edit.test_error.format(error=str(e)))
+            self.finished.emit(False, S.connection_edit.test_error.format(error=_format_connection_test_error(e)))
+
+
+def _format_connection_test_error(error: Exception) -> str:
+    if _is_unicode_decode_error(error):
+        return S.connection_edit.error_postgresql_encoding
+    return _safe_exception_text(error)
 
 
 class ConnectionEditDialog(QDialog):

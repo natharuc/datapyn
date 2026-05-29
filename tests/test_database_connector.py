@@ -71,12 +71,111 @@ class TestDatabaseConnectorConnectionString:
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
-        result, _ = connector._build_connection_string(
+        result, connect_args = connector._build_connection_string(
             db_type="postgresql", host="localhost", port=5432, database="testdb", username="user", password="pass"
         )
 
         assert "postgresql+psycopg2" in result
         assert "localhost" in result
+        assert "client_encoding" not in result
+        assert connect_args == {}
+
+    def test_postgresql_connection_string_accepts_encoding_fallback(self):
+        """Fallback de encoding deve ir em connect_args, nao na URL."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, connect_args = connector._build_connection_string(
+            db_type="postgresql",
+            host="localhost",
+            port=5432,
+            database="testdb",
+            username="user",
+            password="pass",
+            postgresql_client_encoding="WIN1252",
+        )
+
+        assert "postgresql+psycopg2" in result
+        assert "client_encoding" not in result
+        assert connect_args == {"client_encoding": "WIN1252"}
+
+    def test_postgresql_undefined_table_mixed_case_gets_identifier_hint(self):
+        """Erro de tabela inexistente com CamelCase deve explicar aspas no PostgreSQL."""
+        from database.database_connector import _format_sql_error_for_user
+
+        error = RuntimeError('(psycopg2.errors.UndefinedTable) ERRO:  relação "xmlpackages" não existe')
+
+        message = _format_sql_error_for_user(error, "postgresql", "SELECT * FROM XmlPackages")
+
+        assert "xmlpackages" in message
+        assert "XmlPackages" in message
+        assert 'public."XmlPackages"' in message
+
+    def test_postgresql_undefined_table_lowercase_does_not_get_case_hint(self):
+        """Tabela lowercase ausente nao deve sugerir problema de CamelCase."""
+        from database.database_connector import _format_sql_error_for_user
+
+        error = RuntimeError('relation "xmlpackages" does not exist')
+
+        message = _format_sql_error_for_user(error, "postgresql", "SELECT * FROM xmlpackages")
+
+        assert message == 'relation "xmlpackages" does not exist'
+
+    def test_non_postgresql_undefined_table_does_not_get_postgres_hint(self):
+        """Hints de case-sensitive sao especificos do PostgreSQL."""
+        from database.database_connector import _format_sql_error_for_user
+
+        error = RuntimeError('relation "xmlpackages" does not exist')
+
+        message = _format_sql_error_for_user(error, "mysql", "SELECT * FROM XmlPackages")
+
+        assert message == 'relation "xmlpackages" does not exist'
+
+    def test_connect_postgresql_retries_with_win1252_after_utf8_decode_error(self):
+        """Falha de decode no startup do PostgreSQL deve tentar encoding Windows comum."""
+        from database.database_connector import DatabaseConnector
+
+        first_engine = MagicMock()
+        first_conn = MagicMock()
+        first_conn.__enter__ = MagicMock(side_effect=UnicodeDecodeError("utf-8", b"conex\xe7ao", 5, 6, "invalid continuation byte"))
+        first_conn.__exit__ = MagicMock(return_value=False)
+        first_engine.connect.return_value = first_conn
+
+        retry_engine = MagicMock()
+        retry_conn = MagicMock()
+        retry_conn.__enter__ = MagicMock(return_value=retry_conn)
+        retry_conn.__exit__ = MagicMock(return_value=False)
+        retry_engine.connect.return_value = retry_conn
+
+        with patch("database.database_connector.create_engine", side_effect=[first_engine, retry_engine]) as mock_create_engine:
+            connector = DatabaseConnector()
+            connected = connector.connect("postgresql", "localhost", 5432, "testdb", "user", "pass")
+
+        assert connected is True
+        assert connector.engine is retry_engine
+        assert mock_create_engine.call_args_list[1].kwargs["connect_args"] == {"client_encoding": "WIN1252"}
+        assert connector._connection_config["postgresql_client_encoding"] == "WIN1252"
+
+    def test_connect_postgresql_decode_retry_preserves_readable_fallback_error(self):
+        """Se o retry revelar erro real, ele deve ser propagado em vez do codec cru."""
+        from database.database_connector import DatabaseConnector
+
+        first_engine = MagicMock()
+        first_conn = MagicMock()
+        first_conn.__enter__ = MagicMock(side_effect=UnicodeDecodeError("utf-8", b"conex\xe7ao", 5, 6, "invalid continuation byte"))
+        first_conn.__exit__ = MagicMock(return_value=False)
+        first_engine.connect.return_value = first_conn
+
+        retry_engine = MagicMock()
+        retry_conn = MagicMock()
+        retry_conn.__enter__ = MagicMock(side_effect=RuntimeError("database docfis does not exist"))
+        retry_conn.__exit__ = MagicMock(return_value=False)
+        retry_engine.connect.return_value = retry_conn
+
+        with patch("database.database_connector.create_engine", side_effect=[first_engine, retry_engine]):
+            connector = DatabaseConnector()
+            with pytest.raises(RuntimeError, match="database docfis does not exist"):
+                connector.connect("postgresql", "localhost", 5432, "docfis", "user", "pass")
 
     def test_databricks_connection_string(self):
         """Deve construir string Databricks com token"""
@@ -580,6 +679,64 @@ class TestDatabaseConnectorMocked:
         assert result[1]["reference"].tolist() == ["9001"]
         assert all(isinstance(value, str) for value in result[0]["code"])
         assert all(isinstance(value, str) for value in result[1]["reference"])
+
+    def test_postgresql_create_database_runs_with_autocommit(self):
+        """CREATE DATABASE no PostgreSQL deve executar fora de bloco de transacao."""
+        from database.database_connector import DatabaseConnector
+
+        mock_engine = MagicMock()
+        mock_connection = MagicMock()
+        mock_autocommit_connection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.rowcount = -1
+        mock_autocommit_connection.execute.return_value = mock_result
+        mock_connection.execution_options.return_value = mock_autocommit_connection
+        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
+        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+
+        connector = DatabaseConnector()
+        connector.engine = mock_engine
+        connector.db_type = "postgresql"
+
+        result = connector.execute_query("CREATE DATABASE docfis")
+
+        mock_connection.execution_options.assert_called_once_with(isolation_level="AUTOCOMMIT")
+        mock_autocommit_connection.execute.assert_called_once()
+        mock_connection.commit.assert_not_called()
+        assert result["Result"].iloc[0] == "Command executed successfully."
+
+    def test_postgresql_create_database_detection_ignores_leading_comments(self):
+        """Comentarios antes do CREATE DATABASE nao devem impedir autocommit."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "postgresql"
+
+        assert connector._requires_postgresql_autocommit("-- criar banco\nCREATE DATABASE docfis") is True
+        assert connector._requires_postgresql_autocommit("/* criar banco */\nCREATE DATABASE docfis") is True
+        assert connector._requires_postgresql_autocommit("-- etapa 1\n  /* etapa 2 */\nCREATE DATABASE docfis") is True
+
+    def test_postgresql_regular_statement_keeps_transaction_commit(self):
+        """DML comum continua usando transacao normal."""
+        from database.database_connector import DatabaseConnector
+
+        mock_engine = MagicMock()
+        mock_connection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.rowcount = 1
+        mock_connection.execute.return_value = mock_result
+        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
+        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+
+        connector = DatabaseConnector()
+        connector.engine = mock_engine
+        connector.db_type = "postgresql"
+
+        result = connector.execute_query("UPDATE customer SET active = true")
+
+        mock_connection.execution_options.assert_not_called()
+        mock_connection.commit.assert_called_once()
+        assert result["Result"].iloc[0] == "Command executed successfully. 1 row(s) affected."
 
 
 class TestDatabaseConnectorEdgeCases:

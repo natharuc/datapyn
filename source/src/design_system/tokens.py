@@ -335,13 +335,13 @@ class StateColors:
 class ChartColors:
     """Colors for matplotlib and chart rendering"""
     
-    figure_bg: str = "#1e1e1e"
-    axes_bg: str = "#2d2d30"
-    axes_edge: str = "#555555"
-    text: str = "#d4d4d4"
-    grid: str = "#3e3e42"
-    legend_bg: str = "#2d2d30"
-    legend_edge: str = "#555555"
+    figure_bg: str = "#181a1f"
+    axes_bg: str = "#181a1f"
+    axes_edge: str = "#3b404d"
+    text: str = "#dcdee4"
+    grid: str = "#3b404d"
+    legend_bg: str = "#181a1f"
+    legend_edge: str = "#3b404d"
 
 
 # Singleton instances
@@ -362,12 +362,12 @@ LIGHT_STATE_COLORS = StateColors(
 
 LIGHT_CHART_COLORS = ChartColors(
     figure_bg="#ffffff",
-    axes_bg="#f5f5f5",
-    axes_edge="#cccccc",
+    axes_bg="#ffffff",
+    axes_edge="#d1d5db",
     text="#333333",
-    grid="#e0e0e0",
-    legend_bg="#f5f5f5",
-    legend_edge="#cccccc",
+    grid="#e5e7eb",
+    legend_bg="#ffffff",
+    legend_edge="#d1d5db",
 )
 
 

@@ -60,6 +60,7 @@ class Session(QObject):
         self._code = ""  # Compatibility
         self._blocks: list = []  # Lista de blocos [{language, code}]
         self.notification_config: Optional[Dict[str, Any]] = None
+        self.result_view_state: Dict[str, Any] = {}
 
         # Workers ativos (threads)
         self._active_threads: list = []
@@ -302,6 +303,7 @@ class Session(QObject):
             "code": self._code,  # Compatibility
             "blocks": self._blocks,  # New: list of blocks
             "notification_config": self.notification_config,
+            "result_view_state": self.result_view_state,
             "created_at": self.created_at.isoformat(),
             "file_path": getattr(self, "file_path", None),  # Original file path
             "original_file_type": getattr(self, "original_file_type", None),  # File type (sql/py/dpw)
@@ -318,6 +320,8 @@ class Session(QObject):
         session._code = data.get("code", "")
         session._blocks = data.get("blocks", [])
         session.notification_config = data.get("notification_config")
+        result_view_state = data.get("result_view_state", {})
+        session.result_view_state = result_view_state if isinstance(result_view_state, dict) else {}
         session.file_path = data.get("file_path")  # Restore file path
         session.original_file_type = data.get("original_file_type")  # Restore file type
         if data.get("created_at"):

@@ -5,7 +5,7 @@ from database.database_connector import (
     SQLSERVER_AUTH_SQL_PASSWORD,
     SQLSERVER_AUTH_WINDOWS,
 )
-from ui.dialogs.connection_edit_dialog import ConnectionEditDialog
+from ui.dialogs.connection_edit_dialog import ConnectionEditDialog, _format_connection_test_error
 
 
 class TestConnectionEditDialog:
@@ -91,3 +91,39 @@ class TestConnectionEditDialog:
         dialog.cmb_sqlserver_auth.setCurrentIndex(index)
 
         assert "Optional" in dialog.txt_username.placeholderText()
+
+    def test_postgresql_utf8_decode_error_gets_actionable_message(self):
+        """PostgreSQL driver encoding errors should not be shown as raw codec noise only."""
+        error = UnicodeDecodeError("utf-8", b"conex\xe7ao", 5, 6, "invalid continuation byte")
+
+        message = _format_connection_test_error(error)
+
+        assert "PostgreSQL" in message
+        assert "host" in message.lower()
+        assert "codec can't decode" not in message
+
+    def test_nested_postgresql_utf8_decode_error_gets_actionable_message(self):
+        """Nested driver messages containing the codec failure should be normalized too."""
+        error = RuntimeError("'utf-8' codec can't decode byte 0xe7 in position 78: invalid continuation byte")
+
+        message = _format_connection_test_error(error)
+
+        assert "PostgreSQL" in message
+        assert "codec can't decode" not in message
+
+    def test_regular_connection_test_error_is_unchanged(self):
+        """Normal connection errors should preserve the driver message."""
+        message = _format_connection_test_error(RuntimeError("password authentication failed"))
+
+        assert message == "password authentication failed"
+
+    def test_connection_test_error_handles_exception_str_decode_failure(self):
+        """Even exception __str__ decode failures should become a clean PostgreSQL message."""
+        class BrokenError(Exception):
+            def __str__(self):
+                raise UnicodeDecodeError("utf-8", b"conex\xe7ao", 5, 6, "invalid continuation byte")
+
+        message = _format_connection_test_error(BrokenError())
+
+        assert "PostgreSQL" in message
+        assert "codec can't decode" not in message

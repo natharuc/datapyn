@@ -20,7 +20,7 @@ import time
 
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
-from src.database.database_connector import get_connector_database_context
+from src.database.database_connector import _format_sql_error_for_user, _safe_exception_text, get_connector_database_context
 from src.editors.block_editor import BlockEditor
 from src.language import S
 from src.utils.sql_parameter_service import validate_and_convert_parameters
@@ -72,13 +72,15 @@ class SessionSqlWorker(QObject):
             df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.finished.emit(df, "")
         except Exception as e:
-            error_msg = str(e)
+            raw_error_msg = _safe_exception_text(e)
             # Detect if it was cancellation
             cancelled = getattr(self.connector, "_cancelled", False)
-            lower_msg = error_msg.lower()
+            lower_msg = raw_error_msg.lower()
             if cancelled or "cancel" in lower_msg or "abort" in lower_msg:
                 self.finished.emit(None, "__CANCELLED__")
             else:
+                db_type = getattr(self.connector, "db_type", "")
+                error_msg = _format_sql_error_for_user(e, db_type, self.query)
                 self.finished.emit(None, error_msg)
 
 
@@ -265,6 +267,24 @@ class SessionWidget(QWidget):
         """Set per-tab notification config (or None to clear)."""
         self._tab_notification_config = self._normalize_tab_notification_config(config)
         self.session.notification_config = self._tab_notification_config
+
+    def get_result_view_state(self) -> Dict[str, Any]:
+        """Return persisted results-view settings for this session."""
+        info = self._get_own_panels()
+        viewer = info.get("results") if info else None
+        if viewer and hasattr(viewer, "get_view_state"):
+            return viewer.get_view_state()
+        return getattr(self.session, "result_view_state", {}) or {}
+
+    def set_result_view_state(self, state: Optional[Dict[str, Any]]):
+        """Restore persisted results-view settings for this session."""
+        self.session.result_view_state = state if isinstance(state, dict) else {}
+        info = self._get_own_panels()
+        viewer = info.get("results") if info else None
+        if viewer and hasattr(viewer, "set_session"):
+            viewer.set_session(self.session)
+        elif viewer and hasattr(viewer, "set_view_state"):
+            viewer.set_view_state(self.session.result_view_state)
 
     @staticmethod
     def _normalize_tab_notification_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
@@ -475,18 +495,48 @@ class SessionWidget(QWidget):
             main_window.show_panel("output")
 
     def _set_results(self, data, name="result"):
-        """Define resultados no painel DESTA sessao"""
+        """Define resultados no painel DESTA sessao.
+
+        `data` pode ser:
+          - um DataFrame: exibido na aba unica (comportamento padrao);
+          - uma lista de (label, DataFrame): cada item vira uma aba (multi-result);
+          - uma lista de DataFrames: labels automaticos sao gerados.
+        Quando o viewer nao suporta multi-tab, faz fallback exibindo apenas o
+        ultimo item da lista.
+        """
         info = self._get_own_panels()
         viewer = info["results"] if info else None
         if not viewer:
             # Fallback: usar viewer global (compatibilidade com testes/mocks)
             main_window = self._get_main_window()
             viewer = main_window.global_results_viewer if main_window else None
-        if viewer:
+        if not viewer:
+            return
+
+        if hasattr(viewer, "set_session"):
+            viewer.set_session(self.session)
+        if hasattr(viewer, "set_connection_color"):
+            viewer.set_connection_color(self._connection_color)
+
+        if isinstance(data, list):
+            if hasattr(viewer, "display_dataframes"):
+                viewer.display_dataframes(data)
+            else:
+                # Fallback: last item only
+                last = data[-1] if data else None
+                if last is None:
+                    return
+                if isinstance(last, tuple):
+                    label, df_last = last
+                else:
+                    label, df_last = name, last
+                viewer.display_dataframe(df_last, label)
+        else:
             viewer.display_dataframe(data, name)
-            main_window = self._get_main_window()
-            if main_window:
-                main_window.show_panel("results")
+
+        main_window = self._get_main_window()
+        if main_window:
+            main_window.show_panel("results")
 
     def _set_figures(self, figures: list, label: str = "Resultado"):
         """Exibe rich outputs (imagens, HTML, JSON) no painel DESTA sessao"""
@@ -496,6 +546,8 @@ class SessionWidget(QWidget):
             main_window = self._get_main_window()
             viewer = main_window.global_results_viewer if main_window else None
         if viewer:
+            if hasattr(viewer, "set_session"):
+                viewer.set_session(self.session)
             viewer.display_rich_output(figures, label)
             main_window = self._get_main_window()
             if main_window:
@@ -906,10 +958,15 @@ class SessionWidget(QWidget):
                     self.session.set_variable(var_name, dataframe)
                     self._log(S.session_widget.sql_var_rows.format(var_name=var_name, rows=f"{len(dataframe):,}"))
 
-                # Display only last DataFrame in grid
+                # Display ALL DataFrames as tabs in the results grid.
+                # Fallback to last-only when the viewer doesn't support multi-tab.
                 last_df = df[-1]
                 last_var_name = f"{var_base}{len(df) - 1}" if len(df) > 1 else var_base
-                self._set_results(last_df, last_var_name)
+                items = [
+                    (var_base if i == 0 else f"{var_base}{i}", dataframe)
+                    for i, dataframe in enumerate(df)
+                ]
+                self._set_results(items, last_var_name)
                 self._update_last_notification_result(last_df)
 
                 self.session.finish_execution(True, S.session_widget.status_sql_multi.format(count=len(df)))
@@ -1549,6 +1606,7 @@ class SessionWidget(QWidget):
         self.session.code = self.get_code()  # Compatibilidade
         self.session.blocks = self.editor.to_list()  # Novo: blocos
         self.session.notification_config = self.get_tab_notification_config()
+        self.session.result_view_state = self.get_result_view_state()
         # Sync file_path and file type
         if hasattr(self, "file_path") and self.file_path:
             self.session.file_path = self.file_path
@@ -1563,6 +1621,7 @@ class SessionWidget(QWidget):
             self.set_code(self.session.code)
 
         self.set_tab_notification_config(getattr(self.session, "notification_config", None))
+        self.set_result_view_state(getattr(self.session, "result_view_state", None))
 
     def _on_file_dropped(self, file_path: str):
         """Open import dialog when data file is dropped on editor"""

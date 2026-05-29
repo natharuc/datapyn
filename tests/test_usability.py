@@ -81,7 +81,13 @@ def main_window(qapp, qtbot, tmp_path):
 
         yield window
 
-        window.close()
+        try:
+            from PyQt6 import sip
+
+            if not sip.isdeleted(window):
+                window.close()
+        except RuntimeError:
+            pass
 
 
 # === TESTES DE PROPRIEDADES DE DELEGAÇÃO ===
