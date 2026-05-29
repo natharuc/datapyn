@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.33.0 (2026-05-29)
+
+### Features
+
+- Melhora resultados SQL, charts e zoom
+  ([`960a5d4`](https://github.com/natharuc/datapyn/commit/960a5d4718325c280200b509e49921c89bf3990b))
+
+
 ## v1.32.1 (2026-05-22)
 
 
