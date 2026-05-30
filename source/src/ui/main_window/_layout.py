@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QDockWidget, QMessageBox, QStackedWidget, QTabBar
 from src.ui.components.results_viewer import ResultsViewer
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
+from src.ui.components.summarize_panel import SummarizePanel
 from src.ui.components.copilot_chat_panel import CopilotChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.design_system.tokens import get_colors
@@ -36,6 +37,7 @@ class LayoutMixin:
         self._results_stack = QStackedWidget()
         self._output_stack = QStackedWidget()
         self._variables_stack = QStackedWidget()
+        self._summarize_stack = QStackedWidget()
 
         # Mapeamento session_id -> indice no stack
         self._session_panel_indices: dict = {}
@@ -76,6 +78,14 @@ class LayoutMixin:
         self.results_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
 
+        # Summarize Panel (grid selection stats)
+        self.summarize_dock = QDockWidget(S.dock.summarize, self)
+        self.summarize_dock.setObjectName("SummarizeDock")
+        self.summarize_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.summarize_dock.setWidget(self._summarize_stack)
+        self.summarize_dock.setStyleSheet(dock_style_bottom)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.summarize_dock)
+
         # Output Panel
         self.output_dock = QDockWidget(S.dock.output, self)
         self.output_dock.setObjectName("OutputDock")
@@ -94,6 +104,7 @@ class LayoutMixin:
 
         # Configure minimum sizes to ensure visibility
         self.results_dock.setMinimumHeight(180)
+        self.summarize_dock.setMinimumHeight(140)
         self.output_dock.setMinimumHeight(180)
         self.variables_dock.setMinimumWidth(200)
         self.variables_dock.setMinimumHeight(180)
@@ -138,45 +149,55 @@ class LayoutMixin:
         # Initialize centralized Copilot auth service
         self._setup_copilot_auth_service()
 
-        # Tabifica Results e Output por padrao (fica em abas)
+        # Tabifica Results, Summarize e Output por padrao (fica em abas)
+        self.tabifyDockWidget(self.results_dock, self.summarize_dock)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
         self.tabifyDockWidget(self.output_dock, self.copilot_output_dock)
 
         # Results fica como aba ativa
         self.results_dock.raise_()
 
-        # Esconder Results e Variables ate a primeira execucao
+        # Esconder Results, Summarize e Variables ate a primeira execucao
         self.results_dock.hide()
+        self.summarize_dock.hide()
         self.variables_dock.hide()
 
         if getattr(self, "_empty_state_widget", None):
             self._show_empty_state()
 
     def _create_session_panels(self, session_id: str):
-        """Creates panels (Results, Output, Variables) for a session and adds to stacks."""
+        """Creates panels (Results, Output, Variables, Summarize) for a session and adds to stacks."""
         results = ResultsViewer(theme_manager=self.theme_manager)
         session = self.session_manager.get_session(session_id) if hasattr(self, "session_manager") else None
         if session is not None and hasattr(results, "set_session"):
             results.set_session(session)
         output = OutputPanel(theme_manager=self.theme_manager)
         variables = VariablesPanel(theme_manager=self.theme_manager)
+        summarize = SummarizePanel(theme_manager=self.theme_manager)
 
         # Connect signals do painel de variaveis
         variables.insert_variable_name.connect(self._on_insert_variable_in_editor)
         variables.delete_variable.connect(self._on_delete_variable)
         variables.show_in_results.connect(self._on_show_variable_in_results)
 
+        results.grid_selection_changed.connect(
+            lambda rv=results, panel=summarize: panel.update_from_results_viewer(rv)
+        )
+
         r_idx = self._results_stack.addWidget(results)
         o_idx = self._output_stack.addWidget(output)
         v_idx = self._variables_stack.addWidget(variables)
+        s_idx = self._summarize_stack.addWidget(summarize)
 
         self._session_panel_indices[session_id] = {
             "results_idx": r_idx,
             "output_idx": o_idx,
             "variables_idx": v_idx,
+            "summarize_idx": s_idx,
             "results": results,
             "output": output,
             "variables": variables,
+            "summarize": summarize,
         }
         return results, output, variables
 
@@ -188,9 +209,13 @@ class LayoutMixin:
         self._results_stack.removeWidget(info["results"])
         self._output_stack.removeWidget(info["output"])
         self._variables_stack.removeWidget(info["variables"])
+        if info.get("summarize"):
+            self._summarize_stack.removeWidget(info["summarize"])
         info["results"].deleteLater()
         info["output"].deleteLater()
         info["variables"].deleteLater()
+        if info.get("summarize"):
+            info["summarize"].deleteLater()
 
         # Remove Object Explorer from session
         if hasattr(self, "_session_explorers"):
@@ -211,6 +236,12 @@ class LayoutMixin:
             self._output_stack.setCurrentWidget(info["output"])
         if info["variables"]:
             self._variables_stack.setCurrentWidget(info["variables"])
+        if info.get("summarize"):
+            self._summarize_stack.setCurrentWidget(info["summarize"])
+            summarize = info["summarize"]
+            results = info.get("results")
+            if summarize and results:
+                summarize.update_from_results_viewer(results)
 
         # Trocar Object Explorer para a sessao ativa
         if hasattr(self, "_session_explorers"):
@@ -237,6 +268,13 @@ class LayoutMixin:
         info = self._session_panel_indices.get(sid) if sid else None
         return info["variables"] if info else None
 
+    @property
+    def global_summarize_panel(self):
+        """Returns the SummarizePanel of the active session."""
+        sid = self._get_active_session_id()
+        info = self._session_panel_indices.get(sid) if sid else None
+        return info.get("summarize") if info else None
+
     def _get_active_session_id(self) -> str:
         """Returns the session_id of the active tab."""
         widget = self._get_current_session_widget()
@@ -262,6 +300,7 @@ class LayoutMixin:
         """
         dock_map = {
             "results": self.results_dock,
+            "summarize": self.summarize_dock,
             "output": self.output_dock,
             "variables": self.variables_dock,
             "object_explorer": getattr(self, "object_explorer_dock", None),
@@ -274,14 +313,21 @@ class LayoutMixin:
         dock.show()
         dock.raise_()
 
-        # Se mostrando results pela primeira vez, mostrar variables tambem
-        if name == "results" and not self.variables_dock.isVisible():
-            self.variables_dock.show()
+        # Se mostrando results pela primeira vez, mostrar variables e summarize tambem
+        if name == "results":
+            if not self.variables_dock.isVisible():
+                self.variables_dock.show()
+            if hasattr(self, "summarize_dock") and not self.summarize_dock.isVisible():
+                self.summarize_dock.show()
+            panel = self.global_summarize_panel
+            viewer = self.global_results_viewer
+            if panel and viewer:
+                panel.update_from_results_viewer(viewer)
 
         # Para docks tabificados, raise_() nao troca a aba visivel.
         # Precisamos encontrar o QTabBar que controla o grupo e selecionar
         # a aba correspondente manualmente.
-        if name in ("results", "output"):
+        if name in ("results", "output", "summarize"):
             self._activate_tabified_dock(dock)
 
     def _activate_tabified_dock(self, dock: QDockWidget):
@@ -304,6 +350,10 @@ class LayoutMixin:
         """Hides specific panel using QDockWidget"""
         if name == "results":
             self.results_dock.hide()
+            if hasattr(self, "summarize_dock"):
+                self.summarize_dock.hide()
+        elif name == "summarize" and hasattr(self, "summarize_dock"):
+            self.summarize_dock.hide()
         elif name == "output":
             self.output_dock.hide()
         elif name == "variables":
@@ -383,7 +433,13 @@ class LayoutMixin:
                 self._setup_default_layout()
 
             # Ensure all non-hidden docks are properly docked (not floating)
-            for dock in [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]:
+            for dock in [
+                self.connections_dock,
+                self.results_dock,
+                self.summarize_dock,
+                self.output_dock,
+                self.variables_dock,
+            ]:
                 if dock.isFloating() and dock.isVisible():
                     dock.setFloating(False)
 
@@ -412,7 +468,13 @@ class LayoutMixin:
         self._layout_save_timer.timeout.connect(self._save_dock_layout)
 
         # Connect dock visibility changes to schedule save
-        all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
+        all_docks = [
+            self.connections_dock,
+            self.results_dock,
+            self.summarize_dock,
+            self.output_dock,
+            self.variables_dock,
+        ]
         if hasattr(self, "object_explorer_dock"):
             all_docks.append(self.object_explorer_dock)
         if hasattr(self, "copilot_dock"):
@@ -442,7 +504,13 @@ class LayoutMixin:
     def _setup_default_layout(self):
         """Configures the default dock layout."""
         try:
-            all_docks = [self.connections_dock, self.results_dock, self.output_dock, self.variables_dock]
+            all_docks = [
+                self.connections_dock,
+                self.results_dock,
+                self.summarize_dock,
+                self.output_dock,
+                self.variables_dock,
+            ]
             if hasattr(self, "object_explorer_dock"):
                 all_docks.append(self.object_explorer_dock)
             if hasattr(self, "copilot_dock"):
@@ -455,6 +523,7 @@ class LayoutMixin:
             # Position docks in their default areas
             self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
             self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.summarize_dock)
             self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
             self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
 
@@ -466,7 +535,8 @@ class LayoutMixin:
                 self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
                 self.copilot_dock.hide()
 
-            # Tabify Results and Output (bottom tabs)
+            # Tabify Results, Summarize and Output (bottom tabs)
+            self.tabifyDockWidget(self.results_dock, self.summarize_dock)
             self.tabifyDockWidget(self.results_dock, self.output_dock)
             self.results_dock.raise_()
 
@@ -535,6 +605,7 @@ class LayoutMixin:
         dock_action_map = [
             ("connections_dock", "connections_action"),
             ("results_dock", "results_action"),
+            ("summarize_dock", "summarize_action"),
             ("output_dock", "output_action"),
             ("variables_dock", "variables_action"),
             ("object_explorer_dock", "object_explorer_action"),

@@ -25,6 +25,7 @@
     "view": "&Exibir",
     "panels": "&Paineis",
     "panel_results": "&Resultados",
+    "panel_summarize": "Res&umir",
     "panel_output": "&Saida",
     "panel_variables": "&Variaveis",
     "panel_connections": "&Conexoes",
@@ -56,6 +57,7 @@
   "dock": {
     "connections": "Conexoes",
     "results": "Resultados",
+    "summarize": "Resumir",
     "output": "Saida",
     "variables": "Variaveis",
     "object_explorer": "Explorador de Objetos",
@@ -545,6 +547,41 @@
     "ctx_size_info": "Tamanho: {n}",
     "ctx_size_chars": "Tamanho: {n} caracteres",
     "ctx_remove_variable": "Remover variavel"
+  },
+  "summarize_panel": {
+    "title": "Resumir",
+    "tab_summarize": "Resumir",
+    "tab_aggregate": "Agregados",
+    "grand_total": "Total da selecao",
+    "format_column": "Formato da coluna",
+    "zoom_in": "Aumentar zoom",
+    "zoom_out": "Diminuir zoom",
+    "empty_hint": "Selecione celulas no grid de resultados para ver totais, medias e contagens.",
+    "no_data": "Nenhum dado para resumir.",
+    "selection_subtitle": "{rows:,} linhas · {cols} colunas · {cells:,} celulas selecionadas",
+    "all_rows_subtitle": "Todas as linhas · {cols} colunas ({rows:,} linhas)",
+    "headers": {
+      "column": "Coluna",
+      "count": "Contagem",
+      "sum": "Soma",
+      "avg": "Media",
+      "min": "Min",
+      "max": "Max",
+      "distinct": "Distintos",
+      "top": "Valor top"
+    },
+    "aggregates": {
+      "rows": "Linhas",
+      "cols": "Colunas",
+      "count": "Contagem",
+      "count_numeric": "Contagem numerica",
+      "sum": "Soma",
+      "avg": "Media",
+      "min": "Min",
+      "max": "Max",
+      "median": "Mediana",
+      "coefficient": "Coeficiente de variacao"
+    }
   },
   "output_panel": {
     "btn_clear": "Limpar",

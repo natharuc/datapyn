@@ -401,6 +401,14 @@ class UISetupMixin:
         panels_menu.addAction(results_action)
         self.results_action = results_action
 
+        # Summarize panel toggle
+        summarize_action = QAction(S.menu.panel_summarize, self)
+        summarize_action.setCheckable(True)
+        summarize_action.setChecked(True)
+        summarize_action.triggered.connect(lambda checked: self._toggle_panel_visibility("summarize", checked))
+        panels_menu.addAction(summarize_action)
+        self.summarize_action = summarize_action
+
         # Output panel toggle
         output_action = QAction(S.menu.panel_output, self)
         output_action.setCheckable(True)
