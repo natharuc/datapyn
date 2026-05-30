@@ -254,6 +254,17 @@ class CopilotAuthService(QObject):
             self.chat_logged_out.emit()
         except Exception as e:
             logger.warning(f"[AuthService] Chat logout failed: {e}")
+
+    def cancel_chat_auth(self) -> None:
+        """Cancel an in-progress chat login flow and release the auth lock."""
+        if not self._auth_in_progress or self._auth_type != "chat":
+            return
+        logger.info("[AuthService] Cancelling chat auth flow")
+        if self._chat_client and hasattr(self._chat_client, "cancel_pending_auth"):
+            self._chat_client.cancel_pending_auth()
+        else:
+            self._end_auth_flow()
+            self.chat_auth_failed.emit("Authentication cancelled")
     
     def verify_chat_auth(self) -> bool:
         """Verify current chat auth status (non-blocking).

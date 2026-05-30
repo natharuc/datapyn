@@ -169,7 +169,27 @@ class CopilotSettingsManager:
         """Persist the last known usage snapshot."""
         if not isinstance(snapshot, dict):
             snapshot = {}
-        self._settings.setValue("chat/usage_snapshot", json.dumps(snapshot))
+        self._settings.setValue("chat/usage_snapshot", json.dumps(self._json_safe(snapshot)))
+
+    @property
+    def chat_history_collapsed(self) -> bool:
+        """Get whether the Copilot chat history rail is collapsed."""
+        val = self._settings.value("chat/history_collapsed", False)
+        return val in (True, "true", "True", 1, "1")
+
+    def set_chat_history_collapsed(self, collapsed: bool):
+        """Persist whether the Copilot chat history rail is collapsed."""
+        self._settings.setValue("chat/history_collapsed", bool(collapsed))
+
+    def _json_safe(self, value):
+        """Return a QSettings-safe JSON value for SDK metadata."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {str(key): self._json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [self._json_safe(item) for item in value]
+        return str(value)
     
     # ========================
     # LSP / AUTOCOMPLETE SETTINGS

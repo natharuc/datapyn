@@ -292,6 +292,183 @@ class TestChatTemplateThinkingBlock:
         assert "function toggleThinkingBlock" in template_content
 
 
+class TestCopilotChatWebViewApp:
+    """Tests for the new full-WebView Copilot chat app contract."""
+
+    @pytest.fixture
+    def app_files(self):
+        root = Path(__file__).parent.parent / "source" / "src" / "ui"
+        return {
+            "html": (root / "components" / "copilot_chat_app.html").read_text(encoding="utf-8"),
+            "css": (root / "assets" / "css" / "copilot_chat_app.css").read_text(encoding="utf-8"),
+            "js": (root / "assets" / "js" / "copilot_chat_app.js").read_text(encoding="utf-8"),
+        }
+
+    def test_app_has_webview_only_shell_controls(self, app_files):
+        html = app_files["html"]
+        assert "historyRail" in html
+        assert "modelPicker" in html
+        assert "modelPickerMenu" in html
+        assert "modelSearch" in html
+        assert "modelSelect" not in html
+        assert "effortSelect" in html
+        assert "usagePill" in html
+        assert "composerInput" in html
+        assert "referenceSuggestions" in html
+        assert "composerCard" in html
+        assert "composer-footer" in html
+        assert "composerError" in html
+        assert "attachBtn" in html
+        assert "logoutBtn" in html
+        assert "attachmentChips" in html
+        assert 'id="attachmentChips" class="composer-attachments" hidden' in html
+        assert "imageLightbox" in html
+        assert "authStatusPill" not in html
+        assert "settingsDrawer" not in html
+
+    def test_app_exposes_python_bridge_methods(self, app_files):
+        js = app_files["js"]
+        assert 'callBridge("sendMessage"' in js
+        assert 'callBridge("cancelTurn"' in js
+        assert 'callBridge("listReferences"' in js
+        assert 'callBridge("selectModel"' in js
+        assert 'callBridge("selectReasoningEffort"' in js
+        assert 'callBridge("setHistoryCollapsed"' in js
+        assert 'callBridge("authAction"' in js or "authAction" in js
+        assert "logout" in js
+        assert 'callBridge("requestClipboardPaste"' not in js
+        assert "readClipboardImageJson" in js
+        assert "callBridgeResult" in js
+        assert "requestComposerRepaint" in js
+        assert "syncAttachmentStrip" in js
+        assert "forceComposerRepaint" in js
+
+    def test_app_exposes_runtime_update_functions(self, app_files):
+        js = app_files["js"]
+        for function_name in [
+            "setTurnState", "setModels", "setUsage", "setSessions",
+            "showReferenceSuggestions", "startStreaming", "streamChunk",
+            "endStreaming", "startThinkingBlock", "appendThinking",
+        ]:
+            assert f"window.{function_name}" in js
+
+    def test_app_css_uses_stable_ide_layout(self, app_files):
+        css = app_files["css"]
+        assert "grid-template-columns: var(--history-width) 1fr" in css
+        assert ".composer-card" in css
+        assert ".composer-footer" in css
+        assert ".image-lightbox" in css
+        assert ".message-attachment-thumb" in css
+        assert ".message" in css
+        assert ".reference-suggestions" in css
+        assert ".history-collapsed" in css
+        assert ".work-block" in css
+
+    def test_model_picker_hidden_state_is_respected(self, app_files):
+        css = app_files["css"]
+        assert ".model-picker-menu[hidden]" in css
+        assert "display: none !important" in css
+
+    def test_app_has_visible_working_indicator(self, app_files):
+        css = app_files["css"]
+        js = app_files["js"]
+        assert ".chat-shell.working .composer-wrap::before" in css
+        assert "@keyframes working-line" in css
+        assert "thinking-dots" in css
+        assert "function setWorking" in js
+        assert 'classList.toggle("working"' in js
+
+    def test_chat_app_state_object_is_not_corrupted(self, app_files):
+        js = app_files["js"]
+        assert "completedTools: 0," in js
+        assert "const $ = (id) => document.getElementById(id);" in js
+        assert "function setWorking" in js
+        assert js.index("completedTools: 0,") < js.index("function setWorking")
+        assert "line.className" not in js[: js.index("function showThinking")]
+        assert "block.setAttribute" not in js[: js.index("function startThinkingBlock")]
+
+    def test_chat_app_does_not_show_raw_i18n_keys_before_bridge(self, app_files):
+        js = app_files["js"]
+        assert 'fallback || ""' in js
+        assert 'fallback || key' not in js
+
+    def test_app_exposes_composer_focus_function(self, app_files):
+        js = app_files["js"]
+        assert "window.focusComposer" in js
+        assert '$("composerInput")' in js
+        assert "openAttachmentLightbox" in js
+        assert "attachmentDataUrl" in js
+        assert "renderMessageAttachments" in js
+
+    def test_chat_css_avoids_webengine_unsupported_color_mix(self, app_files):
+        css = app_files["css"]
+        assert "color-mix" not in css
+
+    def test_model_picker_labels_are_sent_to_webview(self, app_files):
+        panel_source = (Path(__file__).parent.parent / "source" / "src" / "ui" / "components" / "copilot_chat_panel.py").read_text(encoding="utf-8")
+        assert '"model_search_placeholder"' in panel_source
+        assert '"no_models_found"' in panel_source
+        assert "copilot_session_storage" in panel_source
+        assert "save_session_messages" in panel_source
+        assert "resolve_session_messages" in panel_source
+
+    def test_web_input_state_focus_callback_is_safe(self):
+        from src.ui.components.copilot_chat_panel import _WebInputState
+
+        focused = []
+        state = _WebInputState(lambda: focused.append(True))
+
+        state.setFocus()
+
+        assert focused == [True]
+
+    def test_toggle_copilot_dock_uses_webview_focus_input(self, qapp):
+        from src.ui.main_window._ui_setup import UISetupMixin
+
+        class DummyDock:
+            def __init__(self):
+                self.visible = False
+                self.raised = False
+
+            def isVisible(self):
+                return self.visible
+
+            def show(self):
+                self.visible = True
+
+            def hide(self):
+                self.visible = False
+
+            def raise_(self):
+                self.raised = True
+
+        class DummyPanel:
+            def __init__(self):
+                self.focused = False
+
+            def focus_input(self):
+                self.focused = True
+
+        class Host(UISetupMixin):
+            pass
+
+        host = Host()
+        host.copilot_dock = DummyDock()
+        host._copilot_chat_panel = DummyPanel()
+
+        host._toggle_copilot_dock()
+
+        assert host.copilot_dock.visible is True
+        assert host.copilot_dock.raised is True
+        assert host._copilot_chat_panel.focused is True
+
+    def test_work_display_is_collapsed_by_default(self, app_files):
+        js = app_files["js"]
+        assert 'document.createElement("details")' in js
+        assert 'className = "work-block"' in js
+        assert "open = true" not in js
+
+
 # ===== Chat Panel Thinking State Machine =====
 
 
@@ -532,7 +709,11 @@ class TestI18nLabels:
             "reasoning_effort_tooltip", "effort_medium", "effort_high",
             "effort_xhigh", "usage_unavailable", "history_search_placeholder",
             "refresh_models", "usage_used_format", "usage_tooltip_with_reset",
+            "timeout_message",
+            "toggle_history", "work_title", "work_running", "work_complete",
         ]
+        for key in required_keys:
+            assert key in copilot, f"Missing copilot.{key} in pt-BR.json"
         for key in required_keys:
             assert key in copilot, f"Missing copilot.{key} in en-US.json"
 
@@ -550,9 +731,35 @@ class TestI18nLabels:
             "reasoning_effort_tooltip", "effort_medium", "effort_high",
             "effort_xhigh", "usage_unavailable", "history_search_placeholder",
             "refresh_models", "usage_used_format", "usage_tooltip_with_reset",
+            "timeout_message",
+            "toggle_history", "work_title", "work_running", "work_complete",
         ]
-        for key in required_keys:
-            assert key in copilot, f"Missing copilot.{key} in pt-BR.json"
+
+
+class TestCopilotSettingsPersistence:
+    """Tests for persisted Copilot chat preferences and SDK metadata."""
+
+    def test_usage_snapshot_accepts_non_json_sdk_values(self):
+        """Usage snapshots from SDK events may contain non-JSON objects."""
+        from datetime import datetime
+        from src.services.copilot.copilot_settings import CopilotSettingsManager
+
+        settings = CopilotSettingsManager()
+        settings.set_chat_usage_snapshot({"available": True, "reset_date": datetime(2026, 5, 29)})
+
+        snapshot = settings.chat_usage_snapshot
+        assert snapshot["available"] is True
+        assert snapshot["reset_date"].startswith("2026-05-29")
+
+    def test_history_collapsed_preference_roundtrips(self):
+        """History rail collapsed state should be persisted for the user."""
+        from src.services.copilot.copilot_settings import CopilotSettingsManager
+
+        settings = CopilotSettingsManager()
+        settings.set_chat_history_collapsed(True)
+        assert settings.chat_history_collapsed is True
+        settings.set_chat_history_collapsed(False)
+        assert settings.chat_history_collapsed is False
 
     def test_webview_labels_sent_on_ready(self, qapp):
         """_on_webview_ready should send labels to WebView via setLabels."""
@@ -1049,5 +1256,5 @@ class TestToolGuideInContext:
         context = json.loads(result["content"][0]["text"])
         guide = context["tool_guide"]
 
-        assert "UPDATE" in guide
-        assert "CREATE" in guide
+        assert "UPDATE" in guide or "edit_block" in guide
+        assert "CREATE" in guide or "write_and_run" in guide

@@ -552,9 +552,12 @@ class UISetupMixin:
                 self.copilot_dock.raise_()
                 # Focus input field
                 if hasattr(self, "_copilot_chat_panel"):
-                    input_field = getattr(self._copilot_chat_panel, "_input", None)
-                    if input_field:
-                        input_field.setFocus()
+                    if hasattr(self._copilot_chat_panel, "focus_input"):
+                        self._copilot_chat_panel.focus_input()
+                    else:
+                        input_field = getattr(self._copilot_chat_panel, "_input", None)
+                        if input_field and hasattr(input_field, "setFocus"):
+                            input_field.setFocus()
 
     def _on_workspace_switch(self, path: str):
         """Handle workspace switch request from toolbar."""
