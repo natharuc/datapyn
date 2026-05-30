@@ -25,6 +25,7 @@
     "view": "&View",
     "panels": "&Panels",
     "panel_results": "&Results",
+    "panel_summarize": "Su&mmarize",
     "panel_output": "&Output",
     "panel_variables": "&Variables",
     "panel_connections": "&Connections",
@@ -56,6 +57,7 @@
   "dock": {
     "connections": "Connections",
     "results": "Results",
+    "summarize": "Summarize",
     "output": "Output",
     "variables": "Variables",
     "object_explorer": "Object Explorer",
@@ -545,6 +547,41 @@
     "ctx_size_info": "Size: {n}",
     "ctx_size_chars": "Size: {n} chars",
     "ctx_remove_variable": "Remove variable"
+  },
+  "summarize_panel": {
+    "title": "Summarize",
+    "tab_summarize": "Summarize",
+    "tab_aggregate": "Aggregate",
+    "grand_total": "Selection total",
+    "format_column": "Column format",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "empty_hint": "Select cells in the results grid to see totals, averages, and counts.",
+    "no_data": "No data to summarize.",
+    "selection_subtitle": "{rows:,} rows · {cols} columns · {cells:,} cells selected",
+    "all_rows_subtitle": "All rows · {cols} columns ({rows:,} rows)",
+    "headers": {
+      "column": "Column",
+      "count": "Count",
+      "sum": "Sum",
+      "avg": "Avg",
+      "min": "Min",
+      "max": "Max",
+      "distinct": "Distinct",
+      "top": "Top value"
+    },
+    "aggregates": {
+      "rows": "Rows",
+      "cols": "Cols",
+      "count": "Count",
+      "count_numeric": "Count numeric",
+      "sum": "Sum",
+      "avg": "Avg",
+      "min": "Min",
+      "max": "Max",
+      "median": "Median",
+      "coefficient": "Coefficient of variation"
+    }
   },
   "output_panel": {
     "btn_clear": "Clear",

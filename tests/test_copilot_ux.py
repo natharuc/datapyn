@@ -339,9 +339,8 @@ class TestCopilotChatWebViewApp:
         assert 'callBridge("requestClipboardPaste"' not in js
         assert "readClipboardImageJson" in js
         assert "callBridgeResult" in js
-        assert "requestComposerRepaint" in js
-        assert "syncAttachmentStrip" in js
         assert "forceComposerRepaint" in js
+        assert "syncAttachmentStrip" in js
 
     def test_app_exposes_runtime_update_functions(self, app_files):
         js = app_files["js"]

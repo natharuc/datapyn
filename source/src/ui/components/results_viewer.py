@@ -32,12 +32,14 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QFrame,
     QGridLayout,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QObject, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer, QThread, pyqtSignal, QRect, QPoint, QSize, QSignalBlocker, QEvent
 from PyQt6.QtGui import QColor, QImage, QPixmap, QFont, QKeySequence, QShortcut, QAction, QDoubleValidator, QPainter, QPen
 import pandas as pd
 import io
 import json
+from dataclasses import dataclass
 from typing import Optional, Any
 import subprocess
 import os
@@ -47,6 +49,306 @@ from src.core.theme_manager import ThemeManager
 from src.language import S
 from src.design_system.tokens import SCROLLBAR_STYLE
 from src.workers import FileExportWorker
+
+GRID_ASYNC_ROW_THRESHOLD = 200
+GRID_COLUMN_RESIZE_SAMPLE_ROWS = 50
+GRID_COLUMN_MAX_WIDTH = 420
+
+
+@dataclass
+class PreparedGridData:
+    """Display-ready grid payload built off the UI thread."""
+
+    columns: list[str]
+    display_rows: list[list[str]]
+    null_mask: list[list[bool]]
+    numeric_column_indices: frozenset[int]
+    filtered_row_count: int
+    total_row_count: int
+    limited: bool
+
+
+@dataclass
+class GridPrepareResult:
+    """Full grid refresh result including the filtered export dataframe."""
+
+    prepared: PreparedGridData
+    filtered_df: pd.DataFrame
+
+
+def _grid_is_null_scalar(value) -> bool:
+    try:
+        if not pd.api.types.is_scalar(value):
+            return False
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _grid_column_is_numeric(series: pd.Series) -> bool:
+    """Detect numeric columns, including object columns with numeric strings."""
+    if series is None or series.empty:
+        return False
+    if pd.api.types.is_numeric_dtype(series):
+        return True
+    if pd.api.types.is_bool_dtype(series):
+        return False
+
+    non_null = series.dropna()
+    if non_null.empty:
+        return False
+
+    converted = pd.to_numeric(non_null, errors="coerce")
+    numeric_count = int(converted.notna().sum())
+    return numeric_count >= max(1, len(non_null) // 2)
+
+
+def _grid_coerce_numeric_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+    return pd.to_numeric(series, errors="coerce")
+
+
+def _grid_normalize_format_config(format_config) -> dict:
+    if isinstance(format_config, dict):
+        normalized = dict(format_config)
+        normalized["type"] = str(normalized.get("type", "default") or "default")
+        return normalized
+    return {"type": str(format_config or "default")}
+
+
+def _grid_format_decimals(format_config: dict, default: int = 2) -> int:
+    try:
+        decimals = int(format_config.get("decimals", default))
+    except (TypeError, ValueError):
+        decimals = default
+    return max(0, min(decimals, 8))
+
+
+def _grid_format_display_value(value, format_config) -> str:
+    config = _grid_normalize_format_config(format_config)
+    format_name = config.get("type", "default")
+    if format_name == "default":
+        return str(value)
+    if format_name in {"number", "currency"}:
+        number = pd.to_numeric(value, errors="coerce")
+        if pd.isna(number):
+            return str(value)
+        decimals = _grid_format_decimals(config)
+        prefix = str(config.get("prefix", "$ " if format_name == "currency" else ""))
+        suffix = str(config.get("suffix", ""))
+        return f"{prefix}{float(number):,.{decimals}f}{suffix}"
+    if format_name == "percent":
+        number = pd.to_numeric(value, errors="coerce")
+        decimals = _grid_format_decimals(config)
+        return str(value) if pd.isna(number) else f"{float(number):.{decimals}%}"
+    if format_name in {"date", "datetime"}:
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.isna(parsed):
+            return str(value)
+        return parsed.strftime("%Y-%m-%d" if format_name == "date" else "%Y-%m-%d %H:%M:%S")
+    return str(value)
+
+
+def _grid_normalize_filter_spec(value: Any) -> dict:
+    if isinstance(value, dict):
+        spec = dict(value)
+        spec["type"] = str(spec.get("type", "text") or "text")
+        return spec
+    return {"type": "text", "operator": "contains", "value": str(value or "")}
+
+
+def _grid_filter_spec_is_empty(spec: dict) -> bool:
+    filter_type = str(spec.get("type", "text"))
+    if filter_type == "number":
+        return not str(spec.get("min", "")).strip() and not str(spec.get("max", "")).strip()
+    if filter_type == "bool":
+        return spec.get("value") in (None, "", "any")
+    if filter_type == "date":
+        return not str(spec.get("start", "")).strip() and not str(spec.get("end", "")).strip()
+    return not str(spec.get("value", "")).strip()
+
+
+def _grid_parse_float(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _grid_parse_bool_value(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "sim", "s"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "nao"}:
+        return False
+    return None
+
+
+def _grid_column_filter_mask(df: pd.DataFrame, column, spec: dict):
+    filter_type = str(spec.get("type", "text"))
+    if filter_type == "number":
+        values = pd.to_numeric(df[column], errors="coerce")
+        mask = pd.Series(True, index=df.index)
+        min_value = _grid_parse_float(spec.get("min"))
+        max_value = _grid_parse_float(spec.get("max"))
+        if min_value is not None:
+            mask = mask & values.ge(min_value)
+        if max_value is not None:
+            mask = mask & values.le(max_value)
+        return mask.fillna(False)
+    if filter_type == "bool":
+        desired = _grid_parse_bool_value(spec.get("value"))
+        if desired is None:
+            return pd.Series(True, index=df.index)
+        values = df[column].map(_grid_parse_bool_value)
+        return values.eq(desired).fillna(False)
+    if filter_type == "date":
+        values = pd.to_datetime(df[column], errors="coerce")
+        mask = pd.Series(True, index=df.index)
+        start = pd.to_datetime(spec.get("start"), errors="coerce") if str(spec.get("start", "")).strip() else None
+        end = pd.to_datetime(spec.get("end"), errors="coerce") if str(spec.get("end", "")).strip() else None
+        if start is not None and not pd.isna(start):
+            mask = mask & values.ge(start)
+        if end is not None and not pd.isna(end):
+            mask = mask & values.le(end)
+        return mask.fillna(False)
+
+    value = str(spec.get("value", "")).strip()
+    operator = str(spec.get("operator", "contains") or "contains")
+    values = df[column].astype("string").fillna("")
+    if operator == "equals":
+        return values.str.lower().eq(value.lower())
+    if operator == "starts_with":
+        return values.str.lower().str.startswith(value.lower(), na=False)
+    if operator == "ends_with":
+        return values.str.lower().str.endswith(value.lower(), na=False)
+    return values.str.contains(value, case=False, regex=False, na=False)
+
+
+def filter_dataframe_with_specs(df: pd.DataFrame, column_filters: dict) -> pd.DataFrame:
+    """Filter a DataFrame using active column filter specs."""
+    if df is None:
+        return pd.DataFrame()
+    active_column_filters = [
+        (column, _grid_normalize_filter_spec(value))
+        for column, value in (column_filters or {}).items()
+        if column in df.columns and not _grid_filter_spec_is_empty(_grid_normalize_filter_spec(value))
+    ]
+    if not active_column_filters:
+        return df
+
+    mask = pd.Series(True, index=df.index)
+    for column, spec in active_column_filters:
+        mask = mask & _grid_column_filter_mask(df, column, spec)
+    return df.loc[mask]
+
+
+def prepare_grid_data(
+    source_df: pd.DataFrame,
+    column_filters: dict,
+    column_formats: dict,
+    limit: int,
+) -> GridPrepareResult:
+    """Build display-ready grid data. Safe to run off the UI thread."""
+    if source_df is None:
+        empty = pd.DataFrame()
+        prepared = PreparedGridData([], [], [], frozenset(), 0, 0, False)
+        return GridPrepareResult(prepared, empty)
+
+    total_rows = len(source_df)
+    filtered_df = filter_dataframe_with_specs(source_df, column_filters)
+    filtered_count = len(filtered_df)
+    limited = filtered_count > limit
+    display_df = filtered_df.head(limit) if limited else filtered_df
+
+    columns = [str(column) for column in display_df.columns]
+    row_count = len(display_df)
+    col_count = len(columns)
+    format_map = dict(column_formats or {})
+    numeric_indices = frozenset(
+        index
+        for index, column in enumerate(columns)
+        if column in display_df.columns and _grid_column_is_numeric(display_df[column])
+    )
+
+    display_rows: list[list[str]] = [[""] * col_count for _ in range(row_count)]
+    null_mask: list[list[bool]] = [[False] * col_count for _ in range(row_count)]
+
+    for col_index, column in enumerate(columns):
+        series = display_df[column]
+        format_config = format_map.get(column, format_map.get(str(column), "default"))
+        if _grid_column_is_numeric(series):
+            numeric_series = _grid_coerce_numeric_series(series)
+            nulls = numeric_series.isna().to_numpy()
+            values = numeric_series.to_numpy()
+            for row_index, value in enumerate(values):
+                is_null = bool(nulls[row_index])
+                null_mask[row_index][col_index] = is_null
+                display_rows[row_index][col_index] = (
+                    "NULL" if is_null else _grid_format_display_value(value, format_config)
+                )
+            continue
+
+        values = series.to_numpy()
+        for row_index, value in enumerate(values):
+            is_null = _grid_is_null_scalar(value)
+            null_mask[row_index][col_index] = is_null
+            display_rows[row_index][col_index] = (
+                "NULL" if is_null else _grid_format_display_value(value, format_config)
+            )
+
+    prepared = PreparedGridData(
+        columns=columns,
+        display_rows=display_rows,
+        null_mask=null_mask,
+        numeric_column_indices=numeric_indices,
+        filtered_row_count=filtered_count,
+        total_row_count=total_rows,
+        limited=limited,
+    )
+    return GridPrepareResult(prepared, filtered_df)
+
+
+class GridPrepareWorker(QObject):
+    """Prepare large grid payloads outside the UI thread."""
+
+    finished = pyqtSignal(int, object)
+    error = pyqtSignal(int, str)
+
+    def __init__(
+        self,
+        job_id: int,
+        source_df: pd.DataFrame,
+        column_filters: dict,
+        column_formats: dict,
+        limit: int,
+    ):
+        super().__init__()
+        self._job_id = job_id
+        self._source_df = source_df
+        self._column_filters = dict(column_filters or {})
+        self._column_formats = dict(column_formats or {})
+        self._limit = int(limit)
+
+    def run(self):
+        try:
+            result = prepare_grid_data(
+                self._source_df,
+                self._column_filters,
+                self._column_formats,
+                self._limit,
+            )
+            self.finished.emit(self._job_id, result)
+        except Exception as exc:
+            self.error.emit(self._job_id, str(exc))
 
 
 class ChartRenderWorker(QObject):
@@ -1006,6 +1308,7 @@ class PandasModel(QAbstractTableModel):
     def __init__(self, df: pd.DataFrame = None, theme_manager: ThemeManager = None):
         super().__init__()
         self._df = df if df is not None else pd.DataFrame()
+        self._prepared: Optional[PreparedGridData] = None
         self.theme_manager = theme_manager or ThemeManager()
         self._column_formats = {}
         self._update_colors()
@@ -1034,13 +1337,36 @@ class PandasModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
     def rowCount(self, parent=QModelIndex()):
+        if self._prepared is not None:
+            return len(self._prepared.display_rows)
         return len(self._df)
 
     def columnCount(self, parent=QModelIndex()):
+        if self._prepared is not None:
+            return len(self._prepared.columns)
         return len(self._df.columns)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
+            return QVariant()
+
+        if self._prepared is not None:
+            row = index.row()
+            col = index.column()
+            if role == Qt.ItemDataRole.DisplayRole:
+                return self._prepared.display_rows[row][col]
+            if role == Qt.ItemDataRole.BackgroundRole:
+                if self._prepared.null_mask[row][col]:
+                    return self._null_bg
+                return self._row_even if row % 2 == 0 else self._row_odd
+            if role == Qt.ItemDataRole.ForegroundRole:
+                if self._prepared.null_mask[row][col]:
+                    return self._null_text
+                return self._text_color
+            if role == Qt.ItemDataRole.TextAlignmentRole:
+                if col in self._prepared.numeric_column_indices:
+                    return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             return QVariant()
 
         if role == Qt.ItemDataRole.DisplayRole:
@@ -1055,11 +1381,9 @@ class PandasModel(QAbstractTableModel):
             value = self._df.iloc[index.row(), index.column()]
             if self._is_null_value(value):
                 return self._null_bg
-            # Alternar cores das linhas
             if index.row() % 2 == 0:
                 return self._row_even
-            else:
-                return self._row_odd
+            return self._row_odd
 
         if role == Qt.ItemDataRole.ForegroundRole:
             value = self._df.iloc[index.row(), index.column()]
@@ -1078,10 +1402,10 @@ class PandasModel(QAbstractTableModel):
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
-                # Manter case original do banco de dados
+                if self._prepared is not None:
+                    return self._prepared.columns[section]
                 return self._df.columns[section]
-            else:
-                return str(section + 1)
+            return str(section + 1)
 
         if role == Qt.ItemDataRole.BackgroundRole:
             return self._header_bg
@@ -1091,11 +1415,19 @@ class PandasModel(QAbstractTableModel):
 
         return QVariant()
 
-    def update_data(self, df: pd.DataFrame):
-        """Atualiza o DataFrame"""
+    def update_prepared(self, prepared: PreparedGridData):
+        """Atualiza o grid com payload precomputado."""
         self.beginResetModel()
-        self._df = df
+        self._prepared = prepared
+        self._df = pd.DataFrame()
         self.endResetModel()
+
+    def update_data(self, df: pd.DataFrame):
+        """Atualiza o DataFrame (caminho sincrono para datasets pequenos)."""
+        limit = len(df) if df is not None else 0
+        result = prepare_grid_data(df, {}, self._column_formats, limit)
+        self.update_prepared(result.prepared)
+        self._df = df if df is not None else pd.DataFrame()
 
     def set_column_formats(self, column_formats: dict):
         """Atualiza formatacoes visuais por coluna."""
@@ -1152,6 +1484,8 @@ class PandasModel(QAbstractTableModel):
 class ResultsViewer(QWidget):
     """Widget para visualizar resultados de queries"""
 
+    grid_selection_changed = pyqtSignal()
+
     SETTINGS_KEY_GRID_FONT_SIZE = "results/grid_font_size"
     DEFAULT_GRID_FONT_SIZE = 9
     MIN_GRID_FONT_SIZE = 7
@@ -1172,6 +1506,7 @@ class ResultsViewer(QWidget):
         self._column_filter_popup = None
         self._connection_color = ""
         self._grid_font_size = self._load_grid_font_size()
+        self._bound_selection_model = None
         self._setup_ui()
         self.current_df: Optional[pd.DataFrame] = None
         self._current_image_bytes: Optional[bytes] = None
@@ -1179,6 +1514,13 @@ class ResultsViewer(QWidget):
         # Background export tracking
         self._export_thread: Optional[QThread] = None
         self._export_worker: Optional[FileExportWorker] = None
+        self._grid_prepare_job_serial = 0
+        self._model_prepare_generation: dict[int, int] = {}
+        self._active_grid_prepare_job: Optional[dict] = None
+        self._grid_prepare_job_meta: dict[int, dict] = {}
+        self._primary_grid_cache_key = None
+        self._primary_filtered_df: Optional[pd.DataFrame] = None
+        self._summarize_refresh_timer: Optional[QTimer] = None
 
     def _setup_ui(self):
         """Configura a interface"""
@@ -1415,6 +1757,7 @@ class ResultsViewer(QWidget):
         self._setup_result_tab_close_button(0)
         self._result_tabs.tabBar().setVisible(True)
         self._result_tabs.currentChanged.connect(self._on_result_tab_changed)
+        self.stack.currentChanged.connect(self._on_stack_page_changed)
 
         self.btn_visualization = QToolButton(self._result_tabs)
         self.btn_visualization.setObjectName("visualizationButton")
@@ -1433,6 +1776,7 @@ class ResultsViewer(QWidget):
         self._secondary_pages: list = []
         self._primary_table_view = self.table_view
         self._primary_model = self.model
+        self._connect_active_selection_model()
         self._primary_df: Optional[pd.DataFrame] = None
 
         layout.addWidget(self._result_tabs)
@@ -1681,6 +2025,10 @@ class ResultsViewer(QWidget):
         table_view.setAlternatingRowColors(False)
         table_view.setWordWrap(False)
         table_view.setTextElideMode(Qt.TextElideMode.ElideRight)
+        table_view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        table_view.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        if hasattr(table_view, "setUniformRowHeights"):
+            table_view.setUniformRowHeights(True)
         table_view.setFont(QFont("Consolas", font_size))
         table_view.verticalHeader().setDefaultSectionSize(row_height)
         table_view.verticalHeader().setMinimumSectionSize(18)
@@ -1786,6 +2134,8 @@ class ResultsViewer(QWidget):
         self._collapse_to_primary()
         self._result_tabs.setTabText(0, tab_label)
         self._primary_df = df
+        self._primary_grid_cache_key = None
+        self._primary_filtered_df = None
         self._update_filter_columns(df)
         self._apply_active_dataframe_view(tab_label)
 
@@ -1832,16 +2182,19 @@ class ResultsViewer(QWidget):
 
         # Itens extras viram abas secundarias somente-grid
         for label, df in norm[1:]:
-            page = self._create_secondary_page(df)
+            page = self._create_secondary_page(df, label)
             self._secondary_pages.append(page)
             index = self._result_tabs.addTab(page, label)
             self._setup_result_tab_close_button(index)
 
         self._result_tabs.tabBar().setVisible(True)
+        self.table_view = self._primary_table_view
+        self.model = self._primary_model
         self._result_tabs.setCurrentIndex(0)
         self._restore_chart_tabs_for_current_data()
+        self._schedule_summarize_refresh()
 
-    def _create_secondary_page(self, df: pd.DataFrame) -> QWidget:
+    def _create_secondary_page(self, df: pd.DataFrame, label: str = "") -> QWidget:
         """Cria uma pagina leve somente-grid para uma aba secundaria."""
         page = QWidget()
         vbox = QVBoxLayout(page)
@@ -1858,14 +2211,11 @@ class ResultsViewer(QWidget):
 
         self._apply_table_style_to(table_view)
 
-        # Carrega slice respeitando o limite atual
-        limit = self.row_limit_spin.value()
-        filtered_df = self._filter_dataframe(df)
-        rows = len(filtered_df)
-        display_df = filtered_df.head(limit) if rows > limit else filtered_df
-        model.update_data(display_df)
-        model.set_column_formats(self._column_formats)
-        QTimer.singleShot(0, table_view.resizeColumnsToContents)
+        # Carrega slice respeitando o limite atual (fora da thread principal quando grande)
+        page._table_view = table_view
+        page._model = model
+        page._df = df
+        self._request_grid_view_update(df, var_name=label, model=model, table_view=table_view, page=page)
 
         # Ctrl+C e menu de contexto delegam aos metodos da viewer,
         # que operam em self.table_view/self.model (trocados pelo handler
@@ -1881,9 +2231,6 @@ class ResultsViewer(QWidget):
 
         # Anexa metadados a pagina para o handler de mudanca de aba
         page._df = df
-        page._filtered_df = filtered_df
-        page._table_view = table_view
-        page._model = model
         return page
 
     def _collapse_to_primary(self):
@@ -1915,12 +2262,13 @@ class ResultsViewer(QWidget):
         if tabs is None or index < 0:
             return
         if index == 0:
-            self.table_view = self._primary_table_view
-            self.model = self._primary_model
             if self._primary_df is not None:
-                self._update_filter_columns(self._primary_df)
-                self._apply_active_dataframe_view(tabs.tabText(0))
-                self._show_dataframe_toolbar_buttons()
+                self._switch_to_grid_tab(index, self._primary_df)
+            else:
+                self.table_view = self._primary_table_view
+                self.model = self._primary_model
+                self._connect_active_selection_model()
+                self._schedule_summarize_refresh()
             return
 
         page = tabs.widget(index)
@@ -1932,15 +2280,47 @@ class ResultsViewer(QWidget):
             self._show_chart_toolbar_buttons()
             if getattr(page, "_image_bytes", None) is None and not getattr(page, "_rendering", False):
                 self._render_visualization_page(page)
+            self._schedule_summarize_refresh()
             return
 
         df = getattr(page, "_df", None)
         if df is None:
             return
-        self.table_view = page._table_view
-        self.model = page._model
-        self._update_filter_columns(df)
-        self._apply_active_dataframe_view(tabs.tabText(index))
+        self._switch_to_grid_tab(
+            index,
+            df,
+            page=page,
+            model=getattr(page, "_model", None),
+            table_view=getattr(page, "_table_view", None),
+        )
+
+    def _switch_to_grid_tab(
+        self,
+        index: int,
+        source_df: pd.DataFrame,
+        *,
+        page=None,
+        model=None,
+        table_view=None,
+    ):
+        """Activate a grid tab without re-preparing when cached data is still valid."""
+        tabs = getattr(self, "_result_tabs", None)
+        var_name = tabs.tabText(index) if tabs is not None else self._current_result_label()
+
+        if page is None:
+            self.table_view = self._primary_table_view
+            self.model = self._primary_model
+            model = self._primary_model
+            table_view = self._primary_table_view
+        else:
+            self.table_view = table_view or page._table_view
+            self.model = model or page._model
+
+        self._update_filter_columns(source_df)
+        if self._can_use_cached_grid_view(source_df, self.model, page):
+            self._activate_cached_grid_view(var_name, source_df, self.model, self.table_view, page)
+        else:
+            self._apply_active_dataframe_view(var_name)
         self._show_dataframe_toolbar_buttons()
 
     def _on_result_tab_close_requested(self, index: int):
@@ -3079,6 +3459,69 @@ class ResultsViewer(QWidget):
             return tabs.tabText(tabs.currentIndex())
         return self._current_var_name()
 
+    def _grid_view_cache_key(self, source_df: pd.DataFrame) -> tuple:
+        filter_items = tuple(
+            sorted((str(column), json.dumps(spec, sort_keys=True, default=str)) for column, spec in self._column_filters.items())
+        )
+        format_items = tuple(
+            sorted((str(column), json.dumps(spec, sort_keys=True, default=str)) for column, spec in self._column_formats.items())
+        )
+        return (
+            id(source_df),
+            len(source_df),
+            filter_items,
+            format_items,
+            int(self.row_limit_spin.value()),
+        )
+
+    def _can_use_cached_grid_view(self, source_df: pd.DataFrame, model, page=None) -> bool:
+        if source_df is None or model is None:
+            return False
+        prepared = getattr(model, "_prepared", None)
+        if prepared is None or not prepared.columns:
+            return False
+        cache_key = self._grid_view_cache_key(source_df)
+        cached_key = getattr(page, "_grid_cache_key", None) if page is not None else self._primary_grid_cache_key
+        if cached_key != cache_key:
+            return False
+        filtered_df = getattr(page, "_filtered_df", None) if page is not None else self._primary_filtered_df
+        return filtered_df is not None
+
+    def _activate_cached_grid_view(
+        self,
+        var_name: str,
+        source_df: pd.DataFrame,
+        model,
+        table_view,
+        page=None,
+    ):
+        """Reuse already prepared grid data when switching tabs."""
+        self._cancel_grid_prepare_for_model(model)
+        filtered_df = getattr(page, "_filtered_df", None) if page is not None else self._primary_filtered_df
+        self.current_df = filtered_df
+        prepared = model._prepared
+        self._set_dataframe_info(
+            var_name,
+            prepared.filtered_row_count,
+            prepared.total_row_count,
+            len(prepared.columns),
+            prepared.limited,
+        )
+        self._refresh_filter_chips()
+        self._connect_active_selection_model()
+        self._schedule_summarize_refresh()
+
+    def _schedule_summarize_refresh(self):
+        """Defer summarize panel refresh to keep tab switches responsive."""
+        timer = self._summarize_refresh_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(32)
+            timer.timeout.connect(self.grid_selection_changed.emit)
+            self._summarize_refresh_timer = timer
+        timer.start()
+
     def _update_filter_columns(self, df: Optional[pd.DataFrame]):
         """Remove filtros de coluna que nao existem mais no DataFrame ativo."""
         if df is not None:
@@ -3091,98 +3534,271 @@ class ResultsViewer(QWidget):
 
     def _filter_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Filtra DataFrame pelos filtros de coluna ativos."""
-        if df is None:
-            return pd.DataFrame()
-        active_column_filters = [
-            (column, self._normalize_filter_spec(value))
-            for column, value in self._column_filters.items()
-            if column in df.columns and not self._filter_spec_is_empty(self._normalize_filter_spec(value))
-        ]
-        if not active_column_filters:
-            return df
+        return filter_dataframe_with_specs(df, self._column_filters)
 
-        mask = pd.Series(True, index=df.index)
-        for column, spec in active_column_filters:
-            mask = mask & self._column_filter_mask(df, column, spec)
-        return df.loc[mask]
+    def _show_grid_preparing(self, total_rows: int):
+        preparing = getattr(S.results, "grid_preparing", "Preparing grid...")
+        try:
+            text = preparing.format(rows=f"{int(total_rows):,}")
+        except (KeyError, IndexError):
+            text = preparing
+        self.info_label.setText(text)
+
+    def _model_prepare_key(self, model) -> int:
+        return id(model)
+
+    def _cancel_grid_prepare_for_model(self, model):
+        """Cancel in-flight prepare jobs for one grid model only."""
+        if model is None:
+            return
+        model_key = self._model_prepare_key(model)
+        self._model_prepare_generation[model_key] = self._model_prepare_generation.get(model_key, 0) + 1
+        for job_id, job in list(self._grid_prepare_job_meta.items()):
+            if job.get("model") is not model:
+                continue
+            thread = job.get("thread")
+            if thread and thread.isRunning():
+                thread.quit()
+                thread.wait(200)
+            self._grid_prepare_job_meta.pop(job_id, None)
+            if self._active_grid_prepare_job is job:
+                self._active_grid_prepare_job = None
+
+    def _cancel_all_grid_prepare(self):
+        """Cancel every in-flight grid prepare job."""
+        for job_id, job in list(self._grid_prepare_job_meta.items()):
+            thread = job.get("thread")
+            if thread and thread.isRunning():
+                thread.quit()
+                thread.wait(200)
+        self._grid_prepare_job_meta.clear()
+        self._model_prepare_generation.clear()
+        self._active_grid_prepare_job = None
+
+    def _cancel_active_grid_prepare(self):
+        self._cancel_all_grid_prepare()
+
+    def _start_grid_prepare(
+        self,
+        source_df: pd.DataFrame,
+        var_name: str,
+        model: PandasModel,
+        table_view: QTableView,
+        page=None,
+    ):
+        self._cancel_grid_prepare_for_model(model)
+        self._grid_prepare_job_serial += 1
+        job_id = self._grid_prepare_job_serial
+        model_key = self._model_prepare_key(model)
+        model_generation = self._model_prepare_generation.get(model_key, 0)
+        limit = self.row_limit_spin.value()
+
+        thread = QThread(self)
+        worker = GridPrepareWorker(
+            job_id,
+            source_df,
+            self._column_filters,
+            self._column_formats,
+            limit,
+        )
+        worker.moveToThread(thread)
+
+        job = {
+            "thread": thread,
+            "worker": worker,
+            "var_name": var_name,
+            "model": model,
+            "model_key": model_key,
+            "model_generation": model_generation,
+            "table_view": table_view,
+            "page": page,
+        }
+        self._active_grid_prepare_job = job
+        self._grid_prepare_job_meta[job_id] = job
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_grid_prepare_finished)
+        worker.error.connect(self._on_grid_prepare_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._clear_grid_prepare_job(job))
+        thread.start()
+
+    def _clear_grid_prepare_job(self, job: dict):
+        if self._active_grid_prepare_job is job:
+            self._active_grid_prepare_job = None
+
+    def _grid_prepare_job_is_current(self, job: dict) -> bool:
+        if not job:
+            return False
+        model_key = job.get("model_key")
+        if model_key is None:
+            return False
+        return job.get("model_generation") == self._model_prepare_generation.get(model_key)
+
+    def _on_grid_prepare_finished(self, job_id: int, result: GridPrepareResult):
+        job = self._grid_prepare_job_meta.pop(job_id, None)
+        if not job or not self._grid_prepare_job_is_current(job):
+            return
+        self._apply_grid_prepare_result(
+            result,
+            var_name=job.get("var_name") or self._current_result_label(),
+            model=job.get("model") or self.model,
+            table_view=job.get("table_view") or self.table_view,
+            page=job.get("page"),
+        )
+
+    def _on_grid_prepare_error(self, job_id: int, error: str):
+        job = self._grid_prepare_job_meta.pop(job_id, None)
+        if not job or not self._grid_prepare_job_is_current(job):
+            return
+        self.info_label.setText(str(error)[:240])
+
+    def _apply_grid_prepare_result(
+        self,
+        result: GridPrepareResult,
+        *,
+        var_name: str,
+        model: PandasModel,
+        table_view: QTableView,
+        page=None,
+    ):
+        prepared = result.prepared
+        model.update_prepared(prepared)
+        model.set_column_formats(self._column_formats)
+
+        if page is not None:
+            page._filtered_df = result.filtered_df
+            source_df = getattr(page, "_df", None)
+            if source_df is not None:
+                page._grid_cache_key = self._grid_view_cache_key(source_df)
+        else:
+            self._primary_filtered_df = result.filtered_df
+            if self._primary_df is not None:
+                self._primary_grid_cache_key = self._grid_view_cache_key(self._primary_df)
+        tabs = getattr(self, "_result_tabs", None)
+        if page is None or (
+            tabs is not None
+            and tabs.currentIndex() > 0
+            and tabs.widget(tabs.currentIndex()) is page
+        ):
+            self.current_df = result.filtered_df
+
+        cols = len(prepared.columns)
+        self._set_dataframe_info(
+            var_name,
+            prepared.filtered_row_count,
+            prepared.total_row_count,
+            cols,
+            prepared.limited,
+        )
+        self._schedule_table_column_resize(table_view, prepared)
+        self._refresh_filter_chips()
+        if page is None or (
+            tabs is not None
+            and tabs.currentIndex() > 0
+            and tabs.widget(tabs.currentIndex()) is page
+        ) or (
+            tabs is not None
+            and tabs.currentIndex() == 0
+            and page is None
+        ):
+            self._connect_active_selection_model()
+            self._schedule_summarize_refresh()
+
+    def _apply_grid_view_sync(
+        self,
+        source_df: pd.DataFrame,
+        var_name: str,
+        model: PandasModel,
+        table_view: QTableView,
+        page=None,
+    ):
+        limit = self.row_limit_spin.value()
+        result = prepare_grid_data(source_df, self._column_filters, self._column_formats, limit)
+        self._apply_grid_prepare_result(
+            result,
+            var_name=var_name,
+            model=model,
+            table_view=table_view,
+            page=page,
+        )
+
+    def _request_grid_view_update(
+        self,
+        source_df: pd.DataFrame,
+        *,
+        var_name: str = None,
+        model: PandasModel = None,
+        table_view: QTableView = None,
+        page=None,
+    ):
+        var_name = var_name or self._current_result_label()
+        model = model or self.model
+        table_view = table_view or self.table_view
+        limit = self.row_limit_spin.value()
+        rows_to_prepare = min(len(source_df), limit)
+        use_async = (
+            len(source_df) > GRID_ASYNC_ROW_THRESHOLD
+            or rows_to_prepare > GRID_ASYNC_ROW_THRESHOLD
+        )
+
+        if use_async:
+            self._show_grid_preparing(len(source_df))
+            self._start_grid_prepare(source_df, var_name, model, table_view, page)
+            return
+
+        self._apply_grid_view_sync(source_df, var_name, model, table_view, page)
+
+    def _schedule_table_column_resize(self, table_view: QTableView, prepared: PreparedGridData):
+        def _table_view_is_valid(view) -> bool:
+            if view is None:
+                return False
+            try:
+                from shiboken6 import isValid
+
+                return isValid(view)
+            except ImportError:
+                return True
+
+        def resize_columns():
+            if not _table_view_is_valid(table_view):
+                return
+            try:
+                if len(prepared.display_rows) <= GRID_ASYNC_ROW_THRESHOLD:
+                    table_view.resizeColumnsToContents()
+                    return
+
+                header = table_view.horizontalHeader()
+                metrics = table_view.fontMetrics()
+                sample_rows = min(GRID_COLUMN_RESIZE_SAMPLE_ROWS, len(prepared.display_rows))
+                for col_index, column_name in enumerate(prepared.columns):
+                    max_width = metrics.horizontalAdvance(str(column_name)) + 24
+                    for row_index in range(sample_rows):
+                        cell_text = prepared.display_rows[row_index][col_index]
+                        max_width = max(max_width, metrics.horizontalAdvance(cell_text) + 24)
+                    header.resizeSection(col_index, min(max_width, GRID_COLUMN_MAX_WIDTH))
+            except RuntimeError:
+                return
+
+        QTimer.singleShot(0, resize_columns)
 
     def _normalize_filter_spec(self, value: Any) -> dict:
-        if isinstance(value, dict):
-            spec = dict(value)
-            spec["type"] = str(spec.get("type", "text") or "text")
-            return spec
-        return {"type": "text", "operator": "contains", "value": str(value or "")}
+        return _grid_normalize_filter_spec(value)
 
     def _filter_spec_is_empty(self, spec: dict) -> bool:
-        filter_type = str(spec.get("type", "text"))
-        if filter_type == "number":
-            return not str(spec.get("min", "")).strip() and not str(spec.get("max", "")).strip()
-        if filter_type == "bool":
-            return spec.get("value") in (None, "", "any")
-        if filter_type == "date":
-            return not str(spec.get("start", "")).strip() and not str(spec.get("end", "")).strip()
-        return not str(spec.get("value", "")).strip()
+        return _grid_filter_spec_is_empty(spec)
 
     def _column_filter_mask(self, df: pd.DataFrame, column, spec: dict):
-        filter_type = str(spec.get("type", "text"))
-        if filter_type == "number":
-            values = pd.to_numeric(df[column], errors="coerce")
-            mask = pd.Series(True, index=df.index)
-            min_value = self._parse_float(spec.get("min"))
-            max_value = self._parse_float(spec.get("max"))
-            if min_value is not None:
-                mask = mask & values.ge(min_value)
-            if max_value is not None:
-                mask = mask & values.le(max_value)
-            return mask.fillna(False)
-        if filter_type == "bool":
-            desired = self._parse_bool_value(spec.get("value"))
-            if desired is None:
-                return pd.Series(True, index=df.index)
-            values = df[column].map(self._parse_bool_value)
-            return values.eq(desired).fillna(False)
-        if filter_type == "date":
-            values = pd.to_datetime(df[column], errors="coerce")
-            mask = pd.Series(True, index=df.index)
-            start = pd.to_datetime(spec.get("start"), errors="coerce") if str(spec.get("start", "")).strip() else None
-            end = pd.to_datetime(spec.get("end"), errors="coerce") if str(spec.get("end", "")).strip() else None
-            if start is not None and not pd.isna(start):
-                mask = mask & values.ge(start)
-            if end is not None and not pd.isna(end):
-                mask = mask & values.le(end)
-            return mask.fillna(False)
-
-        value = str(spec.get("value", "")).strip()
-        operator = str(spec.get("operator", "contains") or "contains")
-        values = df[column].astype("string").fillna("")
-        if operator == "equals":
-            return values.str.lower().eq(value.lower())
-        if operator == "starts_with":
-            return values.str.lower().str.startswith(value.lower(), na=False)
-        if operator == "ends_with":
-            return values.str.lower().str.endswith(value.lower(), na=False)
-        return values.str.contains(value, case=False, regex=False, na=False)
+        return _grid_column_filter_mask(df, column, spec)
 
     def _parse_float(self, value: Any) -> Optional[float]:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            return float(text.replace(",", "."))
-        except ValueError:
-            return None
+        return _grid_parse_float(value)
 
     def _parse_bool_value(self, value: Any) -> Optional[bool]:
-        if isinstance(value, bool):
-            return value
-        if value is None:
-            return None
-        text = str(value).strip().lower()
-        if text in {"1", "true", "t", "yes", "y", "sim", "s"}:
-            return True
-        if text in {"0", "false", "f", "no", "n", "nao"}:
-            return False
-        return None
+        return _grid_parse_bool_value(value)
 
     def _apply_active_dataframe_view(self, var_name: str = None):
         """Aplica filtro/limite ao DataFrame original da aba ativa."""
@@ -3190,27 +3806,23 @@ class ResultsViewer(QWidget):
         if source_df is None:
             return
 
-        filtered_df = self._filter_dataframe(source_df)
-        self.current_df = filtered_df
-
         tabs = getattr(self, "_result_tabs", None)
+        page = None
+        model = self.model
+        table_view = self.table_view
         if tabs is not None and tabs.currentIndex() > 0:
             page = tabs.widget(tabs.currentIndex())
-            if page is not None:
-                page._filtered_df = filtered_df
+            if page is not None and hasattr(page, "_model"):
+                model = page._model
+                table_view = page._table_view
 
-        rows = len(filtered_df)
-        total_rows = len(source_df)
-        cols = len(source_df.columns)
-        limit = self.row_limit_spin.value()
-        display_df = filtered_df.head(limit) if rows > limit else filtered_df
-        self.model.update_data(display_df)
-        self.model.set_column_formats(self._column_formats)
-        QTimer.singleShot(0, self.table_view.resizeColumnsToContents)
-
-        label = var_name or self._current_result_label()
-        self._set_dataframe_info(label, rows, total_rows, cols, rows > limit)
-        self._refresh_filter_chips()
+        self._request_grid_view_update(
+            source_df,
+            var_name=var_name or self._current_result_label(),
+            model=model,
+            table_view=table_view,
+            page=page,
+        )
 
     def _refresh_filter_chips(self):
         """Atualiza chips visuais dos filtros ativos."""
@@ -3711,11 +4323,16 @@ class ResultsViewer(QWidget):
 
     def clear(self):
         """Clear visualization"""
+        self._cancel_all_grid_prepare()
+        self._grid_prepare_job_serial += 1
+        self._grid_prepare_job_meta.clear()
         self._collapse_to_primary()
         self._column_filters.clear()
         self._refresh_filter_chips()
         self.current_df = None
         self._primary_df = None
+        self._primary_filtered_df = None
+        self._primary_grid_cache_key = None
         self._current_image_bytes = None
         self.model.update_data(pd.DataFrame())
         self.image_label.clear()
@@ -3724,6 +4341,7 @@ class ResultsViewer(QWidget):
         self.info_label.setText(S.results.no_results)
         self.stack.setCurrentIndex(0)
         self._show_dataframe_toolbar_buttons()
+        self._schedule_summarize_refresh()
 
     def _get_export_destination(self) -> str:
         """Return selected destination: 'clipboard' or 'file'"""
@@ -3999,6 +4617,102 @@ class ResultsViewer(QWidget):
                 text = text[:-1]
             QApplication.instance().clipboard().setText(text)
             self._show_clipboard_success("Table")
+
+    def is_grid_active(self) -> bool:
+        """Return True when the active result tab is showing a data grid."""
+        tabs = getattr(self, "_result_tabs", None)
+        if tabs is None or tabs.currentIndex() < 0:
+            return False
+        if tabs.currentIndex() == 0:
+            return self.stack.currentIndex() == 0
+        page = tabs.widget(tabs.currentIndex())
+        if page is None or self._is_chart_page(page):
+            return False
+        return hasattr(page, "_table_view")
+
+    def get_current_result_label(self) -> str:
+        tabs = getattr(self, "_result_tabs", None)
+        if tabs is None or tabs.currentIndex() < 0:
+            return ""
+        return tabs.tabText(tabs.currentIndex())
+
+    def get_selection_cells(self) -> list[tuple[int, int]]:
+        """Return exact selected (row, column) pairs for the active grid."""
+        if not self.is_grid_active() or self.current_df is None:
+            return []
+
+        selection = self.table_view.selectionModel() if self.table_view is not None else None
+        if selection is None or not selection.hasSelection():
+            return []
+
+        return sorted({(idx.row(), idx.column()) for idx in selection.selectedIndexes()})
+
+    def get_selection_bounds(self) -> tuple[list[int], list[int]]:
+        """Return selected row/column indexes for the active grid."""
+        if not self.is_grid_active() or self.current_df is None:
+            return [], []
+
+        selection = self.table_view.selectionModel() if self.table_view is not None else None
+        if selection is None or not selection.hasSelection():
+            return [], []
+
+        indexes = selection.selectedIndexes()
+        if not indexes:
+            return [], []
+
+        rows = sorted({idx.row() for idx in indexes})
+        cols = sorted({idx.column() for idx in indexes})
+        return rows, cols
+
+    def build_summarize_payload(self) -> dict:
+        from src.ui.components.summarize_stats import build_selection_summary
+
+        cells = self.get_selection_cells()
+        numeric_indices = None
+        prepared = getattr(self.model, "_prepared", None)
+        if prepared is not None and getattr(prepared, "numeric_column_indices", None):
+            numeric_indices = set(prepared.numeric_column_indices)
+
+        return build_selection_summary(
+            self.current_df,
+            cells,
+            result_label=self.get_current_result_label(),
+            column_formats=self._column_formats,
+            numeric_column_indices=numeric_indices,
+        )
+
+    def show_column_format_menu(self, column, global_pos):
+        """Open the column format menu (shared with grid header)."""
+        source_df = self._get_active_source_df()
+        if source_df is None:
+            return
+        if column not in source_df.columns:
+            column = str(column)
+            if column not in source_df.columns:
+                return
+        menu = self._create_column_menu(column, global_pos=global_pos)
+        menu.exec(global_pos)
+
+    def _connect_active_selection_model(self):
+        table_view = getattr(self, "table_view", None)
+        selection_model = table_view.selectionModel() if table_view is not None else None
+        if selection_model is self._bound_selection_model:
+            return
+        if self._bound_selection_model is not None:
+            try:
+                self._bound_selection_model.selectionChanged.disconnect(self._on_grid_selection_changed)
+            except (TypeError, RuntimeError):
+                pass
+        self._bound_selection_model = selection_model
+        if selection_model is not None:
+            selection_model.selectionChanged.connect(self._on_grid_selection_changed)
+
+    def _on_grid_selection_changed(self, *_args):
+        self._schedule_summarize_refresh()
+
+    def _on_stack_page_changed(self, _index: int):
+        self._connect_active_selection_model()
+        self._schedule_summarize_refresh()
 
     def _copy_selection_to_clipboard(self, include_headers: bool = False):
         """Copy selected cells/rows/columns from the table view to clipboard.
@@ -4393,6 +5107,7 @@ class ResultsViewer(QWidget):
         if self._get_active_source_df() is not None:
             self._apply_active_dataframe_view(self._current_result_label())
         self._persist_view_state()
+        self._schedule_summarize_refresh()
 
     def _open_visualization_editor(self):
         """Abre editor compacto de configuracoes de grafico."""

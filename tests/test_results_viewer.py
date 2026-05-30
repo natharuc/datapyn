@@ -606,6 +606,17 @@ class TestResultsViewerMultiTab:
         assert viewer._result_tabs.count() == 1
         assert viewer._result_tabs.tabText(0) == "green1"
 
+    def test_display_dataframes_renders_primary_with_secondary_tabs(self, viewer, qtbot):
+        """Primary tab must render even while secondary tabs prepare in parallel."""
+        first = pd.DataFrame({"a": [1, 2, 3]})
+        second = pd.DataFrame({"b": list(range(250))})
+        viewer.display_dataframes([("first", first), ("second", second)])
+
+        qtbot.waitUntil(lambda: viewer.model.rowCount() == len(first), timeout=5000)
+        assert viewer._result_tabs.currentIndex() == 0
+        assert viewer.table_view is viewer._primary_table_view
+        assert viewer.model.data(viewer.model.index(0, 0)) == "1"
+
     def test_display_dataframes_creates_n_tabs(self, viewer, df_a, df_b, df_c):
         """display_dataframes() with N items creates N tabs and shows the bar."""
         viewer.display_dataframes([
@@ -1609,5 +1620,33 @@ class TestSessionResultViewState:
         assert restored.result_view_state["column_formats"]["valor"]["decimals"] == 0
         assert restored.result_view_state["charts"]["configs"][0]["type"] == "bar"
 
+
+class TestResultsViewerGridPrepare:
+    """Tests for async grid preparation and cached model rendering."""
+
+    def test_prepare_grid_data_limits_display_rows(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame({"value": range(500)})
+        result = prepare_grid_data(df, {}, {}, limit=120)
+
+        assert result.prepared.filtered_row_count == 500
+        assert len(result.prepared.display_rows) == 120
+        assert result.prepared.limited is True
+
+    def test_large_grid_prepares_off_ui_thread(self, qtbot):
+        from src.ui.components.results_viewer import ResultsViewer
+
+        viewer = ResultsViewer()
+        qtbot.addWidget(viewer)
+        viewer.row_limit_spin.setValue(1500)
+
+        df = pd.DataFrame({"name": [f"row-{index}" for index in range(1800)], "value": range(1800)})
+        viewer.display_dataframe(df, "large_df")
+
+        qtbot.waitUntil(lambda: viewer.model.rowCount() == 1500, timeout=5000)
+        assert viewer.current_df is not None
+        assert len(viewer.current_df) == 1800
+        assert viewer.model.data(viewer.model.index(0, 0)) == "row-0"
 
 

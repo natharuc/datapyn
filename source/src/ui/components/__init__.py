@@ -53,6 +53,9 @@ from .editor_header import EditorHeader
 # Results Viewer
 from .results_viewer import ResultsViewer, CSVExportDialog, PandasModel
 
+# Summarize Panel
+from .summarize_panel import SummarizePanel
+
 # Session Widget
 from .session_widget import SessionWidget
 
@@ -93,6 +96,7 @@ __all__ = [
     "ResultsViewer",
     "CSVExportDialog",
     "PandasModel",
+    "SummarizePanel",
     "SessionWidget",
     "ObjectExplorerPanel",
 ]
