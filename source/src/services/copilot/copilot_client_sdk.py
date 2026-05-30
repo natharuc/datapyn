@@ -589,7 +589,7 @@ class CopilotWorker(QObject):
         if model_list:
             self.set_available_models(model_list)
             self.models_ready.emit(model_list)
-            logger.info("Refreshed %d Copilot models: %s", len(model_list), ", ".join(m["id"] for m in model_list[:8]))
+            logger.info("Refreshed %d Copilot models", len(model_list))
         self.usage_ready.emit(await self._async_usage_snapshot())
 
     async def _async_usage_snapshot(self) -> Dict[str, Any]:
@@ -623,10 +623,6 @@ class CopilotWorker(QObject):
             try:
                 model_list = self._loop.run_until_complete(self._fetch_models())
                 logger.info("SDK returned %d models", len(model_list))
-                for model in model_list[:12]:
-                    logger.info("  Model: %s (%s) x%s", model.get("id"), model.get("name"), model.get("multiplier"))
-                if len(model_list) > 12:
-                    logger.info("  ... and %d more", len(model_list) - 12)
                 self.set_available_models(model_list)
                 self.models_ready.emit(model_list)
                 self.usage_ready.emit(self._loop.run_until_complete(self._async_usage_snapshot()))
@@ -911,8 +907,8 @@ class CopilotWorker(QObject):
         our_tool_names = {t.name for t in self._sdk_tools} if self._sdk_tools else set()
         
         try:
-            logger.info("[CHAT] Sending message, model=%s, prompt_len=%s, attachments=%s",
-                        self._model, len(self._prompt), len(sdk_attachments))
+            logger.info("[CHAT] Sending message, prompt_len=%s, attachments=%s",
+                        len(self._prompt), len(sdk_attachments))
             logger.info("[CHAT] Prompt: %s", _safe_log_preview(self._prompt, 100))
             await self._session.send(
                 self._prompt,
