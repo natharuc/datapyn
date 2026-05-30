@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.35.0 (2026-05-30)
+
+### Bug Fixes
+
+- **security**: Stop logging Copilot model IDs and names in clear text.
+  ([`a0d7713`](https://github.com/natharuc/datapyn/commit/a0d771390abfff1d383e505e7be655cf7ac82a73))
+
+### Features
+
+- Ship full WebView Copilot chat with image attachments and session persistence.
+  ([`d455719`](https://github.com/natharuc/datapyn/commit/d45571988819a7ca7c1986805c86178aff2ca3e6))
+
+
 ## v1.34.0 (2026-05-29)
 
 ### Features
