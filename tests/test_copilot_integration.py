@@ -4,6 +4,7 @@ Tests for Copilot MCP tools, MCP server, and CopilotClient.
 
 import pytest
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from PyQt6.QtCore import QObject, QSettings, pyqtSignal
 
@@ -40,6 +41,66 @@ class TestMCPToolRegistry:
         assert "list_visualizations" in tool_names
         assert "create_visualization" in tool_names
         assert "edit_visualization" in tool_names
+        assert "resolve_reference" in tool_names
+        assert "get_tab_context" in tool_names
+        assert "get_block_result" in tool_names
+
+    def _make_reference_main_window(self):
+        block = MagicMock()
+        block.get_block_name.return_value = "orders"
+        block.get_language.return_value = "sql"
+        block.get_code.return_value = "SELECT * FROM orders"
+
+        editor = MagicMock()
+        editor.get_blocks.return_value = [block]
+        editor.blocks = [block]
+
+        widget = SimpleNamespace(
+            session=SimpleNamespace(title="Sales", session_id="sales-tab", connection_name="prod"),
+            editor=editor,
+            namespace={"orders": [{"id": 1}]},
+        )
+
+        tabs = MagicMock()
+        tabs.count.return_value = 1
+        tabs.currentIndex.return_value = 0
+        tabs.widget.return_value = widget
+        tabs.tabText.return_value = "Sales"
+
+        return SimpleNamespace(session_tabs=tabs)
+
+    def _tool_json_payload(self, result):
+        return json.loads(result["content"][0]["text"])
+
+    def test_resolve_reference_tool_resolves_block(self):
+        self.registry.set_main_window(self._make_reference_main_window())
+
+        result = self.registry.execute("resolve_reference", {"reference": "#block1"})
+        payload = self._tool_json_payload(result)
+
+        assert payload["ok"] is True
+        assert payload["type"] == "block"
+        assert payload["name"] == "orders"
+
+    def test_get_tab_context_tool_resolves_tab_index(self):
+        self.registry.set_main_window(self._make_reference_main_window())
+
+        result = self.registry.execute("get_tab_context", {"tab_index": 0})
+        payload = self._tool_json_payload(result)
+
+        assert payload["ok"] is True
+        assert payload["type"] == "tab"
+        assert payload["title"] == "Sales"
+
+    def test_get_block_result_returns_block_and_result_preview(self):
+        self.registry.set_main_window(self._make_reference_main_window())
+
+        result = self.registry.execute("get_block_result", {"block_name": "orders"})
+        payload = self._tool_json_payload(result)
+
+        assert payload["block"]["ok"] is True
+        assert payload["block"]["name"] == "orders"
+        assert payload["result_preview"]["type"] == "list"
 
     def test_list_tools_has_correct_schema(self):
         """Each tool should have name, description, and inputSchema."""
@@ -519,7 +580,7 @@ class TestMCPToolRegistry:
         assert "content" in result
         text = result["content"][0]["text"]
         assert "1 matches" in text or "1 match" in text
-        assert "Block 0" in text
+        assert "test_block" in text or "Block 0" in text
 
     def test_search_in_code_case_insensitive(self):
         """search_in_code should be case-insensitive."""
@@ -885,6 +946,96 @@ class TestCopilotModelMetadata:
         assert models[0]["default_reasoning_effort"] == "medium"
         assert models[0]["multiplier"] == 1.5
 
+    def test_parse_copilot_cli_version(self):
+        from src.services.copilot.copilot_client_sdk import _parse_copilot_cli_version
+
+        assert _parse_copilot_cli_version("GitHub Copilot CLI 1.0.36-0.") == (1, 0, 36)
+        assert _parse_copilot_cli_version("GitHub Copilot CLI 0.0.411.") == (0, 0, 411)
+
+    def test_get_sdk_options_uses_subprocess_config(self, monkeypatch):
+        from src.services.copilot.copilot_client_sdk import _get_sdk_options
+
+        try:
+            from copilot import SubprocessConfig
+        except ImportError:
+            pytest.skip("github-copilot-sdk not installed")
+
+        monkeypatch.setattr(
+            "src.services.copilot.copilot_client_sdk._pick_newest_copilot_cli",
+            lambda: (r"C:\copilot\copilot.exe", (1, 0, 36)),
+        )
+        options = _get_sdk_options()
+        assert isinstance(options, SubprocessConfig)
+        assert options.cli_path == r"C:\copilot\copilot.exe"
+
+    def test_try_import_sdk_supports_copilot_tools_module(self):
+        from src.services.copilot.copilot_client_sdk import _try_import_sdk
+
+        SDKClient, SDKTool, EventType, import_err = _try_import_sdk()
+        if import_err:
+            pytest.skip(f"github-copilot-sdk not installed: {import_err}")
+
+        assert SDKClient is not None
+        assert SDKTool is not None
+        assert EventType is not None
+        assert SDKTool.__module__.endswith("tools") or SDKTool.__name__ == "Tool"
+
+    def test_session_send_expects_plain_prompt_string(self):
+        import inspect
+
+        try:
+            from copilot.session import CopilotSession
+        except ImportError:
+            pytest.skip("github-copilot-sdk not installed")
+
+        prompt_param = inspect.signature(CopilotSession.send).parameters.get("prompt")
+        assert prompt_param is not None
+        assert prompt_param.annotation in (str, "str", inspect._empty)
+
+    def test_sdk_create_session_uses_keyword_only_api(self):
+        import asyncio
+        import inspect
+
+        from src.services.copilot.copilot_client_sdk import _sdk_create_session
+
+        try:
+            from copilot import CopilotClient
+            from copilot.session import PermissionHandler
+        except ImportError:
+            pytest.skip("github-copilot-sdk not installed")
+
+        captured = {}
+
+        class FakeClient:
+            async def create_session(self, **kwargs):
+                captured.update(kwargs)
+                return object()
+
+        asyncio.run(_sdk_create_session(
+            FakeClient(),
+            model="gpt-4o",
+            streaming=True,
+            system_message="Be helpful.",
+            reasoning_effort="medium",
+            disabled_skills=["shell"],
+            our_tool_names={"run_query"},
+        ))
+
+        assert captured["model"] == "gpt-4o"
+        assert captured["streaming"] is True
+        assert captured["on_permission_request"] is PermissionHandler.approve_all
+        assert captured["system_message"] == {"mode": "append", "content": "Be helpful."}
+        assert captured["reasoning_effort"] == "medium"
+        assert captured["disabled_skills"] == ["shell"]
+        assert "hooks" in captured
+
+        sig = inspect.signature(CopilotClient.create_session)
+        for name in sig.parameters:
+            if name == "self":
+                continue
+            param = sig.parameters[name]
+            assert param.kind != inspect.Parameter.POSITIONAL_ONLY
+
     def test_usage_snapshot_from_quota_reports_real_premium_usage(self):
         from dataclasses import dataclass
 
@@ -1091,7 +1242,7 @@ class TestCopilotChatPanel:
         gh_not_found = pyqtSignal()
         license_warning = pyqtSignal(str)
         tool_called = pyqtSignal(str, dict, str)
-        tool_result = pyqtSignal(str, str)
+        tool_result = pyqtSignal(str, str, str)
         thinking = pyqtSignal(str)
         models_changed = pyqtSignal(list)
 
@@ -1100,10 +1251,12 @@ class TestCopilotChatPanel:
             self.system_message = ""
             self.is_authenticated = True
             self.sent_messages = None
+            self.sent_attachments = None
             self.cancel_called = False
 
-        def send_chat(self, messages):
+        def send_chat(self, messages, attachments=None):
             self.sent_messages = messages
+            self.sent_attachments = attachments
 
         def cancel(self):
             self.cancel_called = True
@@ -1368,3 +1521,46 @@ class TestCopilotChatPanel:
 
 # ChatMessageWidget tests removed - class was removed in dead code cleanup
 # (chat rendering now uses WebView exclusively)
+
+
+class TestThreadSafeToolExecutor:
+    """Ensure MCP tools dispatch correctly from background threads."""
+
+    def test_dispatches_from_background_thread(self, qapp):
+        import threading
+        import time
+        from unittest.mock import MagicMock
+
+        from src.services.copilot.copilot_client_sdk import ThreadSafeToolExecutor
+        from src.services.copilot.mcp_tools import MCPToolRegistry
+
+        registry = MCPToolRegistry()
+        mock_widget = MagicMock()
+        mock_widget.editor = MagicMock()
+        mock_widget.editor.blocks = []
+        mock_mw = MagicMock()
+        mock_mw.session_manager.focused_session = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+        registry.set_main_window(mock_mw)
+
+        executor = ThreadSafeToolExecutor(registry, parent=qapp)
+        result_holder = {}
+        errors = []
+
+        def run_in_thread():
+            try:
+                result_holder["text"] = executor.execute("list_blocks", {})
+            except Exception as exc:
+                errors.append(str(exc))
+
+        thread = threading.Thread(target=run_in_thread)
+        thread.start()
+        deadline = time.time() + 5
+        while thread.is_alive() and time.time() < deadline:
+            qapp.processEvents()
+            thread.join(0.05)
+
+        assert not errors, errors
+        assert "text" in result_holder
+        assert "Could not run" not in result_holder["text"]

@@ -31,10 +31,10 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QUrl, QTimer, QSettings, QByteArray, QObject, QRect, QSize, QThread, QEvent
-from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics
+from PyQt6.QtGui import QFont, QDesktopServices, QKeyEvent, QIcon, QPixmap, QPainter, QPen, QColor, QFontMetrics, QKeySequence, QShortcut, QImage
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEnginePage
+from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6 import sip
 import sys
 from PyQt6.QtWebChannel import QWebChannel
@@ -48,6 +48,7 @@ from datetime import datetime
 from src.language import S
 from src.design_system.tokens import get_colors, RADIUS
 from src.services.copilot.copilot_settings import get_copilot_settings
+from src.services.copilot.copilot_chat_runtime import CopilotChatRuntime
 from src.services.copilot.copilot_models import (
     REASONING_EFFORTS,
     fallback_models,
@@ -57,6 +58,7 @@ from src.services.copilot.copilot_models import (
     normalize_models,
     usage_snapshot_for_model,
 )
+from src.services.copilot.reference_resolver import ReferenceResolver
 
 try:
     import qtawesome as qta
@@ -178,6 +180,20 @@ class ChatBridge(QObject):
     # Signals emitted when JS calls our slots
     web_view_ready = pyqtSignal()
     insert_code_requested = pyqtSignal(str)
+    message_submitted = pyqtSignal(str)
+    cancel_requested = pyqtSignal(str)
+    retry_requested = pyqtSignal(str)
+    refresh_models_requested = pyqtSignal()
+    auth_requested = pyqtSignal(str)
+    new_chat_requested = pyqtSignal()
+    restore_chat_requested = pyqtSignal(str)
+    delete_chat_requested = pyqtSignal(str)
+    model_selected = pyqtSignal(str)
+    reasoning_effort_selected = pyqtSignal(str)
+    references_requested = pyqtSignal(str)
+    reference_open_requested = pyqtSignal(str)
+    history_collapsed_changed = pyqtSignal(bool)
+    clipboard_paste_requested = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -191,6 +207,245 @@ class ChatBridge(QObject):
     def insertCode(self, code: str):
         """Called from JS when user clicks Insert button on a code block."""
         self.insert_code_requested.emit(code)
+
+    @pyqtSlot(str)
+    def sendMessage(self, payload_json: str):
+        self.message_submitted.emit(payload_json)
+
+    @pyqtSlot(str)
+    def cancelTurn(self, turn_id: str):
+        self.cancel_requested.emit(turn_id)
+
+    @pyqtSlot(str)
+    def retryTurn(self, turn_id: str):
+        self.retry_requested.emit(turn_id)
+
+    @pyqtSlot(str)
+    def refreshModels(self, _payload_json: str = ""):
+        self.refresh_models_requested.emit()
+
+    @pyqtSlot(str)
+    def authAction(self, payload_json: str = ""):
+        self.auth_requested.emit(payload_json or "{}")
+
+    @pyqtSlot(str)
+    def createNewChat(self, _payload_json: str = ""):
+        self.new_chat_requested.emit()
+
+    @pyqtSlot(str)
+    def restoreChat(self, session_id: str):
+        self.restore_chat_requested.emit(session_id)
+
+    @pyqtSlot(str)
+    def deleteChat(self, session_id: str):
+        self.delete_chat_requested.emit(session_id)
+
+    @pyqtSlot(str)
+    def selectModel(self, model_id: str):
+        self.model_selected.emit(model_id)
+
+    @pyqtSlot(str)
+    def selectReasoningEffort(self, effort: str):
+        self.reasoning_effort_selected.emit(effort)
+
+    @pyqtSlot(str)
+    def listReferences(self, query: str):
+        self.references_requested.emit(query)
+
+    @pyqtSlot(str)
+    def openReference(self, reference: str):
+        self.reference_open_requested.emit(reference)
+
+    @pyqtSlot(str)
+    def setHistoryCollapsed(self, payload_json: str):
+        try:
+            payload = json.loads(payload_json) if payload_json else {}
+            collapsed = bool(payload.get("collapsed", False))
+        except Exception:
+            collapsed = str(payload_json).lower() in ("1", "true", "yes")
+        self.history_collapsed_changed.emit(collapsed)
+
+    @pyqtSlot(str)
+    def requestClipboardPaste(self, _payload_json: str = ""):
+        """Legacy paste hook — prefer readClipboardImageJson from JS."""
+        self.clipboard_paste_requested.emit()
+
+    @pyqtSlot(result=str)
+    def readClipboardImageJson(self) -> str:
+        """Return a clipboard image payload for the WebView composer."""
+        panel = self.parent()
+        if panel is None or not hasattr(panel, "_build_clipboard_image_payload"):
+            return ""
+        payload = panel._build_clipboard_image_payload()
+        return json.dumps(payload) if payload else ""
+
+    @pyqtSlot(result=str)
+    def readClipboardText(self) -> str:
+        """Return plain text from the OS clipboard."""
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            return ""
+        return clipboard.text() or ""
+
+    @pyqtSlot(str)
+    def requestComposerRepaint(self, _payload_json: str = ""):
+        """Lightweight WebView refresh after composer DOM updates."""
+        panel = self.parent()
+        webview = getattr(panel, "_chat_webview", None) if panel is not None else None
+        if webview is None or sip.isdeleted(webview):
+            return
+        webview.update()
+
+
+class _StateItem:
+    def __init__(self):
+        self._enabled = True
+
+    def setEnabled(self, enabled: bool):
+        self._enabled = bool(enabled)
+
+    def isEnabled(self) -> bool:
+        return self._enabled
+
+
+class _StateItemModel:
+    def __init__(self, items):
+        self._items = items
+
+    def item(self, index: int):
+        return self._items[index]
+
+
+class _WebComboState:
+    """Tiny non-visual combo model used by the WebView chat host."""
+
+    def __init__(self):
+        self._items = []
+        self._current_index = -1
+        self._enabled = True
+        self._blocked = False
+        self._on_changed = None
+
+    def set_on_change(self, callback):
+        self._on_changed = callback
+
+    def blockSignals(self, blocked: bool):
+        self._blocked = bool(blocked)
+
+    def clear(self):
+        self._items.clear()
+        self._current_index = -1
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def addItem(self, text: str, data=None):
+        self._items.append({"text": text, "data": data, "roles": {}, "item": _StateItem()})
+        if self._current_index < 0:
+            self._current_index = 0
+
+    def setItemData(self, index: int, value, role=None):
+        self._items[index]["roles"][role] = value
+
+    def itemData(self, index: int, role=None):
+        if role is None:
+            return self._items[index]["data"]
+        return self._items[index]["roles"].get(role)
+
+    def findData(self, value) -> int:
+        for index, item in enumerate(self._items):
+            if item["data"] == value:
+                return index
+        return -1
+
+    def setCurrentIndex(self, index: int):
+        if 0 <= index < len(self._items):
+            changed = self._current_index != index
+            self._current_index = index
+            if changed and not self._blocked and self._on_changed:
+                self._on_changed(index)
+
+    def currentIndex(self) -> int:
+        return self._current_index
+
+    def currentData(self):
+        if 0 <= self._current_index < len(self._items):
+            return self._items[self._current_index]["data"]
+        return None
+
+    def setEnabled(self, enabled: bool):
+        self._enabled = bool(enabled)
+
+    def isEnabled(self) -> bool:
+        return self._enabled
+
+    def model(self):
+        return _StateItemModel([item["item"] for item in self._items])
+
+
+class _WebLabelState:
+    def __init__(self, text: str = ""):
+        self._text = text
+        self._tooltip = ""
+        self._visible = False
+
+    def setText(self, text: str):
+        self._text = str(text or "")
+
+    def text(self) -> str:
+        return self._text
+
+    def setToolTip(self, text: str):
+        self._tooltip = str(text or "")
+
+    def toolTip(self) -> str:
+        return self._tooltip
+
+    def setVisible(self, visible: bool):
+        self._visible = bool(visible)
+
+    def show(self):
+        self.setVisible(True)
+
+    def hide(self):
+        self.setVisible(False)
+
+    def isHidden(self) -> bool:
+        return not self._visible
+
+    def setStyleSheet(self, _style: str):
+        return None
+
+
+class _WebButtonState(_WebLabelState):
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self._enabled = True
+
+    def setEnabled(self, enabled: bool):
+        self._enabled = bool(enabled)
+
+    def isEnabled(self) -> bool:
+        return self._enabled
+
+
+class _WebInputState:
+    def __init__(self, focus_callback=None):
+        self._text = ""
+        self._focus_callback = focus_callback
+
+    def clear(self):
+        self._text = ""
+
+    def setPlainText(self, text: str):
+        self._text = str(text or "")
+
+    def toPlainText(self) -> str:
+        return self._text
+
+    def setFocus(self):
+        if self._focus_callback:
+            self._focus_callback()
 
 
 
@@ -482,6 +737,16 @@ class CopilotChatPanel(QWidget):
         self._current_thinking_widget = None  # Legacy - not used with WebView
         self._current_actions_widget = None  # Legacy - not used with WebView
         self._active_tool_calls: dict = {}  # tool_name -> reference
+        self._turn_tools_used = 0
+        self._turn_had_notify_user = False
+        self._auth_success_shown = False
+        self._auth_signing_in = False
+        self._auth_device_code = None
+        self._auth_error_message = None
+        self._auth_gh_required = False
+        self._auth_installing_gh = False
+        self._auth_gate_progress_message = None
+        self._auth_post_install_message = None
         self._is_thinking = False  # Tracks collapsible thinking block state
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._available_models = fallback_models()
@@ -492,6 +757,9 @@ class CopilotChatPanel(QWidget):
         self._active_tool_target_id = None
         self._gh_install_worker = None
         self._cleaned_up = False
+        self._chat_runtime = CopilotChatRuntime(timeout_message=S.copilot.timeout_message, parent=self)
+        self._chat_runtime.state_changed.connect(self._on_runtime_state_changed)
+        self._chat_runtime.timeout.connect(self._on_runtime_timeout)
         self._setup_ui()
         self._connect_signals()
         # Restore last session on startup
@@ -554,7 +822,7 @@ class CopilotChatPanel(QWidget):
                 client.license_warning.connect(self._on_license_warning)
             # Pass tool registry from MCP server to client
             if self._mcp_server and hasattr(client, 'set_tool_registry'):
-                client.set_tool_registry(self._mcp_server.tool_registry)
+                client.set_tool_registry(self._mcp_server.tool_registry, parent=self.window())
             self._update_auth_state()
             # Update model list from client if available
             self._update_models_from_client()
@@ -566,7 +834,7 @@ class CopilotChatPanel(QWidget):
         self._mcp_server = server
         # Update tool registry in client if available
         if server and self._copilot_client and hasattr(self._copilot_client, 'set_tool_registry'):
-            self._copilot_client.set_tool_registry(server.tool_registry)
+            self._copilot_client.set_tool_registry(server.tool_registry, parent=self.window())
 
     def _setup_ui(self):
         """Build the chat panel UI."""
@@ -1082,8 +1350,16 @@ class CopilotChatPanel(QWidget):
         settings = self._chat_webview.page().settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        
-        # Setup QWebChannel for Python <-> JS communication
+        if hasattr(QWebEngineSettings.WebAttribute, "JavascriptCanAccessClipboard"):
+            settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
+        if hasattr(QWebEngineSettings.WebAttribute, "JavascriptCanPaste"):
+            settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanPaste, True)
+
+        self._chat_webview.installEventFilter(self)
+
+        self._paste_image_shortcut = QShortcut(QKeySequence.StandardKey.Paste, self)
+        self._paste_image_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._paste_image_shortcut.activated.connect(self._on_clipboard_paste)
         self._chat_channel = QWebChannel(self._chat_webview.page())
         self._chat_bridge = ChatBridge(self)
         self._chat_channel.registerObject("bridge", self._chat_bridge)
@@ -1204,6 +1480,12 @@ class CopilotChatPanel(QWidget):
         """Start a new chat session."""
         self._save_current_session()
         self.clear_chat()
+        self._current_session_id = None
+        self._settings.setValue("last_session_id", "")
+        self._turn_tools_used = 0
+        self._turn_had_notify_user = False
+        if self._copilot_client and hasattr(self._copilot_client, "reset_chat_session"):
+            self._copilot_client.reset_chat_session()
 
     def _on_sessions_clicked(self):
         """Toggle the persistent chat history sidebar."""
@@ -1259,6 +1541,9 @@ class CopilotChatPanel(QWidget):
 
     def _delete_session(self, session_id: str, menu: QMenu = None):
         """Delete a specific session."""
+        from src.services.copilot.copilot_session_storage import delete_session_storage
+
+        delete_session_storage(session_id)
         sessions = self._get_sessions_list()
         sessions = [s for s in sessions if s.get("id") != session_id]
         self._save_sessions_list(sessions)
@@ -1274,6 +1559,10 @@ class CopilotChatPanel(QWidget):
 
     def _clear_all_sessions(self):
         """Clear all saved sessions."""
+        from src.services.copilot.copilot_session_storage import delete_session_storage
+
+        for session in self._get_sessions_list():
+            delete_session_storage(session.get("id", ""))
         self._settings.setValue("sessions", "[]")
         self._settings.setValue("last_session_id", "")
         self._refresh_history_sidebar()
@@ -1418,20 +1707,27 @@ class CopilotChatPanel(QWidget):
         block_editor = getattr(session_widget, "editor", None) if session_widget else None
         if block_editor:
             blocks = list(getattr(block_editor, "blocks", []) or [])
-            focused_block = getattr(block_editor, "focused_block", None)
+            last_focused = None
+            if hasattr(block_editor, "get_last_focused_block"):
+                last_focused = block_editor.get_last_focused_block()
+            elif hasattr(block_editor, "focused_block"):
+                last_focused = block_editor.focused_block
             block_infos = []
-            for index, block in enumerate(blocks[:20]):
+            for index, block in enumerate(blocks[:12]):
                 try:
                     code = block.get_code() if hasattr(block, "get_code") else ""
                     name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{index + 1}"
                     language = block.get_language() if hasattr(block, "get_language") else "unknown"
-                    preview = code[:600] + "..." if len(code) > 600 else code
+                    preview = code[:250] + "..." if len(code) > 250 else code
+                    from src.services.copilot.mcp_tools import _infer_block_hints
+                    hints = _infer_block_hints(code, language)
                     block_infos.append({
                         "index": index,
                         "name": name,
                         "language": language,
-                        "focused": block is focused_block,
+                        "focused": block is last_focused,
                         "lines": len(code.splitlines()) if code else 0,
+                        "hints": hints,
                         "code_preview": preview,
                     })
                 except Exception as e:
@@ -1442,6 +1738,12 @@ class CopilotChatPanel(QWidget):
                 context["blocks_truncated"] = len(blocks) - len(block_infos)
             if block_infos:
                 context["block_map"] = {b["name"]: b["index"] for b in block_infos}
+                html_blocks = [b["name"] for b in block_infos if "generates_html" in b.get("hints", [])]
+                if html_blocks:
+                    context["html_blocks"] = html_blocks
+                focused = next((b["name"] for b in block_infos if b.get("focused")), None)
+                if focused:
+                    context["focused_block"] = focused
 
         connection_name = context.get("session", {}).get("connection_name", "")
         schema_summary = self._build_cached_schema_summary(mw, connection_name, context["target_session_id"])
@@ -1564,19 +1866,55 @@ class CopilotChatPanel(QWidget):
             except Exception as e:
                 logger.debug(f"Error cancelling active Copilot query: {e}")
 
-    def _add_message(self, role: str, content: str):
+    def _add_message(
+        self,
+        role: str,
+        content: str,
+        references: list = None,
+        attachments: list = None,
+    ):
         """Add a message to the chat."""
-        self._messages.append({"role": role, "content": content})
+        message = {"role": role, "content": content}
+        if attachments:
+            message["attachments"] = list(attachments)
+        self._messages.append(message)
 
-        # Generate unique ID for this message
         msg_id = f"msg_{len(self._messages)}_{id(content) % 10000}"
-        
-        # Add message via WebView JS
         role_js = "error" if role == "assistant" and content.startswith("Error:") else role
         content_escaped = json.dumps(content)
-        self._run_chat_js(f"addMessage({json.dumps(role_js)}, {content_escaped}, {json.dumps(msg_id)})")
-        
-        # Hide welcome on first message
+        refs_payload = []
+        for ref in references or []:
+            if not isinstance(ref, dict):
+                continue
+            if ref.get("ok") is False:
+                continue
+            token = ref.get("reference") or ref.get("insert_text") or ""
+            if not token and ref.get("type") == "block":
+                name = ref.get("name") or ref.get("label") or ""
+                if name:
+                    token = f"#block:{name}"
+            refs_payload.append({
+                "reference": token,
+                "type": ref.get("type", "block"),
+                "label": ref.get("label") or ref.get("name", ""),
+                "detail": ref.get("detail", ""),
+            })
+        attachments_payload = []
+        for item in attachments or []:
+            if not isinstance(item, dict):
+                continue
+            attachments_payload.append({
+                "name": item.get("name", "image.png"),
+                "mimeType": item.get("mimeType") or item.get("mime_type") or "image/png",
+                "data": item.get("data", ""),
+                "size": item.get("size", 0),
+                "source": item.get("source", "user"),
+            })
+        self._run_chat_js(
+            "addMessage("
+            f"{json.dumps(role_js)}, {content_escaped}, {json.dumps(msg_id)}, "
+            f"{json.dumps(refs_payload)}, {json.dumps(attachments_payload)})"
+        )
         self._run_chat_js("hideWelcome()")
 
     def _scroll_to_bottom(self):
@@ -1946,95 +2284,122 @@ class CopilotChatPanel(QWidget):
         self._populate_model_combo(fallback_models())
 
     def _on_auth_required(self, user_code: str, verification_uri: str):
-        """Show authentication instructions to the user."""
-        # Device code flow - show code to user
-        # NOTE: Browser is opened by main_window._on_lsp_auth_required
-        # Do NOT open browser here to avoid duplication
-        self._add_message(
-            "assistant",
-            S.copilot.auth_instructions.format(code=user_code, url=verification_uri),
-        )
-        # Copy code to clipboard
+        """Show device-code auth in the gate overlay (not in chat)."""
+        self._auth_device_code = (user_code, verification_uri)
+        self._auth_signing_in = False
+        self._auth_error_message = None
         QApplication.clipboard().setText(user_code)
+        self._refresh_auth_gate()
 
     def _on_auth_started(self, message: str):
-        """Authentication process started - show info to user."""
-        self._add_message("assistant", message)
+        """Authentication process started — update gate status."""
+        _ = message
+        self._auth_signing_in = True
+        self._auth_error_message = None
         self._auth_btn.setText(S.copilot.signing_in)
         self._auth_btn.setEnabled(False)
+        self._refresh_auth_gate()
 
     def _on_authenticated(self, info: str):
-        """Authentication succeeded."""
+        """Authentication succeeded — unlock chat."""
+        _ = info
+        self._auth_signing_in = False
+        self._auth_device_code = None
+        self._auth_error_message = None
+        self._auth_gh_required = False
+        self._auth_installing_gh = False
         self._update_auth_state()
-        self._add_message("assistant", S.copilot.auth_success)
-        # Save auth state using centralized settings manager
         username = getattr(self._copilot_client, "_username", "") if self._copilot_client else ""
         get_copilot_settings().on_chat_authenticated(username)
-        # Also keep legacy setting for backwards compatibility
         self._settings.setValue("was_authenticated", True)
 
     def _on_auth_failed(self, error: str):
-        """Authentication failed."""
+        """Authentication failed — show status in gate."""
+        self._auth_signing_in = False
+        self._auth_device_code = None
         self._auth_btn.setText(S.copilot.sign_in)
         self._auth_btn.setEnabled(True)
-        
-        # Check if error is about missing Copilot extension
+
         if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
             self._on_gh_not_found()
-            self._add_message(
-                "assistant",
-                "GitHub Copilot extension not found. Click the button above to install it."
-            )
-        else:
-            self._add_message("assistant", S.copilot.auth_failed.format(error=error))
+            return
 
-    def _on_gh_not_found(self):
-        """GitHub CLI not found - show install widget and message."""
+        if "cancel" in str(error or "").lower():
+            self._auth_error_message = S.copilot.auth_cancelled
+        else:
+            self._auth_error_message = S.copilot.auth_failed.format(error=error)
+        self._refresh_auth_gate()
+
+    def _cancel_auth_flow(self):
+        """Cancel an in-progress GitHub login and return to retryable gate state."""
+        from src.services.copilot import get_copilot_auth_service
+
+        self._auth_signing_in = False
+        self._auth_device_code = None
+        get_copilot_auth_service().cancel_chat_auth()
+        self._auth_error_message = S.copilot.auth_cancelled
         self._auth_btn.setText(S.copilot.sign_in)
         self._auth_btn.setEnabled(True)
-        self._gh_install_widget.setVisible(True)
-        self._add_message("assistant", S.copilot.gh_cli_not_found)
+        self._refresh_auth_gate()
+        self._sync_app_state()
+
+    def _on_gh_not_found(self):
+        """GitHub CLI not found — prompt install via auth gate."""
+        self._auth_gh_required = True
+        self._auth_signing_in = False
+        self._auth_device_code = None
+        self._auth_error_message = None
+        self._auth_btn.setText(S.copilot.sign_in)
+        self._auth_btn.setEnabled(True)
+        if hasattr(self, "_gh_install_widget"):
+            self._gh_install_widget.setVisible(True)
+        self._refresh_auth_gate()
 
     def _on_license_warning(self, message: str):
-        """License may not support chat - show warning message."""
-        self._add_message(
-            "assistant",
+        """License may not support chat — surface in auth gate."""
+        self._auth_error_message = (
             f"Warning: {message}\n\n"
             "Your organization's Copilot license may not include Chat API access. "
             "Please contact your IT admin to verify your Copilot subscription includes Chat features."
         )
+        self._refresh_auth_gate()
 
     def _install_gh_cli(self):
         """Start GitHub CLI installation (non-blocking via QProcess)."""
-        self._gh_install_btn.setEnabled(False)
-        self._gh_install_btn.setText(S.copilot.installing_gh_cli)
-        self._add_message("assistant", S.copilot.installing_gh_cli)
+        self._auth_installing_gh = True
+        self._auth_gh_required = False
+        if hasattr(self, "_gh_install_btn"):
+            self._gh_install_btn.setEnabled(False)
+            self._gh_install_btn.setText(S.copilot.installing_gh_cli)
+        self._refresh_auth_gate()
 
-        # GhCliInstallWorker uses QProcess internally - no QThread needed
         self._gh_install_worker = GhCliInstallWorker(self)
-        self._gh_install_worker.progress.connect(
-            lambda msg: self._add_message("assistant", msg)
-        )
+        self._gh_install_worker.progress.connect(self._on_gh_install_progress)
         self._gh_install_worker.finished.connect(self._on_gh_install_finished)
-
-        # Start the installation (non-blocking)
         self._gh_install_worker.run()
+
+    def _on_gh_install_progress(self, message: str):
+        self._auth_installing_gh = True
+        self._auth_gate_progress_message = message
+        self._refresh_auth_gate()
 
     def _on_gh_install_finished(self, success: bool, message: str):
         """Handle GitHub CLI installation result."""
+        self._auth_installing_gh = False
+        self._auth_gate_progress_message = None
         if success:
-            self._add_message("assistant", S.copilot.gh_cli_installed)
-            self._gh_install_widget.setVisible(False)
+            self._auth_gh_required = False
+            self._auth_post_install_message = S.copilot.gh_cli_installed
+            if hasattr(self, "_gh_install_widget"):
+                self._gh_install_widget.setVisible(False)
         else:
-            self._add_message(
-                "assistant",
-                S.copilot.gh_cli_install_failed.format(error=message),
-            )
-            self._gh_install_btn.setEnabled(True)
-            self._gh_install_btn.setText(S.copilot.install_gh_cli)
+            self._auth_error_message = S.copilot.gh_cli_install_failed.format(error=message)
+            if hasattr(self, "_gh_install_btn"):
+                self._gh_install_btn.setEnabled(True)
+                self._gh_install_btn.setText(S.copilot.install_gh_cli)
 
-        # Cleanup worker
         self._gh_install_worker = None
+        self._refresh_auth_gate()
 
     def _update_auth_state(self):
         """Update UI based on authentication state."""
@@ -2055,9 +2420,116 @@ class CopilotChatPanel(QWidget):
 
     def _on_auth_service_chat_updated(self, username: str):
         """Handle chat auth state change from auth service (e.g., login via Settings)."""
-        self._update_auth_state()
-        # Update models if available
+        self._on_authenticated(username or "")
         self._update_models_from_client()
+
+    def _on_clipboard_paste(self):
+        """Route paste to the WebView composer (native OS clipboard access)."""
+        if getattr(self, "_webview_ready", False):
+            self._run_chat_js("handleHostClipboardPaste()");
+            return
+        self._on_composer_clipboard_paste(fallback_web_paste=True)
+
+    def _on_composer_clipboard_paste(self, *, fallback_web_paste: bool = False):
+        """Handle paste in the composer: image attachment first, then plain text."""
+        if self._try_paste_image_from_clipboard():
+            return
+        if not fallback_web_paste:
+            clipboard = QApplication.clipboard()
+            text = clipboard.text() if clipboard is not None else ""
+            if text:
+                self._run_chat_js(f"insertComposerText({json.dumps(text)})")
+                self._run_chat_js("focusComposer()")
+            return
+        webview = getattr(self, "_chat_webview", None)
+        if webview is not None and not sip.isdeleted(webview):
+            webview.page().triggerAction(QWebEnginePage.WebAction.Paste)
+
+    def _build_clipboard_image_payload(self) -> dict | None:
+        """Build an attachment payload from the OS clipboard, if present."""
+        if not getattr(self, "_webview_ready", False):
+            return None
+
+        image = self._clipboard_image()
+        if image is None:
+            return None
+
+        from PyQt6.QtCore import QBuffer, QIODevice
+        import base64
+
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        if not image.save(buffer, "PNG"):
+            return None
+
+        raw = bytes(buffer.data())
+        return {
+            "name": "pasted.png",
+            "mimeType": "image/png",
+            "data": base64.b64encode(raw).decode("ascii"),
+            "size": len(raw),
+            "source": "clipboard",
+        }
+
+    def _try_paste_image_from_clipboard(self) -> bool:
+        """Read a clipboard image and inject it into the WebView composer."""
+        payload = self._build_clipboard_image_payload()
+        if not payload:
+            return False
+        self._run_chat_js(f"addComposerAttachment({json.dumps(payload)})")
+        self._run_chat_js("focusComposer()")
+        return True
+
+    def _clipboard_image(self):
+        """Return a clipboard image when present (Windows screenshots, copy image, etc.)."""
+        from PyQt6.QtGui import QImage, QPixmap
+
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            return None
+
+        image = clipboard.image()
+        if isinstance(image, QImage) and not image.isNull():
+            return image
+
+        mime = clipboard.mimeData()
+        if mime is None:
+            return None
+
+        if mime.hasImage():
+            image_data = mime.imageData()
+            if isinstance(image_data, QPixmap):
+                image_data = image_data.toImage()
+            if isinstance(image_data, QImage) and not image_data.isNull():
+                return image_data
+
+        for fmt in ("image/png", "image/jpeg", "image/bmp", "image/webp", "image/gif"):
+            if mime.hasFormat(fmt):
+                image_data = QImage.fromData(bytes(mime.data(fmt)))
+                if not image_data.isNull():
+                    return image_data
+
+        return None
+
+    def eventFilter(self, watched, event):
+        """Forward copy/cut/select-all to the chat WebView."""
+        if watched is getattr(self, "_chat_webview", None) and event.type() == QEvent.Type.KeyPress:
+            if event.matches(QKeySequence.StandardKey.Copy):
+                self._chat_webview.page().triggerAction(QWebEnginePage.WebAction.Copy)
+                return True
+            if event.matches(QKeySequence.StandardKey.Cut):
+                self._chat_webview.page().triggerAction(QWebEnginePage.WebAction.Cut)
+                return True
+            if event.matches(QKeySequence.StandardKey.SelectAll):
+                self._chat_webview.page().triggerAction(QWebEnginePage.WebAction.SelectAll)
+                return True
+            if event.matches(QKeySequence.StandardKey.Paste):
+                if getattr(self, "_webview_ready", False):
+                    self._run_chat_js("handleHostClipboardPaste()");
+                    return True
+                if self._try_paste_image_from_clipboard():
+                    return True
+        return super().eventFilter(watched, event)
 
     def cleanup(self):
         """Release background work and WebEngine resources."""
@@ -2117,6 +2589,7 @@ class CopilotChatPanel(QWidget):
 
     def _on_auth_service_chat_logged_out(self):
         """Handle chat logout from auth service (e.g., logout via Settings)."""
+        self._auth_success_shown = False
         self._update_auth_state()
         self._usage_label.setVisible(False)
 
@@ -2199,8 +2672,15 @@ class CopilotChatPanel(QWidget):
         # Generate session name from first user message or timestamp
         session_name = datetime.now().strftime("%d/%m %H:%M")
         for msg in self._messages:
-            if msg["role"] == "user":
-                session_name = msg["content"][:40] + ("..." if len(msg["content"]) > 40 else "")
+            if msg["role"] != "user":
+                continue
+            content = str(msg.get("content") or "").strip()
+            if content:
+                session_name = content[:40] + ("..." if len(content) > 40 else "")
+                break
+            attachments = msg.get("attachments") or []
+            if attachments:
+                session_name = str(attachments[0].get("name") or "Image")
                 break
 
         sessions = self._get_sessions_list()
@@ -2212,6 +2692,10 @@ class CopilotChatPanel(QWidget):
                 existing_idx = i
                 break
 
+        from src.services.copilot.copilot_session_storage import save_session_messages
+
+        save_session_messages(session_id, self._messages.copy())
+
         session_data = {
             "id": session_id,
             "name": session_name,
@@ -2221,7 +2705,6 @@ class CopilotChatPanel(QWidget):
             "target_tab_id": self._current_tab_id,
             "target_tab_name": self._current_tab_name,
             "preview": next((msg.get("content", "")[:120] for msg in self._messages if msg.get("role") == "assistant"), ""),
-            "messages": self._messages.copy(),
         }
 
         if existing_idx is not None:
@@ -2264,11 +2747,18 @@ class CopilotChatPanel(QWidget):
                 effort_index = self._effort_combo.findData(effort)
                 if effort_index >= 0:
                     self._effort_combo.setCurrentIndex(effort_index)
-                messages = session.get("messages", [])
+                from src.services.copilot.copilot_session_storage import resolve_session_messages
+
+                messages = resolve_session_messages(session)
                 for msg in messages:
-                    self._add_message(msg["role"], msg["content"])
+                    self._add_message(
+                        msg["role"],
+                        msg["content"],
+                        attachments=msg.get("attachments", []),
+                    )
+                if messages:
+                    self._run_chat_js("hideWelcome()")
                 self._refresh_history_sidebar()
-                # Welcome is auto-hidden when messages are added
                 return True
         return False
 
@@ -2288,3 +2778,748 @@ class CopilotChatPanel(QWidget):
     def get_saved_sessions(self) -> list:
         """Get list of saved sessions for UI display."""
         return self._get_sessions_list()
+
+    # === New full-WebView chat surface ===
+
+    def _setup_ui(self):
+        """Build a minimal PyQt host; all visible chat UI lives in WebView."""
+        self._model_combo = _WebComboState()
+        self._effort_combo = _WebComboState()
+        self._model_combo.set_on_change(self._on_model_changed)
+        self._effort_combo.set_on_change(self._on_reasoning_effort_changed)
+        self._usage_label = _WebLabelState()
+        self._tab_badge = _WebLabelState()
+        self._auth_btn = _WebButtonState(S.copilot.sign_in)
+        self._send_btn = _WebButtonState(S.copilot.send_tooltip)
+        self._stop_btn = _WebButtonState(S.copilot.stop_tooltip)
+        self._input = _WebInputState(self.focus_input)
+        self._mode_combo = None
+        self._gh_install_widget = _WebLabelState()
+        self._gh_install_btn = _WebButtonState(S.copilot.install_gh_cli)
+        self._active_references = []
+
+        for effort in REASONING_EFFORTS:
+            self._effort_combo.addItem(effort, effort)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._setup_chat_webview()
+        layout.addWidget(self._chat_webview, 1)
+
+        self._populate_model_combo(self._available_models)
+        preferred_effort = get_copilot_settings().chat_reasoning_effort
+        effort_index = self._effort_combo.findData(preferred_effort)
+        if effort_index >= 0:
+            self._effort_combo.setCurrentIndex(effort_index)
+        self._update_reasoning_effort_state()
+        self._set_usage_snapshot(self._usage_snapshot)
+        self._apply_theme()
+
+    def _get_template_path(self) -> Path:
+        """Get path to the new Copilot chat WebView app."""
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            return Path(sys._MEIPASS) / 'src' / 'ui' / 'components' / 'copilot_chat_app.html'
+        return Path(__file__).parent / 'copilot_chat_app.html'
+
+    def focus_input(self):
+        """Focus the WebView composer when the Copilot dock is shown."""
+        if hasattr(self, "_chat_webview") and self._chat_webview:
+            self._chat_webview.setFocus()
+        self._run_chat_js("focusComposer()")
+
+    def _connect_signals(self):
+        """Connect bridge and service signals for the full-WebView app."""
+        bridge = getattr(self, '_chat_bridge', None)
+        if bridge:
+            bridge.message_submitted.connect(self._on_bridge_message_submitted)
+            bridge.cancel_requested.connect(self._on_stop)
+            bridge.retry_requested.connect(self._on_retry_turn)
+            bridge.refresh_models_requested.connect(self._on_refresh_models_clicked)
+            bridge.auth_requested.connect(self._on_auth_clicked)
+            bridge.new_chat_requested.connect(self._on_new_chat)
+            bridge.restore_chat_requested.connect(self._restore_session)
+            bridge.delete_chat_requested.connect(self._delete_session)
+            bridge.model_selected.connect(self._on_model_changed)
+            bridge.reasoning_effort_selected.connect(self._on_reasoning_effort_changed)
+            bridge.references_requested.connect(self._on_reference_suggestions_requested)
+            bridge.reference_open_requested.connect(self._on_reference_open_requested)
+            bridge.history_collapsed_changed.connect(self._on_history_collapsed_changed)
+            bridge.clipboard_paste_requested.connect(
+                lambda: self._on_composer_clipboard_paste(fallback_web_paste=False)
+            )
+
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
+        auth_service.chat_logged_out.connect(self._on_auth_service_chat_logged_out)
+        auth_service.chat_auth_failed.connect(self._on_auth_failed)
+        auth_service.chat_auth_required.connect(self._on_auth_required)
+        auth_service.chat_auth_started.connect(self._on_auth_started)
+        if hasattr(auth_service, 'chat_gh_not_found'):
+            auth_service.chat_gh_not_found.connect(self._on_gh_not_found)
+
+    def _labels_payload(self) -> dict:
+        keys = [
+            "title", "input_placeholder", "send_tooltip", "stop_tooltip", "sign_in",
+            "signing_in", "model_tooltip", "reasoning_effort_tooltip", "refresh_models",
+            "model_search_placeholder", "no_models_found",
+            "new_chat", "chat_history", "history_search_placeholder", "delete_chat",
+            "untitled_chat", "no_sessions", "usage_unavailable", "usage_format",
+            "usage_used_format", "usage_remaining_format", "waiting_response", "thinking",
+            "thinking_complete", "tool_running", "tool_ok", "tool_error", "copy_code",
+            "copied_code", "insert_code", "inserted_code", "effort_auto", "effort_low",
+            "effort_medium", "effort_high", "effort_xhigh", "work_title",
+            "work_running", "work_complete", "toggle_history", "logout",
+            "retry_turn", "task_complete_title", "task_complete_default",
+            "activity_sending", "activity_running_tool",
+            "chat_locked_placeholder", "thinking_live",
+            "attach_image_tooltip", "remove_attachment",
+            "attachment_only_prompt", "attachment_limit_reached", "attachment_too_large",
+            "attachment_invalid_type", "attachment_read_failed", "attachment_loading", "attachment_no_result",
+            "view_attachment", "close_image_preview",
+            "vision_not_supported",
+        ]
+        labels = {key: getattr(S.copilot, key, key) for key in keys}
+        labels["copy"] = getattr(S.copilot, "copy_code", "Copy")
+        labels["insert"] = getattr(S.copilot, "insert_code", "Insert")
+        return labels
+
+    def _on_webview_ready(self):
+        """Called when the new chat WebView app is ready."""
+        self._webview_ready = True
+        self._run_chat_js(f"setLabels({json.dumps(self._labels_payload())})")
+        self._run_chat_js(f"setWelcomeText({json.dumps('GitHub Copilot')}, {json.dumps(S.copilot.welcome_message)})")
+        self._apply_theme()
+        self._sync_all_web_state()
+        for op in self._pending_webview_ops:
+            self._chat_webview.page().runJavaScript(op)
+        self._pending_webview_ops.clear()
+
+    def _sync_all_web_state(self):
+        self._sync_models_to_webview()
+        self._sync_usage_to_webview()
+        self._sync_attachment_limits_to_webview()
+        self._refresh_history_sidebar()
+        self._sync_app_state()
+
+    def _sync_attachment_limits_to_webview(self):
+        from src.services.copilot.copilot_attachments import attachment_limits_for_model
+
+        model_id = self._model_combo.currentData() if hasattr(self, "_model_combo") else ""
+        limits = attachment_limits_for_model(self._available_models, model_id or "")
+        self._run_chat_js(f"setAttachmentLimits({json.dumps(limits)})")
+
+    def _auth_gate_payload(self) -> dict:
+        if self._copilot_client and self._copilot_client.is_authenticated:
+            username = getattr(self._copilot_client, "_username", "") or ""
+            return {
+                "status": "ready",
+                "pill_label": f"@{username}" if username else S.copilot.connected,
+            }
+
+        if self._auth_installing_gh:
+            message = self._auth_gate_progress_message or S.copilot.installing_gh_cli
+            return {
+                "status": "signing_in",
+                "pill_label": S.copilot.auth_status_signing_in,
+                "title": S.copilot.install_gh_cli,
+                "message": message,
+            }
+
+        if self._auth_error_message:
+            return {
+                "status": "error",
+                "pill_label": S.copilot.auth_status_error,
+                "title": S.copilot.chat_auth_error_title,
+                "message": self._auth_error_message,
+                "action_label": S.copilot.auth_gate_retry_action,
+                "action": "sign_in",
+            }
+
+        if self._auth_gh_required:
+            return {
+                "status": "locked",
+                "pill_label": S.copilot.auth_status_locked,
+                "title": S.copilot.chat_locked_title,
+                "message": S.copilot.gh_cli_not_found,
+                "action_label": S.copilot.install_gh_cli,
+                "action": "install_gh",
+            }
+
+        if self._auth_post_install_message:
+            message = self._auth_post_install_message
+            return {
+                "status": "locked",
+                "pill_label": S.copilot.auth_status_locked,
+                "title": S.copilot.chat_locked_title,
+                "message": message,
+                "action_label": S.copilot.sign_in,
+                "action": "sign_in",
+            }
+
+        if self._auth_device_code:
+            user_code, verification_uri = self._auth_device_code
+            return {
+                "status": "device_code",
+                "pill_label": S.copilot.auth_status_device_code,
+                "title": S.copilot.chat_device_code_title,
+                "message": S.copilot.chat_device_code_message.format(url=verification_uri),
+                "code": user_code,
+                "action_label": S.copilot.auth_gate_cancel_action,
+                "action": "cancel_auth",
+            }
+
+        if self._auth_signing_in:
+            return {
+                "status": "signing_in",
+                "pill_label": S.copilot.auth_status_signing_in,
+                "title": S.copilot.chat_locked_title,
+                "message": S.copilot.chat_signing_in_message,
+                "action_label": S.copilot.auth_gate_cancel_action,
+                "action": "cancel_auth",
+            }
+
+        return {
+            "status": "locked",
+            "pill_label": S.copilot.auth_status_locked,
+            "title": S.copilot.chat_locked_title,
+            "message": S.copilot.chat_locked_message,
+            "action_label": S.copilot.sign_in,
+            "action": "sign_in",
+        }
+
+    def _refresh_auth_gate(self):
+        self._run_chat_js(f"setAuthGate({json.dumps(self._auth_gate_payload(), ensure_ascii=False)})")
+
+    def _sync_app_state(self):
+        payload = {
+            "tab_name": S.copilot.chat_context_tab.replace('{name}', self._current_tab_name) if self._current_tab_name else "",
+            "auth_label": self._auth_btn.text(),
+            "auth_ready": bool(self._copilot_client and self._copilot_client.is_authenticated),
+            "selected_model": self._model_combo.currentData() or "",
+            "selected_effort": self._effort_combo.currentData() or "auto",
+            "supported_efforts": self._supported_efforts_for_current_model(),
+            "loading": self._chat_runtime.is_active,
+            "history_collapsed": get_copilot_settings().chat_history_collapsed,
+        }
+        self._run_chat_js(f"setAppState({json.dumps(payload, default=str)})")
+        self._refresh_auth_gate()
+
+    def _sync_models_to_webview(self):
+        payload = {
+            "models": self._available_models,
+            "selected_model": self._model_combo.currentData() or "",
+            "supported_efforts": self._supported_efforts_for_current_model(),
+        }
+        self._run_chat_js(f"setModels({json.dumps(payload, default=str)})")
+
+    def _sync_usage_to_webview(self):
+        self._run_chat_js(f"setUsage({json.dumps(self._usage_snapshot, default=str)})")
+
+    def _supported_efforts_for_current_model(self) -> list:
+        return model_supported_reasoning_efforts(self._available_models, self._model_combo.currentData() or "")
+
+    def _on_bridge_message_submitted(self, payload_json: str):
+        try:
+            payload = json.loads(payload_json) if payload_json else {}
+        except Exception:
+            payload = {"text": payload_json}
+        self._on_send(
+            str(payload.get("text", "")),
+            payload.get("references", []),
+            attachments=payload.get("attachments", []),
+        )
+
+    def _on_send(
+        self,
+        text: str = "",
+        references: list = None,
+        retry: bool = False,
+        attachments: list = None,
+    ):
+        """Send a user prompt from the WebView composer."""
+        if not text and hasattr(self, '_input') and self._input:
+            text = self._input.toPlainText().strip()
+            self._input.clear()
+        text = (text or "").strip()
+        attachments = list(attachments or [])
+        if (not text and not attachments) or self._chat_runtime.is_active:
+            return
+
+        if not self._copilot_client or not self._copilot_client.is_authenticated:
+            self._refresh_auth_gate()
+            return
+
+        from src.services.copilot.copilot_attachments import (
+            AttachmentValidationError,
+            attachments_for_message_storage,
+            parse_attachments_payload,
+            validate_attachments_for_model,
+        )
+
+        model_id = self._model_combo.currentData() if hasattr(self, "_model_combo") else ""
+        normalized_attachments = []
+        try:
+            if attachments:
+                normalized_attachments = parse_attachments_payload(attachments)
+                validate_attachments_for_model(
+                    normalized_attachments,
+                    self._available_models,
+                    model_id or getattr(self._copilot_client, "_model", ""),
+                )
+        except AttachmentValidationError as exc:
+            self._chat_runtime.fail(str(exc))
+            self._set_loading(False)
+            self._add_message("error", str(exc))
+            return
+
+        stored_attachments = attachments_for_message_storage(normalized_attachments)
+
+        resolved_refs = self._resolve_prompt_references(text, references or [])
+        self._active_references = resolved_refs
+        self._turn_tools_used = 0
+        self._turn_had_notify_user = False
+        self._chat_runtime.start_turn(text, resolved_refs, stored_attachments)
+        if not retry:
+            self._add_message("user", text, references=resolved_refs, attachments=stored_attachments)
+        self._set_loading(True)
+        self._run_chat_js(f"setActivity({json.dumps({'phase': S.copilot.activity_sending})})")
+
+        system_prompt = self._build_system_prompt()
+        context_section = self._build_request_context_section()
+        from src.services.copilot.system_prompt import build_request_prompt
+        request_prompt = build_request_prompt(text, context_section)
+        if stored_attachments and not text:
+            request_prompt = build_request_prompt(
+                S.copilot.attachment_only_prompt,
+                context_section,
+            )
+
+        # SDK session keeps conversation history; send only system rules + current turn.
+        api_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request_prompt},
+        ]
+
+        if self._copilot_client:
+            if hasattr(self._copilot_client, "system_message"):
+                self._copilot_client.system_message = system_prompt
+            if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+                tab_id = self._resolve_current_tab_id()
+                if tab_id:
+                    self._active_tool_target_id = tab_id
+                    self._mcp_server.tool_registry.pin_session(tab_id)
+            self._current_assistant_widget = None
+            self._show_thinking_indicator()
+            self.thinking_started.emit()
+            self._copilot_client.send_chat(api_messages, attachments=stored_attachments)
+        else:
+            self._chat_runtime.fail(S.copilot.not_authenticated)
+            self._set_loading(False)
+            self._refresh_auth_gate()
+        self.message_sent.emit(text)
+
+    def _resolve_prompt_references(self, text: str, explicit_refs: list) -> list:
+        resolver = ReferenceResolver(self._get_registry_main_window())
+        refs = []
+        seen = set()
+        for item in explicit_refs or []:
+            ref = item.get("reference") or item.get("insert_text") if isinstance(item, dict) else str(item)
+            if ref and ref not in seen:
+                refs.append(resolver.resolve(ref))
+                seen.add(ref)
+        for item in resolver.parse(text):
+            ref = item.get("reference")
+            if ref and ref not in seen:
+                refs.append(resolver.resolve(ref))
+                seen.add(ref)
+        return refs
+
+    def _build_request_context_section(self) -> str:
+        from src.services.copilot.system_prompt import build_context_section
+        try:
+            snapshot = self._build_context_snapshot()
+            if self._active_references:
+                snapshot["active_references"] = self._active_references
+            context_json = json.dumps(snapshot, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Error building editor context snapshot: {e}")
+            context_json = "{}"
+        return build_context_section(context_json, "")
+
+    def _set_loading(self, loading: bool):
+        self._run_chat_js(f"setAppState({json.dumps({'loading': bool(loading)})})")
+
+    def _on_runtime_state_changed(self, state: dict):
+        self._run_chat_js(f"setTurnState({json.dumps(state)})")
+
+    def _on_runtime_timeout(self, _turn_id: str):
+        if self._copilot_client and hasattr(self._copilot_client, "cancel"):
+            self._copilot_client.cancel()
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); stopActivityTimer();")
+
+    def _on_stop(self, *_args):
+        if self._copilot_client and hasattr(self._copilot_client, "cancel"):
+            self._copilot_client.cancel()
+        self._cancel_active_tool_target()
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
+        self._chat_runtime.cancel()
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); stopActivityTimer();")
+
+    def _on_retry_turn(self, *_args):
+        payload = self._chat_runtime.retry_payload()
+        if payload.get("prompt") or payload.get("attachments"):
+            self._run_chat_js(
+                "document.querySelectorAll('.message-row.error').forEach(n => n.remove())"
+            )
+            self._on_send(
+                payload.get("prompt", ""),
+                payload.get("references", []),
+                retry=True,
+                attachments=payload.get("attachments", []),
+            )
+
+    def _on_response_chunk(self, chunk: str):
+        self._chat_runtime.touch_activity()
+        self._chat_runtime.mark_streaming()
+        self._hide_thinking_indicator()
+        if self._is_thinking:
+            self._is_thinking = False
+            self._run_chat_js("endThinkingBlock()")
+        if self._current_stream_id:
+            self._run_chat_js(f"streamChunk({json.dumps(chunk)})")
+        else:
+            self._messages.append({"role": "assistant", "content": chunk})
+            self._current_stream_id = f"stream_{len(self._messages)}"
+            self._run_chat_js("startStreaming()")
+            self._run_chat_js(f"streamChunk({json.dumps(chunk)})")
+
+    def _on_response_complete(self, full_text: str):
+        if self._chat_runtime.last_turn.get("state") == "timed_out":
+            logger.info("Ignoring response completion after turn timeout")
+            return
+        self._chat_runtime.complete(full_text)
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
+        if self._is_thinking:
+            self._is_thinking = False
+            self._run_chat_js("endThinkingBlock()")
+        self._run_chat_js("endStreaming(); endToolGroup(); stopActivityTimer();")
+        self._active_tool_calls.clear()
+        if not self._current_stream_id:
+            self._add_message("assistant", full_text)
+        elif self._messages and self._messages[-1]["role"] == "assistant":
+            self._messages[-1]["content"] = full_text
+        self._current_stream_id = None
+        self._active_references = []
+        self._notify_copilot_task_complete(full_text)
+        self._save_current_session()
+
+    def _notify_copilot_task_complete(self, response_text: str):
+        """Show a toast when Copilot finished a tool-backed task."""
+        if self._turn_tools_used <= 0 or self._turn_had_notify_user:
+            self._turn_tools_used = 0
+            self._turn_had_notify_user = False
+            return
+        try:
+            from src.ui.components.toast_notification import ToastManager
+            preview = (response_text or "").strip().replace("\n", " ")
+            if len(preview) > 120:
+                preview = preview[:117] + "..."
+            if not preview:
+                preview = S.copilot.task_complete_default
+            tab_index = None
+            mw = self._get_registry_main_window()
+            if mw and hasattr(mw, "session_tabs") and self._current_tab_id:
+                for idx in range(mw.session_tabs.count()):
+                    widget = mw.session_tabs.widget(idx)
+                    session = getattr(widget, "session", None)
+                    if session and getattr(session, "session_id", None) == self._current_tab_id:
+                        tab_index = idx
+                        break
+            ToastManager.notify(
+                S.copilot.task_complete_title,
+                preview,
+                success=True,
+                on_click=(lambda idx=tab_index: mw._focus_window_and_tab(idx)) if tab_index is not None and mw else None,
+            )
+        except Exception as e:
+            logger.debug(f"Could not show Copilot completion toast: {e}")
+        finally:
+            self._turn_tools_used = 0
+            self._turn_had_notify_user = False
+
+    def _on_chat_error(self, error: str):
+        self._chat_runtime.fail(error)
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
+        if self._is_thinking:
+            self._is_thinking = False
+            self._run_chat_js("endThinkingBlock()")
+        self._run_chat_js("endStreaming(); endToolGroup(); stopActivityTimer();")
+        self._current_stream_id = None
+        self._active_tool_calls.clear()
+        if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
+            self._on_gh_not_found()
+
+    def _on_tool_called(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
+        self._chat_runtime.mark_tool(tool_name, "running")
+        if tool_name != "think":
+            self._turn_tools_used += 1
+        if tool_name == "notify_user":
+            self._turn_had_notify_user = True
+        arg_summary = ""
+        if arguments:
+            parts = []
+            for key, val in arguments.items():
+                if key == "thought":
+                    continue
+                val_str = str(val)
+                parts.append(f"{key}={val_str[:37] + '...' if len(val_str) > 40 else val_str}")
+            arg_summary = ", ".join(parts[:3])
+        tool_id = tool_call_id or f"{tool_name}-{len(self._active_tool_calls) + 1}"
+        self._run_chat_js(
+            f"addToolUse({json.dumps(tool_name)}, {json.dumps(arg_summary)}, {json.dumps(tool_id)})"
+        )
+        self._active_tool_calls[tool_id] = tool_name
+        self.tool_call_requested.emit(tool_name, arguments)
+
+    def _on_tool_result(self, tool_name: str, result: str, tool_call_id: str = ""):
+        self._chat_runtime.touch_activity()
+        result_preview = ""
+        is_error = "error" in result.lower()[:100]
+        for line in (result or "").split("\n"):
+            line = line.strip()
+            if line and not line.startswith("```") and not line.startswith("##"):
+                result_preview = line[:80] + ("..." if len(line) > 80 else "")
+                break
+        tool_id = tool_call_id or next(
+            (tid for tid, name in reversed(list(self._active_tool_calls.items())) if name == tool_name),
+            "",
+        )
+        self._run_chat_js(
+            f"updateToolStatus({json.dumps(tool_name)}, 'done', {str(is_error).lower()}, "
+            f"{json.dumps(result_preview)}, {json.dumps(tool_id)})"
+        )
+        if tool_id in self._active_tool_calls:
+            del self._active_tool_calls[tool_id]
+
+    def _on_thinking(self, text: str):
+        if not text.strip():
+            return
+        self._chat_runtime.mark_thinking(text)
+        if not self._is_thinking:
+            self._is_thinking = True
+            self._run_chat_js("startThinkingBlock()")
+        self._run_chat_js(f"appendThinking({json.dumps(text)})")
+
+    def _populate_model_combo(self, models: list):
+        normalized = normalize_models(models) or fallback_models()
+        current_model = self._model_combo.currentData()
+        if not current_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
+            current_model = self._copilot_client.model
+        self._available_models = normalized
+        self._model_combo.blockSignals(True)
+        self._model_combo.clear()
+        for model in normalized:
+            model_id = model.get("id", "")
+            model_name = model.get("name", model_id)
+            idx = self._model_combo.count()
+            self._model_combo.addItem(model_name, model_id)
+            self._model_combo.setItemData(idx, self._format_multiplier(model.get("multiplier", 1.0)), Qt.ItemDataRole.UserRole + 1)
+            self._model_combo.setItemData(idx, dict(model), Qt.ItemDataRole.UserRole + 2)
+        restore_idx = self._model_combo.findData(current_model) if current_model else -1
+        if restore_idx < 0 and self._model_combo.count() > 0:
+            restore_idx = 0
+        if restore_idx >= 0:
+            self._model_combo.setCurrentIndex(restore_idx)
+        self._model_combo.blockSignals(False)
+        selected_model = self._model_combo.currentData()
+        if selected_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
+            self._copilot_client.model = selected_model
+        self._update_reasoning_effort_state()
+        self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, selected_model))
+        self._sync_models_to_webview()
+        self._sync_attachment_limits_to_webview()
+
+    def _on_model_changed(self, value):
+        model_id = value if isinstance(value, str) else self._model_combo.currentData()
+        if model_id:
+            idx = self._model_combo.findData(model_id)
+            if idx >= 0:
+                self._model_combo.setCurrentIndex(idx)
+            get_copilot_settings().set_chat_selected_model(model_id)
+            if self._copilot_client:
+                self._copilot_client.model = model_id
+        self._update_reasoning_effort_state()
+        self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, model_id))
+        self._sync_app_state()
+        self._sync_attachment_limits_to_webview()
+
+    def _update_reasoning_effort_state(self):
+        model_id = self._model_combo.currentData() or ""
+        supported = model_supports_reasoning_effort(self._available_models, model_id)
+        supported_efforts = model_supported_reasoning_efforts(self._available_models, model_id)
+        self._effort_combo.setEnabled(True)
+        for index in range(self._effort_combo.count()):
+            effort = self._effort_combo.itemData(index)
+            self._effort_combo.model().item(index).setEnabled(effort == "auto" or effort in supported_efforts)
+        current_effort = self._effort_combo.currentData()
+        if current_effort != "auto" and current_effort not in supported_efforts:
+            model = find_model(self._available_models, model_id) or {}
+            preferred_effort = model.get("default_reasoning_effort") if supported else "auto"
+            if preferred_effort not in supported_efforts:
+                preferred_effort = "auto"
+            effort_idx = self._effort_combo.findData(preferred_effort)
+            if effort_idx >= 0:
+                self._effort_combo.setCurrentIndex(effort_idx)
+        self._sync_models_to_webview()
+
+    def _on_reasoning_effort_changed(self, value):
+        effort = value if isinstance(value, str) else self._effort_combo.currentData() or "auto"
+        effort_index = self._effort_combo.findData(effort)
+        if effort_index >= 0:
+            self._effort_combo.setCurrentIndex(effort_index)
+        model_id = self._model_combo.currentData() or ""
+        supported_efforts = model_supported_reasoning_efforts(self._available_models, model_id)
+        if effort != "auto" and effort not in supported_efforts:
+            auto_idx = self._effort_combo.findData("auto")
+            if auto_idx >= 0:
+                self._effort_combo.setCurrentIndex(auto_idx)
+            effort = "auto"
+        get_copilot_settings().set_chat_reasoning_effort(effort)
+        if self._copilot_client and hasattr(self._copilot_client, 'reasoning_effort'):
+            self._copilot_client.reasoning_effort = effort
+        self._sync_app_state()
+
+    def _on_refresh_models_clicked(self):
+        self._usage_label.setText(S.copilot.usage_loading)
+        self._usage_label.setVisible(True)
+        self._sync_usage_to_webview()
+        if self._copilot_client and hasattr(self._copilot_client, 'refresh_metadata'):
+            self._copilot_client.refresh_metadata()
+        elif self._copilot_client and hasattr(self._copilot_client, 'start_auth'):
+            self._copilot_client.start_auth()
+
+    def _set_usage_snapshot(self, snapshot: dict):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        self._usage_snapshot = snapshot
+        if snapshot.get("available"):
+            used = snapshot.get("used")
+            total = snapshot.get("total")
+            remaining = snapshot.get("remaining_percentage")
+            if used is not None and total is not None:
+                text = S.copilot.usage_format.format(used=used, total=total)
+            elif used is not None:
+                text = S.copilot.usage_used_format.format(used=used)
+            elif remaining is not None:
+                text = S.copilot.usage_remaining_format.format(remaining=remaining)
+            else:
+                text = S.copilot.usage_unavailable
+            reset_date = snapshot.get("reset_date")
+            tooltip = S.copilot.usage_tooltip_with_reset.format(reset_date=reset_date) if reset_date else S.copilot.usage_tooltip
+        else:
+            multiplier = self._format_multiplier(snapshot.get("multiplier", 1.0))
+            text = S.copilot.usage_unavailable
+            tooltip = S.copilot.usage_unavailable_tooltip.format(multiplier=multiplier)
+        self._usage_label.setText(text)
+        self._usage_label.setToolTip(tooltip)
+        self._usage_label.setVisible(True)
+        self._sync_usage_to_webview()
+
+    def _on_auth_clicked(self, payload_json: str = ""):
+        try:
+            payload = json.loads(payload_json) if payload_json else {}
+        except Exception:
+            payload = {}
+        action = payload.get("action", "sign_in")
+
+        if action == "install_gh":
+            self._install_gh_cli()
+            return
+        if action == "cancel_auth":
+            self._cancel_auth_flow()
+            return
+        if action == "logout":
+            self._do_logout()
+            return
+
+        from src.services.copilot import get_copilot_auth_service
+        auth_service = get_copilot_auth_service()
+        if auth_service.is_chat_authenticated:
+            return
+        self._auth_error_message = None
+        self._auth_post_install_message = None
+        if auth_service.login_chat():
+            self._auth_signing_in = True
+            self._auth_btn.setText(S.copilot.signing_in)
+            self._auth_btn.setEnabled(False)
+            self._refresh_auth_gate()
+            self._sync_app_state()
+
+    def _update_auth_state(self):
+        if self._copilot_client and self._copilot_client.is_authenticated:
+            username = getattr(self._copilot_client, "_username", None)
+            self._auth_btn.setText(f"@{username}" if username else S.copilot.connected)
+        else:
+            self._auth_btn.setText(S.copilot.sign_in)
+        self._auth_btn.setEnabled(True)
+        self._refresh_auth_gate()
+        self._sync_app_state()
+
+    def _on_auth_service_chat_logged_out(self):
+        self._auth_success_shown = False
+        self._auth_signing_in = False
+        self._auth_device_code = None
+        self._auth_error_message = None
+        self._auth_gh_required = False
+        self._auth_installing_gh = False
+        self._auth_gate_progress_message = None
+        self._auth_post_install_message = None
+        self._update_auth_state()
+        self._usage_label.setVisible(False)
+        self._sync_usage_to_webview()
+
+    def _on_reference_suggestions_requested(self, query: str):
+        resolver = ReferenceResolver(self._get_registry_main_window())
+        suggestions = resolver.suggestions(query)
+        self._run_chat_js(f"showReferenceSuggestions({json.dumps(suggestions)})")
+
+    def _on_reference_open_requested(self, reference: str):
+        resolver = ReferenceResolver(self._get_registry_main_window())
+        resolved = resolver.resolve(reference)
+        if not resolved.get("ok") or resolved.get("type") != "tab":
+            return
+        mw = self._get_registry_main_window()
+        if mw and hasattr(mw, "session_tabs"):
+            mw.session_tabs.setCurrentIndex(int(resolved.get("tab_index", 0)))
+
+    def _on_history_collapsed_changed(self, collapsed: bool):
+        get_copilot_settings().set_chat_history_collapsed(collapsed)
+        self._sync_app_state()
+
+    def _refresh_history_sidebar(self):
+        sessions = self._get_sessions_list()
+        self._run_chat_js(f"setSessions({json.dumps({'sessions': sessions, 'current_session_id': self._current_session_id})})")
+
+    def _update_tab_badge(self, tab_name: str):
+        label_text = S.copilot.chat_context_tab.replace('{name}', tab_name)
+        self._tab_badge.setText(label_text)
+        self._tab_badge.setVisible(bool(tab_name))
+        self._sync_app_state()

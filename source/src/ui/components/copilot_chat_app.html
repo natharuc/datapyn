@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' qrc: data: blob:; script-src 'self' qrc: 'unsafe-inline'; style-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob: qrc:;">
+
+    <title>Copilot</title>
+
+    <link rel="stylesheet" href="../assets/css/copilot_chat_app.css">
+
+    <link rel="stylesheet" href="../assets/js/hljs-vs2015.min.css">
+
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+    <script src="../assets/js/marked.min.js"></script>
+
+    <script src="../assets/js/highlight.min.js"></script>
+
+</head>
+
+<body>
+
+    <main id="app" class="chat-shell" data-loading="false">
+
+        <aside id="historyRail" class="history-rail" aria-label="">
+
+            <div class="rail-topline">
+
+                <button id="newChatBtn" class="icon-command" type="button" data-title="new_chat">+</button>
+
+                <button id="toggleHistoryBtn" class="icon-command" type="button" data-title="toggle_history">&times;</button>
+
+            </div>
+
+            <input id="historySearch" class="history-search" type="search" data-placeholder="history_search_placeholder" autocomplete="off">
+
+            <div id="historyList" class="history-list"></div>
+
+        </aside>
+
+
+
+        <section class="chat-main">
+
+            <header class="chat-header">
+
+                <div class="title-cluster">
+
+                    <div class="product-mark">CP</div>
+
+                    <div>
+
+                        <div id="chatTitle" class="chat-title" data-label="title"></div>
+
+                        <div id="tabContext" class="chat-subtitle"></div>
+
+                    </div>
+
+                </div>
+
+                <div class="header-actions">
+
+                    <button id="toggleHistoryHeaderBtn" class="icon-command" type="button" data-title="toggle_history">&#9776;</button>
+
+                    <div class="auth-cluster">
+
+                        <button id="authBtn" class="text-command auth-btn" type="button" data-label="sign_in"></button>
+
+                        <button id="logoutBtn" class="text-command logout-btn" type="button" data-label="logout" hidden></button>
+
+                    </div>
+
+                </div>
+
+            </header>
+
+
+
+            <section id="messages" class="messages" aria-live="polite">
+
+                <div id="welcome" class="welcome">
+
+                    <h2 id="welcomeTitle"></h2>
+
+                    <p id="welcomeText"></p>
+
+                </div>
+
+            </section>
+
+
+
+            <div id="authGate" class="auth-gate" hidden>
+
+                <div class="auth-gate-card">
+
+                    <div id="authGateBadge" class="auth-gate-badge"></div>
+
+                    <h3 id="authGateTitle" class="auth-gate-title"></h3>
+
+                    <p id="authGateMessage" class="auth-gate-message"></p>
+
+                    <div id="authGateCode" class="auth-gate-code" hidden></div>
+
+                    <button id="authGateAction" class="auth-gate-action" type="button" hidden></button>
+
+                </div>
+
+            </div>
+
+
+
+            <section id="debugDrawer" class="debug-drawer" hidden>
+
+                <pre id="debugLog"></pre>
+
+            </section>
+
+
+
+            <footer class="composer-wrap">
+
+                <div id="referenceChips" class="reference-chips"></div>
+
+                <div id="referenceSuggestions" class="reference-suggestions" hidden></div>
+
+                <div id="composerError" class="composer-error" hidden></div>
+
+                <div id="composerCard" class="composer-card">
+
+                    <div id="attachmentChips" class="composer-attachments" hidden></div>
+
+                    <textarea id="composerInput" rows="1" data-placeholder="input_placeholder"></textarea>
+
+                    <div class="composer-footer">
+
+                        <button id="attachBtn" class="composer-tool-btn" type="button" data-title="attach_image_tooltip">+</button>
+
+                        <input id="attachInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" multiple hidden>
+                        <div id="modelPicker" class="model-picker" data-title="model_tooltip">
+
+                            <button id="modelPickerBtn" class="toolbar-select model-picker-button" type="button" data-title="model_tooltip">
+
+                                <span id="modelPickerLabel"></span>
+
+                                <span class="model-picker-caret">&#8964;</span>
+
+                            </button>
+
+                        </div>
+
+                        <select id="effortSelect" class="toolbar-select effort-select" data-title="reasoning_effort_tooltip"></select>
+
+                        <button id="refreshModelsBtn" class="composer-tool-btn" type="button" data-title="refresh_models">&#8635;</button>
+
+                        <div id="usagePill" class="usage-pill"></div>
+
+                        <button id="cancelBtn" class="icon-command danger send-fab" type="button" hidden data-title="stop_tooltip">&times;</button>
+
+                        <button id="sendBtn" class="icon-command primary send-fab" type="button" data-title="send_tooltip">&uarr;</button>
+
+                    </div>
+
+                </div>
+
+                <div id="modelPickerMenu" class="model-picker-menu" hidden>
+
+                    <input id="modelSearch" class="model-search" type="search" data-placeholder="model_search_placeholder" autocomplete="off">
+
+                    <div id="modelList" class="model-list"></div>
+
+                </div>
+
+            </footer>
+
+        </section>
+
+    </main>
+
+    <div id="imageLightbox" class="image-lightbox" hidden>
+        <button id="imageLightboxBackdrop" type="button" class="image-lightbox-backdrop" data-title="close_image_preview"></button>
+        <div class="image-lightbox-dialog" role="dialog" aria-modal="true" aria-labelledby="imageLightboxCaption">
+            <button id="imageLightboxClose" type="button" class="image-lightbox-close" data-title="close_image_preview">&times;</button>
+            <img id="imageLightboxImage" class="image-lightbox-image" alt="">
+            <div id="imageLightboxCaption" class="image-lightbox-caption"></div>
+        </div>
+    </div>
+
+    <script src="../assets/js/copilot_chat_app.js"></script>
+
+</body>
+
+</html>
+

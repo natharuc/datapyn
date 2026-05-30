@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-import threading
+import functools
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from PyQt6.QtCore import (
@@ -26,6 +26,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_log_preview(value: Any, limit: int = 200) -> str:
+    """Return ASCII-safe log preview (Windows consoles often use cp1252)."""
+    if value is None:
+        return "empty"
+    text = str(value)
+    if len(text) > limit:
+        text = text[:limit] + "..."
+    return text.encode("ascii", errors="backslashreplace").decode("ascii")
+
 from .copilot_models import (
     fallback_models,
     find_model,
@@ -37,6 +47,11 @@ from .copilot_models import (
     usage_snapshot_for_model,
     usage_snapshot_from_quota,
 )
+from .copilot_attachments import (
+    AttachmentValidationError,
+    build_sdk_attachments,
+    validate_attachments_for_model,
+)
 from .copilot_settings import get_copilot_settings
 
 # Hide console window on Windows
@@ -46,79 +61,149 @@ _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 DEFAULT_MODELS = fallback_models()
 
 
-def _get_sdk_options():
-    """Get SDK client options, handling PyInstaller bundles and system installs.
-    
-    Priority:
-    1. PyInstaller bundled CLI (if running as frozen app)
-    2. SDK's own bundled CLI (preferred - ships with the copilot pip package)
-    3. System-installed CLI (verified to actually work)
-    """
+def _parse_copilot_cli_version(text: str) -> tuple:
+    """Parse 'GitHub Copilot CLI 0.0.411.' into (0, 0, 411)."""
+    import re
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(part) for part in match.groups())
+
+
+def _read_copilot_cli_version(cli_path: str) -> tuple:
+    """Return semver tuple for a Copilot CLI binary."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            [cli_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            env={**os.environ, "ELECTRON_RUN_AS_NODE": ""},
+        )
+        output = f"{result.stdout}\n{result.stderr}"
+        if result.returncode != 0 or "Cannot find" in output:
+            return (0, 0, 0)
+        return _parse_copilot_cli_version(output)
+    except Exception:
+        return (0, 0, 0)
+
+
+def _discover_copilot_cli_candidates() -> list:
+    """Collect Copilot CLI binaries from SDK bundle, VS Code/Cursor, npm, WinGet, PATH."""
     import sys
     import shutil
-    import subprocess
     from pathlib import Path
-    
-    # 1. If running as PyInstaller bundle, try bundled CLI first
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        cli_path = Path(sys._MEIPASS) / 'copilot' / 'bin' / 'copilot.exe'
-        if cli_path.exists():
-            logger.info(f"Using bundled Copilot CLI: {cli_path}")
-            return {"cli_path": str(cli_path)}
-        else:
-            logger.debug(f"Bundled Copilot CLI not found: {cli_path}")
-    
-    # 2. Let SDK use its own bundled CLI (copilot pip package includes a binary)
-    # This is the most reliable option - avoids VS Code shims and broken PATH entries.
-    try:
-        sdk_bin = Path(__file__).parent
-        # Walk up to find the venv site-packages copilot/bin/copilot
-        for site_pkg in sys.path:
-            candidate = Path(site_pkg) / "copilot" / "bin" / "copilot"
-            if sys.platform == "win32":
-                candidate = candidate.with_suffix(".exe")
-            if candidate.exists():
-                logger.info(f"Using SDK bundled Copilot CLI: {candidate}")
-                return {"cli_path": str(candidate)}
-    except Exception:
-        pass
-    
-    # 3. Try system-installed CLI - but verify it actually works
-    # (VS Code installs a shim script that doesn't work standalone)
-    system_paths = []
-    
+
+    seen = set()
+    candidates: list = []
+
+    def add(path) -> None:
+        if not path:
+            return
+        resolved = Path(path)
+        if not resolved.exists():
+            return
+        key = str(resolved.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(str(resolved))
+
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        add(Path(sys._MEIPASS) / "copilot" / "bin" / "copilot.exe")
+
+    for site_pkg in sys.path:
+        bundled = Path(site_pkg) / "copilot" / "bin" / "copilot.exe" if sys.platform == "win32" else Path(site_pkg) / "copilot" / "bin" / "copilot"
+        add(bundled)
+
+    app_data = os.environ.get("APPDATA", "")
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    user_profile = os.environ.get("USERPROFILE", "")
+
     if sys.platform == "win32":
-        local_app_data = os.environ.get("LOCALAPPDATA", "")
-        app_data = os.environ.get("APPDATA", "")
-        user_profile = os.environ.get("USERPROFILE", "")
-        
-        system_paths.extend([
+        for product in ("Code", "Code - Insiders", "Cursor"):
+            storage = Path(app_data) / product / "User" / "globalStorage" / "github.copilot-chat"
+            if not storage.is_dir():
+                continue
+            for sub in ("copilotCli", "copilot-cli", "copilot"):
+                folder = storage / sub
+                if not folder.is_dir():
+                    continue
+                add(folder / "copilot.exe")
+                add(folder / "copilot.cmd")
+                try:
+                    for nested in folder.rglob("copilot.exe"):
+                        add(nested)
+                except OSError:
+                    pass
+
+        add(Path(app_data) / "npm" / "copilot.cmd")
+        add(Path(app_data) / "npm" / "copilot.exe")
+
+        winget_root = Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
+        if winget_root.is_dir():
+            try:
+                for pkg in winget_root.glob("GitHub.Copilot*"):
+                    add(pkg / "copilot.exe")
+                    for nested in pkg.rglob("copilot.exe"):
+                        add(nested)
+            except OSError:
+                pass
+
+        for path in (
             Path(local_app_data) / "GitHub CLI" / "copilot" / "copilot.exe",
             Path(app_data) / "GitHub CLI" / "copilot" / "copilot.exe",
             Path(local_app_data) / "Programs" / "copilot" / "copilot.exe",
             Path(user_profile) / ".copilot" / "bin" / "copilot.exe",
             Path(user_profile) / "scoop" / "shims" / "copilot.exe",
-        ])
+        ):
+            add(path)
     else:
         home = Path.home()
-        system_paths.extend([
+        for path in (
             home / ".copilot" / "bin" / "copilot",
             home / ".local" / "bin" / "copilot",
             Path("/usr/local/bin/copilot"),
-        ])
-    
-    for path in system_paths:
-        if path.exists() and _verify_cli_works(str(path)):
-            logger.info(f"Using system Copilot CLI: {path}")
-            return {"cli_path": str(path)}
-    
+        ):
+            add(path)
+
     copilot_in_path = shutil.which("copilot")
-    if copilot_in_path and _verify_cli_works(copilot_in_path):
-        logger.info(f"Using Copilot CLI from PATH: {copilot_in_path}")
-        return {"cli_path": copilot_in_path}
-    
-    # 4. No explicit path - let SDK use its own bundled CLI
-    logger.debug("No system Copilot CLI found, SDK will use bundled CLI")
+    if copilot_in_path:
+        add(copilot_in_path)
+
+    return candidates
+
+
+def _pick_newest_copilot_cli() -> tuple:
+    """Pick the newest working Copilot CLI. Returns (path, version_tuple)."""
+    best_path = ""
+    best_version = (0, 0, 0)
+    for cli_path in _discover_copilot_cli_candidates():
+        if not _verify_cli_works(cli_path):
+            continue
+        version = _read_copilot_cli_version(cli_path)
+        if version >= best_version:
+            best_version = version
+            best_path = cli_path
+    return best_path, best_version
+
+
+def _get_sdk_options():
+    """Get SDK client options, preferring the newest working Copilot CLI."""
+    try:
+        from copilot import SubprocessConfig
+    except ImportError:
+        SubprocessConfig = None
+
+    cli_path, version = _pick_newest_copilot_cli()
+    if cli_path and SubprocessConfig is not None:
+        logger.info("Using Copilot CLI v%s.%s.%s at %s", *version, cli_path)
+        return SubprocessConfig(cli_path=cli_path)
+    if cli_path:
+        logger.info("Using Copilot CLI v%s.%s.%s at %s (legacy SDK config)", *version, cli_path)
+        return {"cli_path": cli_path}
+    logger.debug("No working Copilot CLI found; SDK will use its default bundled CLI")
     return None
 
 
@@ -141,128 +226,212 @@ def _verify_cli_works(cli_path: str) -> bool:
         return False
 
 
+def _gh_executable() -> str:
+    import shutil
+    return shutil.which("gh") or ""
+
+
+def _is_gh_logged_in(gh_path: str = "") -> bool:
+    """Return True when GitHub CLI reports an active github.com session."""
+    gh_path = gh_path or _gh_executable()
+    if not gh_path:
+        return False
+    import subprocess
+    try:
+        result = subprocess.run(
+            [gh_path, "auth", "status", "-h", "github.com"],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        output = f"{result.stdout}\n{result.stderr}"
+        if result.returncode != 0:
+            return False
+        output_lower = output.lower()
+        return (
+            "logged in to github.com" in output_lower
+            or "logado em github.com" in output_lower
+            or "logged in to github.com account" in output_lower
+        )
+    except Exception as exc:
+        logger.debug("Could not check gh auth status: %s", exc)
+        return False
+
+
 def _try_import_sdk():
     """Try to import the Copilot SDK."""
     try:
         from copilot import CopilotClient as SDKClient
-        from copilot import Tool as SDKTool
         from copilot.generated.session_events import SessionEventType
+
+        try:
+            from copilot.tools import Tool as SDKTool
+        except ImportError:
+            from copilot import Tool as SDKTool  # SDK <= 0.1.x
+
         return SDKClient, SDKTool, SessionEventType, None
     except ImportError as e:
         return None, None, None, str(e)
 
 
+_DEFAULT_DISABLED_SKILLS = [
+    "view", "grep", "shell", "bash", "read_file", "write_file",
+    "search_files", "list_directory", "report_intent", "search_code",
+    "file_search", "web_search", "fetch_webpage", "terminal",
+    "run_command", "list_files", "read", "write", "search",
+]
+
+
+def _sdk_system_message(text: Optional[str]) -> Optional[Dict[str, str]]:
+    """Build SDK 0.3+ system message config from plain text."""
+    if not text:
+        return None
+    return {"mode": "append", "content": text}
+
+
+def _session_error_text(error_data: Any) -> str:
+    """Extract a user-facing message from a Copilot SESSION_ERROR payload."""
+    if error_data is None:
+        return "Copilot session error"
+    message = getattr(error_data, "message", None)
+    if message:
+        return str(message)
+    return str(error_data)
+
+
+async def _sdk_create_session(
+    sdk_client,
+    *,
+    model: str,
+    streaming: bool = True,
+    tools: Optional[List[Any]] = None,
+    system_message: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    disabled_skills: Optional[List[str]] = None,
+    our_tool_names: Optional[set] = None,
+):
+    """Create a Copilot SDK session using the keyword-only SDK 0.3+ API."""
+    from copilot.session import PermissionHandler
+
+    kwargs: Dict[str, Any] = {
+        "on_permission_request": PermissionHandler.approve_all,
+        "model": model,
+        "streaming": streaming,
+    }
+    if tools:
+        kwargs["tools"] = tools
+
+    sys_msg = _sdk_system_message(system_message)
+    if sys_msg:
+        kwargs["system_message"] = sys_msg
+
+    if disabled_skills is not None:
+        kwargs["disabled_skills"] = disabled_skills
+
+    if our_tool_names is not None:
+        async def on_pre_tool_use(input_data, invocation):
+            tool_name = input_data.get("toolName", "")
+            if tool_name not in our_tool_names:
+                logger.warning("Blocking built-in tool: %s", tool_name)
+                return {
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"Tool '{tool_name}' is not available. Use only DataPyn tools."
+                    ),
+                }
+            logger.info("Allowing tool: %s", tool_name)
+            return {"permissionDecision": "allow"}
+
+        kwargs["hooks"] = {"on_pre_tool_use": on_pre_tool_use}
+
+    if reasoning_effort:
+        kwargs["reasoning_effort"] = reasoning_effort
+
+    try:
+        return await sdk_client.create_session(**kwargs)
+    except Exception:
+        if kwargs.pop("reasoning_effort", None):
+            logger.warning(
+                "SDK rejected reasoning_effort; retrying session without it",
+                exc_info=True,
+            )
+            return await sdk_client.create_session(**kwargs)
+        raise
+
+
 class ThreadSafeToolExecutor(QObject):
     """
-    Executes MCP tools on the main thread regardless of calling thread.
-    
-    When SDK calls a tool handler from its async context (worker thread),
-    this executor ensures the actual execution happens on the main thread
-    where Qt widgets can be safely manipulated.
+    Executes MCP tools on the main Qt thread from any background thread.
+
+    Uses a queued signal with BlockingQueuedConnection — more reliable than
+    QMetaObject.invokeMethod across Python thread-pool / asyncio workers.
     """
-    
-    # Signal to execute on main thread
-    _execute_signal = pyqtSignal(str, str)
-    _result_ready = pyqtSignal()
-    
+
+    _execute_requested = pyqtSignal(str, str)
+
     def __init__(self, registry: "MCPToolRegistry", parent=None):
         super().__init__(parent)
         self._registry = registry
         self._result: Dict[str, Any] = {}
         self._mutex = QMutex()
-        self._pending_event = None
-        
-        # Connect signal to slot
-        self._execute_signal.connect(self._do_execute_on_main_thread, Qt.ConnectionType.QueuedConnection)
-    
+
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app:
+            self.moveToThread(app.thread())
+
+        self._execute_requested.connect(
+            self._do_execute_on_main_thread,
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
+
     @pyqtSlot(str, str)
     def _do_execute_on_main_thread(self, tool_name: str, arguments_json: str) -> None:
-        """Execute tool on main thread. Called via signal."""
+        """Execute tool on the GUI thread."""
+        start = time.perf_counter()
         try:
             arguments = json.loads(arguments_json) if arguments_json else {}
-            logger.info(f"[MAIN THREAD] Executing tool: {tool_name}")
+            logger.info("[MAIN THREAD] Executing tool: %s", tool_name)
             result = self._registry.execute(tool_name, arguments)
-            logger.info(f"[MAIN THREAD] Tool {tool_name} completed, result keys: {result.keys() if isinstance(result, dict) else 'not dict'}")
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info("[MAIN THREAD] Tool %s finished in %.0fms", tool_name, elapsed_ms)
             with QMutexLocker(self._mutex):
                 self._result = result
         except Exception as e:
-            logger.exception(f"[MAIN THREAD] Error executing tool {tool_name}")
+            logger.exception("[MAIN THREAD] Error executing tool %s", tool_name)
             with QMutexLocker(self._mutex):
                 self._result = {"error": str(e)}
-        finally:
-            # Signal that result is ready
-            if self._pending_event:
-                self._pending_event.set()
-            self._result_ready.emit()
-    
-    @pyqtSlot(str, str)
-    def _execute_on_main_thread(self, tool_name: str, arguments_json: str) -> None:
-        """Execute tool on main thread. Called via QMetaObject.invokeMethod."""
-        try:
-            arguments = json.loads(arguments_json) if arguments_json else {}
-            result = self._registry.execute(tool_name, arguments)
-            with QMutexLocker(self._mutex):
-                self._result = result
-        except Exception as e:
-            logger.exception(f"Error executing tool {tool_name}")
-            with QMutexLocker(self._mutex):
-                self._result = {"error": str(e)}
-    
-    def execute(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """
-        Execute tool and return result as string.
-        
-        Thread-safe: can be called from any thread.
-        """
-        from PyQt6.QtCore import QThread
-        from PyQt6.QtWidgets import QApplication
-        import threading
-        import time
-        
-        arguments_json = json.dumps(arguments) if arguments else "{}"
-        
-        # Check if we're on the main thread
-        app = QApplication.instance()
-        is_main_thread = app and QThread.currentThread() == app.thread()
-        
-        if is_main_thread:
-            # Direct execution on main thread
-            logger.info(f"[DIRECT] Executing tool on main thread: {tool_name}")
-            self._execute_on_main_thread(tool_name, arguments_json)
-        else:
-            # Need to invoke on main thread and wait
-            logger.info(f"[WORKER] Scheduling tool on main thread: {tool_name}")
-            
-            # Create event for waiting
-            self._pending_event = threading.Event()
-            
-            # Emit signal to execute on main thread
-            self._execute_signal.emit(tool_name, arguments_json)
-            
-            # Wait for result with timeout, checking periodically
-            start_time = time.time()
-            timeout = 30.0
-            while not self._pending_event.is_set():
-                if time.time() - start_time > timeout:
-                    logger.error(f"[WORKER] Timeout waiting for tool {tool_name}")
-                    self._pending_event = None
-                    return f"Error: Timeout executing {tool_name}"
-                time.sleep(0.05)  # Small sleep to avoid busy-waiting
-            
-            self._pending_event = None
-            logger.info(f"[WORKER] Tool {tool_name} completed")
-        
-        # Get result
-        with QMutexLocker(self._mutex):
-            result = self._result
-            self._result = {}
-        
-        # Format result as string for SDK
+
+    @staticmethod
+    def _format_result(result: Dict[str, Any]) -> str:
         if "error" in result:
             return f"Error: {result['error']}"
-        
         content = result.get("content", [])
         return "\n".join(c.get("text", str(c)) for c in content)
+
+    def execute(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Execute a tool and return the SDK-facing text result."""
+        from PyQt6.QtWidgets import QApplication
+
+        arguments_json = json.dumps(arguments) if arguments else "{}"
+        app = QApplication.instance()
+        on_main = app and QThread.currentThread() == app.thread()
+
+        if on_main:
+            self._do_execute_on_main_thread(tool_name, arguments_json)
+        else:
+            logger.debug("[WORKER] Dispatching tool to main thread: %s", tool_name)
+            try:
+                self._execute_requested.emit(tool_name, arguments_json)
+            except Exception as e:
+                logger.exception("Failed to dispatch tool %s to main thread", tool_name)
+                return f"Error: Could not run {tool_name} on main thread ({e})"
+
+        with QMutexLocker(self._mutex):
+            result = dict(self._result)
+            self._result = {}
+        return self._format_result(result)
 
 
 class CopilotWorker(QObject):
@@ -279,7 +448,7 @@ class CopilotWorker(QObject):
     models_ready = pyqtSignal(list)  # List of available models
     usage_ready = pyqtSignal(dict)  # Account/session usage snapshot
     tool_call = pyqtSignal(str, dict, str)  # tool_name, arguments, tool_call_id
-    tool_result = pyqtSignal(str, str)  # tool_name, result
+    tool_result = pyqtSignal(str, str, str)  # tool_name, result, tool_call_id
     thinking = pyqtSignal(str)  # Reasoning text
     finished = pyqtSignal()
     ready = pyqtSignal()  # Worker is ready to accept chat requests
@@ -302,6 +471,8 @@ class CopilotWorker(QObject):
         self._session_signature = None
         self._loop = None  # Persistent event loop
         self._inline_prompt = ""  # For inline completions
+        self._login_process = None
+        self._attachments: List[Dict[str, Any]] = []
 
     def set_model(self, model: str):
         self._model = model
@@ -322,6 +493,10 @@ class CopilotWorker(QObject):
         """Set prompt for inline completion request."""
         self._inline_prompt = prompt
 
+    def set_attachments(self, attachments: Optional[List[Dict[str, Any]]]):
+        """Set image attachments for the next chat turn."""
+        self._attachments = list(attachments or [])
+
     def _ensure_loop(self):
         """Ensure event loop is available and active. Creates one if needed.
         
@@ -336,12 +511,44 @@ class CopilotWorker(QObject):
 
     def cancel(self):
         self._cancelled = True
+        login_process = getattr(self, "_login_process", None)
+        if login_process is not None and login_process.poll() is None:
+            try:
+                login_process.kill()
+            except Exception:
+                pass
         if self._session and self._loop and not self._loop.is_closed():
             try:
                 # Run abort() coroutine in the worker's event loop
                 self._loop.run_until_complete(self._session.abort())
             except Exception:
                 pass
+
+    def _complete_auth_from_gh(self) -> bool:
+        """Verify Copilot SDK access after GitHub CLI authentication succeeds."""
+        self._ensure_loop()
+        SDKClient, _, _, import_err = _try_import_sdk()
+        if SDKClient is None:
+            self.error.emit(f"Copilot SDK not available: {import_err}")
+            self.finished.emit()
+            return False
+
+        try:
+            if self._sdk_client is None:
+                self._sdk_client = SDKClient(_get_sdk_options())
+                self._loop.run_until_complete(self._sdk_client.start())
+            model_list = self._loop.run_until_complete(self._fetch_models())
+            self.set_available_models(model_list)
+            self.models_ready.emit(model_list)
+            self.usage_ready.emit(self._loop.run_until_complete(self._async_usage_snapshot()))
+            self.auth_ok.emit()
+            self.ready.emit()
+            return True
+        except Exception as exc:
+            logger.warning("Auth verification failed after GitHub login: %s", exc)
+            self.error.emit(str(exc))
+            self.finished.emit()
+            return False
 
     @pyqtSlot()
     def run_refresh_metadata(self):
@@ -351,6 +558,22 @@ class CopilotWorker(QObject):
             self._loop.run_until_complete(self._async_refresh_metadata())
         except Exception as e:
             logger.warning("Failed to refresh Copilot metadata: %s", e)
+
+    async def _clear_models_cache(self) -> None:
+        if not self._sdk_client:
+            return
+        lock = getattr(self._sdk_client, "_models_cache_lock", None)
+        if lock is None:
+            self._sdk_client._models_cache = None
+            return
+        async with lock:
+            self._sdk_client._models_cache = None
+
+    async def _fetch_models(self) -> list:
+        """Fetch models from the CLI, bypassing SDK cache when refreshing."""
+        await self._clear_models_cache()
+        models = await self._sdk_client.list_models()
+        return normalize_models(models)
 
     async def _async_refresh_metadata(self):
         """Fetch latest model metadata and quota from the SDK server."""
@@ -362,11 +585,11 @@ class CopilotWorker(QObject):
             self._sdk_client = SDKClient(_get_sdk_options())
             await self._sdk_client.start()
 
-        models = await self._sdk_client.rpc.models.list()
-        model_list = normalize_models(getattr(models, "models", []))
+        model_list = await self._fetch_models()
         if model_list:
             self.set_available_models(model_list)
             self.models_ready.emit(model_list)
+            logger.info("Refreshed %d Copilot models", len(model_list))
         self.usage_ready.emit(await self._async_usage_snapshot())
 
     async def _async_usage_snapshot(self) -> Dict[str, Any]:
@@ -398,11 +621,8 @@ class CopilotWorker(QObject):
 
             # List models to verify auth (async)
             try:
-                models = self._loop.run_until_complete(self._sdk_client.list_models())
-                logger.info(f"SDK returned {len(models)} models")
-                for m in models:
-                    logger.info(f"  Model: {m.id} ({m.name})")
-                model_list = normalize_models(models)
+                model_list = self._loop.run_until_complete(self._fetch_models())
+                logger.info("SDK returned %d models", len(model_list))
                 self.set_available_models(model_list)
                 self.models_ready.emit(model_list)
                 self.usage_ready.emit(self._loop.run_until_complete(self._async_usage_snapshot()))
@@ -430,133 +650,123 @@ class CopilotWorker(QObject):
 
     def run_login(self):
         """Run GitHub CLI login process automatically. Keep loop/client persistent."""
-        import asyncio
-        import subprocess
-        import shutil
-        import webbrowser
         import re
+        import subprocess
         import time
-        
-        # Use persistent event loop
+
+        self._cancelled = False
+        self._login_process = None
         self._ensure_loop()
-        
+
         try:
-            # Check if gh CLI is available
-            gh_path = shutil.which("gh")
+            gh_path = _gh_executable()
             if not gh_path:
                 self.gh_not_found.emit()
                 self.finished.emit()
                 return
-            
+
+            if _is_gh_logged_in(gh_path):
+                logger.info("GitHub CLI already authenticated; verifying Copilot SDK")
+                self.auth_started.emit("Verifying GitHub authentication...")
+                self._complete_auth_from_gh()
+                return
+
             self.auth_started.emit("Starting GitHub authentication...")
-            
-            # Run gh auth login with device code flow
-            # Use -p https to ensure web flow (not SSH)
+
             process = subprocess.Popen(
                 [gh_path, "auth", "login", "-h", "github.com", "-p", "https", "-w"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Merge stderr into stdout
+                stderr=subprocess.STDOUT,
                 text=True,
                 creationflags=_CREATE_NO_WINDOW,
             )
-            
-            # Read output line by line to find the device code and URL
+            self._login_process = process
+
             device_code = None
             verification_url = None
-            
-            # gh auth login outputs:
-            # ! First copy your one-time code: XXXX-XXXX
-            # Press Enter to open github.com in your browser...
-            # 
-            # We need to extract the code and open browser ourselves
-            
             output_lines = []
+
             try:
-                # Read with timeout - we need to capture the initial output
-                for _ in range(20):  # Max 20 iterations
+                for _ in range(20):
+                    if self._cancelled:
+                        process.kill()
+                        self.error.emit("Authentication cancelled")
+                        self.finished.emit()
+                        return
+
                     line = process.stdout.readline()
                     if not line:
                         break
                     output_lines.append(line)
-                    logger.debug(f"gh output: {line.strip()}")
-                    
-                    # Look for the one-time code
-                    code_match = re.search(r'code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})', line, re.IGNORECASE)
+                    logger.debug("gh output: %s", line.strip())
+
+                    code_match = re.search(r"code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})", line, re.IGNORECASE)
                     if code_match:
                         device_code = code_match.group(1)
-                        logger.info(f"Found device code: {device_code}")
-                    
-                    # Look for URL
-                    url_match = re.search(r'(https://github\.com/login/device)', line)
+                        logger.info("Found device code: %s", device_code)
+
+                    url_match = re.search(r"(https://github\.com/login/device)", line)
                     if url_match:
                         verification_url = url_match.group(1)
-                    
-                    # If we found what we need, break
+
                     if device_code:
                         break
-                    
-                    # Also break on "Press Enter" prompt
                     if "Press Enter" in line or "open github.com" in line:
                         break
-                
+
                 if device_code:
-                    # Emit the auth_required signal with device code
                     verification_url = verification_url or "https://github.com/login/device"
                     self.auth_required.emit(device_code, verification_url)
-                    
-                    # NOTE: Browser is opened by main_window._on_lsp_auth_required
-                    # Do NOT open browser here to avoid duplication
-                    
-                    # Send Enter to continue the process
                     try:
                         process.stdin.write("\n")
                         process.stdin.flush()
                     except Exception:
                         pass
-                    
-                    # Wait for process to complete (user authenticates in browser)
-                    stdout_rest, _ = process.communicate(timeout=180)  # 3 min timeout
-                    output_lines.append(stdout_rest or "")
+
+                    for _ in range(90):
+                        if self._cancelled:
+                            process.kill()
+                            self.error.emit("Authentication cancelled")
+                            self.finished.emit()
+                            return
+                        if _is_gh_logged_in(gh_path):
+                            if process.poll() is None:
+                                try:
+                                    process.kill()
+                                except Exception:
+                                    pass
+                            break
+                        time.sleep(2)
+                    else:
+                        if process.poll() is None:
+                            process.kill()
+                        self.error.emit("Authentication timed out. Please try again.")
+                        self.finished.emit()
+                        return
                 else:
-                    # No device code found - maybe already logged in or error
                     stdout_rest, _ = process.communicate(timeout=30)
                     output_lines.append(stdout_rest or "")
-                    
+
             except subprocess.TimeoutExpired:
                 process.kill()
                 self.error.emit("Authentication timed out. Please try again.")
                 self.finished.emit()
                 return
-            
+            finally:
+                self._login_process = None
+
             full_output = "".join(output_lines)
-            
-            if process.returncode == 0 or "Logged in as" in full_output:
+            if _is_gh_logged_in(gh_path) or process.returncode in (0, None) or "Logged in as" in full_output:
                 logger.info("GitHub auth completed successfully")
-                # Now verify with SDK (async)
-                SDKClient, _, _, _ = _try_import_sdk()
-                if SDKClient:
-                    self._sdk_client = SDKClient(_get_sdk_options())
-                    self._loop.run_until_complete(self._sdk_client.start())
-                    try:
-                        models = self._loop.run_until_complete(self._sdk_client.list_models())
-                        model_list = normalize_models(models)
-                        self.set_available_models(model_list)
-                        self.models_ready.emit(model_list)
-                        self.usage_ready.emit(self._loop.run_until_complete(self._async_usage_snapshot()))
-                        self.auth_ok.emit()
-                        # Keep worker alive for chats
-                        self.ready.emit()
-                    except Exception as e:
-                        logger.warning(f"Auth verification failed: {e}")
-                        self.auth_ok.emit()
-                        self.ready.emit()  # Still ready for chats
-            else:
-                error_msg = full_output.strip() or "Authentication failed"
-                logger.error(f"GitHub auth failed: {error_msg}")
-                self.error.emit(f"GitHub authentication failed: {error_msg}")
-                self.finished.emit()
-                
+                self._complete_auth_from_gh()
+                return
+
+            error_msg = full_output.strip() or "Authentication failed"
+            logger.error("GitHub auth failed: %s", error_msg)
+            self.error.emit(f"GitHub authentication failed: {error_msg}")
+            self.finished.emit()
+
         except subprocess.TimeoutExpired:
             self.error.emit("Authentication timed out. Please try again.")
             self.finished.emit()
@@ -564,6 +774,33 @@ class CopilotWorker(QObject):
             logger.exception("Error during GitHub login")
             self.error.emit(str(e))
             self.finished.emit()
+        finally:
+            self._login_process = None
+
+    @pyqtSlot()
+    def reset_chat_session(self):
+        """Destroy the persistent SDK session so the next chat starts fresh."""
+        try:
+            self._ensure_loop()
+            self._loop.run_until_complete(self._async_reset_chat_session())
+        except Exception as e:
+            logger.warning("Error resetting Copilot chat session: %s", e)
+
+    async def _async_reset_chat_session(self):
+        if not self._session:
+            self._session_signature = None
+            return
+        try:
+            await self._session.destroy()
+        except Exception:
+            try:
+                await self._session.abort()
+            except Exception:
+                pass
+        self._session = None
+        self._session_signature = None
+        self._tool_call_counts = {}
+        logger.info("[CHAT] Copilot session reset for new chat")
 
     @pyqtSlot()
     def run_chat(self):
@@ -624,8 +861,18 @@ class CopilotWorker(QObject):
             self._session_signature = session_signature
             logger.info("[CHAT] Copilot session created")
 
-        if not self._prompt:
+        if not self._prompt and not self._attachments:
             self.error.emit("No message to send")
+            return
+
+        try:
+            sdk_attachments = validate_attachments_for_model(
+                self._attachments,
+                self._available_models,
+                self._model,
+            )
+        except AttachmentValidationError as exc:
+            self.error.emit(str(exc))
             return
 
         # Stream response
@@ -634,35 +881,47 @@ class CopilotWorker(QObject):
         # Set up event collection
         events = []
         idle_event = asyncio.Event()
+        session_error: Optional[str] = None
+        start_time = time.time()
+        last_event_time = start_time
+        idle_timeout = 180  # 3 minutes without SDK activity
+        max_turn_timeout = 600  # 10 minutes absolute cap
+        event_count = 0
         
         def on_event(event):
+            nonlocal session_error, last_event_time
+            last_event_time = time.time()
             events.append(event)
             logger.debug(f"SDK event: {event.type}")
             if event.type == EventType.SESSION_IDLE:
                 logger.info(f"Session idle, full_response so far: {len(full_response)} chars")
                 idle_event.set()
             elif event.type == EventType.SESSION_ERROR:
-                error_data = getattr(event, 'data', None)
-                logger.error(f"Session error: {error_data}")
+                error_data = getattr(event, "data", None)
+                session_error = _session_error_text(error_data)
+                logger.error("Session error: %s", error_data)
                 idle_event.set()
         
         # Register handler
         unsubscribe = self._session.on(on_event)
+        our_tool_names = {t.name for t in self._sdk_tools} if self._sdk_tools else set()
         
         try:
-            # Send message
-            logger.info(f"[CHAT] Sending message, model={self._model}, prompt_len={len(self._prompt)}")
-            logger.info(f"[CHAT] Prompt: {self._prompt[:100]}...")
-            await self._session.send({"prompt": self._prompt})
+            logger.info("[CHAT] Sending message, prompt_len=%s, attachments=%s",
+                        len(self._prompt), len(sdk_attachments))
+            logger.info("[CHAT] Prompt: %s", _safe_log_preview(self._prompt, 100))
+            await self._session.send(
+                self._prompt,
+                attachments=build_sdk_attachments(sdk_attachments) or None,
+            )
             logger.info("[CHAT] Message sent, waiting for events...")
             
-            # Wait for idle with timeout, processing events as they come
-            start_time = time.time()
-            timeout = 180  # 3 minutes for complex workflows with multiple tool calls
-            event_count = 0
-            
             while not idle_event.is_set() and not self._cancelled:
-                if time.time() - start_time > timeout:
+                now = time.time()
+                if now - start_time > max_turn_timeout:
+                    self.error.emit("Chat request timed out")
+                    break
+                if now - last_event_time > idle_timeout:
                     self.error.emit("Chat request timed out")
                     break
                 
@@ -705,28 +964,20 @@ class CopilotWorker(QObject):
                         tool_name = getattr(event.data, "tool_name", "") or ""
                         arguments = getattr(event.data, "arguments", {}) or {}
                         tool_call_id = getattr(event.data, "tool_call_id", "") or ""
-                        if tool_name:
+                        if tool_name and tool_name in our_tool_names:
                             self.tool_call.emit(tool_name, arguments, tool_call_id)
                     
                     elif event_type == EventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = getattr(event.data, "tool_name", "") or ""
+                        tool_call_id = getattr(event.data, "tool_call_id", "") or ""
                         result = getattr(event.data, "result", None)
                         result_text = str(result) if result else ""
-                        if tool_name:
-                            self.tool_result.emit(tool_name, result_text)
+                        if tool_name and tool_name in our_tool_names:
+                            self.tool_result.emit(tool_name, result_text, tool_call_id)
                     
                     elif event_type == EventType.SESSION_ERROR:
-                        error_msg = getattr(event.data, "message", "") or str(event.data)
-                        logger.error(f"[CHAT] Session error: {error_msg}")
-                        # Check for 403 unauthorized error (enterprise license issue)
-                        if "403" in error_msg or "unauthorized" in error_msg.lower():
-                            self.error.emit(
-                                "Your Copilot license does not include Chat API access. "
-                                "This is common with some enterprise licenses. "
-                                "Please contact your organization admin to enable Copilot Chat."
-                            )
-                        else:
-                            self.error.emit(error_msg)
+                        session_error = _session_error_text(getattr(event, "data", None))
+                        logger.error("[CHAT] Session error: %s", session_error)
                         break
                 
                 # Brief sleep to avoid busy loop
@@ -740,10 +991,36 @@ class CopilotWorker(QObject):
                     if delta:
                         full_response += delta
                         self.chunk.emit(delta)
+                elif event.type == EventType.ASSISTANT_REASONING_DELTA:
+                    reasoning_delta = getattr(event.data, "reasoning_text", "") or ""
+                    if reasoning_delta:
+                        self.thinking.emit(reasoning_delta)
+                elif event.type == EventType.TOOL_EXECUTION_COMPLETE:
+                    tool_name = getattr(event.data, "tool_name", "") or ""
+                    tool_call_id = getattr(event.data, "tool_call_id", "") or ""
+                    result = getattr(event.data, "result", None)
+                    result_text = str(result) if result else ""
+                    if tool_name and tool_name in our_tool_names:
+                        self.tool_result.emit(tool_name, result_text, tool_call_id)
+                elif event.type == EventType.SESSION_ERROR:
+                    session_error = _session_error_text(getattr(event, "data", None))
+                    logger.error("[CHAT] Session error (drain): %s", session_error)
                 elif event.type in (EventType.ASSISTANT_USAGE, EventType.SESSION_USAGE_INFO):
                     snapshot = usage_snapshot_from_event(event.data, self._available_models, self._model)
                     if snapshot.get("available"):
                         self.usage_ready.emit(snapshot)
+
+            if session_error:
+                error_msg = session_error
+                if "403" in error_msg or "unauthorized" in error_msg.lower():
+                    self.error.emit(
+                        "Your Copilot license does not include Chat API access. "
+                        "This is common with some enterprise licenses. "
+                        "Please contact your organization admin to enable Copilot Chat."
+                    )
+                else:
+                    self.error.emit(error_msg)
+                return
             
             self.usage_ready.emit(await self._async_usage_snapshot())
             logger.info(f"Chat complete, response length: {len(full_response)} chars")
@@ -759,62 +1036,36 @@ class CopilotWorker(QObject):
 
     async def _async_create_session(self):
         """Create a new session with current configuration (async)."""
-        # Get list of our registered tool names
-        our_tool_names = set()
+        our_tool_names = {t.name for t in self._sdk_tools} if self._sdk_tools else set()
         if self._sdk_tools:
-            our_tool_names = {t.name for t in self._sdk_tools}
-        
-        # Hook to block any tool not in our registry
-        async def on_pre_tool_use(input_data, invocation):
-            tool_name = input_data.get("toolName", "")
-            if tool_name not in our_tool_names:
-                logger.warning(f"Blocking built-in tool: {tool_name}")
-                return {
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": f"Tool '{tool_name}' is not available. Use only DataPyn tools.",
-                }
-            logger.info(f"Allowing tool: {tool_name}")
-            return {"permissionDecision": "allow"}
-        
-        config = {
-            "model": self._model,
-            "streaming": True,
-            # Disable common built-in skills
-            "disabled_skills": [
-                "view", "grep", "shell", "bash", "read_file", "write_file",
-                "search_files", "list_directory", "report_intent", "search_code",
-                "file_search", "web_search", "fetch_webpage", "terminal",
-                "run_command", "list_files", "read", "write", "search",
-            ],
-            "hooks": {
-                "on_pre_tool_use": on_pre_tool_use,
-            },
-        }
-        
-        if self._sdk_tools:
-            config["tools"] = self._sdk_tools
-            logger.info(f"Creating session with {len(self._sdk_tools)} tools: {list(our_tool_names)}")
-        
-        if self._system_message:
-            config["system_message"] = {
-                "message": self._system_message,
-            }
+            logger.info(
+                "Creating session with %d tools: %s",
+                len(self._sdk_tools),
+                list(our_tool_names),
+            )
 
         applied_effort = self._reasoning_effort
         supported_efforts = model_supported_reasoning_efforts(self._available_models, self._model)
+        reasoning_effort = None
         if applied_effort != "auto" and applied_effort in supported_efforts:
-            config["reasoning_effort"] = applied_effort
+            reasoning_effort = applied_effort
         elif applied_effort != "auto":
-            logger.info("Reasoning effort %s is not supported by model %s", applied_effort, self._model)
+            logger.info(
+                "Reasoning effort %s is not supported by model %s",
+                applied_effort,
+                self._model,
+            )
 
-        try:
-            self._session = await self._sdk_client.create_session(config)
-        except Exception:
-            if config.pop("reasoning_effort", None):
-                logger.warning("SDK rejected reasoning_effort; retrying session without it", exc_info=True)
-                self._session = await self._sdk_client.create_session(config)
-            else:
-                raise
+        self._session = await _sdk_create_session(
+            self._sdk_client,
+            model=self._model,
+            streaming=True,
+            tools=self._sdk_tools or None,
+            system_message=self._system_message,
+            reasoning_effort=reasoning_effort,
+            disabled_skills=_DEFAULT_DISABLED_SKILLS,
+            our_tool_names=our_tool_names,
+        )
 
     def _build_session_signature(self):
         """Return a stable signature for SDK session configuration."""
@@ -826,35 +1077,63 @@ class CopilotWorker(QObject):
         if not self._tool_executor:
             logger.warning("No tool executor available - no tools will be registered")
             return []
-        
+
+        try:
+            from copilot.tools import ToolInvocation, ToolResult
+        except ImportError:
+            ToolInvocation = None
+            ToolResult = None
+
         registry = self._tool_executor._registry
         sdk_tools = []
-        
+
         for tool_schema in registry.list_tools():
             tool_name = tool_schema.get("name", "")
             tool_desc = tool_schema.get("description", "")
             input_schema = tool_schema.get("inputSchema", {})
-            
-            # Build proper JSON schema for SDK
+
+            # Build proper JSON schema for SDK (honor optional parameters)
+            raw_properties = input_schema.get("properties", {})
+            properties = {}
+            required = []
+            for name, props in raw_properties.items():
+                clean = {k: v for k, v in props.items() if k != "optional"}
+                properties[name] = clean
+                if not props.get("optional", False):
+                    required.append(name)
             tool_params = {
                 "type": "object",
-                "properties": input_schema.get("properties", {}),
-                "required": list(input_schema.get("properties", {}).keys()),
+                "properties": properties,
+                "required": required,
             }
 
-            # Create async handler that executes via the thread-safe executor
-            # SDK expects: async def handler(invocation) -> dict with textResultForLlm
             def make_handler(name):
                 async def handler(invocation):
-                    arguments = invocation.get("arguments", {}) if isinstance(invocation, dict) else {}
-                    logger.info(f"SDK calling tool: {name} with {arguments}")
+                    if ToolInvocation is not None and isinstance(invocation, ToolInvocation):
+                        arguments = invocation.arguments or {}
+                    elif isinstance(invocation, dict):
+                        arguments = invocation.get("arguments", {})
+                    elif hasattr(invocation, "arguments"):
+                        arguments = invocation.arguments or {}
+                    else:
+                        arguments = {}
+
+                    logger.info("SDK calling tool: %s with %s", name, _safe_log_preview(arguments, 120))
                     result = self._tool_executor.execute(name, arguments)
-                    logger.info(f"SDK tool result for {name}: {result[:200] if result else 'empty'}")
+                    logger.info("SDK tool result for %s: %s", name, _safe_log_preview(result, 200))
+
+                    if ToolResult is not None:
+                        return ToolResult(
+                            text_result_for_llm=result,
+                            result_type="success",
+                            session_log=f"Executed {name}",
+                        )
                     return {
                         "textResultForLlm": result,
                         "resultType": "success",
                         "sessionLog": f"Executed {name}",
                     }
+
                 return handler
 
             sdk_tool = SDKTool(
@@ -930,15 +1209,12 @@ class CopilotWorker(QObject):
         if not self._session:
             if self._cancelled:
                 return
-            config = {
-                "model": "gpt-4o-mini",  # Fast model for completions
-                "streaming": True,
-            }
-            if self._system_message:
-                config["system_message"] = {
-                    "message": self._system_message,
-                }
-            self._session = await self._sdk_client.create_session(config)
+            self._session = await _sdk_create_session(
+                self._sdk_client,
+                model="gpt-4o-mini",
+                streaming=True,
+                system_message=self._system_message,
+            )
             logger.info("Copilot completion session created (pre-init)")
 
     def _do_inline_completion(self):
@@ -972,15 +1248,12 @@ class CopilotWorker(QObject):
         # Create session without tools for faster response
         if not self._session:
             logger.info("[COPILOT-WORKER] Creating new session (gpt-4o-mini)...")
-            config = {
-                "model": "gpt-4o-mini",  # Faster model for completions
-                "streaming": True,
-            }
-            if self._system_message:
-                config["system_message"] = {
-                    "message": self._system_message,
-                }
-            self._session = await self._sdk_client.create_session(config)
+            self._session = await _sdk_create_session(
+                self._sdk_client,
+                model="gpt-4o-mini",
+                streaming=True,
+                system_message=self._system_message,
+            )
             logger.info("[COPILOT-WORKER] Session created successfully")
         
         if not self._inline_prompt:
@@ -1010,7 +1283,7 @@ class CopilotWorker(QObject):
         unsubscribe = self._session.on(on_event)
         
         try:
-            await self._session.send({"prompt": self._inline_prompt})
+            await self._session.send(self._inline_prompt)
             logger.info("[COPILOT-WORKER] Prompt sent, waiting for response...")
             
             # Short timeout for fast completions (3 seconds)
@@ -1107,7 +1380,7 @@ class CopilotClient(QObject):
     chat_response_complete = pyqtSignal(str)
     chat_error = pyqtSignal(str)
     tool_called = pyqtSignal(str, dict, str)
-    tool_result = pyqtSignal(str, str)
+    tool_result = pyqtSignal(str, str, str)
     thinking = pyqtSignal(str)
     models_changed = pyqtSignal(list)
     usage_changed = pyqtSignal(dict)
@@ -1144,11 +1417,18 @@ class CopilotClient(QObject):
         # Tool execution - lives on main thread
         self._tool_executor: Optional[ThreadSafeToolExecutor] = None
         if tool_registry:
-            self._tool_executor = ThreadSafeToolExecutor(tool_registry)
+            from PyQt6.QtWidgets import QApplication
+            self._tool_executor = ThreadSafeToolExecutor(
+                tool_registry,
+                parent=QApplication.instance(),
+            )
 
-    def set_tool_registry(self, registry: "MCPToolRegistry") -> None:
+    def set_tool_registry(self, registry: "MCPToolRegistry", parent: QObject = None) -> None:
         """Set or update the MCP tool registry."""
-        self._tool_executor = ThreadSafeToolExecutor(registry)
+        from PyQt6.QtWidgets import QApplication
+        if parent is None:
+            parent = QApplication.instance()
+        self._tool_executor = ThreadSafeToolExecutor(registry, parent=parent)
 
     @property
     def is_authenticated(self) -> bool:
@@ -1284,13 +1564,18 @@ class CopilotClient(QObject):
         
         self._session_thread.start()
 
-    def send_chat(self, messages: List[Dict[str, str]]) -> None:
+    def send_chat(
+        self,
+        messages: List[Dict[str, str]],
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """
         Send a chat message to Copilot using persistent session.
         
         Args:
             messages: List of message dicts with "role" and "content" keys.
                       The last user message is used as the prompt.
+            attachments: Optional image attachments for the current turn.
         """
         # Extract prompt from last user message and system rules from latest system message.
         system_messages = [m for m in messages if m.get("role") == "system"]
@@ -1303,7 +1588,7 @@ class CopilotClient(QObject):
             return
         
         prompt = user_messages[-1].get("content", "")
-        if not prompt:
+        if not prompt and not attachments:
             self.chat_error.emit("Empty message")
             return
         
@@ -1314,6 +1599,7 @@ class CopilotClient(QObject):
             self._session_worker.set_available_models(self._available_models)
             self._session_worker.set_prompt(prompt)
             self._session_worker.set_system_message(self._system_message)
+            self._session_worker.set_attachments(attachments)
             
             # Ensure signals are connected (only once)
             try:
@@ -1350,6 +1636,7 @@ class CopilotClient(QObject):
             self._worker.set_available_models(self._available_models)
             self._worker.set_prompt(prompt)
             self._worker.set_system_message(self._system_message)
+            self._worker.set_attachments(attachments)
             
             self._worker_thread = QThread()
             self._worker.moveToThread(self._worker_thread)
@@ -1374,6 +1661,23 @@ class CopilotClient(QObject):
             self._session_worker.cancel()
         if self._worker:
             self._worker.cancel()
+
+    def cancel_pending_auth(self) -> None:
+        """Cancel an in-progress GitHub login/auth verification."""
+        self._is_authenticated = False
+        if self._session_worker:
+            self._session_worker.cancel()
+        self._cleanup_session_worker()
+        self.auth_failed.emit("Authentication cancelled")
+
+    def reset_chat_session(self) -> None:
+        """Reset the persistent Copilot SDK session (new chat thread)."""
+        if self._session_worker and self._session_thread and self._session_thread.isRunning():
+            QMetaObject.invokeMethod(
+                self._session_worker,
+                "reset_chat_session",
+                Qt.ConnectionType.QueuedConnection,
+            )
 
     def request_inline_completion(
         self,

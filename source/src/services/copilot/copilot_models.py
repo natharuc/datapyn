@@ -95,6 +95,32 @@ def _model_supported_reasoning_efforts(raw_model: Any, supports_reasoning: bool)
     return efforts
 
 
+def infer_supports_vision(model_id: str, raw_model: Any = None) -> bool:
+    """Infer whether a model accepts image attachments."""
+    explicit = _capability_value(raw_model, "supports_vision")
+    if explicit is not None:
+        return explicit
+    explicit = _capability_value(raw_model, "vision")
+    if explicit is not None:
+        return explicit
+
+    model_id_lower = str(model_id or "").lower()
+    if not model_id_lower:
+        return False
+
+    vision_markers = (
+        "4o",
+        "gpt-5",
+        "gpt-4.1",
+        "claude-3",
+        "claude-sonnet",
+        "claude-opus",
+        "gemini",
+        "vision",
+    )
+    return any(marker in model_id_lower for marker in vision_markers)
+
+
 def infer_supports_reasoning_effort(model_id: str, raw_model: Any = None) -> bool:
     """Infer whether a model can accept a reasoning effort option."""
     explicit = _capability_value(raw_model, "supports_reasoning_effort")
@@ -131,6 +157,21 @@ def normalize_model(raw_model: Any, *, fallback: bool = False) -> Dict[str, Any]
     if supports_tools is None:
         supports_tools = True
 
+    supports_vision = _capability_value(raw_model, "supports_vision")
+    if supports_vision is None:
+        supports_vision = _capability_value(raw_model, "vision")
+    if supports_vision is None:
+        supports_vision = infer_supports_vision(model_id)
+
+    max_prompt_images = None
+    max_prompt_image_size = None
+    capabilities = _get_attr_or_key(raw_model, "capabilities")
+    limits = _get_attr_or_key(capabilities, "limits") if capabilities is not None else None
+    vision_limits = _get_attr_or_key(limits, "vision") if limits is not None else None
+    if vision_limits is not None:
+        max_prompt_images = _get_attr_or_key(vision_limits, "max_prompt_images")
+        max_prompt_image_size = _get_attr_or_key(vision_limits, "max_prompt_image_size")
+
     supports_reasoning = infer_supports_reasoning_effort(model_id, raw_model)
     supported_reasoning_efforts = _model_supported_reasoning_efforts(raw_model, supports_reasoning)
     default_reasoning_effort = normalize_reasoning_effort(_get_attr_or_key(raw_model, "default_reasoning_effort"))
@@ -144,6 +185,9 @@ def normalize_model(raw_model: Any, *, fallback: bool = False) -> Dict[str, Any]
         "default_reasoning_effort": None if default_reasoning_effort == "auto" else default_reasoning_effort,
         "supports_streaming": bool(supports_streaming),
         "supports_tools": bool(supports_tools),
+        "supports_vision": bool(supports_vision),
+        "max_prompt_images": max_prompt_images,
+        "max_prompt_image_size": max_prompt_image_size,
         "fallback": bool(fallback),
     }
 
@@ -182,6 +226,14 @@ def model_supports_reasoning_effort(models: Iterable[Dict[str, Any]], model_id: 
     if model is not None:
         return bool(model.get("supports_reasoning_effort", False))
     return infer_supports_reasoning_effort(model_id)
+
+
+def model_supports_vision(models: Iterable[Dict[str, Any]], model_id: str) -> bool:
+    """Return whether the selected model supports image attachments."""
+    model = find_model(models, model_id)
+    if model is not None:
+        return bool(model.get("supports_vision", False))
+    return infer_supports_vision(model_id)
 
 
 def model_supported_reasoning_efforts(models: Iterable[Dict[str, Any]], model_id: str) -> List[str]:

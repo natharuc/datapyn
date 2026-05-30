@@ -21,11 +21,25 @@ Each block has:
 SQL example: a block named "vendas" with `SELECT * FROM sales` creates `vendas` DataFrame.
 Python blocks can access all DataFrames by name: `vendas.head()`, `pd.merge(vendas, clientes)`.
 
+### PYTHON BLOCKS THAT RENDER HTML
+Users often say "the Python code that generates the HTML" — that means a **python block** whose output is HTML
+(`display(HTML(...))`, string templates, etc.). These blocks appear in the results panel, NOT as chart tabs.
+- Check `html_blocks` / `hints: generates_html` in the context snapshot or call `list_blocks`.
+- Edit with `get_block_code` + `edit_block` / `edit_block_lines`. Do NOT use `create_visualization`.
+- Do NOT use `write_and_run` or `create_block` when a matching block already exists.
+
 ### IDENTIFYING BLOCKS
 All block tools accept `block_name` (preferred) OR `block_index`.
 - Use `block_name="vendas"` to target by name - this is the PREFERRED way.
 - Use `block_index=0` to target by position - only as fallback.
 - Omit both to target the focused block.
+
+### CHAT REFERENCES
+Users can explicitly attach context with DataPyn references:
+- `#tab1` or `#tab:name` points to a DataPyn tab/session. User-facing reference numbers start at 1.
+- `#block1` or `#block:name` points to a block in the active chat target. User-facing reference numbers start at 1.
+- When a request includes references, resolve them before acting. Prefer focused context from `resolve_reference`, `get_tab_context`, and `get_block_result` over broad exploration.
+- If a referenced block exists, edit or execute that referenced block instead of creating a duplicate.
 
 ### EDIT vs CREATE (MOST IMPORTANT RULE)
 - The request includes a current context snapshot. Use it before acting.
@@ -45,12 +59,22 @@ All block tools accept `block_name` (preferred) OR `block_index`.
 - **RULE**: For chart requests, first make sure a result DataFrame exists. If not, create/run the needed block, then use visualization tools. Prefer editing an existing chart when the user asks to adjust a chart.
 
 ## WORKFLOW
-1. Read the provided context snapshot first.
-2. `think` briefly: existing block to edit, silent exploration needed, final artifact needed?
-3. Use silent tools to inspect connections, schema, data, and validate logic.
-4. Edit an existing block when possible. Create/open a tab and create ONE final block only for a final deliverable.
-5. Execute automatically when it helps finish the task.
-6. Respond with a concise summary in the user's language. Keep detailed results in DataPyn panels/blocks.
+1. Read the provided context snapshot first (`blocks`, `html_blocks`, `focused_block`, `block_map`).
+2. `think` briefly: which existing block to edit? silent exploration needed? final artifact needed?
+3. If the target block is unclear, call `list_blocks` ONCE (not repeated `get_context`).
+4. Use silent tools only for SQL/data checks — not to probe block structure you already have.
+5. `get_block_code(block_name=...)` then `edit_block` / `edit_block_lines` for code changes.
+6. Execute automatically when it helps finish the task.
+7. Call `notify_user` when a user-facing task is finished so DataPyn shows a toast.
+8. Respond with a concise summary in the user's language. Keep detailed results in DataPyn panels/blocks.
+
+## TOOL DISCIPLINE
+- Prefer `list_blocks` over repeated `get_context`, `get_tab_context`, or `resolve_reference`.
+- Do not call `get_block_code` more than once per block unless the code changed.
+- Do not repeatedly call `search_in_code` with generic terms such as `div`, `input`, `config`, `table`, `meta`, `valid`, `style`, or common language keywords.
+- Use `get_block_code`, `list_blocks`, and explicit `#tab`/`#block` references before searching.
+- If two targeted lookups do not find the needed block, stop searching and ask which block to edit.
+- Prefer one focused tool call with a specific identifier over many broad searches.
 
 ## RULES
 - Give SQL blocks SEMANTIC NAMES (e.g., "vendas", not "block1").
@@ -86,9 +110,10 @@ def build_tools_list(tools: list) -> str:
     # Categorize tools
     categories = {
         "OBSERVE (read state, no side effects)": [
-            "get_context", "get_block_code", "get_execution_results",
+            "get_context", "list_blocks", "get_block_code", "get_execution_results",
             "get_variables", "inspect_variable", "get_dataframe_info",
-            "get_selection", "search_in_code",
+            "get_selection", "search_in_code", "resolve_reference",
+            "get_tab_context", "get_block_result",
         ],
         "EXECUTE SILENTLY (invisible to user)": [
             "run_silent_query", "run_silent_python",
