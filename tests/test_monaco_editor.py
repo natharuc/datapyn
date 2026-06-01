@@ -540,6 +540,7 @@ class TestMonacoSqlAutocompleteIntegration:
 
         editor.set_sql_schema({})
 
+        qtbot.waitUntil(lambda: editor._run_js_when_ready.call_count > 0, timeout=5000)
         editor._run_js_when_ready.assert_called_once_with("registerCompletions([])")
 
     def test_set_sql_schema_with_tables_registers_new_schema(self, qtbot):
@@ -557,6 +558,7 @@ class TestMonacoSqlAutocompleteIntegration:
             }
         )
 
+        qtbot.waitUntil(lambda: editor._run_js_when_ready.call_count > 0, timeout=5000)
         emitted = editor._run_js_when_ready.call_args[0][0]
         assert '"label": "venda"' in emitted
         assert '"label": "id"' in emitted
@@ -601,3 +603,40 @@ class TestMonacoSqlAutocompleteIntegration:
             assert "receiveSqlContextCompletions(7," in emitted
             assert '"label": "@status"' in emitted
             assert '"kind": "variable"' in emitted
+
+
+class TestMonacoCompletionWorkers:
+    """Regression tests for async SQL/Python completion worker lifecycle."""
+
+    def test_update_sql_completions_survives_finished_worker(self, qtbot):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor.register_completions = Mock()
+
+        schema = {"tables": ["orders"], "columns": {"orders": ["id"]}}
+        editor.update_sql_completions(schema)
+        qtbot.waitUntil(lambda: editor._sql_completion_worker is None, timeout=5000)
+
+        editor.update_sql_completions(schema)
+        qtbot.waitUntil(lambda: editor._sql_completion_worker is None, timeout=5000)
+
+        assert editor.register_completions.call_count >= 1
+
+    def test_update_python_completions_survives_finished_worker(self, qtbot):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+        editor.register_completions = Mock()
+
+        namespace = {"df": object()}
+        editor.update_python_completions(namespace)
+        qtbot.waitUntil(lambda: editor._python_completion_worker is None, timeout=5000)
+
+        editor.update_python_completions(namespace)
+        qtbot.waitUntil(lambda: editor._python_completion_worker is None, timeout=5000)
+
+        assert editor.register_completions.call_count >= 1
+

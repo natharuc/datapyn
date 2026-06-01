@@ -632,6 +632,8 @@
     "status_waiting": "Aguardando",
     "status_running": "Executando",
     "status_running_elapsed": "{status} {elapsed}",
+    "status_reconnecting": "Reconectando...",
+    "status_switching_database": "Trocando banco...",
     "status_cancelled": "Cancelado",
     "status_error": "Erro",
     "drag_label": "[{lang}] Bloco",

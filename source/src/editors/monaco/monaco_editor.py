@@ -36,6 +36,29 @@ from .monaco_sql_completions import (
 logger = logging.getLogger(__name__)
 
 
+def _qthread_alive(worker) -> bool:
+    return worker is not None and not sip.isdeleted(worker)
+
+
+def _qthread_is_running(worker) -> bool:
+    if not _qthread_alive(worker):
+        return False
+    try:
+        return worker.isRunning()
+    except RuntimeError:
+        return False
+
+
+def _qthread_request_stop(worker) -> None:
+    if not _qthread_alive(worker):
+        return
+    try:
+        if worker.isRunning():
+            worker.requestInterruption()
+    except RuntimeError:
+        pass
+
+
 class MonacoPage(QWebEnginePage):
     """Custom WebEnginePage to capture JavaScript console messages."""
     
@@ -159,11 +182,9 @@ class MonacoEditor(QWidget):
         self._cleaned_up = True
         self._is_ready = False
         self._pending_operations.clear()
-        if self._sql_completion_worker and self._sql_completion_worker.isRunning():
-            self._sql_completion_worker.requestInterruption()
+        _qthread_request_stop(self._sql_completion_worker)
         self._sql_completion_worker = None
-        if self._python_completion_worker and self._python_completion_worker.isRunning():
-            self._python_completion_worker.requestInterruption()
+        _qthread_request_stop(self._python_completion_worker)
         self._python_completion_worker = None
         if hasattr(self, "_completion_service") and self._completion_service is not None:
             self._completion_service.cancel()
@@ -703,15 +724,18 @@ class MonacoEditor(QWidget):
         self._sql_completion_generation += 1
         generation = self._sql_completion_generation
 
-        worker = self._sql_completion_worker
-        if worker is not None and worker.isRunning():
-            worker.requestInterruption()
+        _qthread_request_stop(self._sql_completion_worker)
 
         worker = SqlCompletionBuildWorker(generation, schema, self)
         worker.completions_ready.connect(self._on_sql_completions_built)
+        worker.finished.connect(lambda w=worker: self._release_sql_completion_worker(w))
         worker.finished.connect(worker.deleteLater)
         self._sql_completion_worker = worker
         worker.start()
+
+    def _release_sql_completion_worker(self, worker: SqlCompletionBuildWorker) -> None:
+        if self._sql_completion_worker is worker:
+            self._sql_completion_worker = None
 
     def _on_sql_completions_built(self, generation: int, completions: list) -> None:
         if generation != self._sql_completion_generation:
@@ -734,15 +758,18 @@ class MonacoEditor(QWidget):
         self._python_completion_generation += 1
         generation = self._python_completion_generation
 
-        worker = self._python_completion_worker
-        if worker is not None and worker.isRunning():
-            worker.requestInterruption()
+        _qthread_request_stop(self._python_completion_worker)
 
         worker = PythonCompletionBuildWorker(generation, variables, self)
         worker.completions_ready.connect(self._on_python_completions_built)
+        worker.finished.connect(lambda w=worker: self._release_python_completion_worker(w))
         worker.finished.connect(worker.deleteLater)
         self._python_completion_worker = worker
         worker.start()
+
+    def _release_python_completion_worker(self, worker: PythonCompletionBuildWorker) -> None:
+        if self._python_completion_worker is worker:
+            self._python_completion_worker = None
 
     def _on_python_completions_built(self, generation: int, completions: list) -> None:
         if generation != self._python_completion_generation:

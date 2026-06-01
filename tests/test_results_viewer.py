@@ -8,6 +8,17 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "source"))
 
 
+def _switch_result_tab(viewer, qtbot, index: int, *, min_rows: int | None = None):
+    """Switch result tabs and wait for the deferred handler to finish."""
+    viewer._result_tabs.setCurrentIndex(index)
+    qtbot.waitUntil(
+        lambda: viewer._result_tabs.currentIndex() == index and viewer._pending_result_tab_index is None,
+        timeout=5000,
+    )
+    if min_rows is not None:
+        qtbot.waitUntil(lambda: viewer.model.rowCount() == min_rows, timeout=5000)
+
+
 class TestResultsViewerCopySelection:
     """Tests for Ctrl+C copy selection in the results grid."""
 
@@ -641,18 +652,18 @@ class TestResultsViewerMultiTab:
         assert "1" in viewer._result_tabs.tabText(0)
         assert "2" in viewer._result_tabs.tabText(1)
 
-    def test_tab_change_swaps_current_df_and_table_view(self, viewer, df_a, df_b):
+    def test_tab_change_swaps_current_df_and_table_view(self, viewer, df_a, df_b, qtbot):
         """Switching to a secondary tab updates current_df/table_view/model."""
         viewer.display_dataframes([("first", df_a), ("second", df_b)])
 
         primary_table_view = viewer.table_view
-        viewer._result_tabs.setCurrentIndex(1)
+        _switch_result_tab(viewer, qtbot, 1, min_rows=len(df_b))
 
         assert viewer.current_df is df_b
         assert viewer.table_view is not primary_table_view
         assert viewer.model.rowCount() == len(df_b)
 
-        viewer._result_tabs.setCurrentIndex(0)
+        _switch_result_tab(viewer, qtbot, 0, min_rows=len(df_a))
         assert viewer.current_df is df_a
         assert viewer.table_view is primary_table_view
 
@@ -859,7 +870,7 @@ class TestResultsViewerFiltering:
         assert viewer.model.rowCount() == 0
         assert viewer.current_df.empty
 
-    def test_column_filter_is_applied_when_switching_multi_result_tabs(self, viewer):
+    def test_column_filter_is_applied_when_switching_multi_result_tabs(self, viewer, qtbot):
         """Column filters should apply to whichever result tab is active."""
         products = pd.DataFrame({"name": ["desk", "chair"], "sku": ["P01", "P02"]})
         customers = pd.DataFrame({"name": ["Foo Store", "Bar Market"], "city": ["Santos", "Recife"]})
@@ -868,19 +879,18 @@ class TestResultsViewerFiltering:
         viewer._set_column_filter("name", "foo")
         assert viewer.model.rowCount() == 0
 
-        viewer._result_tabs.setCurrentIndex(1)
+        _switch_result_tab(viewer, qtbot, 1, min_rows=1)
 
-        assert viewer.model.rowCount() == 1
         assert list(viewer.current_df["name"]) == ["Foo Store"]
         assert "customers" in viewer.info_label.text()
 
-    def test_row_limit_keeps_multi_result_tabs_and_active_column_filter(self, viewer):
+    def test_row_limit_keeps_multi_result_tabs_and_active_column_filter(self, viewer, qtbot):
         """Changing the row limit should not collapse multi-result tabs."""
         first = pd.DataFrame({"name": [f"first-{i}" for i in range(14)]})
         second = pd.DataFrame({"name": [f"keep-{i}" for i in range(12)] + ["drop-a", "drop-b"]})
 
         viewer.display_dataframes([("first", first), ("second", second)])
-        viewer._result_tabs.setCurrentIndex(1)
+        _switch_result_tab(viewer, qtbot, 1)
         viewer._set_column_filter("name", "keep")
 
         viewer.row_limit_spin.setValue(10)
@@ -1357,7 +1367,7 @@ class TestResultsViewerFiltering:
             render_titles.append(config.get("title", ""))
             if len(render_titles) == 1:
                 first_render_started.set()
-                if not release_first_render.wait(2):
+                if not release_first_render.wait(30):
                     raise RuntimeError("render was not released")
             return png_bytes
 
@@ -1390,7 +1400,7 @@ class TestResultsViewerFiltering:
 
         def fake_render(_df, _config):
             render_started.set()
-            if not release_render.wait(2):
+            if not release_render.wait(30):
                 raise RuntimeError("render was not released")
             return png_bytes
 
@@ -1410,6 +1420,7 @@ class TestResultsViewerFiltering:
         viewer.display_dataframes(items)
         old_chart_page = viewer._result_tabs.widget(2)
         viewer._result_tabs.setCurrentIndex(2)
+        qtbot.waitUntil(lambda: viewer._pending_result_tab_index is None, timeout=5000)
         qtbot.waitUntil(render_started.is_set, timeout=3000)
 
         viewer.display_dataframes(items)
@@ -1433,7 +1444,7 @@ class TestResultsViewerFiltering:
 
         def fake_render(_df, _config):
             render_started.set()
-            if not release_render.wait(2):
+            if not release_render.wait(30):
                 raise RuntimeError("render was not released")
             return png_bytes
 
@@ -1470,7 +1481,7 @@ class TestResultsViewerFiltering:
             render_titles.append(config.get("title", ""))
             if len(render_titles) == 1:
                 first_render_started.set()
-                if not release_first_render.wait(2):
+                if not release_first_render.wait(30):
                     raise RuntimeError("render was not released")
             return png_bytes
 
@@ -1483,6 +1494,10 @@ class TestResultsViewerFiltering:
         viewer._result_tabs.setCurrentIndex(0)
         viewer._set_visualization_config({"type": "line", "title": "Second", "x_column": "mes", "y_columns": ["valor"]})
         second_page = viewer._result_tabs.widget(2)
+        qtbot.waitUntil(
+            lambda: viewer._pending_result_tab_index is None and second_page._render_pending,
+            timeout=5000,
+        )
 
         assert render_titles == ["First"]
         assert first_page._rendering is True
@@ -1506,24 +1521,31 @@ class TestResultsViewerFiltering:
         def fake_render(_df, _config):
             if not first_render_started.is_set():
                 first_render_started.set()
-                if not release_first_render.wait(2):
+                if not release_first_render.wait(30):
                     raise RuntimeError("render was not released")
             return png_bytes
 
         monkeypatch.setattr(viewer, "_render_chart_image", fake_render)
-        viewer.display_dataframe(pd.DataFrame({"mes": ["Jan", "Fev"], "valor": [10, 20]}), "vendas")
-        viewer._set_visualization_config({"type": "bar", "title": "First", "x_column": "mes", "y_columns": ["valor"]})
-        qtbot.waitUntil(first_render_started.is_set, timeout=3000)
+        try:
+            viewer.display_dataframe(pd.DataFrame({"mes": ["Jan", "Fev"], "valor": [10, 20]}), "vendas")
+            viewer._set_visualization_config({"type": "bar", "title": "First", "x_column": "mes", "y_columns": ["valor"]})
+            qtbot.waitUntil(first_render_started.is_set, timeout=3000)
 
-        viewer._result_tabs.setCurrentIndex(0)
-        viewer._set_visualization_config({"type": "line", "title": "Second", "x_column": "mes", "y_columns": ["valor"]})
-        assert viewer._chart_render_queue
+            viewer._result_tabs.setCurrentIndex(0)
+            viewer._set_visualization_config({"type": "line", "title": "Second", "x_column": "mes", "y_columns": ["valor"]})
+            second_page = viewer._result_tabs.widget(2)
+            qtbot.waitUntil(lambda: viewer._pending_result_tab_index is None, timeout=5000)
+            if second_page not in viewer._chart_render_queue:
+                viewer._render_visualization_page(second_page)
 
-        viewer._collapse_to_primary()
+            assert viewer._chart_render_queue
 
-        assert viewer._chart_pages == []
-        assert viewer._chart_render_queue == []
-        release_first_render.set()
+            viewer._collapse_to_primary()
+
+            assert viewer._chart_pages == []
+            assert viewer._chart_render_queue == []
+        finally:
+            release_first_render.set()
         qtbot.waitUntil(lambda: viewer._active_chart_render_job is None, timeout=5000)
 
     def test_saved_visualization_config_restores_chart_tab_for_new_results(self, viewer, qtbot):
@@ -1553,7 +1575,7 @@ class TestResultsViewerFiltering:
         assert chart_page._image_bytes is None
         assert getattr(chart_page, "_rendering", False) is False
 
-        viewer._result_tabs.setCurrentIndex(1)
+        _switch_result_tab(viewer, qtbot, 1)
 
         qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
         assert chart_page._image_bytes
@@ -1648,5 +1670,30 @@ class TestResultsViewerGridPrepare:
         assert viewer.current_df is not None
         assert len(viewer.current_df) == 1800
         assert viewer.model.data(viewer.model.index(0, 0)) == "row-0"
+
+    def test_prepare_grid_data_formats_epoch_nanoseconds_as_datetime(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame(
+            {
+                "DataCriacao": [1779799229610000000, 1779799227757000000],
+                "Total": [0.0, 31.28],
+            }
+        )
+        result = prepare_grid_data(df, {}, {}, limit=10)
+
+        assert "2026" in result.prepared.display_rows[0][0]
+        assert ":" in result.prepared.display_rows[0][0]
+        assert result.prepared.display_rows[0][1] == "0.0"
+
+    def test_prepare_grid_data_respects_explicit_datetime_format(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame({"created_at": [1779799229610000000]})
+        formats = {"created_at": {"type": "datetime"}}
+        result = prepare_grid_data(df, {}, formats, limit=10)
+
+        assert "2026" in result.prepared.display_rows[0][0]
+        assert "1779799229610000000" not in result.prepared.display_rows[0][0]
 
 

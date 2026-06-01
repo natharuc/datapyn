@@ -699,6 +699,7 @@ class SessionWidget(QWidget):
                 )
             else:
                 # Need auto-connect in background (never block UI)
+                self._set_block_busy_status(S.block.status_reconnecting)
                 self.append_output(S.session_widget.connecting_block.format(name=connection_name))
                 self.status_changed.emit(S.session_widget.connecting_block.format(name=connection_name))
 
@@ -750,26 +751,104 @@ class SessionWidget(QWidget):
                 error=True
             )
             self.status_changed.emit(S.session_widget.status_conn_failed)
-            self._process_next_in_queue()
+            self._finish_block_after_switch(has_error=True)
             return
 
         self._execute_sql_with_connector(connector, query, block_name, connection_name, database_name, sql_parameters)
 
-    def _execute_sql_with_connector(self, connector, query, block_name, connection_name, database_name, sql_parameters=None):
+    def _get_active_execution_block(self):
+        block = self.editor.get_current_executing_block()
+        if block is None:
+            block = self.editor.get_focused_block() or self.editor.get_last_focused_block()
+        return block
+
+    def _set_block_busy_status(self, message: str):
+        block = self._get_active_execution_block()
+        if block is not None:
+            block.set_running_status(message)
+
+    def _finish_block_after_switch(self, has_error: bool = False):
+        block = self._get_active_execution_block()
+        if block is not None:
+            self.editor.mark_execution_finished(block, has_error=has_error)
+        self._process_next_in_queue()
+
+    def _cleanup_db_switch_thread(self, thread):
+        if hasattr(self, "_db_switch_threads"):
+            self._db_switch_threads = [
+                (t, w) for t, w in self._db_switch_threads if t is not thread
+            ]
+
+    def _start_database_switch_async(
+        self,
+        connector,
+        database_name: str,
+        *,
+        connection_name: str | None,
+        busy_message: str,
+        on_success,
+        on_error=None,
+    ):
+        """Switch database without blocking the UI thread."""
+        from src.workers import DatabaseSwitchWorker
+
+        self._set_block_busy_status(busy_message)
+        self.status_changed.emit(S.status.switching_database.format(name=database_name))
+        self.execution_started.emit()
+
+        thread = QThread()
+        worker = DatabaseSwitchWorker(connector, database_name)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.switch_success.connect(on_success)
+        if on_error:
+            worker.error.connect(on_error)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        if not hasattr(self, "_db_switch_threads"):
+            self._db_switch_threads = []
+        self._db_switch_threads.append((thread, worker))
+        thread.finished.connect(lambda t=thread: self._cleanup_db_switch_thread(t))
+
+        thread.start()
+
+    def _execute_sql_with_connector(
+        self,
+        connector,
+        query,
+        block_name,
+        connection_name,
+        database_name,
+        sql_parameters=None,
+        *,
+        skip_database_prep: bool = False,
+    ):
         """Execute SQL query using the given connector (called after connection is ready)."""
         import re
         conn_label = connection_name or S.session_widget.default_connection_label
 
-        # Apply custom database if specified (before executing)
-        if database_name:
-            try:
-                connector.change_database(database_name)
-            except Exception as e:
-                self.append_output(S.session_widget.block_connect_error.format(name=database_name, error=e), error=True)
-                self._process_next_in_queue()
-                return
+        if database_name and not skip_database_prep:
+            self._start_database_switch_async(
+                connector,
+                database_name,
+                connection_name=connection_name,
+                busy_message=S.block.status_switching_database,
+                on_success=lambda _db: self._execute_sql_with_connector(
+                    connector,
+                    query,
+                    block_name,
+                    connection_name,
+                    None,
+                    sql_parameters,
+                    skip_database_prep=True,
+                ),
+                on_error=self._on_database_switch_failed,
+            )
+            return
 
-        # Detect USE database command - handle synchronously (fast path)
         use_match = re.match(
             r"^\s*USE\s+(?:CATALOG\s+|SCHEMA\s+)?[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$",
             query, re.IGNORECASE,
@@ -783,18 +862,27 @@ class SessionWidget(QWidget):
                     db_name = f"CATALOG:{db_name}"
                 elif sch_m:
                     db_name = f"SCHEMA:{db_name}"
-            try:
-                connector.change_database(db_name)
-                db_name = get_connector_database_context(connector) or db_name
-                self.session.database_context = db_name if getattr(connector, "db_type", "") == "databricks" else ""
-                conn_name = connection_name or self.session.connection_name
-                if conn_name:
-                    self.connection_changed.emit(conn_name, db_name)
-                self.append_output(self._format_log("SQL", f"Database changed to: {db_name}"))
-                self.status_changed.emit(f"Database: {db_name}")
-            except Exception as e:
-                self.append_output(self._format_log("SQL", f"ERROR: {e}"), error=True)
-            self._process_next_in_queue()
+
+            def on_use_success(_db_name: str):
+                try:
+                    resolved = get_connector_database_context(connector) or _db_name
+                    self.session.database_context = resolved if getattr(connector, "db_type", "") == "databricks" else ""
+                    conn_name = connection_name or self.session.connection_name
+                    if conn_name:
+                        self.connection_changed.emit(conn_name, resolved)
+                    self.append_output(self._format_log("SQL", f"Database changed to: {resolved}"))
+                    self.status_changed.emit(f"Database: {resolved}")
+                finally:
+                    self._finish_block_after_switch(has_error=False)
+
+            self._start_database_switch_async(
+                connector,
+                db_name,
+                connection_name=connection_name,
+                busy_message=S.block.status_switching_database,
+                on_success=on_use_success,
+                on_error=self._on_database_switch_failed,
+            )
             return
 
         if self._is_executing or (self._sql_thread and self._sql_thread.isRunning()):
@@ -835,6 +923,9 @@ class SessionWidget(QWidget):
         self.session.start_execution("sql")
         self.status_changed.emit(S.session_widget.executing_sql.format(conn_label=conn_label))
         self.execution_started.emit()  # Notify main_window to show running indicator
+        block = self._get_active_execution_block()
+        if block is not None:
+            block.set_running(True)
 
         # Track execution context for structured logs
         self._execution_start_time = time.time()
@@ -868,6 +959,11 @@ class SessionWidget(QWidget):
 
         # Iniciar
         self._sql_thread.start()
+
+    def _on_database_switch_failed(self, error_msg: str):
+        self.append_output(self._format_log("SQL", f"ERROR: {error_msg}"), error=True)
+        self.status_changed.emit(S.session_widget.status_conn_failed)
+        self._finish_block_after_switch(has_error=True)
 
     def _on_sql_finished(self, df: Optional[pd.DataFrame], error: str):
         """Callback when SQL finishes"""

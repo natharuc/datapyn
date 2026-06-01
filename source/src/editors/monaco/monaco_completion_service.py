@@ -140,6 +140,8 @@ class _CompletionWorker(QThread):
             logger.debug("Completion worker error (%s): %s", self.kind, exc)
             payload = []
 
+        if self.isInterruptionRequested():
+            return
         self.result_ready.emit(self.request_id, self.kind, payload)
 
 
@@ -235,4 +237,5 @@ class MonacoCompletionService(QObject):
             pass
         if worker.isRunning():
             worker.requestInterruption()
+            return
         worker.deleteLater()

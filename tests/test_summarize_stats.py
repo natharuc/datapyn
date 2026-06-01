@@ -22,21 +22,11 @@ def test_empty_dataframe():
     assert payload["columns"] == []
 
 
-def test_all_rows_when_no_selection(sample_df):
+def test_no_summary_without_selection(sample_df):
     payload = build_selection_summary(sample_df, [])
-    assert payload["scope"] == "all"
-    assert payload["rows_selected"] == 4
-    assert payload["cols_selected"] == 4
-    assert len(payload["columns"]) == 4
-
-    amount = next(c for c in payload["columns"] if c["name"] == "amount")
-    assert amount["kind"] == "numeric"
-    assert amount["sum_raw"] == 100.0
-
-    region = next(c for c in payload["columns"] if c["name"] == "region")
-    assert region["kind"] == "text"
-    assert region["distinct"] == "3"
-    assert region["top"].startswith("North")
+    assert payload["scope"] == "empty"
+    assert payload["columns"] == []
+    assert payload["subtitle"] == "no_selection"
 
 
 def test_selection_subset(sample_df):
@@ -90,8 +80,23 @@ def test_scientific_notation_object_column():
 def test_column_format_applied(sample_df):
     payload = build_selection_summary(
         sample_df,
-        [],
+        [(0, 0), (1, 0), (2, 0), (3, 0)],
         column_formats={"amount": {"type": "currency", "prefix": "$ ", "decimals": 2}},
     )
     amount = next(c for c in payload["columns"] if c["name"] == "amount")
     assert amount["sum"].startswith("$ ")
+
+
+def test_large_selection_uses_row_ranges(sample_df):
+    payload = build_selection_summary(
+        sample_df,
+        [],
+        row_ranges=[(0, 3)],
+        bound_cols=[0, 2],
+    )
+    assert payload["scope"] == "selection"
+    assert payload["rows_selected"] == 4
+    assert payload["cols_selected"] == 2
+    assert payload["cells_selected"] == 8
+    assert {col["name"] for col in payload["columns"]} == {"amount", "region"}
+

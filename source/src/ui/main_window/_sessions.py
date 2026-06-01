@@ -935,8 +935,8 @@ class SessionsMixin:
             # Trocar paineis para a sessao ativa
             self._switch_session_panels(widget.session.session_id)
 
-            # Atualizar OE para mostrar a conexao efetiva desta aba
-            self._update_oe_for_session(widget)
+            # Atualizar OE para mostrar a conexao efetiva desta aba (deferido)
+            QTimer.singleShot(0, lambda w=widget: self._update_oe_for_session(w))
 
             # Switch Copilot chat context to this tab
             if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:

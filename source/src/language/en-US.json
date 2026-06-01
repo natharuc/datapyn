@@ -632,6 +632,8 @@
     "status_waiting": "Waiting",
     "status_running": "Running",
     "status_running_elapsed": "{status} {elapsed}",
+    "status_reconnecting": "Reconnecting...",
+    "status_switching_database": "Switching database...",
     "status_cancelled": "Cancelled",
     "status_error": "Error",
     "drag_label": "[{lang}] Block",
