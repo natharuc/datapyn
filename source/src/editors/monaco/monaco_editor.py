@@ -14,7 +14,6 @@ from PyQt6.QtCore import (
     pyqtSignal,
     QUrl,
     QTimer,
-    QEventLoop,
     QEvent,
     QSettings,
     Qt,
@@ -27,6 +26,12 @@ from PyQt6 import sip
 from PyQt6.QtWebChannel import QWebChannel
 
 from .monaco_bridge import MonacoBridge
+from .monaco_completion_service import MonacoCompletionService
+from .monaco_sql_completions import (
+    PythonCompletionBuildWorker,
+    SqlCompletionBuildWorker,
+    build_sql_completions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +100,16 @@ class MonacoEditor(QWidget):
         
         # SQL/Python autocomplete data
         self._sql_schema: Dict[str, Any] = {}
+        self._sql_completion_worker: Optional[SqlCompletionBuildWorker] = None
+        self._sql_completion_generation = 0
+        self._python_completion_worker: Optional[PythonCompletionBuildWorker] = None
+        self._python_completion_generation = 0
+        self._selected_text_cache = ""
+        self._has_selection_cache = False
+        self._current_line_cache = 0
         self._python_namespace: Dict[str, Any] = {}
         self._global_imports: str = ""
+        self._completion_service = MonacoCompletionService(self)
         
         self._setup_ui()
         self._setup_channel()
@@ -146,6 +159,14 @@ class MonacoEditor(QWidget):
         self._cleaned_up = True
         self._is_ready = False
         self._pending_operations.clear()
+        if self._sql_completion_worker and self._sql_completion_worker.isRunning():
+            self._sql_completion_worker.requestInterruption()
+        self._sql_completion_worker = None
+        if self._python_completion_worker and self._python_completion_worker.isRunning():
+            self._python_completion_worker.requestInterruption()
+        self._python_completion_worker = None
+        if hasattr(self, "_completion_service") and self._completion_service is not None:
+            self._completion_service.cancel()
 
         web_view = getattr(self, "_web_view", None)
         if web_view is not None and not sip.isdeleted(web_view):
@@ -258,12 +279,28 @@ class MonacoEditor(QWidget):
         self._bridge.completion_requested.connect(self._on_completion_requested)
         self._bridge.force_completion_requested.connect(self._on_force_completion_requested)
         self._bridge.cursor_changed.connect(self._on_cursor_changed)
+        self._bridge.selection_changed.connect(self._on_selection_changed)
         
         # SQL/Python context-aware completions
         self._bridge.sql_context_requested.connect(self._on_sql_context_requested)
         self._bridge.sql_completion_requested.connect(self._on_sql_completion_requested)
         self._bridge.python_completion_requested.connect(self._on_python_completion_requested)
+
+        self._completion_service.sql_completions_ready.connect(self._deliver_sql_completions)
+        self._completion_service.sql_context_completions_ready.connect(self._deliver_sql_context_completions)
+        self._completion_service.python_completions_ready.connect(self._deliver_python_completions)
     
+    def _deliver_sql_completions(self, request_id: int, completions: list) -> None:
+        payload = json.dumps(completions or [])
+        self._run_js_when_ready(f"receiveSqlCompletions({int(request_id)}, {payload})")
+
+    def _deliver_sql_context_completions(self, request_id: int, completions: list) -> None:
+        payload = json.dumps(completions or [])
+        self._run_js_when_ready(f"receiveSqlContextCompletions({int(request_id)}, {payload})")
+
+    def _deliver_python_completions(self, request_id: int, completions: list) -> None:
+        payload = json.dumps(completions or [])
+        self._run_js_when_ready(f"receivePythonCompletions({int(request_id)}, {payload})")
     def _on_editor_ready(self):
         """Called when Monaco editor is fully loaded."""
         if self._cleaned_up:
@@ -314,147 +351,27 @@ class MonacoEditor(QWidget):
     
     def _on_cursor_changed(self, line: int, column: int):
         """Handle cursor position change from JS."""
+        self._current_line_cache = max(0, int(line or 1) - 1)
         self.cursor_changed.emit(line, column)
-    
-    def _on_sql_context_requested(self, full_text: str, prefix: str, line: int, column: int):
-        """Handle SQL context-aware completion request.
-        
-        Uses SqlAutoCompleteService to resolve aliases, CTEs, and subqueries.
-        """
-        from src.services.sql_autocomplete_service import SqlAutoCompleteService
-        
-        try:
-            service = SqlAutoCompleteService()
-            service.set_schema(self._sql_schema)
-            
-            # Reuse the main completion path so dot completions honor
-            # cursor scope, aliases, CTEs, subqueries and temp objects.
-            completions = service.get_completions(full_text, line - 1, column - 1)
-            
-            # Format and send back to JavaScript
-            js_completions = []
-            for comp in completions:
-                # comp is a tuple: (name, category, detail/type)
-                name = comp[0] if len(comp) > 0 else ""
-                category = comp[1] if len(comp) > 1 else "column"
-                detail = comp[2] if len(comp) > 2 else ""
-                
-                js_completions.append({
-                    'label': name,
-                    'kind': 'variable' if category == 'variable' else 'field',
-                    'insertText': name,
-                    'detail': detail,
-                    'category': category,
-                    'table': prefix
-                })
-            
-            escaped = json.dumps(js_completions)
-            self._run_js_when_ready(f"receiveSqlContextCompletions({escaped})")
-        except Exception as e:
-            logger.warning(f"[MONACO] SQL context completion error: {e}")
-            self._run_js_when_ready("receiveSqlContextCompletions([])")
-    
-    def _on_sql_completion_requested(self, full_text: str, line: int, column: int):
-        """Handle SQL completion request (SSMS-style full context).
-        
-        Uses SqlAutoCompleteService to provide intelligent completions based on:
-        - Current position (SELECT, FROM, WHERE, etc.)
-        - Tables mentioned in FROM/JOIN clauses
-        - Aliases defined in the query
-        """
-        from src.services.sql_autocomplete_service import SqlAutoCompleteService
-        
-        try:
-            service = SqlAutoCompleteService()
-            service.set_schema(self._sql_schema)
-            
-            # Get context-aware completions
-            completions = service.get_completions(full_text, line - 1, column - 1)
-            
-            # Format for JavaScript
-            js_completions = []
-            for comp in completions:
-                # comp is a tuple: (name, category, detail)
-                name = comp[0] if len(comp) > 0 else ""
-                category = comp[1] if len(comp) > 1 else "text"
-                detail = comp[2] if len(comp) > 2 else ""
-                
-                # Map category to Monaco completion kind
-                kind = 'text'
-                if category == 'keyword':
-                    kind = 'keyword'
-                elif category == 'function':
-                    kind = 'function'
-                elif category == 'routine':
-                    kind = 'function'
-                elif category == 'table':
-                    kind = 'class'
-                elif category == 'column':
-                    kind = 'field'
-                elif category == 'variable':
-                    kind = 'variable'
-                elif category == 'database':
-                    kind = 'module'
-                
-                js_completions.append({
-                    'label': name,
-                    'kind': kind,
-                    'insertText': name,
-                    'detail': detail,
-                    'category': category
-                })
-            
-            escaped = json.dumps(js_completions)
-            self._run_js_when_ready(f"receiveSqlCompletions({escaped})")
-        except Exception as e:
-            logger.warning(f"[MONACO] SQL completion error: {e}")
-            self._run_js_when_ready("receiveSqlCompletions([])")
 
-    def _on_python_completion_requested(self, full_text: str, line: int, column: int):
-        """Handle Python Jedi completion request.
-        
-        Uses JediCompleter with namespace injection for type-aware completions.
-        """
-        from src.services.jedi_completer import JediCompleter
-        
-        try:
-            completer = JediCompleter.instance()
-            completer.set_namespace(self._python_namespace)
-            
-            # Prepend global imports for better context
-            code_with_context = self._global_imports + "\n" + full_text if self._global_imports else full_text
-            
-            # Adjust line number if we prepended imports
-            adjusted_line = line
-            if self._global_imports:
-                import_lines = self._global_imports.count("\n") + 1
-                adjusted_line = line + import_lines
-            
-            # Synchronous completion for dropdown
-            # Returns list of (name, type, description) tuples
-            completions = completer.complete_sync(code_with_context, adjusted_line, column)
-            
-            # Format for JavaScript
-            js_completions = []
-            for comp in completions:
-                # comp is a tuple: (name, type, description)
-                name = comp[0] if len(comp) > 0 else ""
-                kind = comp[1] if len(comp) > 1 else "text"
-                detail = comp[2] if len(comp) > 2 else ""
-                
-                js_completions.append({
-                    'label': name,
-                    'kind': kind,
-                    'insertText': name,
-                    'detail': detail,
-                    'category': 'python'
-                })
-            
-            escaped = json.dumps(js_completions)
-            self._run_js_when_ready(f"receivePythonCompletions({escaped})")
-        except Exception as e:
-            logger.warning(f"[MONACO] Python completion error: {e}")
-            self._run_js_when_ready("receivePythonCompletions([])")
+    def _on_selection_changed(self, text: str, has_selection: bool):
+        self._selected_text_cache = text or ""
+        self._has_selection_cache = bool(has_selection)
+    
+    def _on_sql_context_requested(self, full_text: str, prefix: str, line: int, column: int, request_id: int):
+        """Handle SQL context-aware completion request off the UI thread."""
+        self._completion_service.set_sql_schema(self._sql_schema)
+        self._completion_service.request_sql_context(request_id, full_text, prefix, line, column)
+    
+    def _on_sql_completion_requested(self, full_text: str, line: int, column: int, request_id: int):
+        """Handle SQL completion request off the UI thread."""
+        self._completion_service.set_sql_schema(self._sql_schema)
+        self._completion_service.request_sql_completions(request_id, full_text, line, column)
+
+    def _on_python_completion_requested(self, full_text: str, line: int, column: int, request_id: int):
+        """Handle Python Jedi completion request off the UI thread."""
+        self._completion_service.set_python_context(self._python_namespace, self._global_imports)
+        self._completion_service.request_python_completions(request_id, full_text, line, column)
 
     def _run_js(self, script: str, callback=None):
         """Execute JavaScript in the Monaco editor."""
@@ -506,53 +423,12 @@ class MonacoEditor(QWidget):
         self._run_js_when_ready("forceRequestCompletion()")
     
     def get_selected_text(self) -> str:
-        """Returns selected text or empty string."""
-        # Sync call - use cached value or return empty
-        # For async, we'd need to use callback
-        result = [""]
-        got_result = [False]
-        
-        def on_result(text):
-            result[0] = text or ""
-            got_result[0] = True
-        
-        if self._is_ready:
-            # Run synchronously with event loop
-            loop = QEventLoop()
-            self._web_view.page().runJavaScript(
-                "getSelectedText()",
-                lambda x: (on_result(x), loop.quit())
-            )
-            QTimer.singleShot(500, loop.quit)  # Increased timeout
-            loop.exec()
-            
-            if not got_result[0]:
-                print("[MonacoEditor] get_selected_text timeout - JS did not respond in time")
-        
-        return result[0]
+        """Returns selected text from the latest JS selection snapshot."""
+        return self._selected_text_cache
     
     def has_selection(self) -> bool:
-        """Checks if there is selected text."""
-        result = [False]
-        got_result = [False]
-        
-        def on_result(val):
-            result[0] = bool(val)
-            got_result[0] = True
-        
-        if self._is_ready:
-            loop = QEventLoop()
-            self._web_view.page().runJavaScript(
-                "hasSelection()",
-                lambda x: (on_result(x), loop.quit())
-            )
-            QTimer.singleShot(500, loop.quit)  # Increased timeout
-            loop.exec()
-            
-            if not got_result[0]:
-                print("[MonacoEditor] has_selection timeout - JS did not respond in time")
-        
-        return result[0]
+        """Checks if there is selected text using the cached JS snapshot."""
+        return self._has_selection_cache
     
     def selectAll(self) -> None:
         """Selects all text in the editor."""
@@ -702,22 +578,8 @@ class MonacoEditor(QWidget):
         return len(self._text_cache.split("\n"))
     
     def get_current_line(self) -> int:
-        """Returns the current cursor line (0-indexed)."""
-        result = [0]
-        
-        def on_result(val):
-            result[0] = int(val or 0)
-        
-        if self._is_ready:
-            loop = QEventLoop()
-            self._web_view.page().runJavaScript(
-                "getCurrentLine()",
-                lambda x: (on_result(x), loop.quit())
-            )
-            QTimer.singleShot(100, loop.quit)
-            loop.exec()
-        
-        return result[0]
+        """Returns the current cursor line (0-indexed) from the cached snapshot."""
+        return self._current_line_cache
     
     def go_to_line(self, line: int) -> None:
         """Moves cursor to the specified line (0-indexed)."""
@@ -742,8 +604,9 @@ class MonacoEditor(QWidget):
     def set_sql_schema(self, schema: dict) -> None:
         """Set SQL schema for autocompletion."""
         schema = schema or {}
-        logger.info(f"[MONACO] set_sql_schema called with {len(schema.get('tables', []))} tables")
+        logger.debug("[MONACO] set_sql_schema called with %s tables", len(schema.get('tables', [])))
         self._sql_schema = schema
+        self._completion_service.set_sql_schema(schema)
         if schema:
             self.update_sql_completions(schema)
             return
@@ -757,12 +620,14 @@ class MonacoEditor(QWidget):
     def set_python_namespace(self, namespace: dict) -> None:
         """Set Python namespace for autocompletion."""
         self._python_namespace = namespace
+        self._completion_service.set_python_context(namespace, self._global_imports)
         # Register Python completions in Monaco
         self.update_python_completions(namespace)
     
     def set_global_imports(self, imports_code: str) -> None:
         """Set global imports for Jedi completion."""
         self._global_imports = imports_code
+        self._completion_service.set_python_context(self._python_namespace, imports_code)
     
     def insert_text_at_cursor(self, text: str) -> None:
         """Insert text at current cursor position."""
@@ -831,142 +696,59 @@ class MonacoEditor(QWidget):
         self._run_js_when_ready(f"registerCompletions({completions_json})")
     
     def update_sql_completions(self, schema: Optional[dict]) -> None:
-        """
-        Update SQL autocomplete with database schema (context-aware).
-        
-        Args:
-            schema: dict with keys:
-                - tables: list of table dicts {"name": ..., "schema": ..., "type": ...}
-                - columns: dict of {table_name: [{"name": ..., "type": ...}]}
-                - database: current database name
-        """
+        """Update SQL autocomplete with database schema (built off the UI thread)."""
         if not schema:
             return
-        
-        completions = []
-        
-        # Add tables with category
-        tables = schema.get("tables", [])
-        for table in tables:
-            # Handle both dict format (from SchemaService) and legacy string format
-            if isinstance(table, dict):
-                table_name = table.get("name", "")
-                table_schema = table.get("schema", "")
-                table_type = table.get("type", "TABLE")
-                detail = f"{table_schema}.{table_name}" if table_schema else table_name
-                if table_type == "VIEW":
-                    detail = f"view: {detail}"
-                else:
-                    detail = f"table: {detail}"
-            else:
-                table_name = str(table)
-                detail = "table"
-            
-            if table_name:
-                completions.append({
-                    "label": table_name,
-                    "kind": "property",
-                    "insertText": table_name,
-                    "detail": detail,
-                    "category": "table"
-                })
-        
-        # Add columns with table reference for context filtering
-        columns = schema.get("columns", {})
-        for table_name, column_list in columns.items():
-            for column in column_list:
-                # Handle both dict format (from SchemaService) and legacy string format
-                if isinstance(column, dict):
-                    column_name = column.get("name", "")
-                    column_type = column.get("type", "")
-                    detail = f"{table_name}.{column_name} ({column_type})" if column_type else f"{table_name}.{column_name}"
-                else:
-                    column_name = str(column)
-                    detail = f"{table_name}.{column_name}"
-                
-                if column_name:
-                    completions.append({
-                        "label": column_name,
-                        "kind": "field",
-                        "insertText": column_name,
-                        "detail": detail,
-                        "category": "column",
-                        "table": table_name
-                    })
-        
-        # Add common SQL keywords
-        sql_keywords = [
-            "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "BETWEEN",
-            "LIKE", "IS", "NULL", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER",
-            "ON", "AS", "ORDER BY", "GROUP BY", "HAVING", "LIMIT", "DISTINCT",
-            "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE",
-            "TABLE", "DROP", "ALTER", "COUNT", "SUM", "AVG", "MIN", "MAX",
-            "CAST", "CASE", "WHEN", "THEN", "ELSE", "END"
-        ]
-        for kw in sql_keywords:
-            completions.append({
-                "label": kw,
-                "kind": "keyword",
-                "insertText": kw,
-                "detail": "SQL keyword"
-            })
-        
-        logger.info(f"[MONACO] Registering {len(completions)} contextual SQL completions ({len(tables)} tables, {sum(len(cols) for cols in columns.values())} columns)")
+
+        self._sql_completion_generation += 1
+        generation = self._sql_completion_generation
+
+        worker = self._sql_completion_worker
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+
+        worker = SqlCompletionBuildWorker(generation, schema, self)
+        worker.completions_ready.connect(self._on_sql_completions_built)
+        worker.finished.connect(worker.deleteLater)
+        self._sql_completion_worker = worker
+        worker.start()
+
+    def _on_sql_completions_built(self, generation: int, completions: list) -> None:
+        if generation != self._sql_completion_generation:
+            return
+        tables = len(self._sql_schema.get("tables", [])) if self._sql_schema else 0
+        columns = sum(len(cols) for cols in (self._sql_schema.get("columns") or {}).values())
+        logger.debug(
+            "[MONACO] Registering %s contextual SQL completions (%s tables, %s columns)",
+            len(completions),
+            tables,
+            columns,
+        )
         self.register_completions(completions)
     
     def update_python_completions(self, variables: Optional[dict]) -> None:
-        """
-        Update Python autocomplete with namespace variables.
-        
-        Args:
-            variables: dict of {var_name: var_type_or_value}
-        """
+        """Update Python autocomplete with namespace variables (built off the UI thread)."""
         if not variables:
             return
-        
-        completions = []
-        
-        # Add variables from namespace
-        for var_name, var_info in variables.items():
-            # Skip private/internal variables
-            if var_name.startswith("_"):
-                continue
-            
-            var_type = type(var_info).__name__ if not isinstance(var_info, str) else var_info
-            completions.append({
-                "label": var_name,
-                "kind": "variable",
-                "insertText": var_name,
-                "detail": var_type
-            })
-        
-        # Add common Python keywords/builtins
-        python_keywords = [
-            "def", "class", "if", "elif", "else", "for", "while", "break",
-            "continue", "return", "import", "from", "as", "try", "except",
-            "finally", "with", "lambda", "yield", "assert", "pass", "raise",
-            "True", "False", "None", "and", "or", "not", "in", "is"
-        ]
-        for kw in python_keywords:
-            completions.append({
-                "label": kw,
-                "kind": "keyword",
-                "insertText": kw,
-                "detail": "Python keyword"
-            })
-        
-        # Add common imports/packages
-        common_packages = [
-            "pandas", "pd", "numpy", "np", "datetime", "json", "re", "os",
-            "sys", "math", "random", "collections", "itertools"
-        ]
-        for pkg in common_packages:
-            completions.append({
-                "label": pkg,
-                "kind": "module",
-                "insertText": pkg,
-                "detail": "module"
-            })
-        
-        logger.info(f"[MONACO] Registering {len(completions)} Python completions ({len(variables)} variables)")
+
+        self._python_completion_generation += 1
+        generation = self._python_completion_generation
+
+        worker = self._python_completion_worker
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+
+        worker = PythonCompletionBuildWorker(generation, variables, self)
+        worker.completions_ready.connect(self._on_python_completions_built)
+        worker.finished.connect(worker.deleteLater)
+        self._python_completion_worker = worker
+        worker.start()
+
+    def _on_python_completions_built(self, generation: int, completions: list) -> None:
+        if generation != self._python_completion_generation:
+            return
+        logger.debug(
+            "[MONACO] Registering %s Python completions",
+            len(completions),
+        )
         self.register_completions(completions)

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import logging
 
+from PyQt6.QtCore import QThread
+
 from src.language import S
 
 logger = logging.getLogger(__name__)
@@ -17,31 +19,57 @@ class CopilotMixin:
     def _setup_lsp_client(self):
         """Setup the Copilot LSP client for fast inline completions."""
         from src.services.copilot import CopilotLSPClient, get_copilot_server_path
-        import logging
-        
+
         server_path = get_copilot_server_path()
         if not server_path:
             logging.info("[MAIN] LSP server not available")
             return False
-        
+
         logging.info(f"[MAIN] Setting up LSP client with server: {server_path}")
-        
+
         self._lsp_client = CopilotLSPClient(str(server_path), self)
-        
-        # Connect LSP signals
-        # NOTE: auth_required is handled via CopilotAuthService to avoid duplication
         self._lsp_client.authenticated.connect(self._on_lsp_authenticated)
         self._lsp_client.log_message.connect(self._on_completion_log)
-        
-        # Start the server
-        if self._lsp_client.start():
+
+        self._start_lsp_process_async(str(server_path))
+        return True
+
+    def _start_lsp_process_async(self, server_path: str):
+        from src.workers import LSPProcessWorker
+
+        thread = QThread(self)
+        worker = LSPProcessWorker(server_path)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.process_ready.connect(
+            lambda process: self._on_lsp_process_ready(process, thread)
+        )
+        worker.error.connect(self._on_lsp_process_error)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        self._worker_threads.append((thread, worker))
+        thread.start()
+
+    def _on_lsp_process_ready(self, process, thread):
+        if not getattr(self, "_lsp_client", None):
+            return
+        if self._lsp_client.attach_process(process):
             self._lsp_client.initialize()
             logging.info("[MAIN] LSP client started and initializing")
-            return True
-        
+            if hasattr(self, "_copilot_auth_service") and self._copilot_auth_service:
+                self._copilot_auth_service.set_lsp_client(self._lsp_client)
+            self._update_editors_lsp_client()
+        else:
+            logging.warning("[MAIN] Failed to attach LSP process")
+            self._lsp_client = None
+
+    def _on_lsp_process_error(self, message: str):
+        logging.warning("[MAIN] Failed to start LSP client: %s", message)
         self._lsp_client = None
-        logging.warning("[MAIN] Failed to start LSP client")
-        return False
 
     def _setup_copilot_auth_service(self):
         """Initialize the centralized Copilot authentication service."""

@@ -296,6 +296,62 @@ class ChatBridge(QObject):
             return
         webview.update()
 
+    @pyqtSlot(str)
+    def refreshUsagePanel(self, payload_json: str = ""):
+        panel = self.parent()
+        if panel is None or not hasattr(panel, "_refresh_usage_panel"):
+            return
+        check_latest = True
+        try:
+            payload = json.loads(payload_json) if payload_json else {}
+            check_latest = bool(payload.get("check_latest", True))
+        except Exception:
+            pass
+        panel._refresh_usage_panel(check_latest=check_latest)
+
+    @pyqtSlot(str)
+    def updateCopilotCli(self, _payload_json: str = ""):
+        panel = self.parent()
+        if panel is not None and hasattr(panel, "_begin_runtime_update_flow"):
+            panel._begin_runtime_update_flow()
+
+    @pyqtSlot(str)
+    def openCopilotSubscription(self, _payload_json: str = ""):
+        QDesktopServices.openUrl(QUrl("https://github.com/settings/copilot"))
+
+    @pyqtSlot(str)
+    def switchAccount(self, _payload_json: str = ""):
+        panel = self.parent()
+        if panel is not None and hasattr(panel, "_open_account_picker"):
+            panel._open_account_picker()
+
+    @pyqtSlot(str)
+    def selectAccount(self, payload_json: str = ""):
+        panel = self.parent()
+        if panel is None or not hasattr(panel, "_activate_copilot_account"):
+            return
+        username = ""
+        try:
+            payload = json.loads(payload_json) if payload_json else {}
+            username = str(payload.get("username") or "").strip()
+        except Exception:
+            pass
+        if username:
+            panel._activate_copilot_account(username)
+
+    @pyqtSlot(str)
+    def addAccount(self, _payload_json: str = ""):
+        panel = self.parent()
+        if panel is not None and hasattr(panel, "_add_copilot_account"):
+            panel._add_copilot_account()
+
+    @pyqtSlot(result=str)
+    def listAccountsJson(self) -> str:
+        from src.services.copilot import get_copilot_auth_service
+
+        payload = get_copilot_auth_service().build_account_picker_payload()
+        return json.dumps(payload, default=str)
+
 
 class _StateItem:
     def __init__(self):
@@ -709,6 +765,61 @@ class GhCliInstallWorker(QObject):
         self._process = None
 
 
+class CopilotCliCheckWorker(QObject):
+    """Fetch Copilot CLI + SDK runtime status in a background thread."""
+
+    finished = pyqtSignal(dict)
+
+    def __init__(self, *, check_latest: bool = False, parent=None):
+        super().__init__(parent)
+        self._check_latest = check_latest
+
+    @pyqtSlot()
+    def run(self):
+        from src.services.copilot.copilot_cli_manager import build_cli_status
+
+        try:
+            self.finished.emit(build_cli_status(check_latest=self._check_latest))
+        except Exception as exc:
+            logger.info("Copilot CLI status check failed: %s", exc)
+            self.finished.emit({})
+
+
+class CopilotAccountSwitchWorker(QObject):
+    """Switch gh accounts without blocking the UI thread."""
+
+    finished = pyqtSignal(bool, str, str)
+
+    def __init__(self, username: str = "", parent=None):
+        super().__init__(parent)
+        self._username = username
+
+    @pyqtSlot()
+    def run(self):
+        from src.services.copilot import get_copilot_auth_service
+
+        auth = get_copilot_auth_service()
+        ok, message, mode = auth.prepare_chat_account_switch(self._username)
+        self.finished.emit(ok, message, mode)
+
+
+class CopilotCliUpdateWorker(QObject):
+    """Update Copilot CLI + SDK in a background thread."""
+
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(bool, str, bool)
+
+    @pyqtSlot()
+    def run(self):
+        from src.services.copilot.copilot_cli_manager import update_copilot_runtime
+
+        try:
+            success, message, requires_restart = update_copilot_runtime(progress=self.progress.emit)
+            self.finished.emit(success, message, requires_restart)
+        except Exception as exc:
+            self.finished.emit(False, str(exc), False)
+
+
 class CopilotChatPanel(QWidget):
     """
     Copilot Chat panel - integrates as a dockable panel in DataPyn.
@@ -747,6 +858,9 @@ class CopilotChatPanel(QWidget):
         self._auth_installing_gh = False
         self._auth_gate_progress_message = None
         self._auth_post_install_message = None
+        self._auth_runtime_update_action = False
+        self._account_switch_thread = None
+        self._account_switch_worker = None
         self._is_thinking = False  # Tracks collapsible thinking block state
         self._settings = QSettings("DataPyn", "CopilotChat")
         self._available_models = fallback_models()
@@ -756,6 +870,12 @@ class CopilotChatPanel(QWidget):
         self._current_tab_name = ""
         self._active_tool_target_id = None
         self._gh_install_worker = None
+        self._cli_status = {}
+        self._cli_check_worker = None
+        self._cli_check_thread = None
+        self._cli_update_worker = None
+        self._cli_update_thread = None
+        self._pending_runtime_update = False
         self._cleaned_up = False
         self._chat_runtime = CopilotChatRuntime(timeout_message=S.copilot.timeout_message, parent=self)
         self._chat_runtime.state_changed.connect(self._on_runtime_state_changed)
@@ -2288,6 +2408,7 @@ class CopilotChatPanel(QWidget):
         self._auth_device_code = (user_code, verification_uri)
         self._auth_signing_in = False
         self._auth_error_message = None
+        self._hide_account_switch_busy()
         QApplication.clipboard().setText(user_code)
         self._refresh_auth_gate()
 
@@ -2308,6 +2429,7 @@ class CopilotChatPanel(QWidget):
         self._auth_error_message = None
         self._auth_gh_required = False
         self._auth_installing_gh = False
+        self._hide_account_switch_busy()
         self._update_auth_state()
         username = getattr(self._copilot_client, "_username", "") if self._copilot_client else ""
         get_copilot_settings().on_chat_authenticated(username)
@@ -2315,19 +2437,31 @@ class CopilotChatPanel(QWidget):
 
     def _on_auth_failed(self, error: str):
         """Authentication failed — show status in gate."""
+        from src.services.copilot.copilot_sdk_compat import is_runtime_update_error
+
         self._auth_signing_in = False
         self._auth_device_code = None
+        self._auth_runtime_update_action = False
         self._auth_btn.setText(S.copilot.sign_in)
         self._auth_btn.setEnabled(True)
 
         if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
+            self._hide_account_switch_busy()
             self._on_gh_not_found()
+            return
+
+        if is_runtime_update_error(error):
+            self._auth_runtime_update_action = True
+            self._auth_error_message = S.copilot.runtime_update_required.format(error=error)
+            self._hide_account_switch_busy()
+            self._refresh_auth_gate()
             return
 
         if "cancel" in str(error or "").lower():
             self._auth_error_message = S.copilot.auth_cancelled
         else:
             self._auth_error_message = S.copilot.auth_failed.format(error=error)
+        self._hide_account_switch_busy()
         self._refresh_auth_gate()
 
     def _cancel_auth_flow(self):
@@ -2338,6 +2472,7 @@ class CopilotChatPanel(QWidget):
         self._auth_device_code = None
         get_copilot_auth_service().cancel_chat_auth()
         self._auth_error_message = S.copilot.auth_cancelled
+        self._hide_account_switch_busy()
         self._auth_btn.setText(S.copilot.sign_in)
         self._auth_btn.setEnabled(True)
         self._refresh_auth_gate()
@@ -2866,7 +3001,21 @@ class CopilotChatPanel(QWidget):
             "model_search_placeholder", "no_models_found",
             "new_chat", "chat_history", "history_search_placeholder", "delete_chat",
             "untitled_chat", "no_sessions", "usage_unavailable", "usage_format",
-            "usage_used_format", "usage_remaining_format", "waiting_response", "thinking",
+            "usage_used_format", "usage_remaining_format", "usage_panel_open",
+            "usage_panel_close", "usage_panel_title", "usage_panel_title_user",
+            "usage_panel_credits", "usage_panel_plan_included", "usage_panel_plan_unknown",
+            "usage_panel_runtime", "usage_panel_cli", "usage_panel_sdk",
+            "usage_panel_not_installed",             "usage_panel_reset", "usage_panel_update", "usage_panel_update_runtime",
+            "usage_panel_updating", "usage_panel_update_available", "usage_panel_restart_required",
+            "show_subscription", "runtime_update_required", "switch_account",
+            "account_picker_title", "account_picker_close", "add_account",
+            "account_current", "account_ready", "account_ready_short",
+            "account_needs_login", "account_picker_empty",
+            "account_switch_title", "account_switch_message",
+            "account_switch_add_title", "account_switch_add_message",
+            "runtime_update_checking", "runtime_update_downloading_cli", "runtime_update_installing_cli",
+            "runtime_update_downloading_sdk", "runtime_update_installing_sdk", "runtime_update_complete",
+            "waiting_response", "thinking",
             "thinking_complete", "tool_running", "tool_ok", "tool_error", "copy_code",
             "copied_code", "insert_code", "inserted_code", "effort_auto", "effort_low",
             "effort_medium", "effort_high", "effort_xhigh", "work_title",
@@ -2895,6 +3044,213 @@ class CopilotChatPanel(QWidget):
         for op in self._pending_webview_ops:
             self._chat_webview.page().runJavaScript(op)
         self._pending_webview_ops.clear()
+
+    def _usage_payload(self, *, updating: bool = False) -> dict:
+        from src.services.copilot.copilot_cli_manager import merge_usage_with_runtime
+
+        username = ""
+        if self._copilot_client and getattr(self._copilot_client, "is_authenticated", False):
+            username = getattr(self._copilot_client, "_username", "") or ""
+        payload = merge_usage_with_runtime(
+            self._usage_snapshot,
+            username=username,
+            cli_status=self._cli_status or None,
+        )
+        if updating:
+            payload["updating"] = True
+        return payload
+
+    def _refresh_usage_panel(self, *, check_latest: bool = False):
+        if self._cli_check_thread and self._cli_check_thread.isRunning():
+            return
+
+        self._cli_check_worker = CopilotCliCheckWorker(check_latest=check_latest)
+        self._cli_check_thread = QThread(self)
+        self._cli_check_worker.moveToThread(self._cli_check_thread)
+        self._cli_check_thread.started.connect(self._cli_check_worker.run)
+        self._cli_check_worker.finished.connect(self._on_cli_status_ready)
+        self._cli_check_worker.finished.connect(self._cli_check_thread.quit)
+        self._cli_check_worker.finished.connect(self._cli_check_worker.deleteLater)
+        self._cli_check_thread.finished.connect(self._cli_check_thread.deleteLater)
+        self._cli_check_thread.start()
+
+    def _on_cli_status_ready(self, status: dict):
+        self._cli_status = status if isinstance(status, dict) else {}
+        self._cli_check_thread = None
+        self._cli_check_worker = None
+        self._sync_usage_to_webview()
+        if self._pending_runtime_update:
+            self._pending_runtime_update = False
+            if self._cli_status.get("update_available"):
+                self._start_copilot_cli_update()
+
+    def _begin_runtime_update_flow(self):
+        if self._cli_update_thread and self._cli_update_thread.isRunning():
+            return
+        if (self._cli_status or {}).get("update_available"):
+            self._start_copilot_cli_update()
+            return
+        self._pending_runtime_update = True
+        self._refresh_usage_panel(check_latest=True)
+
+    def _start_copilot_cli_update(self):
+        if self._cli_update_thread and self._cli_update_thread.isRunning():
+            return
+        if not (self._cli_status or {}).get("update_available"):
+            return
+        cli = dict(self._cli_status or {})
+        cli["update_phase"] = "checking"
+        cli.pop("update_error", None)
+        cli.pop("restart_required", None)
+        self._cli_status = cli
+        self._sync_usage_to_webview(updating=True)
+
+        self._cli_update_worker = CopilotCliUpdateWorker()
+        self._cli_update_thread = QThread(self)
+        self._cli_update_worker.moveToThread(self._cli_update_thread)
+        self._cli_update_thread.started.connect(self._cli_update_worker.run)
+        self._cli_update_worker.progress.connect(self._on_cli_update_progress)
+        self._cli_update_worker.finished.connect(self._on_cli_update_finished)
+        self._cli_update_worker.finished.connect(self._cli_update_thread.quit)
+        self._cli_update_worker.finished.connect(self._cli_update_worker.deleteLater)
+        self._cli_update_thread.finished.connect(self._cli_update_thread.deleteLater)
+        self._cli_update_thread.start()
+
+    def _on_cli_update_progress(self, message: str):
+        cli = dict(self._cli_status or {})
+        cli["update_phase"] = message
+        self._cli_status = cli
+        self._sync_usage_to_webview(updating=True)
+
+    def _open_account_picker(self):
+        from src.services.copilot import get_copilot_auth_service
+
+        payload = get_copilot_auth_service().build_account_picker_payload()
+        self._run_chat_js(f"openAccountPicker({json.dumps(payload, default=str)})")
+
+    def _activate_copilot_account(self, username: str):
+        from src.services.copilot import get_copilot_auth_service
+
+        login = str(username or "").strip()
+        if not login:
+            return
+
+        auth = get_copilot_auth_service()
+        current = ""
+        if self._copilot_client and getattr(self._copilot_client, "is_authenticated", False):
+            current = getattr(self._copilot_client, "_username", "") or ""
+        if login == current and auth.is_chat_authenticated:
+            return
+
+        if self._account_switch_thread and self._account_switch_thread.isRunning():
+            return
+
+        self._show_account_switch_busy(login, kind="switch")
+        self._messages.clear()
+        self._run_chat_js("clearMessages()")
+        self._run_chat_js("showWelcome()")
+        self._current_session_id = None
+        self._settings.setValue("last_session_id", "")
+
+        self._account_switch_worker = CopilotAccountSwitchWorker(login, self)
+        self._account_switch_thread = QThread(self)
+        self._account_switch_worker.moveToThread(self._account_switch_thread)
+        self._account_switch_thread.started.connect(self._account_switch_worker.run)
+        self._account_switch_worker.finished.connect(self._on_account_switch_prepared)
+        self._account_switch_worker.finished.connect(self._account_switch_thread.quit)
+        self._account_switch_worker.finished.connect(self._account_switch_worker.deleteLater)
+        self._account_switch_thread.finished.connect(self._account_switch_thread.deleteLater)
+        self._account_switch_thread.start()
+
+    def _add_copilot_account(self):
+        from src.services.copilot import get_copilot_auth_service
+
+        if self._account_switch_thread and self._account_switch_thread.isRunning():
+            return
+
+        auth = get_copilot_auth_service()
+        self._show_account_switch_busy("", kind="add")
+        self._messages.clear()
+        self._run_chat_js("clearMessages()")
+        self._run_chat_js("showWelcome()")
+        self._current_session_id = None
+        self._settings.setValue("last_session_id", "")
+        if auth.add_chat_account():
+            self._auth_signing_in = True
+            self._auth_error_message = None
+            self._auth_runtime_update_action = False
+            self._refresh_auth_gate()
+            self._sync_app_state()
+        else:
+            self._hide_account_switch_busy()
+
+    def _show_account_switch_busy(self, username: str = "", *, kind: str = "switch"):
+        if kind == "add":
+            title = S.copilot.account_switch_add_title
+            message = S.copilot.account_switch_add_message
+        else:
+            title = S.copilot.account_switch_title
+            message = S.copilot.account_switch_message.format(username=username or "")
+        payload = {
+            "visible": True,
+            "username": username,
+            "kind": kind,
+            "title": title,
+            "message": message,
+        }
+        self._run_chat_js(f"setAccountSwitchBusy({json.dumps(payload, ensure_ascii=False)})")
+
+    def _hide_account_switch_busy(self):
+        self._run_chat_js('setAccountSwitchBusy({"visible":false})')
+
+    def _on_account_switch_prepared(self, ok: bool, message: str, mode: str):
+        self._account_switch_thread = None
+        self._account_switch_worker = None
+        if not ok:
+            self._hide_account_switch_busy()
+            self._auth_error_message = message or S.copilot.auth_failed.format(error="")
+            self._refresh_auth_gate()
+            self._sync_app_state()
+            return
+
+        from src.services.copilot import get_copilot_auth_service
+
+        auth = get_copilot_auth_service()
+        if not auth.complete_chat_account_activation(mode):
+            self._hide_account_switch_busy()
+            return
+
+        self._auth_signing_in = True
+        self._auth_error_message = None
+        self._auth_runtime_update_action = False
+        self._refresh_auth_gate()
+        self._sync_app_state()
+
+    def _on_cli_update_finished(self, success: bool, message: str, requires_restart: bool = False):
+        self._cli_update_thread = None
+        self._cli_update_worker = None
+        if success:
+            cli = dict(self._cli_status or {})
+            if requires_restart:
+                cli["update_progress"] = message
+                cli["restart_required"] = True
+                self._cli_status = cli
+                self._sync_usage_to_webview(updating=False)
+            if self._copilot_client and getattr(self._copilot_client, "is_authenticated", False) and not requires_restart:
+                self._copilot_client.start_auth()
+            elif self._auth_runtime_update_action and not requires_restart:
+                from src.services.copilot import get_copilot_auth_service
+                get_copilot_auth_service().login_chat()
+            self._auth_runtime_update_action = False
+            self._auth_error_message = None if not requires_restart else S.copilot.usage_panel_restart_required
+            self._refresh_auth_gate()
+            self._refresh_usage_panel(check_latest=True)
+            return
+
+        cli = dict(self._cli_status or {})
+        cli["update_error"] = message
+        self._cli_status = cli
+        self._sync_usage_to_webview(updating=False)
 
     def _sync_all_web_state(self):
         self._sync_models_to_webview()
@@ -2928,14 +3284,19 @@ class CopilotChatPanel(QWidget):
             }
 
         if self._auth_error_message:
-            return {
+            payload = {
                 "status": "error",
                 "pill_label": S.copilot.auth_status_error,
                 "title": S.copilot.chat_auth_error_title,
                 "message": self._auth_error_message,
-                "action_label": S.copilot.auth_gate_retry_action,
-                "action": "sign_in",
             }
+            if self._auth_runtime_update_action:
+                payload["action_label"] = S.copilot.usage_panel_update_runtime
+                payload["action"] = "update_runtime"
+            else:
+                payload["action_label"] = S.copilot.auth_gate_retry_action
+                payload["action"] = "sign_in"
+            return payload
 
         if self._auth_gh_required:
             return {
@@ -3014,8 +3375,8 @@ class CopilotChatPanel(QWidget):
         }
         self._run_chat_js(f"setModels({json.dumps(payload, default=str)})")
 
-    def _sync_usage_to_webview(self):
-        self._run_chat_js(f"setUsage({json.dumps(self._usage_snapshot, default=str)})")
+    def _sync_usage_to_webview(self, *, updating: bool = False):
+        self._run_chat_js(f"setUsage({json.dumps(self._usage_payload(updating=updating), default=str)})")
 
     def _supported_efforts_for_current_model(self) -> list:
         return model_supported_reasoning_efforts(self._available_models, self._model_combo.currentData() or "")
@@ -3452,6 +3813,12 @@ class CopilotChatPanel(QWidget):
 
         if action == "install_gh":
             self._install_gh_cli()
+            return
+        if action == "update_runtime":
+            self._begin_runtime_update_flow()
+            return
+        if action == "switch_account":
+            self._open_account_picker()
             return
         if action == "cancel_auth":
             self._cancel_auth_flow()

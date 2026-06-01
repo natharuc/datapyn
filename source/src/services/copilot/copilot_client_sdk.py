@@ -16,6 +16,10 @@ import time
 import functools
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
+from .copilot_sdk_compat import apply_sdk_compat_patches
+
+apply_sdk_compat_patches()
+
 from PyQt6.QtCore import (
     QObject, QThread, pyqtSignal, pyqtSlot,
     QMutex, QMutexLocker, Qt, QMetaObject, Q_ARG,
@@ -73,20 +77,28 @@ def _parse_copilot_cli_version(text: str) -> tuple:
 def _read_copilot_cli_version(cli_path: str) -> tuple:
     """Return semver tuple for a Copilot CLI binary."""
     import subprocess
-    try:
-        result = subprocess.run(
-            [cli_path, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=12,
-            env={**os.environ, "ELECTRON_RUN_AS_NODE": ""},
-        )
-        output = f"{result.stdout}\n{result.stderr}"
-        if result.returncode != 0 or "Cannot find" in output:
+
+    def _run_version(args: list) -> tuple:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=12,
+                env={**os.environ, "ELECTRON_RUN_AS_NODE": ""},
+                creationflags=_CREATE_NO_WINDOW,
+            )
+            output = f"{result.stdout}\n{result.stderr}"
+            if result.returncode != 0 or "Cannot find" in output:
+                return (0, 0, 0)
+            return _parse_copilot_cli_version(output)
+        except Exception:
             return (0, 0, 0)
-        return _parse_copilot_cli_version(output)
-    except Exception:
-        return (0, 0, 0)
+
+    version = _run_version([cli_path, "--no-auto-update", "--version"])
+    if version != (0, 0, 0):
+        return version
+    return _run_version([cli_path, "--version"])
 
 
 def _discover_copilot_cli_candidates() -> list:
@@ -772,6 +784,112 @@ class CopilotWorker(QObject):
             self.finished.emit()
         except Exception as e:
             logger.exception("Error during GitHub login")
+            self.error.emit(str(e))
+            self.finished.emit()
+        finally:
+            self._login_process = None
+
+    def run_add_account_login(self):
+        """Run GitHub CLI login to add another account (never short-circuit on existing auth)."""
+        import re
+        import subprocess
+        import time
+
+        self._cancelled = False
+        self._login_process = None
+        self._ensure_loop()
+
+        try:
+            gh_path = _gh_executable()
+            if not gh_path:
+                self.gh_not_found.emit()
+                self.finished.emit()
+                return
+
+            self.auth_started.emit("Adding GitHub account...")
+            process = subprocess.Popen(
+                [gh_path, "auth", "login", "-h", "github.com", "-p", "https", "-w"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=_CREATE_NO_WINDOW,
+            )
+            self._login_process = process
+
+            device_code = None
+            verification_url = None
+            output_lines = []
+
+            try:
+                for _ in range(20):
+                    if self._cancelled:
+                        process.kill()
+                        self.error.emit("Authentication cancelled")
+                        self.finished.emit()
+                        return
+
+                    line = process.stdout.readline()
+                    if not line:
+                        break
+                    output_lines.append(line)
+                    logger.debug("gh output: %s", line.strip())
+
+                    code_match = re.search(r"code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})", line, re.IGNORECASE)
+                    if code_match:
+                        device_code = code_match.group(1)
+
+                    url_match = re.search(r"(https://github\.com/login/device)", line)
+                    if url_match:
+                        verification_url = url_match.group(1)
+
+                    if device_code:
+                        break
+                    if "Press Enter" in line or "open github.com" in line:
+                        break
+
+                if device_code:
+                    verification_url = verification_url or "https://github.com/login/device"
+                    self.auth_required.emit(device_code, verification_url)
+                    try:
+                        process.stdin.write("\n")
+                        process.stdin.flush()
+                    except Exception:
+                        pass
+
+                    for _ in range(90):
+                        if self._cancelled:
+                            process.kill()
+                            self.error.emit("Authentication cancelled")
+                            self.finished.emit()
+                            return
+                        if process.poll() is not None:
+                            break
+                        time.sleep(2)
+                else:
+                    stdout_rest, _ = process.communicate(timeout=30)
+                    output_lines.append(stdout_rest or "")
+
+            except subprocess.TimeoutExpired:
+                process.kill()
+                self.error.emit("Authentication timed out. Please try again.")
+                self.finished.emit()
+                return
+            finally:
+                self._login_process = None
+
+            full_output = "".join(output_lines)
+            if _is_gh_logged_in(gh_path) or process.returncode in (0, None) or "Logged in as" in full_output:
+                logger.info("GitHub account added successfully")
+                self._complete_auth_from_gh()
+                return
+
+            error_msg = full_output.strip() or "Authentication failed"
+            self.error.emit(f"GitHub authentication failed: {error_msg}")
+            self.finished.emit()
+
+        except Exception as e:
+            logger.exception("Error during GitHub add-account login")
             self.error.emit(str(e))
             self.finished.emit()
         finally:
@@ -2014,6 +2132,31 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         self._session_worker.license_warning.connect(self.license_warning.emit)
         # Note: Do NOT connect finished to cleanup - worker stays alive
         
+        self._session_thread.start()
+
+    def do_add_account_login(self) -> None:
+        """Start GitHub login to add another account without logging everyone out."""
+        self._cleanup_worker()
+        self._cleanup_session_worker()
+
+        self._session_worker = CopilotWorker(self._tool_executor)
+        self._session_worker.set_model(self._model)
+        self._session_worker.set_reasoning_effort(self._reasoning_effort)
+        self._session_worker.set_available_models(self._available_models)
+        self._session_thread = QThread()
+        self._session_worker.moveToThread(self._session_thread)
+
+        self._session_thread.started.connect(self._session_worker.run_add_account_login)
+        self._session_worker.auth_ok.connect(self._on_auth_success)
+        self._session_worker.auth_started.connect(self._on_auth_started)
+        self._session_worker.auth_required.connect(self.auth_required.emit)
+        self._session_worker.models_ready.connect(self._on_models_loaded)
+        self._session_worker.usage_ready.connect(self._on_usage_loaded)
+        self._session_worker.error.connect(self._on_init_error)
+        self._session_worker.gh_not_found.connect(self._on_gh_not_found)
+        self._session_worker.ready.connect(self._on_session_ready)
+        self._session_worker.license_warning.connect(self.license_warning.emit)
+
         self._session_thread.start()
 
     def _on_models_loaded(self, models: list):

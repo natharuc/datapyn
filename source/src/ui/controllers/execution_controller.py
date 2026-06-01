@@ -265,10 +265,9 @@ class ExecutionController(QObject):
         thread.start()
     
     def _handle_use_database(self, use_match, query, connector, session):
-        """Handles USE database command"""
+        """Handles USE database command in a background thread."""
         database_name = use_match.group(1)
-        
-        # For Databricks, preserve CATALOG/SCHEMA prefix
+
         if connector.db_type == "databricks":
             catalog_match = re.match(r"^\s*USE\s+CATALOG\s+", query, re.IGNORECASE)
             schema_match = re.match(r"^\s*USE\s+SCHEMA\s+", query, re.IGNORECASE)
@@ -276,30 +275,33 @@ class ExecutionController(QObject):
                 database_name = f"CATALOG:{database_name}"
             elif schema_match:
                 database_name = f"SCHEMA:{database_name}"
-        
-        try:
-            self.start_execution_timer("SQL")
-            self._main.action_label.setText(S.status.sql_switching_database.format(name=database_name))
-            
-            connector.change_database(database_name)
-            self._main._update_connection_status()
-            
-            # Reload schema
-            connection_name = getattr(session, "connection_name", "") or ""
-            if connection_name:
-                self._main._schema_service.invalidate_cache(connection_name)
-                current_widget = self._main._get_current_session_widget()
-                if current_widget and hasattr(current_widget, "connection_changed"):
-                    current_widget.connection_changed.emit(connection_name, database_name)
-            
-            self._main._log_info(S.status.database_changed.format(name=database_name))
-            self._main.action_label.setText(S.status.sql_database.format(name=database_name))
+
+        self.start_execution_timer("SQL")
+        self._main.action_label.setText(S.status.sql_switching_database.format(name=database_name))
+        current_widget = self._main._get_current_session_widget()
+        connection_name = getattr(session, "connection_name", "") or ""
+
+        def on_success(db_name: str):
+            from src.database.database_connector import get_connector_database_context
+
+            try:
+                display_name = get_connector_database_context(connector) or db_name
+                self._main._update_connection_status()
+                if connection_name:
+                    self._main._schema_service.invalidate_cache(connection_name)
+                    if current_widget and hasattr(current_widget, "connection_changed"):
+                        current_widget.connection_changed.emit(connection_name, display_name)
+                self._main._log_info(S.status.database_changed.format(name=display_name))
+                self._main.action_label.setText(S.status.sql_database.format(name=display_name))
+            finally:
+                self.stop_execution_timer()
+
+        def on_error(message: str):
             self.stop_execution_timer()
-            
-        except Exception as e:
-            self.stop_execution_timer()
-            QMessageBox.critical(self._main, S.dialogs.error, S.dialogs.error_switching_db.format(error=str(e)))
+            QMessageBox.critical(self._main, S.dialogs.error, S.dialogs.error_switching_db.format(error=message))
             self._main.action_label.setText(S.status.sql_error_switching)
+
+        self._main._start_database_switch_worker(connector, database_name, on_success=on_success, on_error=on_error)
     
     def _on_sql_finished(self, df, error, thread, tab_index, db_before=""):
         """Callback when SQL finishes"""

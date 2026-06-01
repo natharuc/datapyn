@@ -22,18 +22,19 @@ class MonacoBridge(QObject):
     focus_in = pyqtSignal()
     focus_out = pyqtSignal()
     cursor_changed = pyqtSignal(int, int)  # line, column
+    selection_changed = pyqtSignal(str, bool)  # selected_text, has_selection
     execute_requested = pyqtSignal(str)  # selected_text (empty if no selection)
     completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column
     force_completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column (bypasses throttling)
     
     # SQL context-aware completion request (for dot patterns)
-    sql_context_requested = pyqtSignal(str, str, int, int)  # full_text, prefix (before dot), line, column
+    sql_context_requested = pyqtSignal(str, str, int, int, int)  # full_text, prefix, line, column, request_id
     
     # SQL general completion request (like SSMS - full context)
-    sql_completion_requested = pyqtSignal(str, int, int)  # full_text, line, column
+    sql_completion_requested = pyqtSignal(str, int, int, int)  # full_text, line, column, request_id
     
     # Python Jedi completion request
-    python_completion_requested = pyqtSignal(str, int, int)  # full_text, line, column
+    python_completion_requested = pyqtSignal(str, int, int, int)  # full_text, line, column, request_id
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,6 +66,11 @@ class MonacoBridge(QObject):
     def onCursorChanged(self, line: int, column: int):
         """Called when cursor position changes."""
         self.cursor_changed.emit(line, column)
+
+    @pyqtSlot(str, bool)
+    def onSelectionChanged(self, selected_text: str, has_selection: bool):
+        """Called when the editor selection changes."""
+        self.selection_changed.emit(selected_text, bool(has_selection))
     
     @pyqtSlot(str)
     def onExecuteRequested(self, selected_text: str = ""):
@@ -103,41 +109,21 @@ class MonacoBridge(QObject):
         """
         self.force_completion_requested.emit(prefix, suffix, line, column)
 
-    @pyqtSlot(str, str, int, int)
-    def requestSqlContext(self, full_text: str, prefix: str, line: int, column: int):
+    @pyqtSlot(str, str, int, int, int)
+    def requestSqlContext(self, full_text: str, prefix: str, line: int, column: int, request_id: int):
         """
         Called when SQL context-aware completion is requested.
         
         Used for "table." or "alias." completion to get specific columns.
-        
-        Args:
-            full_text: Complete SQL text for alias resolution
-            prefix: Identifier before the dot (table name or alias)
-            line: Current line number (1-indexed)
-            column: Current column (1-indexed)
         """
-        self.sql_context_requested.emit(full_text, prefix, line, column)
+        self.sql_context_requested.emit(full_text, prefix, line, column, int(request_id))
 
-    @pyqtSlot(str, int, int)
-    def requestSqlCompletion(self, full_text: str, line: int, column: int):
-        """
-        Called when SQL completion is requested (SSMS-style full context).
-        
-        Args:
-            full_text: Complete SQL text
-            line: Current line number (1-indexed)
-            column: Current column (1-indexed)
-        """
-        self.sql_completion_requested.emit(full_text, line, column)
+    @pyqtSlot(str, int, int, int)
+    def requestSqlCompletion(self, full_text: str, line: int, column: int, request_id: int):
+        """Called when SQL completion is requested (SSMS-style full context)."""
+        self.sql_completion_requested.emit(full_text, line, column, int(request_id))
 
-    @pyqtSlot(str, int, int)
-    def requestPythonCompletion(self, full_text: str, line: int, column: int):
-        """
-        Called when Python Jedi completion is requested.
-        
-        Args:
-            full_text: Complete Python source code
-            line: Current line number (1-indexed)
-            column: Current column (0-indexed)
-        """
-        self.python_completion_requested.emit(full_text, line, column)
+    @pyqtSlot(str, int, int, int)
+    def requestPythonCompletion(self, full_text: str, line: int, column: int, request_id: int):
+        """Called when Python Jedi completion is requested."""
+        self.python_completion_requested.emit(full_text, line, column, int(request_id))

@@ -41,6 +41,9 @@ except ImportError as e:
 
 # Try to use SDK-based client first, fallback to legacy
 try:
+    from .copilot_sdk_compat import apply_sdk_compat_patches
+
+    apply_sdk_compat_patches()
     from copilot import CopilotClient as _SDKClient
     # SDK available - use SDK-based wrapper
     from .copilot_client_sdk import CopilotClient

@@ -77,6 +77,9 @@ class InlineCompletionService(QObject):
     
     # Signal for logging to output panel (message, level: info/error/debug)
     log_message = pyqtSignal(str, str)
+
+    _logged_lsp_client_id: Optional[int] = None
+    _logged_lsp_username: Optional[str] = None
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,7 +95,7 @@ class InlineCompletionService(QObject):
         self._pending_request = None
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.setInterval(500)  # 500ms debounce (prevent flooding)
+        self._debounce_timer.setInterval(180)  # Single debounce layer (JS no longer stacks)
         self._debounce_timer.timeout.connect(self._execute_pending_request)
         
         # Request tracking
@@ -122,7 +125,7 @@ class InlineCompletionService(QObject):
         elif level == "debug":
             logger.debug(f"[AUTOCOMPLETE] {message}")
         else:
-            logger.info(f"[AUTOCOMPLETE] {message}")
+            logger.debug(f"[AUTOCOMPLETE] {message}")
         self.log_message.emit(f"[Autocomplete] {message}", level)
     
     def set_database_context(self, context: str) -> None:
@@ -247,28 +250,39 @@ class InlineCompletionService(QObject):
                 client.authenticated.connect(self._on_lsp_authenticated)
             self._lsp_connected = True
             
-            if client.is_authenticated:
-                self._log("Copilot LSP connected (authenticated)", "info")
-            else:
-                # Note: Auto-auth is now handled by CopilotAuthService
-                self._log("Copilot LSP connected (not authenticated yet)", "info")
+            client_id = id(client) if client else None
+            if client_id != InlineCompletionService._logged_lsp_client_id:
+                InlineCompletionService._logged_lsp_client_id = client_id
+                if client.is_authenticated:
+                    self._log("Copilot LSP connected (authenticated)", "info")
+                else:
+                    self._log("Copilot LSP connected (not authenticated yet)", "info")
     
     @pyqtSlot(str)
     def _on_lsp_authenticated(self, username: str) -> None:
         """Handle LSP authentication success."""
         self._sign_in_attempted = False  # Reset so we can retry if needed
-        self._log(f"LSP authenticated as {username} - fast completions ready", "info")
+        if username and username != InlineCompletionService._logged_lsp_username:
+            InlineCompletionService._logged_lsp_username = username
+            self._log(f"LSP authenticated as {username} - fast completions ready", "info")
     
     def set_document_info(self, uri: str, language: str) -> None:
         """Set the current document info for LSP completion requests."""
         self._document_uri = uri
         self._document_language = language
         self._document_version = 1
+        self._last_synced_text = ""
     
     def notify_document_changed(self, text: str) -> None:
         """Notify LSP that the document content changed."""
-        import logging
-        logging.info(f"[Autocomplete] notify_document_changed: uri={self._document_uri}, len={len(text)}, preview={text[:50]!r}...")
+        if text == getattr(self, "_last_synced_text", None):
+            return
+        self._last_synced_text = text
+        logger.debug(
+            "[Autocomplete] notify_document_changed: uri=%s, len=%s",
+            self._document_uri,
+            len(text),
+        )
         if self._lsp_client and self._document_uri:
             self._document_version += 1
             self._lsp_client.change_document(
@@ -279,9 +293,9 @@ class InlineCompletionService(QObject):
 
     def open_document(self, uri: str, language: str, text: str) -> None:
         """Open a document in the LSP server."""
-        import logging
-        logging.info(f"[Autocomplete] open_document: uri={uri}, lang={language}, len={len(text)}")
+        logger.debug("[Autocomplete] open_document: uri=%s, lang=%s, len=%s", uri, language, len(text))
         self._document_version = 1
+        self._last_synced_text = text
         
         if self._lsp_client:
             self._lsp_client.open_document(uri, language, text, 1)
@@ -296,13 +310,9 @@ class InlineCompletionService(QObject):
     @property
     def has_lsp(self) -> bool:
         """Check if LSP client is available and authenticated."""
-        import logging
-        client_id = id(self._lsp_client) if self._lsp_client else None
-        is_auth = self._lsp_client.is_authenticated if self._lsp_client else False
-        logging.info(f"[Autocomplete] has_lsp check: client_id={client_id}, is_auth={is_auth}")
         return (
             self._lsp_client is not None
-            and is_auth
+            and self._lsp_client.is_authenticated
         )
     
     @property
@@ -364,7 +374,7 @@ class InlineCompletionService(QObject):
         """
         # Skip if prefix is too short or just whitespace
         stripped = prefix.rstrip()
-        if len(stripped) < 3:
+        if len(stripped) < 2:
             self.completion_ready.emit("")
             return
         
@@ -386,10 +396,11 @@ class InlineCompletionService(QObject):
             return
         
         # DEDUPLICATE: Skip if same prefix as last request
-        if prefix == self._last_request_prefix:
+        request_key = f"{line}:{column}:{prefix}"
+        if request_key == self._last_request_prefix:
             return
         
-        self._last_request_prefix = prefix
+        self._last_request_prefix = request_key
         
         # Cancel any pending request
         self._current_request_id += 1

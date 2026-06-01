@@ -256,7 +256,6 @@ class ExecutionMixin:
         use_match = re.match(r"^\s*USE\s+(?:CATALOG\s+|SCHEMA\s+)?[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$", query, re.IGNORECASE)
         if use_match:
             database_name = use_match.group(1)
-            # For Databricks, preserve CATALOG/SCHEMA prefix for proper handling
             if connector.db_type == "databricks":
                 catalog_match = re.match(r"^\s*USE\s+CATALOG\s+", query, re.IGNORECASE)
                 schema_match = re.match(r"^\s*USE\s+SCHEMA\s+", query, re.IGNORECASE)
@@ -264,42 +263,34 @@ class ExecutionMixin:
                     database_name = f"CATALOG:{database_name}"
                 elif schema_match:
                     database_name = f"SCHEMA:{database_name}"
-            try:
-                self._start_execution_timer("SQL")
-                self.action_label.setText(S.status.sql_switching_database.format(name=database_name))
 
-                connector.change_database(database_name)
-                database_name = get_connector_database_context(connector) or database_name
-                session.database_context = database_name if connector.db_type == "databricks" else ""
+            self._start_execution_timer("SQL")
+            self.action_label.setText(S.status.sql_switching_database.format(name=database_name))
+            current_widget = self._get_current_session_widget()
+            connection_name = getattr(session, "connection_name", "") or ""
 
-                # Update statusbar
-                self._update_connection_status()
-
-                # Reload Object Explorer for the new database
-                connection_name = getattr(session, "connection_name", "") or ""
-                if connection_name:
-                    # Invalidate cache since database changed via USE command (per-session)
+            def on_success(db_name: str):
+                try:
+                    database_name_resolved = get_connector_database_context(connector) or db_name
+                    session.database_context = database_name_resolved if connector.db_type == "databricks" else ""
+                    self._update_connection_status()
                     sid = session.session_id
-                    current_widget = self._get_current_session_widget()
                     self._clear_sql_autocomplete_for_connection(current_widget, connection_name)
                     self._schema_service.invalidate_cache(connection_name, session_id=sid)
-                    # Signal triggers _on_session_connection_changed which handles:
-                    # - Schema reload
-                    # - Connection panel update
-                    # - Block database panels update
                     if current_widget and hasattr(current_widget, "connection_changed"):
-                        current_widget.connection_changed.emit(connection_name, database_name)
+                        current_widget.connection_changed.emit(connection_name, database_name_resolved)
+                    self._log_info(S.status.database_changed.format(name=database_name_resolved))
+                    self.action_label.setText(S.status.sql_database.format(name=database_name_resolved))
+                finally:
+                    self._stop_execution_timer()
 
-                self._log_info(S.status.database_changed.format(name=database_name))
-                self.action_label.setText(S.status.sql_database.format(name=database_name))
+            def on_error(message: str):
                 self._stop_execution_timer()
-                return
-
-            except Exception as e:
-                self._stop_execution_timer()
-                QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_switching_db.format(error=str(e)))
+                QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_switching_db.format(error=message))
                 self.action_label.setText(S.status.sql_error_switching)
-                return
+
+            self._start_database_switch_worker(connector, database_name, on_success=on_success, on_error=on_error)
+            return
 
         # Background execution
         self._start_execution_timer("SQL")

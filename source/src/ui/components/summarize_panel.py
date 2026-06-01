@@ -240,26 +240,27 @@ class _AggregateRow(QFrame):
         self._show_divider = show_divider
 
         layout = QHBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.label = QLabel(label)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.value = QLabel(value or "—")
         self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(self.label, 1)
-        layout.addWidget(self.value, 0)
+        layout.addWidget(self.value, 1)
 
         self._apply_layout_metrics(layout)
         self._apply_fonts()
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
     def _apply_layout_metrics(self, layout: QHBoxLayout):
-        pad_x = max(8, int(10 * self._zoom))
-        layout.setContentsMargins(pad_x, 0, pad_x, 0)
-        layout.setSpacing(max(4, int(6 * self._zoom)))
-        height = max(12, int(14 * self._zoom))
+        pad_x = max(12, int(16 * self._zoom))
+        pad_y = max(1, int(2 * self._zoom))
+        layout.setContentsMargins(pad_x, pad_y, pad_x, pad_y)
+        layout.setSpacing(max(8, int(12 * self._zoom)))
+        height = max(16, int(18 * self._zoom))
         self.setFixedHeight(height)
-        self.label.setFixedHeight(height)
-        self.value.setFixedHeight(height)
 
     def set_zoom(self, zoom: float):
         self._zoom = zoom
@@ -268,13 +269,13 @@ class _AggregateRow(QFrame):
 
     def _apply_fonts(self):
         label_font = QFont(self.label.font())
-        label_font.setPointSizeF(max(6.5, 7.0 * self._zoom))
+        label_font.setPointSizeF(max(6.0, 6.5 * self._zoom))
         label_font.setWeight(QFont.Weight.Medium)
         label_font.setCapitalization(QFont.Capitalization.AllUppercase)
         self.label.setFont(label_font)
 
         value_font = QFont(self.value.font())
-        value_font.setPointSizeF(max(7.0, 7.5 * self._zoom))
+        value_font.setPointSizeF(max(6.5, 7.0 * self._zoom))
         value_font.setWeight(QFont.Weight.DemiBold)
         self.value.setFont(value_font)
 
@@ -425,8 +426,18 @@ class SummarizePanel(QWidget):
         self.aggregate_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.aggregate_host = QWidget()
         self.aggregate_layout = QVBoxLayout(self.aggregate_host)
-        self.aggregate_layout.setContentsMargins(0, 0, 0, 0)
+        self.aggregate_layout.setContentsMargins(0, 4, 0, 4)
         self.aggregate_layout.setSpacing(0)
+        self.aggregate_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+
+        self.aggregate_inner = QFrame()
+        self.aggregate_inner.setObjectName("summarizeAggregateCard")
+        self.aggregate_inner.setMaximumWidth(320)
+        self.aggregate_inner_layout = QVBoxLayout(self.aggregate_inner)
+        self.aggregate_inner_layout.setContentsMargins(0, 0, 0, 0)
+        self.aggregate_inner_layout.setSpacing(0)
+        self.aggregate_layout.addWidget(self.aggregate_inner)
+        self.aggregate_layout.addStretch(1)
         self.aggregate_scroll.setWidget(self.aggregate_host)
 
         aggregate_layout.addWidget(self.aggregate_empty)
@@ -554,6 +565,13 @@ class SummarizePanel(QWidget):
         self.cards_scroll.setStyleSheet(f"background: {bg}; border: none; {SCROLLBAR_STYLE}")
         self.aggregate_scroll.setStyleSheet(f"background: {bg}; border: none; {SCROLLBAR_STYLE}")
         self.aggregate_host.setStyleSheet(f"background: {bg};")
+        self.aggregate_inner.setStyleSheet(f"""
+            QFrame#summarizeAggregateCard {{
+                background: {tokens.bg_secondary};
+                border: 1px solid {tokens.border_default};
+                border-radius: 8px;
+            }}
+        """)
 
         for card in self._column_cards:
             card.apply_theme(tokens, accent)
@@ -587,8 +605,8 @@ class SummarizePanel(QWidget):
         self._column_cards.clear()
 
     def _clear_aggregate_rows(self):
-        while self.aggregate_layout.count():
-            item = self.aggregate_layout.takeAt(0)
+        while self.aggregate_inner_layout.count():
+            item = self.aggregate_inner_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -625,12 +643,12 @@ class SummarizePanel(QWidget):
             row = _AggregateRow(
                 label,
                 item.get("value", "—"),
-                parent=self.aggregate_host,
+                parent=self.aggregate_inner,
                 zoom=scale,
                 show_divider=index < last_index,
             )
             row.apply_theme(tokens, accent)
-            self.aggregate_layout.addWidget(row)
+            self.aggregate_inner_layout.addWidget(row)
             self._aggregate_rows.append(row)
 
     def _on_format_requested(self, column_name: str, button):

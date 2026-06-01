@@ -20,6 +20,27 @@ logger = logging.getLogger(__name__)
 class ConnectionsMixin:
     """Handles database connections, OE interaction, connection dialogs."""
 
+    def _start_database_switch_worker(self, connector, database_name: str, *, on_success, on_error=None):
+        """Switch the active database in a background thread."""
+        from src.workers import DatabaseSwitchWorker
+
+        thread = QThread(self)
+        worker = DatabaseSwitchWorker(connector, database_name)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.switch_success.connect(on_success)
+        if on_error:
+            worker.error.connect(on_error)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        self._worker_threads.append((thread, worker))
+        thread.start()
+        return thread, worker
+
     def _on_object_explorer_insert_text(self, text: str):
         """Inserts text in the block that was focused before clicking on OE"""
         current_widget = self._get_current_session_widget()

@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
+def spawn_lsp_process(server_path: str) -> subprocess.Popen:
+    """Start the Copilot language server process (safe to call off the UI thread)."""
+    return subprocess.Popen(
+        [server_path, "--stdio"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+        creationflags=_CREATE_NO_WINDOW,
+    )
+
+
 class CopilotLSPClient(QObject):
     """
     LSP client for GitHub Copilot Language Server.
@@ -34,13 +46,6 @@ class CopilotLSPClient(QObject):
         initialized: Server has been initialized
         auth_required(str, str): user_code, verification_uri
         authenticated(str): username/status
-
-            try:
-                stdin = getattr(process, "stdin", None)
-                if stdin:
-                    stdin.close()
-            except Exception:
-                pass
         completion_ready(str): inline completion text
         error(str): error message
         status_changed(str): status update (e.g., "SignedIn", "SignedOut")
@@ -95,9 +100,11 @@ class CopilotLSPClient(QObject):
     @property
     def is_authenticated(self) -> bool:
         """Check if the user is authenticated."""
-        # Debug: log every check at INFO level to see the problem
-        logger.info(f"[LSP] is_authenticated={self._is_authenticated} (id={id(self)})")
         return self._is_authenticated
+
+    def _queue_completion(self, text: str) -> None:
+        """Deliver completion results on the Qt main thread."""
+        QTimer.singleShot(0, lambda value=text: self.completion_ready.emit(value))
     
     def _set_authenticated(self, value: bool, source: str = "unknown") -> None:
         """Set authentication state with logging."""
@@ -136,34 +143,31 @@ class CopilotLSPClient(QObject):
         
         try:
             logger.info(f"[LSP] Starting server: {self._server_path}")
-            
-            # Start process
-            self._process = subprocess.Popen(
-                [self._server_path, "--stdio"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,  # Unbuffered
-                creationflags=_CREATE_NO_WINDOW,
-            )
-            
-            self._stopping = False
-
-            # Start reader thread
-            self._reader_thread = threading.Thread(
-                target=self._read_loop,
-                daemon=True,
-                name="CopilotLSP-Reader"
-            )
-            self._reader_thread.start()
-            
-            logger.info("[LSP] Server process started")
-            return True
-        
+            process = spawn_lsp_process(self._server_path)
+            return self.attach_process(process)
         except Exception as e:
             logger.exception(f"[LSP] Failed to start server: {e}")
             self.error.emit(f"Failed to start Copilot server: {e}")
             return False
+
+    def attach_process(self, process: subprocess.Popen) -> bool:
+        """Attach a process started by spawn_lsp_process()."""
+        if self._process and self._process.poll() is None:
+            logger.warning("[LSP] Server already running")
+            return True
+        if process is None or process.poll() is not None:
+            return False
+
+        self._process = process
+        self._stopping = False
+        self._reader_thread = threading.Thread(
+            target=self._read_loop,
+            daemon=True,
+            name="CopilotLSP-Reader",
+        )
+        self._reader_thread.start()
+        logger.info("[LSP] Server process attached")
+        return True
     
     def stop(self) -> None:
         """Stop the language server."""
@@ -531,21 +535,37 @@ class CopilotLSPClient(QObject):
     
     def change_document(self, uri: str, version: int, text: str) -> None:
         """
-        Notify server of document changes.
-        
-        Args:
-            uri: Document URI
-            version: New version number
-            text: New full document text
+        Notify server of document changes using incremental ranges when possible.
         """
+        from .lsp_text_sync import compute_incremental_change
+
+        old_text = self._current_document_text
+        if text == old_text:
+            return
+
+        change = compute_incremental_change(old_text, text)
+        if change is None:
+            return
+
         self._current_document_version = version
         self._current_document_text = text
-        
-        logger.info(f"[LSP] Document changed: uri={uri}, version={version}, text_len={len(text)}")
-        
+
+        if "range" not in change:
+            content_changes = [{"text": text}]
+        else:
+            content_changes = [change]
+
+        logger.debug(
+            "[LSP] Document changed: uri=%s, version=%s, text_len=%s, incremental=%s",
+            uri,
+            version,
+            len(text),
+            "range" in change,
+        )
+
         self._send_notification("textDocument/didChange", {
             "textDocument": {"uri": uri, "version": version},
-            "contentChanges": [{"text": text}]
+            "contentChanges": content_changes,
         })
     
     def close_document(self, uri: str) -> None:
@@ -576,7 +596,7 @@ class CopilotLSPClient(QObject):
         
         if not self._initialized or not self._is_authenticated:
             logger.warning(f"[LSP] request_completion blocked: init={self._initialized}, auth={self._is_authenticated}")
-            self.completion_ready.emit("")
+            self._queue_completion("")
             return
         
         # Cancel any pending completion request
@@ -596,7 +616,7 @@ class CopilotLSPClient(QObject):
             if error:
                 logger.warning(f"[LSP] Completion error after {elapsed:.0f}ms: {error}")
                 self._panel_request_active = False
-                self.completion_ready.emit("")
+                self._queue_completion("")
                 return
             
             # Log full result structure for debugging
@@ -637,11 +657,11 @@ class CopilotLSPClient(QObject):
                     f"preview={insert_text[:80].replace(chr(10), ' ')}..."
                 )
                 self._panel_request_active = False
-                self.completion_ready.emit(insert_text)
+                self._queue_completion(insert_text)
             else:
                 logger.debug(f"[LSP] No completions in {elapsed:.0f}ms")
                 self._panel_request_active = False
-                self.completion_ready.emit("")
+                self._queue_completion("")
             
             self._pending_completion_id = None
         
@@ -827,7 +847,7 @@ class CopilotLSPClient(QObject):
             logger.info(f"[LSP] Panel solutions complete")
             if not self._panel_solutions:
                 # No solutions received, emit empty
-                self.completion_ready.emit("")
+                self._queue_completion("")
         
         elif method == "window/logMessage":
             msg = params.get("message", "")
@@ -877,6 +897,6 @@ class CopilotLSPClient(QObject):
             # Emit first solution immediately so user sees it
             if len(self._panel_solutions) == 1:
                 self._panel_request_active = False
-                self.completion_ready.emit(solution_text)
+                self._queue_completion(solution_text)
         else:
             logger.warning(f"[LSP] Empty panel solution: {list(params.keys())}")

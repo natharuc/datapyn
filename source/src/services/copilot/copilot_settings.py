@@ -114,8 +114,45 @@ class CopilotSettingsManager:
         self._settings.setValue("chat/was_authenticated", "true")
         self._settings.setValue("chat/user_logged_out", "false")
         self._settings.setValue("chat/username", username)
+        self.register_chat_account(username)
         logger.info(f"Chat auth state saved: authenticated as {username}")
-    
+
+    def register_chat_account(self, username: str = ""):
+        """Remember a GitHub account that successfully signed in to Copilot Chat."""
+        login = str(username or "").strip()
+        if not login:
+            return
+        from .copilot_accounts import normalize_known_accounts, _now_iso
+
+        accounts = normalize_known_accounts(self.chat_known_accounts)
+        now = _now_iso()
+        updated = [item for item in accounts if item.get("username") != login]
+        updated.insert(0, {
+            "username": login,
+            "last_used": now,
+            "added_at": next((a.get("added_at") for a in accounts if a.get("username") == login), now),
+        })
+        self._settings.setValue("chat/known_accounts", json.dumps(updated))
+
+    def mark_chat_account_selected(self, username: str = ""):
+        """Persist account switch intent before reconnect completes."""
+        login = str(username or "").strip()
+        if not login:
+            return
+        self._settings.setValue("chat/user_logged_out", "false")
+        self._settings.setValue("chat/was_authenticated", "true")
+        self.register_chat_account(login)
+
+    @property
+    def chat_known_accounts(self) -> list:
+        raw = self._settings.value("chat/known_accounts", "[]") or "[]"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return []
+        from .copilot_accounts import normalize_known_accounts
+        return normalize_known_accounts(data if isinstance(data, list) else [])
+
     def on_chat_logged_out(self):
         """Call when user explicitly logs out of Chat."""
         self._settings.setValue("chat/user_logged_out", "true")

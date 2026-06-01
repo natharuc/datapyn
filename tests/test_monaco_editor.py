@@ -304,7 +304,7 @@ class TestInlineCompletionService:
         service = InlineCompletionService()
         
         assert service._debounce_timer.isSingleShot()
-        assert service._debounce_timer.interval() == 500  # 500ms (more aggressive throttling)
+        assert service._debounce_timer.interval() == 180
     
     def test_service_cancel_request(self):
         """cancel_request should stop pending requests."""
@@ -379,7 +379,7 @@ class TestInlineCompletionService:
         service.completion_ready.connect(lambda x: results.append(x))
         
         # Very short prefix should be skipped
-        service.request_completion("ab", "", "python", 1, 3)
+        service.request_completion("a", "", "python", 1, 2)
         
         # Should emit empty immediately (not debounced)
         assert len(results) == 1
@@ -573,10 +573,12 @@ class TestMonacoSqlAutocompleteIntegration:
             service = service_cls.return_value
             service.get_completions.return_value = [("total", "column", "decimal(18,2)")]
 
-            editor._on_sql_completion_requested("SELECT o.", 2, 9)
+            with qtbot.waitSignal(editor._completion_service.sql_completions_ready, timeout=3000):
+                editor._on_sql_completion_requested("SELECT o.", 2, 9, 42)
 
             service.get_completions.assert_called_once_with("SELECT o.", 1, 8)
             emitted = editor._run_js_when_ready.call_args[0][0]
+            assert "receiveSqlCompletions(42," in emitted
             assert '"label": "total"' in emitted
             assert '"kind": "field"' in emitted
 
@@ -591,9 +593,11 @@ class TestMonacoSqlAutocompleteIntegration:
             service = service_cls.return_value
             service.get_completions.return_value = [("@status", "variable", "VARCHAR(20)")]
 
-            editor._on_sql_context_requested("SELECT @", "@", 1, 8)
+            with qtbot.waitSignal(editor._completion_service.sql_context_completions_ready, timeout=3000):
+                editor._on_sql_context_requested("SELECT @", "@", 1, 8, 7)
 
             service.get_completions.assert_called_once_with("SELECT @", 0, 7)
             emitted = editor._run_js_when_ready.call_args[0][0]
+            assert "receiveSqlContextCompletions(7," in emitted
             assert '"label": "@status"' in emitted
             assert '"kind": "variable"' in emitted

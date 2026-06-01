@@ -435,6 +435,10 @@ class CodeBlock(QFrame):
         self._sql_parameter_sync_timer.setSingleShot(True)
         self._sql_parameter_sync_timer.setInterval(250)
         self._sql_parameter_sync_timer.timeout.connect(self.sync_sql_parameters_from_query)
+        self._lsp_document_sync_timer = QTimer(self)
+        self._lsp_document_sync_timer.setSingleShot(True)
+        self._lsp_document_sync_timer.setInterval(250)
+        self._lsp_document_sync_timer.timeout.connect(self._sync_lsp_document)
         self._default_language = default_language
         self._connection_name = None  # None = use session connection
         self._database_name = None  # None = use connection default database
@@ -841,6 +845,7 @@ class CodeBlock(QFrame):
         self.editor.SCN_FOCUSIN.connect(self._on_focus_in)
         self.editor.SCN_FOCUSOUT.connect(self._on_focus_out)
         self.editor.textChanged.connect(self._schedule_sql_parameter_sync)
+        self.editor.textChanged.connect(self._schedule_lsp_document_sync)
         self.sql_parameters_panel.parameters_changed.connect(self._on_sql_parameters_panel_changed)
         self.sql_parameters_panel.close_requested.connect(self._on_sql_parameters_panel_close_requested)
         self.show_sql_parameters_btn.clicked.connect(lambda: self.set_sql_parameters_enabled(True))
@@ -965,6 +970,17 @@ class CodeBlock(QFrame):
             self._completion_service.set_lsp_client(client)
             # Re-open document with LSP
             self._update_document_info()
+
+    def _schedule_lsp_document_sync(self):
+        if not hasattr(self, "_completion_service") or not self._completion_service.has_lsp:
+            return
+        self._lsp_document_sync_timer.start()
+
+    def _sync_lsp_document(self):
+        if not hasattr(self, "_completion_service") or not self._completion_service.has_lsp:
+            return
+        text = self.editor.get_text() if hasattr(self.editor, "get_text") else ""
+        self._completion_service.notify_document_changed(text)
     
     def set_database_context(self, context: str):
         """Set database schema context for SQL completions (Monaco only)."""
