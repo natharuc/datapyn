@@ -31,6 +31,11 @@
         pasteBusy: false,
         recentAttachmentKeys: new Set(),
         supportsVision: true,
+        usagePanelOpen: false,
+        usageUpdating: false,
+        accountPickerOpen: false,
+        accountPicker: {},
+        accountSwitchBusy: false,
     };
 
     const $ = (id) => document.getElementById(id);
@@ -218,6 +223,7 @@
         const gate = $("authGate");
         const authBtn = $("authBtn");
         const logoutBtn = $("logoutBtn");
+        const switchAccountBtn = $("switchAccountBtn");
         const badge = $("authGateBadge");
         const title = $("authGateTitle");
         const message = $("authGateMessage");
@@ -231,6 +237,7 @@
             authBtn.disabled = !state.authReady && status === "signing_in";
         }
         if (logoutBtn) logoutBtn.hidden = !state.authReady;
+        if (switchAccountBtn) switchAccountBtn.hidden = !state.authReady;
 
         if (chatMain) chatMain.classList.toggle("chat-locked", !state.authReady);
 
@@ -628,19 +635,244 @@
         select.value = state.selectedEffort || "auto";
     }
 
+    function usageSummaryText(usage) {
+        if (usage.available && usage.used != null && usage.total != null) {
+            return label("usage_format", "{used}/{total}").replace("{used}", usage.used).replace("{total}", usage.total);
+        }
+        if (usage.available && usage.used != null) {
+            return label("usage_used_format", "{used}").replace("{used}", usage.used);
+        }
+        if (usage.available && usage.remaining_percentage != null) {
+            return label("usage_remaining_format", "{remaining}%").replace("{remaining}", usage.remaining_percentage);
+        }
+        return label("usage_unavailable", "");
+    }
+
+    function setUsagePanelOpen(open) {
+        state.usagePanelOpen = !!open;
+        const panel = $("usagePanel");
+        const button = $("usageStatusBtn");
+        if (panel) panel.hidden = !state.usagePanelOpen;
+        if (button) button.setAttribute("aria-expanded", state.usagePanelOpen ? "true" : "false");
+        if (state.usagePanelOpen) setAccountPickerOpen(false);
+    }
+
+    function setAccountPickerOpen(open) {
+        state.accountPickerOpen = !!open;
+        const panel = $("accountPicker");
+        if (panel) panel.hidden = !state.accountPickerOpen;
+    }
+
+    function renderAccountPicker() {
+        const list = $("accountPickerList");
+        if (!list) return;
+        const data = state.accountPicker || {};
+        const current = data.current || "";
+        list.innerHTML = "";
+        const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+        if (!accounts.length) {
+            const empty = document.createElement("div");
+            empty.className = "account-picker-item-meta";
+            empty.style.padding = "8px 10px";
+            empty.textContent = label("account_picker_empty", "No saved accounts yet.");
+            list.appendChild(empty);
+            return;
+        }
+        accounts.forEach((account) => {
+            const username = account.username || "";
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "account-picker-item";
+            if (username === current) btn.classList.add("current");
+            const ready = !!account.ready;
+            const meta = ready
+                ? label("account_ready", "Ready to switch")
+                : label("account_needs_login", "Sign in required");
+            let badge = "";
+            if (username === current) {
+                badge = `<span class="account-picker-item-badge">${escapeHtml(label("account_current", "Current"))}</span>`;
+            } else if (ready) {
+                badge = `<span class="account-picker-item-badge">${escapeHtml(label("account_ready_short", "Ready"))}</span>`;
+            }
+            btn.innerHTML = `<div class="account-picker-item-main"><div class="account-picker-item-name">@${escapeHtml(username)}</div><div class="account-picker-item-meta">${escapeHtml(meta)}</div></div>${badge}`;
+            btn.addEventListener("click", () => {
+                setAccountPickerOpen(false);
+                setAccountSwitchBusy({
+                    visible: true,
+                    username,
+                    kind: "switch",
+                });
+                callBridge("selectAccount", { username });
+            });
+            list.appendChild(btn);
+        });
+    }
+
+    function openAccountPicker(payload) {
+        state.accountPicker = payload || {};
+        renderAccountPicker();
+        setUsagePanelOpen(false);
+        setAccountPickerOpen(true);
+    }
+
+    function setAccountSwitchBusy(payload) {
+        payload = payload || {};
+        const overlay = $("accountSwitchOverlay");
+        const title = $("accountSwitchTitle");
+        const message = $("accountSwitchMessage");
+        const visible = !!payload.visible;
+        state.accountSwitchBusy = visible;
+        if (overlay) overlay.hidden = !visible;
+        if (!visible) return;
+        const username = payload.username || "";
+        const kind = payload.kind || "switch";
+        if (title) {
+            title.textContent = payload.title || label(
+                kind === "add" ? "account_switch_add_title" : "account_switch_title",
+                kind === "add" ? "Adding account" : "Switching account",
+            );
+        }
+        if (message) {
+            let text = payload.message || "";
+            if (!text && kind === "add") {
+                text = label("account_switch_add_message", "Starting GitHub sign in...");
+            } else if (!text && username) {
+                text = label("account_switch_message", "Connecting to @{username}...")
+                    .replace("{username}", username);
+            }
+            message.textContent = text;
+        }
+        setAccountPickerOpen(false);
+        setUsagePanelOpen(false);
+    }
+
+    function runtimePhaseLabel(phase) {
+        if (!phase) return "";
+        return label(`runtime_update_${phase}`, label("usage_panel_updating", ""));
+    }
+
+    function runtimePhasesForUpdate(cli) {
+        const phases = ["checking"];
+        if (cli.cli_update_available) {
+            phases.push("downloading_cli", "installing_cli");
+        }
+        if (cli.sdk_update_available) {
+            phases.push("downloading_sdk", "installing_sdk");
+        }
+        phases.push("complete");
+        return phases;
+    }
+
+    function renderUpdateProgress(cli, updating) {
+        const box = $("usagePanelUpdateProgress");
+        if (!box) return;
+        const phase = cli.update_phase || "";
+        if (!updating || !phase) {
+            box.hidden = true;
+            box.innerHTML = "";
+            return;
+        }
+        const phases = runtimePhasesForUpdate(cli);
+        const activeIndex = Math.max(0, phases.indexOf(phase));
+        box.hidden = false;
+        box.innerHTML = phases.map((step, index) => {
+            const done = index < activeIndex || (phase === "complete" && step !== "complete");
+            const current = step === phase;
+            const cls = done ? "done" : current ? "active" : "pending";
+            return `<div class="usage-panel-progress-step ${cls}">${escapeHtml(runtimePhaseLabel(step))}</div>`;
+        }).join("");
+    }
+
+    function renderUsagePanel() {
+        const usage = state.usage || {};
+        const cli = usage.cli || {};
+        const sdk = usage.sdk || {};
+        const title = $("usagePanelTitle");
+        const planHint = $("usagePanelPlanHint");
+        const quota = $("usagePanelQuota");
+        const reset = $("usagePanelReset");
+        const cliRow = $("usagePanelCli");
+        const sdkRow = $("usagePanelSdk");
+        const updateSection = $("usagePanelUpdateSection");
+        const updateBtn = $("usagePanelUpdateBtn");
+        const updateStatus = $("usagePanelUpdateStatus");
+
+        if (title) {
+            title.textContent = usage.username
+                ? label("usage_panel_title_user", "GitHub Copilot").replace("{username}", usage.username)
+                : label("usage_panel_title", "GitHub Copilot");
+        }
+        if (planHint) {
+            planHint.textContent = usage.available
+                ? label("usage_panel_plan_included", "")
+                : label("usage_panel_plan_unknown", "");
+        }
+        if (quota) quota.textContent = usageSummaryText(usage);
+        if (reset) {
+            reset.textContent = usage.reset_date
+                ? label("usage_panel_reset", "").replace("{reset_date}", usage.reset_date)
+                : "";
+        }
+        if (cliRow) {
+            const version = cli.version || label("usage_panel_not_installed", "Not installed");
+            const source = cli.source_label || cli.source || "";
+            cliRow.innerHTML = `<span>${escapeHtml(label("usage_panel_cli", "CLI"))}</span><strong>${escapeHtml(version)}${source ? ` · ${escapeHtml(source)}` : ""}</strong>`;
+        }
+        if (sdkRow) {
+            const version = sdk.version || cli.sdk_version || label("usage_unavailable", "");
+            const latest = cli.latest_sdk_version || "";
+            const latestHint = latest && latest !== version ? ` · latest ${latest}` : "";
+            sdkRow.innerHTML = `<span>${escapeHtml(label("usage_panel_sdk", "SDK"))}</span><strong>${escapeHtml(version)}${escapeHtml(latestHint)}</strong>`;
+        }
+        if (updateSection && updateBtn && updateStatus) {
+            const hasUpdate = !!(cli.cli_update_available || cli.sdk_update_available);
+            const showUpdate = !!(
+                (hasUpdate && cli.can_update)
+                || state.usageUpdating
+                || cli.update_error
+                || cli.restart_required
+            );
+            updateSection.hidden = !showUpdate;
+            updateBtn.hidden = !hasUpdate || state.usageUpdating || cli.restart_required;
+            updateBtn.textContent = label("usage_panel_update_runtime", label("usage_panel_update", "Update"));
+            updateBtn.disabled = state.usageUpdating || !hasUpdate || !cli.can_update;
+            renderUpdateProgress(cli, state.usageUpdating);
+            if (cli.restart_required) {
+                updateStatus.textContent = label("usage_panel_restart_required", "");
+            } else if (cli.update_error) {
+                updateStatus.textContent = cli.update_error;
+            } else if (state.usageUpdating) {
+                updateStatus.textContent = runtimePhaseLabel(cli.update_phase) || label("usage_panel_updating", "Updating...");
+            } else if (hasUpdate) {
+                const parts = [];
+                if (cli.version && cli.latest_version && cli.cli_update_available) {
+                    parts.push(`CLI ${cli.version} → ${cli.latest_version}`);
+                }
+                if (cli.sdk_version && cli.latest_sdk_version && cli.sdk_update_available) {
+                    parts.push(`SDK ${cli.sdk_version} → ${cli.latest_sdk_version}`);
+                }
+                updateStatus.textContent = parts.join(" · ");
+            } else {
+                updateStatus.textContent = "";
+            }
+        }
+        const switchAccount = $("usagePanelSwitchAccount");
+        if (switchAccount) switchAccount.hidden = !state.authReady;
+    }
+
     function renderUsage() {
         const usage = state.usage || {};
-        const pill = $("usagePill");
-        if (!pill) return;
-        if (usage.available && usage.used != null && usage.total != null) {
-            pill.textContent = label("usage_format", "{used}/{total}").replace("{used}", usage.used).replace("{total}", usage.total);
-        } else if (usage.available && usage.used != null) {
-            pill.textContent = label("usage_used_format", "{used}").replace("{used}", usage.used);
-        } else if (usage.available && usage.remaining_percentage != null) {
-            pill.textContent = label("usage_remaining_format", "{remaining}%").replace("{remaining}", usage.remaining_percentage);
-        } else {
-            pill.textContent = label("usage_unavailable", "");
+        const labelNode = $("usageStatusLabel");
+        const badge = $("usageUpdateBadge");
+        const button = $("usageStatusBtn");
+        if (labelNode) labelNode.textContent = usageSummaryText(usage);
+        if (button) button.hidden = !state.authReady;
+        if (badge) {
+            const showBadge = !!(usage.cli && (usage.cli.cli_update_available || usage.cli.sdk_update_available) && !state.usageUpdating);
+            badge.hidden = !showBadge;
+            badge.textContent = showBadge ? "1" : "";
         }
+        renderUsagePanel();
     }
 
     function renderSessions() {
@@ -1238,8 +1470,12 @@
         if (Object.prototype.hasOwnProperty.call(payload, "auth_ready")) {
             const authBtn = $("authBtn");
             const logoutBtn = $("logoutBtn");
+            const switchAccountBtn = $("switchAccountBtn");
             if (authBtn) authBtn.classList.toggle("ready", !!payload.auth_ready);
             if (logoutBtn) logoutBtn.hidden = !payload.auth_ready;
+            if (switchAccountBtn) switchAccountBtn.hidden = !payload.auth_ready;
+            state.authReady = !!payload.auth_ready;
+            renderUsage();
         }
         if (payload.selected_model) state.selectedModel = payload.selected_model;
         if (payload.selected_effort) state.selectedEffort = payload.selected_effort;
@@ -1282,6 +1518,68 @@
         $("toggleHistoryBtn").addEventListener("click", () => applyHistoryCollapsed(!state.historyCollapsed, true));
         $("toggleHistoryHeaderBtn").addEventListener("click", () => applyHistoryCollapsed(!state.historyCollapsed, true));
         $("refreshModelsBtn").addEventListener("click", () => callBridge("refreshModels", {}));
+        const usageStatusBtn = $("usageStatusBtn");
+        const usagePanelClose = $("usagePanelClose");
+        const usagePanelUpdateBtn = $("usagePanelUpdateBtn");
+        const usagePanelSubscription = $("usagePanelSubscription");
+        if (usageStatusBtn) {
+            usageStatusBtn.addEventListener("click", (event) => {
+                event.stopPropagation();
+                const nextOpen = !state.usagePanelOpen;
+                setUsagePanelOpen(nextOpen);
+                if (nextOpen) callBridge("refreshUsagePanel", { check_latest: true });
+            });
+        }
+        if (usagePanelClose) {
+            usagePanelClose.addEventListener("click", () => setUsagePanelOpen(false));
+        }
+        if (usagePanelUpdateBtn) {
+            usagePanelUpdateBtn.addEventListener("click", () => callBridge("updateCopilotCli", {}));
+        }
+        if (usagePanelSubscription) {
+            usagePanelSubscription.addEventListener("click", () => callBridge("openCopilotSubscription", {}));
+        }
+        const usagePanelSwitchAccount = $("usagePanelSwitchAccount");
+        if (usagePanelSwitchAccount) {
+            usagePanelSwitchAccount.addEventListener("click", () => {
+                setUsagePanelOpen(false);
+                callBridge("switchAccount", {});
+            });
+        }
+        const switchAccountBtn = $("switchAccountBtn");
+        if (switchAccountBtn) {
+            switchAccountBtn.addEventListener("click", (event) => {
+                event.stopPropagation();
+                callBridge("switchAccount", {});
+            });
+        }
+        const accountPickerClose = $("accountPickerClose");
+        if (accountPickerClose) {
+            accountPickerClose.addEventListener("click", () => setAccountPickerOpen(false));
+        }
+        const accountPickerAdd = $("accountPickerAdd");
+        if (accountPickerAdd) {
+            accountPickerAdd.addEventListener("click", () => {
+                setAccountPickerOpen(false);
+                setAccountSwitchBusy({ visible: true, kind: "add" });
+                callBridge("addAccount", {});
+            });
+        }
+        document.addEventListener("click", (event) => {
+            if (state.accountPickerOpen) {
+                const wrap = document.querySelector(".account-picker-wrap");
+                if (wrap && !wrap.contains(event.target)) setAccountPickerOpen(false);
+            }
+            if (!state.usagePanelOpen) return;
+            const wrap = document.querySelector(".usage-status-wrap");
+            if (wrap && !wrap.contains(event.target)) setUsagePanelOpen(false);
+        });
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                if (state.accountPickerOpen) setAccountPickerOpen(false);
+                if (state.usagePanelOpen) setUsagePanelOpen(false);
+            }
+        });
         $("authBtn").addEventListener("click", () => {
             if (state.authReady) return;
             callBridge("authAction", { action: "sign_in" });
@@ -1447,8 +1745,13 @@
     };
     window.setUsage = (payload) => {
         state.usage = payload || {};
+        if (Object.prototype.hasOwnProperty.call(payload || {}, "updating")) {
+            state.usageUpdating = !!payload.updating;
+        }
         renderUsage();
     };
+    window.openAccountPicker = openAccountPicker;
+    window.setAccountSwitchBusy = setAccountSwitchBusy;
     window.setSessions = (payload) => {
         state.sessions = Array.isArray(payload && payload.sessions) ? payload.sessions : [];
         renderSessions();

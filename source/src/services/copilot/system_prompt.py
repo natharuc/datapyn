@@ -25,6 +25,7 @@ Python blocks can access all DataFrames by name: `vendas.head()`, `pd.merge(vend
 Users often say "the Python code that generates the HTML" — that means a **python block** whose output is HTML
 (`display(HTML(...))`, string templates, etc.). These blocks appear in the results panel, NOT as chart tabs.
 - Check `html_blocks` / `hints: generates_html` in the context snapshot or call `list_blocks`.
+- For LARGE HTML blocks: `inspect_block` → `get_block_code(around='symbol')` → `edit_block_lines`. Do NOT use `run_silent_python` to grep HTML strings.
 - Edit with `get_block_code` + `edit_block` / `edit_block_lines`. Do NOT use `create_visualization`.
 - Do NOT use `write_and_run` or `create_block` when a matching block already exists.
 
@@ -63,7 +64,7 @@ Users can explicitly attach context with DataPyn references:
 2. `think` briefly: which existing block to edit? silent exploration needed? final artifact needed?
 3. If the target block is unclear, call `list_blocks` ONCE (not repeated `get_context`).
 4. Use silent tools only for SQL/data checks — not to probe block structure you already have.
-5. `get_block_code(block_name=...)` then `edit_block` / `edit_block_lines` for code changes.
+5. For large blocks: `inspect_block` then `get_block_code(around=...)` or `start_line`/`end_line`, then `edit_block_lines`.
 6. Execute automatically when it helps finish the task.
 7. Call `notify_user` when a user-facing task is finished so DataPyn shows a toast.
 8. Respond with a concise summary in the user's language. Keep detailed results in DataPyn panels/blocks.
@@ -71,6 +72,7 @@ Users can explicitly attach context with DataPyn references:
 ## TOOL DISCIPLINE
 - Prefer `list_blocks` over repeated `get_context`, `get_tab_context`, or `resolve_reference`.
 - Do not call `get_block_code` more than once per block unless the code changed.
+- NEVER use `run_silent_python` with `html.find(...)` or string slicing to explore block source — use `inspect_block` and `get_block_code(around=...)`.
 - Do not repeatedly call `search_in_code` with generic terms such as `div`, `input`, `config`, `table`, `meta`, `valid`, `style`, or common language keywords.
 - Use `get_block_code`, `list_blocks`, and explicit `#tab`/`#block` references before searching.
 - If two targeted lookups do not find the needed block, stop searching and ask which block to edit.
@@ -110,7 +112,7 @@ def build_tools_list(tools: list) -> str:
     # Categorize tools
     categories = {
         "OBSERVE (read state, no side effects)": [
-            "get_context", "list_blocks", "get_block_code", "get_execution_results",
+            "get_context", "list_blocks", "inspect_block", "get_block_code", "get_execution_results",
             "get_variables", "inspect_variable", "get_dataframe_info",
             "get_selection", "search_in_code", "resolve_reference",
             "get_tab_context", "get_block_result",

@@ -241,11 +241,11 @@ class LayoutMixin:
             summarize = info["summarize"]
             results = info.get("results")
             if summarize and results:
-                summarize.update_from_results_viewer(results)
+                QTimer.singleShot(0, lambda panel=summarize, rv=results: panel.schedule_update_from_results_viewer(rv))
 
-        # Trocar Object Explorer para a sessao ativa
+        # Trocar Object Explorer para a sessao ativa (deferido para nao bloquear a UI)
         if hasattr(self, "_session_explorers"):
-            self._switch_session_explorer(session_id)
+            QTimer.singleShot(0, lambda sid=session_id: self._switch_session_explorer(sid))
 
     @property
     def global_results_viewer(self):

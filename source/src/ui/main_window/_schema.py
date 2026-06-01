@@ -8,7 +8,7 @@ import logging
 import weakref
 
 import pandas as pd
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import QMessageBox
 
 from src.language import S
@@ -415,16 +415,11 @@ class SchemaMixin:
             S.status.schema_loaded.format(name=connection_name, tables=tables_count, cols=cols_count), 5000
         )
 
-        # Enviar schema para blocos que usam esta conexao
-        # Get db_type early for special handling (e.g., Databricks)
         db_type = ""
         conn_config = self.connection_manager.get_connection_config(connection_name)
         if conn_config:
             db_type = conn_config.get("db_type", "")
 
-        all_databases = self._available_databases_from_schema(schema, db_type)
-
-        # Determine which session requested this schema (use signal param OR fallback to tracking dict)
         pending_sid = ""
         if hasattr(self, "_pending_schema_sessions"):
             pending_sid = self._pending_schema_sessions.get(connection_name, "") or ""
@@ -432,47 +427,14 @@ class SchemaMixin:
         requesting_sid = session_id or pending_sid
         self._clear_pending_object_explorer_requests(requesting_sid)
 
-        for widget in self._session_widgets.values():
-            if not (hasattr(widget, "editor") and widget.editor):
-                continue
+        # Defer heavy Monaco/schema propagation to the next event-loop tick
+        QTimer.singleShot(
+            0,
+            lambda s=schema, cn=connection_name, db=db_type, rs=requesting_sid: self._apply_loaded_schema_to_blocks(
+                s, cn, db_type=db, requesting_sid=rs,
+            ),
+        )
 
-            # Verificar se esta conexao e a conexao da sessao
-            session_conn = ""
-            sid = ""
-            if hasattr(widget, "session") and widget.session:
-                session_conn = getattr(widget.session, "connection_name", "") or ""
-                sid = widget.session.session_id
-
-            # Only update session that REQUESTED the schema (sessions are isolated)
-            if requesting_sid and sid != requesting_sid:
-                continue
-
-            # If this is the session's connection, cache schema in BlockEditor
-            # BlockEditor will apply to all SQL blocks and handle language changes
-            if session_conn == connection_name:
-                if hasattr(widget.editor, "set_sql_schema"):
-                    widget.editor.set_sql_schema(schema)
-            
-            # Also handle per-block custom connections
-            for block in widget.editor.get_blocks():
-                # Only apply SQL schema to SQL blocks
-                block_lang = block.get_language() if hasattr(block, "get_language") else ""
-                if block_lang != "sql":
-                    continue
-
-                block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-
-                # Block with custom connection: only apply if same connection
-                if block_conn and block_conn == connection_name:
-                    if hasattr(block.editor, "set_sql_schema"):
-                        block.editor.set_sql_schema(schema)
-                    if hasattr(block, "set_available_databases"):
-                        block.set_available_databases(all_databases)
-                elif not block_conn and session_conn == connection_name:
-                    # Block without custom connection uses session - set available databases
-                    if hasattr(block, "set_available_databases"):
-                        block.set_available_databases(all_databases)
-        
         # Build text context from schema for Copilot completions
         schema_context = self._build_schema_context(schema, connection_name)
         
@@ -519,6 +481,49 @@ class SchemaMixin:
                     self._apply_schema_to_block(pending_block, schema, db_type=db_type)
                     # Also update OE if this block is focused
                     self._update_oe_for_block_connection(pending_block, connection_name, schema)
+
+    def _apply_loaded_schema_to_blocks(
+        self,
+        schema: dict,
+        connection_name: str,
+        *,
+        db_type: str = "",
+        requesting_sid: str = "",
+    ):
+        """Apply loaded schema to SQL blocks without blocking the schema_loaded handler."""
+        all_databases = self._available_databases_from_schema(schema, db_type)
+
+        for widget in self._session_widgets.values():
+            if not (hasattr(widget, "editor") and widget.editor):
+                continue
+
+            session_conn = ""
+            sid = ""
+            if hasattr(widget, "session") and widget.session:
+                session_conn = getattr(widget.session, "connection_name", "") or ""
+                sid = widget.session.session_id
+
+            if requesting_sid and sid != requesting_sid:
+                continue
+
+            if session_conn == connection_name and hasattr(widget.editor, "set_sql_schema"):
+                widget.editor.set_sql_schema(schema)
+
+            for block in widget.editor.get_blocks():
+                block_lang = block.get_language() if hasattr(block, "get_language") else ""
+                if block_lang != "sql":
+                    continue
+
+                block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+
+                if block_conn and block_conn == connection_name:
+                    if hasattr(block.editor, "set_sql_schema"):
+                        block.editor.set_sql_schema(schema)
+                    if hasattr(block, "set_available_databases"):
+                        block.set_available_databases(all_databases)
+                elif not block_conn and session_conn == connection_name:
+                    if hasattr(block, "set_available_databases"):
+                        block.set_available_databases(all_databases)
 
     def _build_schema_context(self, schema: dict, connection_name: str) -> str:
         """Build text context from schema for Copilot inline completions.

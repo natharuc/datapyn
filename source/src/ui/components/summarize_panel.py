@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QThread, QTimer
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFrame,
@@ -32,6 +32,47 @@ except ImportError:
 
 ZOOM_LEVELS = (85, 100, 115, 130)
 DEFAULT_ZOOM_INDEX = 1
+
+
+class _SummarizeBuildWorker(QObject):
+    """Compute summarize stats off the UI thread."""
+
+    finished = pyqtSignal(int, object)
+    error = pyqtSignal(int, str)
+
+    def __init__(
+        self,
+        generation: int,
+        df,
+        scope: dict,
+        result_label: str,
+        column_formats: dict,
+        numeric_column_indices,
+    ):
+        super().__init__()
+        self._generation = generation
+        self._df = df
+        self._scope = dict(scope or {})
+        self._result_label = result_label
+        self._column_formats = dict(column_formats or {})
+        self._numeric_column_indices = numeric_column_indices
+
+    def run(self):
+        try:
+            from src.ui.components.summarize_stats import build_selection_summary
+
+            payload = build_selection_summary(
+                self._df,
+                self._scope.get("cells") or [],
+                row_ranges=self._scope.get("row_ranges"),
+                bound_cols=self._scope.get("bound_cols"),
+                result_label=self._result_label,
+                column_formats=self._column_formats,
+                numeric_column_indices=self._numeric_column_indices,
+            )
+            self.finished.emit(self._generation, payload)
+        except Exception as exc:
+            self.error.emit(self._generation, str(exc))
 
 
 class _StatChip(QFrame):
@@ -240,26 +281,27 @@ class _AggregateRow(QFrame):
         self._show_divider = show_divider
 
         layout = QHBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.label = QLabel(label)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.value = QLabel(value or "—")
         self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(self.label, 1)
-        layout.addWidget(self.value, 0)
+        layout.addWidget(self.value, 1)
 
         self._apply_layout_metrics(layout)
         self._apply_fonts()
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
     def _apply_layout_metrics(self, layout: QHBoxLayout):
-        pad_x = max(8, int(10 * self._zoom))
-        layout.setContentsMargins(pad_x, 0, pad_x, 0)
-        layout.setSpacing(max(4, int(6 * self._zoom)))
-        height = max(12, int(14 * self._zoom))
+        pad_x = max(14, int(18 * self._zoom))
+        pad_y = max(2, int(3 * self._zoom))
+        layout.setContentsMargins(pad_x, pad_y, pad_x, pad_y)
+        layout.setSpacing(max(10, int(14 * self._zoom)))
+        height = max(20, int(22 * self._zoom))
         self.setFixedHeight(height)
-        self.label.setFixedHeight(height)
-        self.value.setFixedHeight(height)
 
     def set_zoom(self, zoom: float):
         self._zoom = zoom
@@ -268,13 +310,13 @@ class _AggregateRow(QFrame):
 
     def _apply_fonts(self):
         label_font = QFont(self.label.font())
-        label_font.setPointSizeF(max(6.5, 7.0 * self._zoom))
+        label_font.setPointSizeF(max(7.0, 7.5 * self._zoom))
         label_font.setWeight(QFont.Weight.Medium)
         label_font.setCapitalization(QFont.Capitalization.AllUppercase)
         self.label.setFont(label_font)
 
         value_font = QFont(self.value.font())
-        value_font.setPointSizeF(max(7.0, 7.5 * self._zoom))
+        value_font.setPointSizeF(max(7.5, 8.5 * self._zoom))
         value_font.setWeight(QFont.Weight.DemiBold)
         self.value.setFont(value_font)
 
@@ -310,6 +352,11 @@ class SummarizePanel(QWidget):
         self._column_cards: List[_ColumnSummaryCard] = []
         self._aggregate_rows: List[_AggregateRow] = []
         self._zoom_index = DEFAULT_ZOOM_INDEX
+        self._summarize_dirty = False
+        self._summarize_generation = 0
+        self._summarize_thread: Optional[QThread] = None
+        self._summarize_worker: Optional[_SummarizeBuildWorker] = None
+        self._summarize_update_timer: Optional[QTimer] = None
         self._setup_ui()
         self.clear()
 
@@ -425,8 +472,17 @@ class SummarizePanel(QWidget):
         self.aggregate_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.aggregate_host = QWidget()
         self.aggregate_layout = QVBoxLayout(self.aggregate_host)
-        self.aggregate_layout.setContentsMargins(0, 0, 0, 0)
+        self.aggregate_layout.setContentsMargins(8, 6, 8, 6)
         self.aggregate_layout.setSpacing(0)
+        self.aggregate_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.aggregate_inner = QFrame()
+        self.aggregate_inner.setObjectName("summarizeAggregateCard")
+        self.aggregate_inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.aggregate_inner_layout = QVBoxLayout(self.aggregate_inner)
+        self.aggregate_inner_layout.setContentsMargins(0, 0, 0, 0)
+        self.aggregate_inner_layout.setSpacing(0)
+        self.aggregate_layout.addWidget(self.aggregate_inner)
         self.aggregate_scroll.setWidget(self.aggregate_host)
 
         aggregate_layout.addWidget(self.aggregate_empty)
@@ -554,6 +610,13 @@ class SummarizePanel(QWidget):
         self.cards_scroll.setStyleSheet(f"background: {bg}; border: none; {SCROLLBAR_STYLE}")
         self.aggregate_scroll.setStyleSheet(f"background: {bg}; border: none; {SCROLLBAR_STYLE}")
         self.aggregate_host.setStyleSheet(f"background: {bg};")
+        self.aggregate_inner.setStyleSheet(f"""
+            QFrame#summarizeAggregateCard {{
+                background: {tokens.bg_secondary};
+                border: 1px solid {tokens.border_default};
+                border-radius: 8px;
+            }}
+        """)
 
         for card in self._column_cards:
             card.apply_theme(tokens, accent)
@@ -587,8 +650,8 @@ class SummarizePanel(QWidget):
         self._column_cards.clear()
 
     def _clear_aggregate_rows(self):
-        while self.aggregate_layout.count():
-            item = self.aggregate_layout.takeAt(0)
+        while self.aggregate_inner_layout.count():
+            item = self.aggregate_inner_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -625,12 +688,12 @@ class SummarizePanel(QWidget):
             row = _AggregateRow(
                 label,
                 item.get("value", "—"),
-                parent=self.aggregate_host,
+                parent=self.aggregate_inner,
                 zoom=scale,
                 show_divider=index < last_index,
             )
             row.apply_theme(tokens, accent)
-            self.aggregate_layout.addWidget(row)
+            self.aggregate_inner_layout.addWidget(row)
             self._aggregate_rows.append(row)
 
     def _on_format_requested(self, column_name: str, button):
@@ -699,4 +762,97 @@ class SummarizePanel(QWidget):
         if not results_viewer.is_grid_active():
             self.clear()
             return
-        self.set_summary(results_viewer.build_summarize_payload())
+        if not self.isVisible():
+            self._summarize_dirty = True
+            return
+        self._schedule_summarize_update()
+
+    def schedule_update_from_results_viewer(self, results_viewer) -> None:
+        """Deferred entry point for session/result tab switches."""
+        self._results_viewer = results_viewer
+        if not self.isVisible():
+            self._summarize_dirty = True
+            return
+        self._schedule_summarize_update()
+
+    def _schedule_summarize_update(self):
+        timer = self._summarize_update_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(48)
+            timer.timeout.connect(self._start_summarize_update)
+            self._summarize_update_timer = timer
+        timer.start()
+
+    def _start_summarize_update(self):
+        viewer = self._results_viewer
+        if viewer is None or not viewer.is_grid_active() or not self.isVisible():
+            return
+
+        scope = viewer.get_summarize_selection_scope()
+        from src.ui.components.summarize_stats import has_summarize_selection
+
+        if not has_summarize_selection(scope):
+            self._cancel_summarize_worker()
+            self.clear()
+            return
+
+        self._summarize_generation += 1
+        generation = self._summarize_generation
+        prepared = getattr(viewer.model, "_prepared", None)
+        numeric_indices = None
+        if prepared is not None and getattr(prepared, "numeric_column_indices", None):
+            numeric_indices = set(prepared.numeric_column_indices)
+
+        self._cancel_summarize_worker()
+        worker = _SummarizeBuildWorker(
+            generation,
+            viewer.current_df,
+            scope,
+            viewer.get_current_result_label(),
+            getattr(viewer, "_column_formats", {}),
+            numeric_indices,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_summarize_payload_ready)
+        worker.error.connect(self._on_summarize_payload_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._clear_summarize_worker(thread))
+        self._summarize_thread = thread
+        self._summarize_worker = worker
+        thread.start()
+
+    def _clear_summarize_worker(self, thread: QThread):
+        if self._summarize_thread is thread:
+            self._summarize_thread = None
+            self._summarize_worker = None
+
+    def _cancel_summarize_worker(self):
+        thread = self._summarize_thread
+        if thread is not None and thread.isRunning():
+            thread.quit()
+        self._summarize_thread = None
+        self._summarize_worker = None
+
+    def _on_summarize_payload_ready(self, generation: int, payload: dict):
+        if generation != self._summarize_generation:
+            return
+        self._summarize_dirty = False
+        self.set_summary(payload)
+
+    def _on_summarize_payload_error(self, generation: int, message: str):
+        if generation != self._summarize_generation:
+            return
+        self.clear()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._summarize_dirty and self._results_viewer is not None:
+            self._summarize_dirty = False
+            self._schedule_summarize_update()

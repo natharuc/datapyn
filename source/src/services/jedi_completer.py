@@ -178,11 +178,19 @@ class JediCompleter(QObject):
     """
 
     completions_ready = pyqtSignal(list)  # List of (name, type, description)
+    _shared_instance: Optional["JediCompleter"] = None
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._thread: Optional[_JediThread] = None
         self._namespace: Dict[str, Any] = {}
+
+    @classmethod
+    def instance(cls, parent=None) -> "JediCompleter":
+        """Return a process-wide Jedi completer instance."""
+        if cls._shared_instance is None:
+            cls._shared_instance = JediCompleter(parent)
+        return cls._shared_instance
 
     def is_available(self) -> bool:
         """Check if jedi is installed."""

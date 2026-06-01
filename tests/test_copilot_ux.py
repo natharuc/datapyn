@@ -312,7 +312,8 @@ class TestCopilotChatWebViewApp:
         assert "modelSearch" in html
         assert "modelSelect" not in html
         assert "effortSelect" in html
-        assert "usagePill" in html
+        assert "usageStatusBtn" in html
+        assert "usagePanel" in html
         assert "composerInput" in html
         assert "referenceSuggestions" in html
         assert "composerCard" in html
@@ -341,6 +342,8 @@ class TestCopilotChatWebViewApp:
         assert "callBridgeResult" in js
         assert "forceComposerRepaint" in js
         assert "syncAttachmentStrip" in js
+        assert 'callBridge("updateCopilotCli"' in js
+        assert 'callBridge("refreshUsagePanel"' in js
 
     def test_app_exposes_runtime_update_functions(self, app_files):
         js = app_files["js"]
@@ -354,6 +357,8 @@ class TestCopilotChatWebViewApp:
     def test_app_css_uses_stable_ide_layout(self, app_files):
         css = app_files["css"]
         assert "grid-template-columns: var(--history-width) 1fr" in css
+        assert ".usage-panel" in css
+        assert ".usage-status-btn" in css
         assert ".composer-card" in css
         assert ".composer-footer" in css
         assert ".image-lightbox" in css

@@ -140,6 +140,10 @@ class _DummyExecutionMainWindow(ExecutionMixin):
         self._show_warning = MagicMock()
         self.action_label = MagicMock()
 
+    def _start_database_switch_worker(self, connector, database_name, *, on_success, on_error=None):
+        connector.change_database(database_name)
+        on_success(database_name)
+
 
 class _DummyMainWindow(SchemaMixin):
     def __init__(self, widget, explorer):
@@ -187,7 +191,7 @@ def test_invalidate_cache_by_connection_clears_all_session_entries(qapp):
     assert service._cache["sid-1:Other"] == {"database": "other"}
 
 
-def test_on_schema_loaded_updates_requesting_explorer_from_explicit_session_id(qapp):
+def test_on_schema_loaded_updates_requesting_explorer_from_explicit_session_id(qapp, qtbot):
     schema = {"database": "db2", "tables": [{"name": "venda", "schema": "dbo"}], "columns": {}}
     widget = _DummyWidget("sid-1", "Conn")
     explorer = MagicMock()
@@ -195,6 +199,7 @@ def test_on_schema_loaded_updates_requesting_explorer_from_explicit_session_id(q
 
     main_window._on_schema_loaded(schema, "Conn", session_id="sid-1")
 
+    qtbot.waitUntil(lambda: widget.editor.set_sql_schema.call_count > 0, timeout=5000)
     widget.editor.set_sql_schema.assert_called_once_with(schema)
     widget.editor.set_database_context.assert_called_once_with("Conn:db2")
     explorer.set_schema.assert_called_once_with(schema, "Conn", db_type="sqlserver")

@@ -40,7 +40,10 @@ import pandas as pd
 import io
 import json
 from dataclasses import dataclass
+from datetime import date, datetime
+from numbers import Integral, Real
 from typing import Optional, Any
+import re
 import subprocess
 import os
 import qtawesome as qta
@@ -53,6 +56,7 @@ from src.workers import FileExportWorker
 GRID_ASYNC_ROW_THRESHOLD = 200
 GRID_COLUMN_RESIZE_SAMPLE_ROWS = 50
 GRID_COLUMN_MAX_WIDTH = 420
+SUMMARIZE_MAX_EXPLICIT_CELLS = 5000
 
 
 @dataclass
@@ -125,10 +129,136 @@ def _grid_format_decimals(format_config: dict, default: int = 2) -> int:
     return max(0, min(decimals, 8))
 
 
+_DATETIME_COLUMN_HINT = re.compile(
+    r"(data|date|time|timestamp|created|updated|modified|evento|criacao|criado|nascimento)",
+    re.IGNORECASE,
+)
+
+
+def _grid_column_name_suggests_datetime(column_name: str) -> bool:
+    return bool(_DATETIME_COLUMN_HINT.search(str(column_name or "").strip()))
+
+
+def _grid_epoch_int(value) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        if pd.isna(value):
+            return None
+        as_float = float(value)
+        if not as_float.is_integer():
+            return None
+        if abs(as_float) > 9_007_199_254_740_992:
+            return None
+        return int(as_float)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lstrip("-").isdigit():
+            try:
+                return int(stripped)
+            except ValueError:
+                return None
+    return None
+
+
+def _grid_parse_datetime_from_epoch_numeric(value: int) -> pd.Timestamp:
+    abs_value = abs(int(value))
+    if abs_value < 1_000_000_000:
+        return pd.NaT
+
+    units = ("ns", "us", "ms", "s")
+    if abs_value >= 10**17:
+        units = ("ns", "us", "ms", "s")
+    elif abs_value >= 10**14:
+        units = ("us", "ms", "s", "ns")
+    elif abs_value >= 10**11:
+        units = ("ms", "s", "us", "ns")
+    else:
+        units = ("s", "ms", "us", "ns")
+
+    for unit in units:
+        parsed = pd.to_datetime(value, unit=unit, errors="coerce")
+        if pd.isna(parsed):
+            continue
+        if 1970 <= parsed.year <= 2100:
+            return parsed
+    return pd.NaT
+
+
+def _grid_parse_datetime_value(value) -> pd.Timestamp:
+    if value is None or (isinstance(value, Real) and not isinstance(value, bool) and pd.isna(value)):
+        return pd.NaT
+    if isinstance(value, pd.Timestamp):
+        return value
+    if isinstance(value, datetime):
+        return pd.Timestamp(value)
+    if isinstance(value, date):
+        return pd.Timestamp(value)
+
+    epoch_value = _grid_epoch_int(value)
+    if epoch_value is not None:
+        parsed = _grid_parse_datetime_from_epoch_numeric(epoch_value)
+        if not pd.isna(parsed):
+            return parsed
+
+    parsed = pd.to_datetime(value, errors="coerce")
+    if not pd.isna(parsed):
+        return parsed
+    return pd.NaT
+
+
+def _grid_column_values_look_like_epoch(series: pd.Series) -> bool:
+    if series is None or series.empty:
+        return False
+
+    checked = 0
+    parsed = 0
+    for value in series.dropna().head(25):
+        epoch_value = _grid_epoch_int(value)
+        if epoch_value is None:
+            continue
+        checked += 1
+        if not pd.isna(_grid_parse_datetime_from_epoch_numeric(epoch_value)):
+            parsed += 1
+
+    return checked > 0 and parsed == checked
+
+
+def _grid_should_auto_datetime_format(column_name: str, series: pd.Series) -> bool:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    if not _grid_column_is_numeric(series):
+        return False
+    if not _grid_column_name_suggests_datetime(column_name):
+        return False
+    return _grid_column_values_look_like_epoch(series)
+
+
+def _grid_resolve_display_format(column_name: str, series: pd.Series, format_config) -> dict:
+    config = _grid_normalize_format_config(format_config)
+    if config.get("type") != "default":
+        return config
+    if _grid_should_auto_datetime_format(column_name, series):
+        return {"type": "datetime"}
+    return config
+
+
+def _grid_format_datetime_value(value, format_name: str) -> str:
+    parsed = _grid_parse_datetime_value(value)
+    if pd.isna(parsed):
+        return str(value)
+    pattern = "%Y-%m-%d" if format_name == "date" else "%Y-%m-%d %H:%M:%S"
+    return parsed.strftime(pattern)
+
+
 def _grid_format_display_value(value, format_config) -> str:
     config = _grid_normalize_format_config(format_config)
     format_name = config.get("type", "default")
     if format_name == "default":
+        if isinstance(value, (pd.Timestamp, datetime, date)):
+            return _grid_format_datetime_value(value, "datetime")
         return str(value)
     if format_name in {"number", "currency"}:
         number = pd.to_numeric(value, errors="coerce")
@@ -143,10 +273,7 @@ def _grid_format_display_value(value, format_config) -> str:
         decimals = _grid_format_decimals(config)
         return str(value) if pd.isna(number) else f"{float(number):.{decimals}%}"
     if format_name in {"date", "datetime"}:
-        parsed = pd.to_datetime(value, errors="coerce")
-        if pd.isna(parsed):
-            return str(value)
-        return parsed.strftime("%Y-%m-%d" if format_name == "date" else "%Y-%m-%d %H:%M:%S")
+        return _grid_format_datetime_value(value, format_name)
     return str(value)
 
 
@@ -276,7 +403,14 @@ def prepare_grid_data(
     numeric_indices = frozenset(
         index
         for index, column in enumerate(columns)
-        if column in display_df.columns and _grid_column_is_numeric(display_df[column])
+        if column in display_df.columns
+        and _grid_column_is_numeric(display_df[column])
+        and _grid_resolve_display_format(
+            column,
+            display_df[column],
+            format_map.get(column, format_map.get(str(column), "default")),
+        ).get("type")
+        not in {"date", "datetime"}
     )
 
     display_rows: list[list[str]] = [[""] * col_count for _ in range(row_count)]
@@ -284,8 +418,15 @@ def prepare_grid_data(
 
     for col_index, column in enumerate(columns):
         series = display_df[column]
-        format_config = format_map.get(column, format_map.get(str(column), "default"))
-        if _grid_column_is_numeric(series):
+        format_config = _grid_resolve_display_format(
+            column,
+            series,
+            format_map.get(column, format_map.get(str(column), "default")),
+        )
+        format_type = format_config.get("type", "default")
+        use_raw_values = format_type in {"date", "datetime"} or pd.api.types.is_datetime64_any_dtype(series)
+
+        if _grid_column_is_numeric(series) and not use_raw_values:
             numeric_series = _grid_coerce_numeric_series(series)
             nulls = numeric_series.isna().to_numpy()
             values = numeric_series.to_numpy()
@@ -297,7 +438,7 @@ def prepare_grid_data(
                 )
             continue
 
-        values = series.to_numpy()
+        values = series.to_list()
         for row_index, value in enumerate(values):
             is_null = _grid_is_null_scalar(value)
             null_mask[row_index][col_index] = is_null
@@ -1474,10 +1615,7 @@ class PandasModel(QAbstractTableModel):
             decimals = self._format_decimals(config)
             return str(value) if pd.isna(number) else f"{float(number):.{decimals}%}"
         if format_name in {"date", "datetime"}:
-            parsed = pd.to_datetime(value, errors="coerce")
-            if pd.isna(parsed):
-                return str(value)
-            return parsed.strftime("%Y-%m-%d" if format_name == "date" else "%Y-%m-%d %H:%M:%S")
+            return _grid_format_datetime_value(value, format_name)
         return str(value)
 
 
@@ -1521,6 +1659,8 @@ class ResultsViewer(QWidget):
         self._primary_grid_cache_key = None
         self._primary_filtered_df: Optional[pd.DataFrame] = None
         self._summarize_refresh_timer: Optional[QTimer] = None
+        self._pending_result_tab_index: Optional[int] = None
+        self._result_tab_switch_timer: Optional[QTimer] = None
 
     def _setup_ui(self):
         """Configura a interface"""
@@ -2238,7 +2378,13 @@ class ResultsViewer(QWidget):
         tabs = getattr(self, "_result_tabs", None)
         if tabs is None:
             return
+        self._pending_result_tab_index = None
+        timer = self._result_tab_switch_timer
+        if timer is not None:
+            timer.stop()
         blocker = QSignalBlocker(tabs)
+        if tabs.currentIndex() != 0:
+            tabs.setCurrentIndex(0)
         while tabs.count() > 1:
             page = tabs.widget(1)
             if self._is_chart_page(page):
@@ -2257,7 +2403,22 @@ class ResultsViewer(QWidget):
         del blocker
 
     def _on_result_tab_changed(self, index: int):
+        """Defer tab activation so the tab bar can repaint before heavy work."""
+        self._pending_result_tab_index = index
+        timer = self._result_tab_switch_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._apply_pending_result_tab_changed)
+            self._result_tab_switch_timer = timer
+        timer.start(0)
+
+    def _apply_pending_result_tab_changed(self):
         """Troca referencias internas (current_df, table_view, model) ao mudar de aba."""
+        index = self._pending_result_tab_index
+        self._pending_result_tab_index = None
+        if index is None:
+            return
         tabs = getattr(self, "_result_tabs", None)
         if tabs is None or index < 0:
             return
@@ -2336,15 +2497,15 @@ class ResultsViewer(QWidget):
             self.clear()
             return
         page = tabs.widget(index)
+        chart_index = -1
         if self._is_chart_page(page):
+            chart_index = getattr(page, "_chart_index", -1)
             self._dispose_chart_page(page)
         blocker = QSignalBlocker(tabs)
         tabs.removeTab(index)
         if page in self._secondary_pages:
             self._secondary_pages.remove(page)
-        if page in self._chart_pages:
-            chart_index = getattr(page, "_chart_index", -1)
-            self._chart_pages.remove(page)
+        if self._is_chart_page(page) and chart_index >= 0:
             self._remove_chart_config(chart_index)
         if page is not None:
             page.deleteLater()
@@ -2432,6 +2593,8 @@ class ResultsViewer(QWidget):
         page._disposed = True
         page._render_pending = False
         self._chart_render_queue = [queued for queued in self._chart_render_queue if queued is not page]
+        if page in self._chart_pages:
+            self._chart_pages.remove(page)
 
     def _start_queued_chart_render(self, page_key: int):
         page = self._chart_page_by_key(page_key)
@@ -2853,7 +3016,9 @@ class ResultsViewer(QWidget):
 
     def _on_chart_render_complete(self, page_key: int, generation: int, image_bytes):
         page = self._chart_page_by_key(page_key)
-        if page is None or generation != getattr(page, "_render_generation", None):
+        if page is None or getattr(page, "_disposed", False):
+            return
+        if generation != getattr(page, "_render_generation", None):
             return
         try:
             image = QImage()
@@ -2872,7 +3037,9 @@ class ResultsViewer(QWidget):
 
     def _on_chart_render_error(self, page_key: int, generation: int, error: str):
         page = self._chart_page_by_key(page_key)
-        if page is None or generation != getattr(page, "_render_generation", None):
+        if page is None or getattr(page, "_disposed", False):
+            return
+        if generation != getattr(page, "_render_generation", None):
             return
         page._image_bytes = None
         page._image_label.clear()
@@ -3517,7 +3684,7 @@ class ResultsViewer(QWidget):
         if timer is None:
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.setInterval(32)
+            timer.setInterval(48)
             timer.timeout.connect(self.grid_selection_changed.emit)
             self._summarize_refresh_timer = timer
         timer.start()
@@ -3559,7 +3726,6 @@ class ResultsViewer(QWidget):
             thread = job.get("thread")
             if thread and thread.isRunning():
                 thread.quit()
-                thread.wait(200)
             self._grid_prepare_job_meta.pop(job_id, None)
             if self._active_grid_prepare_job is job:
                 self._active_grid_prepare_job = None
@@ -3570,7 +3736,6 @@ class ResultsViewer(QWidget):
             thread = job.get("thread")
             if thread and thread.isRunning():
                 thread.quit()
-                thread.wait(200)
         self._grid_prepare_job_meta.clear()
         self._model_prepare_generation.clear()
         self._active_grid_prepare_job = None
@@ -4638,14 +4803,85 @@ class ResultsViewer(QWidget):
 
     def get_selection_cells(self) -> list[tuple[int, int]]:
         """Return exact selected (row, column) pairs for the active grid."""
+        scope = self.get_summarize_selection_scope()
+        return list(scope.get("cells") or [])
+
+    def get_summarize_selection_scope(self) -> dict:
+        """Build a selection scope without materializing huge Qt index lists."""
+        empty_scope = {"cells": [], "row_ranges": None, "bound_cols": None}
         if not self.is_grid_active() or self.current_df is None:
-            return []
+            return empty_scope
 
         selection = self.table_view.selectionModel() if self.table_view is not None else None
         if selection is None or not selection.hasSelection():
-            return []
+            return empty_scope
 
-        return sorted({(idx.row(), idx.column()) for idx in selection.selectedIndexes()})
+        ranges = selection.selection()
+        if not ranges:
+            return empty_scope
+
+        total_cells = 0
+        row_ranges: list[tuple[int, int]] = []
+        cols: set[int] = set()
+
+        for item_range in ranges:
+            top = item_range.top()
+            left = item_range.left()
+            bottom = item_range.bottom()
+            right = item_range.right()
+            height = bottom - top + 1
+            width = right - left + 1
+            total_cells += height * width
+            row_ranges.append((top, bottom))
+            cols.update(range(left, right + 1))
+
+        if total_cells > SUMMARIZE_MAX_EXPLICIT_CELLS:
+            return {
+                "cells": [],
+                "row_ranges": row_ranges,
+                "bound_cols": sorted(cols),
+            }
+
+        cells = []
+        for item_range in ranges:
+            top = item_range.top()
+            left = item_range.left()
+            bottom = item_range.bottom()
+            right = item_range.right()
+            for row in range(top, bottom + 1):
+                for col in range(left, right + 1):
+                    cells.append((row, col))
+
+        return {
+            "cells": sorted(set(cells)),
+            "row_ranges": None,
+            "bound_cols": None,
+        }
+
+    @staticmethod
+    def has_summarize_selection(scope: Optional[dict]) -> bool:
+        from src.ui.components.summarize_stats import has_summarize_selection as _has_selection
+
+        return _has_selection(scope)
+
+    def build_summarize_payload(self) -> dict:
+        from src.ui.components.summarize_stats import build_selection_summary
+
+        scope = self.get_summarize_selection_scope()
+        numeric_indices = None
+        prepared = getattr(self.model, "_prepared", None)
+        if prepared is not None and getattr(prepared, "numeric_column_indices", None):
+            numeric_indices = set(prepared.numeric_column_indices)
+
+        return build_selection_summary(
+            self.current_df,
+            scope.get("cells") or [],
+            row_ranges=scope.get("row_ranges"),
+            bound_cols=scope.get("bound_cols"),
+            result_label=self.get_current_result_label(),
+            column_formats=self._column_formats,
+            numeric_column_indices=numeric_indices,
+        )
 
     def get_selection_bounds(self) -> tuple[list[int], list[int]]:
         """Return selected row/column indexes for the active grid."""
@@ -4656,6 +4892,17 @@ class ResultsViewer(QWidget):
         if selection is None or not selection.hasSelection():
             return [], []
 
+        scope = self.get_summarize_selection_scope()
+        if scope.get("row_ranges"):
+            rows: set[int] = set()
+            for start, end in scope["row_ranges"]:
+                rows.update(range(int(start), int(end) + 1))
+            return sorted(rows), list(scope.get("bound_cols") or [])
+
+        cells = scope.get("cells") or []
+        if cells:
+            return sorted({row for row, _ in cells}), sorted({col for _, col in cells})
+
         indexes = selection.selectedIndexes()
         if not indexes:
             return [], []
@@ -4663,23 +4910,6 @@ class ResultsViewer(QWidget):
         rows = sorted({idx.row() for idx in indexes})
         cols = sorted({idx.column() for idx in indexes})
         return rows, cols
-
-    def build_summarize_payload(self) -> dict:
-        from src.ui.components.summarize_stats import build_selection_summary
-
-        cells = self.get_selection_cells()
-        numeric_indices = None
-        prepared = getattr(self.model, "_prepared", None)
-        if prepared is not None and getattr(prepared, "numeric_column_indices", None):
-            numeric_indices = set(prepared.numeric_column_indices)
-
-        return build_selection_summary(
-            self.current_df,
-            cells,
-            result_label=self.get_current_result_label(),
-            column_formats=self._column_formats,
-            numeric_column_indices=numeric_indices,
-        )
 
     def show_column_format_menu(self, column, global_pos):
         """Open the column format menu (shared with grid header)."""

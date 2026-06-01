@@ -14,7 +14,9 @@ Each tool maps to a DataPyn operation:
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Callable
+import re
+import time
+from typing import Any, Dict, List, Optional, Callable, Tuple
 
 from PyQt6.QtCore import QObject, QEventLoop, QTimer
 
@@ -46,6 +48,75 @@ def _truncate_code_for_tool(code: str, max_lines: int = MAX_TOOL_CODE_LINES, max
         code = code[:max_chars] + f"\n# ... truncated ({len(code) - max_chars} chars omitted) ..."
         notes.append("truncated for token limits")
     return code, "; ".join(notes)
+
+
+def _merge_line_ranges(ranges: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    if not ranges:
+        return []
+    merged: List[Tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _extract_code_regions(
+    lines: List[str],
+    hit_indices: List[int],
+    *,
+    context: int = 40,
+    max_regions: int = 3,
+) -> str:
+    if not hit_indices or not lines:
+        return ""
+    ranges = _merge_line_ranges([
+        (max(0, idx - context), min(len(lines), idx + context + 1))
+        for idx in hit_indices
+    ])[:max_regions]
+    parts: List[str] = []
+    for start, end in ranges:
+        parts.append(f"# --- lines {start + 1}-{end} of {len(lines)} ---")
+        parts.append("\n".join(lines[start:end]))
+    return "\n\n".join(parts)
+
+
+def _inspect_block_structure(code: str, language: str) -> Dict[str, Any]:
+    structure: Dict[str, Any] = {}
+    if not code:
+        return structure
+
+    hints = _infer_block_hints(code, language)
+    if hints:
+        structure["hints"] = hints
+
+    ids = sorted(set(re.findall(r'\bid=["\']([^"\']+)["\']', code)))
+    if ids:
+        structure["html_element_ids"] = ids[:50]
+
+    js_fns = sorted(set(re.findall(r"function\s+(\w+)\s*\(", code)))
+    js_const_fns = sorted(set(re.findall(r"(?:const|let|var)\s+(\w+)\s*=\s*(?:function|\([^)]*\)\s*=>)", code)))
+    js_names = sorted(set(js_fns + js_const_fns))
+    if js_names:
+        structure["js_functions"] = js_names[:40]
+
+    css_classes: set = set()
+    for group in re.findall(r'class=["\']([^"\']+)["\']', code):
+        css_classes.update(token.strip() for token in group.split() if token.strip())
+    css_classes.update(re.findall(r"\.([\w-]+)\s*\{", code))
+    if css_classes:
+        structure["css_classes"] = sorted(css_classes)[:60]
+
+    py_defs = sorted(set(re.findall(r"^\s*def\s+(\w+)", code, re.M)))
+    if py_defs:
+        structure["python_functions"] = py_defs[:40]
+
+    media = sorted(set(re.findall(r"@media\s*\([^)]+\)", code)))
+    if media:
+        structure["css_media_queries"] = media[:10]
+
+    return structure
 
 
 def _infer_block_hints(code: str, language: str) -> List[str]:
@@ -130,6 +201,7 @@ class MCPToolRegistry(QObject):
         self._tools: Dict[str, MCPTool] = {}
         self._main_window = None
         self._pinned_session_id: Optional[str] = None  # Per-tab tool isolation
+        self._recent_tool_cache: Dict[tuple, tuple] = {}
         self._register_tools()
 
     def set_main_window(self, main_window) -> None:
@@ -276,7 +348,11 @@ class MCPToolRegistry(QObject):
 
         self._register(MCPTool(
             name="get_block_code",
-            description="Get the FULL code of a block by name or index. If neither given, returns focused block.",
+            description=(
+                "Get code from a block by name or index. For LARGE blocks (HTML/CSS/JS), "
+                "prefer inspect_block first, then use around/start_line/end_line instead of "
+                "run_silent_python or repeated search_in_code."
+            ),
             parameters={
                 "block_name": {
                     "type": "string",
@@ -288,8 +364,49 @@ class MCPToolRegistry(QObject):
                     "description": "Block index (0-based). Use block_name instead when possible.",
                     "optional": True,
                 },
+                "start_line": {
+                    "type": "integer",
+                    "description": "1-based first line to return (use with end_line for a section).",
+                    "optional": True,
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "1-based last line to return (inclusive).",
+                    "optional": True,
+                },
+                "around": {
+                    "type": "string",
+                    "description": "Return code around this anchor (function name, id, CSS class, etc.).",
+                    "optional": True,
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Lines of context on each side when using around (default 40).",
+                    "optional": True,
+                },
             },
             handler=self._get_block_code,
+        ))
+
+        self._register(MCPTool(
+            name="inspect_block",
+            description=(
+                "Return a structural outline of a block: total lines, html ids, css classes, "
+                "js/python symbols. Use FIRST on large HTML blocks before get_block_code(around=...)."
+            ),
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name (e.g., 'calendario_conciliacao').",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based).",
+                    "optional": True,
+                },
+            },
+            handler=self._inspect_block,
         ))
 
         self._register(MCPTool(
@@ -436,13 +553,18 @@ class MCPToolRegistry(QObject):
         self._register(MCPTool(
             name="search_in_code",
             description=(
-                "Search blocks in the CHAT TARGET tab only. Returns block name, language, and line. "
-                "Use a SPECIFIC term (e.g. 'calendario', 'display(HTML'). Max 3 searches per task."
+                "Search blocks in the CHAT TARGET tab. Returns line numbers and surrounding context. "
+                "Prefer inspect_block + get_block_code(around=...) for large HTML blocks. Max 3 searches per task."
             ),
             parameters={
                 "query": {
                     "type": "string",
                     "description": "Specific text to search (case-insensitive). Avoid generic terms like html, div, style.",
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Lines of context before/after each match (default 3).",
+                    "optional": True,
                 },
             },
             handler=self._search_in_code,
@@ -955,13 +1077,26 @@ class MCPToolRegistry(QObject):
         if not tool:
             return {"error": f"Unknown tool: {tool_name}"}
 
+        cache_key = (tool_name, json.dumps(arguments or {}, sort_keys=True, default=str))
+        now = time.time()
+        cached = self._recent_tool_cache.get(cache_key)
+        if cached and now - cached[0] < 30:
+            logger.info("Tool '%s' deduplicated (identical call within 30s)", tool_name)
+            return cached[1]
+
         try:
-            import time
             start = time.perf_counter()
             logger.info("Executing tool '%s'", tool_name)
             result = tool.handler(arguments)
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info("Tool '%s' finished in %.0fms", tool_name, elapsed_ms)
+            self._recent_tool_cache[cache_key] = (now, result)
+            if len(self._recent_tool_cache) > 64:
+                cutoff = now - 30
+                self._recent_tool_cache = {
+                    key: value for key, value in self._recent_tool_cache.items()
+                    if value[0] >= cutoff
+                }
             return result
         except Exception as e:
             logger.error("Error executing tool '%s': %s", tool_name, e)
@@ -1395,11 +1530,12 @@ class MCPToolRegistry(QObject):
         # Add tool usage guide for smart tool selection
         context["tool_guide"] = (
             "WORKFLOW: (1) Read blocks/html_blocks/focused_block/block_map above. "
-            "(2) If target is clear, call get_block_code(block_name=...) then edit_block or edit_block_lines to UPDATE it. "
-            "(3) Use list_blocks or ONE specific search_in_code only when the target block is unknown. "
-            "(4) Only use write_and_run to CREATE a new block when none exists. "
-            "(5) Use run_silent_query/run_silent_python for data checks, not block discovery. "
-            "(6) Python blocks with generates_html render HTML in the results panel — edit them with edit_block, not create_visualization."
+            "(2) For large HTML blocks: inspect_block → get_block_code(around=...) → edit_block_lines. "
+            "(3) If target is clear, call get_block_code(block_name=...) then edit_block or edit_block_lines to UPDATE it. "
+            "(4) Use list_blocks or ONE specific search_in_code only when the target block is unknown. "
+            "(5) Only use write_and_run to CREATE a new block when none exists. "
+            "(6) Use run_silent_query/run_silent_python for DATA checks only — never to grep block source. "
+            "(7) Python blocks with generates_html render HTML in the results panel — edit them with edit_block, not create_visualization."
         )
 
         # Add namespace variables summary
@@ -2870,7 +3006,7 @@ class MCPToolRegistry(QObject):
         }
 
     def _get_block_code(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get the full code from a block by name, index, or focused block."""
+        """Get code from a block, optionally limited to a line range or anchor."""
         target_block, block_editor, block_index, error = self._resolve_block(args)
         if error:
             return {"error": error}
@@ -2883,16 +3019,87 @@ class MCPToolRegistry(QObject):
 
         language = target_block.get_language() if hasattr(target_block, "get_language") else "unknown"
         name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index + 1}"
-        total_lines = len(code.split("\n")) if code else 0
-        code, truncate_note = _truncate_code_for_tool(code)
-        note = f" ({truncate_note})" if truncate_note else ""
+        lines = code.split("\n") if code else []
+        total_lines = len(lines)
+
+        start_line = args.get("start_line")
+        end_line = args.get("end_line")
+        around = str(args.get("around") or "").strip()
+        context_lines = args.get("context_lines", 40)
+        try:
+            context_lines = max(5, min(int(context_lines), 120))
+        except (TypeError, ValueError):
+            context_lines = 40
+
+        section_note = ""
+        if around:
+            query = around.lower()
+            hits = [idx for idx, line in enumerate(lines) if query in line.lower()]
+            if not hits:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"No anchor '{around}' in block '{name}' ({total_lines} lines). "
+                            "Call inspect_block(block_name=...) for ids/functions/classes, then retry."
+                        ),
+                    }]
+                }
+            code = _extract_code_regions(lines, hits, context=context_lines, max_regions=3)
+            section_note = f" around '{around}' ({len(hits)} hit(s))"
+        elif start_line is not None or end_line is not None:
+            try:
+                start = max(1, int(start_line or 1))
+                end = min(total_lines, int(end_line or total_lines))
+            except (TypeError, ValueError):
+                return {"error": "start_line and end_line must be integers."}
+            if start > end:
+                return {"error": "start_line must be <= end_line."}
+            code = "\n".join(lines[start - 1:end])
+            section_note = f" lines {start}-{end}"
+        else:
+            code, truncate_note = _truncate_code_for_tool(code)
+            if truncate_note:
+                section_note = f" ({truncate_note}; use inspect_block + get_block_code(around=...) for large blocks)"
 
         return {
             "content": [{
                 "type": "text",
-                "text": f"Block {block_index} ('{name}', {language}, {total_lines} lines){note}:\n```{language}\n{code}\n```"
+                "text": (
+                    f"Block {block_index} ('{name}', {language}, {total_lines} lines){section_note}:\n"
+                    f"```{language}\n{code}\n```"
+                ),
             }]
         }
+
+    def _inspect_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Return structural outline for a block without sending the full source."""
+        target_block, block_editor, block_index, error = self._resolve_block(args)
+        if error:
+            return {"error": error}
+
+        code = ""
+        if hasattr(target_block, "get_code"):
+            code = target_block.get_code()
+        elif hasattr(target_block, "code"):
+            code = target_block.code
+
+        language = target_block.get_language() if hasattr(target_block, "get_language") else "unknown"
+        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{block_index + 1}"
+        total_lines = len(code.splitlines()) if code else 0
+        structure = _inspect_block_structure(code, language)
+        payload = {
+            "block_index": block_index,
+            "name": name,
+            "language": language,
+            "total_lines": total_lines,
+            **structure,
+            "next_step": (
+                "Call get_block_code(block_name=..., around='<symbol>') for the section to edit, "
+                "then edit_block_lines."
+            ),
+        }
+        return self._json_tool_result(payload)
 
     def _list_blocks(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Return a compact catalog of blocks in the chat target tab."""
@@ -2970,34 +3177,56 @@ class MCPToolRegistry(QObject):
                 "content": [{
                     "type": "text",
                     "text": (
-                        f"Query '{query}' is too generic. Use list_blocks or search for a specific "
-                        "block name or unique symbol (e.g. 'calendario', 'display(HTML', 'meta_conciliacao')."
+                        f"Query '{query}' is too generic. Use inspect_block or search for a specific "
+                        "block name or unique symbol (e.g. 'calendario', 'updateSummary', 'summary-grid')."
                     ),
                 }]
             }
 
+        context_lines = args.get("context_lines", 3)
+        try:
+            context_lines = max(0, min(int(context_lines), 20))
+        except (TypeError, ValueError):
+            context_lines = 3
+
         matches = []
         matched_blocks = set()
+        seen_regions = set()
         for i, block in enumerate(blocks):
             code = block.get_code() if hasattr(block, "get_code") else getattr(block, "code", "")
             name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{i + 1}"
             language = block.get_language() if hasattr(block, "get_language") else "unknown"
+            lines = code.split("\n")
 
-            for line_num, line in enumerate(code.split("\n"), start=1):
-                if query_lower in line.lower():
-                    matched_blocks.add(name)
-                    matches.append(f"  [{name}] ({language}) line {line_num}: {line.strip()[:120]}")
-                    if len(matches) >= 40:
-                        break
-            if len(matches) >= 40:
+            for line_num, line in enumerate(lines, start=1):
+                if query_lower not in line.lower():
+                    continue
+                matched_blocks.add(name)
+                region_key = (name, max(1, line_num - context_lines), min(len(lines), line_num + context_lines))
+                if region_key in seen_regions:
+                    continue
+                seen_regions.add(region_key)
+                start = region_key[1] - 1
+                end = region_key[2]
+                snippet_lines = lines[start:end]
+                numbered = "\n".join(
+                    f"{start + offset + 1:>5}| {text}"
+                    for offset, text in enumerate(snippet_lines)
+                )
+                matches.append(
+                    f"  [{name}] ({language}) line {line_num}:\n{numbered}"
+                )
+                if len(matches) >= 12:
+                    break
+            if len(matches) >= 12:
                 break
 
         if not matches:
             return {"content": [{"type": "text", "text": f"No matches found for '{query}'. Try list_blocks first."}]}
 
         summary = f"Matched blocks: {', '.join(sorted(matched_blocks))}\n"
-        if len(matches) >= 40:
-            summary += "(showing first 40 matches)\n"
+        if len(matches) >= 12:
+            summary += "(showing first 12 regions; use get_block_code(around=...) for more context)\n"
         return {
             "content": [{
                 "type": "text",

@@ -427,6 +427,7 @@ class CodeBlock(QFrame):
         self._resize_start_y = 0
         self._resize_start_height = 0
         self._execution_start_time = 0
+        self._custom_running_status = ""
         self._last_execution_time = None
         self._execution_tick_timer = QTimer(self)
         self._execution_tick_timer.setInterval(100)
@@ -435,6 +436,10 @@ class CodeBlock(QFrame):
         self._sql_parameter_sync_timer.setSingleShot(True)
         self._sql_parameter_sync_timer.setInterval(250)
         self._sql_parameter_sync_timer.timeout.connect(self.sync_sql_parameters_from_query)
+        self._lsp_document_sync_timer = QTimer(self)
+        self._lsp_document_sync_timer.setSingleShot(True)
+        self._lsp_document_sync_timer.setInterval(250)
+        self._lsp_document_sync_timer.timeout.connect(self._sync_lsp_document)
         self._default_language = default_language
         self._connection_name = None  # None = use session connection
         self._database_name = None  # None = use connection default database
@@ -841,6 +846,7 @@ class CodeBlock(QFrame):
         self.editor.SCN_FOCUSIN.connect(self._on_focus_in)
         self.editor.SCN_FOCUSOUT.connect(self._on_focus_out)
         self.editor.textChanged.connect(self._schedule_sql_parameter_sync)
+        self.editor.textChanged.connect(self._schedule_lsp_document_sync)
         self.sql_parameters_panel.parameters_changed.connect(self._on_sql_parameters_panel_changed)
         self.sql_parameters_panel.close_requested.connect(self._on_sql_parameters_panel_close_requested)
         self.show_sql_parameters_btn.clicked.connect(lambda: self.set_sql_parameters_enabled(True))
@@ -965,6 +971,17 @@ class CodeBlock(QFrame):
             self._completion_service.set_lsp_client(client)
             # Re-open document with LSP
             self._update_document_info()
+
+    def _schedule_lsp_document_sync(self):
+        if not hasattr(self, "_completion_service") or not self._completion_service.has_lsp:
+            return
+        self._lsp_document_sync_timer.start()
+
+    def _sync_lsp_document(self):
+        if not hasattr(self, "_completion_service") or not self._completion_service.has_lsp:
+            return
+        text = self.editor.get_text() if hasattr(self.editor, "get_text") else ""
+        self._completion_service.notify_document_changed(text)
     
     def set_database_context(self, context: str):
         """Set database schema context for SQL completions (Monaco only)."""
@@ -1434,10 +1451,50 @@ class CodeBlock(QFrame):
             if not self._is_running:
                 self._update_style()
 
+    def set_running_status(self, message: str):
+        """Show a busy state on the block while work runs off the UI thread."""
+        self._is_running = True
+        self._is_waiting = False
+        self._custom_running_status = str(message or "")
+        if self._execution_start_time <= 0:
+            self._execution_start_time = time.time()
+        self.run_btn.setIcon(qta.icon("mdi.stop", color="#ef4444"))
+        from src.design_system.tokens import get_colors
+        colors = get_colors()
+        self.run_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {colors.bg_tertiary};
+                border: 1px solid #ef4444;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: rgba(239, 68, 68, 0.15);
+            }}
+        """)
+        self.status_label.setText(self._custom_running_status)
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #3498db;
+                font-size: 11px;
+                padding: 2px 6px;
+                background: rgba(52, 152, 219, 0.12);
+                border-radius: 4px;
+            }
+        """)
+        if self._spinner_animation is not None:
+            self._spinner_animation.stop()
+        self._spinner_animation = qta.Spin(self._spinner_widget)
+        spin_icon = qta.icon("fa5s.spinner", animation=self._spinner_animation, color="#3498db")
+        self._spinner_widget.setIcon(spin_icon)
+        self._spinner_widget.show()
+        if not self._execution_tick_timer.isActive():
+            self._execution_tick_timer.start()
+
     def set_running(self, running: bool):
         self._is_running = running
         self._is_waiting = False
         if running:
+            self._custom_running_status = ""
             self._execution_start_time = time.time()
             # Stop icon vermelho quando executando
             self.run_btn.setIcon(qta.icon("mdi.stop", color="#ef4444"))
@@ -1473,6 +1530,7 @@ class CodeBlock(QFrame):
             # Start elapsed time counter
             self._execution_tick_timer.start()
         else:
+            self._custom_running_status = ""
             self._execution_tick_timer.stop()
             if self._spinner_animation is not None:
                 self._spinner_animation.stop()
@@ -1502,6 +1560,7 @@ class CodeBlock(QFrame):
         """Set cancelled state"""
         self._is_running = False
         self._is_waiting = False
+        self._custom_running_status = ""
         self._execution_tick_timer.stop()
         if self._spinner_animation is not None:
             self._spinner_animation.stop()
@@ -1525,6 +1584,7 @@ class CodeBlock(QFrame):
         """Set error state"""
         self._is_running = False
         self._is_waiting = False
+        self._custom_running_status = ""
         self._execution_tick_timer.stop()
         if self._spinner_animation is not None:
             self._spinner_animation.stop()
@@ -1564,6 +1624,9 @@ class CodeBlock(QFrame):
             return
         elapsed = time.time() - self._execution_start_time
         elapsed_str = self._format_execution_time(elapsed)
+        if self._custom_running_status:
+            self.status_label.setText(f"{self._custom_running_status} · {elapsed_str}")
+            return
         running_text = getattr(S.block, 'status_running_elapsed', '{status} {elapsed}')
         self.status_label.setText(
             running_text.format(status=S.block.status_running, elapsed=elapsed_str)

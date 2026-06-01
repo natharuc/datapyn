@@ -72,6 +72,19 @@
 
                         <button id="authBtn" class="text-command auth-btn" type="button" data-label="sign_in"></button>
 
+                        <div class="account-picker-wrap">
+                            <button id="switchAccountBtn" class="text-command switch-account-btn" type="button" data-label="switch_account" hidden></button>
+
+                            <div id="accountPicker" class="account-picker" hidden role="dialog" aria-labelledby="accountPickerTitle">
+                                <div class="account-picker-header">
+                                    <div id="accountPickerTitle" class="account-picker-title" data-label="account_picker_title"></div>
+                                    <button id="accountPickerClose" class="icon-command account-picker-close" type="button" data-title="account_picker_close">&times;</button>
+                                </div>
+                                <div id="accountPickerList" class="account-picker-list"></div>
+                                <button id="accountPickerAdd" class="account-picker-add" type="button" data-label="add_account"></button>
+                            </div>
+                        </div>
+
                         <button id="logoutBtn" class="text-command logout-btn" type="button" data-label="logout" hidden></button>
 
                     </div>
@@ -112,6 +125,16 @@
 
                 </div>
 
+            </div>
+
+
+
+            <div id="accountSwitchOverlay" class="account-switch-overlay" hidden>
+                <div class="account-switch-modal" role="status" aria-live="polite">
+                    <div class="account-switch-spinner" aria-hidden="true"></div>
+                    <div id="accountSwitchTitle" class="account-switch-title"></div>
+                    <div id="accountSwitchMessage" class="account-switch-message"></div>
+                </div>
             </div>
 
 
@@ -159,7 +182,38 @@
 
                         <button id="refreshModelsBtn" class="composer-tool-btn" type="button" data-title="refresh_models">&#8635;</button>
 
-                        <div id="usagePill" class="usage-pill"></div>
+                        <div class="usage-status-wrap">
+                            <button id="usageStatusBtn" class="usage-status-btn" type="button" data-title="usage_panel_open">
+                                <span id="usageStatusLabel" class="usage-status-label"></span>
+                                <span id="usageUpdateBadge" class="usage-update-badge" hidden>1</span>
+                            </button>
+                            <div id="usagePanel" class="usage-panel" hidden role="dialog" aria-labelledby="usagePanelTitle">
+                                <div class="usage-panel-header">
+                                    <div id="usagePanelTitle" class="usage-panel-title"></div>
+                                    <button id="usagePanelClose" class="icon-command usage-panel-close" type="button" data-title="usage_panel_close">&times;</button>
+                                </div>
+                                <section class="usage-panel-section">
+                                    <div class="usage-panel-section-title" data-label="usage_panel_credits"></div>
+                                    <div id="usagePanelPlanHint" class="usage-panel-muted"></div>
+                                    <div id="usagePanelQuota" class="usage-panel-quota"></div>
+                                    <div id="usagePanelReset" class="usage-panel-muted"></div>
+                                </section>
+                                <section class="usage-panel-section">
+                                    <div class="usage-panel-section-title" data-label="usage_panel_runtime"></div>
+                                    <div id="usagePanelCli" class="usage-panel-row"></div>
+                                    <div id="usagePanelSdk" class="usage-panel-row"></div>
+                                </section>
+                                <section class="usage-panel-section" id="usagePanelUpdateSection" hidden>
+                                    <button id="usagePanelUpdateBtn" class="usage-panel-update-btn" type="button"></button>
+                                    <div id="usagePanelUpdateProgress" class="usage-panel-progress" hidden></div>
+                                    <div id="usagePanelUpdateStatus" class="usage-panel-muted"></div>
+                                </section>
+                                <div class="usage-panel-footer">
+                                    <button id="usagePanelSwitchAccount" class="text-command usage-panel-link" type="button" data-label="switch_account" hidden></button>
+                                    <button id="usagePanelSubscription" class="text-command usage-panel-link" type="button" data-label="show_subscription"></button>
+                                </div>
+                            </div>
+                        </div>
 
                         <button id="cancelBtn" class="icon-command danger send-fab" type="button" hidden data-title="stop_tooltip">&times;</button>
 

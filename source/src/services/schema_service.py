@@ -8,7 +8,7 @@ Thread-safe: each load uses its own thread with safe cleanup.
 Errors are silenced - user can force reload manually.
 """
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer
 from PyQt6 import sip
 from typing import Dict, List, Optional
 import logging
@@ -444,7 +444,8 @@ class SchemaService(QObject):
         # Check cache (per-session key)
         cache_key = self._cache_key(connection_name, session_id)
         if connection_name and cache_key in self._cache:
-            self.schema_loaded.emit(self._cache[cache_key], connection_name, session_id)
+            cached = self._cache[cache_key]
+            QTimer.singleShot(0, lambda c=cached, cn=connection_name, sid=session_id: self.schema_loaded.emit(c, cn, sid))
             return
 
         try:

@@ -21,7 +21,7 @@ Usage:
     auth.lsp_authenticated.connect(on_lsp_auth)
 """
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Tuple
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 import logging
 
@@ -254,6 +254,89 @@ class CopilotAuthService(QObject):
             self.chat_logged_out.emit()
         except Exception as e:
             logger.warning(f"[AuthService] Chat logout failed: {e}")
+
+    def switch_chat_account(self) -> bool:
+        """Legacy hook — account switching is handled via the account picker."""
+        return self.build_account_picker_payload() is not None
+
+    def build_account_picker_payload(self) -> dict:
+        from .copilot_accounts import build_account_picker_payload
+
+        current = ""
+        if self._chat_client and self.is_chat_authenticated:
+            current = getattr(self._chat_client, "_username", "") or self._settings.chat_username
+        elif self._settings.chat_username:
+            current = self._settings.chat_username
+        return build_account_picker_payload(
+            self._settings.chat_known_accounts,
+            current_username=current,
+        )
+
+    def activate_chat_account(self, username: str) -> bool:
+        """Switch to a known account. Uses gh CLI when ready, otherwise opens login."""
+        ok, message, mode = self.prepare_chat_account_switch(username)
+        if not ok:
+            self.chat_auth_failed.emit(message)
+            return False
+        return self.complete_chat_account_activation(mode)
+
+    def prepare_chat_account_switch(self, username: str) -> Tuple[bool, str, str]:
+        """Prepare gh account switch (safe to call off the UI thread)."""
+        login = str(username or "").strip()
+        if not login:
+            return False, "Account username is required.", ""
+
+        from .copilot_accounts import list_gh_accounts, switch_gh_account
+
+        self._settings.mark_chat_account_selected(login)
+
+        gh_entry = next((item for item in list_gh_accounts() if item.get("username") == login), None)
+        if gh_entry and gh_entry.get("ready"):
+            if not gh_entry.get("active"):
+                ok, message = switch_gh_account(login)
+                if not ok:
+                    return False, message, ""
+            return True, "", "reconnect"
+        return True, "", "login"
+
+    def complete_chat_account_activation(self, mode: str) -> bool:
+        if mode == "reconnect":
+            return self._reconnect_chat_client()
+        if mode == "login":
+            return self.add_chat_account()
+        return False
+
+    def add_chat_account(self) -> bool:
+        """Authenticate a new GitHub account from scratch."""
+        if not self._chat_client:
+            self.chat_auth_failed.emit("Chat client not initialized")
+            return False
+        if not self._start_auth_flow("chat"):
+            return False
+        logger.info("[AuthService] Adding chat account via GitHub CLI...")
+        try:
+            self._chat_client.do_add_account_login()
+            return True
+        except Exception as exc:
+            logger.exception("[AuthService] Add-account login failed to start")
+            self._end_auth_flow()
+            self.chat_auth_failed.emit(str(exc))
+            return False
+
+    def _reconnect_chat_client(self) -> bool:
+        if not self._chat_client:
+            return False
+        if not self._start_auth_flow("chat"):
+            return False
+        logger.info("[AuthService] Reconnecting Copilot chat with active GitHub account...")
+        try:
+            self._chat_client.start_auth()
+            return True
+        except Exception as exc:
+            logger.exception("[AuthService] Chat reconnect failed")
+            self._end_auth_flow()
+            self.chat_auth_failed.emit(str(exc))
+            return False
 
     def cancel_chat_auth(self) -> None:
         """Cancel an in-progress chat login flow and release the auth lock."""

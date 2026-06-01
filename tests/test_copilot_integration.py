@@ -698,10 +698,52 @@ class TestMCPToolRegistry:
         tool_names = [t["name"] for t in tools]
         assert "edit_block_lines" in tool_names
         assert "get_block_code" in tool_names
+        assert "inspect_block" in tool_names
         assert "search_in_code" in tool_names
         assert "run_silent_python" in tool_names
         assert "run_silent_query" in tool_names
         assert "write_and_run" in tool_names
+
+    def test_inspect_block_returns_structure(self):
+        html_block = self._make_mock_with_code(
+            'html = """<div id="calendarGrid" class="calendar-panel">'
+            '<script>function renderCalendar(){}</script>"""',
+            "python",
+            "calendario",
+        )
+        self._make_mock_env([html_block])
+
+        result = self.registry.execute("inspect_block", {"block_name": "calendario"})
+        assert "content" in result
+        text = result["content"][0]["text"]
+        assert "calendarGrid" in text
+        assert "renderCalendar" in text
+        assert "calendar-panel" in text
+
+    def test_get_block_code_around_anchor(self):
+        lines = [f"line_{i} = {i}" for i in range(1, 120)]
+        lines[50] = "function updateSummary() { return 1; }"
+        code = "\n".join(lines)
+        block = self._make_mock_with_code(code, "python", "calendario")
+        self._make_mock_env([block])
+
+        result = self.registry.execute(
+            "get_block_code",
+            {"block_name": "calendario", "around": "updateSummary", "context_lines": 5},
+        )
+        assert "content" in result
+        text = result["content"][0]["text"]
+        assert "updateSummary" in text
+        assert "line_1" not in text
+
+    def test_duplicate_tool_calls_are_deduplicated(self):
+        block = self._make_mock_with_code("x = 1", "python", "analise")
+        self._make_mock_env([block])
+
+        args = {"block_name": "analise"}
+        first = self.registry.execute("get_block_code", args)
+        second = self.registry.execute("get_block_code", args)
+        assert first == second
 
     # === Tests for _resolve_block (block_name support) ===
 

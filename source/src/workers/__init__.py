@@ -216,6 +216,29 @@ class DataFrameOperationWorker(BaseWorker):
             self.finished.emit()
 
 
+class LSPProcessWorker(BaseWorker):
+    """Start Copilot LSP subprocess without blocking the UI thread."""
+
+    process_ready = pyqtSignal(object)
+
+    def __init__(self, server_path: str):
+        super().__init__()
+        self.server_path = server_path
+
+    def run(self):
+        self.started.emit()
+        try:
+            from src.services.copilot.copilot_lsp_client import spawn_lsp_process
+
+            process = spawn_lsp_process(self.server_path)
+            self.process_ready.emit(process)
+        except Exception as e:
+            error_msg = S.workers.error_operation.format(msg=str(e))
+            self.error.emit(error_msg)
+        finally:
+            self.finished.emit()
+
+
 class DatabaseSwitchWorker(BaseWorker):
     """
     Worker for switching database in background
