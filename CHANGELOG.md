@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.35.1 (2026-06-02)
+
+### Continuous Integration
+
+- Add agent rules for Conventional Commits and improve PSR workflow
+  ([`f26666d`](https://github.com/natharuc/datapyn/commit/f26666dcdb94211191d45d10c162cdbea5b21ace))
+
+
 ## v1.35.0 (2026-05-30)
 
 ### Bug Fixes
