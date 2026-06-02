@@ -510,13 +510,24 @@
         scrollToBottom();
     }
 
+    function renderThinkingHtml(text) {
+        const raw = String(text || "");
+        if (window.marked && typeof window.marked.parse === "function") {
+            return window.marked.parse(raw);
+        }
+        return escapeHtml(raw).replace(/\n/g, "<br>");
+    }
+
     function appendThinking(text) {
         startThinkingBlock();
         const chunk = String(text || "");
         if (!chunk) return;
         state.thinkingText += chunk;
         const content = state.thinkingEl && state.thinkingEl.querySelector(".thinking-block-content");
-        if (content) content.textContent = state.thinkingText;
+        if (content) {
+            content.className = "thinking-block-content markdown-body";
+            content.innerHTML = renderThinkingHtml(state.thinkingText);
+        }
         const preview = summarizeThinkingPreview(state.thinkingText);
         const status = state.thinkingEl && state.thinkingEl.querySelector(".thinking-summary-status");
         if (status) status.textContent = preview || label("thinking_live", "");

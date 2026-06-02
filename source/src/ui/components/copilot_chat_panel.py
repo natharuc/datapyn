@@ -3964,6 +3964,10 @@ class PyniaChatPanel(QWidget):
         phase_key = str(payload.get("phase_key") or "")
         detail = str(payload.get("detail") or "")
         step_id = str(payload.get("step_id") or "")
+        reasoning = str(payload.get("reasoning") or "").strip()
+
+        if reasoning or payload.get("thinking_step"):
+            self._append_visible_thinking(reasoning or self._resolve_progress_phase(phase_key, detail))
 
         if phase_key in ("activity_tool_done",):
             return
@@ -4090,15 +4094,27 @@ class PyniaChatPanel(QWidget):
         if tool_id in self._active_tool_calls:
             del self._active_tool_calls[tool_id]
 
-    def _on_thinking(self, text: str):
-        if not text.strip() or not self._turn_events_allowed():
+    def _append_visible_thinking(self, text: str) -> None:
+        """Show reasoning / sequential steps in the collapsible thinking block."""
+        chunk = (text or "").strip()
+        if not chunk or not self._turn_events_allowed():
             return
-        self._chat_runtime.mark_thinking(text)
-        preview = text.strip().replace("\n", " ")[:100]
+        self._chat_runtime.mark_thinking(chunk)
+        if not self._is_thinking:
+            self._is_thinking = True
+            self._run_chat_js("startThinkingBlock()")
+        self._run_chat_js(f"appendThinking({json.dumps(chunk + chr(10))})")
+        preview = chunk.replace("\n", " ")[:100]
         phase = getattr(S.pynia, "thinking", "Thinking")
         self._run_chat_js(
             f"setActivity({json.dumps({'phase': phase, 'detail': preview})})"
         )
+
+    def _on_thinking(self, text: str):
+        """Copilot SDK native reasoning stream → visible thinking block."""
+        if not text.strip():
+            return
+        self._append_visible_thinking(text)
 
     def _populate_model_combo(self, models: list):
         normalized = normalize_models(models) or fallback_models()

@@ -765,6 +765,11 @@ select {
 }
 .thinking-block summary::-webkit-details-marker, .work-block summary::-webkit-details-marker { display: none; }
 .thinking-block-content, .work-list { padding: 9px 10px; color: var(--text-secondary); white-space: pre-wrap; }
+.thinking-block-content.markdown-body { white-space: normal; font-size: 12px; line-height: 1.45; }
+.thinking-block-content.markdown-body p { margin: 0 0 6px; }
+.thinking-block-content.markdown-body ul { margin: 4px 0 8px 1.1em; padding: 0; }
+.thinking-block-content.markdown-body li { margin: 2px 0; }
+.thinking-block-content.markdown-body strong { color: var(--text-primary); }
 .thinking-summary-status { color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
 .tool-row { display: grid; gap: 3px; padding: 6px 0; border-bottom: 1px solid var(--border-muted); }
 .tool-row:last-child { border-bottom: 0; }

@@ -15,6 +15,7 @@ def emit_progress(
     step_id: str = "",
     step_state: str = "active",
     reasoning: str = "",
+    thinking_step: bool = False,
 ) -> None:
     if not callback:
         return
@@ -26,6 +27,8 @@ def emit_progress(
         payload["step_state"] = step_state
     if reasoning:
         payload["reasoning"] = reasoning
+    if thinking_step:
+        payload["thinking_step"] = True
     try:
         callback(payload)
     except Exception:

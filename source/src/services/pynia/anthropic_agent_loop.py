@@ -128,7 +128,14 @@ def run_anthropic_agent_turn(
     seen_tool_keys: set[str] = set()
     block_inspect_counts: dict[str, int] = {}
 
-    emit_progress(on_progress, phase_key=PHASE_PLANNING, step_id="plan", step_state="active")
+    from src.services.pynia.sequential_thinking import emit_thinking_step, round_step_title
+
+    emit_thinking_step(
+        on_progress,
+        title=round_step_title(0, planning=True),
+        body="Reviewing focused block and workspace context.",
+        step_id="plan-start",
+    )
 
     for round_idx in range(max_tool_rounds):
         if is_cancelled():
@@ -254,6 +261,10 @@ def run_anthropic_agent_turn(
             seen_keys=seen_tool_keys,
             block_inspect_counts=block_inspect_counts,
         )
+
+        from src.services.pynia.sequential_thinking import emit_planned_tools_thinking
+
+        emit_planned_tools_thinking(on_progress, round_idx, prepared)
 
         round_outcomes = process_tool_round(
             prepared,

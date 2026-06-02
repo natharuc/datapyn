@@ -59,6 +59,8 @@ Blocks with HTML output render in the results panel. Edit via `datapyn_inspect` 
 - **Visible**: `datapyn_run`, `datapyn_chart` — user-facing outcomes.
 - Pure Q&A → query + chat. User asked for artifact → query → one visible step.
 
+{sequential_thinking}
+
 ## DISCIPLINE
 - Use only `datapyn_*` tools; never invent APIs or old MCP names.
 - **Forbidden**: calling `datapyn_inspect` with the same block_name + detail twice; calling `datapyn_snapshot` action=full after context was provided.
@@ -105,13 +107,18 @@ def build_request_prompt(
 
 def build_system_prompt(*, include_tool_catalog: bool = False, tools: list | None = None) -> str:
     """Build the stable Pynia system message."""
+    from src.services.pynia.sequential_thinking import SEQUENTIAL_THINKING_PROMPT
+
     if include_tool_catalog and tools:
         from src.services.copilot.system_prompt import build_tools_list
 
         tools_note = TOOLS_NOTE_LEGACY.format(tools_list=build_tools_list(tools))
     else:
         tools_note = TOOLS_NOTE_WITH_API
-    return PYNIA_SYSTEM_PROMPT.format(tools_note=tools_note)
+    return PYNIA_SYSTEM_PROMPT.format(
+        tools_note=tools_note,
+        sequential_thinking=SEQUENTIAL_THINKING_PROMPT,
+    )
 
 
 def build_context_section(context_json: str = "", schema_text: str = "") -> str:
