@@ -79,7 +79,7 @@ class PyniaAgentClient(QObject):
         self._available_models = [
             dict(m) for m in FALLBACK_MODELS.get(self._provider_id, fallback_models())
         ]
-        self._model = self._settings.selected_model or PROVIDERS[self._provider_id].default_model
+        self._model = self._settings.selected_model(self._provider_id)
         self._reasoning_effort = self._settings.reasoning_effort
         self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
 
@@ -112,7 +112,7 @@ class PyniaAgentClient(QObject):
         self._settings.set_active_provider(provider_id)
         self._is_authenticated = self._settings.is_authenticated(provider_id)
         self._username = self._settings.username(provider_id)
-        self._model = self._settings.selected_model or PROVIDERS[provider_id].default_model
+        self._model = self._settings.selected_model(provider_id)
         self._available_models = [
             dict(m) for m in FALLBACK_MODELS.get(provider_id, fallback_models())
         ]
@@ -128,7 +128,11 @@ class PyniaAgentClient(QObject):
             self._copilot_adapter.connect_signals(self)
             self._is_authenticated = self._copilot_backend.is_authenticated
             self._username = getattr(self._copilot_backend, "_username", "") or ""
-            if self._copilot_backend.is_authenticated:
+            saved_model = self._settings.selected_model("copilot")
+            if saved_model:
+                self._copilot_backend.model = saved_model
+                self._model = saved_model
+            elif self._copilot_backend.is_authenticated:
                 self._available_models = self._copilot_backend.available_models()
                 self._model = self._copilot_backend.model
         else:
@@ -154,7 +158,7 @@ class PyniaAgentClient(QObject):
     @model.setter
     def model(self, value: str) -> None:
         self._model = value or PROVIDERS[self._provider_id].default_model
-        self._settings.set_selected_model(self._model)
+        self._settings.set_selected_model(self._model, self._provider_id)
         if self._subagent_orchestrator:
             self._subagent_orchestrator.set_model(self._model)
         if self._provider_id == "copilot" and self._copilot_backend:

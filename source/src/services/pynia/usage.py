@@ -150,7 +150,7 @@ def build_pynia_usage_payload(
     """Merge provider limits with optional Copilot quota/runtime metadata."""
     p = _pynia()
     models = models or []
-    model = model or get_pynia_settings().selected_model
+    model = model or get_pynia_settings().selected_model(provider_id)
 
     if provider_id == "copilot":
         from src.services.copilot.copilot_cli_manager import merge_usage_with_runtime

@@ -93,13 +93,35 @@ class PyniaSettingsManager:
     def set_active_provider(self, provider_id: ProviderId) -> None:
         self._settings.setValue("active_provider", provider_id)
 
-    @property
-    def selected_model(self) -> str:
-        provider = PROVIDERS[self.active_provider]
-        return self._settings.value("selected_model", provider.default_model) or provider.default_model
+    def selected_model(self, provider_id: Optional[ProviderId] = None) -> str:
+        """Last chat model chosen for a connector (persisted per provider)."""
+        pid = provider_id or self.active_provider
+        key = f"{pid}/selected_model"
+        stored = self._settings.value(key, "") or ""
+        if not stored and pid == "copilot":
+            from src.services.copilot.copilot_settings import get_copilot_settings
 
-    def set_selected_model(self, model_id: str) -> None:
-        self._settings.setValue("selected_model", model_id or "")
+            stored = get_copilot_settings().chat_selected_model
+        if not stored:
+            legacy = self._settings.value("selected_model", "") or ""
+            if legacy and pid == self.active_provider:
+                stored = legacy
+                self._settings.setValue(key, legacy)
+        if not stored:
+            stored = PROVIDERS[pid].default_model
+        return stored
+
+    def set_selected_model(
+        self,
+        model_id: str,
+        provider_id: Optional[ProviderId] = None,
+    ) -> None:
+        pid = provider_id or self.active_provider
+        self._settings.setValue(f"{pid}/selected_model", model_id or "")
+        if pid == "copilot":
+            from src.services.copilot.copilot_settings import get_copilot_settings
+
+            get_copilot_settings().set_chat_selected_model(model_id)
 
     @property
     def reasoning_effort(self) -> str:

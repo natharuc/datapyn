@@ -2283,9 +2283,7 @@ class PyniaChatPanel(QWidget):
     def _populate_model_combo(self, models: list):
         """Populate the model combo with normalized model metadata."""
         normalized = normalize_models(models) or fallback_models()
-        current_model = self._model_combo.currentData()
-        if not current_model and self._agent_client and hasattr(self._agent_client, 'model'):
-            current_model = self._agent_client.model
+        current_model = self._preferred_model_id(self._model_combo.currentData())
         self._available_models = normalized
 
         self._model_combo.blockSignals(True)
@@ -2310,6 +2308,17 @@ class PyniaChatPanel(QWidget):
             self._agent_client.model = selected_model
         self._update_reasoning_effort_state()
         self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, selected_model))
+
+    def _preferred_model_id(self, current_combo_value: str = "") -> str:
+        """Restore the last model for the active connector when repopulating the list."""
+        if current_combo_value:
+            return current_combo_value
+        if self._agent_client and getattr(self._agent_client, "model", ""):
+            return self._agent_client.model
+        from src.services.pynia.settings import get_pynia_settings
+
+        pid = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
+        return get_pynia_settings().selected_model(pid)
 
     def _on_usage_changed(self, snapshot: dict):
         """Update usage display from client/service metadata."""
@@ -3959,9 +3968,7 @@ class PyniaChatPanel(QWidget):
 
     def _populate_model_combo(self, models: list):
         normalized = normalize_models(models) or fallback_models()
-        current_model = self._model_combo.currentData()
-        if not current_model and self._agent_client and hasattr(self._agent_client, 'model'):
-            current_model = self._agent_client.model
+        current_model = self._preferred_model_id(self._model_combo.currentData())
         self._available_models = normalized
         self._model_combo.blockSignals(True)
         self._model_combo.clear()
@@ -3992,7 +3999,6 @@ class PyniaChatPanel(QWidget):
             idx = self._model_combo.findData(model_id)
             if idx >= 0:
                 self._model_combo.setCurrentIndex(idx)
-            get_copilot_settings().set_chat_selected_model(model_id)
             if self._agent_client:
                 self._agent_client.model = model_id
         self._update_reasoning_effort_state()

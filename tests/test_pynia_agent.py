@@ -98,7 +98,9 @@ class TestPyniaAgentClient:
         from src.services.pynia.agent_client import PyniaAgentClient
 
         client = PyniaAgentClient()
+        start_provider = client.provider_id
+        target = "anthropic" if start_provider != "anthropic" else "openai"
         with qtbot.waitSignal(client.provider_changed, timeout=1000):
-            client.set_provider("openai")
-        assert client.provider_id == "openai"
+            client.set_provider(target)
+        assert client.provider_id == target
         client.cleanup()
