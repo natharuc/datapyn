@@ -90,7 +90,8 @@ class BlockEditor(QWidget):
         self._execution_queue_blocks: List[CodeBlock] = []  # Blocks in execution queue
         self._current_executing_block: Optional[CodeBlock] = None  # Currently executing block
         self._dragging_block: Optional[CodeBlock] = None  # Block being dragged
-        self._copilot_client = None  # Copilot client for inline completions
+        self._pynia_client = None  # Pynia agent for inline autocomplete
+        self._copilot_client = None  # Deprecated alias storage
         self._lsp_client = None  # LSP client for inline completions
         self._database_context = ""  # Database schema context for SQL completions
         self._sql_schema = {}  # Cached SQL schema for completions
@@ -107,11 +108,16 @@ class BlockEditor(QWidget):
 
     # === Public Properties ===
 
-    def set_copilot_client(self, client) -> None:
-        """Set Copilot client for inline completions in all blocks."""
+    def set_pynia_client(self, client) -> None:
+        """Set Pynia agent client for inline autocomplete in all blocks."""
+        self._pynia_client = client
         self._copilot_client = client
         for block in self._blocks:
-            block.set_copilot_client(client)
+            block.set_pynia_client(client)
+
+    def set_copilot_client(self, client) -> None:
+        """Backward-compatible alias for set_pynia_client."""
+        self.set_pynia_client(client)
 
     def set_lsp_client(self, client) -> None:
         """Set LSP client for inline completions in all blocks."""
@@ -445,9 +451,11 @@ class BlockEditor(QWidget):
         if code:
             block.set_code(code)
         
-        # Pass Copilot client for inline completions (Monaco)
-        if self._copilot_client:
-            block.set_copilot_client(self._copilot_client)
+        # Pynia inline autocomplete (Monaco)
+        if self._pynia_client:
+            block.set_pynia_client(self._pynia_client)
+        elif self._copilot_client:
+            block.set_pynia_client(self._copilot_client)
 
         # Pass LSP client for inline completions (Monaco)
         if hasattr(self, "_lsp_client") and self._lsp_client:

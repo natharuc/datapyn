@@ -676,10 +676,11 @@ class SessionsMixin:
         widget = SessionWidget(session, theme_manager=self.theme_manager)
         
         # Pynia inline autocomplete for Monaco editors
-        if hasattr(self, "_pynia_agent") and self._pynia_agent:
-            widget.editor.set_pynia_client(self._pynia_agent)
-        elif hasattr(self, "_copilot_client") and self._copilot_client:
-            widget.editor.set_pynia_client(self._copilot_client)
+        if hasattr(widget.editor, "set_pynia_client"):
+            if hasattr(self, "_pynia_agent") and self._pynia_agent:
+                widget.editor.set_pynia_client(self._pynia_agent)
+            elif hasattr(self, "_copilot_client") and self._copilot_client:
+                widget.editor.set_pynia_client(self._copilot_client)
 
         # Criar paineis por sessao (Results, Output, Variables)
         self._create_session_panels(session.session_id)
