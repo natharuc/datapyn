@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.36.1 (2026-06-02)
+
+### Documentation
+
+- **agents**: Add Cursor Cloud development instructions
+  ([`e22b2bb`](https://github.com/natharuc/datapyn/commit/e22b2bb8fb130e99f200041aa9f815bd55c1221b))
+
+- **agents**: Add Cursor Cloud development instructions
+  ([`3209838`](https://github.com/natharuc/datapyn/commit/3209838a30e7fdd402d0020a9cea8ca8131ff6b4))
+
+### Heuristic
+
+- Merge pull request #110 from natharuc/cursor/cloud-dev-env-setup-1c49
+  ([`e22b2bb`](https://github.com/natharuc/datapyn/commit/e22b2bb8fb130e99f200041aa9f815bd55c1221b))
+
+
 ## v1.36.0 (2026-06-02)
 
 ### Bug Fixes
