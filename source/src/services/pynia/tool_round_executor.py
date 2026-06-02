@@ -12,6 +12,8 @@ from src.services.pynia.agent_loop_policy import (
     truncate_tool_result,
     was_duplicate_skip,
 )
+from src.services.pynia.agent_progress import ProgressCallback, emit_progress
+from src.services.pynia.agent_status import PHASE_TOOL_DONE, format_tool_display
 
 if TYPE_CHECKING:
     from src.services.pynia.subagents.orchestrator import SubagentOrchestrator
@@ -29,6 +31,7 @@ def process_tool_round(
     on_tool_call: Callable[[str, dict, str], None],
     on_tool_result: Callable[[str, str, str], None],
     is_cancelled: Callable[[], bool],
+    on_progress: ProgressCallback = None,
 ) -> List[Tuple[str, str, str]]:
     """
     Run prepared tool calls; return (tool_call_id, name, result_text) for conversation.
@@ -60,6 +63,13 @@ def process_tool_round(
 
     # Parallel explore subagents (LLM workers on background QThreads)
     if subagent_calls:
+        emit_progress(
+            on_progress,
+            phase_key="activity_subagent_parallel",
+            detail=str(len(subagent_calls)),
+            step_id="subagents",
+            step_state="active",
+        )
         if subagent_orchestrator:
             from src.services.pynia.subagents.types import ExploreTask
 
@@ -96,6 +106,7 @@ def process_tool_round(
                 err = "Error: parallel subagents unavailable."
                 on_tool_result(name, err, tc_id)
                 outcomes.append((tc_id, name, err))
+        emit_progress(on_progress, phase_key=PHASE_TOOL_DONE, step_id="subagents", step_state="done")
 
     # Batch read-only tools (single main-thread hop when possible)
     use_batch = (
@@ -105,19 +116,37 @@ def process_tool_round(
     )
     if use_batch:
         for name, args, tc_id in to_run_ro:
+            title, detail = format_tool_display(name, args)
+            emit_progress(
+                on_progress,
+                phase_key="activity_running_tool",
+                detail=title,
+                step_id=tc_id,
+                step_state="active",
+            )
             on_tool_call(name, args, tc_id)
         results = tool_executor.execute_batch([(n, a) for n, a, _ in to_run_ro])
         for (name, args, tc_id), result in zip(to_run_ro, results):
             result = truncate_tool_result(result)
             on_tool_result(name, result, tc_id)
+            emit_progress(on_progress, phase_key=PHASE_TOOL_DONE, step_id=tc_id, step_state="done")
             outcomes.append((tc_id, name, result))
     else:
         for name, args, tc_id in to_run_ro:
             if is_cancelled():
                 return outcomes
+            title, detail = format_tool_display(name, args)
+            emit_progress(
+                on_progress,
+                phase_key="activity_running_tool",
+                detail=title,
+                step_id=tc_id,
+                step_state="active",
+            )
             on_tool_call(name, args, tc_id)
             result = truncate_tool_result(execute_tool(name, args))
             on_tool_result(name, result, tc_id)
+            emit_progress(on_progress, phase_key=PHASE_TOOL_DONE, step_id=tc_id, step_state="done")
             outcomes.append((tc_id, name, result))
 
     # Overflow read-only (limit skipped) — still execute, tool-only
@@ -142,14 +171,25 @@ def process_tool_round(
     for name, args, tc_id, should_execute in sequential:
         if is_cancelled():
             return outcomes
+        if should_execute:
+            title, _detail = format_tool_display(name, args)
+            emit_progress(
+                on_progress,
+                phase_key="activity_running_tool",
+                detail=title,
+                step_id=tc_id,
+                step_state="active",
+            )
         on_tool_call(name, args, tc_id)
         if should_execute:
             result = truncate_tool_result(execute_tool(name, args))
+            emit_progress(on_progress, phase_key=PHASE_TOOL_DONE, step_id=tc_id, step_state="done")
         else:
             result = skipped_tool_message(name, args, seen_keys)
         on_tool_result(name, result, tc_id)
         outcomes.append((tc_id, name, result))
 
+    emit_progress(on_progress, phase_key="activity_waiting_model", step_state="active")
     return outcomes
 
 

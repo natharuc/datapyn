@@ -914,6 +914,8 @@ class PyniaChatPanel(QWidget):
                     self._agent_client.tool_result.disconnect(self._on_tool_result)
                 if hasattr(self._agent_client, 'thinking'):
                     self._agent_client.thinking.disconnect(self._on_thinking)
+                if hasattr(self._agent_client, 'agent_progress'):
+                    self._agent_client.agent_progress.disconnect(self._on_agent_progress)
                 if hasattr(self._agent_client, 'models_changed'):
                     self._agent_client.models_changed.disconnect(self._on_models_changed)
                 if hasattr(self._agent_client, 'models_updated'):
@@ -941,6 +943,8 @@ class PyniaChatPanel(QWidget):
                 client.tool_result.connect(self._on_tool_result)
             if hasattr(client, 'thinking'):
                 client.thinking.connect(self._on_thinking)
+            if hasattr(client, 'agent_progress'):
+                client.agent_progress.connect(self._on_agent_progress)
             if hasattr(client, 'models_changed'):
                 client.models_changed.connect(self._on_models_changed)
             if hasattr(client, 'models_updated'):
@@ -3053,7 +3057,9 @@ class PyniaChatPanel(QWidget):
             "effort_medium", "effort_high", "effort_xhigh", "work_title",
             "work_running", "work_complete", "toggle_history", "logout",
             "retry_turn", "task_complete_title", "task_complete_default",
-            "activity_sending", "activity_running_tool",
+            "activity_sending", "activity_connecting", "activity_planning",
+            "activity_analyzing", "activity_synthesizing", "activity_waiting_model",
+            "activity_subagent_parallel", "activity_running_tool", "turn_context_block",
             "chat_locked_placeholder", "thinking_live",
             "attach_image_tooltip", "remove_attachment",
             "attachment_only_prompt", "attachment_limit_reached", "attachment_too_large",
@@ -3559,6 +3565,7 @@ class PyniaChatPanel(QWidget):
         self._active_references = resolved_refs
         self._turn_tools_used = 0
         self._turn_had_notify_user = False
+        self._last_progress_step = ""
         self._chat_runtime.start_turn(text, resolved_refs, stored_attachments)
         if not retry:
             self._add_message("user", text, references=resolved_refs, attachments=stored_attachments)
@@ -3582,11 +3589,18 @@ class PyniaChatPanel(QWidget):
             m = re.search(r"block `([^`]+)`", start_here)
             if m:
                 focus_name = m.group(1)
+        context_chip = ""
         if focus_name:
             phase = S.pynia.activity_focused_block.format(block=focus_name) if hasattr(
                 S.pynia, "activity_focused_block"
             ) else f"Focused block: {focus_name}"
             self._run_chat_js(f"setActivity({json.dumps({'phase': phase, 'detail': ''})})")
+            if hasattr(S.pynia, "turn_context_block"):
+                context_chip = S.pynia.turn_context_block.format(block=focus_name)
+            else:
+                context_chip = f"block:{focus_name}"
+
+        self._run_chat_js(f"startAgentTurn({json.dumps(context_chip)})")
 
         # SDK session keeps conversation history; send only system rules + current turn.
         api_messages = [
@@ -3660,7 +3674,7 @@ class PyniaChatPanel(QWidget):
         self._active_tool_target_id = None
         self._set_loading(False)
         self._hide_thinking_indicator()
-        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); stopActivityTimer();")
+        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
 
     def _on_stop(self, *_args):
         if self._agent_client and hasattr(self._agent_client, "cancel"):
@@ -3672,7 +3686,7 @@ class PyniaChatPanel(QWidget):
         self._chat_runtime.cancel()
         self._set_loading(False)
         self._hide_thinking_indicator()
-        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); stopActivityTimer();")
+        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
 
     def _on_retry_turn(self, *_args):
         payload = self._chat_runtime.retry_payload()
@@ -3715,7 +3729,7 @@ class PyniaChatPanel(QWidget):
         if self._is_thinking:
             self._is_thinking = False
             self._run_chat_js("endThinkingBlock()")
-        self._run_chat_js("endStreaming(); endToolGroup(); stopActivityTimer();")
+        self._run_chat_js("endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
         self._active_tool_calls.clear()
         if not self._current_stream_id:
             self._add_message("assistant", full_text)
@@ -3770,11 +3784,50 @@ class PyniaChatPanel(QWidget):
         if self._is_thinking:
             self._is_thinking = False
             self._run_chat_js("endThinkingBlock()")
-        self._run_chat_js("endStreaming(); endToolGroup(); stopActivityTimer();")
+        self._run_chat_js("endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
         self._current_stream_id = None
         self._active_tool_calls.clear()
         if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
             self._on_gh_not_found()
+
+    def _resolve_progress_phase(self, phase_key: str, detail: str = "") -> str:
+        tpl = getattr(S.pynia, phase_key, phase_key)
+        if "{tool}" in tpl:
+            return tpl.replace("{tool}", detail or "…")
+        if "{count}" in tpl:
+            return tpl.replace("{count}", detail or "0")
+        if phase_key == "activity_running_tool" and detail:
+            return detail
+        return tpl
+
+    def _on_agent_progress(self, payload: dict) -> None:
+        """Timeline + activity updates during agent turns (API providers)."""
+        if not isinstance(payload, dict):
+            return
+        self._chat_runtime.touch_activity()
+        phase_key = str(payload.get("phase_key") or "")
+        detail = str(payload.get("detail") or "")
+        step_id = str(payload.get("step_id") or "")
+        step_state = str(payload.get("step_state") or "active")
+        phase = self._resolve_progress_phase(phase_key, detail)
+        js_payload = {
+            "phase": phase,
+            "detail": detail if phase_key not in ("activity_running_tool",) else "",
+            "step_id": step_id,
+            "step_state": step_state,
+        }
+        self._run_chat_js(f"pushAgentProgress({json.dumps(js_payload)})")
+
+        provider = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
+        reasoning = str(payload.get("reasoning") or "").strip()
+        if provider != "copilot" and step_id and step_state == "active" and step_id != self._last_progress_step:
+            self._last_progress_step = step_id
+            line = reasoning or phase
+            if line:
+                if not self._is_thinking:
+                    self._is_thinking = True
+                    self._run_chat_js("startThinkingBlock()")
+                self._run_chat_js(f"appendThinking({json.dumps(line + chr(10))})")
 
     def _on_tool_called(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
         self._chat_runtime.mark_tool(tool_name, "running")
@@ -3782,8 +3835,11 @@ class PyniaChatPanel(QWidget):
             self._turn_tools_used += 1
         if tool_name == "notify_user":
             self._turn_had_notify_user = True
-        arg_summary = ""
-        if arguments:
+        from src.services.pynia.agent_status import format_tool_display
+
+        display_title, arg_detail = format_tool_display(tool_name, arguments or {})
+        arg_summary = arg_detail
+        if not arg_summary and arguments:
             parts = []
             for key, val in arguments.items():
                 if key == "thought":
@@ -3793,7 +3849,8 @@ class PyniaChatPanel(QWidget):
             arg_summary = ", ".join(parts[:3])
         tool_id = tool_call_id or f"{tool_name}-{len(self._active_tool_calls) + 1}"
         self._run_chat_js(
-            f"addToolUse({json.dumps(tool_name)}, {json.dumps(arg_summary)}, {json.dumps(tool_id)})"
+            f"addToolUse({json.dumps(tool_name)}, {json.dumps(arg_summary)}, "
+            f"{json.dumps(tool_id)}, {json.dumps(display_title)})"
         )
         self._active_tool_calls[tool_id] = tool_name
         self.tool_call_requested.emit(tool_name, arguments)

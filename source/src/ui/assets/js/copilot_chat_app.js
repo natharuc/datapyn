@@ -28,6 +28,7 @@
         authReady: false,
         thinkingText: "",
         thinkingStartedAt: 0,
+        agentTimelineEl: null,
         pasteBusy: false,
         recentAttachmentKeys: new Set(),
         supportsVision: true,
@@ -364,7 +365,7 @@
     function clearMessages() {
         const messages = $("messages");
         if (messages) {
-            messages.querySelectorAll(".message-row,.thinking-block,.work-block,.status-line,#activityLine").forEach((node) => node.remove());
+            messages.querySelectorAll(".message-row,.thinking-block,.work-block,.status-line,#activityLine,.agent-timeline,.turn-context-chip").forEach((node) => node.remove());
         }
         const welcome = $("welcome");
         if (welcome) welcome.hidden = false;
@@ -464,11 +465,89 @@
         state.streamingEl = null;
     }
 
+    function ensureAgentTimeline() {
+        hideWelcome();
+        if (state.agentTimelineEl) return state.agentTimelineEl;
+        const el = document.createElement("div");
+        el.className = "agent-timeline";
+        el.id = "agentTimeline";
+        $("messages").appendChild(el);
+        state.agentTimelineEl = el;
+        return el;
+    }
+
+    function pushAgentProgress(payload) {
+        payload = payload || {};
+        const phase = payload.phase || "";
+        const detail = payload.detail || "";
+        if (phase || detail) {
+            setActivity({ phase: phase || label("waiting_response", ""), detail });
+        }
+        const stepId = payload.step_id || "";
+        const stepState = payload.step_state || "active";
+        if (!stepId) {
+            scrollToBottom();
+            return;
+        }
+        const tl = ensureAgentTimeline();
+        if (stepState === "active") {
+            tl.querySelectorAll(".agent-step.active").forEach((node) => {
+                node.classList.remove("active");
+                node.classList.add("done");
+            });
+        }
+        let row = tl.querySelector(`[data-step-id="${CSS.escape(stepId)}"]`);
+        if (!row) {
+            row = document.createElement("div");
+            row.className = "agent-step";
+            row.dataset.stepId = stepId;
+            row.innerHTML = '<span class="agent-step-icon" aria-hidden="true"></span><span class="agent-step-label"></span>';
+            tl.appendChild(row);
+        }
+        row.classList.remove("active", "done", "error");
+        if (stepState === "done") row.classList.add("done");
+        else if (stepState === "error") row.classList.add("error");
+        else row.classList.add("active");
+        const labelEl = row.querySelector(".agent-step-label");
+        if (labelEl && phase) labelEl.textContent = phase;
+        scrollToBottom();
+    }
+
+    function startAgentTurn(contextChip) {
+        hideWelcome();
+        state.workEl = null;
+        state.toolCount = 0;
+        state.completedTools = 0;
+        const oldTimeline = $("agentTimeline");
+        if (oldTimeline) oldTimeline.remove();
+        state.agentTimelineEl = null;
+        document.querySelectorAll(".turn-context-chip").forEach((node) => node.remove());
+        if (contextChip) {
+            const chip = document.createElement("div");
+            chip.className = "turn-context-chip";
+            chip.innerHTML = `<span class="turn-context-icon" aria-hidden="true">◇</span><code>${escapeHtml(contextChip)}</code>`;
+            $("messages").appendChild(chip);
+        }
+        showThinking();
+        scrollToBottom();
+    }
+
+    function endAgentTurn() {
+        const tl = $("agentTimeline");
+        if (tl) {
+            tl.querySelectorAll(".agent-step.active").forEach((node) => {
+                node.classList.remove("active");
+                node.classList.add("done");
+            });
+        }
+    }
+
     function ensureWorkBlock() {
         hideWelcome();
         if (state.workEl) return state.workEl;
         const block = document.createElement("details");
         block.className = "work-block";
+        block.setAttribute("open", "");
         block.innerHTML = `<summary><span>${escapeHtml(label("work_title", label("thinking", "")))}</span><span class="work-status">${escapeHtml(label("work_running", label("tool_running", "")))}</span></summary><div class="work-list"></div>`;
         $("messages").appendChild(block);
         state.workEl = block;
@@ -482,12 +561,14 @@
         status.textContent = done ? label("work_complete", label("tool_ok", "")) : label("work_running", label("tool_running", ""));
     }
 
-    function addToolUse(toolName, argSummary, toolId) {
+    function addToolUse(toolName, argSummary, toolId, displayLabel) {
         const block = ensureWorkBlock();
+        block.setAttribute("open", "");
         state.toolCount += 1;
         updateWorkStatus(false);
+        const title = displayLabel || toolName;
         setActivity({
-            phase: label("activity_running_tool", "Running {tool}...").replace("{tool}", toolName),
+            phase: label("activity_running_tool", "{tool}").replace("{tool}", title),
             detail: argSummary || "",
         });
 
@@ -495,7 +576,7 @@
         row.className = "tool-row running";
         row.dataset.toolName = toolName;
         row.dataset.toolId = toolId || `${toolName}-${state.toolCount}`;
-        row.innerHTML = `<div class="tool-row-head"><span>${escapeHtml(toolName)}</span><span>${escapeHtml(label("tool_running", ""))}</span></div><div class="tool-row-detail">${escapeHtml(argSummary || "")}</div>`;
+        row.innerHTML = `<div class="tool-row-head"><span>${escapeHtml(title)}</span><span>${escapeHtml(label("tool_running", ""))}</span></div><div class="tool-row-detail">${escapeHtml(argSummary || "")}</div>`;
         block.querySelector(".work-list").appendChild(row);
         scrollToBottom();
         return row.dataset.toolId;
@@ -1780,6 +1861,9 @@
     window.streamChunk = streamChunk;
     window.endStreaming = endStreaming;
     window.addToolUse = addToolUse;
+    window.pushAgentProgress = pushAgentProgress;
+    window.startAgentTurn = startAgentTurn;
+    window.endAgentTurn = endAgentTurn;
     window.updateToolStatus = updateToolStatus;
     window.completeAllRunningTools = completeAllRunningTools;
     window.endToolGroup = endToolGroup;

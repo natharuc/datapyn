@@ -51,6 +51,7 @@ class PyniaAgentClient(QObject):
     chat_error = pyqtSignal(str)
     tool_called = pyqtSignal(str, dict, str)
     tool_result = pyqtSignal(str, str, str)
+    agent_progress = pyqtSignal(dict)
     thinking = pyqtSignal(str)
     models_changed = pyqtSignal(list)
     usage_changed = pyqtSignal(dict)
@@ -430,6 +431,7 @@ class PyniaAgentClient(QObject):
         self._token_worker.usage_ready.connect(self._on_usage_loaded)
         self._token_worker.tool_call.connect(self.tool_called.emit)
         self._token_worker.tool_result.connect(self.tool_result.emit)
+        self._token_worker.agent_progress.connect(self.agent_progress.emit)
 
         self._token_thread = QThread()
         self._token_worker.moveToThread(self._token_thread)

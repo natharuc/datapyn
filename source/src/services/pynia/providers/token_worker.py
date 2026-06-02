@@ -49,6 +49,7 @@ class TokenAgentWorker(QObject):
     usage_ready = pyqtSignal(dict)
     tool_call = pyqtSignal(str, dict, str)
     tool_result = pyqtSignal(str, str, str)
+    agent_progress = pyqtSignal(dict)
     finished = pyqtSignal()
 
     def __init__(
@@ -89,6 +90,9 @@ class TokenAgentWorker(QObject):
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    def _emit_progress(self, payload: dict) -> None:
+        self.agent_progress.emit(payload)
 
     def _execute_tool(self, name: str, arguments: dict) -> str:
         if not self._tool_executor:
@@ -134,6 +138,7 @@ class TokenAgentWorker(QObject):
 
             settings = get_pynia_settings()
             is_cancelled = lambda: self._cancelled
+            self._emit_progress({"phase_key": "activity_connecting", "step_id": "connect", "step_state": "active"})
 
             if self._provider_id == "anthropic":
                 final = run_anthropic_agent_turn(
@@ -149,6 +154,7 @@ class TokenAgentWorker(QObject):
                     on_tool_call=self.tool_call.emit,
                     on_tool_result=self.tool_result.emit,
                     is_cancelled=is_cancelled,
+                    on_progress=self._emit_progress,
                 )
             else:
                 extra = OPENROUTER_HEADERS if self._provider_id == "openrouter" else None
@@ -167,6 +173,7 @@ class TokenAgentWorker(QObject):
                     on_tool_result=self.tool_result.emit,
                     is_cancelled=is_cancelled,
                     extra_headers=extra,
+                    on_progress=self._emit_progress,
                 )
             self.complete.emit(final or "")
         except Exception as exc:

@@ -91,6 +91,7 @@ def run_anthropic_agent_turn(
     execute_tool: Callable[[str, Dict[str, Any]], str],
     tool_executor: Any = None,
     subagent_orchestrator: Any = None,
+    on_progress: Any = None,
     on_chunk: Callable[[str], None],
     on_tool_call: Callable[[str, dict, str], None],
     on_tool_result: Callable[[str, str, str], None],
@@ -98,6 +99,8 @@ def run_anthropic_agent_turn(
     max_tool_rounds: int = 10,
 ) -> str:
     from src.services.pynia.agent_loop_policy import MAX_TOOL_ROUNDS, prepare_tool_calls
+    from src.services.pynia.agent_progress import emit_progress
+    from src.services.pynia.agent_status import PHASE_ANALYZING, PHASE_PLANNING, PHASE_SYNTHESIZING
     from src.services.pynia.tool_round_executor import process_tool_round
 
     max_tool_rounds = min(max_tool_rounds, MAX_TOOL_ROUNDS)
@@ -118,9 +121,18 @@ def run_anthropic_agent_turn(
     final_text = ""
     seen_tool_keys: set[str] = set()
 
+    emit_progress(on_progress, phase_key=PHASE_PLANNING, step_id="plan", step_state="active")
+
     for _round in range(max_tool_rounds):
         if is_cancelled():
             return final_text
+
+        emit_progress(
+            on_progress,
+            phase_key=PHASE_ANALYZING if _round == 0 else PHASE_SYNTHESIZING,
+            step_id="model",
+            step_state="active",
+        )
 
         payload: Dict[str, Any] = {
             "model": model,
@@ -237,6 +249,7 @@ def run_anthropic_agent_turn(
             on_tool_call=on_tool_call,
             on_tool_result=on_tool_result,
             is_cancelled=is_cancelled,
+            on_progress=on_progress,
         )
         tool_results = [
             {"type": "tool_result", "tool_use_id": tc_id, "content": result}
