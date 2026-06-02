@@ -943,6 +943,7 @@ class SessionsMixin:
                 self._copilot_chat_panel.switch_tab_context(
                     widget.session.session_id, tab_name
                 )
+                self._copilot_chat_panel.notify_block_focused()
 
             # Restaurar contexto de arquivo da aba selecionada
             if hasattr(widget, "file_path") and widget.file_path:

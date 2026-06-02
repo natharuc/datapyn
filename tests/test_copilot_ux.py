@@ -321,6 +321,8 @@ class TestCopilotChatWebViewApp:
         assert "composerError" in html
         assert "attachBtn" in html
         assert "logoutBtn" in html
+        assert "focusedBlockChips" in html
+        assert 'id="focusedBlockChips" class="composer-focused-block" hidden' in html
         assert "attachmentChips" in html
         assert 'id="attachmentChips" class="composer-attachments" hidden' in html
         assert "imageLightbox" in html
@@ -342,6 +344,8 @@ class TestCopilotChatWebViewApp:
         assert "callBridgeResult" in js
         assert "forceComposerRepaint" in js
         assert "syncAttachmentStrip" in js
+        assert "setFocusedBlockAttachment" in js
+        assert "focused_block" in js
         assert 'callBridge("updateCopilotCli"' in js
         assert 'callBridge("refreshUsagePanel"' in js
 

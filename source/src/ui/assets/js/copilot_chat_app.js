@@ -7,6 +7,7 @@
         usage: {},
         references: [],
         attachments: [],
+        focusedBlock: null,
         maxAttachments: 4,
         maxImageBytes: 4 * 1024 * 1024,
         streamingEl: null,
@@ -334,7 +335,98 @@
         container.appendChild(wrap);
     }
 
-    function addMessage(role, content, id, references, attachments) {
+    function languageBadgeClass(language) {
+        const lang = String(language || "").toLowerCase();
+        if (lang.includes("python")) return "lang-python";
+        if (lang === "sql") return "lang-sql";
+        if (lang.includes("html")) return "lang-html";
+        return "";
+    }
+
+    function languageBadgeText(language) {
+        const lang = String(language || "").toLowerCase();
+        if (lang.includes("python")) return "Py";
+        if (lang === "sql") return "SQL";
+        if (lang.includes("html")) return "HTML";
+        if (lang.includes("javascript") || lang === "js") return "JS";
+        if (lang) return lang.slice(0, 4).toUpperCase();
+        return "?";
+    }
+
+    function buildFocusedBlockChipElement(item, { composer = false } = {}) {
+        if (!item || !item.label) return null;
+        const chip = document.createElement(composer ? "div" : "span");
+        chip.className = composer ? "focused-block-chip" : "message-focused-block-chip";
+        const aria = label("focused_block_chip_aria", "Focused block {label}").replace("{label}", item.label);
+        chip.title = label("focused_block_pin_title", "Primary context");
+        chip.setAttribute("aria-label", aria);
+
+        const pin = document.createElement("span");
+        pin.className = "focused-block-pin";
+        pin.setAttribute("aria-hidden", "true");
+        pin.textContent = "📌";
+        chip.appendChild(pin);
+
+        const lang = document.createElement("span");
+        lang.className = `focused-block-lang ${languageBadgeClass(item.language)}`.trim();
+        lang.textContent = languageBadgeText(item.language);
+        lang.setAttribute("aria-hidden", "true");
+        chip.appendChild(lang);
+
+        const text = document.createElement("span");
+        text.className = "focused-block-label";
+        text.textContent = item.label;
+        chip.appendChild(text);
+        return chip;
+    }
+
+    function renderMessageFocusedBlock(container, focusedBlock) {
+        if (!container || !focusedBlock || !focusedBlock.label) return;
+        const wrap = document.createElement("div");
+        wrap.className = "message-focused-blocks";
+        const chip = buildFocusedBlockChipElement(focusedBlock, { composer: false });
+        if (chip) wrap.appendChild(chip);
+        container.appendChild(wrap);
+    }
+
+    function syncFocusedBlockStrip() {
+        const wrap = $("focusedBlockChips");
+        const card = $("composerCard");
+        const hasItem = !!(state.focusedBlock && state.focusedBlock.label);
+        if (wrap) {
+            wrap.hidden = !hasItem;
+            wrap.classList.toggle("has-items", hasItem);
+            wrap.innerHTML = "";
+            if (hasItem) {
+                const chip = buildFocusedBlockChipElement(state.focusedBlock, { composer: true });
+                if (chip) wrap.appendChild(chip);
+            }
+        }
+        if (card) {
+            card.classList.toggle("has-focused-block", hasItem);
+        }
+        forceComposerRepaint();
+    }
+
+    function setFocusedBlockAttachment(payload) {
+        if (!payload || !payload.label) {
+            state.focusedBlock = null;
+        } else {
+            state.focusedBlock = {
+                type: "focused_block",
+                block_name: payload.block_name || "",
+                language: payload.language || "",
+                lines: payload.lines || 0,
+                line_range: payload.line_range || "",
+                label: payload.label,
+                index: payload.index,
+                is_primary_target: true,
+            };
+        }
+        syncFocusedBlockStrip();
+    }
+
+    function addMessage(role, content, id, references, attachments, focusedBlock) {
         hideWelcome();
         const row = document.createElement("article");
         row.className = `message-row ${role || "assistant"}`;
@@ -344,6 +436,7 @@
         stack.className = "message-stack";
 
         if (role === "user") {
+            renderMessageFocusedBlock(stack, focusedBlock);
             renderMessageAttachments(stack, attachments);
             renderAttachedReferences(stack, references);
         }
@@ -585,7 +678,7 @@
         return toolId;
     }
 
-    function startAgentTurn(contextChip) {
+    function startAgentTurn() {
         hideWelcome();
         hideThinking();
         state.workEl = null;
@@ -595,12 +688,6 @@
         document.querySelectorAll(".agent-timeline").forEach((node) => node.remove());
         state.agentTimelineEl = null;
         document.querySelectorAll(".turn-context-chip").forEach((node) => node.remove());
-        if (contextChip) {
-            const chip = document.createElement("div");
-            chip.className = "turn-context-chip";
-            chip.innerHTML = `<span class="turn-context-icon" aria-hidden="true">◇</span><code>${escapeHtml(contextChip)}</code>`;
-            $("messages").appendChild(chip);
-        }
         setActivity({
             phase: label("activity_working", label("waiting_response", "")),
             detail: "",
@@ -1660,10 +1747,22 @@
             size,
             source,
         }));
+        const focusedBlock = state.focusedBlock
+            ? {
+                type: "focused_block",
+                block_name: state.focusedBlock.block_name,
+                language: state.focusedBlock.language,
+                lines: state.focusedBlock.lines,
+                line_range: state.focusedBlock.line_range,
+                label: state.focusedBlock.label,
+                index: state.focusedBlock.index,
+            }
+            : null;
         callBridge("sendMessage", {
             text: text || label("attachment_only_prompt", "What do you see in this image?"),
             references: state.references,
             attachments,
+            focused_block: focusedBlock,
         });
         input.value = "";
         input.style.height = "auto";
@@ -1900,6 +1999,7 @@
     window.trackAgentTool = trackAgentTool;
     window.pushAgentProgress = pushAgentProgress;
     window.startAgentTurn = startAgentTurn;
+    window.setFocusedBlockAttachment = setFocusedBlockAttachment;
     window.endAgentTurn = endAgentTurn;
     window.updateToolStatus = updateToolStatus;
     window.completeAllRunningTools = completeAllRunningTools;

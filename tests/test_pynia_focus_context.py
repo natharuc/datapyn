@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 from src.services.pynia.focus_context import (
     apply_focused_block_defaults,
+    focused_block_chip_payload,
     focused_block_payload,
     start_here_directive,
 )
@@ -24,6 +25,24 @@ def test_focused_block_payload_includes_code():
     assert payload is not None
     assert payload["name"] == "vendas"
     assert "SELECT 1" in payload["code"]
+
+
+def test_focused_block_chip_payload_label():
+    block = MagicMock()
+    block.get_code.return_value = "x = 1\n" * 10
+    block.get_block_name.return_value = "calendario"
+    block.get_language.return_value = "python"
+    block.has_selection.return_value = False
+
+    editor = MagicMock()
+    editor.get_last_focused_block.return_value = block
+    editor.blocks = [block]
+
+    chip = focused_block_chip_payload(editor)
+    assert chip is not None
+    assert chip["label"] == "calendario:1-10"
+    assert chip["type"] == "focused_block"
+    assert chip["block_name"] == "calendario"
 
 
 def test_start_here_directive_names_block():

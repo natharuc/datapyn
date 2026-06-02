@@ -1568,6 +1568,8 @@
     "activity_focused_block": "Focused block: {block}",
     "activity_running_tool": "{tool}",
     "turn_context_block": "Block: {block}",
+    "focused_block_pin_title": "Primary context — the agent starts from this block",
+    "focused_block_chip_aria": "Focused block {label}",
     "work_title": "Pynia work",
     "work_summary_steps": "{n} steps",
     "work_expand_hint": "Details",

@@ -2033,11 +2033,14 @@ class PyniaChatPanel(QWidget):
         content: str,
         references: list = None,
         attachments: list = None,
+        focused_block: dict = None,
     ):
         """Add a message to the chat."""
         message = {"role": role, "content": content}
         if attachments:
             message["attachments"] = list(attachments)
+        if focused_block:
+            message["focused_block"] = dict(focused_block)
         self._messages.append(message)
 
         msg_id = f"msg_{len(self._messages)}_{id(content) % 10000}"
@@ -2071,10 +2074,12 @@ class PyniaChatPanel(QWidget):
                 "size": item.get("size", 0),
                 "source": item.get("source", "user"),
             })
+        focused_payload = dict(focused_block) if focused_block else None
         self._run_chat_js(
             "addMessage("
             f"{json.dumps(role_js)}, {content_escaped}, {json.dumps(msg_id)}, "
-            f"{json.dumps(refs_payload)}, {json.dumps(attachments_payload)})"
+            f"{json.dumps(refs_payload)}, {json.dumps(attachments_payload)}, "
+            f"{json.dumps(focused_payload)})"
         )
         self._run_chat_js("hideWelcome()")
 
@@ -2810,6 +2815,7 @@ class PyniaChatPanel(QWidget):
         self._current_tab_name = tab_name or ""
         if tab_name:
             self._update_tab_badge(tab_name)
+        self._sync_focused_block_chip()
     
     def _update_tab_badge(self, tab_name: str):
         """Update the tab context badge in the chat header."""
@@ -3072,6 +3078,7 @@ class PyniaChatPanel(QWidget):
             "activity_sending", "activity_connecting", "activity_planning",
             "activity_analyzing", "activity_synthesizing", "activity_waiting_model",
             "activity_subagent_parallel", "activity_running_tool", "turn_context_block",
+            "focused_block_pin_title", "focused_block_chip_aria",
             "tool_timed_out", "tool_interrupted",
             "chat_locked_placeholder", "thinking_live",
             "attach_image_tooltip", "remove_attachment",
@@ -3352,6 +3359,25 @@ class PyniaChatPanel(QWidget):
         self._sync_attachment_limits_to_webview()
         self._refresh_history_sidebar()
         self._sync_app_state()
+        self._sync_focused_block_chip()
+
+    def _active_block_editor(self):
+        mw = self._get_registry_main_window()
+        session_widget = self._get_context_session_widget(mw, self._resolve_current_tab_id() or "")
+        return getattr(session_widget, "editor", None) if session_widget else None
+
+    def _focused_block_chip_payload(self):
+        from src.services.pynia.focus_context import focused_block_chip_payload
+
+        return focused_block_chip_payload(self._active_block_editor())
+
+    def notify_block_focused(self, _block=None):
+        """Refresh the composer chip when the user focuses a block in the editor."""
+        self._sync_focused_block_chip()
+
+    def _sync_focused_block_chip(self):
+        payload = self._focused_block_chip_payload()
+        self._run_chat_js(f"setFocusedBlockAttachment({json.dumps(payload)})")
 
     def _sync_attachment_limits_to_webview(self):
         from src.services.copilot.copilot_attachments import attachment_limits_for_model
@@ -3556,6 +3582,7 @@ class PyniaChatPanel(QWidget):
             str(payload.get("text", "")),
             payload.get("references", []),
             attachments=payload.get("attachments", []),
+            focused_block=payload.get("focused_block"),
         )
 
     def _on_send(
@@ -3564,6 +3591,7 @@ class PyniaChatPanel(QWidget):
         references: list = None,
         retry: bool = False,
         attachments: list = None,
+        focused_block: dict = None,
     ):
         """Send a user prompt from the WebView composer."""
         if not text and hasattr(self, '_input') and self._input:
@@ -3609,9 +3637,18 @@ class PyniaChatPanel(QWidget):
         self._turn_had_notify_user = False
         self._last_progress_step = ""
         self._clear_tool_watch_timers()
+        chip_payload = focused_block if isinstance(focused_block, dict) and focused_block.get("label") else None
+        if not chip_payload:
+            chip_payload = self._focused_block_chip_payload()
         self._chat_runtime.start_turn(text, resolved_refs, stored_attachments)
         if not retry:
-            self._add_message("user", text, references=resolved_refs, attachments=stored_attachments)
+            self._add_message(
+                "user",
+                text,
+                references=resolved_refs,
+                attachments=stored_attachments,
+                focused_block=chip_payload,
+            )
         self._set_loading(True)
         self._run_chat_js(f"setActivity({json.dumps({'phase': S.pynia.activity_sending})})")
 
@@ -3643,25 +3680,20 @@ class PyniaChatPanel(QWidget):
                 context_section,
                 start_here,
             )
-        focus_name = ""
-        if "`" in start_here:
+        focus_name = (chip_payload or {}).get("block_name") or ""
+        if not focus_name and "`" in start_here:
             import re
 
             m = re.search(r"block `([^`]+)`", start_here)
             if m:
                 focus_name = m.group(1)
-        context_chip = ""
         if focus_name:
             phase = S.pynia.activity_focused_block.format(block=focus_name) if hasattr(
                 S.pynia, "activity_focused_block"
             ) else f"Focused block: {focus_name}"
             self._run_chat_js(f"setActivity({json.dumps({'phase': phase, 'detail': ''})})")
-            if hasattr(S.pynia, "turn_context_block"):
-                context_chip = S.pynia.turn_context_block.format(block=focus_name)
-            else:
-                context_chip = f"block:{focus_name}"
 
-        self._run_chat_js(f"startAgentTurn({json.dumps(context_chip)})")
+        self._run_chat_js("startAgentTurn()")
 
         api_messages = self._build_api_messages_for_agent(system_prompt, request_prompt)
 

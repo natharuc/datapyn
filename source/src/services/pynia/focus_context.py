@@ -105,6 +105,35 @@ def apply_focused_block_defaults(
     return out
 
 
+def focused_block_chip_payload(
+    block_editor,
+    *,
+    max_lines: int = 400,
+    max_chars: int = 24_000,
+) -> Optional[Dict[str, Any]]:
+    """
+    Compact display payload for the composer / message attachment chip.
+    """
+    detail = focused_block_payload(block_editor, max_lines=max_lines, max_chars=max_chars)
+    if not detail:
+        return None
+    name = str(detail.get("name") or "block")
+    language = str(detail.get("language") or "unknown")
+    lines = int(detail.get("lines") or 0)
+    line_range = f"1-{lines}" if lines > 1 else ("1" if lines == 1 else "")
+    label = f"{name}:{line_range}" if line_range else name
+    return {
+        "type": "focused_block",
+        "block_name": name,
+        "language": language,
+        "lines": lines,
+        "line_range": line_range,
+        "label": label,
+        "index": detail.get("index", 0),
+        "is_primary_target": True,
+    }
+
+
 def start_here_directive(focus: Optional[Dict[str, Any]]) -> str:
     if not focus:
         return (

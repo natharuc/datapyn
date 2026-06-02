@@ -1568,6 +1568,8 @@
     "activity_focused_block": "Bloco em foco: {block}",
     "activity_running_tool": "{tool}",
     "turn_context_block": "Bloco: {block}",
+    "focused_block_pin_title": "Contexto principal — o agente começa neste bloco",
+    "focused_block_chip_aria": "Bloco em foco {label}",
     "work_title": "Trabalho Pynia",
     "work_summary_steps": "{n} etapas",
     "work_expand_hint": "Detalhes",

@@ -632,6 +632,11 @@ class SchemaMixin:
 
         This makes the OE follow the 'focused connection' — per-block or per-session.
         """
+        if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
+            try:
+                self._copilot_chat_panel.notify_block_focused(block)
+            except Exception:
+                pass
         if not block or not widget:
             return
 
