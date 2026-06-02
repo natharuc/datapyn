@@ -214,11 +214,7 @@ This project uses semantic-release for automatic versioning. Commits determine t
 
 Commits that don't trigger a release: `docs`, `style`, `test`, `chore`, `ci`, `refactor`
 
-**CI/CD (main branch):** after tests pass, `Continuous Delivery - PSR` runs python-semantic-release.
-If the merge/squash commit title is free-form (e.g. `Improve grid performance` or `Delete file.txt`),
-the workflow succeeds but **no version bump** occurs (`no_release`). Use a PR title / squash message
-starting with `feat:` or `fix:` when you expect a new MSI. Manual recovery: run the PSR workflow with
-`force: patch|minor|major` (not `rebuild_only`).
+**CI/CD (main branch):** after tests pass, **Continuous Delivery - PSR** runs python-semantic-release with `scripts/datapyn_commit_parser.py`. Types above control semver; merge titles and imperative subjects get heuristics. If still `no_release`, the workflow applies a **fallback patch** and builds the MSI. Pure `docs`/`chore`-only merges may skip MSI unless you run PSR manually with `force`.
 
 ---
 

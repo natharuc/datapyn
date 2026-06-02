@@ -57,12 +57,16 @@ from .copilot_attachments import (
     validate_attachments_for_model,
 )
 from .copilot_settings import get_copilot_settings
+from .copilot_process import popen_hidden, run_hidden
 
-# Hide console window on Windows
+# Backward-compatible alias for modules that import _CREATE_NO_WINDOW from here.
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 # Default models - will be updated from SDK at runtime
 DEFAULT_MODELS = fallback_models()
+
+_CLI_DISCOVERY_CACHE: Optional[tuple] = None
+_MAX_RGLOB_PER_FOLDER = 6
 
 
 def _parse_copilot_cli_version(text: str) -> tuple:
@@ -76,17 +80,13 @@ def _parse_copilot_cli_version(text: str) -> tuple:
 
 def _read_copilot_cli_version(cli_path: str) -> tuple:
     """Return semver tuple for a Copilot CLI binary."""
-    import subprocess
-
     def _run_version(args: list) -> tuple:
         try:
-            result = subprocess.run(
+            result = run_hidden(
                 args,
-                capture_output=True,
                 text=True,
                 timeout=12,
                 env={**os.environ, "ELECTRON_RUN_AS_NODE": ""},
-                creationflags=_CREATE_NO_WINDOW,
             )
             output = f"{result.stdout}\n{result.stderr}"
             if result.returncode != 0 or "Cannot find" in output:
@@ -99,6 +99,12 @@ def _read_copilot_cli_version(cli_path: str) -> tuple:
     if version != (0, 0, 0):
         return version
     return _run_version([cli_path, "--version"])
+
+
+def invalidate_copilot_cli_cache() -> None:
+    """Clear cached CLI discovery (call after npm install/update)."""
+    global _CLI_DISCOVERY_CACHE
+    _CLI_DISCOVERY_CACHE = None
 
 
 def _discover_copilot_cli_candidates() -> list:
@@ -116,11 +122,24 @@ def _discover_copilot_cli_candidates() -> list:
         resolved = Path(path)
         if not resolved.exists():
             return
+        if sys.platform == "win32" and resolved.suffix.lower() in {".cmd", ".bat"}:
+            return
         key = str(resolved.resolve())
         if key in seen:
             return
         seen.add(key)
         candidates.append(str(resolved))
+
+    def add_rglob(folder: Path, pattern: str) -> None:
+        count = 0
+        try:
+            for nested in folder.rglob(pattern):
+                add(nested)
+                count += 1
+                if count >= _MAX_RGLOB_PER_FOLDER:
+                    break
+        except OSError:
+            pass
 
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         add(Path(sys._MEIPASS) / "copilot" / "bin" / "copilot.exe")
@@ -143,14 +162,8 @@ def _discover_copilot_cli_candidates() -> list:
                 if not folder.is_dir():
                     continue
                 add(folder / "copilot.exe")
-                add(folder / "copilot.cmd")
-                try:
-                    for nested in folder.rglob("copilot.exe"):
-                        add(nested)
-                except OSError:
-                    pass
+                add_rglob(folder, "copilot.exe")
 
-        add(Path(app_data) / "npm" / "copilot.cmd")
         add(Path(app_data) / "npm" / "copilot.exe")
 
         winget_root = Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
@@ -158,8 +171,7 @@ def _discover_copilot_cli_candidates() -> list:
             try:
                 for pkg in winget_root.glob("GitHub.Copilot*"):
                     add(pkg / "copilot.exe")
-                    for nested in pkg.rglob("copilot.exe"):
-                        add(nested)
+                    add_rglob(pkg, "copilot.exe")
             except OSError:
                 pass
 
@@ -189,16 +201,27 @@ def _discover_copilot_cli_candidates() -> list:
 
 def _pick_newest_copilot_cli() -> tuple:
     """Pick the newest working Copilot CLI. Returns (path, version_tuple)."""
+    global _CLI_DISCOVERY_CACHE
+    if _CLI_DISCOVERY_CACHE is not None:
+        return _CLI_DISCOVERY_CACHE
+
     best_path = ""
     best_version = (0, 0, 0)
     for cli_path in _discover_copilot_cli_candidates():
-        if not _verify_cli_works(cli_path):
-            continue
         version = _read_copilot_cli_version(cli_path)
+        if version == (0, 0, 0):
+            continue
         if version >= best_version:
             best_version = version
             best_path = cli_path
-    return best_path, best_version
+
+    _CLI_DISCOVERY_CACHE = (best_path, best_version)
+    return _CLI_DISCOVERY_CACHE
+
+
+def _verify_cli_works(cli_path: str) -> bool:
+    """Verify that a copilot CLI binary actually works (not a broken shim)."""
+    return _read_copilot_cli_version(cli_path) != (0, 0, 0)
 
 
 def _get_sdk_options():
@@ -209,33 +232,15 @@ def _get_sdk_options():
         SubprocessConfig = None
 
     cli_path, version = _pick_newest_copilot_cli()
+    cli_env = {**os.environ, "ELECTRON_RUN_AS_NODE": ""}
     if cli_path and SubprocessConfig is not None:
         logger.info("Using Copilot CLI v%s.%s.%s at %s", *version, cli_path)
-        return SubprocessConfig(cli_path=cli_path)
+        return SubprocessConfig(cli_path=cli_path, env=cli_env)
     if cli_path:
         logger.info("Using Copilot CLI v%s.%s.%s at %s (legacy SDK config)", *version, cli_path)
-        return {"cli_path": cli_path}
+        return {"cli_path": cli_path, "env": cli_env}
     logger.debug("No working Copilot CLI found; SDK will use its default bundled CLI")
     return None
-
-
-def _verify_cli_works(cli_path: str) -> bool:
-    """Verify that a copilot CLI binary actually works (not a broken shim)."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            [cli_path, "--version"],
-            capture_output=True, text=True, timeout=10,
-            env={**os.environ, "ELECTRON_RUN_AS_NODE": ""},
-        )
-        # A working CLI outputs version info; a broken shim outputs error messages
-        if result.returncode == 0 and "Cannot find" not in result.stderr:
-            return True
-        logger.debug(f"CLI at {cli_path} not usable: {result.stderr[:100]}")
-        return False
-    except Exception as e:
-        logger.debug(f"CLI at {cli_path} failed verification: {e}")
-        return False
 
 
 def _gh_executable() -> str:
@@ -250,12 +255,10 @@ def _is_gh_logged_in(gh_path: str = "") -> bool:
         return False
     import subprocess
     try:
-        result = subprocess.run(
+        result = run_hidden(
             [gh_path, "auth", "status", "-h", "github.com"],
-            capture_output=True,
             text=True,
             timeout=12,
-            creationflags=_CREATE_NO_WINDOW,
         )
         output = f"{result.stdout}\n{result.stderr}"
         if result.returncode != 0:
@@ -685,13 +688,12 @@ class CopilotWorker(QObject):
 
             self.auth_started.emit("Starting GitHub authentication...")
 
-            process = subprocess.Popen(
+            process = popen_hidden(
                 [gh_path, "auth", "login", "-h", "github.com", "-p", "https", "-w"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                creationflags=_CREATE_NO_WINDOW,
             )
             self._login_process = process
 
@@ -807,13 +809,12 @@ class CopilotWorker(QObject):
                 return
 
             self.auth_started.emit("Adding GitHub account...")
-            process = subprocess.Popen(
+            process = popen_hidden(
                 [gh_path, "auth", "login", "-h", "github.com", "-p", "https", "-w"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                creationflags=_CREATE_NO_WINDOW,
             )
             self._login_process = process
 
@@ -2048,11 +2049,9 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
             gh_path = shutil.which("gh")
             if gh_path:
                 # Run gh auth logout with --hostname to avoid prompts
-                subprocess.run(
+                run_hidden(
                     [gh_path, "auth", "logout", "--hostname", "github.com"],
-                    capture_output=True,
                     timeout=10,
-                    creationflags=_CREATE_NO_WINDOW,
                 )
                 logger.info("GitHub auth logout completed")
         except Exception as e:
@@ -2079,12 +2078,10 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
             gh_path = shutil.which("gh")
             if not gh_path:
                 return ""
-            result = subprocess.run(
+            result = run_hidden(
                 [gh_path, "api", "user", "-q", ".login"],
-                capture_output=True,
                 text=True,
                 timeout=10,
-                creationflags=_CREATE_NO_WINDOW,
             )
             if result.returncode == 0:
                 return result.stdout.strip()

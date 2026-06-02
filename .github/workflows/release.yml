@@ -48,9 +48,9 @@ jobs:
       contents: write
 
     outputs:
-      released: ${{ steps.release.outputs.released || steps.dry_run_version.outputs.released }}
-      tag: ${{ steps.release.outputs.tag || steps.dry_run_version.outputs.tag }}
-      version: ${{ steps.release.outputs.version || steps.dry_run_version.outputs.version }}
+      released: ${{ steps.set_release_outputs.outputs.released || steps.dry_run_version.outputs.released }}
+      tag: ${{ steps.set_release_outputs.outputs.tag || steps.dry_run_version.outputs.tag }}
+      version: ${{ steps.set_release_outputs.outputs.version || steps.dry_run_version.outputs.version }}
 
     steps:
       - name: Install SSH Client and add private key to ssh-agent
@@ -82,15 +82,45 @@ jobs:
           git_committer_email: "actions@users.noreply.github.com"
           force: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '' }}
 
-      - name: Report | No semantic release (conventional commits required)
+      - name: Fallback | Force patch when new commits did not match a release
+        id: release_fallback
         if: steps.release.outputs.released != 'true' && (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true)
+        uses: python-semantic-release/python-semantic-release@v10.5.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          git_committer_name: "github-actions"
+          git_committer_email: "actions@users.noreply.github.com"
+          force: patch
+
+      - name: Set release job outputs
+        id: set_release_outputs
+        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        run: |
+          if [ "${{ steps.release.outputs.released }}" = "true" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ steps.release.outputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.release_fallback.outputs.released }}" = "true" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ steps.release_fallback.outputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ steps.release_fallback.outputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "::notice::Applied fallback patch release after no_release from commit parser."
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report | No semantic release (conventional commits required)
+        if: steps.set_release_outputs.outputs.released != 'true' && (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true)
         run: |
           echo "::notice::Semantic Release did not bump the version (released=false)."
           echo "Commits on main since the last tag must use Conventional Commits, for example:"
           echo "  feat: new feature (minor bump)"
           echo "  fix: bug fix (patch bump)"
-          echo "Merge/squash titles like 'Improve grid performance' or 'Delete file.txt' do not trigger a release."
-          echo "To publish anyway, run this workflow manually with rebuild_only=false and force=patch|minor|major."
+          echo "Free-form subjects like 'Improve grid performance' are mapped by scripts/datapyn_commit_parser.py."
+          echo "Pure ci:/docs:/chore: merges may still skip MSI unless fallback patch applies."
+          echo "Manual recovery: Actions → Continuous Delivery - PSR → force: patch|minor|major"
 
       - name: Manual | Read version from pyproject.toml (rebuild MSI only)
         id: dry_run_version
@@ -106,6 +136,20 @@ jobs:
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Rebuild only: version=$VERSION tag=v${VERSION} (no bump)"
+
+  # Automatic runs that only merge ci:/chore:/docs: succeed the release job but skip MSI.
+  # Fail the workflow so "green" does not look like a published installer.
+  verify-msi-published:
+    needs: release
+    if: github.event_name == 'workflow_run' && needs.release.outputs.released != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail when no release was published
+        run: |
+          echo "::error::MSI was not built: semantic-release and fallback patch both returned released=false."
+          echo "Check commits since the last tag and scripts/datapyn_commit_parser.py heuristics."
+          echo "Manual recovery: Actions → Continuous Delivery - PSR → force: patch|minor|major"
+          exit 1
 
   build-windows-msi:
     needs: release

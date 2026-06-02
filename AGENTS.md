@@ -4,24 +4,19 @@ Instructions for AI agents (Cursor, Copilot, Claude, etc.) working in this repos
 
 ## Conventional Commits (mandatory)
 
-**All commits and PR titles must use Conventional Commits in English.**
+**All commits and PR titles must use Conventional Commits in English** when possible.
 
 Format: `type(scope): subject`
 
-- `feat` — new feature (minor release on merge to `main`)
-- `fix` — bug fix (patch release)
-- `feat!` or `BREAKING CHANGE:` — major release
-- `chore`, `ci`, `docs`, `test`, `refactor`, etc. — no automatic version bump
+| Type | Semver on merge to `main` |
+|------|---------------------------|
+| `feat` | Minor |
+| `fix`, `perf`, `refactor`, `revert`, `build` | Patch |
+| `chore`, `ci`, `docs`, `style`, `test` | No automatic bump |
 
-Free-form messages (e.g. `Improve grid performance`, `Delete file.txt`) cause the **Continuous Delivery - PSR** workflow to succeed without incrementing `pyproject.toml`.
+CI uses `scripts/datapyn_commit_parser.py` (extends python-semantic-release) plus a **fallback patch** if no release is detected. Imperative subjects without a prefix (e.g. `Add …`, `Improve …`) are mapped heuristically, but **`feat:` / `fix:` are still required** for predictable changelog and semver.
 
-When committing or opening a PR:
-
-1. Pick the correct `type` and optional `scope`.
-2. Use imperative mood in the subject (`add`, `fix`, `remove`, not `added` / `fixes`).
-3. Align squash-merge PR titles with the same format so `main` receives a releasable commit.
-
-See `.github/git-commit-instructions.md` and `.cursor/rules/conventional-commits.mdc` for details and scopes.
+See `.github/git-commit-instructions.md` and `.cursor/rules/conventional-commits.mdc`.
 
 ## Releases
 

@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+from .copilot_process import run_hidden
+
 _DEFAULT_HOST = "github.com"
 
 
@@ -32,12 +33,10 @@ def list_gh_accounts(hostname: str = _DEFAULT_HOST) -> List[Dict[str, Any]]:
         return []
 
     try:
-        result = subprocess.run(
+        result = run_hidden(
             [gh_path, "auth", "status", "-h", hostname, "--json", "hosts"],
-            capture_output=True,
             text=True,
             timeout=15,
-            creationflags=_CREATE_NO_WINDOW,
         )
     except Exception as exc:
         logger.info("Could not read gh auth status: %s", exc)
@@ -93,12 +92,10 @@ def switch_gh_account(username: str, hostname: str = _DEFAULT_HOST) -> Tuple[boo
         return False, "Account username is required."
 
     try:
-        result = subprocess.run(
+        result = run_hidden(
             [gh_path, "auth", "switch", "-h", hostname, "-u", login],
-            capture_output=True,
             text=True,
             timeout=30,
-            creationflags=_CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return False, "Timed out while switching GitHub account."
