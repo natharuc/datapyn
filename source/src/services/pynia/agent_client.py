@@ -35,7 +35,7 @@ class PyniaAgentClient(QObject):
     """
     Unified agent client for Pynia connectors.
 
-    Compatible with CopilotClient's public surface used by CopilotChatPanel.
+    Compatible with CopilotClient's public surface used by PyniaChatPanel.
     """
 
     auth_required = pyqtSignal(str, str)

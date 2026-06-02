@@ -13,7 +13,7 @@ from src.ui.components.results_viewer import ResultsViewer
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.summarize_panel import SummarizePanel
-from src.ui.components.copilot_chat_panel import CopilotChatPanel
+from src.ui.components.copilot_chat_panel import PyniaChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.design_system.tokens import get_colors
 from src.language import S
@@ -111,7 +111,7 @@ class LayoutMixin:
 
         # Copilot Chat Panel
         agent_client = getattr(self, "_pynia_agent", None) or self._copilot_client
-        self._copilot_chat_panel = CopilotChatPanel(
+        self._copilot_chat_panel = PyniaChatPanel(
             copilot_client=agent_client,
             mcp_server=self._mcp_server,
             theme_manager=self.theme_manager,
@@ -131,7 +131,7 @@ class LayoutMixin:
 
         # Copilot Output Panel (shows tool calls, results, debug info)
         self._copilot_output_panel = CopilotOutputPanel(theme_manager=self.theme_manager)
-        self.copilot_output_dock = QDockWidget("Copilot Output", self)
+        self.copilot_output_dock = QDockWidget("Pynia Output", self)
         self.copilot_output_dock.setObjectName("CopilotOutputDock")
         self.copilot_output_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.copilot_output_dock.setWidget(self._copilot_output_panel)

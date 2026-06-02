@@ -82,7 +82,7 @@ from src.ui.components.statusbar import MainStatusBar
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.object_explorer_panel import ObjectExplorerPanel
-from src.ui.components.copilot_chat_panel import CopilotChatPanel
+from src.ui.components.copilot_chat_panel import PyniaChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS, RADIUS

@@ -1,13 +1,8 @@
 """
-Copilot Chat Panel - Chat interface for GitHub Copilot integration.
+Pynia Chat Panel - multi-provider AI chat for DataPyn.
 
-This panel functions as a dockable block in DataPyn, similar to
-Variables, Object Explorer, etc. It provides:
-- Chat message display (WebView-based)
-- Message input area
-- Model selection
-- Mode selection (chat/edit/agent)
-- GitHub authentication flow
+Dockable chat UI for the Pynia agent. Connectors (OpenAI, Claude, Open Router,
+GitHub Copilot) are selected per workspace; all MCP IDE tools run through Pynia.
 """
 
 from PyQt6.QtWidgets import (
@@ -70,8 +65,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def _load_copilot_icon(color: str, size: int = 20) -> QIcon:
-    """Load Copilot SVG icon with custom color."""
+def _load_pynia_icon(color: str, size: int = 20) -> QIcon:
+    """Load Pynia mark icon (SVG) with custom color."""
     try:
         # Get path relative to this file (ui/components -> ui -> src -> assets/icons)
         components_dir = os.path.dirname(os.path.abspath(__file__))
@@ -320,6 +315,11 @@ class ChatBridge(QObject):
         QDesktopServices.openUrl(QUrl("https://github.com/settings/copilot"))
 
     @pyqtSlot(str)
+    def openExternalUrl(self, url: str = ""):
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+
+    @pyqtSlot(str)
     def switchAccount(self, _payload_json: str = ""):
         panel = self.parent()
         if panel is not None and hasattr(panel, "_open_account_picker"):
@@ -515,7 +515,7 @@ class ChatInputWidget(QTextEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setPlaceholderText(S.copilot.input_placeholder)
+        self.setPlaceholderText(S.pynia.input_placeholder)
         self.setMaximumHeight(120)
         self.setMinimumHeight(36)
         self.setAcceptRichText(False)
@@ -826,7 +826,7 @@ class CopilotCliUpdateWorker(QObject):
             self.finished.emit(False, str(exc), False)
 
 
-class CopilotChatPanel(QWidget):
+class PyniaChatPanel(QWidget):
     """
     Copilot Chat panel - integrates as a dockable panel in DataPyn.
 
@@ -868,7 +868,10 @@ class CopilotChatPanel(QWidget):
         self._account_switch_thread = None
         self._account_switch_worker = None
         self._is_thinking = False  # Tracks collapsible thinking block state
-        self._settings = QSettings("DataPyn", "CopilotChat")
+        self._settings = QSettings("DataPyn", "PyniaChat")
+        legacy = QSettings("DataPyn", "CopilotChat")
+        if legacy.contains("last_session_id") and not self._settings.contains("last_session_id"):
+            self._settings.setValue("last_session_id", legacy.value("last_session_id", ""))
         self._available_models = fallback_models()
         self._usage_snapshot = usage_snapshot_for_model(self._available_models, "gpt-4o")
         self._current_session_id = None
@@ -883,7 +886,7 @@ class CopilotChatPanel(QWidget):
         self._cli_update_thread = None
         self._pending_runtime_update = False
         self._cleaned_up = False
-        self._chat_runtime = CopilotChatRuntime(timeout_message=S.copilot.timeout_message, parent=self)
+        self._chat_runtime = CopilotChatRuntime(timeout_message=S.pynia.timeout_message, parent=self)
         self._chat_runtime.state_changed.connect(self._on_runtime_state_changed)
         self._chat_runtime.timeout.connect(self._on_runtime_timeout)
         self._setup_ui()
@@ -981,14 +984,14 @@ class CopilotChatPanel(QWidget):
         header_layout.setContentsMargins(10, 6, 10, 6)
         header_layout.setSpacing(8)
 
-        # Copilot icon + title
-        copilot_icon = _load_copilot_icon(colors.text_primary, size=20)
+        # Pynia icon + title
+        copilot_icon = _load_pynia_icon(colors.text_primary, size=20)
         if copilot_icon:
             icon_label = QLabel()
             icon_label.setPixmap(copilot_icon.pixmap(20, 20))
             header_layout.addWidget(icon_label)
 
-        title_label = QLabel(S.copilot.title)
+        title_label = QLabel(S.pynia.title)
         title_font = QFont()
         title_font.setBold(True)
         title_font.setPointSize(10)
@@ -1002,7 +1005,7 @@ class CopilotChatPanel(QWidget):
         self._new_chat_btn = QPushButton()
         self._new_chat_btn.setFixedSize(28, 28)
         self._new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._new_chat_btn.setToolTip(S.copilot.new_chat)
+        self._new_chat_btn.setToolTip(S.pynia.new_chat)
         if HAS_QTAWESOME:
             self._new_chat_btn.setIcon(qta.icon("mdi.plus", color=colors.text_primary))
         else:
@@ -1023,11 +1026,11 @@ class CopilotChatPanel(QWidget):
         self._sessions_btn = QPushButton()
         self._sessions_btn.setFixedSize(28, 28)
         self._sessions_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sessions_btn.setToolTip(S.copilot.chat_history)
+        self._sessions_btn.setToolTip(S.pynia.chat_history)
         if HAS_QTAWESOME:
             self._sessions_btn.setIcon(qta.icon("mdi.history", color=colors.text_primary))
         else:
-            self._sessions_btn.setText(S.copilot.chat_history_short)
+            self._sessions_btn.setText(S.pynia.chat_history_short)
         self._sessions_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -1041,7 +1044,7 @@ class CopilotChatPanel(QWidget):
         header_layout.addWidget(self._sessions_btn)
 
         # Auth button (no icon, just text showing username or sign-in)
-        self._auth_btn = QPushButton(S.copilot.sign_in)
+        self._auth_btn = QPushButton(S.pynia.sign_in)
         self._auth_btn.setFixedWidth(90)
         self._auth_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         header_layout.addWidget(self._auth_btn)
@@ -1097,12 +1100,12 @@ class CopilotChatPanel(QWidget):
             gh_icon_label.setText("!")
         gh_layout.addWidget(gh_icon_label)
 
-        gh_text = QLabel(S.copilot.gh_cli_not_found.split("\n")[0])
+        gh_text = QLabel(S.pynia.gh_cli_not_found.split("\n")[0])
         gh_text.setWordWrap(True)
         gh_text.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
         gh_layout.addWidget(gh_text, 1)
 
-        self._gh_install_btn = QPushButton(S.copilot.install_gh_cli)
+        self._gh_install_btn = QPushButton(S.pynia.install_gh_cli)
         self._gh_install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._gh_install_btn.setFixedHeight(30)
         self._gh_install_btn.setStyleSheet(f"""
@@ -1173,17 +1176,17 @@ class CopilotChatPanel(QWidget):
         self._model_delegate = ModelItemDelegate(self._model_combo)
         self._model_combo.setItemDelegate(self._model_delegate)
         self._model_combo.setFixedWidth(220)  # Accommodate model names + multiplier
-        self._model_combo.setToolTip(S.copilot.model_tooltip)
+        self._model_combo.setToolTip(S.pynia.model_tooltip)
         config_layout.addWidget(self._model_combo)
 
         self._refresh_models_btn = QPushButton()
         self._refresh_models_btn.setFixedSize(26, 26)
-        self._refresh_models_btn.setToolTip(S.copilot.refresh_models)
+        self._refresh_models_btn.setToolTip(S.pynia.refresh_models)
         self._refresh_models_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         if HAS_QTAWESOME:
             self._refresh_models_btn.setIcon(qta.icon("mdi.refresh", color=colors.text_secondary))
         else:
-            self._refresh_models_btn.setText(S.copilot.refresh_models_short)
+            self._refresh_models_btn.setText(S.pynia.refresh_models_short)
         self._refresh_models_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -1201,13 +1204,13 @@ class CopilotChatPanel(QWidget):
 
         self._effort_combo = QComboBox()
         self._effort_combo.setFixedWidth(118)
-        self._effort_combo.setToolTip(S.copilot.reasoning_effort_tooltip)
+        self._effort_combo.setToolTip(S.pynia.reasoning_effort_tooltip)
         effort_labels = {
-            "auto": S.copilot.effort_auto,
-            "low": S.copilot.effort_low,
-            "medium": S.copilot.effort_medium,
-            "high": S.copilot.effort_high,
-            "xhigh": S.copilot.effort_xhigh,
+            "auto": S.pynia.effort_auto,
+            "low": S.pynia.effort_low,
+            "medium": S.pynia.effort_medium,
+            "high": S.pynia.effort_high,
+            "xhigh": S.pynia.effort_xhigh,
         }
         for effort in REASONING_EFFORTS:
             self._effort_combo.addItem(effort_labels.get(effort, effort), effort)
@@ -1281,7 +1284,7 @@ class CopilotChatPanel(QWidget):
         self._send_btn = QPushButton()
         self._send_btn.setFixedSize(36, 36)
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._send_btn.setToolTip(S.copilot.send_tooltip)
+        self._send_btn.setToolTip(S.pynia.send_tooltip)
         if HAS_QTAWESOME:
             self._send_btn.setIcon(qta.icon("mdi.send", color=colors.text_primary))
         self._send_btn.setStyleSheet(f"""
@@ -1303,7 +1306,7 @@ class CopilotChatPanel(QWidget):
         self._stop_btn = QPushButton()
         self._stop_btn.setFixedSize(36, 36)
         self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._stop_btn.setToolTip(S.copilot.stop_tooltip)
+        self._stop_btn.setToolTip(S.pynia.stop_tooltip)
         if HAS_QTAWESOME:
             self._stop_btn.setIcon(qta.icon("mdi.stop", color=colors.text_primary))
         self._stop_btn.setStyleSheet(f"""
@@ -1391,13 +1394,13 @@ class CopilotChatPanel(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        title = QLabel(S.copilot.chat_history)
+        title = QLabel(S.pynia.chat_history)
         title.setObjectName("copilotHistoryTitle")
         layout.addWidget(title)
 
         self._history_search = QLineEdit()
         self._history_search.setObjectName("copilotHistorySearch")
-        self._history_search.setPlaceholderText(S.copilot.history_search_placeholder)
+        self._history_search.setPlaceholderText(S.pynia.history_search_placeholder)
         layout.addWidget(self._history_search)
 
         self._history_list = QListWidget()
@@ -1409,11 +1412,11 @@ class CopilotChatPanel(QWidget):
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(6)
-        self._history_delete_btn = QPushButton(S.copilot.delete_chat)
+        self._history_delete_btn = QPushButton(S.pynia.delete_chat)
         self._history_delete_btn.setEnabled(False)
         self._history_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         actions.addWidget(self._history_delete_btn)
-        self._history_clear_btn = QPushButton(S.copilot.clear_all)
+        self._history_clear_btn = QPushButton(S.pynia.clear_all)
         self._history_clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         actions.addWidget(self._history_clear_btn)
         layout.addLayout(actions)
@@ -1536,7 +1539,7 @@ class CopilotChatPanel(QWidget):
         else:
             logger.error(f"Chat template not found: {template_path}")
             # Fallback minimal HTML
-            fallback_text = S.copilot.template_not_found
+            fallback_text = S.pynia.template_not_found
             self._chat_webview.setHtml("""
                 <!DOCTYPE html>
                 <html>
@@ -1573,27 +1576,27 @@ class CopilotChatPanel(QWidget):
         self._webview_ready = True
         
         # Set welcome text from translation
-        welcome_title = "GitHub Copilot"
-        welcome_msg = S.copilot.welcome_message
+        welcome_title = getattr(S.pynia, "welcome_title", S.pynia.title)
+        welcome_msg = S.pynia.welcome_message
         self._run_chat_js(f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(welcome_msg)})")
         
         # Send i18n labels to WebView
         chat_labels = {
-            "thinking": S.copilot.thinking,
-            "thinking_complete": S.copilot.thinking_complete,
-            "tool_processing": S.copilot.tool_processing,
-            "tool_using_one": S.copilot.tool_using_one,
-            "tool_using_many": S.copilot.tool_using_many,
-            "tool_used_one": S.copilot.tool_used_one,
-            "tool_used_many": S.copilot.tool_used_many,
-            "tool_running": S.copilot.tool_running,
-            "tool_ok": S.copilot.tool_ok,
-            "tool_error": S.copilot.tool_error,
-            "copy": S.copilot.copy_code,
-            "copied": S.copilot.copied_code,
-            "insert": S.copilot.insert_code,
-            "inserted": S.copilot.inserted_code,
-            "waiting_response": S.copilot.waiting_response,
+            "thinking": S.pynia.thinking,
+            "thinking_complete": S.pynia.thinking_complete,
+            "tool_processing": S.pynia.tool_processing,
+            "tool_using_one": S.pynia.tool_using_one,
+            "tool_using_many": S.pynia.tool_using_many,
+            "tool_used_one": S.pynia.tool_used_one,
+            "tool_used_many": S.pynia.tool_used_many,
+            "tool_running": S.pynia.tool_running,
+            "tool_ok": S.pynia.tool_ok,
+            "tool_error": S.pynia.tool_error,
+            "copy": S.pynia.copy_code,
+            "copied": S.pynia.copied_code,
+            "insert": S.pynia.insert_code,
+            "inserted": S.pynia.inserted_code,
+            "waiting_response": S.pynia.waiting_response,
         }
         self._run_chat_js(f"setLabels({json.dumps(chat_labels)})")
         self._apply_theme()
@@ -1624,9 +1627,8 @@ class CopilotChatPanel(QWidget):
         self._new_chat_btn.clicked.connect(self._on_new_chat)
         self._sessions_btn.clicked.connect(self._on_sessions_clicked)
         
-        # Connect to auth service for cross-component updates
-        from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
+        # Connect to Pynia auth service for cross-component updates
+        auth_service = self._get_chat_auth_service()
         auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
         auth_service.chat_logged_out.connect(self._on_auth_service_chat_logged_out)
         if hasattr(auth_service, 'chat_gh_not_found'):
@@ -1649,8 +1651,8 @@ class CopilotChatPanel(QWidget):
         self._history_sidebar.setVisible(not self._history_sidebar.isVisible())
 
     def _session_display_name(self, session: dict) -> str:
-        name = session.get("name") or session.get("title") or S.copilot.untitled_chat
-        return str(name).strip() or S.copilot.untitled_chat
+        name = session.get("name") or session.get("title") or S.pynia.untitled_chat
+        return str(name).strip() or S.pynia.untitled_chat
 
     def _refresh_history_sidebar(self):
         """Refresh the visible history list from persisted sessions."""
@@ -1679,7 +1681,7 @@ class CopilotChatPanel(QWidget):
             self._history_list.addItem(item)
 
         if self._history_list.count() == 0:
-            item = QListWidgetItem(S.copilot.no_sessions)
+            item = QListWidgetItem(S.pynia.no_sessions)
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._history_list.addItem(item)
         self._history_delete_btn.setEnabled(self._history_list.currentItem() is not None)
@@ -1728,11 +1730,11 @@ class CopilotChatPanel(QWidget):
         self._send_btn.setEnabled(not loading)
         self._input.setEnabled(not loading)
         if loading:
-            self._send_btn.setToolTip(getattr(S.copilot, 'waiting_response', S.copilot.send_tooltip))
+            self._send_btn.setToolTip(getattr(S.pynia, 'waiting_response', S.pynia.send_tooltip))
             self._send_btn.hide()
             self._stop_btn.show()
         else:
-            self._send_btn.setToolTip(S.copilot.send_tooltip)
+            self._send_btn.setToolTip(S.pynia.send_tooltip)
             self._stop_btn.hide()
             self._send_btn.show()
 
@@ -1803,7 +1805,7 @@ class CopilotChatPanel(QWidget):
             self._agent_client.send_chat(api_messages)
         else:
             self._set_loading(False)
-            self._add_message("assistant", S.copilot.not_authenticated)
+            self._add_message("assistant", S.pynia.not_authenticated)
 
         self.message_sent.emit(text)
 
@@ -2263,7 +2265,7 @@ class CopilotChatPanel(QWidget):
 
     def _on_refresh_models_clicked(self):
         """Refresh model and usage metadata from the Copilot client."""
-        self._usage_label.setText(S.copilot.usage_loading)
+        self._usage_label.setText(S.pynia.usage_loading)
         self._usage_label.setVisible(True)
         if self._agent_client and hasattr(self._agent_client, 'refresh_metadata'):
             self._agent_client.refresh_metadata()
@@ -2323,19 +2325,19 @@ class CopilotChatPanel(QWidget):
             total = snapshot.get("total")
             remaining = snapshot.get("remaining_percentage")
             if used is not None and total is not None:
-                text = S.copilot.usage_format.format(used=used, total=total)
+                text = S.pynia.usage_format.format(used=used, total=total)
             elif used is not None:
-                text = S.copilot.usage_used_format.format(used=used)
+                text = S.pynia.usage_used_format.format(used=used)
             elif remaining is not None:
-                text = S.copilot.usage_remaining_format.format(remaining=remaining)
+                text = S.pynia.usage_remaining_format.format(remaining=remaining)
             else:
-                text = S.copilot.usage_unavailable
+                text = S.pynia.usage_unavailable
             reset_date = snapshot.get("reset_date")
-            tooltip = S.copilot.usage_tooltip_with_reset.format(reset_date=reset_date) if reset_date else S.copilot.usage_tooltip
+            tooltip = S.pynia.usage_tooltip_with_reset.format(reset_date=reset_date) if reset_date else S.pynia.usage_tooltip
         else:
             multiplier = self._format_multiplier(snapshot.get("multiplier", 1.0))
-            text = S.copilot.usage_unavailable
-            tooltip = S.copilot.usage_unavailable_tooltip.format(multiplier=multiplier)
+            text = S.pynia.usage_unavailable
+            tooltip = S.pynia.usage_unavailable_tooltip.format(multiplier=multiplier)
         self._usage_label.setText(text)
         self._usage_label.setToolTip(tooltip)
         self._usage_label.setVisible(True)
@@ -2359,9 +2361,9 @@ class CopilotChatPanel(QWidget):
             effort_idx = self._effort_combo.findData(preferred_effort)
             if effort_idx >= 0:
                 self._effort_combo.setCurrentIndex(effort_idx)
-        tooltip = S.copilot.reasoning_effort_tooltip
+        tooltip = S.pynia.reasoning_effort_tooltip
         if not supported:
-            tooltip = S.copilot.reasoning_effort_unavailable
+            tooltip = S.pynia.reasoning_effort_unavailable
         self._effort_combo.setToolTip(tooltip)
 
     def _on_reasoning_effort_changed(self, index: int):
@@ -2405,7 +2407,7 @@ class CopilotChatPanel(QWidget):
             """)
 
             # Show subscription
-            subscription_action = menu.addAction(S.copilot.show_subscription)
+            subscription_action = menu.addAction(S.pynia.show_subscription)
             subscription_action.triggered.connect(
                 lambda: QDesktopServices.openUrl(QUrl("https://github.com/settings/copilot"))
             )
@@ -2413,7 +2415,7 @@ class CopilotChatPanel(QWidget):
             menu.addSeparator()
 
             # Logout
-            logout_action = menu.addAction(S.copilot.logout)
+            logout_action = menu.addAction(S.pynia.logout)
             logout_action.triggered.connect(self._do_logout)
 
             menu.exec(self._auth_btn.mapToGlobal(self._auth_btn.rect().bottomLeft()))
@@ -2421,7 +2423,7 @@ class CopilotChatPanel(QWidget):
 
         # Start login via centralized auth service
         if auth_service.login_chat():
-            self._auth_btn.setText(S.copilot.signing_in)
+            self._auth_btn.setText(S.pynia.signing_in)
             self._auth_btn.setEnabled(False)
         else:
             logger.info("Chat login blocked - auth already in progress")
@@ -2453,7 +2455,7 @@ class CopilotChatPanel(QWidget):
         _ = message
         self._auth_signing_in = True
         self._auth_error_message = None
-        self._auth_btn.setText(S.copilot.signing_in)
+        self._auth_btn.setText(S.pynia.signing_in)
         self._auth_btn.setEnabled(False)
         self._refresh_auth_gate()
 
@@ -2478,7 +2480,7 @@ class CopilotChatPanel(QWidget):
         self._auth_signing_in = False
         self._auth_device_code = None
         self._auth_runtime_update_action = False
-        self._auth_btn.setText(S.copilot.sign_in)
+        self._auth_btn.setText(S.pynia.sign_in)
         self._auth_btn.setEnabled(True)
 
         if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
@@ -2488,15 +2490,15 @@ class CopilotChatPanel(QWidget):
 
         if is_runtime_update_error(error):
             self._auth_runtime_update_action = True
-            self._auth_error_message = S.copilot.runtime_update_required.format(error=error)
+            self._auth_error_message = S.pynia.runtime_update_required.format(error=error)
             self._hide_account_switch_busy()
             self._refresh_auth_gate()
             return
 
         if "cancel" in str(error or "").lower():
-            self._auth_error_message = S.copilot.auth_cancelled
+            self._auth_error_message = S.pynia.auth_cancelled
         else:
-            self._auth_error_message = S.copilot.auth_failed.format(error=error)
+            self._auth_error_message = S.pynia.auth_failed.format(error=error)
         self._hide_account_switch_busy()
         self._refresh_auth_gate()
 
@@ -2507,9 +2509,9 @@ class CopilotChatPanel(QWidget):
         self._auth_signing_in = False
         self._auth_device_code = None
         get_copilot_auth_service().cancel_chat_auth()
-        self._auth_error_message = S.copilot.auth_cancelled
+        self._auth_error_message = S.pynia.auth_cancelled
         self._hide_account_switch_busy()
-        self._auth_btn.setText(S.copilot.sign_in)
+        self._auth_btn.setText(S.pynia.sign_in)
         self._auth_btn.setEnabled(True)
         self._refresh_auth_gate()
         self._sync_app_state()
@@ -2520,7 +2522,7 @@ class CopilotChatPanel(QWidget):
         self._auth_signing_in = False
         self._auth_device_code = None
         self._auth_error_message = None
-        self._auth_btn.setText(S.copilot.sign_in)
+        self._auth_btn.setText(S.pynia.sign_in)
         self._auth_btn.setEnabled(True)
         if hasattr(self, "_gh_install_widget"):
             self._gh_install_widget.setVisible(True)
@@ -2541,7 +2543,7 @@ class CopilotChatPanel(QWidget):
         self._auth_gh_required = False
         if hasattr(self, "_gh_install_btn"):
             self._gh_install_btn.setEnabled(False)
-            self._gh_install_btn.setText(S.copilot.installing_gh_cli)
+            self._gh_install_btn.setText(S.pynia.installing_gh_cli)
         self._refresh_auth_gate()
 
         self._gh_install_worker = GhCliInstallWorker(self)
@@ -2560,14 +2562,14 @@ class CopilotChatPanel(QWidget):
         self._auth_gate_progress_message = None
         if success:
             self._auth_gh_required = False
-            self._auth_post_install_message = S.copilot.gh_cli_installed
+            self._auth_post_install_message = S.pynia.gh_cli_installed
             if hasattr(self, "_gh_install_widget"):
                 self._gh_install_widget.setVisible(False)
         else:
-            self._auth_error_message = S.copilot.gh_cli_install_failed.format(error=message)
+            self._auth_error_message = S.pynia.gh_cli_install_failed.format(error=message)
             if hasattr(self, "_gh_install_btn"):
                 self._gh_install_btn.setEnabled(True)
-                self._gh_install_btn.setText(S.copilot.install_gh_cli)
+                self._gh_install_btn.setText(S.pynia.install_gh_cli)
 
         self._gh_install_worker = None
         self._refresh_auth_gate()
@@ -2579,14 +2581,14 @@ class CopilotChatPanel(QWidget):
             username = getattr(self._agent_client, "_username", None)
             if username:
                 self._auth_btn.setText(f"@{username}")
-                self._auth_btn.setToolTip(S.copilot.click_to_sign_out)
+                self._auth_btn.setToolTip(S.pynia.click_to_sign_out)
             else:
-                self._auth_btn.setText(S.copilot.connected)
-                self._auth_btn.setToolTip(S.copilot.click_to_sign_out)
+                self._auth_btn.setText(S.pynia.connected)
+                self._auth_btn.setToolTip(S.pynia.click_to_sign_out)
             self._auth_btn.setEnabled(True)
         else:
-            self._auth_btn.setText(S.copilot.sign_in)
-            self._auth_btn.setToolTip(S.copilot.sign_in_tooltip)
+            self._auth_btn.setText(S.pynia.sign_in)
+            self._auth_btn.setToolTip(S.pynia.sign_in_tooltip)
             self._auth_btn.setEnabled(True)
 
     def _on_auth_service_chat_updated(self, username: str):
@@ -2800,7 +2802,7 @@ class CopilotChatPanel(QWidget):
     
     def _update_tab_badge(self, tab_name: str):
         """Update the tab context badge in the chat header."""
-        label_text = S.copilot.chat_context_tab.replace('{name}', tab_name)
+        label_text = S.pynia.chat_context_tab.replace('{name}', tab_name)
         if hasattr(self, '_tab_badge'):
             self._tab_badge.setText(label_text)
             self._tab_badge.setVisible(True)
@@ -2960,13 +2962,13 @@ class CopilotChatPanel(QWidget):
         self._effort_combo.set_on_change(self._on_reasoning_effort_changed)
         self._usage_label = _WebLabelState()
         self._tab_badge = _WebLabelState()
-        self._auth_btn = _WebButtonState(S.copilot.sign_in)
-        self._send_btn = _WebButtonState(S.copilot.send_tooltip)
-        self._stop_btn = _WebButtonState(S.copilot.stop_tooltip)
+        self._auth_btn = _WebButtonState(S.pynia.sign_in)
+        self._send_btn = _WebButtonState(S.pynia.send_tooltip)
+        self._stop_btn = _WebButtonState(S.pynia.stop_tooltip)
         self._input = _WebInputState(self.focus_input)
         self._mode_combo = None
         self._gh_install_widget = _WebLabelState()
-        self._gh_install_btn = _WebButtonState(S.copilot.install_gh_cli)
+        self._gh_install_btn = _WebButtonState(S.pynia.install_gh_cli)
         self._active_references = []
 
         for effort in REASONING_EFFORTS:
@@ -3064,17 +3066,23 @@ class CopilotChatPanel(QWidget):
             "attachment_invalid_type", "attachment_read_failed", "attachment_loading", "attachment_no_result",
             "view_attachment", "close_image_preview",
             "vision_not_supported",
+            "usage_panel_title", "usage_panel_title_user", "usage_panel_limits_link",
+            "usage_panel_credits", "usage_panel_plan_included", "usage_panel_plan_unknown",
+            "connector_label", "title", "welcome_title",
         ]
-        labels = {key: getattr(S.copilot, key, key) for key in keys}
-        labels["copy"] = getattr(S.copilot, "copy_code", "Copy")
-        labels["insert"] = getattr(S.copilot, "insert_code", "Insert")
+        labels = {key: getattr(S.pynia, key, key) for key in keys}
+        labels["copy"] = getattr(S.pynia, "copy_code", "Copy")
+        labels["insert"] = getattr(S.pynia, "insert_code", "Insert")
         return labels
 
     def _on_webview_ready(self):
         """Called when the new chat WebView app is ready."""
         self._webview_ready = True
         self._run_chat_js(f"setLabels({json.dumps(self._labels_payload())})")
-        self._run_chat_js(f"setWelcomeText({json.dumps('GitHub Copilot')}, {json.dumps(S.copilot.welcome_message)})")
+        welcome_title = getattr(S.pynia, "welcome_title", S.pynia.title)
+        self._run_chat_js(
+            f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(S.pynia.welcome_message)})"
+        )
         self._apply_theme()
         self._sync_all_web_state()
         for op in self._pending_webview_ops:
@@ -3082,21 +3090,29 @@ class CopilotChatPanel(QWidget):
         self._pending_webview_ops.clear()
 
     def _usage_payload(self, *, updating: bool = False) -> dict:
-        from src.services.copilot.copilot_cli_manager import merge_usage_with_runtime
+        from src.services.pynia.usage import build_pynia_usage_payload
 
+        provider_id = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
         username = ""
         if self._agent_client and getattr(self._agent_client, "is_authenticated", False):
             username = getattr(self._agent_client, "_username", "") or ""
-        payload = merge_usage_with_runtime(
-            self._usage_snapshot,
+        model = self._model_combo.currentData() if hasattr(self, "_model_combo") else ""
+        return build_pynia_usage_payload(
+            provider_id,
+            model=model or "",
+            usage_snapshot=self._usage_snapshot,
+            models=self._available_models,
             username=username,
             cli_status=self._cli_status or None,
+            updating=updating,
         )
-        if updating:
-            payload["updating"] = True
-        return payload
 
     def _refresh_usage_panel(self, *, check_latest: bool = False):
+        provider_id = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
+        if provider_id != "copilot":
+            self._sync_usage_to_webview()
+            return
+
         if self._cli_check_thread and self._cli_check_thread.isRunning():
             return
 
@@ -3222,11 +3238,11 @@ class CopilotChatPanel(QWidget):
 
     def _show_account_switch_busy(self, username: str = "", *, kind: str = "switch"):
         if kind == "add":
-            title = S.copilot.account_switch_add_title
-            message = S.copilot.account_switch_add_message
+            title = S.pynia.account_switch_add_title
+            message = S.pynia.account_switch_add_message
         else:
-            title = S.copilot.account_switch_title
-            message = S.copilot.account_switch_message.format(username=username or "")
+            title = S.pynia.account_switch_title
+            message = S.pynia.account_switch_message.format(username=username or "")
         payload = {
             "visible": True,
             "username": username,
@@ -3244,7 +3260,7 @@ class CopilotChatPanel(QWidget):
         self._account_switch_worker = None
         if not ok:
             self._hide_account_switch_busy()
-            self._auth_error_message = message or S.copilot.auth_failed.format(error="")
+            self._auth_error_message = message or S.pynia.auth_failed.format(error="")
             self._refresh_auth_gate()
             self._sync_app_state()
             return
@@ -3278,7 +3294,7 @@ class CopilotChatPanel(QWidget):
                 from src.services.copilot import get_copilot_auth_service
                 get_copilot_auth_service().login_chat()
             self._auth_runtime_update_action = False
-            self._auth_error_message = None if not requires_restart else S.copilot.usage_panel_restart_required
+            self._auth_error_message = None if not requires_restart else S.pynia.usage_panel_restart_required
             self._refresh_auth_gate()
             self._refresh_usage_panel(check_latest=True)
             return
@@ -3322,9 +3338,13 @@ class CopilotChatPanel(QWidget):
             self._agent_client.set_provider(provider_id)
         self._auth_error_message = None
         self._auth_gh_required = False
+        if provider_id != "copilot" and hasattr(self, "_gh_install_widget"):
+            self._gh_install_widget.setVisible(False)
         self._update_auth_state()
         if hasattr(self._agent_client, "available_models"):
             self._populate_model_combo(self._agent_client.available_models())
+        self._refresh_usage_panel()
+        self._sync_app_state()
 
     def _on_provider_changed(self, provider_id: str) -> None:
         if not hasattr(self, "_provider_combo"):
@@ -3343,14 +3363,14 @@ class CopilotChatPanel(QWidget):
     def _auth_gate_payload(self) -> dict:
         if self._is_token_provider():
             if self._agent_client and self._agent_client.is_authenticated:
-                label = getattr(S.pynia, "connected", S.copilot.connected) if hasattr(S, "pynia") else S.copilot.connected
+                label = getattr(S.pynia, "connected", S.pynia.connected) if hasattr(S, "pynia") else S.pynia.connected
                 return {"status": "ready", "pill_label": label}
-            title = getattr(S.pynia, "token_required_title", S.copilot.chat_locked_title)
-            message = getattr(S.pynia, "token_required_message", S.copilot.chat_locked_message)
-            action = getattr(S.pynia, "open_settings", S.copilot.sign_in)
+            title = getattr(S.pynia, "token_required_title", S.pynia.chat_locked_title)
+            message = getattr(S.pynia, "token_required_message", S.pynia.chat_locked_message)
+            action = getattr(S.pynia, "open_settings", S.pynia.sign_in)
             return {
                 "status": "locked",
-                "pill_label": S.copilot.auth_status_locked,
+                "pill_label": S.pynia.auth_status_locked,
                 "title": title,
                 "message": message,
                 "action_label": action,
@@ -3361,40 +3381,40 @@ class CopilotChatPanel(QWidget):
             username = getattr(self._agent_client, "_username", "") or ""
             return {
                 "status": "ready",
-                "pill_label": f"@{username}" if username else S.copilot.connected,
+                "pill_label": f"@{username}" if username else S.pynia.connected,
             }
 
         if self._auth_installing_gh:
-            message = self._auth_gate_progress_message or S.copilot.installing_gh_cli
+            message = self._auth_gate_progress_message or S.pynia.installing_gh_cli
             return {
                 "status": "signing_in",
-                "pill_label": S.copilot.auth_status_signing_in,
-                "title": S.copilot.install_gh_cli,
+                "pill_label": S.pynia.auth_status_signing_in,
+                "title": S.pynia.install_gh_cli,
                 "message": message,
             }
 
         if self._auth_error_message:
             payload = {
                 "status": "error",
-                "pill_label": S.copilot.auth_status_error,
-                "title": S.copilot.chat_auth_error_title,
+                "pill_label": S.pynia.auth_status_error,
+                "title": S.pynia.chat_auth_error_title,
                 "message": self._auth_error_message,
             }
             if self._auth_runtime_update_action:
-                payload["action_label"] = S.copilot.usage_panel_update_runtime
+                payload["action_label"] = S.pynia.usage_panel_update_runtime
                 payload["action"] = "update_runtime"
             else:
-                payload["action_label"] = S.copilot.auth_gate_retry_action
+                payload["action_label"] = S.pynia.auth_gate_retry_action
                 payload["action"] = "sign_in"
             return payload
 
         if self._auth_gh_required:
             return {
                 "status": "locked",
-                "pill_label": S.copilot.auth_status_locked,
-                "title": S.copilot.chat_locked_title,
-                "message": S.copilot.gh_cli_not_found,
-                "action_label": S.copilot.install_gh_cli,
+                "pill_label": S.pynia.auth_status_locked,
+                "title": S.pynia.chat_locked_title,
+                "message": S.pynia.gh_cli_not_found,
+                "action_label": S.pynia.install_gh_cli,
                 "action": "install_gh",
             }
 
@@ -3402,10 +3422,10 @@ class CopilotChatPanel(QWidget):
             message = self._auth_post_install_message
             return {
                 "status": "locked",
-                "pill_label": S.copilot.auth_status_locked,
-                "title": S.copilot.chat_locked_title,
+                "pill_label": S.pynia.auth_status_locked,
+                "title": S.pynia.chat_locked_title,
                 "message": message,
-                "action_label": S.copilot.sign_in,
+                "action_label": S.pynia.sign_in,
                 "action": "sign_in",
             }
 
@@ -3413,39 +3433,53 @@ class CopilotChatPanel(QWidget):
             user_code, verification_uri = self._auth_device_code
             return {
                 "status": "device_code",
-                "pill_label": S.copilot.auth_status_device_code,
-                "title": S.copilot.chat_device_code_title,
-                "message": S.copilot.chat_device_code_message.format(url=verification_uri),
+                "pill_label": S.pynia.auth_status_device_code,
+                "title": S.pynia.chat_device_code_title,
+                "message": S.pynia.chat_device_code_message.format(url=verification_uri),
                 "code": user_code,
-                "action_label": S.copilot.auth_gate_cancel_action,
+                "action_label": S.pynia.auth_gate_cancel_action,
                 "action": "cancel_auth",
             }
 
         if self._auth_signing_in:
             return {
                 "status": "signing_in",
-                "pill_label": S.copilot.auth_status_signing_in,
-                "title": S.copilot.chat_locked_title,
-                "message": S.copilot.chat_signing_in_message,
-                "action_label": S.copilot.auth_gate_cancel_action,
+                "pill_label": S.pynia.auth_status_signing_in,
+                "title": S.pynia.chat_locked_title,
+                "message": S.pynia.chat_signing_in_message,
+                "action_label": S.pynia.auth_gate_cancel_action,
                 "action": "cancel_auth",
             }
 
         return {
             "status": "locked",
-            "pill_label": S.copilot.auth_status_locked,
-            "title": S.copilot.chat_locked_title,
-            "message": S.copilot.chat_locked_message,
-            "action_label": S.copilot.sign_in,
+            "pill_label": S.pynia.auth_status_locked,
+            "title": S.pynia.chat_locked_title,
+            "message": S.pynia.chat_locked_message,
+            "action_label": S.pynia.sign_in,
             "action": "sign_in",
         }
 
     def _refresh_auth_gate(self):
         self._run_chat_js(f"setAuthGate({json.dumps(self._auth_gate_payload(), ensure_ascii=False)})")
 
+    def _provider_display_name(self) -> str:
+        if not self._agent_client:
+            return getattr(S.pynia, "title", "Pynia")
+        pid = getattr(self._agent_client, "provider_id", "copilot")
+        key = {
+            "openai": "provider_openai",
+            "openrouter": "provider_openrouter",
+            "anthropic": "provider_anthropic",
+            "copilot": "provider_copilot",
+        }.get(pid, "title")
+        return getattr(S.pynia, key, pid)
+
     def _sync_app_state(self):
+        provider_label = S.pynia.connector_label.format(provider=self._provider_display_name())
         payload = {
-            "tab_name": S.copilot.chat_context_tab.replace('{name}', self._current_tab_name) if self._current_tab_name else "",
+            "tab_name": S.pynia.chat_context_tab.replace('{name}', self._current_tab_name) if self._current_tab_name else "",
+            "provider_label": provider_label,
             "auth_label": self._auth_btn.text(),
             "auth_ready": bool(self._agent_client and self._agent_client.is_authenticated),
             "selected_model": self._model_combo.currentData() or "",
@@ -3535,7 +3569,7 @@ class CopilotChatPanel(QWidget):
         if not retry:
             self._add_message("user", text, references=resolved_refs, attachments=stored_attachments)
         self._set_loading(True)
-        self._run_chat_js(f"setActivity({json.dumps({'phase': S.copilot.activity_sending})})")
+        self._run_chat_js(f"setActivity({json.dumps({'phase': S.pynia.activity_sending})})")
 
         system_prompt = self._build_system_prompt()
         context_section = self._build_request_context_section()
@@ -3543,7 +3577,7 @@ class CopilotChatPanel(QWidget):
         request_prompt = build_request_prompt(text, context_section)
         if stored_attachments and not text:
             request_prompt = build_request_prompt(
-                S.copilot.attachment_only_prompt,
+                S.pynia.attachment_only_prompt,
                 context_section,
             )
 
@@ -3566,7 +3600,7 @@ class CopilotChatPanel(QWidget):
             self.thinking_started.emit()
             self._agent_client.send_chat(api_messages, attachments=stored_attachments)
         else:
-            self._chat_runtime.fail(S.copilot.not_authenticated)
+            self._chat_runtime.fail(S.pynia.not_authenticated)
             self._set_loading(False)
             self._refresh_auth_gate()
         self.message_sent.emit(text)
@@ -3691,7 +3725,7 @@ class CopilotChatPanel(QWidget):
             if len(preview) > 120:
                 preview = preview[:117] + "..."
             if not preview:
-                preview = S.copilot.task_complete_default
+                preview = S.pynia.task_complete_default
             tab_index = None
             mw = self._get_registry_main_window()
             if mw and hasattr(mw, "session_tabs") and self._current_tab_id:
@@ -3702,7 +3736,7 @@ class CopilotChatPanel(QWidget):
                         tab_index = idx
                         break
             ToastManager.notify(
-                S.copilot.task_complete_title,
+                S.pynia.task_complete_title,
                 preview,
                 success=True,
                 on_click=(lambda idx=tab_index: mw._focus_window_and_tab(idx)) if tab_index is not None and mw else None,
@@ -3860,7 +3894,7 @@ class CopilotChatPanel(QWidget):
         self._sync_app_state()
 
     def _on_refresh_models_clicked(self):
-        self._usage_label.setText(S.copilot.usage_loading)
+        self._usage_label.setText(S.pynia.usage_loading)
         self._usage_label.setVisible(True)
         self._sync_usage_to_webview()
         if self._agent_client and hasattr(self._agent_client, 'refresh_metadata'):
@@ -3876,19 +3910,19 @@ class CopilotChatPanel(QWidget):
             total = snapshot.get("total")
             remaining = snapshot.get("remaining_percentage")
             if used is not None and total is not None:
-                text = S.copilot.usage_format.format(used=used, total=total)
+                text = S.pynia.usage_format.format(used=used, total=total)
             elif used is not None:
-                text = S.copilot.usage_used_format.format(used=used)
+                text = S.pynia.usage_used_format.format(used=used)
             elif remaining is not None:
-                text = S.copilot.usage_remaining_format.format(remaining=remaining)
+                text = S.pynia.usage_remaining_format.format(remaining=remaining)
             else:
-                text = S.copilot.usage_unavailable
+                text = S.pynia.usage_unavailable
             reset_date = snapshot.get("reset_date")
-            tooltip = S.copilot.usage_tooltip_with_reset.format(reset_date=reset_date) if reset_date else S.copilot.usage_tooltip
+            tooltip = S.pynia.usage_tooltip_with_reset.format(reset_date=reset_date) if reset_date else S.pynia.usage_tooltip
         else:
             multiplier = self._format_multiplier(snapshot.get("multiplier", 1.0))
-            text = S.copilot.usage_unavailable
-            tooltip = S.copilot.usage_unavailable_tooltip.format(multiplier=multiplier)
+            text = S.pynia.usage_unavailable
+            tooltip = S.pynia.usage_unavailable_tooltip.format(multiplier=multiplier)
         self._usage_label.setText(text)
         self._usage_label.setToolTip(tooltip)
         self._usage_label.setVisible(True)
@@ -3927,7 +3961,7 @@ class CopilotChatPanel(QWidget):
         self._auth_post_install_message = None
         if auth_service.login_chat():
             self._auth_signing_in = True
-            self._auth_btn.setText(S.copilot.signing_in)
+            self._auth_btn.setText(S.pynia.signing_in)
             self._auth_btn.setEnabled(False)
             self._refresh_auth_gate()
             self._sync_app_state()
@@ -3935,9 +3969,9 @@ class CopilotChatPanel(QWidget):
     def _update_auth_state(self):
         if self._agent_client and self._agent_client.is_authenticated:
             username = getattr(self._agent_client, "_username", None)
-            self._auth_btn.setText(f"@{username}" if username else S.copilot.connected)
+            self._auth_btn.setText(f"@{username}" if username else S.pynia.connected)
         else:
-            self._auth_btn.setText(S.copilot.sign_in)
+            self._auth_btn.setText(S.pynia.sign_in)
         self._auth_btn.setEnabled(True)
         self._refresh_auth_gate()
         self._sync_app_state()
@@ -3978,7 +4012,11 @@ class CopilotChatPanel(QWidget):
         self._run_chat_js(f"setSessions({json.dumps({'sessions': sessions, 'current_session_id': self._current_session_id})})")
 
     def _update_tab_badge(self, tab_name: str):
-        label_text = S.copilot.chat_context_tab.replace('{name}', tab_name)
+        label_text = S.pynia.chat_context_tab.replace("{name}", tab_name)
         self._tab_badge.setText(label_text)
         self._tab_badge.setVisible(bool(tab_name))
         self._sync_app_state()
+
+
+# Backward-compatible alias (imports/tests)
+CopilotChatPanel = PyniaChatPanel

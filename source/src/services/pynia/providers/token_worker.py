@@ -102,7 +102,9 @@ class TokenAgentWorker(QObject):
                 if fetched:
                     models = normalize_models(fetched) or models
             self.models_ready.emit(models)
-            self.usage_ready.emit(usage_snapshot_for_model(models, self._model))
+            from src.services.pynia.usage import _token_usage_snapshot
+
+            self.usage_ready.emit(_token_usage_snapshot(self._provider_id, self._model, models))
             self.auth_ok.emit()
         except Exception as exc:
             logger.exception("Token provider verify failed")

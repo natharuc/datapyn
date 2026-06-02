@@ -477,14 +477,14 @@ class TestCopilotChatWebViewApp:
 
 
 class TestChatPanelThinkingState:
-    """Tests for the thinking state machine in CopilotChatPanel."""
+    """Tests for the thinking state machine in PyniaChatPanel."""
 
     @pytest.fixture
     def panel(self, qapp):
-        """Create a CopilotChatPanel with mocked dependencies."""
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        """Create a PyniaChatPanel with mocked dependencies."""
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
         return panel
 
     def test_initial_thinking_state(self, panel):
@@ -544,9 +544,9 @@ class TestChatPanelModelControls:
         from PyQt6.QtCore import QSettings
         settings = QSettings("DataPyn", "CopilotChat")
         settings.clear()
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
         yield panel
         settings.clear()
 
@@ -639,10 +639,10 @@ class TestPerTabChatContext:
 
     @pytest.fixture
     def panel(self, qapp):
-        """Create a CopilotChatPanel with mocked dependencies."""
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        """Create a PyniaChatPanel with mocked dependencies."""
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
         return panel
 
     def test_switch_to_new_tab_keeps_global_messages(self, panel):
@@ -767,9 +767,9 @@ class TestCopilotSettingsPersistence:
 
     def test_webview_labels_sent_on_ready(self, qapp):
         """_on_webview_ready should send labels to WebView via setLabels."""
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
         
         with patch.object(panel, '_run_chat_js') as mock_js:
             panel._webview_ready = True

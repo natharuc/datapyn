@@ -636,6 +636,10 @@
     }
 
     function usageSummaryText(usage) {
+        usage = usage || {};
+        if (usage.limits_summary) {
+            return String(usage.limits_summary);
+        }
         if (usage.available && usage.used != null && usage.total != null) {
             return label("usage_format", "{used}/{total}").replace("{used}", usage.used).replace("{total}", usage.total);
         }
@@ -646,6 +650,17 @@
             return label("usage_remaining_format", "{remaining}%").replace("{remaining}", usage.remaining_percentage);
         }
         return label("usage_unavailable", "");
+    }
+
+    function usagePanelTitleText(usage) {
+        usage = usage || {};
+        const provider = usage.provider_name || label("title", "Pynia");
+        if (usage.username) {
+            return label("usage_panel_title_user", "Pynia · {provider} · @{username}")
+                .replace("{provider}", provider)
+                .replace("{username}", usage.username);
+        }
+        return label("usage_panel_title", "Pynia · {provider}").replace("{provider}", provider);
     }
 
     function setUsagePanelOpen(open) {
@@ -798,20 +813,44 @@
         const updateStatus = $("usagePanelUpdateStatus");
 
         if (title) {
-            title.textContent = usage.username
-                ? label("usage_panel_title_user", "GitHub Copilot").replace("{username}", usage.username)
-                : label("usage_panel_title", "GitHub Copilot");
+            title.textContent = usagePanelTitleText(usage);
         }
         if (planHint) {
-            planHint.textContent = usage.available
-                ? label("usage_panel_plan_included", "")
-                : label("usage_panel_plan_unknown", "");
+            if (usage.limits_detail) {
+                planHint.textContent = usage.limits_detail;
+            } else if (usage.available) {
+                planHint.textContent = label("usage_panel_plan_included", "");
+            } else {
+                planHint.textContent = label("usage_panel_plan_unknown", "");
+            }
         }
         if (quota) quota.textContent = usageSummaryText(usage);
         if (reset) {
             reset.textContent = usage.reset_date
                 ? label("usage_panel_reset", "").replace("{reset_date}", usage.reset_date)
                 : "";
+        }
+        const runtimeSection = $("usagePanelRuntimeSection");
+        if (runtimeSection) {
+            runtimeSection.hidden = usage.show_runtime === false;
+        }
+        const limitsLink = $("usagePanelLimitsLink");
+        if (limitsLink) {
+            const url = usage.limits_url || "";
+            limitsLink.hidden = !url;
+            limitsLink.onclick = url
+                ? () => {
+                    if (state.bridge && typeof state.bridge.openExternalUrl === "function") {
+                        state.bridge.openExternalUrl(url);
+                    } else {
+                        window.open(url, "_blank");
+                    }
+                }
+                : null;
+        }
+        const subscription = $("usagePanelSubscription");
+        if (subscription) {
+            subscription.hidden = usage.show_subscription === false;
         }
         if (cliRow) {
             const version = cli.version || label("usage_panel_not_installed", "Not installed");
@@ -857,7 +896,9 @@
             }
         }
         const switchAccount = $("usagePanelSwitchAccount");
-        if (switchAccount) switchAccount.hidden = !state.authReady;
+        if (switchAccount) {
+            switchAccount.hidden = !state.authReady || usage.show_account_switch === false;
+        }
     }
 
     function renderUsage() {
@@ -1466,6 +1507,11 @@
     function setAppState(payload) {
         payload = payload || {};
         if (payload.tab_name && $("tabContext")) $("tabContext").textContent = payload.tab_name;
+        if (payload.provider_label && $("tabContext") && !payload.tab_name) {
+            $("tabContext").textContent = payload.provider_label;
+        } else if (payload.provider_label && $("tabContext") && payload.tab_name) {
+            $("tabContext").textContent = `${payload.provider_label} · ${payload.tab_name}`;
+        }
         if (payload.auth_label && $("authBtn")) $("authBtn").textContent = payload.auth_label;
         if (Object.prototype.hasOwnProperty.call(payload, "auth_ready")) {
             const authBtn = $("authBtn");

@@ -1268,11 +1268,11 @@ class TestCopilotClient:
             self.client.send_chat([{"role": "user", "content": "hello"}])
 
 
-# ==================== CopilotChatPanel Tests ====================
+# ==================== PyniaChatPanel Tests ====================
 
 
-class TestCopilotChatPanel:
-    """Tests for the CopilotChatPanel UI component."""
+class TestPyniaChatPanel:
+    """Tests for the PyniaChatPanel UI component."""
 
     class FakeCopilotClient(QObject):
         chat_response_chunk = pyqtSignal(str)
@@ -1315,10 +1315,10 @@ class TestCopilotChatPanel:
             self._model = value
 
     def _make_panel_with_fake_client(self, qtbot):
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
 
         client = self.FakeCopilotClient()
-        panel = CopilotChatPanel()
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         panel.set_copilot_client(client)
 
@@ -1332,51 +1332,51 @@ class TestCopilotChatPanel:
 
     def test_panel_creates(self, qtbot):
         """Panel should be created without errors."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         assert panel is not None
 
     def test_panel_has_input(self, qtbot):
         """Panel should have an input widget."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         assert panel._input is not None
 
     def test_panel_has_send_button(self, qtbot):
         """Panel should have a send button."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         assert panel._send_btn is not None
 
     def test_panel_has_model_combo(self, qtbot):
         """Panel should have model selection combo."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         assert panel._model_combo.count() >= 4
 
     def test_panel_mode_is_agent_only(self, qtbot):
         """Panel should always use agent mode (mode_combo removed)."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         # Mode combo was removed - always agent mode for tool support
         assert panel._mode_combo is None
 
     def test_panel_has_auth_button(self, qtbot):
         """Panel should have auth button."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         assert panel._auth_btn is not None
 
     def test_clear_chat(self, qtbot):
         """clear_chat should remove all messages."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         panel._add_message("user", "Hello")
         panel._add_message("assistant", "Hi there")
@@ -1386,8 +1386,8 @@ class TestCopilotChatPanel:
 
     def test_add_message(self, qtbot):
         """_add_message should add to messages list."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         panel._add_message("user", "Test message")
         assert len(panel._messages) == 1
@@ -1396,7 +1396,7 @@ class TestCopilotChatPanel:
 
     def test_set_copilot_client(self, qtbot):
         """Setting a copilot client should connect signals."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
         from src.services.copilot.copilot_client import CopilotClient
 
         # Clear settings first
@@ -1404,7 +1404,7 @@ class TestCopilotChatPanel:
         settings.clear()
         settings.sync()
 
-        panel = CopilotChatPanel()
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         client = CopilotClient()
         panel.set_copilot_client(client)
@@ -1413,8 +1413,8 @@ class TestCopilotChatPanel:
 
     def test_send_without_text_does_nothing(self, qtbot):
         """Pressing send with empty input should not add a message."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
-        panel = CopilotChatPanel()
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
         panel._input.clear()
         panel._on_send()
@@ -1470,7 +1470,7 @@ class TestCopilotChatPanel:
 
     def test_model_change_updates_client(self, qtbot):
         """Changing the model combo should update the client."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
         from src.services.copilot.copilot_client import CopilotClient
 
         settings = QSettings("DataPyn", "CopilotAuth")
@@ -1478,7 +1478,7 @@ class TestCopilotChatPanel:
         settings.sync()
 
         client = CopilotClient()
-        panel = CopilotChatPanel(copilot_client=client)
+        panel = PyniaChatPanel(copilot_client=client)
         panel.set_copilot_client(client)
         qtbot.addWidget(panel)
 
@@ -1490,10 +1490,10 @@ class TestCopilotChatPanel:
 
     def test_delete_session_removes_from_list(self, qtbot):
         """_delete_session should remove the session from saved sessions."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
         from PyQt6.QtWidgets import QMenu
 
-        panel = CopilotChatPanel()
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
 
         # Add some test sessions
@@ -1517,10 +1517,10 @@ class TestCopilotChatPanel:
 
     def test_delete_session_clears_current_if_deleted(self, qtbot):
         """_delete_session should clear current session if it's the one deleted."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
         from PyQt6.QtWidgets import QMenu
 
-        panel = CopilotChatPanel()
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
 
         # Setup: current session is session1
@@ -1539,10 +1539,10 @@ class TestCopilotChatPanel:
 
     def test_delete_session_keeps_current_if_different(self, qtbot):
         """_delete_session should not change current session if deleting another."""
-        from src.ui.components.copilot_chat_panel import CopilotChatPanel
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
         from PyQt6.QtWidgets import QMenu
 
-        panel = CopilotChatPanel()
+        panel = PyniaChatPanel()
         qtbot.addWidget(panel)
 
         # Setup: current session is session1, deleting session2
