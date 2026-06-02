@@ -66,6 +66,7 @@ def run_openai_agent_turn(
     conversation = _inject_attachments(messages, attachments)
     final_text = ""
     seen_tool_keys: set[str] = set()
+    block_inspect_counts: dict[str, int] = {}
 
     emit_progress(on_progress, phase_key=PHASE_PLANNING, step_id="plan", step_state="active")
 
@@ -170,7 +171,11 @@ def run_openai_agent_turn(
                 args = {}
             parsed_calls.append((name, args, tc["id"]))
 
-        prepared = prepare_tool_calls(parsed_calls, seen_keys=seen_tool_keys)
+        prepared = prepare_tool_calls(
+            parsed_calls,
+            seen_keys=seen_tool_keys,
+            block_inspect_counts=block_inspect_counts,
+        )
 
         if len(parsed_calls) > len([p for p in prepared if p[3]]) and round_idx == 0:
             logger.info(

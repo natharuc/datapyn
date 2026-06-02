@@ -76,15 +76,12 @@ def test_was_duplicate_skip():
     assert not was_duplicate_skip("datapyn_snapshot", {"action": "blocks"}, seen)
 
 
-def test_process_tool_round_overflow_executes_readonly():
+def test_process_tool_round_overflow_skips_readonly():
     executor = MagicMock()
     executor.execute_batch = None
     executor.execute.side_effect = lambda name, args: f"ok:{name}"
 
     orchestrator = MagicMock()
-    orchestrator.execute_readonly_overflow.return_value = [
-        ("datapyn_inspect", "overflow-result", "tc-overflow"),
-    ]
 
     from src.services.pynia.agent_loop_policy import tool_call_key
 
@@ -104,10 +101,12 @@ def test_process_tool_round_overflow_executes_readonly():
         on_tool_result=lambda *a: None,
         is_cancelled=lambda: False,
     )
-    orchestrator.execute_readonly_overflow.assert_called_once()
+    orchestrator.execute_readonly_overflow.assert_not_called()
     ids = {tc_id for tc_id, _, _ in outcomes}
     assert "tc1" in ids
-    assert "tc-overflow" in ids
+    assert "tc2" in ids
+    skipped = next(text for tc_id, _, text in outcomes if tc_id == "tc2")
+    assert "SKIPPED" in skipped
 
 
 def test_orchestrator_format_subagent_results():

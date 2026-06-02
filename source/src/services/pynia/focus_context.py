@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 def focused_block_payload(
     block_editor,
     *,
-    max_lines: int = 220,
-    max_chars: int = 14_000,
+    max_lines: int = 400,
+    max_chars: int = 24_000,
 ) -> Optional[Dict[str, Any]]:
     """Build rich context for the block the user last focused in the editor."""
     if not block_editor:

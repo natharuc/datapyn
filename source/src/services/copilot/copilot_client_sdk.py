@@ -543,6 +543,9 @@ class CopilotWorker(QObject):
         self._attachments: List[Dict[str, Any]] = []
         self._pending_tool_ids: List[tuple] = []  # (tool_call_id, tool_name)
         self._finished_tool_keys: set[str] = set()
+        self._tool_guard_seen: set[str] = set()
+        self._block_inspect_counts: Dict[str, int] = {}
+        self._ui_tool_call_ids: set[str] = set()
 
     def invalidate_sdk_tools(self) -> None:
         """Force SDK tools and session to rebuild (e.g. after Pynia registry swap)."""
@@ -576,6 +579,19 @@ class CopilotWorker(QObject):
             return
         self._finished_tool_keys.add(key)
         self.tool_result.emit(tool_name, result_text, tool_call_id)
+
+    def _emit_tool_call_once(self, tool_name: str, arguments: dict, tool_call_id: str) -> None:
+        ui_key = f"ui:{tool_call_id}"
+        if ui_key in self._ui_tool_call_ids:
+            return
+        self._ui_tool_call_ids.add(ui_key)
+        self.tool_call.emit(tool_name, arguments or {}, tool_call_id)
+
+    def _resolve_tool_call_id(self, tool_name: str, invocation: Any) -> str:
+        invocation_id = self._extract_invocation_id(invocation)
+        if invocation_id:
+            return invocation_id
+        return f"{tool_name}-{len(self._ui_tool_call_ids) + len(self._finished_tool_keys)}"
 
     def _pop_pending_call_id(self, tool_name: str, invocation_id: str) -> str:
         if invocation_id:
@@ -1058,6 +1074,9 @@ class CopilotWorker(QObject):
         self._cancelled = False
         self._pending_tool_ids = []
         self._finished_tool_keys = set()
+        self._tool_guard_seen = set()
+        self._block_inspect_counts = {}
+        self._ui_tool_call_ids = set()
 
         SDKClient, SDKTool, EventType, import_err = _try_import_sdk()
         if SDKClient is None:
@@ -1199,10 +1218,10 @@ class CopilotWorker(QObject):
                         arguments = getattr(event.data, "arguments", {}) or {}
                         tool_call_id = getattr(event.data, "tool_call_id", "") or ""
                         if tool_name and tool_name in our_tool_names:
+                            # Custom SDK tools: UI is emitted from the handler so ids match results.
                             if not tool_call_id:
                                 tool_call_id = f"{tool_name}-{len(self._pending_tool_ids)}"
                             self._pending_tool_ids.append((tool_call_id, tool_name))
-                            self.tool_call.emit(tool_name, arguments, tool_call_id)
                     
                     elif event_type == EventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = getattr(event.data, "tool_name", "") or ""
@@ -1357,15 +1376,25 @@ class CopilotWorker(QObject):
                     else:
                         arguments = {}
 
-                    call_id = worker._pop_pending_call_id(
-                        name, worker._extract_invocation_id(invocation)
+                    from src.services.pynia.agent_loop_policy import evaluate_tool_call
+
+                    call_id = worker._resolve_tool_call_id(name, invocation)
+                    worker._emit_tool_call_once(name, arguments, call_id)
+                    allowed, skip_msg = evaluate_tool_call(
+                        name,
+                        arguments,
+                        seen_keys=worker._tool_guard_seen,
+                        block_inspect_counts=worker._block_inspect_counts,
                     )
                     logger.info("SDK calling tool: %s with %s", name, _safe_log_preview(arguments, 120))
-                    try:
-                        result = worker._tool_executor.execute(name, arguments)
-                    except Exception as exc:
-                        logger.exception("SDK tool %s failed", name)
-                        result = f"Error: {exc}"
+                    if not allowed:
+                        result = skip_msg
+                    else:
+                        try:
+                            result = worker._tool_executor.execute(name, arguments)
+                        except Exception as exc:
+                            logger.exception("SDK tool %s failed", name)
+                            result = f"Error: {exc}"
                     logger.info("SDK tool result for %s: %s", name, _safe_log_preview(result, 200))
 
                     # Custom SDK tools often never emit TOOL_EXECUTION_COMPLETE — always notify UI.

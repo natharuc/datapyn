@@ -3920,7 +3920,7 @@ class PyniaChatPanel(QWidget):
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda tid=tool_id, tname=tool_name: self._on_tool_watchdog(tid, tname))
-        timer.start(180_000)
+        timer.start(45_000)
         self._tool_watch_timers[tool_id] = timer
 
     def _on_tool_result(self, tool_name: str, result: str, tool_call_id: str = ""):

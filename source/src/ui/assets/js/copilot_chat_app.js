@@ -561,12 +561,41 @@
         status.textContent = done ? label("work_complete", label("tool_ok", "")) : label("work_running", label("tool_running", ""));
     }
 
+    function inspectBlockKey(toolName, argSummary) {
+        if (toolName !== "datapyn_inspect" || !argSummary) return "";
+        const match = String(argSummary).match(/block_name=([^,]+)/i);
+        return match ? match[1].trim() : "";
+    }
+
     function addToolUse(toolName, argSummary, toolId, displayLabel) {
         const block = ensureWorkBlock();
         block.setAttribute("open", "");
+        const title = displayLabel || toolName;
+        const blockKey = inspectBlockKey(toolName, argSummary);
+        const list = block.querySelector(".work-list");
+
+        if (blockKey && list) {
+            const existing = Array.from(list.querySelectorAll(".tool-row.running")).find(
+                (node) => node.dataset.inspectBlock === blockKey
+            );
+            if (existing) {
+                existing.dataset.toolId = toolId || existing.dataset.toolId;
+                const detail = existing.querySelector(".tool-row-detail");
+                if (detail) {
+                    const prev = detail.textContent || "";
+                    detail.textContent = prev ? `${prev} · ${argSummary || ""}` : (argSummary || "");
+                }
+                setActivity({
+                    phase: label("activity_running_tool", "{tool}").replace("{tool}", title),
+                    detail: argSummary || "",
+                });
+                scrollToBottom();
+                return existing.dataset.toolId;
+            }
+        }
+
         state.toolCount += 1;
         updateWorkStatus(false);
-        const title = displayLabel || toolName;
         setActivity({
             phase: label("activity_running_tool", "{tool}").replace("{tool}", title),
             detail: argSummary || "",
@@ -576,8 +605,9 @@
         row.className = "tool-row running";
         row.dataset.toolName = toolName;
         row.dataset.toolId = toolId || `${toolName}-${state.toolCount}`;
+        if (blockKey) row.dataset.inspectBlock = blockKey;
         row.innerHTML = `<div class="tool-row-head"><span>${escapeHtml(title)}</span><span>${escapeHtml(label("tool_running", ""))}</span></div><div class="tool-row-detail">${escapeHtml(argSummary || "")}</div>`;
-        block.querySelector(".work-list").appendChild(row);
+        list.appendChild(row);
         scrollToBottom();
         return row.dataset.toolId;
     }

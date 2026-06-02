@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.services.pynia.subagents.classifier import (
     READ_ONLY_TOOLS,
@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 8
 MAX_MUTATING_PER_ROUND = 2
-MAX_READ_ONLY_PER_ROUND = 5
+MAX_READ_ONLY_PER_ROUND = 4
 MAX_SUBAGENTS_PER_ROUND = 3
+MAX_INSPECTS_PER_BLOCK = 2
 
 MAX_TOOL_RESULT_CHARS = 6_000
 DUPLICATE_RESULT_MSG = (
@@ -29,6 +30,10 @@ DUPLICATE_RESULT_MSG = (
 TOO_MANY_TOOLS_MSG = (
     "SKIPPED: too many {kind} tools in one step (max {max}). "
     "Use datapyn_subagent for parallel explore, or fewer calls per step."
+)
+BLOCK_INSPECT_LIMIT_MSG = (
+    "SKIPPED: `{block}` was already inspected twice this turn. "
+    "Use focused_block_detail and earlier tool results — do not re-read the same block."
 )
 
 # Re-export for agent loops
@@ -51,10 +56,21 @@ def tool_call_key(name: str, args: Dict[str, Any]) -> str:
     return f"{name}:{json.dumps(args or {}, sort_keys=True, default=str)}"
 
 
+def inspect_block_name(args: Dict[str, Any]) -> str:
+    """Block name for datapyn_inspect kind=block (empty when not a block read)."""
+    if not args:
+        return ""
+    kind = args.get("kind")
+    if kind not in (None, "", "block"):
+        return ""
+    return str(args.get("block_name") or "").strip()
+
+
 def prepare_tool_calls(
     parsed_calls: List[Tuple[str, Dict[str, Any], str]],
     *,
     seen_keys: set[str],
+    block_inspect_counts: Optional[Dict[str, int]] = None,
     max_mutating: int = MAX_MUTATING_PER_ROUND,
     max_read_only: int = MAX_READ_ONLY_PER_ROUND,
     max_subagents: int = MAX_SUBAGENTS_PER_ROUND,
@@ -69,12 +85,19 @@ def prepare_tool_calls(
     mutating_this_round = 0
     read_only_this_round = 0
     subagents_this_round = 0
+    block_counts = block_inspect_counts if block_inspect_counts is not None else {}
 
     for name, args, tc_id in parsed_calls:
         key = tool_call_key(name, args or {})
         if key in seen_keys:
             prepared.append((name, args, tc_id, False))
             continue
+
+        block_name = inspect_block_name(args or {})
+        if block_name:
+            if block_counts.get(block_name, 0) >= MAX_INSPECTS_PER_BLOCK:
+                prepared.append((name, args, tc_id, False))
+                continue
 
         if is_subagent_tool(name):
             if subagents_this_round >= max_subagents:
@@ -98,9 +121,29 @@ def prepare_tool_calls(
             mutating_this_round += 1
 
         seen_keys.add(key)
+        if block_name:
+            block_counts[block_name] = block_counts.get(block_name, 0) + 1
         prepared.append((name, args, tc_id, True))
 
     return prepared
+
+
+def evaluate_tool_call(
+    name: str,
+    args: Dict[str, Any],
+    *,
+    seen_keys: set[str],
+    block_inspect_counts: Dict[str, int],
+) -> Tuple[bool, str]:
+    """Return (should_execute, skip_message). Used by the Copilot SDK tool handler."""
+    prepared = prepare_tool_calls(
+        [(name, args or {}, "guard")],
+        seen_keys=seen_keys,
+        block_inspect_counts=block_inspect_counts,
+    )
+    if prepared and prepared[0][3]:
+        return True, ""
+    return False, skipped_tool_message(name, args or {}, seen_keys, block_inspect_counts)
 
 
 def was_duplicate_skip(name: str, args: Dict[str, Any], seen_keys: set[str]) -> bool:
@@ -108,10 +151,22 @@ def was_duplicate_skip(name: str, args: Dict[str, Any], seen_keys: set[str]) -> 
     return tool_call_key(name, args or {}) in seen_keys
 
 
-def skipped_tool_message(name: str, args: Dict[str, Any], seen_keys: set[str]) -> str:
+def skipped_tool_message(
+    name: str,
+    args: Dict[str, Any],
+    seen_keys: set[str],
+    block_inspect_counts: Optional[Dict[str, int]] = None,
+) -> str:
     key = tool_call_key(name, args or {})
     if key in seen_keys:
         return DUPLICATE_RESULT_MSG
+    block_name = inspect_block_name(args or {})
+    if (
+        block_name
+        and block_inspect_counts is not None
+        and block_inspect_counts.get(block_name, 0) >= MAX_INSPECTS_PER_BLOCK
+    ):
+        return BLOCK_INSPECT_LIMIT_MSG.format(block=block_name)
     if is_subagent_tool(name):
         kind = "subagent"
         max_n = MAX_SUBAGENTS_PER_ROUND

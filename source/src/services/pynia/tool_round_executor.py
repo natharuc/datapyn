@@ -149,24 +149,15 @@ def process_tool_round(
             emit_progress(on_progress, phase_key=PHASE_TOOL_DONE, step_id=tc_id, step_state="done")
             outcomes.append((tc_id, name, result))
 
-    # Overflow read-only (limit skipped) — still execute, tool-only
-    if overflow_ro:
-        if subagent_orchestrator:
-            for name, args, tc_id in overflow_ro:
-                on_tool_call(name, args, tc_id)
-            overflow_results = subagent_orchestrator.execute_readonly_overflow(overflow_ro)
-            for name, result, tc_id in overflow_results:
-                result = truncate_tool_result(result)
-                on_tool_result(name, result, tc_id)
-                outcomes.append((tc_id, name, result))
-        else:
-            for name, args, tc_id in overflow_ro:
-                if is_cancelled():
-                    return outcomes
-                on_tool_call(name, args, tc_id)
-                result = truncate_tool_result(execute_tool(name, args))
-                on_tool_result(name, result, tc_id)
-                outcomes.append((tc_id, name, result))
+    # Overflow read-only (limit skipped) — do not execute; return skip text to the model
+    for name, args, tc_id in overflow_ro:
+        if is_cancelled():
+            return outcomes
+        on_tool_call(name, args, tc_id)
+        result = skipped_tool_message(name, args, seen_keys)
+        on_tool_result(name, result, tc_id)
+        emit_progress(on_progress, phase_key=PHASE_TOOL_DONE, step_id=tc_id, step_state="done")
+        outcomes.append((tc_id, name, result))
 
     for name, args, tc_id, should_execute in sequential:
         if is_cancelled():
