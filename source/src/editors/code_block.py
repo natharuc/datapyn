@@ -963,17 +963,19 @@ class CodeBlock(QFrame):
             return "sql"
         return "txt"
     
+    def set_pynia_client(self, client):
+        """Set Pynia agent client for AI inline autocomplete (Monaco only)."""
+        if hasattr(self, "_completion_service"):
+            self._completion_service.set_pynia_client(client)
+
     def set_copilot_client(self, client):
-        """Set Copilot SDK client for inline completions (Monaco only)."""
-        if hasattr(self, '_completion_service'):
-            self._completion_service.set_copilot_client(client)
-    
+        """Backward-compatible alias for set_pynia_client."""
+        self.set_pynia_client(client)
+
     def set_lsp_client(self, client):
-        """Set Copilot LSP client for fast inline completions (Monaco only)."""
-        if hasattr(self, '_completion_service'):
+        """Deprecated: autocomplete uses Pynia API."""
+        if hasattr(self, "_completion_service"):
             self._completion_service.set_lsp_client(client)
-            # Re-open document with LSP
-            self._update_document_info()
 
     def _schedule_lsp_document_sync(self):
         if not hasattr(self, "_completion_service") or not self._completion_service.has_lsp:

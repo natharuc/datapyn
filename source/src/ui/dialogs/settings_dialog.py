@@ -59,7 +59,7 @@ class SettingsDialog(QDialog):
             shortcut_manager: Shortcut manager instance
             theme_manager: Theme manager instance
             parent: Parent widget
-            initial_tab: Tab to show initially ("general", "shortcuts", "copilot", "workspace")
+            initial_tab: Tab to show initially ("general", "shortcuts", "pynia", "workspace")
         """
         super().__init__(parent)
         self.shortcut_manager = shortcut_manager
@@ -126,10 +126,7 @@ class SettingsDialog(QDialog):
         # Shortcuts tab
         self._setup_shortcuts_tab()
 
-        # Copilot tab (LSP autocomplete + Copilot connector sign-in)
-        self._setup_copilot_tab()
-
-        # Pynia tab (API token connectors)
+        # Pynia tab (connectors + inline autocomplete)
         self._setup_pynia_tab()
 
         # Notifications tab
@@ -145,10 +142,10 @@ class SettingsDialog(QDialog):
             tab_map = {
                 "general": 0,
                 "shortcuts": 1,
+                "pynia": 2,
+                "notifications": 3,
+                "workspace": 4,
                 "copilot": 2,
-                "pynia": 3,
-                "notifications": 4,
-                "workspace": 5,
             }
             if self._initial_tab in tab_map:
                 self.tabs.setCurrentIndex(tab_map[self._initial_tab])
@@ -408,7 +405,7 @@ class SettingsDialog(QDialog):
 
         editor_layout.addWidget(self._make_label(
             S.settings.editor_monaco if hasattr(S.settings, 'editor_monaco')
-            else "Monaco Editor with Copilot inline completions",
+            else "Monaco Editor with Pynia AI inline autocomplete",
             colors,
         ))
         editor_layout.addWidget(self._make_hint("Powered by Monaco (VS Code editor engine)", colors))
@@ -579,6 +576,8 @@ class SettingsDialog(QDialog):
         intro.setStyleSheet(self._get_hint_style(colors))
         layout.addWidget(intro)
 
+        self._pynia_settings = get_pynia_settings()
+
         group = self._make_group(
             S.pynia.section_connectors if hasattr(S, "pynia") else "CONNECTORS",
             colors,
@@ -624,20 +623,67 @@ class SettingsDialog(QDialog):
         self._pynia_status_label.setStyleSheet(self._get_hint_style(colors))
         form.addRow("", self._pynia_status_label)
 
-        copilot_note = QLabel(S.pynia.copilot_hint if hasattr(S, "pynia") else "")
-        copilot_note.setWordWrap(True)
-        copilot_note.setStyleSheet(self._get_hint_style(colors))
-        form.addRow("", copilot_note)
-
         layout.addWidget(group)
+
+        auto_group = self._make_group(
+            S.pynia.section_autocomplete if hasattr(S, "pynia") else "INLINE AUTOCOMPLETE",
+            colors,
+        )
+        auto_layout = QVBoxLayout(auto_group)
+        auto_layout.setSpacing(8)
+
+        from PyQt6.QtWidgets import QCheckBox
+
+        self._pynia_autocomplete_cb = QCheckBox(
+            S.pynia.autocomplete_enable
+            if hasattr(S, "pynia")
+            else "Enable AI inline autocomplete in code blocks"
+        )
+        self._pynia_autocomplete_cb.setChecked(self._pynia_settings.autocomplete_enabled)
+        auto_layout.addWidget(self._pynia_autocomplete_cb)
+
+        auto_hint = QLabel(
+            S.pynia.autocomplete_hint if hasattr(S, "pynia") else ""
+        )
+        auto_hint.setWordWrap(True)
+        auto_hint.setStyleSheet(self._get_hint_style(colors))
+        auto_layout.addWidget(auto_hint)
+
+        self._pynia_autocomplete_status = QLabel("")
+        self._pynia_autocomplete_status.setStyleSheet(self._get_hint_style(colors))
+        auto_layout.addWidget(self._pynia_autocomplete_status)
+        self._refresh_pynia_autocomplete_status()
+
+        layout.addWidget(auto_group)
         layout.addStretch()
 
-        self._pynia_settings = get_pynia_settings()
         self._pynia_provider_combo.currentIndexChanged.connect(self._load_pynia_connector_fields)
+        self._pynia_provider_combo.currentIndexChanged.connect(self._refresh_pynia_autocomplete_status)
         self._load_pynia_connector_fields()
+        self._refresh_pynia_autocomplete_status()
 
         tab_title = S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia"
         self.tabs.addTab(pynia_widget, tab_title)
+
+    def _refresh_pynia_autocomplete_status(self) -> None:
+        from src.services.pynia.settings import get_provider_secret
+
+        if not hasattr(self, "_pynia_autocomplete_status"):
+            return
+        pid = self._current_pynia_connector_id() if hasattr(self, "_pynia_provider_combo") else "openai"
+        if get_provider_secret(pid):
+            text = (
+                S.pynia.autocomplete_ready.format(provider=pid)
+                if hasattr(S, "pynia") and hasattr(S.pynia, "autocomplete_ready")
+                else f"Autocomplete will use the {pid} connector when enabled."
+            )
+        else:
+            text = (
+                S.pynia.autocomplete_need_token
+                if hasattr(S, "pynia")
+                else "Save an API token above to enable AI autocomplete."
+            )
+        self._pynia_autocomplete_status.setText(text)
 
     def _current_pynia_connector_id(self) -> str:
         return self._pynia_provider_combo.currentData() or "openai"
@@ -660,6 +706,7 @@ class SettingsDialog(QDialog):
         if token:
             self._pynia_settings.on_token_authenticated(pid, pid)
         self._pynia_status_label.setText(S.pynia.verify_ok if hasattr(S, "pynia") else "Saved.")
+        self._refresh_pynia_autocomplete_status()
 
     def _on_pynia_verify_token(self):
         from src.services.pynia.agent_client import PyniaAgentClient
@@ -1740,6 +1787,13 @@ class SettingsDialog(QDialog):
         settings.setValue("notifications/error_message", self.notif_error_msg.text())
         self._persist_notification_transport_settings()
         self._refresh_notification_transport_status()
+
+        if hasattr(self, "_pynia_autocomplete_cb"):
+            from src.services.pynia.settings import get_pynia_settings
+
+            get_pynia_settings().set_autocomplete_enabled(
+                self._pynia_autocomplete_cb.isChecked()
+            )
 
         # Save shortcuts
         for row in range(self.table.rowCount()):

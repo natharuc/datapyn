@@ -143,12 +143,9 @@ class LayoutMixin:
         # Connect Copilot signals to output panel
         self._connect_copilot_to_output()
 
-        # Setup LSP client for fast inline completions (if server is available)
-        if hasattr(self, "_lsp_server_available") and self._lsp_server_available:
-            self._setup_lsp_client()
-        
-        # Initialize centralized Copilot auth service
+        # Wire Pynia auth (chat + inline autocomplete)
         self._setup_copilot_auth_service()
+        self._update_editors_pynia_client()
 
         # Tabifica Results, Summarize e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.summarize_dock)

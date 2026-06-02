@@ -19,6 +19,10 @@ from src.services.copilot.copilot_models import (
     normalize_reasoning_effort,
     usage_snapshot_for_model,
 )
+from src.services.pynia.completion import (
+    build_inline_prompt,
+    clean_completion_text,
+)
 from src.services.pynia.providers.copilot_adapter import CopilotProviderAdapter
 from src.services.pynia.providers.token_worker import FALLBACK_MODELS, TokenAgentWorker
 from src.services.pynia.settings import get_pynia_settings, get_provider_secret, set_provider_secret
@@ -79,6 +83,9 @@ class PyniaAgentClient(QObject):
 
         self._token_thread: Optional[QThread] = None
         self._token_worker: Optional[TokenAgentWorker] = None
+
+        self._completion_thread: Optional[QThread] = None
+        self._completion_worker: Optional[QObject] = None
 
         self._connect_active_provider()
 
@@ -270,27 +277,112 @@ class PyniaAgentClient(QObject):
         if self._provider_id == "copilot" and self._copilot_adapter:
             self._copilot_adapter.reset_chat_session()
 
-    def request_inline_completion(self, *args, **kwargs) -> None:
-        """Inline completion still uses Copilot LSP when available."""
-        if self._copilot_backend:
-            self._copilot_backend.request_inline_completion(*args, **kwargs)
+    def request_inline_completion(
+        self,
+        prefix: str,
+        suffix: str,
+        language: str,
+        request_id: int = 0,
+        context: str = "",
+    ) -> None:
+        """Pynia inline autocomplete (API connectors or Copilot connector)."""
+        settings = get_pynia_settings()
+        if not settings.autocomplete_enabled:
+            self.inline_completion_ready.emit("")
+            return
+
+        if self._provider_id == "copilot":
+            if self._copilot_backend:
+                self._copilot_backend.request_inline_completion(
+                    prefix, suffix, language, request_id=request_id, context=context
+                )
+            else:
+                self.inline_completion_ready.emit("")
+            return
+
+        if not get_provider_secret(self._provider_id):
+            logger.debug("[Pynia] Autocomplete skipped: no token for %s", self._provider_id)
+            self.inline_completion_ready.emit("")
+            return
+
+        prompt = build_inline_prompt(
+            language=language,
+            prefix=prefix,
+            suffix=suffix,
+            context=context,
+        )
+        self._start_inline_completion_worker(
+            language=language,
+            prompt=prompt,
+            prefix=prefix,
+            suffix=suffix,
+        )
 
     def setup_lsp_client(self, server_path: str) -> bool:
-        if self._copilot_backend and hasattr(self._copilot_backend, "setup_lsp_client"):
-            return self._copilot_backend.setup_lsp_client(server_path)
+        """Deprecated: autocomplete uses Pynia API, not Copilot LSP."""
         return False
 
     @property
     def lsp_client(self):
-        if self._copilot_backend:
-            return getattr(self._copilot_backend, "lsp_client", None)
         return None
 
     def cleanup(self) -> None:
         self.cancel()
+        self._cleanup_inline_completion_worker()
         self._disconnect_active_provider()
         if self._copilot_backend and hasattr(self._copilot_backend, "cleanup"):
             self._copilot_backend.cleanup()
+
+    def _start_inline_completion_worker(
+        self,
+        *,
+        language: str,
+        prompt: str,
+        prefix: str,
+        suffix: str,
+    ) -> None:
+        from src.services.pynia.completion import PyniaInlineCompletionWorker
+
+        self._cleanup_inline_completion_worker()
+
+        worker = PyniaInlineCompletionWorker()
+        worker.set_request(
+            self._provider_id,
+            language,
+            prompt,
+            prefix,
+            suffix,
+            model=get_pynia_settings().completion_model(self._provider_id),
+        )
+
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        def _deliver(text: str) -> None:
+            cleaned = clean_completion_text(text, prefix, suffix)
+            self.inline_completion_ready.emit(cleaned)
+
+        worker.inline_complete.connect(_deliver)
+        worker.error.connect(lambda _msg: self.inline_completion_ready.emit(""))
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._completion_worker = worker
+        self._completion_thread = thread
+        thread.start()
+
+    def _cleanup_inline_completion_worker(self) -> None:
+        worker = self._completion_worker
+        thread = self._completion_thread
+        if worker and hasattr(worker, "cancel"):
+            worker.cancel()
+        if thread and thread.isRunning():
+            thread.quit()
+            thread.wait(2000)
+        self._completion_worker = None
+        self._completion_thread = None
 
     def _start_token_worker(
         self,

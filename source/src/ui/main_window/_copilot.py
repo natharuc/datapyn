@@ -151,14 +151,18 @@ class CopilotMixin:
         self._update_editors_lsp_client()
 
     def _update_editors_lsp_client(self):
-        """Update all editors with the LSP client."""
-        if not self._lsp_client:
+        """Deprecated: use _update_editors_pynia_client."""
+        self._update_editors_pynia_client()
+
+    def _update_editors_pynia_client(self):
+        """Attach Pynia agent to all session editors for inline autocomplete."""
+        client = getattr(self, "_pynia_agent", None)
+        if not client:
             return
-        
         for i in range(self.session_tabs.count()):
             widget = self.session_tabs.widget(i)
-            if hasattr(widget, "editor") and hasattr(widget.editor, "set_lsp_client"):
-                widget.editor.set_lsp_client(self._lsp_client)
+            if hasattr(widget, "editor") and hasattr(widget.editor, "set_pynia_client"):
+                widget.editor.set_pynia_client(client)
 
     def _on_settings_chat_login(self):
         """Handle Chat login request from settings dialog.

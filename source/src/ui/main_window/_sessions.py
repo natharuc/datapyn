@@ -675,13 +675,11 @@ class SessionsMixin:
 
         widget = SessionWidget(session, theme_manager=self.theme_manager)
         
-        # Pass Copilot client to BlockEditor for inline completions (Monaco)
-        if hasattr(self, "_copilot_client") and self._copilot_client:
-            widget.editor.set_copilot_client(self._copilot_client)
-
-        # Pass LSP client if available
-        if hasattr(self, "_lsp_client") and self._lsp_client:
-            widget.editor.set_lsp_client(self._lsp_client)
+        # Pynia inline autocomplete for Monaco editors
+        if hasattr(self, "_pynia_agent") and self._pynia_agent:
+            widget.editor.set_pynia_client(self._pynia_agent)
+        elif hasattr(self, "_copilot_client") and self._copilot_client:
+            widget.editor.set_pynia_client(self._copilot_client)
 
         # Criar paineis por sessao (Results, Output, Variables)
         self._create_session_panels(session.session_id)

@@ -159,6 +159,26 @@ class PyniaSettingsManager:
         pid = provider_id or self.active_provider
         return self._settings.value(f"{pid}/username", "") or ""
 
+    @property
+    def autocomplete_enabled(self) -> bool:
+        val = self._settings.value("autocomplete_enabled", True)
+        return val in (True, "true", "True", 1, "1")
+
+    def set_autocomplete_enabled(self, enabled: bool) -> None:
+        self._settings.setValue("autocomplete_enabled", "true" if enabled else "false")
+
+    def completion_model(self, provider_id: Optional[ProviderId] = None) -> str:
+        pid = provider_id or self.active_provider
+        custom = self._settings.value(f"{pid}/completion_model", "") or ""
+        if custom:
+            return custom
+        from src.services.pynia.completion import COMPLETION_MODELS
+
+        return COMPLETION_MODELS.get(pid, COMPLETION_MODELS["openai"])
+
+    def set_completion_model(self, provider_id: ProviderId, model_id: str) -> None:
+        self._settings.setValue(f"{provider_id}/completion_model", model_id or "")
+
 
 def get_pynia_settings() -> PyniaSettingsManager:
     return PyniaSettingsManager()

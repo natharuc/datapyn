@@ -1,13 +1,9 @@
 """
-Inline completion service for Monaco Editor using Copilot.
-
-Uses Copilot Language Server (LSP) for fast inline completions (<500ms).
-Falls back to Chat API if LSP not available, then smart heuristics.
+Inline completion service for Monaco Editor — powered by Pynia.
 
 Hybrid approach:
-1. Local heuristics for instant keywords/table names
-2. Copilot LSP for fast completions (<500ms)
-3. Chat API fallback (slower, 2-3s)
+1. Local heuristics for instant keywords / schema hints
+2. Pynia API autocomplete (active connector token)
 """
 
 import logging
@@ -15,7 +11,7 @@ import re
 from typing import Optional, List, Dict
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
-from src.services.copilot.copilot_settings import get_copilot_settings
+from src.services.pynia.settings import get_pynia_settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,15 +54,10 @@ SQL_KEYWORDS = [
 
 class InlineCompletionService(QObject):
     """
-    Service that provides inline completions for code editors.
-    
-    Uses Copilot Language Server (LSP) for fast completions (<500ms).
-    Falls back to Chat API if LSP not available.
-    
-    Optimized for speed:
-    - LSP binary for real completions API (<500ms)
-    - Local heuristics for common patterns (instant)
-    - Chat API fallback if LSP unavailable (2-3s)
+    Service that provides inline completions for code editors via Pynia.
+
+    - Local heuristics for common SQL/Python patterns (instant)
+    - Pynia connector API for AI ghost-text (OpenAI, OpenRouter, Claude, Copilot)
     """
     
     # Signal emitted when completion is ready
@@ -88,9 +79,9 @@ class InlineCompletionService(QObject):
         self._lsp_client = None
         self._lsp_connected = False
         
-        # SDK client (fallback - slower)
-        self._copilot_client = None
-        self._copilot_connected = False
+        # Pynia agent client (API autocomplete)
+        self._pynia_client = None
+        self._pynia_connected = False
         
         self._pending_request = None
         self._debounce_timer = QTimer(self)
@@ -207,56 +198,33 @@ class InlineCompletionService(QObject):
             f"{sum(len(c) for c in self._cached_columns.values())} columns"
         )
     
-    def set_copilot_client(self, client) -> None:
-        """Set the Copilot SDK client (Chat API fallback)."""
-        # Disconnect old client if any
-        if self._copilot_client and self._copilot_connected:
+    def set_pynia_client(self, client) -> None:
+        """Set the Pynia agent client for AI inline autocomplete."""
+        if self._pynia_client and self._pynia_connected:
             try:
-                self._copilot_client.inline_completion_ready.disconnect(
-                    self._on_copilot_completion
+                self._pynia_client.inline_completion_ready.disconnect(
+                    self._on_pynia_completion
                 )
             except (TypeError, RuntimeError):
                 pass
-            self._copilot_connected = False
-        
-        self._copilot_client = client
-        
-        # Connect to Copilot completion signal
+            self._pynia_connected = False
+
+        self._pynia_client = client
+
         if client and hasattr(client, "inline_completion_ready"):
-            client.inline_completion_ready.connect(self._on_copilot_completion)
-            self._copilot_connected = True
-            auth_status = "authenticated" if client.is_authenticated else "not authenticated"
-            self._log(f"Copilot Chat API connected ({auth_status})", "info")
+            client.inline_completion_ready.connect(self._on_pynia_completion)
+            self._pynia_connected = True
+            auth_status = "ready" if self.has_pynia else "configure token in Settings → Pynia"
+            self._log(f"Pynia autocomplete connected ({auth_status})", "info")
+
+    def set_copilot_client(self, client) -> None:
+        """Backward-compatible alias for set_pynia_client."""
+        self.set_pynia_client(client)
     
     def set_lsp_client(self, client) -> None:
-        """Set the Copilot LSP client (primary, fast completions)."""
-        # Disconnect old client if any
-        if self._lsp_client and self._lsp_connected:
-            try:
-                self._lsp_client.completion_ready.disconnect(self._on_lsp_completion)
-                self._lsp_client.authenticated.disconnect(self._on_lsp_authenticated)
-            except (TypeError, RuntimeError):
-                pass
-            self._lsp_connected = False
-        
-        self._lsp_client = client
-        self._sign_in_attempted = False  # Reset sign-in flag for new client
-        
-        # Connect to LSP completion signal
-        if client and hasattr(client, "completion_ready"):
-            client.completion_ready.connect(self._on_lsp_completion)
-            # Also listen for auth changes
-            if hasattr(client, "authenticated"):
-                client.authenticated.connect(self._on_lsp_authenticated)
-            self._lsp_connected = True
-            
-            client_id = id(client) if client else None
-            if client_id != InlineCompletionService._logged_lsp_client_id:
-                InlineCompletionService._logged_lsp_client_id = client_id
-                if client.is_authenticated:
-                    self._log("Copilot LSP connected (authenticated)", "info")
-                else:
-                    self._log("Copilot LSP connected (not authenticated yet)", "info")
+        """Deprecated: LSP autocomplete removed; Pynia API is used instead."""
+        self._lsp_client = None
+        self._lsp_connected = False
     
     @pyqtSlot(str)
     def _on_lsp_authenticated(self, username: str) -> None:
@@ -316,12 +284,17 @@ class InlineCompletionService(QObject):
         )
     
     @property
-    def has_sdk(self) -> bool:
-        """Check if SDK client is available and authenticated."""
-        return (
-            self._copilot_client is not None
-            and self._copilot_client.is_authenticated
-        )
+    def has_pynia(self) -> bool:
+        """Whether Pynia can serve AI autocomplete for the active connector."""
+        if not get_pynia_settings().autocomplete_enabled:
+            return False
+        if not self._pynia_client:
+            return False
+        if self._pynia_client.provider_id == "copilot":
+            return bool(self._pynia_client.is_authenticated)
+        from src.services.pynia.settings import get_provider_secret
+
+        return bool(get_provider_secret(self._pynia_client.provider_id))
     
     @pyqtSlot(str)
     def _on_lsp_completion(self, completion: str) -> None:
@@ -340,19 +313,25 @@ class InlineCompletionService(QObject):
         self.completion_ready.emit(completion)
     
     @pyqtSlot(str)
-    def _on_copilot_completion(self, completion: str) -> None:
-        """Handle completion from Copilot."""
-        # Only process if THIS service was waiting for a completion
+    def _on_pynia_completion(self, completion: str) -> None:
+        """Handle completion from Pynia agent client."""
         if not self._is_processing:
-            return  # Ignore - this completion is for another code block
-            
-        self._is_processing = False  # Release lock
+            return
+
+        self._is_processing = False
         if completion:
-            preview = completion[:60].replace('\n', ' ')
-            self._log(f"Chat API completion: {preview}...", "info")
+            preview = completion[:60].replace("\n", " ")
+            self._log(f"Pynia completion: {preview}...", "info")
         else:
-            self._log("Chat API returned empty (timeout or no match)", "debug")
+            self._log("Pynia returned empty (no suggestion)", "debug")
         self.completion_ready.emit(completion)
+
+    def _build_request_context(self, language: str) -> str:
+        if language == "sql" and self._database_context:
+            return self._database_context
+        if language == "python":
+            return self._build_python_context()
+        return ""
     
     def request_completion(
         self,
@@ -429,9 +408,8 @@ class InlineCompletionService(QObject):
         """Execute the debounced completion request.
         
         Priority:
-        1. Local heuristics for instant keywords/table names
-        2. LSP client for fast completions (<500ms) - primary
-        3. SDK client fallback (slower, 2-3s) - if LSP unavailable
+        1. Local heuristics
+        2. Pynia API autocomplete
         """
         if not self._pending_request:
             return
@@ -462,46 +440,30 @@ class InlineCompletionService(QObject):
                 self.completion_ready.emit(local_completion)
             return
         
-        # Try LSP client first (fast, <500ms)
-        if self.has_lsp and self._document_uri:
+        if self.has_pynia and self._pynia_client:
+            ctx = self._build_request_context(request["language"])
             self._log(
-                f"Requesting LSP completion ({request['language']}, "
-                f"L{request['line']}:C{request['column']})", "info"
+                f"Requesting Pynia completion ({request['language']}, "
+                f"L{request['line']}:C{request['column']})",
+                "info",
             )
-            self._lsp_client.request_completion(
-                uri=self._document_uri,
-                version=self._document_version,
-                line=request["line"] - 1,  # LSP uses 0-indexed
-                character=request["column"] - 1,
-                trigger_kind=2,  # Automatic
+            self._pynia_client.request_inline_completion(
+                request["prefix"],
+                request["suffix"],
+                request["language"],
+                context=ctx,
             )
             return
-        
-        # LSP not available - determine reason and try to help
-        if self._lsp_client:
-            if not self._lsp_client.is_authenticated:
-                # LSP exists but not authenticated - notify user
-                if not getattr(self, "_sign_in_attempted", False):
-                    self._sign_in_attempted = True
-                    self._log(
-                        "LSP not authenticated - use Settings > Copilot to sign in",
-                        "info"
-                    )
-                    # Note: Auth is now handled by CopilotAuthService
-                    # User should use Settings > Copilot or Chat panel to sign in
-                lsp_reason = "not authenticated - use Settings > Copilot to sign in"
-            elif not self._document_uri:
-                lsp_reason = "no document URI"
-            else:
-                lsp_reason = "unknown"
+
+        if not get_pynia_settings().autocomplete_enabled:
+            reason = "disabled in Settings → Pynia"
+        elif not self._pynia_client:
+            reason = "Pynia client not connected"
         else:
-            lsp_reason = "not installed"
-        
-        self._log(
-            f"Autocomplete unavailable - LSP: {lsp_reason}",
-            "info"
-        )
-        self._is_processing = False  # Release lock when no service available
+            reason = "configure API token in Settings → Pynia"
+
+        self._log(f"AI autocomplete unavailable — {reason}", "info")
+        self._is_processing = False
         if request["id"] == self._active_request_id:
             self.completion_ready.emit("")
     
@@ -552,33 +514,15 @@ class InlineCompletionService(QObject):
                 "column": column,
             }
             
-            # Sync document with LSP
-            full_text = prefix + suffix
-            self._log(f"Force: syncing doc (len={len(full_text)})", "info")
-            self.notify_document_changed(full_text)
-            
-            # Debug: check LSP state
-            lsp_present = self._lsp_client is not None
-            lsp_auth = self._lsp_client.is_authenticated if self._lsp_client else False
-            doc_uri = self._document_uri
-            self._log(f"Force: lsp_present={lsp_present}, lsp_auth={lsp_auth}, doc_uri={doc_uri}", "info")
-            
-            # Try LSP client with manual trigger
-            if self.has_lsp and self._document_uri:
-                self._log(
-                    f"Force LSP completion ({language}, L{line}:C{column})", "info"
-                )
-                self._lsp_client.request_completion(
-                    uri=self._document_uri,
-                    version=self._document_version,
-                    line=line - 1,  # LSP uses 0-indexed
-                    character=column - 1,
-                    trigger_kind=1,  # Manual trigger
+            if self.has_pynia and self._pynia_client:
+                ctx = self._build_request_context(language)
+                self._log(f"Force Pynia completion ({language}, L{line}:C{column})", "info")
+                self._pynia_client.request_inline_completion(
+                    prefix, suffix, language, context=ctx
                 )
                 return
-            
-            # LSP not available
-            self._log(f"Force completion failed - LSP not available (lsp={lsp_present}, auth={lsp_auth}, uri={doc_uri})", "warning")
+
+            self._log("Force completion failed — configure Pynia in Settings", "warning")
             self._is_processing = False
             self.completion_ready.emit("")
         
@@ -842,9 +786,7 @@ class InlineCompletionService(QObject):
                 return completion
         
         return ""
-        
-        return ""
-    
+
     def _clean_completion(self, text: str) -> str:
         """Clean up completion text from chat response."""
         text = text.strip()

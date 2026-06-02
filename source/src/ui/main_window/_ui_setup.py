@@ -514,24 +514,18 @@ class UISetupMixin:
         open_pynia_action.triggered.connect(self._toggle_copilot_dock)
         pynia_menu.addAction(open_pynia_action)
 
-        # Inline autocomplete (GitHub Copilot language server)
-        copilot_menu = tools_menu.addMenu(S.menu.copilot_submenu)
+        pynia_autocomplete_action = QAction(
+            S.menu.pynia_autocomplete_settings
+            if hasattr(S.menu, "pynia_autocomplete_settings")
+            else "Pynia autocomplete settings…",
+            self,
+        )
         if HAS_QTAWESOME:
-            copilot_menu.setIcon(qta.icon("mdi.robot", color="#b0b0b0"))
-
-        # Download Language Server
-        download_lsp_action = QAction(S.menu.copilot_download_lsp, self)
-        if HAS_QTAWESOME:
-            download_lsp_action.setIcon(qta.icon("mdi.download", color="#b0b0b0"))
-        download_lsp_action.triggered.connect(self._show_copilot_download_dialog)
-        copilot_menu.addAction(download_lsp_action)
-
-        # Check Status
-        check_status_action = QAction(S.menu.copilot_check_status, self)
-        if HAS_QTAWESOME:
-            check_status_action.setIcon(qta.icon("mdi.information-outline", color="#b0b0b0"))
-        check_status_action.triggered.connect(self._show_copilot_status)
-        copilot_menu.addAction(check_status_action)
+            pynia_autocomplete_action.setIcon(qta.icon("mdi.lightning-bolt", color="#b0b0b0"))
+        pynia_autocomplete_action.triggered.connect(
+            lambda: self.show_settings_dialog(initial_tab="pynia")
+        )
+        pynia_menu.addAction(pynia_autocomplete_action)
 
         # Help Menu
         help_menu = menubar.addMenu(S.menu.help)
