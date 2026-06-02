@@ -189,7 +189,8 @@ class LogDetailDialog(QDialog):
 
         # Resolve with Copilot (only for errors)
         if entry.level == "error":
-            copilot_btn = QPushButton(S.output_panel.btn_resolve_copilot)
+            label = getattr(S.output_panel, "btn_resolve_pynia", S.output_panel.btn_resolve_copilot)
+            copilot_btn = QPushButton(label)
             try:
                 from src.ui.components.copilot_chat_panel import _load_copilot_icon
                 copilot_icon = _load_copilot_icon("#ffffff", size=16)

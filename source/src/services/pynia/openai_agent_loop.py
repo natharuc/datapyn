@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional  # noqa: F401 — Any for tool_executor
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ def run_openai_agent_turn(
     tools: List[Dict[str, Any]],
     attachments: Optional[List[Dict[str, Any]]],
     execute_tool: Callable[[str, Dict[str, Any]], str],
+    tool_executor: Any = None,
     on_chunk: Callable[[str], None],
     on_tool_call: Callable[[str, dict, str], None],
     on_tool_result: Callable[[str, str, str], None],
@@ -142,25 +143,43 @@ def run_openai_agent_turn(
         assistant_msg["tool_calls"] = openai_tool_calls
         conversation.append(assistant_msg)
 
+        parsed_calls = []
         for tc in openai_tool_calls:
-            if is_cancelled():
-                return final_text
             fn = tc["function"]
             name = fn["name"]
             try:
                 args = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
-            on_tool_call(name, args, tc["id"])
-            result = execute_tool(name, args)
-            on_tool_result(name, result, tc["id"])
-            conversation.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                }
-            )
+            parsed_calls.append((name, args, tc["id"]))
+
+        use_batch = (
+            len(parsed_calls) > 1
+            and tool_executor is not None
+            and hasattr(tool_executor, "execute_batch")
+        )
+
+        if use_batch:
+            if is_cancelled():
+                return final_text
+            for name, args, tc_id in parsed_calls:
+                on_tool_call(name, args, tc_id)
+            results = tool_executor.execute_batch([(n, a) for n, a, _ in parsed_calls])
+            for (name, args, tc_id), result in zip(parsed_calls, results):
+                on_tool_result(name, result, tc_id)
+                conversation.append(
+                    {"role": "tool", "tool_call_id": tc_id, "content": result}
+                )
+        else:
+            for name, args, tc_id in parsed_calls:
+                if is_cancelled():
+                    return final_text
+                on_tool_call(name, args, tc_id)
+                result = execute_tool(name, args)
+                on_tool_result(name, result, tc_id)
+                conversation.append(
+                    {"role": "tool", "tool_call_id": tc_id, "content": result}
+                )
 
     return final_text
 

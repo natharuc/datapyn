@@ -663,7 +663,10 @@ class CodeBlock(QFrame):
         )
         self._copilot_icon.setIcon(copilot_sparkle)
         copilot_ind_layout.addWidget(self._copilot_icon)
-        self._copilot_label = QLabel(S.block.copilot_editing)
+        label_text = getattr(S.block, "pynia_editing", None) or getattr(
+            S.block, "copilot_editing", "Pynia editing..."
+        )
+        self._copilot_label = QLabel(label_text)
         self._copilot_label.setStyleSheet("""
             QLabel {
                 color: #b48ead;
@@ -1384,6 +1387,10 @@ class CodeBlock(QFrame):
 
     def is_focused(self) -> bool:
         return self._is_focused
+
+    def set_pynia_editing(self, editing: bool):
+        """Highlight block while Pynia edits it."""
+        self.set_copilot_editing(editing)
 
     def set_copilot_editing(self, editing: bool):
         """Show/hide Copilot editing indicator on this block.

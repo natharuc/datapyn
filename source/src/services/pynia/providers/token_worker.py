@@ -147,6 +147,7 @@ class TokenAgentWorker(QObject):
                     tools=self._openai_tools,
                     attachments=self._attachments,
                     execute_tool=self._execute_tool,
+                    tool_executor=self._tool_executor,
                     on_chunk=self.chunk.emit,
                     on_tool_call=self.tool_call.emit,
                     on_tool_result=self.tool_result.emit,

@@ -19,8 +19,8 @@ _ICON_COLOR = "#b0b0b0"
 _ICON_HOVER = "#ffffff"
 
 
-def _load_copilot_icon(color: str, size: int = 20) -> QIcon:
-    """Load Copilot SVG icon with custom color."""
+def _load_pynia_icon(color: str, size: int = 20) -> QIcon:
+    """Load Pynia mark icon with custom color."""
     try:
         # Get path relative to this file (ui/components -> ui -> src -> assets/icons)
         components_dir = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +60,8 @@ class MainToolbar(QToolBar):
     new_tab_clicked = pyqtSignal()
     run_clicked = pyqtSignal()
     run_timer_clicked = pyqtSignal()
-    copilot_clicked = pyqtSignal()
+    pynia_clicked = pyqtSignal()
+    copilot_clicked = pyqtSignal()  # alias for pynia_clicked
     workspace_switch_requested = pyqtSignal(str)  # path
     workspace_settings_requested = pyqtSignal()  # open settings on workspace tab
 
@@ -145,16 +146,18 @@ class MainToolbar(QToolBar):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
 
-        # Copilot button (right side) - icon only
-        self.btn_copilot = QPushButton()
-        copilot_icon = _load_copilot_icon("#9cdcfe", size=18)
-        if copilot_icon:
-            self.btn_copilot.setIcon(copilot_icon)
+        # Pynia button (right side) - icon only
+        self.btn_pynia = QPushButton()
+        self.btn_copilot = self.btn_pynia  # backward compat
+        pynia_icon = _load_pynia_icon("#9cdcfe", size=18)
+        if pynia_icon:
+            self.btn_pynia.setIcon(pynia_icon)
         else:
-            self.btn_copilot.setIcon(qta.icon("mdi.robot", color="#9cdcfe"))
-        self.btn_copilot.setIconSize(QSize(18, 18))
-        self.btn_copilot.setToolTip("Copilot")
-        self.btn_copilot.setStyleSheet(f"""
+            self.btn_pynia.setIcon(qta.icon("mdi.robot", color="#9cdcfe"))
+        self.btn_pynia.setIconSize(QSize(18, 18))
+        pynia_tip = getattr(S.dock, "copilot", "Pynia") if hasattr(S, "dock") else "Pynia"
+        self.btn_pynia.setToolTip(pynia_tip)
+        self.btn_pynia.setStyleSheet(f"""
             QPushButton {{
                 background-color: rgba(86, 156, 214, 0.1);
                 padding: 6px;
@@ -167,8 +170,9 @@ class MainToolbar(QToolBar):
                 background-color: rgba(86, 156, 214, 0.35);
             }}
         """)
-        self.btn_copilot.clicked.connect(self.copilot_clicked.emit)
-        self.addWidget(self.btn_copilot)
+        self.btn_pynia.clicked.connect(self.pynia_clicked.emit)
+        self.pynia_clicked.connect(self.copilot_clicked.emit)
+        self.addWidget(self.btn_pynia)
 
     def _setup_workspace_selector(self):
         """Setup workspace dropdown selector."""

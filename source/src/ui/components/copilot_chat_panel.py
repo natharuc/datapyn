@@ -1776,7 +1776,7 @@ class PyniaChatPanel(QWidget):
         system_prompt = self._build_system_prompt()
         context_section = self._build_request_context_section()
 
-        from src.services.copilot.system_prompt import build_request_prompt
+        from src.services.pynia.system_prompt import build_request_prompt
         request_prompt = build_request_prompt(text, context_section)
 
         # Prepare messages for API
@@ -1810,27 +1810,14 @@ class PyniaChatPanel(QWidget):
         self.message_sent.emit(text)
 
     def _build_system_prompt(self) -> str:
-        """Build stable system prompt with behavior rules and available tools."""
-        from src.services.copilot.system_prompt import (
-            SYSTEM_PROMPT_TEMPLATE, build_tools_list,
-        )
+        """Build Pynia system prompt (tools via API — not duplicated in text)."""
+        from src.services.pynia.system_prompt import build_system_prompt
 
-        # Build tools list
-        tools_list = ""
-        if self._mcp_server:
-            try:
-                tools = self._mcp_server.tool_registry.list_tools()
-                tools_list = build_tools_list(tools)
-            except Exception as e:
-                logger.debug(f"Error listing tools: {e}")
-
-        return SYSTEM_PROMPT_TEMPLATE.format(
-            tools_list=tools_list,
-        )
+        return build_system_prompt(include_tool_catalog=False)
 
     def _build_request_context_section(self) -> str:
         """Build a lightweight context snapshot for a single chat turn."""
-        from src.services.copilot.system_prompt import build_context_section
+        from src.services.pynia.system_prompt import build_context_section
 
         try:
             context_json = json.dumps(self._build_context_snapshot(), indent=2, ensure_ascii=False)
@@ -1871,12 +1858,12 @@ class PyniaChatPanel(QWidget):
             elif hasattr(block_editor, "focused_block"):
                 last_focused = block_editor.focused_block
             block_infos = []
-            for index, block in enumerate(blocks[:12]):
+            for index, block in enumerate(blocks[:18]):
                 try:
                     code = block.get_code() if hasattr(block, "get_code") else ""
                     name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{index + 1}"
                     language = block.get_language() if hasattr(block, "get_language") else "unknown"
-                    preview = code[:250] + "..." if len(code) > 250 else code
+                    preview = code[:160] + "..." if len(code) > 160 else code
                     from src.services.copilot.mcp_tools import _infer_block_hints
                     hints = _infer_block_hints(code, language)
                     block_infos.append({
@@ -3573,7 +3560,7 @@ class PyniaChatPanel(QWidget):
 
         system_prompt = self._build_system_prompt()
         context_section = self._build_request_context_section()
-        from src.services.copilot.system_prompt import build_request_prompt
+        from src.services.pynia.system_prompt import build_request_prompt
         request_prompt = build_request_prompt(text, context_section)
         if stored_attachments and not text:
             request_prompt = build_request_prompt(
@@ -3622,7 +3609,7 @@ class PyniaChatPanel(QWidget):
         return refs
 
     def _build_request_context_section(self) -> str:
-        from src.services.copilot.system_prompt import build_context_section
+        from src.services.pynia.system_prompt import build_context_section
         try:
             snapshot = self._build_context_snapshot()
             if self._active_references:

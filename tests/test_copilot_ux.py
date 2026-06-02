@@ -3,7 +3,7 @@ Tests for Copilot UX improvements:
 
 1. CodeBlock copilot editing indicator (sparkle icon, purple border, auto-dismiss)
 2. Monaco highlight_lines integration
-3. MCP tool helpers (_signal_copilot_editing, _highlight_edited_lines)
+3. MCP tool helpers (_signal_pynia_editing, _highlight_edited_lines)
 4. Chat template thinking block / i18n labels
 5. Chat panel thinking state machine
 6. Per-tab chat context switching
@@ -164,7 +164,7 @@ class TestMonacoHighlightLines:
 
 
 class TestMCPToolHelpers:
-    """Tests for _signal_copilot_editing and _highlight_edited_lines helpers."""
+    """Tests for _signal_pynia_editing and _highlight_edited_lines helpers."""
 
     def _make_registry(self):
         """Create a MCPToolRegistry with mocked main window."""
@@ -173,34 +173,34 @@ class TestMCPToolHelpers:
         registry._main_window = MagicMock()
         return registry
 
-    def test_signal_copilot_editing_calls_block(self, qapp):
-        """_signal_copilot_editing should call set_copilot_editing on the block."""
+    def test_signal_pynia_editing_calls_block(self, qapp):
+        """_signal_pynia_editing should call set_copilot_editing on the block."""
         registry = self._make_registry()
         block = MagicMock()
         block_editor = MagicMock()
 
-        registry._signal_copilot_editing(block, block_editor)
+        registry._signal_pynia_editing(block, block_editor)
 
         block.set_copilot_editing.assert_called_once_with(True)
 
-    def test_signal_copilot_editing_scrolls_into_view(self, qapp):
-        """_signal_copilot_editing should scroll to make the block visible."""
+    def test_signal_pynia_editing_scrolls_into_view(self, qapp):
+        """_signal_pynia_editing should scroll to make the block visible."""
         registry = self._make_registry()
         block = MagicMock()
         block_editor = MagicMock()
 
-        registry._signal_copilot_editing(block, block_editor)
+        registry._signal_pynia_editing(block, block_editor)
 
         block_editor.ensureWidgetVisible.assert_called_once_with(block)
 
-    def test_signal_copilot_editing_no_scroll_area(self, qapp):
-        """_signal_copilot_editing should not crash if scroll_area is missing."""
+    def test_signal_pynia_editing_no_scroll_area(self, qapp):
+        """_signal_pynia_editing should not crash if scroll_area is missing."""
         registry = self._make_registry()
         block = MagicMock()
         block_editor = MagicMock(spec=[])  # no scroll_area
 
         # Should not raise
-        registry._signal_copilot_editing(block, block_editor)
+        registry._signal_pynia_editing(block, block_editor)
         block.set_copilot_editing.assert_called_once_with(True)
 
     def test_highlight_edited_lines_calls_editor(self, qapp):

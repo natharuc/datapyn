@@ -427,26 +427,54 @@ class ThreadSafeToolExecutor(QObject):
 
     def execute(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Execute a tool and return the SDK-facing text result."""
+        results = self.execute_batch([(tool_name, arguments or {})])
+        return results[0] if results else "Error: empty tool result"
+
+    def execute_batch(self, calls: List[tuple]) -> List[str]:
+        """Execute multiple tools with a single main-thread hop when possible."""
         from PyQt6.QtWidgets import QApplication
 
-        arguments_json = json.dumps(arguments) if arguments else "{}"
+        if not calls:
+            return []
+
+        normalized = []
+        for item in calls:
+            if not item:
+                continue
+            name = item[0]
+            args = item[1] if len(item) > 1 else {}
+            normalized.append((name, args if isinstance(args, dict) else {}))
+
         app = QApplication.instance()
         on_main = app and QThread.currentThread() == app.thread()
 
+        def _run_all_on_main() -> List[str]:
+            outputs: List[str] = []
+            for tool_name, arguments in normalized:
+                arguments_json = json.dumps(arguments) if arguments else "{}"
+                self._do_execute_on_main_thread(tool_name, arguments_json)
+                with QMutexLocker(self._mutex):
+                    outputs.append(self._format_result(dict(self._result)))
+                    self._result = {}
+            return outputs
+
         if on_main:
-            self._do_execute_on_main_thread(tool_name, arguments_json)
-        else:
+            return _run_all_on_main()
+
+        outputs: List[str] = []
+        for tool_name, arguments in normalized:
+            arguments_json = json.dumps(arguments) if arguments else "{}"
             logger.debug("[WORKER] Dispatching tool to main thread: %s", tool_name)
             try:
                 self._execute_requested.emit(tool_name, arguments_json)
             except Exception as e:
                 logger.exception("Failed to dispatch tool %s to main thread", tool_name)
-                return f"Error: Could not run {tool_name} on main thread ({e})"
-
-        with QMutexLocker(self._mutex):
-            result = dict(self._result)
-            self._result = {}
-        return self._format_result(result)
+                outputs.append(f"Error: Could not run {tool_name} on main thread ({e})")
+                continue
+            with QMutexLocker(self._mutex):
+                outputs.append(self._format_result(dict(self._result)))
+                self._result = {}
+        return outputs
 
 
 class CopilotWorker(QObject):

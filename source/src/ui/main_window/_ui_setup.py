@@ -501,7 +501,20 @@ class UISetupMixin:
 
         tools_menu.addSeparator()
 
-        # Copilot submenu
+        # Pynia chat
+        pynia_menu = tools_menu.addMenu(
+            S.menu.pynia_submenu if hasattr(S.menu, "pynia_submenu") else "Pynia"
+        )
+        if HAS_QTAWESOME:
+            pynia_menu.setIcon(qta.icon("mdi.robot", color="#b0b0b0"))
+        open_pynia_action = QAction(
+            S.menu.pynia_open_chat if hasattr(S.menu, "pynia_open_chat") else "Open Pynia Chat",
+            self,
+        )
+        open_pynia_action.triggered.connect(self._toggle_copilot_dock)
+        pynia_menu.addAction(open_pynia_action)
+
+        # Inline autocomplete (GitHub Copilot language server)
         copilot_menu = tools_menu.addMenu(S.menu.copilot_submenu)
         if HAS_QTAWESOME:
             copilot_menu.setIcon(qta.icon("mdi.robot", color="#b0b0b0"))
@@ -546,6 +559,7 @@ class UISetupMixin:
         self.main_toolbar.new_tab_clicked.connect(self._new_session)
         self.main_toolbar.run_clicked.connect(self._execute_from_toolbar)
         self.main_toolbar.run_timer_clicked.connect(self._toggle_run_timer)
+        self.main_toolbar.pynia_clicked.connect(self._toggle_copilot_dock)
         self.main_toolbar.copilot_clicked.connect(self._toggle_copilot_dock)
         self.main_toolbar.workspace_switch_requested.connect(self._on_workspace_switch)
         self.main_toolbar.workspace_settings_requested.connect(self._show_workspace_settings)

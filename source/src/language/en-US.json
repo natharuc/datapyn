@@ -36,9 +36,11 @@
     "package_manager": "&Package Manager...",
     "shortcut_settings": "&Settings...",
     "auto_update": "Enable &Auto-Update",
-    "copilot_submenu": "&Copilot",
-    "copilot_download_lsp": "Download &Language Server...",
-    "copilot_check_status": "Check &Status",
+    "copilot_submenu": "&Autocomplete",
+    "pynia_submenu": "&Pynia",
+    "pynia_open_chat": "Open Pynia &Chat",
+    "copilot_download_lsp": "Download autocomplete &engine...",
+    "copilot_check_status": "Check autocomplete &status",
     "help": "&Help",
     "check_updates": "Check for &Updates...",
     "about": "&About"
@@ -597,7 +599,8 @@
     "detail_output": "Output",
     "btn_copy_detail": "Copy Error",
     "btn_close_detail": "Close",
-    "btn_resolve_copilot": "Resolve with Copilot"
+    "btn_resolve_copilot": "Resolve with Pynia",
+    "btn_resolve_pynia": "Resolve with Pynia"
   },
   "session_tabs": {
     "ctx_open_file_location": "Open File Location",
@@ -637,7 +640,8 @@
     "status_cancelled": "Cancelled",
     "status_error": "Error",
     "drag_label": "[{lang}] Block",
-    "copilot_editing": "Copilot editing...",
+    "copilot_editing": "Pynia editing...",
+    "pynia_editing": "Pynia editing...",
     "tooltip_active": "Enable/disable block (inactive blocks are skipped on execute all)"
   },
   "sql_parameters": {
