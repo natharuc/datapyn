@@ -190,6 +190,7 @@ class SessionWidget(QWidget):
 
         # Active workers
         self._sql_thread: Optional[QThread] = None
+        self._sql_worker: Optional[SessionSqlWorker] = None
         self._python_thread: Optional[QThread] = None
         self._connection_thread: Optional[QThread] = None
         self._connection_worker: Optional[SessionConnectionWorker] = None
@@ -774,6 +775,17 @@ class SessionWidget(QWidget):
             self.editor.mark_execution_finished(block, has_error=has_error)
         self._process_next_in_queue()
 
+    def _disconnect_previous_sql_worker(self) -> None:
+        """Detach signals from a prior SQL worker before starting a new one."""
+        worker = getattr(self, "_sql_worker", None)
+        if worker is None:
+            return
+        try:
+            worker.finished.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        self._sql_worker = None
+
     def _cleanup_db_switch_thread(self, thread):
         if hasattr(self, "_db_switch_threads"):
             self._db_switch_threads = [
@@ -937,11 +949,7 @@ class SessionWidget(QWidget):
         self._current_connection_name_exec = connection_name or self.session.connection_name or ""
         self._current_database_name_exec = database_name or ""
 
-        if self._sql_worker:
-            try:
-                self._sql_worker.finished.disconnect()
-            except (TypeError, RuntimeError):
-                pass
+        self._disconnect_previous_sql_worker()
 
         # Criar worker e thread
         self._sql_thread = QThread()
@@ -977,6 +985,7 @@ class SessionWidget(QWidget):
                         pass
                     thread.quit()
                     thread.deleteLater()
+                self._sql_worker = None
                 return
             self._on_sql_finished(df, err)
 
@@ -1004,6 +1013,7 @@ class SessionWidget(QWidget):
                     pass
                 thread.quit()
                 thread.deleteLater()
+            self._sql_worker = None
             return
 
         # Async thread cleanup - don't wait synchronously
@@ -1016,6 +1026,7 @@ class SessionWidget(QWidget):
                 pass
             thread.quit()
             thread.deleteLater()
+        self._sql_worker = None
 
         # Marcar bloco atual como finalizado
         current_block = self.editor.get_current_executing_block()
