@@ -52,6 +52,10 @@ class PyniaToolRegistry(QObject):
     def unpin_session(self) -> None:
         self._legacy.unpin_session()
 
+    def set_subagent_orchestrator(self, orchestrator) -> None:
+        """Wire parallel explore subagents (optional)."""
+        self._dispatcher.set_orchestrator(orchestrator)
+
     def _register_tools(self) -> None:
         for spec in pynia_tool_definitions():
             name = spec["name"]

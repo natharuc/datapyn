@@ -16,6 +16,7 @@ from src.services.pynia.types import PROVIDERS, ProviderId
 
 if TYPE_CHECKING:
     from src.services.copilot.copilot_client_sdk import ThreadSafeToolExecutor
+    from src.services.pynia.subagents.orchestrator import SubagentOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,13 @@ class TokenAgentWorker(QObject):
         self,
         provider_id: ProviderId,
         tool_executor: Optional["ThreadSafeToolExecutor"] = None,
+        subagent_orchestrator: Optional["SubagentOrchestrator"] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._provider_id = provider_id
         self._tool_executor = tool_executor
+        self._subagent_orchestrator = subagent_orchestrator
         self._cancelled = False
         self._messages: List[Dict[str, Any]] = []
         self._attachments: Optional[List[Dict[str, Any]]] = None
@@ -67,6 +70,13 @@ class TokenAgentWorker(QObject):
 
     def set_openai_tools(self, tools: List[Dict[str, Any]]) -> None:
         self._openai_tools = tools
+        if self._subagent_orchestrator:
+            self._subagent_orchestrator.set_openai_tools(tools)
+
+    def set_subagent_orchestrator(self, orchestrator: "SubagentOrchestrator") -> None:
+        self._subagent_orchestrator = orchestrator
+        if orchestrator and self._openai_tools:
+            orchestrator.set_openai_tools(self._openai_tools)
 
     def set_model(self, model: str) -> None:
         self._model = model or PROVIDERS[self._provider_id].default_model
@@ -133,6 +143,8 @@ class TokenAgentWorker(QObject):
                     tools=self._openai_tools,
                     attachments=self._attachments,
                     execute_tool=self._execute_tool,
+                    tool_executor=self._tool_executor,
+                    subagent_orchestrator=self._subagent_orchestrator,
                     on_chunk=self.chunk.emit,
                     on_tool_call=self.tool_call.emit,
                     on_tool_result=self.tool_result.emit,
@@ -149,6 +161,7 @@ class TokenAgentWorker(QObject):
                     attachments=self._attachments,
                     execute_tool=self._execute_tool,
                     tool_executor=self._tool_executor,
+                    subagent_orchestrator=self._subagent_orchestrator,
                     on_chunk=self.chunk.emit,
                     on_tool_call=self.tool_call.emit,
                     on_tool_result=self.tool_result.emit,

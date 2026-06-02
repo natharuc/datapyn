@@ -45,6 +45,10 @@ class PyniaToolDispatcher:
 
     def __init__(self, legacy: "MCPToolRegistry"):
         self._legacy = legacy
+        self._orchestrator = None
+
+    def set_orchestrator(self, orchestrator) -> None:
+        self._orchestrator = orchestrator
 
     def dispatch(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         handlers = {
@@ -57,6 +61,7 @@ class PyniaToolDispatcher:
             "datapyn_database": self._database,
             "datapyn_chart": self._chart,
             "datapyn_notify": self._notify,
+            "datapyn_subagent": self._subagent,
         }
         handler = handlers.get(tool_name)
         if not handler:
@@ -304,6 +309,11 @@ class PyniaToolDispatcher:
                 payload["path"] = args["path"]
             return self._exec("export_visualization", payload)
         return {"error": f"Unknown chart operation: {operation}"}
+
+    def _subagent(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._orchestrator:
+            return {"error": "Parallel subagents are not available in this session."}
+        return self._orchestrator.run_subagent_tool(args)
 
     def _notify(self, args: Dict[str, Any]) -> Dict[str, Any]:
         return self._exec(

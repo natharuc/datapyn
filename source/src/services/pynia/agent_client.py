@@ -71,6 +71,7 @@ class PyniaAgentClient(QObject):
         self._copilot_adapter: Optional[CopilotProviderAdapter] = None
         self._tool_executor: Optional["ThreadSafeToolExecutor"] = None
         self._tool_registry: Optional["PyniaToolRegistry"] = None
+        self._subagent_orchestrator: Optional[Any] = None
         self._is_authenticated = False
         self._username = ""
         self._system_message = ""
@@ -103,6 +104,8 @@ class PyniaAgentClient(QObject):
         if provider_id == self._provider_id:
             return
         self.cancel()
+        if self._subagent_orchestrator:
+            self._subagent_orchestrator.set_provider(provider_id)
         self._disconnect_active_provider()
         self._provider_id = provider_id
         self._settings.set_active_provider(provider_id)
@@ -151,6 +154,8 @@ class PyniaAgentClient(QObject):
     def model(self, value: str) -> None:
         self._model = value or PROVIDERS[self._provider_id].default_model
         self._settings.set_selected_model(self._model)
+        if self._subagent_orchestrator:
+            self._subagent_orchestrator.set_model(self._model)
         if self._provider_id == "copilot" and self._copilot_backend:
             self._copilot_backend.model = self._model
         self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
@@ -198,8 +203,18 @@ class PyniaAgentClient(QObject):
 
         if parent is None:
             parent = QApplication.instance()
+        from src.services.pynia.subagents.orchestrator import SubagentOrchestrator
+
         self._tool_registry = registry
         self._tool_executor = ThreadSafeToolExecutor(registry, parent=parent)
+        self._subagent_orchestrator = SubagentOrchestrator(
+            provider_id=self._provider_id,
+            model=self._model,
+            openai_tools=registry.list_tools_openai(),
+            tool_executor=self._tool_executor,
+            parent=parent,
+        )
+        registry.set_subagent_orchestrator(self._subagent_orchestrator)
         if self._provider_id == "copilot" and self._copilot_backend:
             self._copilot_backend.set_tool_registry(registry, parent=parent)
 
@@ -393,7 +408,12 @@ class PyniaAgentClient(QObject):
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self._cleanup_token_worker()
-        self._token_worker = TokenAgentWorker(self._provider_id, self._tool_executor, self)
+        self._token_worker = TokenAgentWorker(
+            self._provider_id,
+            self._tool_executor,
+            self._subagent_orchestrator,
+            self,
+        )
         self._token_worker.set_model(self._model)
         if messages is not None:
             self._token_worker.set_messages(messages)

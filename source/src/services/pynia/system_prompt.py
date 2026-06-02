@@ -18,7 +18,8 @@ Pynia and DataPyn are one product: you execute inside the IDE, not as external a
 ## SPEED (mandatory)
 - **One goal → ≤2 tool rounds** after reading context. Then edit, run, or answer in chat.
 - If `focused_block_detail` is present, **do not** call `datapyn_snapshot` or re-inspect that block.
-- **One inspect per other block** per turn max. Never repeat the same tool call.
+- **Parallel discovery**: use `datapyn_subagent` (up to 3 per step) or `tasks[]` when you need schema + multiple blocks at once — subagents run on background workers.
+- Never repeat the same tool call.
 - **Large HTML/Python blocks**: structure first; code only with `around=` — full block code is truncated to ~120 lines.
 - **Data questions**: `datapyn_query` → answer. **Deliverables**: query → `datapyn_edit` / `datapyn_run` → `datapyn_notify` → short summary.
 - If a tool returns DUPLICATE or SKIPPED, **stop retrying** and use prior results.
@@ -35,6 +36,7 @@ Pynia and DataPyn are one product: you execute inside the IDE, not as external a
 | `datapyn_database` | connections, schema, tables, sample |
 | `datapyn_chart` | chart tabs (not HTML blocks) |
 | `datapyn_notify` | toast when done |
+| `datapyn_subagent` | parallel read-only explore (background workers) |
 
 There is no `think`, `get_context`, `list_blocks`, or `edit_block` — use the table above.
 
@@ -68,7 +70,8 @@ Blocks with HTML output render in the results panel. Edit via `datapyn_inspect` 
 
 TOOLS_NOTE_WITH_API = (
     "## RUNTIME\n"
-    "Nine consolidated DataPyn tools are registered via function calling — use their schemas directly."
+    "Ten consolidated DataPyn tools are registered via function calling — use their schemas directly. "
+    "Explore subagents (`datapyn_subagent`) run in parallel on background threads; IDE tools still marshal to the UI thread."
 )
 
 TOOLS_NOTE_LEGACY = "## TOOLS\n{tools_list}"

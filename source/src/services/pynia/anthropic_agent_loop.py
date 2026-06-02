@@ -89,18 +89,16 @@ def run_anthropic_agent_turn(
     tools: List[Dict[str, Any]],
     attachments: Optional[List[Dict[str, Any]]],
     execute_tool: Callable[[str, Dict[str, Any]], str],
+    tool_executor: Any = None,
+    subagent_orchestrator: Any = None,
     on_chunk: Callable[[str], None],
     on_tool_call: Callable[[str, dict, str], None],
     on_tool_result: Callable[[str, str, str], None],
     is_cancelled: Callable[[], bool],
     max_tool_rounds: int = 10,
 ) -> str:
-    from src.services.pynia.agent_loop_policy import (
-        MAX_TOOL_ROUNDS,
-        prepare_tool_calls,
-        skipped_tool_message,
-        truncate_tool_result,
-    )
+    from src.services.pynia.agent_loop_policy import MAX_TOOL_ROUNDS, prepare_tool_calls
+    from src.services.pynia.tool_round_executor import process_tool_round
 
     max_tool_rounds = min(max_tool_rounds, MAX_TOOL_ROUNDS)
     import requests
@@ -230,21 +228,20 @@ def run_anthropic_agent_turn(
         ]
         prepared = prepare_tool_calls(parsed, seen_keys=seen_tool_keys)
 
-        tool_results = []
-        for name, args, tc_id, should_execute in prepared:
-            on_tool_call(name, args, tc_id)
-            if should_execute:
-                result = truncate_tool_result(execute_tool(name, args))
-            else:
-                result = skipped_tool_message(name, args, seen_tool_keys)
-            on_tool_result(name, result, tc_id)
-            tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tc_id,
-                    "content": result,
-                }
-            )
+        round_outcomes = process_tool_round(
+            prepared,
+            seen_keys=seen_tool_keys,
+            execute_tool=execute_tool,
+            tool_executor=tool_executor,
+            subagent_orchestrator=subagent_orchestrator,
+            on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result,
+            is_cancelled=is_cancelled,
+        )
+        tool_results = [
+            {"type": "tool_result", "tool_use_id": tc_id, "content": result}
+            for tc_id, _name, result in round_outcomes
+        ]
         anthropic_messages.append({"role": "user", "content": tool_results})
 
     return final_text

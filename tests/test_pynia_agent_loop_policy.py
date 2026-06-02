@@ -25,7 +25,7 @@ def test_prepare_dedupes_same_call():
     assert prepared[1][3] is False
 
 
-def test_prepare_limits_per_round():
+def test_prepare_limits_read_only_per_round():
     seen: set[str] = set()
     calls = [
         ("datapyn_snapshot", {"action": "context"}, "a"),
@@ -33,12 +33,14 @@ def test_prepare_limits_per_round():
         ("datapyn_inspect", {"kind": "block", "block_name": "2"}, "c"),
         ("datapyn_inspect", {"kind": "block", "block_name": "3"}, "d"),
         ("datapyn_inspect", {"kind": "block", "block_name": "4"}, "e"),
+        ("datapyn_inspect", {"kind": "block", "block_name": "5"}, "f"),
+        ("datapyn_inspect", {"kind": "block", "block_name": "6"}, "g"),
     ]
-    prepared = prepare_tool_calls(calls, seen_keys=seen, max_per_round=3)
-    assert sum(1 for p in prepared if p[3]) == 3
-    assert prepared[3][3] is False
-    msg = skipped_tool_message(prepared[3][0], prepared[3][1], seen)
-    assert "max" in msg.lower() or "skipped" in msg.lower()
+    prepared = prepare_tool_calls(calls, seen_keys=seen, max_read_only=5)
+    assert sum(1 for p in prepared if p[3]) == 5
+    assert prepared[5][3] is False
+    msg = skipped_tool_message(prepared[5][0], prepared[5][1], seen)
+    assert "read-only" in msg.lower() or "skipped" in msg.lower()
 
 
 def test_truncate_tool_result():

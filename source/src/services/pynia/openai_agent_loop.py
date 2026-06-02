@@ -7,13 +7,8 @@ import logging
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
-from src.services.pynia.agent_loop_policy import (
-    MAX_TOOL_ROUNDS,
-    READ_ONLY_TOOLS,
-    prepare_tool_calls,
-    skipped_tool_message,
-    truncate_tool_result,
-)
+from src.services.pynia.agent_loop_policy import MAX_TOOL_ROUNDS, prepare_tool_calls
+from src.services.pynia.tool_round_executor import process_tool_round
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +37,7 @@ def run_openai_agent_turn(
     attachments: Optional[List[Dict[str, Any]]],
     execute_tool: Callable[[str, Dict[str, Any]], str],
     tool_executor: Any = None,
+    subagent_orchestrator: Any = None,
     on_chunk: Callable[[str], None],
     on_tool_call: Callable[[str, dict, str], None],
     on_tool_result: Callable[[str, str, str], None],
@@ -171,49 +167,17 @@ def run_openai_agent_turn(
                 sum(1 for p in prepared if p[3]),
             )
 
-        to_run = [(n, a, i) for n, a, i, run in prepared if run]
-        use_batch = (
-            len(to_run) > 1
-            and all(n in READ_ONLY_TOOLS for n, _, _ in to_run)
-            and tool_executor is not None
-            and hasattr(tool_executor, "execute_batch")
+        round_outcomes = process_tool_round(
+            prepared,
+            seen_keys=seen_tool_keys,
+            execute_tool=execute_tool,
+            tool_executor=tool_executor,
+            subagent_orchestrator=subagent_orchestrator,
+            on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result,
+            is_cancelled=is_cancelled,
         )
-
-        if use_batch:
-            for name, args, tc_id in to_run:
-                if is_cancelled():
-                    return final_text
-                on_tool_call(name, args, tc_id)
-            results = tool_executor.execute_batch([(n, a) for n, a, _ in to_run])
-            for (name, args, tc_id), result in zip(to_run, results):
-                result = truncate_tool_result(result)
-                on_tool_result(name, result, tc_id)
-                conversation.append(
-                    {"role": "tool", "tool_call_id": tc_id, "content": result}
-                )
-            for name, args, tc_id, should_execute in prepared:
-                if should_execute:
-                    continue
-                if is_cancelled():
-                    return final_text
-                on_tool_call(name, args, tc_id)
-                result = skipped_tool_message(name, args, seen_tool_keys)
-                on_tool_result(name, result, tc_id)
-                conversation.append(
-                    {"role": "tool", "tool_call_id": tc_id, "content": result}
-                )
-            continue
-
-        for name, args, tc_id, should_execute in prepared:
-            if is_cancelled():
-                return final_text
-            on_tool_call(name, args, tc_id)
-            if should_execute:
-                result = execute_tool(name, args)
-                result = truncate_tool_result(result)
-            else:
-                result = skipped_tool_message(name, args, seen_tool_keys)
-            on_tool_result(name, result, tc_id)
+        for tc_id, _name, result in round_outcomes:
             conversation.append(
                 {"role": "tool", "tool_call_id": tc_id, "content": result}
             )
