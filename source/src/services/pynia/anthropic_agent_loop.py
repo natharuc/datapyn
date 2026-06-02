@@ -93,8 +93,16 @@ def run_anthropic_agent_turn(
     on_tool_call: Callable[[str, dict, str], None],
     on_tool_result: Callable[[str, str, str], None],
     is_cancelled: Callable[[], bool],
-    max_tool_rounds: int = 24,
+    max_tool_rounds: int = 10,
 ) -> str:
+    from src.services.pynia.agent_loop_policy import (
+        MAX_TOOL_ROUNDS,
+        prepare_tool_calls,
+        skipped_tool_message,
+        truncate_tool_result,
+    )
+
+    max_tool_rounds = min(max_tool_rounds, MAX_TOOL_ROUNDS)
     import requests
 
     from .openai_agent_loop import _inject_attachments
@@ -110,6 +118,7 @@ def run_anthropic_agent_turn(
     system_text, conv_msgs = _split_system(conversation)
     anthropic_messages = _to_anthropic_messages(conv_msgs)
     final_text = ""
+    seen_tool_keys: set[str] = set()
 
     for _round in range(max_tool_rounds):
         if is_cancelled():
@@ -215,13 +224,19 @@ def run_anthropic_agent_turn(
             )
         anthropic_messages.append({"role": "assistant", "content": assistant_content})
 
+        parsed = [
+            (tu["name"], tu["input"], tu["id"] or f"toolu_{uuid.uuid4().hex[:12]}")
+            for tu in tool_uses
+        ]
+        prepared = prepare_tool_calls(parsed, seen_keys=seen_tool_keys)
+
         tool_results = []
-        for tu in tool_uses:
-            tc_id = tu["id"]
-            name = tu["name"]
-            args = tu["input"]
+        for name, args, tc_id, should_execute in prepared:
             on_tool_call(name, args, tc_id)
-            result = execute_tool(name, args)
+            if should_execute:
+                result = truncate_tool_result(execute_tool(name, args))
+            else:
+                result = skipped_tool_message(name, args, seen_tool_keys)
             on_tool_result(name, result, tc_id)
             tool_results.append(
                 {

@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, Callable, Dict, List, Optional  # noqa: F401 — Any for tool_executor
+from typing import Any, Callable, Dict, List, Optional
+
+from src.services.pynia.agent_loop_policy import (
+    MAX_TOOL_ROUNDS,
+    prepare_tool_calls,
+    skipped_tool_message,
+    truncate_tool_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +45,7 @@ def run_openai_agent_turn(
     on_tool_call: Callable[[str, dict, str], None],
     on_tool_result: Callable[[str, str, str], None],
     is_cancelled: Callable[[], bool],
-    max_tool_rounds: int = 24,
+    max_tool_rounds: int = MAX_TOOL_ROUNDS,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> str:
     """
@@ -58,8 +65,9 @@ def run_openai_agent_turn(
 
     conversation = _inject_attachments(messages, attachments)
     final_text = ""
+    seen_tool_keys: set[str] = set()
 
-    for _round in range(max_tool_rounds):
+    for round_idx in range(max_tool_rounds):
         if is_cancelled():
             return final_text
 
@@ -153,33 +161,32 @@ def run_openai_agent_turn(
                 args = {}
             parsed_calls.append((name, args, tc["id"]))
 
-        use_batch = (
-            len(parsed_calls) > 1
-            and tool_executor is not None
-            and hasattr(tool_executor, "execute_batch")
-        )
+        prepared = prepare_tool_calls(parsed_calls, seen_keys=seen_tool_keys)
 
-        if use_batch:
+        if len(parsed_calls) > len([p for p in prepared if p[3]]) and round_idx == 0:
+            logger.info(
+                "Tool round: %s requested, %s executing (dedupe/limit)",
+                len(parsed_calls),
+                sum(1 for p in prepared if p[3]),
+            )
+
+        for name, args, tc_id, should_execute in prepared:
             if is_cancelled():
                 return final_text
-            for name, args, tc_id in parsed_calls:
-                on_tool_call(name, args, tc_id)
-            results = tool_executor.execute_batch([(n, a) for n, a, _ in parsed_calls])
-            for (name, args, tc_id), result in zip(parsed_calls, results):
-                on_tool_result(name, result, tc_id)
-                conversation.append(
-                    {"role": "tool", "tool_call_id": tc_id, "content": result}
-                )
-        else:
-            for name, args, tc_id in parsed_calls:
-                if is_cancelled():
-                    return final_text
-                on_tool_call(name, args, tc_id)
+            on_tool_call(name, args, tc_id)
+            if should_execute:
                 result = execute_tool(name, args)
-                on_tool_result(name, result, tc_id)
-                conversation.append(
-                    {"role": "tool", "tool_call_id": tc_id, "content": result}
-                )
+                result = truncate_tool_result(result)
+            else:
+                result = skipped_tool_message(name, args, seen_tool_keys)
+            on_tool_result(name, result, tc_id)
+            conversation.append(
+                {"role": "tool", "tool_call_id": tc_id, "content": result}
+            )
+
+        if round_idx >= max_tool_rounds - 1:
+            logger.warning("Max tool rounds (%s) reached", max_tool_rounds)
+            break
 
     return final_text
 

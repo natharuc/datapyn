@@ -9,6 +9,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from src.services.copilot.copilot_models import fallback_models, normalize_models, usage_snapshot_for_model
 from src.services.pynia.anthropic_agent_loop import run_anthropic_agent_turn
+from src.services.pynia.agent_loop_policy import truncate_tool_result
 from src.services.pynia.openai_agent_loop import fetch_openai_models, run_openai_agent_turn
 from src.services.pynia.settings import get_pynia_settings, get_provider_secret
 from src.services.pynia.types import PROVIDERS, ProviderId
@@ -82,7 +83,7 @@ class TokenAgentWorker(QObject):
     def _execute_tool(self, name: str, arguments: dict) -> str:
         if not self._tool_executor:
             return f"Error: Tools not available for {name}"
-        return self._tool_executor.execute(name, arguments)
+        return truncate_tool_result(self._tool_executor.execute(name, arguments))
 
     @pyqtSlot()
     def run_verify(self) -> None:

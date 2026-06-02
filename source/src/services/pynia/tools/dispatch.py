@@ -131,11 +131,18 @@ class PyniaToolDispatcher:
         if detail == "execution":
             return self._exec("get_execution_results", block_args)
 
-        # detail == code
+        # detail == code — avoid full-file reads on large blocks without an anchor
         payload = dict(block_args)
         for key in ("around", "start_line", "end_line", "context_lines"):
             if args.get(key) is not None:
                 payload[key] = args[key]
+        if (
+            not payload.get("around")
+            and payload.get("start_line") is None
+            and payload.get("end_line") is None
+        ):
+            payload["start_line"] = 1
+            payload["end_line"] = 120
         return self._exec("get_block_code", payload)
 
     def _query(self, args: Dict[str, Any]) -> Dict[str, Any]:

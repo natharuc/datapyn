@@ -3774,6 +3774,7 @@ class PyniaChatPanel(QWidget):
 
     def _on_tool_result(self, tool_name: str, result: str, tool_call_id: str = ""):
         self._chat_runtime.touch_activity()
+        self._chat_runtime.mark_tool(tool_name, "done")
         result_preview = ""
         is_error = "error" in result.lower()[:100]
         for line in (result or "").split("\n"):
