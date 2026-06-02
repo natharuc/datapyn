@@ -98,6 +98,7 @@ from src.design_system.stylesheet import (
 
 from src.services import AutoUpdateService
 from src.services.copilot import MCPServer, CopilotClient
+from src.services.pynia import PyniaAgentClient
 from src.services.copilot.copilot_settings import get_copilot_settings
 from src.language import S
 
@@ -175,9 +176,12 @@ class MainWindow(
         self._schema_service.tables_loaded.connect(self._on_tables_loaded)
         self._schema_service.columns_loaded.connect(self._on_columns_loaded)
 
-        # Copilot integration (MCP server + client)
+        # Pynia agent (multi-provider chat) + Copilot backend (LSP / Copilot connector)
         self._mcp_server = MCPServer() if MCPServer else None
         self._copilot_client = CopilotClient() if CopilotClient else None
+        self._pynia_agent = (
+            PyniaAgentClient(copilot_client=self._copilot_client) if PyniaAgentClient else None
+        )
         
         # LSP server manager for fast inline completions
         from src.services.copilot import CopilotServerManager, is_copilot_server_available
@@ -582,7 +586,9 @@ class MainWindow(
         self.connection_manager.close_all()
 
         # Cleanup Copilot client
-        if hasattr(self, "_copilot_client") and self._copilot_client:
+        if hasattr(self, "_pynia_agent") and self._pynia_agent:
+            self._pynia_agent.cleanup()
+        elif hasattr(self, "_copilot_client") and self._copilot_client:
             self._copilot_client.cleanup()
 
         # Cleanup docking manager timers

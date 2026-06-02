@@ -604,7 +604,7 @@ class TestChatPanelModelControls:
     def test_refresh_models_button_calls_client_refresh_metadata(self, panel):
         client = MagicMock()
         client.refresh_metadata = MagicMock()
-        panel._copilot_client = client
+        panel._agent_client = client
 
         panel._on_refresh_models_clicked()
 

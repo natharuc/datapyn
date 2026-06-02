@@ -846,7 +846,7 @@ class CopilotChatPanel(QWidget):
 
     def __init__(self, copilot_client=None, mcp_server=None, theme_manager=None, parent=None):
         super().__init__(parent)
-        self._copilot_client = copilot_client
+        self._agent_client = copilot_client
         self._mcp_server = mcp_server
         self.theme_manager = theme_manager
         self._messages: list = []  # Chat history [{role, content}]
@@ -892,35 +892,39 @@ class CopilotChatPanel(QWidget):
         QTimer.singleShot(100, self._restore_last_session)
 
     def set_copilot_client(self, client):
-        """Set or update the Copilot client."""
-        if self._copilot_client:
+        """Backward-compatible alias for set_agent_client."""
+        self.set_agent_client(client)
+
+    def set_agent_client(self, client):
+        """Set or update the Pynia agent client."""
+        if self._agent_client:
             try:
-                self._copilot_client.chat_response_chunk.disconnect(self._on_response_chunk)
-                self._copilot_client.chat_response_complete.disconnect(self._on_response_complete)
-                self._copilot_client.chat_error.disconnect(self._on_chat_error)
+                self._agent_client.chat_response_chunk.disconnect(self._on_response_chunk)
+                self._agent_client.chat_response_complete.disconnect(self._on_response_complete)
+                self._agent_client.chat_error.disconnect(self._on_chat_error)
                 # NOTE: auth_required handled by main_window to avoid duplication
-                self._copilot_client.authenticated.disconnect(self._on_authenticated)
-                self._copilot_client.auth_failed.disconnect(self._on_auth_failed)
-                if hasattr(self._copilot_client, 'tool_called'):
-                    self._copilot_client.tool_called.disconnect(self._on_tool_called)
-                if hasattr(self._copilot_client, 'tool_result'):
-                    self._copilot_client.tool_result.disconnect(self._on_tool_result)
-                if hasattr(self._copilot_client, 'thinking'):
-                    self._copilot_client.thinking.disconnect(self._on_thinking)
-                if hasattr(self._copilot_client, 'models_changed'):
-                    self._copilot_client.models_changed.disconnect(self._on_models_changed)
-                if hasattr(self._copilot_client, 'models_updated'):
-                    self._copilot_client.models_updated.disconnect(self._on_models_changed)
-                if hasattr(self._copilot_client, 'usage_changed'):
-                    self._copilot_client.usage_changed.disconnect(self._on_usage_changed)
-                if hasattr(self._copilot_client, 'auth_started'):
-                    self._copilot_client.auth_started.disconnect(self._on_auth_started)
-                if hasattr(self._copilot_client, 'gh_not_found'):
-                    self._copilot_client.gh_not_found.disconnect(self._on_gh_not_found)
+                self._agent_client.authenticated.disconnect(self._on_authenticated)
+                self._agent_client.auth_failed.disconnect(self._on_auth_failed)
+                if hasattr(self._agent_client, 'tool_called'):
+                    self._agent_client.tool_called.disconnect(self._on_tool_called)
+                if hasattr(self._agent_client, 'tool_result'):
+                    self._agent_client.tool_result.disconnect(self._on_tool_result)
+                if hasattr(self._agent_client, 'thinking'):
+                    self._agent_client.thinking.disconnect(self._on_thinking)
+                if hasattr(self._agent_client, 'models_changed'):
+                    self._agent_client.models_changed.disconnect(self._on_models_changed)
+                if hasattr(self._agent_client, 'models_updated'):
+                    self._agent_client.models_updated.disconnect(self._on_models_changed)
+                if hasattr(self._agent_client, 'usage_changed'):
+                    self._agent_client.usage_changed.disconnect(self._on_usage_changed)
+                if hasattr(self._agent_client, 'auth_started'):
+                    self._agent_client.auth_started.disconnect(self._on_auth_started)
+                if hasattr(self._agent_client, 'gh_not_found'):
+                    self._agent_client.gh_not_found.disconnect(self._on_gh_not_found)
             except (TypeError, RuntimeError):
                 pass
 
-        self._copilot_client = client
+        self._agent_client = client
         if client:
             client.chat_response_chunk.connect(self._on_response_chunk)
             client.chat_response_complete.connect(self._on_response_complete)
@@ -946,6 +950,8 @@ class CopilotChatPanel(QWidget):
                 client.gh_not_found.connect(self._on_gh_not_found)
             if hasattr(client, 'license_warning'):
                 client.license_warning.connect(self._on_license_warning)
+            if hasattr(client, 'provider_changed'):
+                client.provider_changed.connect(self._on_provider_changed)
             # Pass tool registry from MCP server to client
             if self._mcp_server and hasattr(client, 'set_tool_registry'):
                 client.set_tool_registry(self._mcp_server.tool_registry, parent=self.window())
@@ -959,8 +965,8 @@ class CopilotChatPanel(QWidget):
         """Set or update the MCP server reference."""
         self._mcp_server = server
         # Update tool registry in client if available
-        if server and self._copilot_client and hasattr(self._copilot_client, 'set_tool_registry'):
-            self._copilot_client.set_tool_registry(server.tool_registry, parent=self.window())
+        if server and self._agent_client and hasattr(self._agent_client, 'set_tool_registry'):
+            self._agent_client.set_tool_registry(server.tool_registry, parent=self.window())
 
     def _setup_ui(self):
         """Build the chat panel UI."""
@@ -1137,6 +1143,30 @@ class CopilotChatPanel(QWidget):
 
         # Mode is always Agent (hidden) - tools only work in agent mode
         self._mode_combo = None  # Removed - always agent mode
+
+        from src.services.pynia import PROVIDERS, get_pynia_settings
+
+        self._provider_combo = QComboBox()
+        self._provider_combo.setFixedWidth(168)
+        self._provider_combo.setToolTip(
+            getattr(S.pynia, "provider_tooltip", "AI connector for Pynia chat")
+            if hasattr(S, "pynia")
+            else "AI connector"
+        )
+        provider_labels = {
+            "openai": getattr(S.pynia, "provider_openai", "OpenAI"),
+            "openrouter": getattr(S.pynia, "provider_openrouter", "Open Router"),
+            "anthropic": getattr(S.pynia, "provider_anthropic", "Claude"),
+            "copilot": getattr(S.pynia, "provider_copilot", "GitHub Copilot"),
+        }
+        for pid in PROVIDERS:
+            self._provider_combo.addItem(provider_labels.get(pid, pid), pid)
+        active = get_pynia_settings().active_provider
+        idx = self._provider_combo.findData(active)
+        if idx >= 0:
+            self._provider_combo.setCurrentIndex(idx)
+        self._provider_combo.currentIndexChanged.connect(self._on_provider_combo_changed)
+        config_layout.addWidget(self._provider_combo)
 
         # Model selector with custom delegate
         self._model_combo = QComboBox()
@@ -1610,8 +1640,8 @@ class CopilotChatPanel(QWidget):
         self._settings.setValue("last_session_id", "")
         self._turn_tools_used = 0
         self._turn_had_notify_user = False
-        if self._copilot_client and hasattr(self._copilot_client, "reset_chat_session"):
-            self._copilot_client.reset_chat_session()
+        if self._agent_client and hasattr(self._agent_client, "reset_chat_session"):
+            self._agent_client.reset_chat_session()
 
     def _on_sessions_clicked(self):
         """Toggle the persistent chat history sidebar."""
@@ -1708,8 +1738,8 @@ class CopilotChatPanel(QWidget):
 
     def _on_stop(self):
         """Handle stop button - cancel current operation."""
-        if self._copilot_client and hasattr(self._copilot_client, "cancel"):
-            self._copilot_client.cancel()
+        if self._agent_client and hasattr(self._agent_client, "cancel"):
+            self._agent_client.cancel()
         self._cancel_active_tool_target()
         if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
             self._mcp_server.tool_registry.unpin_session()
@@ -1754,9 +1784,9 @@ class CopilotChatPanel(QWidget):
         api_messages.append({"role": "user", "content": request_prompt})
 
         # Send to Copilot
-        if self._copilot_client:
-            if hasattr(self._copilot_client, "system_message"):
-                self._copilot_client.system_message = system_prompt
+        if self._agent_client:
+            if hasattr(self._agent_client, "system_message"):
+                self._agent_client.system_message = system_prompt
 
             # Pin MCP tools to the current tab so tools target it even if user switches tabs
             if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
@@ -1770,7 +1800,7 @@ class CopilotChatPanel(QWidget):
             # Add animated thinking indicator
             self._show_thinking_indicator()
             self.thinking_started.emit()
-            self._copilot_client.send_chat(api_messages)
+            self._agent_client.send_chat(api_messages)
         else:
             self._set_loading(False)
             self._add_message("assistant", S.copilot.not_authenticated)
@@ -2235,10 +2265,10 @@ class CopilotChatPanel(QWidget):
         """Refresh model and usage metadata from the Copilot client."""
         self._usage_label.setText(S.copilot.usage_loading)
         self._usage_label.setVisible(True)
-        if self._copilot_client and hasattr(self._copilot_client, 'refresh_metadata'):
-            self._copilot_client.refresh_metadata()
-        elif self._copilot_client and hasattr(self._copilot_client, 'start_auth'):
-            self._copilot_client.start_auth()
+        if self._agent_client and hasattr(self._agent_client, 'refresh_metadata'):
+            self._agent_client.refresh_metadata()
+        elif self._agent_client and hasattr(self._agent_client, 'start_auth'):
+            self._agent_client.start_auth()
 
     def _format_multiplier(self, multiplier) -> str:
         try:
@@ -2253,8 +2283,8 @@ class CopilotChatPanel(QWidget):
         """Populate the model combo with normalized model metadata."""
         normalized = normalize_models(models) or fallback_models()
         current_model = self._model_combo.currentData()
-        if not current_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
-            current_model = self._copilot_client.model
+        if not current_model and self._agent_client and hasattr(self._agent_client, 'model'):
+            current_model = self._agent_client.model
         self._available_models = normalized
 
         self._model_combo.blockSignals(True)
@@ -2275,8 +2305,8 @@ class CopilotChatPanel(QWidget):
         self._model_combo.blockSignals(False)
 
         selected_model = self._model_combo.currentData()
-        if selected_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
-            self._copilot_client.model = selected_model
+        if selected_model and self._agent_client and hasattr(self._agent_client, 'model'):
+            self._agent_client.model = selected_model
         self._update_reasoning_effort_state()
         self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, selected_model))
 
@@ -2345,8 +2375,8 @@ class CopilotChatPanel(QWidget):
                 self._effort_combo.setCurrentIndex(auto_idx)
             return
         get_copilot_settings().set_chat_reasoning_effort(effort)
-        if self._copilot_client and hasattr(self._copilot_client, 'reasoning_effort'):
-            self._copilot_client.reasoning_effort = effort
+        if self._agent_client and hasattr(self._agent_client, 'reasoning_effort'):
+            self._agent_client.reasoning_effort = effort
 
     def _on_auth_clicked(self):
         """Handle auth button click."""
@@ -2437,7 +2467,7 @@ class CopilotChatPanel(QWidget):
         self._auth_installing_gh = False
         self._hide_account_switch_busy()
         self._update_auth_state()
-        username = getattr(self._copilot_client, "_username", "") if self._copilot_client else ""
+        username = getattr(self._agent_client, "_username", "") if self._agent_client else ""
         get_copilot_settings().on_chat_authenticated(username)
         self._settings.setValue("was_authenticated", True)
 
@@ -2544,9 +2574,9 @@ class CopilotChatPanel(QWidget):
 
     def _update_auth_state(self):
         """Update UI based on authentication state."""
-        if self._copilot_client and self._copilot_client.is_authenticated:
+        if self._agent_client and self._agent_client.is_authenticated:
             # Get username from client
-            username = getattr(self._copilot_client, "_username", None)
+            username = getattr(self._agent_client, "_username", None)
             if username:
                 self._auth_btn.setText(f"@{username}")
                 self._auth_btn.setToolTip(S.copilot.click_to_sign_out)
@@ -2685,7 +2715,7 @@ class CopilotChatPanel(QWidget):
             pass
 
         try:
-            self.set_copilot_client(None)
+            self.set_agent_client(None)
         except RuntimeError:
             pass
 
@@ -2736,11 +2766,11 @@ class CopilotChatPanel(QWidget):
 
     def _update_models_from_client(self):
         """Update model combo box from client's available models."""
-        if not self._copilot_client:
+        if not self._agent_client:
             return
 
         try:
-            models = self._copilot_client.available_models()
+            models = self._agent_client.available_models()
             if models and len(models) > 0:
                 self._populate_model_combo(models)
         except Exception as e:
@@ -2749,8 +2779,8 @@ class CopilotChatPanel(QWidget):
     def _on_model_changed(self, index: int):
         """Handle model selection change."""
         model_id = self._model_combo.currentData()
-        if model_id and self._copilot_client:
-            self._copilot_client.model = model_id
+        if model_id and self._agent_client:
+            self._agent_client.model = model_id
         self._update_reasoning_effort_state()
         self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, model_id))
 
@@ -3055,8 +3085,8 @@ class CopilotChatPanel(QWidget):
         from src.services.copilot.copilot_cli_manager import merge_usage_with_runtime
 
         username = ""
-        if self._copilot_client and getattr(self._copilot_client, "is_authenticated", False):
-            username = getattr(self._copilot_client, "_username", "") or ""
+        if self._agent_client and getattr(self._agent_client, "is_authenticated", False):
+            username = getattr(self._agent_client, "_username", "") or ""
         payload = merge_usage_with_runtime(
             self._usage_snapshot,
             username=username,
@@ -3143,8 +3173,8 @@ class CopilotChatPanel(QWidget):
 
         auth = get_copilot_auth_service()
         current = ""
-        if self._copilot_client and getattr(self._copilot_client, "is_authenticated", False):
-            current = getattr(self._copilot_client, "_username", "") or ""
+        if self._agent_client and getattr(self._agent_client, "is_authenticated", False):
+            current = getattr(self._agent_client, "_username", "") or ""
         if login == current and auth.is_chat_authenticated:
             return
 
@@ -3242,8 +3272,8 @@ class CopilotChatPanel(QWidget):
                 cli["restart_required"] = True
                 self._cli_status = cli
                 self._sync_usage_to_webview(updating=False)
-            if self._copilot_client and getattr(self._copilot_client, "is_authenticated", False) and not requires_restart:
-                self._copilot_client.start_auth()
+            if self._agent_client and getattr(self._agent_client, "is_authenticated", False) and not requires_restart:
+                self._agent_client.start_auth()
             elif self._auth_runtime_update_action and not requires_restart:
                 from src.services.copilot import get_copilot_auth_service
                 get_copilot_auth_service().login_chat()
@@ -3272,9 +3302,63 @@ class CopilotChatPanel(QWidget):
         limits = attachment_limits_for_model(self._available_models, model_id or "")
         self._run_chat_js(f"setAttachmentLimits({json.dumps(limits)})")
 
+    def _is_token_provider(self) -> bool:
+        from src.services.pynia.types import PROVIDERS
+
+        pid = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
+        info = PROVIDERS.get(pid)
+        return bool(info and info.auth_kind == "api_token")
+
+    def _get_chat_auth_service(self):
+        from src.services.pynia import get_pynia_auth_service
+
+        return get_pynia_auth_service()
+
+    def _on_provider_combo_changed(self, _index: int = 0) -> None:
+        if not self._agent_client or not hasattr(self, "_provider_combo"):
+            return
+        provider_id = self._provider_combo.currentData()
+        if provider_id and hasattr(self._agent_client, "set_provider"):
+            self._agent_client.set_provider(provider_id)
+        self._auth_error_message = None
+        self._auth_gh_required = False
+        self._update_auth_state()
+        if hasattr(self._agent_client, "available_models"):
+            self._populate_model_combo(self._agent_client.available_models())
+
+    def _on_provider_changed(self, provider_id: str) -> None:
+        if not hasattr(self, "_provider_combo"):
+            return
+        idx = self._provider_combo.findData(provider_id)
+        if idx >= 0:
+            self._provider_combo.blockSignals(True)
+            self._provider_combo.setCurrentIndex(idx)
+            self._provider_combo.blockSignals(False)
+
+    def _open_pynia_settings(self) -> None:
+        main = self.window()
+        if main and hasattr(main, "show_settings_dialog"):
+            main.show_settings_dialog(initial_tab="pynia")
+
     def _auth_gate_payload(self) -> dict:
-        if self._copilot_client and self._copilot_client.is_authenticated:
-            username = getattr(self._copilot_client, "_username", "") or ""
+        if self._is_token_provider():
+            if self._agent_client and self._agent_client.is_authenticated:
+                label = getattr(S.pynia, "connected", S.copilot.connected) if hasattr(S, "pynia") else S.copilot.connected
+                return {"status": "ready", "pill_label": label}
+            title = getattr(S.pynia, "token_required_title", S.copilot.chat_locked_title)
+            message = getattr(S.pynia, "token_required_message", S.copilot.chat_locked_message)
+            action = getattr(S.pynia, "open_settings", S.copilot.sign_in)
+            return {
+                "status": "locked",
+                "pill_label": S.copilot.auth_status_locked,
+                "title": title,
+                "message": message,
+                "action_label": action,
+                "action": "open_pynia_settings",
+            }
+
+        if self._agent_client and self._agent_client.is_authenticated:
+            username = getattr(self._agent_client, "_username", "") or ""
             return {
                 "status": "ready",
                 "pill_label": f"@{username}" if username else S.copilot.connected,
@@ -3363,7 +3447,7 @@ class CopilotChatPanel(QWidget):
         payload = {
             "tab_name": S.copilot.chat_context_tab.replace('{name}', self._current_tab_name) if self._current_tab_name else "",
             "auth_label": self._auth_btn.text(),
-            "auth_ready": bool(self._copilot_client and self._copilot_client.is_authenticated),
+            "auth_ready": bool(self._agent_client and self._agent_client.is_authenticated),
             "selected_model": self._model_combo.currentData() or "",
             "selected_effort": self._effort_combo.currentData() or "auto",
             "supported_efforts": self._supported_efforts_for_current_model(),
@@ -3414,7 +3498,7 @@ class CopilotChatPanel(QWidget):
         if (not text and not attachments) or self._chat_runtime.is_active:
             return
 
-        if not self._copilot_client or not self._copilot_client.is_authenticated:
+        if not self._agent_client or not self._agent_client.is_authenticated:
             self._refresh_auth_gate()
             return
 
@@ -3433,7 +3517,7 @@ class CopilotChatPanel(QWidget):
                 validate_attachments_for_model(
                     normalized_attachments,
                     self._available_models,
-                    model_id or getattr(self._copilot_client, "_model", ""),
+                    model_id or getattr(self._agent_client, "_model", ""),
                 )
         except AttachmentValidationError as exc:
             self._chat_runtime.fail(str(exc))
@@ -3469,9 +3553,9 @@ class CopilotChatPanel(QWidget):
             {"role": "user", "content": request_prompt},
         ]
 
-        if self._copilot_client:
-            if hasattr(self._copilot_client, "system_message"):
-                self._copilot_client.system_message = system_prompt
+        if self._agent_client:
+            if hasattr(self._agent_client, "system_message"):
+                self._agent_client.system_message = system_prompt
             if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
                 tab_id = self._resolve_current_tab_id()
                 if tab_id:
@@ -3480,7 +3564,7 @@ class CopilotChatPanel(QWidget):
             self._current_assistant_widget = None
             self._show_thinking_indicator()
             self.thinking_started.emit()
-            self._copilot_client.send_chat(api_messages, attachments=stored_attachments)
+            self._agent_client.send_chat(api_messages, attachments=stored_attachments)
         else:
             self._chat_runtime.fail(S.copilot.not_authenticated)
             self._set_loading(False)
@@ -3522,8 +3606,8 @@ class CopilotChatPanel(QWidget):
         self._run_chat_js(f"setTurnState({json.dumps(state)})")
 
     def _on_runtime_timeout(self, _turn_id: str):
-        if self._copilot_client and hasattr(self._copilot_client, "cancel"):
-            self._copilot_client.cancel()
+        if self._agent_client and hasattr(self._agent_client, "cancel"):
+            self._agent_client.cancel()
         if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
             self._mcp_server.tool_registry.unpin_session()
         self._active_tool_target_id = None
@@ -3532,8 +3616,8 @@ class CopilotChatPanel(QWidget):
         self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); stopActivityTimer();")
 
     def _on_stop(self, *_args):
-        if self._copilot_client and hasattr(self._copilot_client, "cancel"):
-            self._copilot_client.cancel()
+        if self._agent_client and hasattr(self._agent_client, "cancel"):
+            self._agent_client.cancel()
         self._cancel_active_tool_target()
         if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
             self._mcp_server.tool_registry.unpin_session()
@@ -3699,8 +3783,8 @@ class CopilotChatPanel(QWidget):
     def _populate_model_combo(self, models: list):
         normalized = normalize_models(models) or fallback_models()
         current_model = self._model_combo.currentData()
-        if not current_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
-            current_model = self._copilot_client.model
+        if not current_model and self._agent_client and hasattr(self._agent_client, 'model'):
+            current_model = self._agent_client.model
         self._available_models = normalized
         self._model_combo.blockSignals(True)
         self._model_combo.clear()
@@ -3718,8 +3802,8 @@ class CopilotChatPanel(QWidget):
             self._model_combo.setCurrentIndex(restore_idx)
         self._model_combo.blockSignals(False)
         selected_model = self._model_combo.currentData()
-        if selected_model and self._copilot_client and hasattr(self._copilot_client, 'model'):
-            self._copilot_client.model = selected_model
+        if selected_model and self._agent_client and hasattr(self._agent_client, 'model'):
+            self._agent_client.model = selected_model
         self._update_reasoning_effort_state()
         self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, selected_model))
         self._sync_models_to_webview()
@@ -3732,8 +3816,8 @@ class CopilotChatPanel(QWidget):
             if idx >= 0:
                 self._model_combo.setCurrentIndex(idx)
             get_copilot_settings().set_chat_selected_model(model_id)
-            if self._copilot_client:
-                self._copilot_client.model = model_id
+            if self._agent_client:
+                self._agent_client.model = model_id
         self._update_reasoning_effort_state()
         self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, model_id))
         self._sync_app_state()
@@ -3771,18 +3855,18 @@ class CopilotChatPanel(QWidget):
                 self._effort_combo.setCurrentIndex(auto_idx)
             effort = "auto"
         get_copilot_settings().set_chat_reasoning_effort(effort)
-        if self._copilot_client and hasattr(self._copilot_client, 'reasoning_effort'):
-            self._copilot_client.reasoning_effort = effort
+        if self._agent_client and hasattr(self._agent_client, 'reasoning_effort'):
+            self._agent_client.reasoning_effort = effort
         self._sync_app_state()
 
     def _on_refresh_models_clicked(self):
         self._usage_label.setText(S.copilot.usage_loading)
         self._usage_label.setVisible(True)
         self._sync_usage_to_webview()
-        if self._copilot_client and hasattr(self._copilot_client, 'refresh_metadata'):
-            self._copilot_client.refresh_metadata()
-        elif self._copilot_client and hasattr(self._copilot_client, 'start_auth'):
-            self._copilot_client.start_auth()
+        if self._agent_client and hasattr(self._agent_client, 'refresh_metadata'):
+            self._agent_client.refresh_metadata()
+        elif self._agent_client and hasattr(self._agent_client, 'start_auth'):
+            self._agent_client.start_auth()
 
     def _set_usage_snapshot(self, snapshot: dict):
         snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -3832,9 +3916,11 @@ class CopilotChatPanel(QWidget):
         if action == "logout":
             self._do_logout()
             return
+        if action == "open_pynia_settings":
+            self._open_pynia_settings()
+            return
 
-        from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
+        auth_service = self._get_chat_auth_service()
         if auth_service.is_chat_authenticated:
             return
         self._auth_error_message = None
@@ -3847,8 +3933,8 @@ class CopilotChatPanel(QWidget):
             self._sync_app_state()
 
     def _update_auth_state(self):
-        if self._copilot_client and self._copilot_client.is_authenticated:
-            username = getattr(self._copilot_client, "_username", None)
+        if self._agent_client and self._agent_client.is_authenticated:
+            username = getattr(self._agent_client, "_username", None)
             self._auth_btn.setText(f"@{username}" if username else S.copilot.connected)
         else:
             self._auth_btn.setText(S.copilot.sign_in)

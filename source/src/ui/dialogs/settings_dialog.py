@@ -126,8 +126,11 @@ class SettingsDialog(QDialog):
         # Shortcuts tab
         self._setup_shortcuts_tab()
 
-        # Copilot tab
+        # Copilot tab (LSP autocomplete + Copilot connector sign-in)
         self._setup_copilot_tab()
+
+        # Pynia tab (API token connectors)
+        self._setup_pynia_tab()
 
         # Notifications tab
         self._setup_notifications_tab()
@@ -139,7 +142,14 @@ class SettingsDialog(QDialog):
 
         # Select initial tab if specified
         if self._initial_tab:
-            tab_map = {"general": 0, "shortcuts": 1, "copilot": 2, "notifications": 3, "workspace": 4}
+            tab_map = {
+                "general": 0,
+                "shortcuts": 1,
+                "copilot": 2,
+                "pynia": 3,
+                "notifications": 4,
+                "workspace": 5,
+            }
             if self._initial_tab in tab_map:
                 self.tabs.setCurrentIndex(tab_map[self._initial_tab])
 
@@ -550,6 +560,130 @@ class SettingsDialog(QDialog):
         auth_service.chat_logged_out.connect(self._on_auth_service_chat_updated)
         auth_service.lsp_authenticated.connect(self._on_auth_service_lsp_updated)
         auth_service.lsp_logged_out.connect(self._on_auth_service_lsp_updated)
+
+    def _setup_pynia_tab(self):
+        """Pynia connectors: OpenAI, Open Router, Claude API tokens."""
+        from src.services.pynia import PROVIDERS, get_pynia_settings, get_provider_secret, set_provider_secret
+        from src.services.pynia.types import ProviderId
+
+        colors = get_colors()
+        pynia_widget = QWidget()
+        layout = QVBoxLayout(pynia_widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            S.pynia.settings_intro if hasattr(S, "pynia") else "Configure Pynia AI connectors."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(self._get_hint_style(colors))
+        layout.addWidget(intro)
+
+        group = self._make_group(
+            S.pynia.section_connectors if hasattr(S, "pynia") else "CONNECTORS",
+            colors,
+        )
+        form = QFormLayout(group)
+        form.setSpacing(10)
+
+        self._pynia_provider_combo = QComboBox()
+        labels = {
+            "openai": S.pynia.provider_openai,
+            "openrouter": S.pynia.provider_openrouter,
+            "anthropic": S.pynia.provider_anthropic,
+        }
+        for pid in ("openai", "openrouter", "anthropic"):
+            self._pynia_provider_combo.addItem(labels.get(pid, pid), pid)
+        form.addRow(
+            S.pynia.title if hasattr(S, "pynia") else "Connector",
+            self._pynia_provider_combo,
+        )
+
+        self._pynia_token_edit = QLineEdit()
+        self._pynia_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._pynia_token_edit.setPlaceholderText(S.pynia.label_api_token if hasattr(S, "pynia") else "API token")
+        form.addRow(S.pynia.label_api_token if hasattr(S, "pynia") else "API token", self._pynia_token_edit)
+
+        self._pynia_base_url_edit = QLineEdit()
+        form.addRow(
+            S.pynia.label_base_url if hasattr(S, "pynia") else "Base URL",
+            self._pynia_base_url_edit,
+        )
+
+        btn_row = QHBoxLayout()
+        self._pynia_save_btn = QPushButton(S.pynia.btn_save_token if hasattr(S, "pynia") else "Save")
+        self._pynia_verify_btn = QPushButton(S.pynia.btn_verify if hasattr(S, "pynia") else "Verify")
+        self._pynia_save_btn.clicked.connect(self._on_pynia_save_token)
+        self._pynia_verify_btn.clicked.connect(self._on_pynia_verify_token)
+        btn_row.addWidget(self._pynia_save_btn)
+        btn_row.addWidget(self._pynia_verify_btn)
+        btn_row.addStretch()
+        form.addRow("", btn_row)
+
+        self._pynia_status_label = QLabel("")
+        self._pynia_status_label.setStyleSheet(self._get_hint_style(colors))
+        form.addRow("", self._pynia_status_label)
+
+        copilot_note = QLabel(S.pynia.copilot_hint if hasattr(S, "pynia") else "")
+        copilot_note.setWordWrap(True)
+        copilot_note.setStyleSheet(self._get_hint_style(colors))
+        form.addRow("", copilot_note)
+
+        layout.addWidget(group)
+        layout.addStretch()
+
+        self._pynia_settings = get_pynia_settings()
+        self._pynia_provider_combo.currentIndexChanged.connect(self._load_pynia_connector_fields)
+        self._load_pynia_connector_fields()
+
+        tab_title = S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia"
+        self.tabs.addTab(pynia_widget, tab_title)
+
+    def _current_pynia_connector_id(self) -> str:
+        return self._pynia_provider_combo.currentData() or "openai"
+
+    def _load_pynia_connector_fields(self):
+        from src.services.pynia import get_provider_secret
+
+        pid = self._current_pynia_connector_id()
+        self._pynia_token_edit.setText(get_provider_secret(pid))
+        self._pynia_base_url_edit.setText(self._pynia_settings.base_url(pid))
+        self._pynia_status_label.setText("")
+
+    def _on_pynia_save_token(self):
+        from src.services.pynia import set_provider_secret
+
+        pid = self._current_pynia_connector_id()
+        token = self._pynia_token_edit.text().strip()
+        set_provider_secret(pid, token)
+        self._pynia_settings.set_base_url(pid, self._pynia_base_url_edit.text().strip())
+        if token:
+            self._pynia_settings.on_token_authenticated(pid, pid)
+        self._pynia_status_label.setText(S.pynia.verify_ok if hasattr(S, "pynia") else "Saved.")
+
+    def _on_pynia_verify_token(self):
+        from src.services.pynia.agent_client import PyniaAgentClient
+        from src.services.pynia.types import ProviderId
+
+        pid: ProviderId = self._current_pynia_connector_id()
+        self._on_pynia_save_token()
+        client = PyniaAgentClient(parent=self)
+        client.set_provider(pid)
+
+        def _ok(username: str):
+            template = S.pynia.verify_ok if hasattr(S, "pynia") else "OK"
+            self._pynia_status_label.setText(template)
+            client.deleteLater()
+
+        def _fail(msg: str):
+            template = S.pynia.verify_failed if hasattr(S, "pynia") else "Failed: {error}"
+            self._pynia_status_label.setText(template.format(error=msg))
+            client.deleteLater()
+
+        client.authenticated.connect(_ok)
+        client.auth_failed.connect(_fail)
+        client.chat_error.connect(_fail)
+        client.start_auth()
 
     def _update_chat_status_label(self):
         """Update the Chat status label based on current state."""

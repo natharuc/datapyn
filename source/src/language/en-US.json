@@ -61,7 +61,7 @@
     "output": "Output",
     "variables": "Variables",
     "object_explorer": "Object Explorer",
-    "copilot": "Copilot Chat"
+    "copilot": "Pynia"
   },
   "status": {
     "ready": "Ready",
@@ -791,6 +791,7 @@
     "editor_monaco": "Monaco (experimental, Copilot ghost text)",
     "editor_restart_hint": "Requires restart to apply. Monaco uses more memory.",
     "tab_copilot": "Copilot",
+    "tab_pynia": "Pynia",
     "section_copilot_chat": "COPILOT CHAT",
     "section_copilot_autocomplete": "AUTOCOMPLETE",
     "copilot_status": "Status:",
@@ -1409,6 +1410,27 @@
     "view_attachment": "View image",
     "close_image_preview": "Close image preview",
     "vision_not_supported": "The selected model does not support image input. Choose a vision-capable model such as GPT-4o."
+  },
+  "pynia": {
+    "title": "Pynia",
+    "provider_tooltip": "AI connector for chat and agent tools",
+    "provider_openai": "OpenAI",
+    "provider_openrouter": "Open Router",
+    "provider_anthropic": "Claude",
+    "provider_copilot": "GitHub Copilot",
+    "connected": "Connected",
+    "token_required_title": "API token required",
+    "token_required_message": "Add your API token in Settings → Pynia, then verify the connection.",
+    "open_settings": "Open Pynia settings",
+    "settings_intro": "Pynia is the DataPyn AI agent. Choose a connector and add credentials. All IDE tools work with every connector.",
+    "section_connectors": "CONNECTORS",
+    "label_api_token": "API token",
+    "label_base_url": "API base URL (optional)",
+    "btn_save_token": "Save token",
+    "btn_verify": "Verify connection",
+    "verify_ok": "Connection verified.",
+    "verify_failed": "Verification failed: {error}",
+    "copilot_hint": "GitHub Copilot uses device sign-in (MFA on GitHub). Configure it in the Copilot tab."
   },
   "copilot_download": {
     "title": "Copilot Autocomplete",

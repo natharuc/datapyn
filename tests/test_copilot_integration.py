@@ -1408,7 +1408,7 @@ class TestCopilotChatPanel:
         qtbot.addWidget(panel)
         client = CopilotClient()
         panel.set_copilot_client(client)
-        assert panel._copilot_client is client
+        assert panel._agent_client is client
         client.cleanup()
 
     def test_send_without_text_does_nothing(self, qtbot):

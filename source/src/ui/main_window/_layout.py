@@ -110,12 +110,13 @@ class LayoutMixin:
         self.variables_dock.setMinimumHeight(180)
 
         # Copilot Chat Panel
+        agent_client = getattr(self, "_pynia_agent", None) or self._copilot_client
         self._copilot_chat_panel = CopilotChatPanel(
-            copilot_client=self._copilot_client,
+            copilot_client=agent_client,
             mcp_server=self._mcp_server,
             theme_manager=self.theme_manager,
         )
-        self._copilot_chat_panel.set_copilot_client(self._copilot_client)
+        self._copilot_chat_panel.set_agent_client(agent_client)
         self._copilot_chat_panel.set_mcp_server(self._mcp_server)
         self._copilot_chat_panel.insert_code_requested.connect(self._on_insert_code_from_chat)
 

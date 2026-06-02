@@ -1049,18 +1049,23 @@ class UISetupMixin:
         dialog = PackageManagerDialog(theme_manager=self.theme_manager, parent=self)
         dialog.exec()
 
-    def _show_settings(self):
-        """Shows the settings dialog"""
-        dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
+    def show_settings_dialog(self, initial_tab: str = None):
+        """Shows the settings dialog, optionally selecting a tab."""
+        dialog = SettingsDialog(
+            self.shortcut_manager,
+            theme_manager=self.theme_manager,
+            initial_tab=initial_tab,
+        )
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
-        
-        # Connect Copilot auth signals
         dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
         dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
         dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
         dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
-        
         dialog.exec()
+
+    def _show_settings(self):
+        """Shows the settings dialog"""
+        self.show_settings_dialog()
 
     def _show_workspace_settings(self):
         """Shows the settings dialog on the Workspace tab."""
