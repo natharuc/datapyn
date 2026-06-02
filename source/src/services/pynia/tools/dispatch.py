@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, TYPE_CHECKING
 
+from src.services.pynia.focus_context import apply_focused_block_defaults
+
 if TYPE_CHECKING:
     from src.services.copilot.mcp_tools import MCPToolRegistry
 
@@ -59,7 +61,8 @@ class PyniaToolDispatcher:
         handler = handlers.get(tool_name)
         if not handler:
             return {"error": f"Unknown Pynia tool: {tool_name}"}
-        return handler(arguments or {})
+        args = apply_focused_block_defaults(tool_name, arguments or {}, self._legacy)
+        return handler(args)
 
     def _exec(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return self._legacy.execute(name, args)

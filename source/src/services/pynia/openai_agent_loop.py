@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from src.services.pynia.agent_loop_policy import (
     MAX_TOOL_ROUNDS,
+    READ_ONLY_TOOLS,
     prepare_tool_calls,
     skipped_tool_message,
     truncate_tool_result,
@@ -169,6 +170,39 @@ def run_openai_agent_turn(
                 len(parsed_calls),
                 sum(1 for p in prepared if p[3]),
             )
+
+        to_run = [(n, a, i) for n, a, i, run in prepared if run]
+        use_batch = (
+            len(to_run) > 1
+            and all(n in READ_ONLY_TOOLS for n, _, _ in to_run)
+            and tool_executor is not None
+            and hasattr(tool_executor, "execute_batch")
+        )
+
+        if use_batch:
+            for name, args, tc_id in to_run:
+                if is_cancelled():
+                    return final_text
+                on_tool_call(name, args, tc_id)
+            results = tool_executor.execute_batch([(n, a) for n, a, _ in to_run])
+            for (name, args, tc_id), result in zip(to_run, results):
+                result = truncate_tool_result(result)
+                on_tool_result(name, result, tc_id)
+                conversation.append(
+                    {"role": "tool", "tool_call_id": tc_id, "content": result}
+                )
+            for name, args, tc_id, should_execute in prepared:
+                if should_execute:
+                    continue
+                if is_cancelled():
+                    return final_text
+                on_tool_call(name, args, tc_id)
+                result = skipped_tool_message(name, args, seen_tool_keys)
+                on_tool_result(name, result, tc_id)
+                conversation.append(
+                    {"role": "tool", "tool_call_id": tc_id, "content": result}
+                )
+            continue
 
         for name, args, tc_id, should_execute in prepared:
             if is_cancelled():

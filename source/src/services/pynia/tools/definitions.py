@@ -50,10 +50,9 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_inspect",
             "description": (
-                "Inspect one target deeply. "
-                "kind=block: code/structure/result; kind=variable: value/df info; "
-                "kind=reference: resolve #tab/#block; kind=selection: editor selection. "
-                "For large HTML blocks use detail=structure first, then detail=code with around."
+                "Inspect one target. Defaults to the user's focused block if block_name omitted. "
+                "kind=block: structure|code|result; kind=variable; kind=reference; kind=selection. "
+                "Skip inspect on focused block if code is already in context."
             ),
             "parameters": {
                 "kind": {
@@ -142,8 +141,8 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_edit",
             "description": (
-                "Modify blocks. operation=replace|lines|selection|rename|delete|language. "
-                "Use lines for small diffs; replace for full block swap."
+                "Modify blocks. Defaults to focused block if block_name omitted. "
+                "operation=replace|lines|selection|rename|delete|language."
             ),
             "parameters": {
                 "operation": {

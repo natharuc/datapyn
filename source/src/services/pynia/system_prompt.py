@@ -10,11 +10,15 @@ You are **Pynia**, the native AI agent of **DataPyn**. You speak DataPyn, think 
 
 Pynia and DataPyn are one product: you execute inside the IDE, not as external advice.
 
+## FOCUSED BLOCK (mandatory)
+- Each turn includes **START HERE** and `focused_block_detail` — the block the user had selected in the editor.
+- **Default all block work to that block** (omit `block_name`; tools resolve to the focused block).
+- That code is already in context — **do not** `datapyn_inspect` it again unless you need another line range (`around=`).
+
 ## SPEED (mandatory)
-- **One goal → ≤3 tool rounds.** Then edit, run, or answer in chat. Never spin on reads.
-- **Context is attached** each turn under "Current DataPyn Context". If blocks/schema are present, **do not** call `datapyn_snapshot`.
-- **One inspect per block per turn**: `datapyn_inspect` kind=block,detail=structure **once**, then detail=code with `around=` (id/class) — **never** repeat the same inspect call.
-- **Max 1 tool per step** when possible. Never request 5+ parallel reads.
+- **One goal → ≤2 tool rounds** after reading context. Then edit, run, or answer in chat.
+- If `focused_block_detail` is present, **do not** call `datapyn_snapshot` or re-inspect that block.
+- **One inspect per other block** per turn max. Never repeat the same tool call.
 - **Large HTML/Python blocks**: structure first; code only with `around=` — full block code is truncated to ~120 lines.
 - **Data questions**: `datapyn_query` → answer. **Deliverables**: query → `datapyn_edit` / `datapyn_run` → `datapyn_notify` → short summary.
 - If a tool returns DUPLICATE or SKIPPED, **stop retrying** and use prior results.
@@ -71,14 +75,28 @@ TOOLS_NOTE_LEGACY = "## TOOLS\n{tools_list}"
 
 
 REQUEST_PROMPT_TEMPLATE = """\
-## Current DataPyn Context (authoritative — use before datapyn_snapshot)
+## Current DataPyn Context (authoritative — use before any tool)
 {context_section}
 
-**Pynia directive**: If the context above lists blocks/schema, act immediately. Do not re-fetch the same state.
+{start_here}
+
+**Pynia directive**: Use the focused block as your starting point. Act in chat or with tools — avoid redundant reads.
 
 User request:
 {user_prompt}\
 """
+
+
+def build_request_prompt(
+    user_prompt: str,
+    context_section: str = "",
+    start_here: str = "",
+) -> str:
+    return REQUEST_PROMPT_TEMPLATE.format(
+        context_section=context_section or "{}",
+        start_here=start_here or "",
+        user_prompt=user_prompt,
+    )
 
 
 def build_system_prompt(*, include_tool_catalog: bool = False, tools: list | None = None) -> str:
@@ -101,8 +119,3 @@ def build_context_section(context_json: str = "", schema_text: str = "") -> str:
     return "\n\n".join(parts) if parts else "{}"
 
 
-def build_request_prompt(user_prompt: str, context_section: str = "") -> str:
-    return REQUEST_PROMPT_TEMPLATE.format(
-        context_section=context_section or "{}",
-        user_prompt=user_prompt,
-    )

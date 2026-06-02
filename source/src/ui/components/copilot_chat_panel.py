@@ -1774,10 +1774,10 @@ class PyniaChatPanel(QWidget):
 
         # Build static system prompt and lightweight per-turn context.
         system_prompt = self._build_system_prompt()
-        context_section = self._build_request_context_section()
+        context_section, start_here = self._build_request_context_section()
 
         from src.services.pynia.system_prompt import build_request_prompt
-        request_prompt = build_request_prompt(text, context_section)
+        request_prompt = build_request_prompt(text, context_section, start_here)
 
         # Prepare messages for API
         api_messages = [{"role": "system", "content": system_prompt}]
@@ -1851,6 +1851,13 @@ class PyniaChatPanel(QWidget):
 
         block_editor = getattr(session_widget, "editor", None) if session_widget else None
         if block_editor:
+            from src.services.pynia.focus_context import focused_block_payload
+
+            focus_detail = focused_block_payload(block_editor)
+            if focus_detail:
+                context["focused_block_detail"] = focus_detail
+                context["focused_block"] = focus_detail["name"]
+
             blocks = list(getattr(block_editor, "blocks", []) or [])
             last_focused = None
             if hasattr(block_editor, "get_last_focused_block"):
@@ -3559,14 +3566,27 @@ class PyniaChatPanel(QWidget):
         self._run_chat_js(f"setActivity({json.dumps({'phase': S.pynia.activity_sending})})")
 
         system_prompt = self._build_system_prompt()
-        context_section = self._build_request_context_section()
+        context_section, start_here = self._build_request_context_section()
         from src.services.pynia.system_prompt import build_request_prompt
-        request_prompt = build_request_prompt(text, context_section)
+        request_prompt = build_request_prompt(text, context_section, start_here)
         if stored_attachments and not text:
             request_prompt = build_request_prompt(
                 S.pynia.attachment_only_prompt,
                 context_section,
+                start_here,
             )
+        focus_name = ""
+        if "`" in start_here:
+            import re
+
+            m = re.search(r"block `([^`]+)`", start_here)
+            if m:
+                focus_name = m.group(1)
+        if focus_name:
+            phase = S.pynia.activity_focused_block.format(block=focus_name) if hasattr(
+                S.pynia, "activity_focused_block"
+            ) else f"Focused block: {focus_name}"
+            self._run_chat_js(f"setActivity({json.dumps({'phase': phase, 'detail': ''})})")
 
         # SDK session keeps conversation history; send only system rules + current turn.
         api_messages = [
@@ -3608,17 +3628,23 @@ class PyniaChatPanel(QWidget):
                 seen.add(ref)
         return refs
 
-    def _build_request_context_section(self) -> str:
+    def _build_request_context_section(self) -> tuple[str, str]:
+        """Return (context_section, start_here_directive) for the user message."""
+        from src.services.pynia.focus_context import start_here_directive
         from src.services.pynia.system_prompt import build_context_section
+
         try:
             snapshot = self._build_context_snapshot()
             if self._active_references:
                 snapshot["active_references"] = self._active_references
+            focus_detail = snapshot.get("focused_block_detail")
+            start_here = start_here_directive(focus_detail)
             context_json = json.dumps(snapshot, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.debug(f"Error building editor context snapshot: {e}")
             context_json = "{}"
-        return build_context_section(context_json, "")
+            start_here = start_here_directive(None)
+        return build_context_section(context_json, ""), start_here
 
     def _set_loading(self, loading: bool):
         self._run_chat_js(f"setAppState({json.dumps({'loading': bool(loading)})})")

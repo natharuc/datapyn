@@ -1555,6 +1555,7 @@
     "task_complete_title": "Pynia",
     "task_complete_default": "Task completed.",
     "activity_sending": "Sending request...",
+    "activity_focused_block": "Focused block: {block}",
     "activity_running_tool": "Running {tool}...",
     "work_title": "Pynia work",
     "work_running": "Working...",

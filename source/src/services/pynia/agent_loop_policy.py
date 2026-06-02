@@ -8,8 +8,15 @@ from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 10
-MAX_TOOLS_PER_ROUND = 3
+MAX_TOOL_ROUNDS = 8
+MAX_TOOLS_PER_ROUND = 2
+
+# Tools safe to run in one batch hop (read-only, main-thread)
+READ_ONLY_TOOLS = frozenset({
+    "datapyn_snapshot",
+    "datapyn_inspect",
+    "datapyn_database",
+})
 MAX_TOOL_RESULT_CHARS = 6_000
 DUPLICATE_RESULT_MSG = (
     "DUPLICATE (skipped): identical tool call already ran this turn. "
