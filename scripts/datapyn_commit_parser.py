@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import ClassVar, Tuple
-
-from git.objects.commit import Commit
+from typing import TYPE_CHECKING, ClassVar, Tuple
 
 from semantic_release.commit_parser.conventional.options import (
     ConventionalCommitParserOptions,
 )
 from semantic_release.commit_parser.conventional.parser import ConventionalCommitParser
-from semantic_release.commit_parser.token import ParseError, ParseResult, ParsedCommit
+from semantic_release.commit_parser.token import ParseResult, ParsedCommit
 from semantic_release.commit_parser.util import force_str
 from semantic_release.enums import LevelBump
+
+if TYPE_CHECKING:
+    from git.objects.commit import Commit
 
 
 @dataclass
@@ -71,7 +72,7 @@ class DatapynCommitParser(ConventionalCommitParser):
     def __init__(self, options: DatapynCommitParserOptions | None = None) -> None:
         super().__init__(options or DatapynCommitParserOptions())
 
-    def parse_commit(self, commit: Commit) -> ParseResult:
+    def parse_commit(self, commit: "Commit") -> ParseResult:
         result = super().parse_commit(commit)
         if isinstance(result, ParsedCommit):
             return result

@@ -52,6 +52,8 @@ dev = [
     "pytest-subtests>=0.13.0",
     "pytest-env>=1.1.0",
     "pytest-timeout>=2.3.0",
+    # Release parser (scripts/datapyn_commit_parser.py + tests)
+    "python-semantic-release>=10.5.3",
     # Build
     "pyinstaller",
     "ruff>=0.15.0",
