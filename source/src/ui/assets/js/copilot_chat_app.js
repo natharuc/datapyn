@@ -588,6 +588,9 @@
         if (!row) {
             row = rows.find((node) => node.dataset.toolName === toolName && node.classList.contains("running"));
         }
+        if (!row) {
+            row = rows.find((node) => node.classList.contains("running"));
+        }
         if (!row) return;
         row.classList.remove("running");
         row.classList.toggle("error", !!isError);
@@ -602,10 +605,11 @@
 
     function completeAllRunningTools() {
         const running = Array.from(document.querySelectorAll(".tool-row.running"));
+        const interrupted = label("tool_interrupted", label("tool_ok", ""));
         running.forEach((row) => {
             row.classList.remove("running");
             const statusEl = row.querySelector(".tool-row-head span:last-child");
-            if (statusEl) statusEl.textContent = label("tool_ok", "");
+            if (statusEl) statusEl.textContent = interrupted;
         });
         if (running.length) {
             state.completedTools = state.toolCount;

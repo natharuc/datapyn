@@ -853,7 +853,8 @@ class PyniaChatPanel(QWidget):
         self._current_stream_id = None  # Tracks current streaming message
         self._current_thinking_widget = None  # Legacy - not used with WebView
         self._current_actions_widget = None  # Legacy - not used with WebView
-        self._active_tool_calls: dict = {}  # tool_name -> reference
+        self._active_tool_calls: dict = {}  # tool_call_id -> tool_name
+        self._tool_watch_timers: dict = {}  # tool_call_id -> QTimer
         self._turn_tools_used = 0
         self._turn_had_notify_user = False
         self._auth_success_shown = False
@@ -3060,6 +3061,7 @@ class PyniaChatPanel(QWidget):
             "activity_sending", "activity_connecting", "activity_planning",
             "activity_analyzing", "activity_synthesizing", "activity_waiting_model",
             "activity_subagent_parallel", "activity_running_tool", "turn_context_block",
+            "tool_timed_out", "tool_interrupted",
             "chat_locked_placeholder", "thinking_live",
             "attach_image_tooltip", "remove_attachment",
             "attachment_only_prompt", "attachment_limit_reached", "attachment_too_large",
@@ -3566,6 +3568,7 @@ class PyniaChatPanel(QWidget):
         self._turn_tools_used = 0
         self._turn_had_notify_user = False
         self._last_progress_step = ""
+        self._clear_tool_watch_timers()
         self._chat_runtime.start_turn(text, resolved_refs, stored_attachments)
         if not retry:
             self._add_message("user", text, references=resolved_refs, attachments=stored_attachments)
@@ -3730,6 +3733,7 @@ class PyniaChatPanel(QWidget):
             self._is_thinking = False
             self._run_chat_js("endThinkingBlock()")
         self._run_chat_js("endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
+        self._clear_tool_watch_timers()
         self._active_tool_calls.clear()
         if not self._current_stream_id:
             self._add_message("assistant", full_text)
@@ -3829,6 +3833,23 @@ class PyniaChatPanel(QWidget):
                     self._run_chat_js("startThinkingBlock()")
                 self._run_chat_js(f"appendThinking({json.dumps(line + chr(10))})")
 
+    def _clear_tool_watch_timers(self) -> None:
+        for timer in list(self._tool_watch_timers.values()):
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except RuntimeError:
+                pass
+        self._tool_watch_timers.clear()
+
+    def _on_tool_watchdog(self, tool_id: str, tool_name: str) -> None:
+        """Mark a tool as failed if Copilot SDK never sent TOOL_EXECUTION_COMPLETE."""
+        if tool_id not in self._active_tool_calls:
+            return
+        msg = getattr(S.pynia, "tool_timed_out", "Tool timed out — continuing.")
+        logger.warning("Tool watchdog fired for %s (%s)", tool_name, tool_id)
+        self._on_tool_result(tool_name, f"Error: {msg}", tool_id)
+
     def _on_tool_called(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
         self._chat_runtime.mark_tool(tool_name, "running")
         if tool_name != "think":
@@ -3855,9 +3876,29 @@ class PyniaChatPanel(QWidget):
         self._active_tool_calls[tool_id] = tool_name
         self.tool_call_requested.emit(tool_name, arguments)
 
+        from PyQt6.QtCore import QTimer
+
+        old = self._tool_watch_timers.pop(tool_id, None)
+        if old:
+            old.stop()
+            old.deleteLater()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda tid=tool_id, tname=tool_name: self._on_tool_watchdog(tid, tname))
+        timer.start(180_000)
+        self._tool_watch_timers[tool_id] = timer
+
     def _on_tool_result(self, tool_name: str, result: str, tool_call_id: str = ""):
         self._chat_runtime.touch_activity()
         self._chat_runtime.mark_tool(tool_name, "done")
+        tool_id = tool_call_id or next(
+            (tid for tid, name in reversed(list(self._active_tool_calls.items())) if name == tool_name),
+            "",
+        )
+        watch = self._tool_watch_timers.pop(tool_id, None) if tool_id else None
+        if watch:
+            watch.stop()
+            watch.deleteLater()
         result_preview = ""
         is_error = "error" in result.lower()[:100]
         for line in (result or "").split("\n"):
@@ -3865,13 +3906,18 @@ class PyniaChatPanel(QWidget):
             if line and not line.startswith("```") and not line.startswith("##"):
                 result_preview = line[:80] + ("..." if len(line) > 80 else "")
                 break
-        tool_id = tool_call_id or next(
-            (tid for tid, name in reversed(list(self._active_tool_calls.items())) if name == tool_name),
-            "",
-        )
+        if not tool_id:
+            tool_id = tool_call_id or next(
+                (tid for tid, name in reversed(list(self._active_tool_calls.items())) if name == tool_name),
+                "",
+            )
         self._run_chat_js(
             f"updateToolStatus({json.dumps(tool_name)}, 'done', {str(is_error).lower()}, "
             f"{json.dumps(result_preview)}, {json.dumps(tool_id)})"
+        )
+        done_label = self._resolve_progress_phase("activity_tool_done", "")
+        self._run_chat_js(
+            f"pushAgentProgress({json.dumps({'phase': done_label, 'step_id': tool_id or tool_name, 'step_state': 'done'})})"
         )
         if tool_id in self._active_tool_calls:
             del self._active_tool_calls[tool_id]

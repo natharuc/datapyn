@@ -1545,6 +1545,8 @@
     "tool_running": "executando...",
     "tool_ok": "ok",
     "tool_error": "erro",
+    "tool_timed_out": "Ferramenta expirou (interface recuperada).",
+    "tool_interrupted": "interrompido",
     "copy_code": "Copiar",
     "copied_code": "Copiado!",
     "insert_code": "Inserir",

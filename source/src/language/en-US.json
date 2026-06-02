@@ -1545,6 +1545,8 @@
     "tool_running": "running...",
     "tool_ok": "ok",
     "tool_error": "error",
+    "tool_timed_out": "Tool timed out (UI sync recovered).",
+    "tool_interrupted": "interrupted",
     "copy_code": "Copy",
     "copied_code": "Copied!",
     "insert_code": "Insert",

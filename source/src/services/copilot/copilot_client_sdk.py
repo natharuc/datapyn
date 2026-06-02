@@ -516,6 +516,63 @@ class CopilotWorker(QObject):
         self._inline_prompt = ""  # For inline completions
         self._login_process = None
         self._attachments: List[Dict[str, Any]] = []
+        self._pending_tool_ids: List[tuple] = []  # (tool_call_id, tool_name)
+        self._finished_tool_keys: set[str] = set()
+
+    def invalidate_sdk_tools(self) -> None:
+        """Force SDK tools and session to rebuild (e.g. after Pynia registry swap)."""
+        self._sdk_tools = []
+        self._session_signature = None
+
+    def set_tool_executor(self, tool_executor: Optional["ThreadSafeToolExecutor"]) -> None:
+        self._tool_executor = tool_executor
+        self.invalidate_sdk_tools()
+
+    @staticmethod
+    def _extract_invocation_id(invocation: Any) -> str:
+        if invocation is None:
+            return ""
+        for attr in ("tool_call_id", "toolCallId", "id", "call_id"):
+            val = getattr(invocation, attr, None)
+            if val:
+                return str(val)
+        if isinstance(invocation, dict):
+            for key in ("toolCallId", "tool_call_id", "id", "call_id"):
+                if invocation.get(key):
+                    return str(invocation[key])
+        return ""
+
+    def _tool_result_key(self, tool_name: str, tool_call_id: str) -> str:
+        return f"{tool_name}:{tool_call_id or ''}"
+
+    def _emit_tool_result_once(self, tool_name: str, result_text: str, tool_call_id: str) -> None:
+        key = self._tool_result_key(tool_name, tool_call_id)
+        if key in self._finished_tool_keys:
+            return
+        self._finished_tool_keys.add(key)
+        self.tool_result.emit(tool_name, result_text, tool_call_id)
+
+    def _pop_pending_call_id(self, tool_name: str, invocation_id: str) -> str:
+        if invocation_id:
+            for i, (cid, tname) in enumerate(self._pending_tool_ids):
+                if cid == invocation_id:
+                    self._pending_tool_ids.pop(i)
+                    return invocation_id
+            return invocation_id
+        for i, (cid, tname) in enumerate(self._pending_tool_ids):
+            if tname == tool_name:
+                return self._pending_tool_ids.pop(i)[0]
+        return f"{tool_name}-{len(self._finished_tool_keys)}"
+
+    def _registry_tool_names(self) -> tuple:
+        registry = self._tool_executor._registry if self._tool_executor else None
+        if not registry:
+            return ()
+        if hasattr(registry, "tool_names"):
+            return tuple(registry.tool_names())
+        if hasattr(registry, "list_tools"):
+            return tuple(t.get("name", "") for t in registry.list_tools())
+        return ()
 
     def set_model(self, model: str):
         self._model = model
@@ -946,7 +1003,8 @@ class CopilotWorker(QObject):
                 pass
         self._session = None
         self._session_signature = None
-        self._tool_call_counts = {}
+        self._pending_tool_ids = []
+        self._finished_tool_keys = set()
         logger.info("[CHAT] Copilot session reset for new chat")
 
     @pyqtSlot()
@@ -973,7 +1031,9 @@ class CopilotWorker(QObject):
         
         # Reset cancellation flag at start of each chat
         self._cancelled = False
-        
+        self._pending_tool_ids = []
+        self._finished_tool_keys = set()
+
         SDKClient, SDKTool, EventType, import_err = _try_import_sdk()
         if SDKClient is None:
             self.error.emit(f"Copilot SDK not available: {import_err}")
@@ -987,8 +1047,10 @@ class CopilotWorker(QObject):
             await self._sdk_client.start()
             logger.info("[CHAT] Copilot SDK client started")
 
-        # Build SDK tools if we have an executor
-        if self._tool_executor and not self._sdk_tools:
+        # Build / refresh SDK tools when registry changes (Pynia vs legacy MCP)
+        expected_tools = self._registry_tool_names()
+        current_tools = tuple(t.name for t in self._sdk_tools) if self._sdk_tools else ()
+        if self._tool_executor and (not self._sdk_tools or current_tools != expected_tools):
             self._sdk_tools = self._build_sdk_tools(SDKTool)
             logger.info(f"[CHAT] Built {len(self._sdk_tools)} SDK tools")
             for t in self._sdk_tools:
@@ -1112,6 +1174,9 @@ class CopilotWorker(QObject):
                         arguments = getattr(event.data, "arguments", {}) or {}
                         tool_call_id = getattr(event.data, "tool_call_id", "") or ""
                         if tool_name and tool_name in our_tool_names:
+                            if not tool_call_id:
+                                tool_call_id = f"{tool_name}-{len(self._pending_tool_ids)}"
+                            self._pending_tool_ids.append((tool_call_id, tool_name))
                             self.tool_call.emit(tool_name, arguments, tool_call_id)
                     
                     elif event_type == EventType.TOOL_EXECUTION_COMPLETE:
@@ -1120,7 +1185,7 @@ class CopilotWorker(QObject):
                         result = getattr(event.data, "result", None)
                         result_text = str(result) if result else ""
                         if tool_name and tool_name in our_tool_names:
-                            self.tool_result.emit(tool_name, result_text, tool_call_id)
+                            self._emit_tool_result_once(tool_name, result_text, tool_call_id)
                     
                     elif event_type == EventType.SESSION_ERROR:
                         session_error = _session_error_text(getattr(event, "data", None))
@@ -1148,7 +1213,7 @@ class CopilotWorker(QObject):
                     result = getattr(event.data, "result", None)
                     result_text = str(result) if result else ""
                     if tool_name and tool_name in our_tool_names:
-                        self.tool_result.emit(tool_name, result_text, tool_call_id)
+                        self._emit_tool_result_once(tool_name, result_text, tool_call_id)
                 elif event.type == EventType.SESSION_ERROR:
                     session_error = _session_error_text(getattr(event, "data", None))
                     logger.error("[CHAT] Session error (drain): %s", session_error)
@@ -1254,6 +1319,8 @@ class CopilotWorker(QObject):
                 "required": required,
             }
 
+            worker = self
+
             def make_handler(name):
                 async def handler(invocation):
                     if ToolInvocation is not None and isinstance(invocation, ToolInvocation):
@@ -1265,9 +1332,19 @@ class CopilotWorker(QObject):
                     else:
                         arguments = {}
 
+                    call_id = worker._pop_pending_call_id(
+                        name, worker._extract_invocation_id(invocation)
+                    )
                     logger.info("SDK calling tool: %s with %s", name, _safe_log_preview(arguments, 120))
-                    result = self._tool_executor.execute(name, arguments)
+                    try:
+                        result = worker._tool_executor.execute(name, arguments)
+                    except Exception as exc:
+                        logger.exception("SDK tool %s failed", name)
+                        result = f"Error: {exc}"
                     logger.info("SDK tool result for %s: %s", name, _safe_log_preview(result, 200))
+
+                    # Custom SDK tools often never emit TOOL_EXECUTION_COMPLETE — always notify UI.
+                    worker._emit_tool_result_once(name, result, call_id)
 
                     if ToolResult is not None:
                         return ToolResult(
@@ -1576,6 +1653,10 @@ class CopilotClient(QObject):
         if parent is None:
             parent = QApplication.instance()
         self._tool_executor = ThreadSafeToolExecutor(registry, parent=parent)
+        if self._session_worker:
+            self._session_worker.set_tool_executor(self._tool_executor)
+        if self._worker:
+            self._worker.set_tool_executor(self._tool_executor)
 
     @property
     def is_authenticated(self) -> bool:
