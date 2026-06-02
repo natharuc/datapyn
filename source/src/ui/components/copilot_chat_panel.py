@@ -1863,6 +1863,8 @@ class PyniaChatPanel(QWidget):
                 context["focused_block_detail"] = focus_detail
                 context["focused_block"] = focus_detail["name"]
 
+            from src.services.pynia.block_summary import enrich_block_info_entry
+
             blocks = list(getattr(block_editor, "blocks", []) or [])
             last_focused = None
             if hasattr(block_editor, "get_last_focused_block"):
@@ -1875,18 +1877,20 @@ class PyniaChatPanel(QWidget):
                     code = block.get_code() if hasattr(block, "get_code") else ""
                     name = block.get_block_name() if hasattr(block, "get_block_name") else f"block{index + 1}"
                     language = block.get_language() if hasattr(block, "get_language") else "unknown"
-                    preview = code[:160] + "..." if len(code) > 160 else code
                     from src.services.copilot.mcp_tools import _infer_block_hints
                     hints = _infer_block_hints(code, language)
-                    block_infos.append({
-                        "index": index,
-                        "name": name,
-                        "language": language,
-                        "focused": block is last_focused,
-                        "lines": len(code.splitlines()) if code else 0,
-                        "hints": hints,
-                        "code_preview": preview,
-                    })
+                    line_count = len(code.splitlines()) if code else 0
+                    block_infos.append(
+                        enrich_block_info_entry(
+                            name=name,
+                            language=language,
+                            code=code,
+                            lines=line_count,
+                            hints=hints,
+                            focused=block is last_focused,
+                            index=index,
+                        )
+                    )
                 except Exception as e:
                     logger.debug(f"Error reading block context: {e}")
             context["blocks"] = block_infos
@@ -3613,6 +3617,24 @@ class PyniaChatPanel(QWidget):
         context_section, start_here = self._build_request_context_section()
         from src.services.pynia.system_prompt import build_request_prompt
         request_prompt = build_request_prompt(text, context_section, start_here)
+        try:
+            from src.services.pynia.subagents.classifier import (
+                should_delegate_to_subagent,
+                suggest_explore_tasks,
+            )
+
+            snap = self._build_context_snapshot()
+            blocks = snap.get("blocks") or []
+            conn = (snap.get("session") or {}).get("connection_name", "")
+            if should_delegate_to_subagent(text, block_count=len(blocks)):
+                tasks = suggest_explore_tasks(text, connection_name=conn)
+                if tasks:
+                    request_prompt += (
+                        "\n\n**Runtime hint**: Prefer a single `datapyn_subagent` call with "
+                        f"`tasks`: {json.dumps(tasks, ensure_ascii=False)}"
+                    )
+        except Exception as exc:
+            logger.debug("Subagent hint skipped: %s", exc)
         if stored_attachments and not text:
             request_prompt = build_request_prompt(
                 S.pynia.attachment_only_prompt,
@@ -3639,13 +3661,19 @@ class PyniaChatPanel(QWidget):
 
         self._run_chat_js(f"startAgentTurn({json.dumps(context_chip)})")
 
-        # SDK session keeps conversation history; send only system rules + current turn.
-        api_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": request_prompt},
-        ]
+        api_messages = self._build_api_messages_for_agent(system_prompt, request_prompt)
 
         if self._agent_client:
+            if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+                try:
+                    snap = self._build_context_snapshot()
+                    if self._active_references:
+                        snap["active_references"] = self._active_references
+                    self._mcp_server.tool_registry.set_workspace_context(
+                        json.dumps(snap, ensure_ascii=False)[:12_000]
+                    )
+                except Exception as exc:
+                    logger.debug("Workspace context for subagents: %s", exc)
             if hasattr(self._agent_client, "system_message"):
                 self._agent_client.system_message = system_prompt
             if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
@@ -3678,6 +3706,27 @@ class PyniaChatPanel(QWidget):
                 refs.append(resolver.resolve(ref))
                 seen.add(ref)
         return refs
+
+    def _build_api_messages_for_agent(
+        self,
+        system_prompt: str,
+        request_prompt: str,
+    ) -> list:
+        """Copilot SDK keeps session history; API providers get compact multi-turn memory."""
+        provider_id = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
+        if provider_id == "copilot":
+            return [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": request_prompt},
+            ]
+        from src.services.pynia.session_memory import build_api_messages
+
+        return build_api_messages(
+            system_prompt=system_prompt,
+            current_user_prompt=request_prompt,
+            ui_messages=self._messages,
+            include_history=True,
+        )
 
     def _build_request_context_section(self) -> tuple[str, str]:
         """Return (context_section, start_here_directive) for the user message."""

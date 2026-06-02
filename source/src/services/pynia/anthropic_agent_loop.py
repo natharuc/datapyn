@@ -98,7 +98,13 @@ def run_anthropic_agent_turn(
     is_cancelled: Callable[[], bool],
     max_tool_rounds: int = 10,
 ) -> str:
-    from src.services.pynia.agent_loop_policy import MAX_TOOL_ROUNDS, prepare_tool_calls
+    from src.services.pynia.agent_loop_policy import (
+        FORCE_ANSWER_AFTER_ROUND,
+        MAX_TOOL_ROUNDS,
+        prepare_tool_calls,
+        should_offer_tools,
+    )
+    from src.services.pynia.session_memory import FORCE_ANSWER_NUDGE, compact_conversation_in_place
     from src.services.pynia.agent_progress import emit_progress
     from src.services.pynia.agent_status import PHASE_ANALYZING, PHASE_PLANNING, PHASE_SYNTHESIZING
     from src.services.pynia.tool_round_executor import process_tool_round
@@ -120,19 +126,24 @@ def run_anthropic_agent_turn(
     anthropic_messages = _to_anthropic_messages(conv_msgs)
     final_text = ""
     seen_tool_keys: set[str] = set()
+    block_inspect_counts: dict[str, int] = {}
 
     emit_progress(on_progress, phase_key=PHASE_PLANNING, step_id="plan", step_state="active")
 
-    for _round in range(max_tool_rounds):
+    for round_idx in range(max_tool_rounds):
         if is_cancelled():
             return final_text
 
         emit_progress(
             on_progress,
-            phase_key=PHASE_ANALYZING if _round == 0 else PHASE_SYNTHESIZING,
+            phase_key=PHASE_ANALYZING if round_idx == 0 else PHASE_SYNTHESIZING,
             step_id="model",
             step_state="active",
         )
+
+        offer_tools = should_offer_tools(round_idx, max_rounds=max_tool_rounds) and bool(anthropic_tools)
+        if round_idx == FORCE_ANSWER_AFTER_ROUND:
+            anthropic_messages.append({"role": "user", "content": FORCE_ANSWER_NUDGE})
 
         payload: Dict[str, Any] = {
             "model": model,
@@ -142,7 +153,7 @@ def run_anthropic_agent_turn(
         }
         if system_text:
             payload["system"] = system_text
-        if anthropic_tools:
+        if offer_tools:
             payload["tools"] = anthropic_tools
 
         resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=180)
@@ -238,7 +249,11 @@ def run_anthropic_agent_turn(
             (tu["name"], tu["input"], tu["id"] or f"toolu_{uuid.uuid4().hex[:12]}")
             for tu in tool_uses
         ]
-        prepared = prepare_tool_calls(parsed, seen_keys=seen_tool_keys)
+        prepared = prepare_tool_calls(
+            parsed,
+            seen_keys=seen_tool_keys,
+            block_inspect_counts=block_inspect_counts,
+        )
 
         round_outcomes = process_tool_round(
             prepared,
@@ -256,5 +271,9 @@ def run_anthropic_agent_turn(
             for tc_id, _name, result in round_outcomes
         ]
         anthropic_messages.append({"role": "user", "content": tool_results})
+        compact_conversation_in_place(anthropic_messages)
+
+        if not offer_tools:
+            continue
 
     return final_text

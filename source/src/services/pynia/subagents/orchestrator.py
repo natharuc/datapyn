@@ -115,7 +115,13 @@ class SubagentOrchestrator(QObject):
         parts: List[str] = []
         for r in results:
             status = "ok" if r.ok else "failed"
-            parts.append(f"### Subagent `{r.task_id}` ({status})\n{r.summary}")
+            section = f"### Subagent `{r.task_id}` ({status})\n{r.summary}"
+            if r.tool_trace:
+                tools_used = ", ".join(
+                    f"{t.get('tool', '?')}" for t in r.tool_trace[:6]
+                )
+                section += f"\n\n_Tools used: {tools_used}_"
+            parts.append(section)
         return "\n\n".join(parts)
 
     def run_subagent_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -124,6 +130,34 @@ class SubagentOrchestrator(QObject):
 
         Supports one or more tasks in a single call.
         """
+        from src.services.pynia.subagents.classifier import try_parse_single_tool_call
+        from src.services.pynia.subagents.explore_worker import run_tool_only_explore
+
+        instr = str(arguments.get("instruction") or arguments.get("task") or "").strip()
+        if instr and not arguments.get("tasks"):
+            single = try_parse_single_tool_call(instr)
+            if single and self._tool_executor:
+                name, args = single
+                text = run_tool_only_explore(name, args, self._tool_executor)
+                tid = str(arguments.get("task_id") or "explore-fast")
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": self.format_subagent_results(
+                                [
+                                    ExploreTaskResult(
+                                        task_id=tid,
+                                        summary=text,
+                                        ok=True,
+                                        tool_trace=[{"tool": name, "args": args}],
+                                    )
+                                ]
+                            ),
+                        }
+                    ]
+                }
+
         raw_tasks = arguments.get("tasks")
         if raw_tasks and isinstance(raw_tasks, list):
             explore_tasks = []

@@ -8,7 +8,13 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from src.services.pynia.agent_progress import ProgressCallback, emit_progress
-from src.services.pynia.agent_loop_policy import MAX_TOOL_ROUNDS, prepare_tool_calls
+from src.services.pynia.agent_loop_policy import (
+    FORCE_ANSWER_AFTER_ROUND,
+    MAX_TOOL_ROUNDS,
+    prepare_tool_calls,
+    should_offer_tools,
+)
+from src.services.pynia.session_memory import FORCE_ANSWER_NUDGE, compact_conversation_in_place
 from src.services.pynia.agent_status import PHASE_ANALYZING, PHASE_PLANNING, PHASE_SYNTHESIZING
 from src.services.pynia.tool_round_executor import process_tool_round
 
@@ -81,12 +87,16 @@ def run_openai_agent_turn(
             step_state="active",
         )
 
+        offer_tools = should_offer_tools(round_idx, max_rounds=max_tool_rounds) and bool(tools)
+        if round_idx == FORCE_ANSWER_AFTER_ROUND:
+            conversation.append({"role": "user", "content": FORCE_ANSWER_NUDGE})
+
         payload: Dict[str, Any] = {
             "model": model,
             "messages": conversation,
             "stream": True,
         }
-        if tools:
+        if offer_tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
@@ -199,6 +209,10 @@ def run_openai_agent_turn(
             conversation.append(
                 {"role": "tool", "tool_call_id": tc_id, "content": result}
             )
+        compact_conversation_in_place(conversation)
+
+        if not offer_tools:
+            continue
 
         if round_idx >= max_tool_rounds - 1:
             logger.warning("Max tool rounds (%s) reached", max_tool_rounds)

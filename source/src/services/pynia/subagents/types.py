@@ -13,7 +13,7 @@ class ExploreTask:
     task_id: str
     instruction: str
     context: str = ""
-    max_tool_rounds: int = 3
+    max_tool_rounds: int = 2
 
 
 @dataclass

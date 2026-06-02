@@ -546,6 +546,7 @@ class CopilotWorker(QObject):
         self._tool_guard_seen: set[str] = set()
         self._block_inspect_counts: Dict[str, int] = {}
         self._ui_tool_call_ids: set[str] = set()
+        self._turn_tool_executions: int = 0
 
     def invalidate_sdk_tools(self) -> None:
         """Force SDK tools and session to rebuild (e.g. after Pynia registry swap)."""
@@ -1077,6 +1078,7 @@ class CopilotWorker(QObject):
         self._tool_guard_seen = set()
         self._block_inspect_counts = {}
         self._ui_tool_call_ids = set()
+        self._turn_tool_executions = 0
 
         SDKClient, SDKTool, EventType, import_err = _try_import_sdk()
         if SDKClient is None:
@@ -1376,16 +1378,27 @@ class CopilotWorker(QObject):
                     else:
                         arguments = {}
 
-                    from src.services.pynia.agent_loop_policy import evaluate_tool_call
+                    from src.services.pynia.agent_loop_policy import (
+                        MAX_SDK_TOOLS_PER_TURN,
+                        evaluate_tool_call,
+                    )
 
                     call_id = worker._resolve_tool_call_id(name, invocation)
                     worker._emit_tool_call_once(name, arguments, call_id)
-                    allowed, skip_msg = evaluate_tool_call(
-                        name,
-                        arguments,
-                        seen_keys=worker._tool_guard_seen,
-                        block_inspect_counts=worker._block_inspect_counts,
-                    )
+                    if worker._turn_tool_executions >= MAX_SDK_TOOLS_PER_TURN:
+                        allowed, skip_msg = False, (
+                            f"SKIPPED: max {MAX_SDK_TOOLS_PER_TURN} tools per turn. "
+                            "Answer from context or make one edit/run."
+                        )
+                    else:
+                        allowed, skip_msg = evaluate_tool_call(
+                            name,
+                            arguments,
+                            seen_keys=worker._tool_guard_seen,
+                            block_inspect_counts=worker._block_inspect_counts,
+                        )
+                    if allowed:
+                        worker._turn_tool_executions += 1
                     logger.info("SDK calling tool: %s with %s", name, _safe_log_preview(arguments, 120))
                     if not allowed:
                         result = skip_msg

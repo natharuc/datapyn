@@ -46,6 +46,10 @@ class PyniaToolDispatcher:
     def __init__(self, legacy: "MCPToolRegistry"):
         self._legacy = legacy
         self._orchestrator = None
+        self._workspace_context: str = ""
+
+    def set_workspace_context(self, context_json: str = "") -> None:
+        self._workspace_context = (context_json or "").strip()
 
     def set_orchestrator(self, orchestrator) -> None:
         self._orchestrator = orchestrator
@@ -313,7 +317,13 @@ class PyniaToolDispatcher:
     def _subagent(self, args: Dict[str, Any]) -> Dict[str, Any]:
         if not self._orchestrator:
             return {"error": "Parallel subagents are not available in this session."}
-        return self._orchestrator.run_subagent_tool(args)
+        payload = dict(args or {})
+        if self._workspace_context and not str(payload.get("context") or "").strip():
+            payload["context"] = (
+                "## Workspace (auto)\n"
+                f"{self._workspace_context[:12_000]}"
+            )
+        return self._orchestrator.run_subagent_tool(payload)
 
     def _notify(self, args: Dict[str, Any]) -> Dict[str, Any]:
         return self._exec(

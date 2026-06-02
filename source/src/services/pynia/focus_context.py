@@ -62,7 +62,9 @@ def focused_block_payload(
         payload["code_note"] = truncate_note
     if selection:
         payload["selection"] = selection
-    return payload
+    from src.services.pynia.block_summary import enrich_focus_detail
+
+    return enrich_focus_detail(payload)
 
 
 def apply_focused_block_defaults(

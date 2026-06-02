@@ -16,11 +16,13 @@ from src.services.pynia.subagents.classifier import (
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 4
+FORCE_ANSWER_AFTER_ROUND = 2
 MAX_MUTATING_PER_ROUND = 2
 MAX_READ_ONLY_PER_ROUND = 4
 MAX_SUBAGENTS_PER_ROUND = 3
 MAX_INSPECTS_PER_BLOCK = 2
+MAX_SDK_TOOLS_PER_TURN = 10
 
 MAX_TOOL_RESULT_CHARS = 6_000
 DUPLICATE_RESULT_MSG = (
@@ -40,15 +42,19 @@ BLOCK_INSPECT_LIMIT_MSG = (
 __all__ = [
     "READ_ONLY_TOOLS",
     "MAX_TOOL_ROUNDS",
+    "FORCE_ANSWER_AFTER_ROUND",
     "MAX_MUTATING_PER_ROUND",
     "MAX_READ_ONLY_PER_ROUND",
     "MAX_SUBAGENTS_PER_ROUND",
+    "MAX_SDK_TOOLS_PER_TURN",
     "prepare_tool_calls",
+    "evaluate_tool_call",
     "skipped_tool_message",
     "tool_call_key",
     "truncate_tool_result",
     "format_registry_result",
     "was_duplicate_skip",
+    "should_offer_tools",
 ]
 
 
@@ -126,6 +132,13 @@ def prepare_tool_calls(
         prepared.append((name, args, tc_id, True))
 
     return prepared
+
+
+def should_offer_tools(round_idx: int, *, max_rounds: int = MAX_TOOL_ROUNDS) -> bool:
+    """After FORCE_ANSWER_AFTER_ROUND tool rounds, stop offering tools to the model."""
+    if round_idx >= FORCE_ANSWER_AFTER_ROUND:
+        return False
+    return round_idx < max_rounds
 
 
 def evaluate_tool_call(

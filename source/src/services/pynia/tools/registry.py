@@ -56,6 +56,10 @@ class PyniaToolRegistry(QObject):
         """Wire parallel explore subagents (optional)."""
         self._dispatcher.set_orchestrator(orchestrator)
 
+    def set_workspace_context(self, context_json: str = "") -> None:
+        """Inject compact workspace JSON into explore subagents when context is omitted."""
+        self._dispatcher.set_workspace_context(context_json)
+
     def _register_tools(self) -> None:
         for spec in pynia_tool_definitions():
             name = spec["name"]

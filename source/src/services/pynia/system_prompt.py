@@ -16,10 +16,11 @@ Pynia and DataPyn are one product: you execute inside the IDE, not as external a
 - That code is already in context — **do not** `datapyn_inspect` it again unless you need another line range (`around=`).
 
 ## SPEED (mandatory)
-- **One goal → ≤2 tool rounds** after reading context. Then edit, run, or answer in chat.
+- **One goal → ≤2 tool rounds** after reading context. Then edit, run, or answer in chat (enforced by runtime).
+- If `focused_block_detail` includes `structure_summary`, treat it as inspect structure — **no** `datapyn_inspect` for that block unless you need `around=` for a specific line range.
 - If `focused_block_detail` is present, **do not** call `datapyn_snapshot` or re-inspect that block.
-- **Parallel discovery**: use `datapyn_subagent` (up to 3 per step) or `tasks[]` when you need schema + multiple blocks at once — subagents run on background workers.
-- Never repeat the same tool call.
+- **Parallel discovery**: use `datapyn_subagent` with `tasks[]` for schema + blocks + variables in **one** step (subagents run on background workers).
+- Never repeat the same tool call; max **2** `datapyn_inspect` per block per turn.
 - **Large HTML/Python blocks**: at most **2** `datapyn_inspect` calls per block per turn; use `around=` for one section. Full block code is already truncated in `focused_block_detail` (~400 lines).
 - **Data questions**: `datapyn_query` → answer. **Deliverables**: query → `datapyn_edit` / `datapyn_run` → `datapyn_notify` → short summary.
 - If a tool returns DUPLICATE or SKIPPED, **stop retrying** and use prior results.
