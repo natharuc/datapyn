@@ -70,7 +70,7 @@ class TestCopilotCliManager:
         assert payload["sdk"]["version"] is not None or payload["sdk"]["version"] == ""
 
     @patch("src.services.copilot.copilot_cli_manager.shutil.which", return_value=r"C:\Program Files\nodejs\npm.cmd")
-    @patch("src.services.copilot.copilot_cli_manager.subprocess.run")
+    @patch("src.services.copilot.copilot_cli_manager.run_hidden")
     @patch("src.services.copilot.copilot_cli_manager.get_active_cli_info")
     @patch("src.services.copilot.copilot_cli_manager.build_cli_status")
     def test_update_copilot_cli_runs_npm(self, mock_build, mock_active, mock_run, _mock_which):

@@ -87,6 +87,9 @@ def _patch_ping_response(sdk_client: Any) -> None:
 def apply_sdk_compat_patches() -> None:
     """Patch SDK parsing for newer Copilot CLI wire formats."""
     global _PATCHED
+    from .copilot_process import install_hidden_subprocess_patch
+
+    install_hidden_subprocess_patch()
     if _PATCHED:
         return
     try:

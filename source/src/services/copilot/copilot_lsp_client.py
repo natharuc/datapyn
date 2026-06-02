@@ -20,19 +20,17 @@ from src.services.copilot.copilot_settings import get_copilot_settings
 
 logger = logging.getLogger(__name__)
 
-# Hide console window on Windows
-_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+from src.services.copilot.copilot_process import popen_hidden, run_hidden
 
 
 def spawn_lsp_process(server_path: str) -> subprocess.Popen:
     """Start the Copilot language server process (safe to call off the UI thread)."""
-    return subprocess.Popen(
+    return popen_hidden(
         [server_path, "--stdio"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         bufsize=0,
-        creationflags=_CREATE_NO_WINDOW,
     )
 
 

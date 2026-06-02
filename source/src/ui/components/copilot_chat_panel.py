@@ -571,7 +571,7 @@ class GhCliInstallWorker(QObject):
         """Install GitHub CLI and Copilot extension."""
         import shutil
         import platform
-        import subprocess
+        from src.services.copilot.copilot_process import run_hidden, configure_hidden_qprocess
 
         try:
             # Check if gh is already installed
@@ -604,9 +604,10 @@ class GhCliInstallWorker(QObject):
 
             # Pre-compute architecture
             try:
-                arch_result = subprocess.run(
+                arch_result = run_hidden(
                     ["dpkg", "--print-architecture"],
-                    capture_output=True, text=True, timeout=10,
+                    text=True,
+                    timeout=10,
                 )
                 self._arch = arch_result.stdout.strip() or "amd64"
             except Exception:
@@ -629,8 +630,10 @@ class GhCliInstallWorker(QObject):
 
             # Use QProcess for non-blocking execution
             from PyQt6.QtCore import QProcess
+            from src.services.copilot.copilot_process import configure_hidden_qprocess
 
             self._process = QProcess(self)
+            configure_hidden_qprocess(self._process)
             self._process.finished.connect(self._on_process_finished)
             self._process.errorOccurred.connect(self._on_process_error)
 
@@ -671,7 +674,7 @@ class GhCliInstallWorker(QObject):
         Note: In gh CLI 2.87+, copilot is a built-in command and no extension is needed.
         """
         import shutil
-        import subprocess
+        from src.services.copilot.copilot_process import run_hidden, configure_hidden_qprocess
 
         gh_path = shutil.which("gh")
         if not gh_path:
@@ -680,9 +683,10 @@ class GhCliInstallWorker(QObject):
 
         # First check if gh copilot command works (built-in in gh 2.87+)
         try:
-            result = subprocess.run(
+            result = run_hidden(
                 [gh_path, "copilot", "--help"],
-                capture_output=True, text=True, timeout=10
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 # Copilot command works (built-in or extension already installed)
@@ -693,9 +697,10 @@ class GhCliInstallWorker(QObject):
 
         # Check if extension already installed (for older gh versions)
         try:
-            result = subprocess.run(
+            result = run_hidden(
                 [gh_path, "extension", "list"],
-                capture_output=True, text=True, timeout=10
+                text=True,
+                timeout=10,
             )
             if "copilot" in result.stdout.lower():
                 # Already installed
@@ -707,6 +712,7 @@ class GhCliInstallWorker(QObject):
         # Install extension using QProcess (for older gh versions)
         from PyQt6.QtCore import QProcess
         self._ext_process = QProcess(self)
+        configure_hidden_qprocess(self._ext_process)
         self._ext_process.finished.connect(self._on_extension_finished)
         self._ext_process.errorOccurred.connect(self._on_extension_error)
 

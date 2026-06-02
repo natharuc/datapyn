@@ -20,7 +20,8 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+from .copilot_process import run_hidden
+
 _NPM_LATEST_URL = "https://registry.npmjs.org/@github/copilot/latest"
 _PYPI_SDK_URL = "https://pypi.org/pypi/github-copilot-sdk/json"
 _SDK_PACKAGE = "github-copilot-sdk"
@@ -81,13 +82,11 @@ def read_cli_version(cli_path: str, *, no_auto_update: bool = True) -> Tuple[int
         args.append("--no-auto-update")
     args.append("--version")
     try:
-        result = subprocess.run(
+        result = run_hidden(
             args,
-            capture_output=True,
             text=True,
             timeout=12,
             env=_cli_env(),
-            creationflags=_CREATE_NO_WINDOW,
         )
         output = f"{result.stdout}\n{result.stderr}"
         if result.returncode != 0 or "Cannot find" in output:
@@ -256,12 +255,10 @@ def update_copilot_sdk(
 
     emit(PHASE_DOWNLOADING_SDK)
     try:
-        result = subprocess.run(
+        result = run_hidden(
             [sys.executable, "-m", "pip", "install", "-U", _SDK_PACKAGE],
-            capture_output=True,
             text=True,
             timeout=300,
-            creationflags=_CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return False, "Copilot SDK update timed out.", False
@@ -301,13 +298,11 @@ def update_copilot_cli(
     env.setdefault("npm_config_ignore_scripts", "false")
 
     try:
-        result = subprocess.run(
+        result = run_hidden(
             [npm_path, "install", "-g", "@github/copilot@latest"],
-            capture_output=True,
             text=True,
             timeout=300,
             env=env,
-            creationflags=_CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return False, "Copilot CLI update timed out."
@@ -320,6 +315,9 @@ def update_copilot_cli(
         return False, detail
 
     emit(PHASE_INSTALLING_CLI)
+    from .copilot_client_sdk import invalidate_copilot_cli_cache
+
+    invalidate_copilot_cli_cache()
     refreshed = build_cli_status(check_latest=False)
     version = refreshed.get("version") or "latest"
     emit(PHASE_COMPLETE)
