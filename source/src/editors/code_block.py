@@ -900,6 +900,8 @@ class CodeBlock(QFrame):
         """Handle run button click - execute or cancel depending on state"""
         if self._is_running:
             self.cancel_requested.emit(self)
+        elif hasattr(self.editor, "request_execute"):
+            self.editor.request_execute()
         else:
             self.execute_requested.emit(self, "")
 

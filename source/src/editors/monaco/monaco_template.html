@@ -284,11 +284,7 @@
                     monaco.KeyMod.Shift | monaco.KeyCode.Enter
                 ],
                 run: function() {
-                    if (pyBridge) {
-                        // Pass selected text so Python doesn't need async round-trip
-                        var selectedText = getSelectedText();
-                        pyBridge.onExecuteRequested(selectedText);
-                    }
+                    triggerExecute();
                 }
             });
             
@@ -731,6 +727,14 @@
                 return editor.getModel().getValueInRange(editor.getSelection());
             }
             return '';
+        }
+
+        /** Read selection at execute time (avoids stale Python cache). */
+        function triggerExecute() {
+            if (!pyBridge || !pyBridge.onExecuteRequested) {
+                return;
+            }
+            pyBridge.onExecuteRequested(getSelectedText());
         }
         
         function hasSelection() {

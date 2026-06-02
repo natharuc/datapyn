@@ -221,6 +221,7 @@ class SessionWidget(QWidget):
         self._current_block_index: Optional[int] = None
         self._current_connection_name_exec: str = ""
         self._current_database_name_exec: str = ""
+        self._sql_execution_token: int = 0
 
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
@@ -911,6 +912,8 @@ class SessionWidget(QWidget):
 
         self._is_executing = True
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
+        self._sql_execution_token += 1
+        execution_token = self._sql_execution_token
 
         # Reset notification counters for single-block execution
         if self._queue_blocks_done == 0:
@@ -925,7 +928,7 @@ class SessionWidget(QWidget):
         self.execution_started.emit()  # Notify main_window to show running indicator
         block = self._get_active_execution_block()
         if block is not None:
-            block.set_running(True)
+            self.editor.mark_block_started(block)
 
         # Track execution context for structured logs
         self._execution_start_time = time.time()
@@ -933,6 +936,12 @@ class SessionWidget(QWidget):
         self._current_block_index = self.editor.get_current_block_index()
         self._current_connection_name_exec = connection_name or self.session.connection_name or ""
         self._current_database_name_exec = database_name or ""
+
+        if self._sql_worker:
+            try:
+                self._sql_worker.finished.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
         # Criar worker e thread
         self._sql_thread = QThread()
@@ -955,7 +964,23 @@ class SessionWidget(QWidget):
 
         # Conectar sinais
         self._sql_thread.started.connect(self._sql_worker.run)
-        self._sql_worker.finished.connect(self._on_sql_finished)
+        token = execution_token
+
+        def _sql_finished_handler(df, err, _token=token):
+            if _token != self._sql_execution_token:
+                if self._sql_thread:
+                    thread = self._sql_thread
+                    self._sql_thread = None
+                    try:
+                        self.session.unregister_thread(thread)
+                    except Exception:
+                        pass
+                    thread.quit()
+                    thread.deleteLater()
+                return
+            self._on_sql_finished(df, err)
+
+        self._sql_worker.finished.connect(_sql_finished_handler)
 
         # Iniciar
         self._sql_thread.start()

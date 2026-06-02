@@ -230,18 +230,17 @@ class BlockEditor(QWidget):
         - If no selection: runs focused block
         """
         if self._focused_block:
+            editor = getattr(self._focused_block, "editor", None)
+            if editor is not None and hasattr(editor, "request_execute"):
+                editor.request_execute()
+                return
             has_sel = self._focused_block.has_selection()
-            print(f"[BlockEditor] _execute_smart: has_selection={has_sel}")
             if has_sel:
-                # Run selection
                 code = self._focused_block.get_selected_text()
-                print(f"[BlockEditor] Running selected text ({len(code)} chars): {code[:50]!r}...")
                 lang = self._focused_block.get_language()
                 self._execute_code(code, lang, self._focused_block)
                 return
-        
-        # Run focused block
-        print("[BlockEditor] Running full block (no selection)")
+
         self._execute_block(self._focused_block or (self._blocks[0] if self._blocks else None))
 
     def _execute_focused_and_advance(self):
@@ -272,6 +271,7 @@ class BlockEditor(QWidget):
 
     def _execute_code(self, code: str, language: str, block: CodeBlock):
         """Emit appropriate execution signal"""
+        self._current_executing_block = block
         block.set_running(True)
 
         if language == "sql":
