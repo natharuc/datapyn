@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v1.36.0 (2026-06-02)
+
+### Bug Fixes
+
+- Melhoria em integração com cli
+  ([`b072dfb`](https://github.com/natharuc/datapyn/commit/b072dfb97b0189f188401790287d5a9613f45ab7))
+
+- **release**: Add DataPyn commit parser and PSR fallback for MSI
+  ([`7feba5b`](https://github.com/natharuc/datapyn/commit/7feba5bdfd9aeb10fc2e49208f14bba5cae86a66))
+
+- **release**: Semantic-release parser and MSI fallback on main
+  ([`4bd39fc`](https://github.com/natharuc/datapyn/commit/4bd39fc06fd73793ea57f7ba09b9fff3ab862207))
+
+### Continuous Integration
+
+- **release**: Fail workflow when MSI is skipped on main
+  ([`15445f7`](https://github.com/natharuc/datapyn/commit/15445f73e7ecdb33056b9bfcbbddbf98ce352363))
+
+### Features
+
+- Melhoria em integração com copilot
+  ([`044667e`](https://github.com/natharuc/datapyn/commit/044667e03e005cbe5b21932bafb25d3444585751))
+
+- Melhoria em integração com copilot
+  ([`19ee27c`](https://github.com/natharuc/datapyn/commit/19ee27ccf63606a3dbddf48c1caca72776c5d6e7))
+
+### Heuristic
+
+- Merge pull request #108 from natharuc/ci/fail-when-msi-skipped
+  ([`4bd39fc`](https://github.com/natharuc/datapyn/commit/4bd39fc06fd73793ea57f7ba09b9fff3ab862207))
+
+- Merge pull request #109 from natharuc/ci/fail-when-msi-skipped
+  ([`044667e`](https://github.com/natharuc/datapyn/commit/044667e03e005cbe5b21932bafb25d3444585751))
+
+
 ## v1.35.1 (2026-06-02)
 
 ### Continuous Integration
