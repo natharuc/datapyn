@@ -62,20 +62,20 @@ class TestCodeBlockCopilotIndicator:
         block = CodeBlock()
         assert block.is_copilot_editing() is False
 
-    def test_set_copilot_editing_true(self, qapp):
-        """set_copilot_editing(True) should show the indicator."""
+    def test_set_pynia_editing_true(self, qapp):
+        """set_pynia_editing(True) should show the indicator."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
+        block.set_pynia_editing(True)
         assert block.is_copilot_editing() is True
         # Widget is not visible when parent is not shown,
         # but the internal flag and !isHidden() confirm it
         assert not block._copilot_indicator.isHidden()
 
-    def test_set_copilot_editing_false(self, qapp):
-        """set_copilot_editing(False) should hide the indicator."""
+    def test_set_pynia_editing_false(self, qapp):
+        """set_pynia_editing(False) should hide the indicator."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
-        block.set_copilot_editing(False)
+        block.set_pynia_editing(True)
+        block.set_pynia_editing(False)
         assert block.is_copilot_editing() is False
         assert block._copilot_indicator.isHidden()
 
@@ -93,7 +93,7 @@ class TestCodeBlockCopilotIndicator:
     def test_copilot_editing_border_style(self, qapp):
         """When copilot editing, block should have purple left border."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
+        block.set_pynia_editing(True)
         block._update_style()
         style = block.styleSheet()
         # Should contain the copilot purple color
@@ -102,17 +102,17 @@ class TestCodeBlockCopilotIndicator:
     def test_normal_border_after_editing_ends(self, qapp):
         """After copilot editing ends, border should return to normal."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
-        block.set_copilot_editing(False)
+        block.set_pynia_editing(True)
+        block.set_pynia_editing(False)
         block._update_style()
         style = block.styleSheet()
         # Purple should not be in the border anymore since block is not focused
         assert block.is_copilot_editing() is False
 
     def test_auto_dismiss_timer_created(self, qapp):
-        """set_copilot_editing(True) should create an auto-dismiss QTimer."""
+        """set_pynia_editing(True) should create an auto-dismiss QTimer."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
+        block.set_pynia_editing(True)
         # Timer should have been created and started
         assert block._copilot_editing_timer is not None
         assert block._copilot_editing_timer.isActive()
@@ -174,14 +174,14 @@ class TestMCPToolHelpers:
         return registry
 
     def test_signal_pynia_editing_calls_block(self, qapp):
-        """_signal_pynia_editing should call set_copilot_editing on the block."""
+        """_signal_pynia_editing should call set_pynia_editing on the block."""
         registry = self._make_registry()
         block = MagicMock()
         block_editor = MagicMock()
 
         registry._signal_pynia_editing(block, block_editor)
 
-        block.set_copilot_editing.assert_called_once_with(True)
+        block.set_pynia_editing.assert_called_once_with(True)
 
     def test_signal_pynia_editing_scrolls_into_view(self, qapp):
         """_signal_pynia_editing should scroll to make the block visible."""
@@ -201,7 +201,7 @@ class TestMCPToolHelpers:
 
         # Should not raise
         registry._signal_pynia_editing(block, block_editor)
-        block.set_copilot_editing.assert_called_once_with(True)
+        block.set_pynia_editing.assert_called_once_with(True)
 
     def test_highlight_edited_lines_calls_editor(self, qapp):
         """_highlight_edited_lines should call go_to_line and highlight_lines."""

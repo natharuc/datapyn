@@ -26,7 +26,7 @@ from src.services.pynia.types import DEFAULT_PROVIDER, PROVIDERS, ProviderId
 
 if TYPE_CHECKING:
     from src.services.copilot.copilot_client_sdk import CopilotClient, ThreadSafeToolExecutor
-    from src.services.copilot.mcp_tools import MCPToolRegistry
+    from src.services.pynia.tools import PyniaToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class PyniaAgentClient(QObject):
         self._copilot_backend = copilot_client
         self._copilot_adapter: Optional[CopilotProviderAdapter] = None
         self._tool_executor: Optional["ThreadSafeToolExecutor"] = None
-        self._tool_registry: Optional["MCPToolRegistry"] = None
+        self._tool_registry: Optional["PyniaToolRegistry"] = None
         self._is_authenticated = False
         self._username = ""
         self._system_message = ""
@@ -185,7 +185,7 @@ class PyniaAgentClient(QObject):
             return self._copilot_backend.usage_snapshot()
         return dict(self._usage_snapshot)
 
-    def set_tool_registry(self, registry: "MCPToolRegistry", parent: QObject = None) -> None:
+    def set_tool_registry(self, registry: "PyniaToolRegistry", parent: QObject = None) -> None:
         from PyQt6.QtWidgets import QApplication
         from src.services.copilot.copilot_client_sdk import ThreadSafeToolExecutor
 

@@ -8,7 +8,9 @@ def test_system_prompt_is_pynia_native():
     assert "Pynia" in text
     assert "DataPyn" in text
     assert "SPEED" in text
-    assert "do not" in text.lower() and "get_context" in text
+    assert "datapyn_snapshot" in text
+    assert "datapyn_" in text
+    assert "get_context" not in text or "no `get_context`" in text.lower() or "There is no" in text
 
 
 def test_request_prompt_includes_directive():

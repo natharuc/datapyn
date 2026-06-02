@@ -35,7 +35,7 @@ class TestOpenAIAgentLoop:
             return "ok-result"
 
         sse_lines = [
-            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"think","arguments":"{\\"text\\":\\"hi\\"}"}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"datapyn_notify","arguments":"{\\"title\\":\\"t\\",\\"message\\":\\"hi\\"}"}}]}}]}',
             "data: [DONE]",
         ]
 
@@ -73,8 +73,8 @@ class TestOpenAIAgentLoop:
                     {
                         "type": "function",
                         "function": {
-                            "name": "think",
-                            "description": "think",
+                            "name": "datapyn_notify",
+                            "description": "notify",
                             "parameters": {"type": "object", "properties": {}},
                         },
                     }
