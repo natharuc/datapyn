@@ -107,6 +107,21 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Rebuild only: version=$VERSION tag=v${VERSION} (no bump)"
 
+  # Automatic runs that only merge ci:/chore:/docs: succeed the release job but skip MSI.
+  # Fail the workflow so "green" does not look like a published installer.
+  verify-msi-published:
+    needs: release
+    if: github.event_name == 'workflow_run' && needs.release.outputs.released != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail when semantic-release did not publish
+        run: |
+          echo "::error::MSI was not built: semantic-release returned released=false (no_release)."
+          echo "Commits on main since the last tag need feat: or fix: in the squash/merge title."
+          echo "ci:, chore:, and docs: do not bump version or build an installer."
+          echo "Recovery: Actions → Continuous Delivery - PSR → Run workflow → force: patch|minor|major"
+          exit 1
+
   build-windows-msi:
     needs: release
     if: needs.release.outputs.released == 'true'
