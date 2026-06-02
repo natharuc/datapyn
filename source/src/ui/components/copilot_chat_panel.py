@@ -2429,9 +2429,8 @@ class PyniaChatPanel(QWidget):
 
     def _do_logout(self):
         """Perform logout via centralized auth service."""
-        from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
-        
+        auth_service = self._get_chat_auth_service()
+
         auth_service.logout_chat()
         self._update_auth_state()
         self._usage_label.setVisible(False)
@@ -2503,11 +2502,9 @@ class PyniaChatPanel(QWidget):
 
     def _cancel_auth_flow(self):
         """Cancel an in-progress GitHub login and return to retryable gate state."""
-        from src.services.copilot import get_copilot_auth_service
-
         self._auth_signing_in = False
         self._auth_device_code = None
-        get_copilot_auth_service().cancel_chat_auth()
+        self._get_chat_auth_service().cancel_chat_auth()
         self._auth_error_message = S.pynia.auth_cancelled
         self._hide_account_switch_busy()
         self._auth_btn.setText(S.pynia.sign_in)
@@ -3021,14 +3018,13 @@ class PyniaChatPanel(QWidget):
                 lambda: self._on_composer_clipboard_paste(fallback_web_paste=False)
             )
 
-        from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
+        auth_service = self._get_chat_auth_service()
         auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
         auth_service.chat_logged_out.connect(self._on_auth_service_chat_logged_out)
         auth_service.chat_auth_failed.connect(self._on_auth_failed)
         auth_service.chat_auth_required.connect(self._on_auth_required)
         auth_service.chat_auth_started.connect(self._on_auth_started)
-        if hasattr(auth_service, 'chat_gh_not_found'):
+        if hasattr(auth_service, "chat_gh_not_found"):
             auth_service.chat_gh_not_found.connect(self._on_gh_not_found)
 
     def _labels_payload(self) -> dict:
@@ -3087,9 +3083,38 @@ class PyniaChatPanel(QWidget):
         )
         self._apply_theme()
         self._sync_all_web_state()
+        self._try_begin_auto_auth_on_open()
         for op in self._pending_webview_ops:
             self._chat_webview.page().runJavaScript(op)
         self._pending_webview_ops.clear()
+
+    def _try_begin_auto_auth_on_open(self) -> None:
+        """Start Copilot/API verification without requiring a manual Sign in click."""
+        if not self._agent_client or self._agent_client.is_authenticated:
+            return
+        if self._auth_signing_in:
+            return
+        auth = self._get_chat_auth_service()
+        pid = getattr(self._agent_client, "provider_id", "copilot")
+        should_start = False
+        if pid == "copilot":
+            from src.services.copilot.copilot_client_sdk import _gh_executable, _is_gh_logged_in
+
+            should_start = _is_gh_logged_in(_gh_executable()) or auth.should_auto_auth("copilot")
+        else:
+            should_start = auth.should_auto_auth(pid)
+        if not should_start:
+            return
+
+        self._auth_error_message = None
+        started = False
+        if pid == "copilot" and hasattr(auth, "trigger_auto_auth_on_open"):
+            started = bool(auth.trigger_auto_auth_on_open(delay_ms=0))
+        else:
+            started = auth.login_chat()
+        if started:
+            self._auth_signing_in = True
+            self._refresh_auth_gate()
 
     def _usage_payload(self, *, updating: bool = False) -> dict:
         from src.services.pynia.usage import build_pynia_usage_payload
@@ -3690,6 +3715,7 @@ class PyniaChatPanel(QWidget):
         self._set_loading(False)
         self._hide_thinking_indicator()
         self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
+        self._clear_tool_watch_timers()
 
     def _on_retry_turn(self, *_args):
         payload = self._chat_runtime.retry_payload()

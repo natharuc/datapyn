@@ -96,8 +96,7 @@ class CopilotMixin:
         auth_chat.chat_auth_required.connect(self._on_lsp_auth_required)
         self._copilot_auth_service.lsp_auth_required.connect(self._on_lsp_auth_required)
         
-        # Trigger auto-auth after UI is ready
-        auth_chat.trigger_auto_auth(delay_ms=500)
+        # Chat panel starts auto-auth when the WebView is ready (shows signing-in state)
         
         logging.info("[MAIN] Copilot auth service initialized")
 

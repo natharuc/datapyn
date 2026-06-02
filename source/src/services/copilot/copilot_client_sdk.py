@@ -237,10 +237,35 @@ def _get_sdk_options():
         logger.info("Using Copilot CLI v%s.%s.%s at %s", *version, cli_path)
         return SubprocessConfig(cli_path=cli_path, env=cli_env)
     if cli_path:
-        logger.info("Using Copilot CLI v%s.%s.%s at %s (legacy SDK config)", *version, cli_path)
-        return {"cli_path": cli_path, "env": cli_env}
-    logger.debug("No working Copilot CLI found; SDK will use its default bundled CLI")
+        logger.warning(
+            "Copilot CLI at %s but SubprocessConfig unavailable; SDK will use default client",
+            cli_path,
+        )
+    else:
+        logger.debug("No working Copilot CLI found; SDK will use its default bundled CLI")
     return None
+
+
+def _create_sdk_client(SDKClient):
+    """
+    Construct the GitHub Copilot SDK client across SDK versions.
+
+    Older SDK builds expose CopilotClient() with no arguments; newer ones accept
+  SubprocessConfig as the first positional argument.
+    """
+    opts = _get_sdk_options()
+    if opts is None:
+        return SDKClient()
+    try:
+        return SDKClient(opts)
+    except TypeError as exc:
+        if "positional argument" in str(exc).lower():
+            logger.warning(
+                "Copilot SDK rejected config (%s); falling back to CopilotClient()",
+                exc,
+            )
+            return SDKClient()
+        raise
 
 
 def _gh_executable() -> str:
@@ -635,7 +660,7 @@ class CopilotWorker(QObject):
 
         try:
             if self._sdk_client is None:
-                self._sdk_client = SDKClient(_get_sdk_options())
+                self._sdk_client = _create_sdk_client(SDKClient)
                 self._loop.run_until_complete(self._sdk_client.start())
             model_list = self._loop.run_until_complete(self._fetch_models())
             self.set_available_models(model_list)
@@ -682,7 +707,7 @@ class CopilotWorker(QObject):
             if SDKClient is None:
                 self.error.emit(f"Copilot SDK not available: {import_err}")
                 return
-            self._sdk_client = SDKClient(_get_sdk_options())
+            self._sdk_client = _create_sdk_client(SDKClient)
             await self._sdk_client.start()
 
         model_list = await self._fetch_models()
@@ -716,7 +741,7 @@ class CopilotWorker(QObject):
                 return
 
             # Create client and start (async)
-            self._sdk_client = SDKClient(_get_sdk_options())
+            self._sdk_client = _create_sdk_client(SDKClient)
             self._loop.run_until_complete(self._sdk_client.start())
 
             # List models to verify auth (async)
@@ -1043,7 +1068,7 @@ class CopilotWorker(QObject):
         logger.info(f"[CHAT] sdk_client exists: {self._sdk_client is not None}, session exists: {self._session is not None}")
         if not self._sdk_client:
             logger.info("[CHAT] Creating new SDK client")
-            self._sdk_client = SDKClient(_get_sdk_options())
+            self._sdk_client = _create_sdk_client(SDKClient)
             await self._sdk_client.start()
             logger.info("[CHAT] Copilot SDK client started")
 
@@ -1425,7 +1450,7 @@ class CopilotWorker(QObject):
         if not self._sdk_client:
             if self._cancelled:
                 return
-            self._sdk_client = SDKClient(_get_sdk_options())
+            self._sdk_client = _create_sdk_client(SDKClient)
             await self._sdk_client.start()
             logger.info("Copilot SDK client started (pre-init)")
         
@@ -1465,7 +1490,7 @@ class CopilotWorker(QObject):
         # Initialize client if needed
         if not self._sdk_client:
             logger.info("[COPILOT-WORKER] Creating new SDK client...")
-            self._sdk_client = SDKClient(_get_sdk_options())
+            self._sdk_client = _create_sdk_client(SDKClient)
             await self._sdk_client.start()
             logger.info("[COPILOT-WORKER] SDK client started")
         

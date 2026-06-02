@@ -70,6 +70,9 @@ class CopilotProviderAdapter(QObject):
                 pass
 
     def start_auth(self) -> None:
+        self._client.start_auth()
+
+    def do_login(self) -> None:
         if hasattr(self._client, "do_login"):
             self._client.do_login()
         else:

@@ -29,8 +29,8 @@ class PyniaAuthService(QObject):
     chat_auth_failed = pyqtSignal(str)
     chat_auth_required = pyqtSignal(str, str)
     chat_auth_started = pyqtSignal(str)
-    chat_gh_not_found = pyqtSignal()
     chat_logged_out = pyqtSignal()
+    chat_gh_not_found = pyqtSignal()
 
     lsp_authenticated = pyqtSignal(str)
     lsp_auth_failed = pyqtSignal(str)
@@ -66,7 +66,7 @@ class PyniaAuthService(QObject):
             return
         c = self._agent_client
         c.authenticated.connect(self._on_chat_authenticated)
-        c.auth_failed.connect(self.chat_auth_failed.emit)
+        c.auth_failed.connect(self._on_chat_auth_failed)
         c.auth_required.connect(self.chat_auth_required.emit)
         c.auth_started.connect(self.chat_auth_started.emit)
         c.models_changed.connect(self.models_changed.emit)
@@ -80,7 +80,7 @@ class PyniaAuthService(QObject):
         c = self._agent_client
         try:
             c.authenticated.disconnect(self._on_chat_authenticated)
-            c.auth_failed.disconnect(self.chat_auth_failed.emit)
+            c.auth_failed.disconnect(self._on_chat_auth_failed)
             c.auth_required.disconnect(self.chat_auth_required.emit)
             c.auth_started.disconnect(self.chat_auth_started.emit)
             c.models_changed.disconnect(self.models_changed.emit)
@@ -108,6 +108,7 @@ class PyniaAuthService(QObject):
         self._lsp_connected = False
 
     def _on_chat_authenticated(self, username: str) -> None:
+        self._auth_in_progress = False
         pid = self._agent_client.provider_id if self._agent_client else "copilot"
         if pid == "copilot":
             from src.services.copilot.copilot_settings import get_copilot_settings
@@ -117,19 +118,45 @@ class PyniaAuthService(QObject):
             self._settings.on_token_authenticated(pid, username)
         self.chat_authenticated.emit(username)
 
+    def _on_chat_auth_failed(self, error: str) -> None:
+        self._auth_in_progress = False
+        self.chat_auth_failed.emit(error)
+
+    def _copilot_backend(self):
+        if not self._agent_client:
+            return None
+        return getattr(self._agent_client, "_copilot_backend", None)
+
     def login_chat(self) -> bool:
         if self._auth_in_progress or not self._agent_client:
             return False
         self._auth_in_progress = True
         client = self._agent_client
-        if client.provider_id == "copilot" and client._copilot_backend:
-            if hasattr(client._copilot_backend, "do_login"):
-                client._copilot_backend.do_login()
+        try:
+            if client.provider_id == "copilot":
+                backend = self._copilot_backend()
+                if backend is None:
+                    self._auth_in_progress = False
+                    self.chat_auth_failed.emit("Copilot connector not available.")
+                    return False
+                from src.services.copilot.copilot_client_sdk import _gh_executable, _is_gh_logged_in
+
+                if _is_gh_logged_in(_gh_executable()):
+                    logger.info("[PyniaAuth] GitHub CLI session found — verifying Copilot")
+                    client.start_auth()
+                elif hasattr(backend, "do_login"):
+                    logger.info("[PyniaAuth] Starting GitHub login for Copilot")
+                    backend.do_login()
+                else:
+                    client.start_auth()
             else:
                 client.start_auth()
-        else:
-            client.start_auth()
-        return True
+            return True
+        except Exception as exc:
+            logger.exception("[PyniaAuth] Failed to start chat login")
+            self._auth_in_progress = False
+            self.chat_auth_failed.emit(str(exc))
+            return False
 
     def logout_chat(self) -> None:
         if not self._agent_client:
@@ -140,7 +167,11 @@ class PyniaAuthService(QObject):
             from src.services.copilot.copilot_settings import get_copilot_settings
 
             get_copilot_settings().on_chat_logout()
+            backend = self._copilot_backend()
+            if backend and hasattr(backend, "sign_out"):
+                backend.sign_out()
         self._agent_client.cancel()
+        self._auth_in_progress = False
         self.chat_logged_out.emit()
 
     def login_lsp(self) -> bool:
@@ -158,14 +189,49 @@ class PyniaAuthService(QObject):
             self._agent_client.cancel_pending_auth()
         self._auth_in_progress = False
 
-    def trigger_auto_auth(self, delay_ms: int = 500) -> None:
-        if not self._settings.should_auto_auth():
-            return
+    def should_auto_auth(self, provider_id: Optional[ProviderId] = None) -> bool:
+        pid = provider_id or (self._agent_client.provider_id if self._agent_client else "copilot")
+        if pid == "copilot":
+            from src.services.copilot.copilot_settings import get_copilot_settings
+
+            return get_copilot_settings().should_auto_auth_chat()
+        return self._settings.should_auto_auth(pid)
+
+    def trigger_auto_auth(self, delay_ms: int = 500) -> bool:
+        if not self.should_auto_auth():
+            return False
         QTimer.singleShot(delay_ms, self._auto_auth_chat)
+        return True
+
+    def trigger_auto_auth_on_open(self, delay_ms: int = 400) -> bool:
+        """Verify Copilot when gh is already logged in, even before first successful chat."""
+        if not self._agent_client or self._agent_client.is_authenticated:
+            return False
+        if self._auth_in_progress:
+            return False
+        if self._agent_client.provider_id != "copilot":
+            return self.trigger_auto_auth(delay_ms)
+        from src.services.copilot.copilot_client_sdk import _gh_executable, _is_gh_logged_in
+
+        if not _is_gh_logged_in(_gh_executable()):
+            return self.trigger_auto_auth(delay_ms)
+        QTimer.singleShot(delay_ms, self._auto_verify_copilot)
+        return True
+
+    def _auto_verify_copilot(self) -> None:
+        if self._auth_in_progress or not self._agent_client or self._agent_client.is_authenticated:
+            return
+        self._auth_in_progress = True
+        try:
+            self._agent_client.start_auth()
+        except Exception as exc:
+            self._auth_in_progress = False
+            self.chat_auth_failed.emit(str(exc))
 
     def _auto_auth_chat(self) -> None:
         if self._agent_client and not self._agent_client.is_authenticated:
-            self.login_chat()
+            if not self.login_chat():
+                self._auth_in_progress = False
 
     def prepare_chat_account_switch(self, username: str):
         """Copilot-only multi-account via gh CLI."""
