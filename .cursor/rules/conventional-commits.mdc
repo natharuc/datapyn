@@ -1,11 +1,11 @@
 ---
-description: Require Conventional Commits for all git commits and PR titles in DataPyn
+description: Require Conventional Commits for git and PR titles in DataPyn
 alwaysApply: true
 ---
 
 # Conventional Commits (required)
 
-Every agent and human contributor **must** use [Conventional Commits](https://www.conventionalcommits.org/) in this repository.
+Use [Conventional Commits](https://www.conventionalcommits.org/) in **English** for commits and PR titles.
 
 ## Format
 
@@ -13,43 +13,26 @@ Every agent and human contributor **must** use [Conventional Commits](https://ww
 <type>(<scope>): <subject>
 ```
 
-- **Language**: English only for commit messages and PR titles.
-- **Subject**: imperative mood, ≤50 characters, no trailing period.
-- **Body** (optional): explain what and why; separate from subject with a blank line.
-
-## Types that affect semver (CI release)
+## Types and semver (python-semantic-release on `main`)
 
 | Type | Release |
 |------|---------|
-| `fix` | Patch (1.0.X) |
-| `feat` | Minor (1.X.0) |
-| `feat!` or footer `BREAKING CHANGE:` | Major (X.0.0) |
+| `feat` | Minor |
+| `fix`, `perf`, `refactor`, `revert`, `build` | Patch |
+| `chore`, `ci`, `docs`, `style`, `test` | No bump (CI may still apply fallback patch if nothing else released) |
 
-Types that **do not** trigger a version bump: `docs`, `style`, `test`, `chore`, `ci`, `refactor`, `perf`, `build`, `revert`.
+Breaking: `feat!` or footer `BREAKING CHANGE:` → major.
 
-## Scopes (prefer when relevant)
+## Parser fallback
 
-`ui`, `editor`, `database`, `executor`, `services`, `workers`, `panels`, `copilot`, `settings`, `i18n`, `deps`, `installer`, `tests`, `ci`
+`scripts/datapyn_commit_parser.py` also maps imperative subjects without a prefix (e.g. `Add …` → minor, `Improve …` / `Delete …` → patch) and parses GitHub merge commit bodies. Prefer explicit `feat:` / `fix:` anyway.
 
 ## Agent obligations
 
-1. **Before committing**: write the message as `type(scope): subject`, never free-form titles like `Improve grid performance` or `Delete file.txt`.
-2. **Before suggesting a PR title**: use the same format; squash-merge titles become the commit on `main` and drive python-semantic-release.
-3. **When the user asks to commit**: propose a conventional message; if the change is user-facing, prefer `feat` or `fix` over `chore`.
-4. **When creating commits for the user**: use conventional format in `git commit -m`.
+1. Propose and use `type(scope): subject` for every commit and PR title.
+2. User-facing work → `feat` or `fix`, not bare `Improve …` or `chore`.
+3. Do not use free-form merge titles when a release is expected.
 
-## Examples
-
-```
-feat(copilot): add image attachments to chat runtime
-fix(results): format epoch nanoseconds as datetime in grid
-ci(release): document manual force bump in PSR workflow
-chore(deps): bump uv lockfile
-```
-
-## Do not
-
-- `Improve Summarize panel` / `Make Monaco async` / `Update stuff`
-- Commits without a `type:` prefix on merges to `main` (release pipeline will skip with `no_release`)
+Examples: `feat(copilot): add image attachments`, `fix(results): format epoch datetimes`, `ci(release): improve PSR fallback`
 
 Full guide: `.github/git-commit-instructions.md`

@@ -64,6 +64,14 @@ native-tls = true
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 commit_message = "chore(release): {version} [skip ci]"
+commit_parser = "scripts/datapyn_commit_parser.py:DatapynCommitParser"
+
+[tool.semantic_release.commit_parser_options]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf", "refactor", "revert", "build"]
+other_allowed_tags = ["chore", "ci", "docs", "style", "test"]
+ignore_merge_commits = false
+parse_squash_commits = true
 
 [tool.semantic_release.remote]
 ignore_token_for_push = true
