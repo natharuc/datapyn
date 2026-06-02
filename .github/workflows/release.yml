@@ -8,6 +8,21 @@ on:
     types:
       - completed
   workflow_dispatch:
+    inputs:
+      rebuild_only:
+        description: "Rebuild MSI for the current pyproject.toml version (no version bump)"
+        required: false
+        type: boolean
+        default: false
+      force:
+        description: "Force a semver bump on manual run (patch, minor, or major). Ignored when rebuild_only is true."
+        required: false
+        type: choice
+        options:
+          - ""
+          - patch
+          - minor
+          - major
 
 # default: least privileged permissions across all jobs
 permissions:
@@ -39,7 +54,7 @@ jobs:
 
     steps:
       - name: Install SSH Client and add private key to ssh-agent
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
@@ -50,7 +65,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.workflow_run.head_branch }}
-          ssh-key: ${{ github.event_name != 'workflow_dispatch' && secrets.ACTIONS_DEPLOY_KEY || '' }}
+          ssh-key: ${{ (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true) && secrets.ACTIONS_DEPLOY_KEY || '' }}
 
       - name: Setup | Force release branch to be at workflow sha
         if: github.event_name != 'workflow_dispatch'
@@ -59,16 +74,27 @@ jobs:
 
       - name: Action | Semantic Version Release
         id: release
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
         uses: python-semantic-release/python-semantic-release@v10.5.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           git_committer_name: "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
+          force: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '' }}
 
-      - name: Manual | Read version from pyproject.toml
+      - name: Report | No semantic release (conventional commits required)
+        if: steps.release.outputs.released != 'true' && (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true)
+        run: |
+          echo "::notice::Semantic Release did not bump the version (released=false)."
+          echo "Commits on main since the last tag must use Conventional Commits, for example:"
+          echo "  feat: new feature (minor bump)"
+          echo "  fix: bug fix (patch bump)"
+          echo "Merge/squash titles like 'Improve grid performance' or 'Delete file.txt' do not trigger a release."
+          echo "To publish anyway, run this workflow manually with rebuild_only=false and force=patch|minor|major."
+
+      - name: Manual | Read version from pyproject.toml (rebuild MSI only)
         id: dry_run_version
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.rebuild_only == true
         run: |
           VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           if [ -z "$VERSION" ] || [ "$VERSION" = "0.0.0" ]; then
@@ -79,7 +105,7 @@ jobs:
           echo "released=true" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Manual release: version=$VERSION tag=v${VERSION}"
+          echo "Rebuild only: version=$VERSION tag=v${VERSION} (no bump)"
 
   build-windows-msi:
     needs: release

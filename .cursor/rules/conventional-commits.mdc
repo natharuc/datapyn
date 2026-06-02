@@ -1,0 +1,55 @@
+---
+description: Require Conventional Commits for all git commits and PR titles in DataPyn
+alwaysApply: true
+---
+
+# Conventional Commits (required)
+
+Every agent and human contributor **must** use [Conventional Commits](https://www.conventionalcommits.org/) in this repository.
+
+## Format
+
+```
+<type>(<scope>): <subject>
+```
+
+- **Language**: English only for commit messages and PR titles.
+- **Subject**: imperative mood, ≤50 characters, no trailing period.
+- **Body** (optional): explain what and why; separate from subject with a blank line.
+
+## Types that affect semver (CI release)
+
+| Type | Release |
+|------|---------|
+| `fix` | Patch (1.0.X) |
+| `feat` | Minor (1.X.0) |
+| `feat!` or footer `BREAKING CHANGE:` | Major (X.0.0) |
+
+Types that **do not** trigger a version bump: `docs`, `style`, `test`, `chore`, `ci`, `refactor`, `perf`, `build`, `revert`.
+
+## Scopes (prefer when relevant)
+
+`ui`, `editor`, `database`, `executor`, `services`, `workers`, `panels`, `copilot`, `settings`, `i18n`, `deps`, `installer`, `tests`, `ci`
+
+## Agent obligations
+
+1. **Before committing**: write the message as `type(scope): subject`, never free-form titles like `Improve grid performance` or `Delete file.txt`.
+2. **Before suggesting a PR title**: use the same format; squash-merge titles become the commit on `main` and drive python-semantic-release.
+3. **When the user asks to commit**: propose a conventional message; if the change is user-facing, prefer `feat` or `fix` over `chore`.
+4. **When creating commits for the user**: use conventional format in `git commit -m`.
+
+## Examples
+
+```
+feat(copilot): add image attachments to chat runtime
+fix(results): format epoch nanoseconds as datetime in grid
+ci(release): document manual force bump in PSR workflow
+chore(deps): bump uv lockfile
+```
+
+## Do not
+
+- `Improve Summarize panel` / `Make Monaco async` / `Update stuff`
+- Commits without a `type:` prefix on merges to `main` (release pipeline will skip with `no_release`)
+
+Full guide: `.github/git-commit-instructions.md`
