@@ -2027,6 +2027,66 @@ class PyniaChatPanel(QWidget):
             except Exception as e:
                 logger.debug(f"Error cancelling active Copilot query: {e}")
 
+    def _clear_pynia_editing_indicators(self) -> None:
+        """Clear block sparkle state left by datapyn_edit when a turn aborts."""
+        editor = self._active_block_editor()
+        if not editor:
+            return
+        for block in list(getattr(editor, "blocks", []) or []):
+            try:
+                if hasattr(block, "set_pynia_editing"):
+                    block.set_pynia_editing(False)
+            except Exception as exc:
+                logger.debug("Clear Pynia editing indicator: %s", exc)
+
+    def _turn_events_allowed(self) -> bool:
+        return bool(self._chat_runtime.is_active)
+
+    def _should_ignore_stale_completion(self) -> bool:
+        if self._chat_runtime.is_active:
+            return False
+        return self._chat_runtime.last_turn.get("state") in (
+            "timed_out",
+            "cancelled",
+            "error",
+            "complete",
+        )
+
+    def _release_turn_ui(self) -> None:
+        """Reset WebView, tools, and pins after any terminal turn outcome."""
+        self._clear_tool_watch_timers()
+        self._active_tool_calls.clear()
+        self._cancel_active_tool_target()
+        self._clear_pynia_editing_indicators()
+        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
+            self._mcp_server.tool_registry.unpin_session()
+        self._active_tool_target_id = None
+        self._current_stream_id = None
+        if self._is_thinking:
+            self._is_thinking = False
+        self._set_loading(False)
+        self._hide_thinking_indicator()
+        self._run_chat_js(
+            "completeAllRunningTools(); endThinkingBlock(); endStreaming(); "
+            "endToolGroup(); endAgentTurn(); stopActivityTimer();"
+        )
+
+    def _recover_stuck_turn(self, error: str = "", *, cancelled: bool = False) -> None:
+        """Force-release a wedged turn so the user can send again."""
+        if self._chat_runtime.is_active:
+            if cancelled:
+                self._chat_runtime.cancel()
+            elif error:
+                self._chat_runtime.fail(error)
+            else:
+                self._chat_runtime.cancel()
+        if self._agent_client and hasattr(self._agent_client, "cancel"):
+            try:
+                self._agent_client.cancel()
+            except Exception as exc:
+                logger.debug("Agent cancel during turn recovery: %s", exc)
+        self._release_turn_ui()
+
     def _add_message(
         self,
         role: str,
@@ -2494,6 +2554,9 @@ class PyniaChatPanel(QWidget):
     def _on_auth_failed(self, error: str):
         """Authentication failed — show status in gate."""
         from src.services.copilot.copilot_sdk_compat import is_runtime_update_error
+
+        if self._chat_runtime.is_active:
+            self._recover_stuck_turn(str(error or "Authentication failed"))
 
         self._auth_signing_in = False
         self._auth_device_code = None
@@ -3789,25 +3852,11 @@ class PyniaChatPanel(QWidget):
     def _on_runtime_timeout(self, _turn_id: str):
         if self._agent_client and hasattr(self._agent_client, "cancel"):
             self._agent_client.cancel()
-        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-            self._mcp_server.tool_registry.unpin_session()
-        self._active_tool_target_id = None
-        self._set_loading(False)
-        self._hide_thinking_indicator()
-        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
+        self._release_turn_ui()
 
     def _on_stop(self, *_args):
-        if self._agent_client and hasattr(self._agent_client, "cancel"):
-            self._agent_client.cancel()
-        self._cancel_active_tool_target()
-        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-            self._mcp_server.tool_registry.unpin_session()
-        self._active_tool_target_id = None
         self._chat_runtime.cancel()
-        self._set_loading(False)
-        self._hide_thinking_indicator()
-        self._run_chat_js("endThinkingBlock(); endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
-        self._clear_tool_watch_timers()
+        self._recover_stuck_turn(cancelled=True)
 
     def _on_retry_turn(self, *_args):
         payload = self._chat_runtime.retry_payload()
@@ -3823,6 +3872,8 @@ class PyniaChatPanel(QWidget):
             )
 
     def _on_response_chunk(self, chunk: str):
+        if not self._turn_events_allowed():
+            return
         self._chat_runtime.touch_activity()
         self._chat_runtime.mark_streaming()
         self._hide_thinking_indicator()
@@ -3838,26 +3889,18 @@ class PyniaChatPanel(QWidget):
             self._run_chat_js(f"streamChunk({json.dumps(chunk)})")
 
     def _on_response_complete(self, full_text: str):
-        if self._chat_runtime.last_turn.get("state") == "timed_out":
-            logger.info("Ignoring response completion after turn timeout")
+        if self._should_ignore_stale_completion():
+            logger.info("Ignoring stale response completion (turn already ended)")
             return
+        if not self._turn_events_allowed():
+            return
+        stream_id = self._current_stream_id
         self._chat_runtime.complete(full_text)
-        self._set_loading(False)
-        self._hide_thinking_indicator()
-        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-            self._mcp_server.tool_registry.unpin_session()
-        self._active_tool_target_id = None
-        if self._is_thinking:
-            self._is_thinking = False
-            self._run_chat_js("endThinkingBlock()")
-        self._run_chat_js("endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
-        self._clear_tool_watch_timers()
-        self._active_tool_calls.clear()
-        if not self._current_stream_id:
+        if not stream_id:
             self._add_message("assistant", full_text)
         elif self._messages and self._messages[-1]["role"] == "assistant":
             self._messages[-1]["content"] = full_text
-        self._current_stream_id = None
+        self._release_turn_ui()
         self._active_references = []
         self._notify_copilot_task_complete(full_text)
         self._save_current_session()
@@ -3897,18 +3940,9 @@ class PyniaChatPanel(QWidget):
             self._turn_had_notify_user = False
 
     def _on_chat_error(self, error: str):
-        self._chat_runtime.fail(error)
-        self._set_loading(False)
-        self._hide_thinking_indicator()
-        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-            self._mcp_server.tool_registry.unpin_session()
-        self._active_tool_target_id = None
-        if self._is_thinking:
-            self._is_thinking = False
-            self._run_chat_js("endThinkingBlock()")
-        self._run_chat_js("endStreaming(); endToolGroup(); endAgentTurn(); stopActivityTimer();")
-        self._current_stream_id = None
-        self._active_tool_calls.clear()
+        if self._chat_runtime.is_active:
+            self._chat_runtime.fail(error)
+        self._recover_stuck_turn(error)
         if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
             self._on_gh_not_found()
 
@@ -3924,7 +3958,7 @@ class PyniaChatPanel(QWidget):
 
     def _on_agent_progress(self, payload: dict) -> None:
         """Single activity line during agent turns (no per-tool timeline spam)."""
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or not self._turn_events_allowed():
             return
         self._chat_runtime.touch_activity()
         phase_key = str(payload.get("phase_key") or "")
@@ -3974,6 +4008,8 @@ class PyniaChatPanel(QWidget):
 
     def _on_tool_watchdog(self, tool_id: str, tool_name: str) -> None:
         """Mark a tool as failed if Copilot SDK never sent TOOL_EXECUTION_COMPLETE."""
+        if not self._turn_events_allowed():
+            return
         if tool_id not in self._active_tool_calls:
             return
         msg = getattr(S.pynia, "tool_timed_out", "Tool timed out — continuing.")
@@ -3981,6 +4017,8 @@ class PyniaChatPanel(QWidget):
         self._on_tool_result(tool_name, f"Error: {msg}", tool_id)
 
     def _on_tool_called(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
+        if not self._turn_events_allowed():
+            return
         self._chat_runtime.mark_tool(tool_name, "running")
         if tool_name != "think":
             self._turn_tools_used += 1
@@ -4021,6 +4059,8 @@ class PyniaChatPanel(QWidget):
         self._tool_watch_timers[tool_id] = timer
 
     def _on_tool_result(self, tool_name: str, result: str, tool_call_id: str = ""):
+        if not self._turn_events_allowed():
+            return
         self._chat_runtime.touch_activity()
         self._chat_runtime.mark_tool(tool_name, "done")
         tool_id = tool_call_id or next(
@@ -4051,7 +4091,7 @@ class PyniaChatPanel(QWidget):
             del self._active_tool_calls[tool_id]
 
     def _on_thinking(self, text: str):
-        if not text.strip():
+        if not text.strip() or not self._turn_events_allowed():
             return
         self._chat_runtime.mark_thinking(text)
         preview = text.strip().replace("\n", " ")[:100]

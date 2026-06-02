@@ -547,6 +547,7 @@ class CopilotWorker(QObject):
         self._block_inspect_counts: Dict[str, int] = {}
         self._ui_tool_call_ids: set[str] = set()
         self._turn_tool_executions: int = 0
+        self._chat_busy = False
 
     def invalidate_sdk_tools(self) -> None:
         """Force SDK tools and session to rebuild (e.g. after Pynia registry swap)."""
@@ -661,8 +662,12 @@ class CopilotWorker(QObject):
                 pass
         if self._session and self._loop and not self._loop.is_closed():
             try:
-                # Run abort() coroutine in the worker's event loop
-                self._loop.run_until_complete(self._session.abort())
+                import asyncio
+
+                if self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(self._session.abort(), self._loop)
+                else:
+                    self._loop.run_until_complete(self._session.abort())
             except Exception:
                 pass
 
@@ -1052,12 +1057,19 @@ class CopilotWorker(QObject):
     @pyqtSlot()
     def run_chat(self):
         """Send chat message and stream response. Uses persistent loop/client."""
+        if self._chat_busy:
+            self.error.emit("A response is still in progress. Wait or press Stop.")
+            self.finished.emit()
+            return
+        self._chat_busy = True
+        self._cancelled = False
         try:
             self._do_chat()
         except Exception as e:
             logger.exception("Error in Copilot chat")
             self.error.emit(str(e))
         finally:
+            self._chat_busy = False
             self.finished.emit()
 
     def _do_chat(self):
@@ -1281,6 +1293,9 @@ class CopilotWorker(QObject):
                 return
             
             self.usage_ready.emit(await self._async_usage_snapshot())
+            if self._cancelled:
+                logger.info("Chat cancelled before completion")
+                return
             logger.info(f"Chat complete, response length: {len(full_response)} chars")
             if not full_response:
                 logger.warning("Empty response from Copilot - enterprise account may not have chat access")

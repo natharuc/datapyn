@@ -175,6 +175,8 @@ class TokenAgentWorker(QObject):
                     extra_headers=extra,
                     on_progress=self._emit_progress,
                 )
+            if self._cancelled:
+                return
             self.complete.emit(final or "")
         except Exception as exc:
             logger.exception("Token agent chat failed")

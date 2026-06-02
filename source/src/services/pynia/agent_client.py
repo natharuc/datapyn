@@ -85,6 +85,7 @@ class PyniaAgentClient(QObject):
 
         self._token_thread: Optional[QThread] = None
         self._token_worker: Optional[TokenAgentWorker] = None
+        self._token_worker_mode = ""
 
         self._completion_thread: Optional[QThread] = None
         self._completion_worker: Optional[QObject] = None
@@ -413,6 +414,7 @@ class PyniaAgentClient(QObject):
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self._cleanup_token_worker()
+        self._token_worker_mode = mode
         self._token_worker = TokenAgentWorker(
             self._provider_id,
             self._tool_executor,
@@ -454,6 +456,7 @@ class PyniaAgentClient(QObject):
             self._token_thread.wait(3000)
         self._token_worker = None
         self._token_thread = None
+        self._token_worker_mode = ""
 
     def _on_token_auth_ok(self) -> None:
         self._is_authenticated = True
@@ -461,6 +464,11 @@ class PyniaAgentClient(QObject):
         self.authenticated.emit(self._username)
 
     def _on_token_error(self, message: str) -> None:
+        if self._token_worker_mode == "chat":
+            self.chat_error.emit(message)
+            if "token" in message.lower() or "401" in message:
+                self.auth_failed.emit(message)
+            return
         if "token" in message.lower() or "401" in message:
             self.auth_failed.emit(message)
         else:
