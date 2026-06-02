@@ -446,6 +446,7 @@ class TestMonacoEditorInterface:
         assert callable(getattr(editor, "get_text", None))
         assert callable(getattr(editor, "set_text", None))
         assert callable(getattr(editor, "get_selected_text", None))
+        assert callable(getattr(editor, "request_execute", None))
         assert callable(getattr(editor, "has_selection", None))
         assert callable(getattr(editor, "clear", None))
         

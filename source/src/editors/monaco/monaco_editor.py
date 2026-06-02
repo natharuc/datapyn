@@ -443,6 +443,13 @@ class MonacoEditor(QWidget):
         """Force trigger an inline completion request (Ctrl+. shortcut)."""
         self._run_js_when_ready("forceRequestCompletion()")
     
+    def request_execute(self) -> None:
+        """Run the current selection (or full block) using live Monaco selection."""
+        if self._is_ready:
+            self._run_js("triggerExecute()")
+        else:
+            self.execute_requested.emit(self.get_selected_text())
+
     def get_selected_text(self) -> str:
         """Returns selected text from the latest JS selection snapshot."""
         return self._selected_text_cache
