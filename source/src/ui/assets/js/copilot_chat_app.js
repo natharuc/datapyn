@@ -29,6 +29,7 @@
         thinkingText: "",
         thinkingStartedAt: 0,
         agentTimelineEl: null,
+        turnToolLog: [],
         pasteBusy: false,
         recentAttachmentKeys: new Set(),
         supportsVision: true,
@@ -447,6 +448,8 @@
     function startStreaming() {
         hideThinking();
         endThinkingBlock();
+        endToolGroup();
+        stopActivityTimer();
         const row = addMessage("assistant", "", `stream-${Date.now()}`);
         state.streamingEl = row.querySelector(".message");
     }
@@ -481,45 +484,115 @@
         const phase = payload.phase || "";
         const detail = payload.detail || "";
         if (phase || detail) {
-            setActivity({ phase: phase || label("waiting_response", ""), detail });
-        }
-        const stepId = payload.step_id || "";
-        const stepState = payload.step_state || "active";
-        if (!stepId) {
-            scrollToBottom();
-            return;
-        }
-        const tl = ensureAgentTimeline();
-        if (stepState === "active") {
-            tl.querySelectorAll(".agent-step.active").forEach((node) => {
-                node.classList.remove("active");
-                node.classList.add("done");
+            setActivity({
+                phase: phase || label("activity_working", label("waiting_response", "")),
+                detail: detail && !phase.includes(detail) ? detail : "",
             });
         }
-        let row = tl.querySelector(`[data-step-id="${CSS.escape(stepId)}"]`);
+        scrollToBottom();
+    }
+
+    function refreshCompactWorkSummary() {
+        if (!state.workEl) return;
+        const n = state.turnToolLog.length;
+        const titleSpan = state.workEl.querySelector(".work-summary-title");
+        const status = state.workEl.querySelector(".work-status");
+        if (!titleSpan) return;
+        if (n === 0) {
+            state.workEl.remove();
+            state.workEl = null;
+            return;
+        }
+        const tpl = label("work_summary_steps", "{n} steps");
+        titleSpan.textContent = tpl.replace("{n}", String(n));
+        if (status) {
+            status.textContent = label("work_expand_hint", "Show details");
+        }
+    }
+
+    function ensureCompactWorkBlock() {
+        hideWelcome();
+        if (state.workEl) return state.workEl;
+        const block = document.createElement("details");
+        block.className = "work-block work-block-compact";
+        block.innerHTML = `<summary><span class="work-summary-title">${escapeHtml(label("work_title", ""))}</span><span class="work-status">${escapeHtml(label("work_expand_hint", ""))}</span></summary><div class="work-list"></div>`;
+        $("messages").appendChild(block);
+        state.workEl = block;
+        return block;
+    }
+
+    function appendToolLogRow(title, toolId, status) {
+        const block = ensureCompactWorkBlock();
+        const list = block.querySelector(".work-list");
+        if (!list) return;
+        let row = list.querySelector(`[data-tool-id="${CSS.escape(toolId)}"]`);
         if (!row) {
             row = document.createElement("div");
-            row.className = "agent-step";
-            row.dataset.stepId = stepId;
-            row.innerHTML = '<span class="agent-step-icon" aria-hidden="true"></span><span class="agent-step-label"></span>';
-            tl.appendChild(row);
+            row.className = "tool-row";
+            row.dataset.toolId = toolId;
+            row.innerHTML = `<div class="tool-row-head"><span></span><span></span></div>`;
+            list.appendChild(row);
         }
-        row.classList.remove("active", "done", "error");
-        if (stepState === "done") row.classList.add("done");
-        else if (stepState === "error") row.classList.add("error");
-        else row.classList.add("active");
-        const labelEl = row.querySelector(".agent-step-label");
-        if (labelEl && phase) labelEl.textContent = phase;
+        row.classList.toggle("running", status === "running");
+        row.classList.toggle("error", status === "error");
+        const spans = row.querySelectorAll(".tool-row-head span");
+        if (spans[0]) spans[0].textContent = title;
+        if (spans[1]) {
+            spans[1].textContent = status === "running"
+                ? label("tool_running", "")
+                : status === "error"
+                    ? label("tool_error", "")
+                    : label("tool_ok", "");
+        }
+    }
+
+    function trackAgentTool(toolId, labelText, phase) {
+        hideWelcome();
+        setWorking(true);
+        const title = String(labelText || "").trim();
+        if (phase === "start") {
+            const existing = state.turnToolLog.find((t) => t.id === toolId);
+            if (!existing) {
+                state.turnToolLog.push({ id: toolId, title, status: "running" });
+            } else {
+                existing.status = "running";
+            }
+            state.toolCount = state.turnToolLog.length;
+            if (title) {
+                setActivity({ phase: title, detail: "" });
+            }
+            appendToolLogRow(title, toolId, "running");
+            refreshCompactWorkSummary();
+        } else {
+            const entry = state.turnToolLog.find((t) => t.id === toolId);
+            if (entry) {
+                entry.status = phase === "error" ? "error" : "done";
+                appendToolLogRow(entry.title, toolId, entry.status);
+            }
+            state.completedTools = state.turnToolLog.filter((t) => t.status !== "running").length;
+            const next = state.turnToolLog.find((t) => t.status === "running");
+            if (next) {
+                setActivity({ phase: next.title, detail: "" });
+            } else if (state.turnToolLog.length) {
+                setActivity({
+                    phase: label("activity_synthesizing", label("waiting_response", "")),
+                    detail: "",
+                });
+            }
+            refreshCompactWorkSummary();
+        }
         scrollToBottom();
+        return toolId;
     }
 
     function startAgentTurn(contextChip) {
         hideWelcome();
+        hideThinking();
         state.workEl = null;
         state.toolCount = 0;
         state.completedTools = 0;
-        const oldTimeline = $("agentTimeline");
-        if (oldTimeline) oldTimeline.remove();
+        state.turnToolLog = [];
+        document.querySelectorAll(".agent-timeline").forEach((node) => node.remove());
         state.agentTimelineEl = null;
         document.querySelectorAll(".turn-context-chip").forEach((node) => node.remove());
         if (contextChip) {
@@ -528,127 +601,56 @@
             chip.innerHTML = `<span class="turn-context-icon" aria-hidden="true">◇</span><code>${escapeHtml(contextChip)}</code>`;
             $("messages").appendChild(chip);
         }
-        showThinking();
+        setActivity({
+            phase: label("activity_working", label("waiting_response", "")),
+            detail: "",
+        });
+        setWorking(true);
         scrollToBottom();
     }
 
     function endAgentTurn() {
-        const tl = $("agentTimeline");
-        if (tl) {
-            tl.querySelectorAll(".agent-step.active").forEach((node) => {
-                node.classList.remove("active");
-                node.classList.add("done");
-            });
+        refreshCompactWorkSummary();
+        if (state.workEl) {
+            state.workEl.removeAttribute("open");
         }
     }
 
     function ensureWorkBlock() {
-        hideWelcome();
-        if (state.workEl) return state.workEl;
-        const block = document.createElement("details");
-        block.className = "work-block";
-        block.setAttribute("open", "");
-        block.innerHTML = `<summary><span>${escapeHtml(label("work_title", label("thinking", "")))}</span><span class="work-status">${escapeHtml(label("work_running", label("tool_running", "")))}</span></summary><div class="work-list"></div>`;
-        $("messages").appendChild(block);
-        state.workEl = block;
-        return block;
+        return ensureCompactWorkBlock();
     }
 
-    function updateWorkStatus(done) {
-        if (!state.workEl) return;
-        const status = state.workEl.querySelector(".work-status");
-        if (!status) return;
-        status.textContent = done ? label("work_complete", label("tool_ok", "")) : label("work_running", label("tool_running", ""));
-    }
-
-    function inspectBlockKey(toolName, argSummary) {
-        if (toolName !== "datapyn_inspect" || !argSummary) return "";
-        const match = String(argSummary).match(/block_name=([^,]+)/i);
-        return match ? match[1].trim() : "";
+    function updateWorkStatus(_done) {
+        refreshCompactWorkSummary();
     }
 
     function addToolUse(toolName, argSummary, toolId, displayLabel) {
-        const block = ensureWorkBlock();
-        block.setAttribute("open", "");
         const title = displayLabel || toolName;
-        const blockKey = inspectBlockKey(toolName, argSummary);
-        const list = block.querySelector(".work-list");
-
-        if (blockKey && list) {
-            const existing = Array.from(list.querySelectorAll(".tool-row.running")).find(
-                (node) => node.dataset.inspectBlock === blockKey
-            );
-            if (existing) {
-                existing.dataset.toolId = toolId || existing.dataset.toolId;
-                const detail = existing.querySelector(".tool-row-detail");
-                if (detail) {
-                    const prev = detail.textContent || "";
-                    detail.textContent = prev ? `${prev} · ${argSummary || ""}` : (argSummary || "");
-                }
-                setActivity({
-                    phase: label("activity_running_tool", "{tool}").replace("{tool}", title),
-                    detail: argSummary || "",
-                });
-                scrollToBottom();
-                return existing.dataset.toolId;
-            }
-        }
-
-        state.toolCount += 1;
-        updateWorkStatus(false);
-        setActivity({
-            phase: label("activity_running_tool", "{tool}").replace("{tool}", title),
-            detail: argSummary || "",
-        });
-
-        const row = document.createElement("div");
-        row.className = "tool-row running";
-        row.dataset.toolName = toolName;
-        row.dataset.toolId = toolId || `${toolName}-${state.toolCount}`;
-        if (blockKey) row.dataset.inspectBlock = blockKey;
-        row.innerHTML = `<div class="tool-row-head"><span>${escapeHtml(title)}</span><span>${escapeHtml(label("tool_running", ""))}</span></div><div class="tool-row-detail">${escapeHtml(argSummary || "")}</div>`;
-        list.appendChild(row);
-        scrollToBottom();
-        return row.dataset.toolId;
+        return trackAgentTool(toolId || `${toolName}-${state.turnToolLog.length + 1}`, title, "start");
     }
 
-    function updateToolStatus(toolName, _status, isError, resultPreview, toolId) {
-        const rows = Array.from(document.querySelectorAll(".tool-row"));
-        let row = toolId ? rows.find((node) => node.dataset.toolId === toolId) : null;
-        if (!row) {
-            row = rows.find((node) => node.dataset.toolName === toolName && node.classList.contains("running"));
-        }
-        if (!row) {
-            row = rows.find((node) => node.classList.contains("running"));
-        }
-        if (!row) return;
-        row.classList.remove("running");
-        row.classList.toggle("error", !!isError);
-        const statusEl = row.querySelector(".tool-row-head span:last-child");
-        if (statusEl) statusEl.textContent = isError ? label("tool_error", "") : label("tool_ok", "");
-        const content = row.querySelector(".tool-row-detail");
-        if (content && resultPreview) content.textContent = resultPreview;
-        state.completedTools = Math.min(state.toolCount, state.completedTools + 1);
-        updateWorkStatus(state.toolCount > 0 && state.completedTools >= state.toolCount);
-        scrollToBottom();
+    function updateToolStatus(toolName, _status, isError, _resultPreview, toolId) {
+        trackAgentTool(
+            toolId || toolName,
+            toolName,
+            isError ? "error" : "done",
+        );
     }
 
     function completeAllRunningTools() {
-        const running = Array.from(document.querySelectorAll(".tool-row.running"));
-        const interrupted = label("tool_interrupted", label("tool_ok", ""));
-        running.forEach((row) => {
-            row.classList.remove("running");
-            const statusEl = row.querySelector(".tool-row-head span:last-child");
-            if (statusEl) statusEl.textContent = interrupted;
+        state.turnToolLog.forEach((t) => {
+            if (t.status === "running") t.status = "done";
         });
-        if (running.length) {
-            state.completedTools = state.toolCount;
-            updateWorkStatus(true);
-        }
+        state.completedTools = state.turnToolLog.length;
+        refreshCompactWorkSummary();
     }
 
     function endToolGroup() {
         completeAllRunningTools();
+        setActivity({
+            phase: label("activity_synthesizing", label("waiting_response", "")),
+            detail: "",
+        });
     }
 
     function formatMultiplier(multiplier) {
@@ -1895,6 +1897,7 @@
     window.streamChunk = streamChunk;
     window.endStreaming = endStreaming;
     window.addToolUse = addToolUse;
+    window.trackAgentTool = trackAgentTool;
     window.pushAgentProgress = pushAgentProgress;
     window.startAgentTurn = startAgentTurn;
     window.endAgentTurn = endAgentTurn;

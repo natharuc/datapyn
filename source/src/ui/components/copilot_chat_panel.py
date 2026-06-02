@@ -2186,8 +2186,10 @@ class PyniaChatPanel(QWidget):
             self._add_message("assistant", f"Error: {error}")
 
     def _show_thinking_indicator(self):
-        """Show the animated thinking indicator via WebView."""
-        self._run_chat_js("showThinking()")
+        """Compact status only — no extra thinking rows in the message list."""
+        self._run_chat_js(
+            f"setActivity({json.dumps({'phase': getattr(S.pynia, 'activity_working', 'Working…'), 'detail': ''})})"
+        )
 
     def _hide_thinking_indicator(self):
         """Hide the thinking indicator via WebView."""
@@ -3889,25 +3891,37 @@ class PyniaChatPanel(QWidget):
         return tpl
 
     def _on_agent_progress(self, payload: dict) -> None:
-        """Timeline + activity updates during agent turns (API providers)."""
+        """Single activity line during agent turns (no per-tool timeline spam)."""
         if not isinstance(payload, dict):
             return
         self._chat_runtime.touch_activity()
         phase_key = str(payload.get("phase_key") or "")
         detail = str(payload.get("detail") or "")
         step_id = str(payload.get("step_id") or "")
-        step_state = str(payload.get("step_state") or "active")
+
+        if phase_key in ("activity_tool_done",):
+            return
+
         phase = self._resolve_progress_phase(phase_key, detail)
-        js_payload = {
-            "phase": phase,
-            "detail": detail if phase_key not in ("activity_running_tool",) else "",
-            "step_id": step_id,
-            "step_state": step_state,
-        }
-        self._run_chat_js(f"pushAgentProgress({json.dumps(js_payload)})")
+        if phase_key == "activity_running_tool":
+            self._run_chat_js(
+                f"setActivity({json.dumps({'phase': detail or phase, 'detail': ''})})"
+            )
+        elif phase_key in (
+            "activity_planning",
+            "activity_analyzing",
+            "activity_synthesizing",
+            "activity_waiting_model",
+            "activity_connecting",
+            "activity_subagent_parallel",
+        ):
+            self._run_chat_js(
+                f"setActivity({json.dumps({'phase': phase, 'detail': ''})})"
+            )
 
         provider = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
         reasoning = str(payload.get("reasoning") or "").strip()
+        step_state = str(payload.get("step_state") or "active")
         if provider != "copilot" and step_id and step_state == "active" and step_id != self._last_progress_step:
             self._last_progress_step = step_id
             line = reasoning or phase
@@ -3953,9 +3967,11 @@ class PyniaChatPanel(QWidget):
                 parts.append(f"{key}={val_str[:37] + '...' if len(val_str) > 40 else val_str}")
             arg_summary = ", ".join(parts[:3])
         tool_id = tool_call_id or f"{tool_name}-{len(self._active_tool_calls) + 1}"
+        from src.services.pynia.agent_status import activity_line_for_tool
+
+        activity = activity_line_for_tool(tool_name, arguments or {})
         self._run_chat_js(
-            f"addToolUse({json.dumps(tool_name)}, {json.dumps(arg_summary)}, "
-            f"{json.dumps(tool_id)}, {json.dumps(display_title)})"
+            f"trackAgentTool({json.dumps(tool_id)}, {json.dumps(activity)}, 'start')"
         )
         self._active_tool_calls[tool_id] = tool_name
         self.tool_call_requested.emit(tool_name, arguments)
@@ -3996,12 +4012,8 @@ class PyniaChatPanel(QWidget):
                 "",
             )
         self._run_chat_js(
-            f"updateToolStatus({json.dumps(tool_name)}, 'done', {str(is_error).lower()}, "
-            f"{json.dumps(result_preview)}, {json.dumps(tool_id)})"
-        )
-        done_label = self._resolve_progress_phase("activity_tool_done", "")
-        self._run_chat_js(
-            f"pushAgentProgress({json.dumps({'phase': done_label, 'step_id': tool_id or tool_name, 'step_state': 'done'})})"
+            f"trackAgentTool({json.dumps(tool_id)}, {json.dumps(tool_name)}, "
+            f"{json.dumps('error' if is_error else 'done')})"
         )
         if tool_id in self._active_tool_calls:
             del self._active_tool_calls[tool_id]
@@ -4010,10 +4022,11 @@ class PyniaChatPanel(QWidget):
         if not text.strip():
             return
         self._chat_runtime.mark_thinking(text)
-        if not self._is_thinking:
-            self._is_thinking = True
-            self._run_chat_js("startThinkingBlock()")
-        self._run_chat_js(f"appendThinking({json.dumps(text)})")
+        preview = text.strip().replace("\n", " ")[:100]
+        phase = getattr(S.pynia, "thinking", "Thinking")
+        self._run_chat_js(
+            f"setActivity({json.dumps({'phase': phase, 'detail': preview})})"
+        )
 
     def _populate_model_combo(self, models: list):
         normalized = normalize_models(models) or fallback_models()

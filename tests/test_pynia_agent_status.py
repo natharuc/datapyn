@@ -9,7 +9,11 @@ def test_format_inspect_block():
         {"kind": "block", "block_name": "sales", "detail": "code"},
     )
     assert "sales" in title
-    assert "code" in detail
+    assert detail == ""
+    assert activity_line_for_tool(
+        "datapyn_inspect",
+        {"kind": "block", "block_name": "sales", "detail": "code"},
+    )
 
 
 def test_format_subagent():

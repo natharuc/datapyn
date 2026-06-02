@@ -20,8 +20,10 @@ def format_tool_display(tool_name: str, arguments: Dict[str, Any] | None) -> Tup
             block = args.get("block_name") or (f"#{args['block_index']}" if args.get("block_index") is not None else "focused block")
             detail = (args.get("detail") or "structure").lower()
             if args.get("around"):
-                return f"Reading block `{block}`", f"lines around {args.get('around')}"
-            return f"Inspecting `{block}`", f"detail={detail}"
+                return f"Reading `{block}`", ""
+            if detail == "structure":
+                return f"Scanning `{block}`", ""
+            return f"Reading `{block}`", ""
         if kind == "variable":
             return "Inspecting variable", str(args.get("variable_name") or "")
         if kind == "reference":
@@ -104,7 +106,13 @@ def format_tool_display(tool_name: str, arguments: Dict[str, Any] | None) -> Tup
     if name in legacy:
         return legacy[name]
 
-    return name.replace("datapyn_", "").replace("_", " ").title(), _arg_preview(args)
+    return name.replace("datapyn_", "").replace("_", " ").title(), ""
+
+
+def activity_line_for_tool(tool_name: str, arguments: Dict[str, Any] | None) -> str:
+    """Single-line status for the compact activity indicator (no arg spam)."""
+    title, _detail = format_tool_display(tool_name, arguments)
+    return title
 
 
 def _arg_preview(args: Dict[str, Any]) -> str:

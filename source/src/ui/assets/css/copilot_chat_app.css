@@ -773,14 +773,25 @@ select {
 .status-line { color: var(--text-tertiary); font-size: 12px; padding: 6px 0; }
 
 .agent-timeline {
-    max-width: min(760px, 88%);
-    display: grid;
-    gap: 4px;
-    margin: 0 0 10px;
-    padding: 8px 10px;
-    border: 1px solid var(--border-muted);
-    border-radius: 7px;
-    background: var(--bg-secondary);
+    display: none !important;
+}
+
+.work-block-compact {
+    max-width: min(520px, 72%);
+    margin: 0 0 8px;
+    opacity: 0.92;
+}
+.work-block-compact:not([open]) .work-list {
+    display: none;
+}
+.work-block-compact[open] .work-list {
+    display: block;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.work-block-compact .tool-row-head span:last-child {
+    font-size: 11px;
+    color: var(--text-tertiary);
 }
 .agent-step {
     display: flex;

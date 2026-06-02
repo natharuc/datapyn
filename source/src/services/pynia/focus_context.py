@@ -117,7 +117,7 @@ def start_here_directive(focus: Optional[Dict[str, Any]]) -> str:
     hints = ", ".join(focus.get("hints") or []) or "none"
     return (
         f"**START HERE**: The user was focused on block `{name}` ({lang}, {lines} lines, hints: {hints}). "
-        f"Treat `{name}` as the primary target. Its code is in `focused_block_detail` below — "
-        f"do not call `datapyn_inspect` on `{name}` unless you need a different section (use around=). "
-        f"Prefer `datapyn_edit` / `datapyn_run` on `{name}` directly."
+        f"Treat `{name}` as the primary target. Its code and `structure_summary` are in "
+        f"`focused_block_detail` below — do not call `datapyn_inspect` or `datapyn_snapshot` on `{name}`. "
+        f"For edits or logic changes, use `datapyn_edit` on `{name}` immediately (one tool round)."
     )
