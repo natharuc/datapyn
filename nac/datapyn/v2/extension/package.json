@@ -1,0 +1,50 @@
+{
+  "name": "datapyn-v2",
+  "displayName": "DataPyn v2",
+  "description": "DataPyn v2 PoC — SQL execution via Python runtime",
+  "version": "0.1.0",
+  "publisher": "datapyn",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onCommand:datapyn.pocRunSql", "onCommand:datapyn.pocPing"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "datapyn.pocRunSql",
+        "title": "DataPyn: PoC Run SQL (SELECT 1)"
+      },
+      {
+        "command": "datapyn.pocPing",
+        "title": "DataPyn: PoC Ping Runtime"
+      }
+    ],
+    "configuration": {
+      "title": "DataPyn",
+      "properties": {
+        "datapyn.runtime.directory": {
+          "type": "string",
+          "default": "",
+          "description": "Path to nac/datapyn/v2/runtime (empty = auto relative to extension)"
+        },
+        "datapyn.runtime.useUv": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run runtime via uv run (recommended)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.7.0"
+  }
+}

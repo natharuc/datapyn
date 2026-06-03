@@ -15,10 +15,26 @@ Plano completo: [`docs/DATAPYN_V2_MIGRATION_PLAN.md`](../../../docs/DATAPYN_V2_M
 ```
 nac/datapyn/v2/
 ├── README.md           # este arquivo
-├── extension/          # extensão VS Code (TypeScript)
-├── runtime/            # motor Python (extraído/adaptado do v1)
+├── extension/          # extensão VS Code (TypeScript) — PoC
+├── runtime/            # motor Python JSON-RPC — PoC
 ├── vscode/             # fork Code-OSS + product.json
 └── cli/                # ferramentas CLI (migrate, run headless)
+```
+
+## PoC Fase 0 (implementado)
+
+1. **Runtime** (`runtime/`): `ping`, `execute_sql` via SQLite em memória.
+2. **Extension** (`extension/`): comandos PoC que falam com o runtime via subprocess + stdio.
+
+### Quick start
+
+```bash
+# Runtime
+cd nac/datapyn/v2/runtime && uv sync --dev && uv run pytest -q
+
+# Extension
+cd ../extension && npm install && npm run compile
+# F5 → Run Extension no VS Code/Cursor
 ```
 
 ## v1 (referência)
@@ -31,9 +47,9 @@ nac/datapyn/v2/
 
 | Componente | Estado |
 |------------|--------|
-| `extension/` | scaffold |
-| `runtime/` | scaffold |
+| `runtime/` | PoC — JSON-RPC + `execute_sql` (SQLite) |
+| `extension/` | PoC — ping + run SQL |
 | `vscode/` | scaffold |
 | `cli/` | scaffold |
 
-Próximo passo recomendado (Fase 0): PoC em `extension/` + `runtime/` — executar `SELECT 1` via subprocess a partir do VS Code OSS em `vscode/`.
+Próximo passo: language support `.dpw`, conexões reais (v1 `ConnectionManager`), painel de resultados.

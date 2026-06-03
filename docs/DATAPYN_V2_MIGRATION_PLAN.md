@@ -263,12 +263,12 @@ Módulos Python candidatos a **`datapyn-runtime`** (mínima alteração inicial)
 ### Fase 0 — Fundação (estudo + PoC)
 
 - [ ] Decisão fork vs extensão-only (este documento recomenda fork).
-- [ ] PoC: VS Code OSS + extensão “Hello DataPyn” + subprocess Python executando `SELECT 1`.
+- [x] PoC: extensão VS Code + subprocess Python executando `SELECT 1` (`nac/datapyn/v2/extension/` + `runtime/`).
 - [ ] Validar schema `.dpw` v1.0 (compatível com v1) na extensão.
 - [ ] Spike: SecretStorage para credenciais.
 - [x] Scaffold monorepo em `nac/datapyn/v2/`.
 
-**Entregável:** build do fork em `nac/datapyn/v2/vscode/` + extensão mínima em `extension/`.
+**Entregável:** build do fork em `nac/datapyn/v2/vscode/` + extensão mínima em `extension/` (PoC extensão+runtime feito; fork VS Code pendente).
 
 ### Fase 1 — Runtime desacoplado
 
