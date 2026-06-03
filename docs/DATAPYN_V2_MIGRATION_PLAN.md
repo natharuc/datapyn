@@ -1,7 +1,20 @@
 # DataPyn v2 — Plano de migração
 
 > **Status:** proposta de estudo (branch `cursor/datapyn-v2-migration-plan-ce57`)  
-> **Objetivo:** manter todas as funcionalidades principais do DataPyn v1, migrar o shell para um **fork do VS Code** (Copilot nativo) e adotar um modelo **baseado em arquivos** no projeto do usuário.
+> **Objetivo:** manter todas as funcionalidades principais do DataPyn v1, migrar o shell para um **fork do VS Code** (Copilot nativo) e adotar um modelo **baseado em arquivos** no projeto do usuário.  
+> **Implementação v2:** monorepo em [`nac/datapyn/v2/`](../nac/datapyn/v2/README.md)
+
+---
+
+## 0. Decisões fechadas (produto)
+
+| # | Decisão | Resolução |
+|---|---------|-----------|
+| 1 | Formato de análise multi-bloco | **Manter `.dpw`** — mesmo formato JSON do v1; não criar `.dpyn` como substituto |
+| 2 | Granularidade do arquivo | **Um arquivo `.dpw` pode conter blocos SQL, Python ou os dois**, como hoje (lista `blocks` com `language` por bloco) |
+| 3 | Repositório | **Monorepo** — código v2 em `nac/datapyn/v2/` (`extension/`, `runtime/`, `vscode/`, `cli/`); v1 permanece em `source/` |
+
+Arquivos `.sql` e `.py` continuam como **um bloco por arquivo** (paridade v1). O fluxo principal de análise mista é **`.dpw`**.
 
 ---
 
@@ -79,7 +92,7 @@ flowchart TB
     end
 
     subgraph project ["Pasta do projeto (arquivos)"]
-        DPW["*.dpyn / *.sql / *.py"]
+        DPW["*.dpw / *.sql / *.py"]
         Conn[".datapyn/connections.json"]
         Meta[".datapyn/settings.json"]
     end
@@ -97,12 +110,16 @@ flowchart TB
     CopilotExt -.->|"contexto via extensão"| DatapynExt
 ```
 
-### 3.1 Componentes
+### 3.1 Componentes (pastas no monorepo)
 
-1. **`datapyn-vscode`** — fork do [code OSS](https://github.com/microsoft/vscode) com branding, marketplace allowlist e build CI.
-2. **`datapyn-extension`** — extensão TypeScript: comandos, views, language IDs, integração com runtime.
-3. **`datapyn-runtime`** — pacote Python extraído do v1: `database/`, workers, execução, schema, import/export.
-4. **`datapyn-cli`** (opcional) — `datapyn run notebook.dpw` para CI e headless.
+| Pasta | Papel |
+|-------|--------|
+| [`nac/datapyn/v2/vscode/`](../nac/datapyn/v2/vscode/README.md) | Fork [Code-OSS](https://github.com/microsoft/vscode), branding, build CI |
+| [`nac/datapyn/v2/extension/`](../nac/datapyn/v2/extension/README.md) | Extensão TypeScript: comandos, views, `.dpw`, integração runtime |
+| [`nac/datapyn/v2/runtime/`](../nac/datapyn/v2/runtime/README.md) | Python: `database/`, execução, schema (extraído do v1) |
+| [`nac/datapyn/v2/cli/`](../nac/datapyn/v2/cli/README.md) | `datapyn migrate`, `datapyn run` (headless) |
+
+v1 inalterado em `source/` até EOL (Fase 5).
 
 ### 3.2 Por que fork e não só extensão no VS Code stock?
 
@@ -133,38 +150,44 @@ meu-projeto/
 │   ├── settings.json         # tema, atalhos locais, preferências
 │   └── .gitignore            # opcional: ignorar secrets
 ├── analyses/
-│   ├── vendas.q.sql          # bloco SQL único
-│   ├── limpeza.py
-│   └── pipeline.dpw          # multi-bloco (evolução do .dpw)
+│   ├── vendas.sql            # um bloco SQL
+│   ├── limpeza.py            # um bloco Python
+│   └── pipeline.dpw          # vários blocos SQL/Python no mesmo arquivo
 ├── data/                     # opcional: CSV/Parquet locais
 └── README.md
 ```
 
 ### 4.3 Formatos de documento
 
-| Extensão | Uso | Migração desde v1 |
-|----------|-----|-------------------|
-| `.sql` / `.py` | Arquivo = um bloco executável | Já suportado |
-| `.dpw` | JSON multi-bloco legado | Manter leitor; deprecar gradualmente |
-| `.dpyn` (novo) | Formato canônico v2 (YAML ou JSON com schema versionado) | Gerador a partir de `.dpw` + `sessions.json` |
+| Extensão | Uso | v2 |
+|----------|-----|-----|
+| **`.dpw`** | **Formato principal** — JSON com `version`, `blocks[]` (cada bloco: `language`, `code`, opcional `connection_name`, etc.) | **Idêntico ao v1** — sem breaking change |
+| `.sql` / `.py` | Um bloco por arquivo | Mantido |
+| `.ipynb` | Import / conversão para blocos | Paridade v1 (Fase 4) |
 
-**Schema `.dpyn` (rascunho):**
+**Schema `.dpw` (v1 = v2, referência):**
 
-```yaml
-# datapyn/schema_version: 1
-connection: "prod-sql"
-blocks:
-  - id: b1
-    language: sql
-    name: "Vendas do mês"
-    connection: null  # herda da sessão
-    code: |
-      SELECT ...
-  - id: b2
-    language: python
-    code: |
-      df.head()
+```json
+{
+  "version": "1.0",
+  "blocks": [
+    {
+      "language": "sql",
+      "code": "SELECT 1",
+      "block_name": "Query",
+      "connection_name": "prod-sql"
+    },
+    {
+      "language": "python",
+      "code": "df.head()"
+    }
+  ],
+  "notification_config": {},
+  "result_view_state": {}
+}
 ```
+
+Implementação de referência: `source/src/ui/main_window/_file_io.py` (`_save_tab_as_dpw`, abertura multi-bloco).
 
 ### 4.4 O que continua só em memória
 
@@ -180,7 +203,7 @@ Persistência explícita apenas quando o usuário exporta (Parquet, tabela, etc.
 
 1. Lê `~/.datapyn/` ou workspace custom.
 2. Emite `connections.json` → `.datapyn/connections.json`.
-3. Converte cada entrada de `sessions.json` em `analyses/<titulo>.dpyn`.
+3. Converte cada entrada de `sessions.json` em `analyses/<titulo>.dpw` (mesmo JSON de blocos que o v1 já serializa).
 4. Gera relatório (abas sem título, cross-syntax incompleto, senhas em plaintext).
 
 ---
@@ -241,10 +264,11 @@ Módulos Python candidatos a **`datapyn-runtime`** (mínima alteração inicial)
 
 - [ ] Decisão fork vs extensão-only (este documento recomenda fork).
 - [ ] PoC: VS Code OSS + extensão “Hello DataPyn” + subprocess Python executando `SELECT 1`.
-- [ ] Definir schema `.dpyn` v1 e validador.
+- [ ] Validar schema `.dpw` v1.0 (compatível com v1) na extensão.
 - [ ] Spike: SecretStorage para credenciais.
+- [x] Scaffold monorepo em `nac/datapyn/v2/`.
 
-**Entregável:** repositório `datapyn-v2` (monorepo ou subpastas) com build do fork.
+**Entregável:** build do fork em `nac/datapyn/v2/vscode/` + extensão mínima em `extension/`.
 
 ### Fase 1 — Runtime desacoplado
 
@@ -258,7 +282,7 @@ Módulos Python candidatos a **`datapyn-runtime`** (mínima alteração inicial)
 
 - [ ] Abrir pasta = workspace DataPyn.
 - [ ] Explorer: conexões, schema, variáveis.
-- [ ] Executar `.sql` / `.py` / `.dpyn` (Run Cell / Run Block).
+- [ ] Executar `.sql` / `.py` / `.dpw` (Run Block / Run All, fila como v1).
 - [ ] Painel de resultados (Webview ou tabela nativa).
 - [ ] `datapyn migrate` CLI.
 
@@ -300,12 +324,10 @@ Módulos Python candidatos a **`datapyn-runtime`** (mínima alteração inicial)
 | R6 | Cross-syntax incompleto no v1 | Fechar no runtime antes do MVP v2 |
 | R7 | Usuários Windows MSI | Manter pipeline até v2 estável; installer Electron/Squirrel |
 
-### Decisões que precisam de produto
+### Decisões ainda em aberto
 
-1. **Nome do formato:** manter `.dpw` como legado ou só `.dpyn`?
-2. **Um arquivo = uma aba** vs **notebook único por projeto**?
-3. **Suporte a Jupyter nativo** (.ipynb) no v2 ou só conversão?
-4. **Monorepo:** `datapyn` v1 + v2 no mesmo repo ou repo separado?
+1. **Suporte a Jupyter nativo** (.ipynb) no v2 ou só conversão para `.dpw`?
+2. **Conexão padrão por arquivo `.dpw`:** campo top-level `connection` no JSON ou só por aba/bloco (hoje: aba/sessão + override por bloco)?
 
 ---
 
@@ -325,7 +347,7 @@ Módulos Python candidatos a **`datapyn-runtime`** (mínima alteração inicial)
 ## 10. Próximos passos imediatos
 
 1. **Review** deste plano com stakeholders (produto + engenharia).
-2. **PoC Fase 0** em repo/spike: Code OSS + extensão mínima + `SELECT 1` via runtime.
+2. **PoC Fase 0** em `nac/datapyn/v2/`: Code OSS + extensão mínima + `SELECT 1` via runtime.
 3. **Issue breakdown** no GitHub: labels `v2`, `parity`, `runtime`, `vscode-fork`.
 4. **Fechar cross-syntax** no v1/runtime — reduz surpresa na migração.
 

@@ -26,6 +26,7 @@ After tests pass on `main`, python-semantic-release bumps the version and builds
 
 - Python 3.12+, PyQt6, `uv` for dependencies
 - Run tests: `uv run pytest` (see `pytest.ini` for CI ignores)
+- **DataPyn v2** (VS Code fork, in progress): `nac/datapyn/v2/` — see `docs/DATAPYN_V2_MIGRATION_PLAN.md`
 
 ## Cursor Cloud specific instructions
 
