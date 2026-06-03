@@ -2019,13 +2019,11 @@ class PyniaChatPanel(QWidget):
                 editor.cancel_all_executions()
             except Exception as e:
                 logger.debug(f"Error cancelling active Copilot execution: {e}")
-        session = getattr(session_widget, "session", None) if session_widget else None
-        connector = getattr(session, "connector", None) if session else None
-        if connector and hasattr(connector, "cancel_query"):
+        elif session_widget and hasattr(session_widget, "_request_sql_cancel_interrupt"):
             try:
-                connector.cancel_query()
+                session_widget._request_sql_cancel_interrupt()
             except Exception as e:
-                logger.debug(f"Error cancelling active Copilot query: {e}")
+                logger.debug(f"Error requesting SQL cancel for Copilot: {e}")
 
     def _clear_pynia_editing_indicators(self) -> None:
         """Clear block sparkle state left by datapyn_edit when a turn aborts."""

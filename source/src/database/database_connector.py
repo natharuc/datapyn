@@ -768,14 +768,12 @@ class DatabaseConnector:
             logger.error(f"Error executing query: {str(e)}")
             raise
 
-    def cancel_query(self):
-        """Cancel running query.
-
-        Works for SQL Server (pyodbc), PostgreSQL (psycopg2), and Databricks.
-        For MySQL/MariaDB, interrupts via flag.
-        """
+    def request_cancel(self) -> None:
+        """Set cancellation flag (safe from any thread; does not call the driver)."""
         self._cancelled = True
 
+    def interrupt_query(self) -> None:
+        """Interrupt the driver-level query (must run on the query worker thread)."""
         try:
             if self.db_type == "sqlserver":
                 # pyodbc: cancel() is a Cursor method, not Connection
@@ -805,6 +803,15 @@ class DatabaseConnector:
                 logger.info(f"Cancel requested for {self.db_type} (via flag)")
         except Exception as e:
             logger.warning(f"Error cancelling query: {e}")
+
+    def cancel_query(self):
+        """Cancel running query (flag + driver interrupt).
+
+        Prefer ``request_cancel()`` from the UI thread and ``interrupt_query()``
+        queued on the SQL worker thread to avoid blocking or deadlocking Qt.
+        """
+        self.request_cancel()
+        self.interrupt_query()
 
     def _execute_mssql_batches(self, batches: list, parameters: Optional[List[Dict[str, Any]]] = None) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """Execute multiple SQL Server batches on the same connection.

@@ -1464,7 +1464,7 @@ class TestPyniaChatPanel:
 
         assert client.cancel_called is True
         editor.cancel_all_executions.assert_called_once()
-        connector.cancel_query.assert_called_once()
+        connector.cancel_query.assert_not_called()
         registry.unpin_session.assert_called_once()
         assert panel._active_tool_target_id is None
 

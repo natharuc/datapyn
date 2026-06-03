@@ -7,7 +7,7 @@ Contains all session components:
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QLabel
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QObject, pyqtSlot, QMetaObject
 from PyQt6.QtGui import QFont
 import pandas as pd
 import sys
@@ -82,6 +82,18 @@ class SessionSqlWorker(QObject):
                 db_type = getattr(self.connector, "db_type", "")
                 error_msg = _format_sql_error_for_user(e, db_type, self.query)
                 self.finished.emit(None, error_msg)
+
+    @pyqtSlot()
+    def interrupt_query(self):
+        """Driver-level cancel; must run on the SQL worker thread."""
+        connector = self.connector
+        if connector is None:
+            return
+        if hasattr(connector, "interrupt_query"):
+            try:
+                connector.interrupt_query()
+            except Exception as e:
+                logger.warning(f"Error interrupting SQL query on worker thread: {e}")
 
 
 class BlockAutoConnectWorker(QObject):
@@ -785,6 +797,25 @@ class SessionWidget(QWidget):
         except (TypeError, RuntimeError):
             pass
         self._sql_worker = None
+
+    def _request_sql_cancel_interrupt(self) -> None:
+        """Request SQL cancellation without blocking the UI thread."""
+        if not self._sql_thread or not self._sql_thread.isRunning():
+            return
+        worker = getattr(self, "_sql_worker", None)
+        if worker is None:
+            return
+        connector = getattr(worker, "connector", None)
+        if connector is not None and hasattr(connector, "request_cancel"):
+            try:
+                connector.request_cancel()
+            except Exception as e:
+                logger.warning(f"Error requesting SQL cancel flag: {e}")
+        QMetaObject.invokeMethod(
+            worker,
+            "interrupt_query",
+            Qt.ConnectionType.QueuedConnection,
+        )
 
     def _cleanup_db_switch_thread(self, thread):
         if hasattr(self, "_db_switch_threads"):
@@ -1526,20 +1557,8 @@ class SessionWidget(QWidget):
         self._cancel_requested = True
         self._execution_queue.clear()
 
-        # Cancel SQL query in database (real cancellation)
-        if self._sql_thread and self._sql_thread.isRunning():
-            # Try to cancel query in database - this is non-blocking
-            if hasattr(self, "_sql_worker") and self._sql_worker:
-                connector = getattr(self._sql_worker, "connector", None)
-                if connector and hasattr(connector, "cancel_query"):
-                    try:
-                        connector.cancel_query()
-                    except Exception as e:
-                        logger.warning(f"Error cancelling SQL query: {e}")
-            
-            # Don't wait synchronously - let the finished signal handle cleanup
-            # The cancel_query() will interrupt the cursor, causing worker.run() to return
-            # with error, which emits finished signal, triggering _on_sql_finished for cleanup.
+        # Cancel SQL on the worker thread (never call driver cancel() on the UI thread).
+        self._request_sql_cancel_interrupt()
 
         if self._python_thread and self._python_thread.isRunning():
             # For Python, we can only request quit - the thread will finish when it can
