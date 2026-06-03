@@ -15,7 +15,8 @@ Requisitos: **Node.js 18+**, **uv** (para `datapyn.runtime.useUv`, padrão `true
 ## Testar no VS Code / Cursor
 
 1. Abra a pasta `nac/datapyn/v2/extension` no editor.
-2. **Run and Debug** → **Run Extension** (abre Extension Development Host).
+2. Copie `launch.example.json` → `.vscode/launch.json` (a pasta `.vscode` é ignorada pelo git do repo).
+3. **Run and Debug** → **Run Extension** (abre Extension Development Host).
 3. No host, Command Palette:
    - **DataPyn: PoC Ping Runtime**
    - **DataPyn: PoC Run SQL (SELECT 1)** — usa seleção ou texto do editor, senão `SELECT 1 AS n`
