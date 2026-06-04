@@ -33,5 +33,10 @@ echo "[datapyn-v2] npm $($NPM -v) + node $($DATAPYN_NODE -v)"
 export npm_config_user_agent="npm/11.0.0"
 "$NPM" install --no-audit --no-fund
 "$NPM" run compile
+# Upstream may finish typecheck before all JS is in out/ — transpile fills gaps (nls.js, etc.)
+"$NPM" run transpile-client
+"$NPM" run electron
 
-echo "[datapyn-v2] Build finished. Launch: $CHECKOUT/scripts/code.sh"
+"$ROOT/scripts/ensure-compiled.sh"
+
+echo "[datapyn-v2] Build finished. Launch: $ROOT/scripts/run.sh"

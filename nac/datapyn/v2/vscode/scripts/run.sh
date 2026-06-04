@@ -13,7 +13,10 @@ fi
 # shellcheck source=/dev/null
 . "$ROOT/scripts/use-node.sh"
 
+"$ROOT/scripts/ensure-compiled.sh"
+
 export DISPLAY="${DISPLAY:-:1}"
+export PATH="$(dirname "$DATAPYN_NODE"):$PATH"
 export ELECTRON_ENABLE_LOGGING="${ELECTRON_ENABLE_LOGGING:-1}"
 USER_DATA="${DATAPYN_USER_DATA:-/tmp/datapyn-fork-data}"
 mkdir -p "$USER_DATA"

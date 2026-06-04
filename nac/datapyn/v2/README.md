@@ -15,8 +15,11 @@ cd nac/datapyn/v2/runtime && uv sync --dev
 cd ../vscode && chmod +x scripts/*.sh
 ./scripts/bootstrap.sh
 ./scripts/build.sh          # corrigido: Node 24 + npm
+./scripts/verify.sh         # diagnóstico
 ./scripts/run.sh            # abre o fork
 ```
+
+Se aparecer `Cannot find module .../nls.js`, o build não terminou — rode `./scripts/build.sh` de novo (não interrompa).
 
 ## Estrutura
 

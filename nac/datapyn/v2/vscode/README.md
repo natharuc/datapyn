@@ -34,10 +34,12 @@ No app: Command Palette → **DataPyn: PoC Ping Runtime** ou **DataPyn: PoC Run 
 
 | Erro | Solução |
 |------|---------|
-| Node 22 / `/exec-daemon/node` | `./scripts/build.sh` usa `use-node.sh` (Node 24 explícito via nvm) |
+| `Cannot find module .../out/vs/nls.js` | Build incompleto — rode `./scripts/build.sh` até o fim (~5–15 min) ou `./scripts/ensure-compiled.sh` |
+| Node 22 / `/exec-daemon/node` | Use `./scripts/run.sh` (não `code.sh` direto) — força Node 24 via nvm |
 | `please use npm i instead` | Não rode `yarn` no `checkout/`; use `./scripts/build.sh` |
 | `Please use Node.js v24…` | `nvm install 24.15.0` |
 | Build falta lib GTK/X11 | `./scripts/install-linux-deps.sh` |
+| Diagnóstico | `./scripts/verify.sh` |
 
 ## Variáveis
 
