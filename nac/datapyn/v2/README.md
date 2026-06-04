@@ -16,7 +16,8 @@ cd ../vscode && chmod +x scripts/*.sh
 ./scripts/bootstrap.sh
 ./scripts/build.sh          # corrigido: Node 24 + npm
 ./scripts/verify.sh         # diagnóstico
-./scripts/run.sh            # abre o fork
+./scripts/start.sh          # inicia em background (recomendado)
+# ou: ./scripts/run.sh      # foreground
 ```
 
 Se aparecer `Cannot find module .../nls.js`, o build não terminou — rode `./scripts/build.sh` de novo (não interrompa).

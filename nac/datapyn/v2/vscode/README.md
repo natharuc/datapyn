@@ -25,7 +25,8 @@ chmod +x scripts/*.sh
 ./scripts/install-linux-deps.sh   # opcional se o build falhar por libs
 ./scripts/build.sh            # npm install + compile (~5–15 min)
 
-./scripts/run.sh              # abre a janela DataPyn
+./scripts/start.sh            # inicia DataPyn em background (PID em /tmp/datapyn-app.pid)
+./scripts/run.sh              # mesmo app, terminal em foreground
 ```
 
 No app: Command Palette → **DataPyn: PoC Ping Runtime** ou **DataPyn: PoC Run SQL**.
