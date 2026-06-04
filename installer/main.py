@@ -7,17 +7,27 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
 _INSTALLER_DIR = Path(__file__).resolve().parent
 if str(_INSTALLER_DIR) not in sys.path:
     sys.path.insert(0, str(_INSTALLER_DIR))
+
+import _bundle_deps  # noqa: F401 — PyInstaller: stdlib for windows_installer (datas/exec)
 
 from _bootstrap import load_windows_installer
 
 wi = load_windows_installer()
 
-from PyQt6.QtCore import QByteArray, Qt, QPoint, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon, QMouseEvent, QPainter, QPixmap
+from PyQt6.QtCore import Qt, QPoint, QThread, pyqtSignal
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QIcon,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -44,20 +54,80 @@ C_DIM = "#5c6d85"
 C_ACCENT = "#3369ff"
 C_CYAN = "#33c2ff"
 C_SUCCESS = "#4ade80"
+LOGO_SIZE = 56
+
+
+def _assets_dir() -> Path:
+    """Dev: repo source/src/assets. Frozen: PyInstaller datas folder."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "assets"
+    return _INSTALLER_DIR.parent / "source" / "src" / "assets"
+
+
+def _asset_path(*names: str) -> Path | None:
+    folder = _assets_dir()
+    for name in names:
+        path = folder / name
+        if path.is_file():
+            return path
+    return None
 
 
 def _load_logo_pixmap(size: int = 40) -> QPixmap:
-    for name in ("datapyn_logo.svg", "datapyn-logo.svg"):
-        path = ROOT / "source" / "src" / "assets" / name
-        if path.is_file():
-            renderer = QSvgRenderer(QByteArray(path.read_bytes()))
+    svg_path = _asset_path("datapyn_logo.svg", "datapyn-logo.svg")
+    if svg_path is not None:
+        renderer = QSvgRenderer(str(svg_path))
+        if renderer.isValid():
             pixmap = QPixmap(size, size)
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
             renderer.render(painter)
             painter.end()
+            if not pixmap.isNull():
+                return pixmap
+
+    ico_path = _asset_path("datapyn-logo.ico")
+    if ico_path is not None:
+        icon = QIcon(str(ico_path))
+        pixmap = icon.pixmap(size, size)
+        if not pixmap.isNull():
             return pixmap
     return QPixmap()
+
+
+class SuccessBadge(QWidget):
+    """Rounded success indicator (vector check, no text glyphs)."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedSize(48, 48)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        fill = QColor(C_SUCCESS)
+        fill.setAlpha(38)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawEllipse(2, 2, 44, 44)
+
+        pen = QPen(QColor(C_SUCCESS))
+        pen.setWidthF(2.0)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(4, 4, 40, 40)
+
+        pen.setWidthF(2.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        check = QPainterPath()
+        check.moveTo(14, 24)
+        check.lineTo(21, 31)
+        check.lineTo(34, 16)
+        painter.drawPath(check)
+        painter.end()
 
 
 class TitleBar(QWidget):
@@ -137,10 +207,9 @@ class SetupWindow(QMainWindow):
         self._worker: InstallWorker | None = None
         self._exe_path: str | None = None
 
-        icon_path = ROOT / "source" / "src" / "assets"
         for name in ("datapyn-logo.ico", "datapyn_logo.svg"):
-            p = icon_path / name
-            if p.exists():
+            p = _asset_path(name)
+            if p is not None:
                 self.setWindowIcon(QIcon(str(p)))
                 break
 
@@ -168,7 +237,26 @@ class SetupWindow(QMainWindow):
         body.setObjectName("body")
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(36, 8, 36, 36)
-        body_layout.setSpacing(0)
+        body_layout.setSpacing(8)
+
+        brand = QWidget()
+        brand_layout = QVBoxLayout(brand)
+        brand_layout.setContentsMargins(0, 4, 0, 0)
+        brand_layout.setSpacing(6)
+        brand_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        self._logo_label = QLabel()
+        self._logo_label.setPixmap(_load_logo_pixmap(LOGO_SIZE))
+        self._logo_label.setFixedSize(LOGO_SIZE, LOGO_SIZE)
+        self._logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_layout.addWidget(self._logo_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        brand_title = QLabel("DataPyn")
+        brand_title.setObjectName("title")
+        brand_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_layout.addWidget(brand_title)
+
+        body_layout.addWidget(brand)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._page_welcome())
@@ -297,26 +385,11 @@ class SetupWindow(QMainWindow):
         page, layout = self._centered_page()
         layout.setSpacing(12)
 
-        logo = QLabel()
-        logo.setPixmap(_load_logo_pixmap(56))
-        logo.setFixedSize(56, 56)
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        title = QLabel("DataPyn")
-        title.setObjectName("title")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-
         existing = wi.read_installed_version()
-        if existing:
-            sub = QLabel(f"Atualizar · v{existing}")
-            sub.setObjectName("muted")
-            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        else:
-            sub = QLabel("Instalar")
-            sub.setObjectName("muted")
-            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle = f"Atualizar · v{existing}" if existing else "Instalar"
+        sub = QLabel(subtitle)
+        sub.setObjectName("muted")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(sub)
 
         path = QLabel(str(self._install_dir))
@@ -332,7 +405,7 @@ class SetupWindow(QMainWindow):
 
     def _page_progress(self) -> QWidget:
         page, layout = self._centered_page()
-        layout.setSpacing(20)
+        layout.setSpacing(12)
 
         layout.addStretch()
 
@@ -352,13 +425,11 @@ class SetupWindow(QMainWindow):
 
     def _page_done(self) -> QWidget:
         page, layout = self._centered_page()
+        layout.setSpacing(12)
 
         layout.addStretch()
 
-        ok = QLabel("✓")
-        ok.setStyleSheet(f"font-size: 32px; color: {C_SUCCESS}; font-weight: 700;")
-        ok.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(ok)
+        layout.addWidget(SuccessBadge(), 0, Qt.AlignmentFlag.AlignHCenter)
 
         self._done_label = QLabel("")
         self._done_label.setObjectName("title")

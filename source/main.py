@@ -12,12 +12,12 @@ from PyQt6.QtCore import Qt
 # Required for QtWebEngineWidgets (Monaco Editor) - must be set before QApplication
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("datapyn.log"), logging.StreamHandler()],
-)
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler("datapyn.log"), logging.StreamHandler()],
+    )
 
 
 def get_icon_path():
@@ -87,20 +87,28 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DataPyn")
     app.setOrganizationName("DataPyn")
-
-    # Estilo Fusion para visual consistente cross-platform
     app.setStyle("Fusion")
-    
-    # Inicializar fontes customizadas (baixa Ubuntu se necessario)
+
+    # Splash o mais cedo possível (antes de fontes, tema e imports pesados)
+    from src.ui.splash_screen import SplashScreen
+
+    splash = SplashScreen()
+    splash.show()
+    app.processEvents()
+
+    _configure_logging()
+
+    splash.set_progress(8, "Carregando fontes…")
     from src.design_system.font_manager import initialize_fonts, get_application_font
+
     initialize_fonts()
-    
-    # Fonte global moderna - Ubuntu (empacotada com o app)
+
     global_font = get_application_font(size=10)
     app.setFont(global_font)
-    
-    # Stylesheet global para fonte consistente e scrollbars clean
+
+    splash.set_progress(18, "Aplicando tema…")
     from src.design_system.font_manager import FONT_FAMILY_PRIMARY
+
     app.setStyleSheet(f"""
         * {{
             font-family: {FONT_FAMILY_PRIMARY};
@@ -161,26 +169,17 @@ def main():
         }}
     """)
 
-    # Paleta dark nativa
     _apply_dark_palette(app)
 
-    # Splash screen - exibe imediatamente enquanto carrega
-    from src.ui.splash_screen import SplashScreen
-
-    splash = SplashScreen()
-    splash.show()
-    app.processEvents()
-
-    splash.set_progress(10, "Loading language settings...")
-
-    # Initialize i18n before creating any UI widgets
+    splash.set_progress(28, "Carregando idioma…")
     from PyQt6.QtCore import QSettings
     from src.language import init_language
+
     settings = QSettings("DataPyn", "DataPyn")
     language = settings.value("language", "en-US")
     init_language(language)
 
-    splash.set_progress(25, "Loading design system...")
+    splash.set_progress(38, "Preparando ambiente…")
     
     # Handle --workspace argument: switch to specified workspace before loading UI
     if args.workspace:
@@ -208,7 +207,7 @@ def main():
         app_icon = QIcon(icon_path)
         app.setWindowIcon(app_icon)
 
-    splash.set_progress(40, "Initializing application...")
+    splash.set_progress(48, "Inicializando serviços…")
 
     # Ensure venv site-packages is on sys.path early, so that packages
     # installed via Package Manager are importable by PythonWorker.
@@ -220,13 +219,11 @@ def main():
     except Exception:
         logging.warning("Failed to initialize PackageManagerService for venv path setup")
 
-    # Criar janela principal (a parte mais pesada - import deferido)
+    splash.set_progress(55, "Abrindo interface…")
     from src.ui import MainWindow
+
     window = MainWindow(splash=splash)
 
-    splash.set_progress(100, "Ready!")
-
-    # Fechar splash e mostrar janela
     splash.finish_with_window(window)
 
     # Iniciar loop de eventos
