@@ -88,7 +88,15 @@ class InlineCompletionService(QObject):
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.setInterval(180)  # Single debounce layer (JS no longer stacks)
         self._debounce_timer.timeout.connect(self._execute_pending_request)
-        
+
+        # Watchdog: never let a dropped/hung completion wedge the pipeline.
+        # If a request stays "in flight" too long, release the lock so the
+        # next keystroke is served instead of being silently blocked.
+        self._watchdog_timer = QTimer(self)
+        self._watchdog_timer.setSingleShot(True)
+        self._watchdog_timer.setInterval(7000)
+        self._watchdog_timer.timeout.connect(self._on_request_watchdog)
+
         # Request tracking
         self._current_request_id = 0
         self._active_request_id = 0
@@ -303,14 +311,15 @@ class InlineCompletionService(QObject):
         # This prevents duplicate handling when multiple CodeBlocks share LSP client
         if not self._is_processing:
             return  # Ignore - this completion is for another code block
-        
-        self._is_processing = False  # Release lock
+
+        self._release_processing()  # Release lock
         if completion:
             preview = completion[:60].replace('\n', ' ')
             self._log(f"LSP completion: {preview}...", "info")
         else:
             self._log("LSP returned empty (no suggestion)", "debug")
         self.completion_ready.emit(completion)
+        self._maybe_serve_pending()
     
     @pyqtSlot(str)
     def _on_pynia_completion(self, completion: str) -> None:
@@ -318,13 +327,14 @@ class InlineCompletionService(QObject):
         if not self._is_processing:
             return
 
-        self._is_processing = False
+        self._release_processing()
         if completion:
             preview = completion[:60].replace("\n", " ")
             self._log(f"Pynia completion: {preview}...", "info")
         else:
             self._log("Pynia returned empty (no suggestion)", "debug")
         self.completion_ready.emit(completion)
+        self._maybe_serve_pending()
 
     def _build_request_context(self, language: str) -> str:
         if language == "sql" and self._database_context:
@@ -370,20 +380,20 @@ class InlineCompletionService(QObject):
                 self.completion_ready.emit("")
                 return
         
-        # THROTTLE: Skip if already processing a request
-        if self._is_processing:
-            return
-        
         # DEDUPLICATE: Skip if same prefix as last request
         request_key = f"{line}:{column}:{prefix}"
         if request_key == self._last_request_prefix:
             return
-        
+
         self._last_request_prefix = request_key
-        
-        # Cancel any pending request
+
+        # Supersede any pending request (latest keystroke wins). We do NOT
+        # drop the request when one is already in flight — that left Monaco's
+        # promise hanging until timeout. Instead we queue the latest request;
+        # _execute_pending_request waits for the in-flight call and then serves
+        # it (see _maybe_serve_pending).
         self._current_request_id += 1
-        
+
         # Store request for debounced execution
         self._pending_request = {
             "id": self._current_request_id,
@@ -393,7 +403,7 @@ class InlineCompletionService(QObject):
             "line": line,
             "column": column,
         }
-        
+
         # Restart debounce timer
         self._debounce_timer.start()
     
@@ -402,44 +412,40 @@ class InlineCompletionService(QObject):
         self._debounce_timer.stop()
         self._pending_request = None
         self._current_request_id += 1
+        # Drop the in-flight lock so a late result is ignored and the next
+        # keystroke is served immediately.
+        self._release_processing()
     
     @pyqtSlot()
     def _execute_pending_request(self) -> None:
         """Execute the debounced completion request.
-        
-        Priority:
-        1. Local heuristics
-        2. Pynia API autocomplete
+
+        Pynia AI autocomplete is the primary source. Local heuristics are only
+        a fallback when no AI provider is available — they used to preempt the
+        AI and emit contextually-wrong ghost text (e.g. ``(self):`` for a
+        module-level def), which is exactly the "invalid hints" complaint.
         """
         if not self._pending_request:
             return
-        
+
+        # A previous request is still in flight. Keep the pending request and
+        # let the completion handler re-arm us once the lock is released
+        # (_maybe_serve_pending). This serves the latest keystroke instead of
+        # dropping it.
+        if self._is_processing:
+            return
+
         request = self._pending_request
         self._pending_request = None
         self._active_request_id = request["id"]
-        
+
         # Mark as processing to block concurrent requests
         self._is_processing = True
-        
+        self._watchdog_timer.start()
+
         last_line = request["prefix"].split('\n')[-1][:40]
         self._log(f"Completion request: '{last_line}' ({request['language']})", "info")
-        
-        # Try local heuristics first for fast response
-        local_completion = self._get_smart_completion(
-            request["prefix"],
-            request["suffix"],
-            request["language"],
-        )
-        
-        # If we got a local completion, use it immediately
-        if local_completion:
-            preview = local_completion[:40].replace('\\n', ' ')
-            self._log(f"Local completion: {preview}...", "info")
-            self._is_processing = False  # Release lock for local completions
-            if request["id"] == self._active_request_id:
-                self.completion_ready.emit(local_completion)
-            return
-        
+
         if self.has_pynia and self._pynia_client:
             ctx = self._build_request_context(request["language"])
             self._log(
@@ -455,17 +461,45 @@ class InlineCompletionService(QObject):
             )
             return
 
-        if not get_pynia_settings().autocomplete_enabled:
-            reason = "disabled in Settings → Pynia"
-        elif not self._pynia_client:
-            reason = "Pynia client not connected"
+        # No AI provider — fall back to safe local heuristics so there is
+        # still *something* offline.
+        local_completion = self._get_smart_completion(
+            request["prefix"],
+            request["suffix"],
+            request["language"],
+        )
+        self._release_processing()
+        if local_completion:
+            preview = local_completion[:40].replace('\\n', ' ')
+            self._log(f"Local fallback completion: {preview}...", "info")
         else:
-            reason = "configure API token in Settings → Pynia"
+            if not get_pynia_settings().autocomplete_enabled:
+                reason = "disabled in Settings → Pynia"
+            elif not self._pynia_client:
+                reason = "Pynia client not connected"
+            else:
+                reason = "configure API token in Settings → Pynia"
+            self._log(f"AI autocomplete unavailable — {reason}", "info")
+        self.completion_ready.emit(local_completion or "")
 
-        self._log(f"AI autocomplete unavailable — {reason}", "info")
+    def _release_processing(self) -> None:
+        """Clear the in-flight lock and stop the watchdog."""
         self._is_processing = False
-        if request["id"] == self._active_request_id:
+        self._watchdog_timer.stop()
+
+    def _maybe_serve_pending(self) -> None:
+        """If a newer request queued up while we were busy, serve it now."""
+        if self._pending_request and not self._debounce_timer.isActive():
+            self._debounce_timer.start()
+
+    @pyqtSlot()
+    def _on_request_watchdog(self) -> None:
+        """Force-release a wedged in-flight request so typing keeps working."""
+        if self._is_processing:
+            self._log("Completion watchdog: releasing stuck request", "debug")
+            self._is_processing = False
             self.completion_ready.emit("")
+            self._maybe_serve_pending()
     
     def force_completion(
         self,
@@ -503,17 +537,8 @@ class InlineCompletionService(QObject):
             
             # Start processing
             self._is_processing = True
-            
-            # Build request
-            request = {
-                "id": request_id,
-                "prefix": prefix,
-                "suffix": suffix,
-                "language": language,
-                "line": line,
-                "column": column,
-            }
-            
+            self._watchdog_timer.start()
+
             if self.has_pynia and self._pynia_client:
                 ctx = self._build_request_context(language)
                 self._log(f"Force Pynia completion ({language}, L{line}:C{column})", "info")
@@ -523,13 +548,13 @@ class InlineCompletionService(QObject):
                 return
 
             self._log("Force completion failed — configure Pynia in Settings", "warning")
-            self._is_processing = False
+            self._release_processing()
             self.completion_ready.emit("")
-        
+
         except Exception as e:
             import traceback
             self._log(f"Force completion exception: {e}\n{traceback.format_exc()}", "error")
-            self._is_processing = False
+            self._release_processing()
             self.completion_ready.emit("")
 
     def _get_smart_completion(
@@ -575,13 +600,14 @@ class InlineCompletionService(QObject):
         
         # Structure completions
         if line.startswith("def ") and "(" not in line:
-            func_name = line[4:].strip()
-            if func_name.startswith("__"):
-                return "(self):"
-            return "(self):\n" + indent + "    "
-        
+            # Only assume `self` when the def is clearly inside a class body
+            # (indented and a class appears above). A module-level function
+            # getting `(self):` was a classic wrong suggestion.
+            in_class = bool(indent) and ("class " in prefix)
+            return "(self):" if in_class else "():"
+
         if line.startswith("class ") and ":" not in line:
-            return ":\n" + indent + "    def __init__(self):\n" + indent + "        "
+            return ":"
         
         if line.startswith("for ") and " in " not in line:
             var_hint = line[4:].strip()

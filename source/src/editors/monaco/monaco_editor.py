@@ -702,11 +702,10 @@ class MonacoEditor(QWidget):
             text: The completion text to show as ghost text
         """
         logger.debug(f"[MONACO] provide_completion called: {len(text) if text else 0} chars, is_ready={self._is_ready}")
-        if not text:
-            logger.debug("[MONACO] provide_completion: empty text, skipping")
-            return
-        escaped = json.dumps(text)
-        logger.debug(f"[MONACO] Calling receiveCompletion with {len(escaped)} escaped chars")
+        # Always resolve the pending JS promise — even for an empty result.
+        # Skipping the call here left the inline-completion promise hanging
+        # until its timeout, blocking every later suggestion in that slot.
+        escaped = json.dumps(text or "")
         self._run_js_when_ready(f"receiveCompletion({escaped})")
     
     def register_completions(self, completions: list) -> None:

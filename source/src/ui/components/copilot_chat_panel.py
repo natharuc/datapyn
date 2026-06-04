@@ -72,7 +72,7 @@ def _load_pynia_icon(color: str, size: int = 20) -> QIcon:
         components_dir = os.path.dirname(os.path.abspath(__file__))
         ui_dir = os.path.dirname(components_dir)
         src_dir = os.path.dirname(ui_dir)
-        svg_path = os.path.join(src_dir, "assets", "icons", "copilot_icon.svg")
+        svg_path = os.path.join(src_dir, "assets", "icons", "pynia_icon.svg")
 
         with open(svg_path, "r", encoding="utf-8") as f:
             svg_content = f.read()
@@ -96,7 +96,7 @@ def _load_pynia_icon(color: str, size: int = 20) -> QIcon:
 
         return QIcon(pixmap)
     except Exception as e:
-        logger.error(f"Failed to load Copilot icon: {e}")
+        logger.error(f"Failed to load Pynia icon: {e}")
         return None
 
 
@@ -976,416 +976,6 @@ class PyniaChatPanel(QWidget):
         if server and self._agent_client and hasattr(self._agent_client, 'set_tool_registry'):
             self._agent_client.set_tool_registry(server.tool_registry, parent=self.window())
 
-    def _setup_ui(self):
-        """Build the chat panel UI."""
-        colors = get_colors()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # === Header bar ===
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(10, 6, 10, 6)
-        header_layout.setSpacing(8)
-
-        # Pynia icon + title
-        copilot_icon = _load_pynia_icon(colors.text_primary, size=20)
-        if copilot_icon:
-            icon_label = QLabel()
-            icon_label.setPixmap(copilot_icon.pixmap(20, 20))
-            header_layout.addWidget(icon_label)
-
-        title_label = QLabel(S.pynia.title)
-        title_font = QFont()
-        title_font.setBold(True)
-        title_font.setPointSize(10)
-        title_label.setFont(title_font)
-        title_label.setStyleSheet(f"color: {colors.text_primary};")
-        header_layout.addWidget(title_label)
-
-        header_layout.addStretch()
-
-        # New chat button
-        self._new_chat_btn = QPushButton()
-        self._new_chat_btn.setFixedSize(28, 28)
-        self._new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._new_chat_btn.setToolTip(S.pynia.new_chat)
-        if HAS_QTAWESOME:
-            self._new_chat_btn.setIcon(qta.icon("mdi.plus", color=colors.text_primary))
-        else:
-            self._new_chat_btn.setText("+")
-        self._new_chat_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                border: 1px solid {colors.border_muted};
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.bg_tertiary};
-            }}
-        """)
-        header_layout.addWidget(self._new_chat_btn)
-
-        # Sessions button (history)
-        self._sessions_btn = QPushButton()
-        self._sessions_btn.setFixedSize(28, 28)
-        self._sessions_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sessions_btn.setToolTip(S.pynia.chat_history)
-        if HAS_QTAWESOME:
-            self._sessions_btn.setIcon(qta.icon("mdi.history", color=colors.text_primary))
-        else:
-            self._sessions_btn.setText(S.pynia.chat_history_short)
-        self._sessions_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                border: 1px solid {colors.border_muted};
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.bg_tertiary};
-            }}
-        """)
-        header_layout.addWidget(self._sessions_btn)
-
-        # Auth button (no icon, just text showing username or sign-in)
-        self._auth_btn = QPushButton(S.pynia.sign_in)
-        self._auth_btn.setFixedWidth(90)
-        self._auth_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        header_layout.addWidget(self._auth_btn)
-
-        header.setStyleSheet(f"""
-            QWidget {{
-                background-color: {colors.bg_secondary};
-                border-bottom: 1px solid {colors.border_default};
-            }}
-        """)
-        layout.addWidget(header)
-
-        # === Tab context badge (shows which tab the chat is scoped to) ===
-        self._tab_badge = QLabel()
-        self._tab_badge.setVisible(False)
-        self._tab_badge.setStyleSheet(f"""
-            QLabel {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_secondary};
-                font-size: 11px;
-                padding: 3px 12px;
-                border-bottom: 1px solid {colors.border_default};
-            }}
-        """)
-        layout.addWidget(self._tab_badge)
-
-        # === Messages area with persistent history sidebar ===
-        self._chat_body = QWidget()
-        chat_body_layout = QHBoxLayout(self._chat_body)
-        chat_body_layout.setContentsMargins(0, 0, 0, 0)
-        chat_body_layout.setSpacing(0)
-
-        self._history_sidebar = self._create_history_sidebar()
-        self._history_sidebar.setVisible(False)
-        chat_body_layout.addWidget(self._history_sidebar)
-
-        self._setup_chat_webview()
-        chat_body_layout.addWidget(self._chat_webview, 1)
-        layout.addWidget(self._chat_body, 1)
-
-        # === GitHub CLI install bar (hidden by default) ===
-        self._gh_install_widget = QWidget()
-        gh_layout = QHBoxLayout(self._gh_install_widget)
-        gh_layout.setContentsMargins(10, 8, 10, 8)
-        gh_layout.setSpacing(8)
-
-        gh_icon_label = QLabel()
-        if HAS_QTAWESOME:
-            gh_icon_label.setPixmap(
-                qta.icon("mdi.alert-circle-outline", color="#e5c07b").pixmap(20, 20)
-            )
-        else:
-            gh_icon_label.setText("!")
-        gh_layout.addWidget(gh_icon_label)
-
-        gh_text = QLabel(S.pynia.gh_cli_not_found.split("\n")[0])
-        gh_text.setWordWrap(True)
-        gh_text.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
-        gh_layout.addWidget(gh_text, 1)
-
-        self._gh_install_btn = QPushButton(S.pynia.install_gh_cli)
-        self._gh_install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._gh_install_btn.setFixedHeight(30)
-        self._gh_install_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 4px 14px;
-                font-size: 12px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary_hover};
-            }}
-            QPushButton:disabled {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_tertiary};
-            }}
-        """)
-        self._gh_install_btn.clicked.connect(self._install_gh_cli)
-        gh_layout.addWidget(self._gh_install_btn)
-
-        self._gh_install_widget.setStyleSheet(f"""
-            QWidget {{
-                background-color: {colors.bg_secondary};
-                border-top: 1px solid {colors.border_muted};
-            }}
-        """)
-        self._gh_install_widget.setVisible(False)
-        layout.addWidget(self._gh_install_widget)
-
-        # === Config bar (Model selector only - always uses Agent mode) ===
-        config_bar = QWidget()
-        config_layout = QHBoxLayout(config_bar)
-        config_layout.setContentsMargins(8, 4, 8, 4)
-        config_layout.setSpacing(8)
-
-        # Mode is always Agent (hidden) - tools only work in agent mode
-        self._mode_combo = None  # Removed - always agent mode
-
-        from src.services.pynia import PROVIDERS, get_pynia_settings
-
-        self._provider_combo = QComboBox()
-        self._provider_combo.setFixedWidth(168)
-        self._provider_combo.setToolTip(
-            getattr(S.pynia, "provider_tooltip", "AI connector for Pynia chat")
-            if hasattr(S, "pynia")
-            else "AI connector"
-        )
-        provider_labels = {
-            "openai": getattr(S.pynia, "provider_openai", "OpenAI"),
-            "openrouter": getattr(S.pynia, "provider_openrouter", "Open Router"),
-            "anthropic": getattr(S.pynia, "provider_anthropic", "Claude"),
-            "copilot": getattr(S.pynia, "provider_copilot", "GitHub Copilot"),
-        }
-        for pid in PROVIDERS:
-            self._provider_combo.addItem(provider_labels.get(pid, pid), pid)
-        active = get_pynia_settings().active_provider
-        idx = self._provider_combo.findData(active)
-        if idx >= 0:
-            self._provider_combo.setCurrentIndex(idx)
-        self._provider_combo.currentIndexChanged.connect(self._on_provider_combo_changed)
-        config_layout.addWidget(self._provider_combo)
-
-        # Model selector with custom delegate
-        self._model_combo = QComboBox()
-        self._model_delegate = ModelItemDelegate(self._model_combo)
-        self._model_combo.setItemDelegate(self._model_delegate)
-        self._model_combo.setFixedWidth(220)  # Accommodate model names + multiplier
-        self._model_combo.setToolTip(S.pynia.model_tooltip)
-        config_layout.addWidget(self._model_combo)
-
-        self._refresh_models_btn = QPushButton()
-        self._refresh_models_btn.setFixedSize(26, 26)
-        self._refresh_models_btn.setToolTip(S.pynia.refresh_models)
-        self._refresh_models_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        if HAS_QTAWESOME:
-            self._refresh_models_btn.setIcon(qta.icon("mdi.refresh", color=colors.text_secondary))
-        else:
-            self._refresh_models_btn.setText(S.pynia.refresh_models_short)
-        self._refresh_models_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_muted};
-                border-radius: {RADIUS.radius_sm}px;
-                padding: 0;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_secondary_hover};
-                border-color: {colors.border_default};
-            }}
-        """)
-        config_layout.addWidget(self._refresh_models_btn)
-
-        self._effort_combo = QComboBox()
-        self._effort_combo.setFixedWidth(118)
-        self._effort_combo.setToolTip(S.pynia.reasoning_effort_tooltip)
-        effort_labels = {
-            "auto": S.pynia.effort_auto,
-            "low": S.pynia.effort_low,
-            "medium": S.pynia.effort_medium,
-            "high": S.pynia.effort_high,
-            "xhigh": S.pynia.effort_xhigh,
-        }
-        for effort in REASONING_EFFORTS:
-            self._effort_combo.addItem(effort_labels.get(effort, effort), effort)
-        config_layout.addWidget(self._effort_combo)
-
-        # Usage label (shows premium requests percentage)
-        # Hidden by default - shown when usage data becomes available
-        self._usage_label = QLabel("")
-        self._usage_label.setStyleSheet(f"""
-            QLabel {{
-                color: {colors.text_tertiary};
-                font-size: 11px;
-                padding: 0 8px;
-            }}
-        """)
-        self._usage_label.setVisible(False)  # Hidden until we have data or model metadata
-        config_layout.addWidget(self._usage_label)
-
-        config_layout.addStretch()
-
-        config_bar.setStyleSheet(f"""
-            QWidget {{
-                background-color: {colors.bg_secondary};
-                border-top: 1px solid {colors.border_muted};
-            }}
-        """)
-        layout.addWidget(config_bar)
-
-        # === Input area ===
-        input_container = QWidget()
-        input_layout = QHBoxLayout(input_container)
-        input_layout.setContentsMargins(8, 6, 8, 8)
-        input_layout.setSpacing(6)
-
-        self._input = ChatInputWidget()
-        self._input.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS.radius_md}px;
-                padding: 8px 12px;
-                font-size: 13px;
-            }}
-            QTextEdit:focus {{
-                border-color: {colors.interactive_primary};
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 8px;
-                margin: 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(128, 128, 128, 0.3);
-                border-radius: 4px;
-                min-height: 40px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: rgba(128, 128, 128, 0.5);
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
-        """)
-        input_layout.addWidget(self._input, 1)
-
-        self._send_btn = QPushButton()
-        self._send_btn.setFixedSize(36, 36)
-        self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._send_btn.setToolTip(S.pynia.send_tooltip)
-        if HAS_QTAWESOME:
-            self._send_btn.setIcon(qta.icon("mdi.send", color=colors.text_primary))
-        self._send_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                border: none;
-                border-radius: {RADIUS.radius_md}px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors.interactive_primary_active};
-            }}
-        """)
-        input_layout.addWidget(self._send_btn, 0, Qt.AlignmentFlag.AlignBottom)
-
-        # Stop button (hidden by default, shown when loading)
-        self._stop_btn = QPushButton()
-        self._stop_btn.setFixedSize(36, 36)
-        self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._stop_btn.setToolTip(S.pynia.stop_tooltip)
-        if HAS_QTAWESOME:
-            self._stop_btn.setIcon(qta.icon("mdi.stop", color=colors.text_primary))
-        self._stop_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.danger};
-                border: none;
-                border-radius: {RADIUS.radius_md}px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.danger_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors.danger_active};
-            }}
-        """)
-        self._stop_btn.hide()  # Hidden by default
-        input_layout.addWidget(self._stop_btn, 0, Qt.AlignmentFlag.AlignBottom)
-
-        input_container.setStyleSheet(f"""
-            QWidget {{
-                background-color: {colors.bg_secondary};
-                border-top: 1px solid {colors.border_default};
-            }}
-        """)
-        layout.addWidget(input_container)
-
-        # Style combo boxes
-        combo_style = f"""
-            QComboBox {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS.radius_sm}px;
-                padding: 3px 8px;
-                font-size: 12px;
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {colors.bg_elevated};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                selection-background-color: {colors.interactive_primary};
-            }}
-        """
-        # Mode combo was removed - always agent mode
-        self._model_combo.setStyleSheet(combo_style)
-        self._effort_combo.setStyleSheet(combo_style)
-
-        self._auth_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS.radius_sm}px;
-                padding: 4px 10px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_secondary_hover};
-            }}
-        """)
-
-        self._populate_model_combo(self._available_models)
-        preferred_effort = get_copilot_settings().chat_reasoning_effort
-        effort_index = self._effort_combo.findData(preferred_effort)
-        if effort_index >= 0:
-            self._effort_combo.setCurrentIndex(effort_index)
-        self._update_reasoning_effort_state()
-        self._set_usage_snapshot(self._usage_snapshot)
-        self._refresh_history_sidebar()
-        self._apply_theme()
 
     def _create_history_sidebar(self):
         """Create the persistent chat history sidebar."""
@@ -1484,14 +1074,6 @@ class PyniaChatPanel(QWidget):
         """)
         return sidebar
 
-    def _get_template_path(self) -> Path:
-        """Get path to chat template, handling PyInstaller bundle."""
-        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-            # Running as PyInstaller bundle
-            return Path(sys._MEIPASS) / 'src' / 'ui' / 'components' / 'chat_template.html'
-        else:
-            # Development mode
-            return Path(__file__).parent / 'chat_template.html'
 
     def _setup_chat_webview(self):
         """Setup the WebView-based chat messages area."""
@@ -1576,68 +1158,24 @@ class PyniaChatPanel(QWidget):
         }
         self._run_chat_js(f"setTheme({json.dumps(theme_payload)})")
     
-    def _on_webview_ready(self):
-        """Called when chat WebView is ready."""
-        self._webview_ready = True
-        
-        # Set welcome text from translation
-        welcome_title = getattr(S.pynia, "welcome_title", S.pynia.title)
-        welcome_msg = S.pynia.welcome_message
-        self._run_chat_js(f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(welcome_msg)})")
-        
-        # Send i18n labels to WebView
-        chat_labels = {
-            "thinking": S.pynia.thinking,
-            "thinking_complete": S.pynia.thinking_complete,
-            "tool_processing": S.pynia.tool_processing,
-            "tool_using_one": S.pynia.tool_using_one,
-            "tool_using_many": S.pynia.tool_using_many,
-            "tool_used_one": S.pynia.tool_used_one,
-            "tool_used_many": S.pynia.tool_used_many,
-            "tool_running": S.pynia.tool_running,
-            "tool_ok": S.pynia.tool_ok,
-            "tool_error": S.pynia.tool_error,
-            "copy": S.pynia.copy_code,
-            "copied": S.pynia.copied_code,
-            "insert": S.pynia.insert_code,
-            "inserted": S.pynia.inserted_code,
-            "waiting_response": S.pynia.waiting_response,
-        }
-        self._run_chat_js(f"setLabels({json.dumps(chat_labels)})")
-        self._apply_theme()
-        
-        # Execute pending operations
-        for op in self._pending_webview_ops:
-            self._run_chat_js(op)
-        self._pending_webview_ops.clear()
-        
-        logger.debug("Chat WebView ready")
     
     def _run_chat_js(self, code: str):
         """Run JavaScript in the chat WebView."""
-        if self._webview_ready:
-            self._chat_webview.page().runJavaScript(code)
-        else:
+        if not self._webview_ready:
             self._pending_webview_ops.append(code)
+            return
+        # During teardown an async callback (e.g. auth) can fire after the
+        # webview/page is gone. Guard against None and already-deleted Qt
+        # objects so it degrades to a no-op instead of crashing the event loop.
+        try:
+            webview = self._chat_webview
+            page = webview.page() if webview is not None else None
+            if page is not None:
+                page.runJavaScript(code)
+        except RuntimeError:
+            # Underlying C++ object already deleted — nothing to run.
+            pass
 
-    def _connect_signals(self):
-        """Connect internal signals."""
-        self._send_btn.clicked.connect(self._on_send)
-        self._stop_btn.clicked.connect(self._on_stop)
-        self._input.submit_requested.connect(self._on_send)
-        self._auth_btn.clicked.connect(self._on_auth_clicked)
-        self._model_combo.currentIndexChanged.connect(self._on_model_changed)
-        self._effort_combo.currentIndexChanged.connect(self._on_reasoning_effort_changed)
-        self._refresh_models_btn.clicked.connect(self._on_refresh_models_clicked)
-        self._new_chat_btn.clicked.connect(self._on_new_chat)
-        self._sessions_btn.clicked.connect(self._on_sessions_clicked)
-        
-        # Connect to Pynia auth service for cross-component updates
-        auth_service = self._get_chat_auth_service()
-        auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
-        auth_service.chat_logged_out.connect(self._on_auth_service_chat_logged_out)
-        if hasattr(auth_service, 'chat_gh_not_found'):
-            auth_service.chat_gh_not_found.connect(self._on_gh_not_found)
 
     def _on_new_chat(self):
         """Start a new chat session."""
@@ -1659,37 +1197,6 @@ class PyniaChatPanel(QWidget):
         name = session.get("name") or session.get("title") or S.pynia.untitled_chat
         return str(name).strip() or S.pynia.untitled_chat
 
-    def _refresh_history_sidebar(self):
-        """Refresh the visible history list from persisted sessions."""
-        if not hasattr(self, '_history_list'):
-            return
-        query = ""
-        if hasattr(self, '_history_search'):
-            query = self._history_search.text().strip().lower()
-
-        self._history_list.clear()
-        sessions = self._get_sessions_list()
-        for session in sessions:
-            name = self._session_display_name(session)
-            if query and query not in name.lower():
-                continue
-            timestamp = str(session.get("timestamp", ""))[:16].replace("T", " ")
-            model = session.get("model", "")
-            label = name
-            details = "  ".join(part for part in (timestamp, model) if part)
-            if details:
-                label = f"{name}\n{details}"
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, session.get("id", ""))
-            if session.get("id") == self._current_session_id:
-                item.setSelected(True)
-            self._history_list.addItem(item)
-
-        if self._history_list.count() == 0:
-            item = QListWidgetItem(S.pynia.no_sessions)
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self._history_list.addItem(item)
-        self._history_delete_btn.setEnabled(self._history_list.currentItem() is not None)
 
     def _restore_session_from_item(self, item: QListWidgetItem):
         session_id = item.data(Qt.ItemDataRole.UserRole) if item else ""
@@ -1730,89 +1237,8 @@ class PyniaChatPanel(QWidget):
         self._settings.setValue("last_session_id", "")
         self._refresh_history_sidebar()
 
-    def _set_loading(self, loading: bool):
-        """Set loading state - disable input while waiting for response."""
-        self._send_btn.setEnabled(not loading)
-        self._input.setEnabled(not loading)
-        if loading:
-            self._send_btn.setToolTip(getattr(S.pynia, 'waiting_response', S.pynia.send_tooltip))
-            self._send_btn.hide()
-            self._stop_btn.show()
-        else:
-            self._send_btn.setToolTip(S.pynia.send_tooltip)
-            self._stop_btn.hide()
-            self._send_btn.show()
 
-    def _on_stop(self):
-        """Handle stop button - cancel current operation."""
-        if self._agent_client and hasattr(self._agent_client, "cancel"):
-            self._agent_client.cancel()
-        self._cancel_active_tool_target()
-        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-            self._mcp_server.tool_registry.unpin_session()
-        self._active_tool_target_id = None
-        self._set_loading(False)
-        self._hide_thinking_indicator()
-        # Mark any widgets as complete
-        if hasattr(self, '_current_thinking_widget') and self._current_thinking_widget:
-            self._current_thinking_widget.set_complete()
-            self._current_thinking_widget = None
-        if hasattr(self, '_current_actions_widget') and self._current_actions_widget:
-            self._current_actions_widget.set_complete()
-            self._current_actions_widget = None
 
-    def _on_send(self):
-        """Handle send button or Enter key."""
-        text = self._input.toPlainText().strip()
-        if not text:
-            return
-
-        self._input.clear()
-
-        # Hide welcome message (done automatically in _add_message via WebView)
-
-        # Add user message
-        self._add_message("user", text)
-
-        # Show loading state
-        self._set_loading(True)
-
-        # Build static system prompt and lightweight per-turn context.
-        system_prompt = self._build_system_prompt()
-        context_section, start_here = self._build_request_context_section()
-
-        from src.services.pynia.system_prompt import build_request_prompt
-        request_prompt = build_request_prompt(text, context_section, start_here)
-
-        # Prepare messages for API
-        api_messages = [{"role": "system", "content": system_prompt}]
-        for msg in self._messages[:-1]:
-            api_messages.append({"role": msg["role"], "content": msg["content"]})
-        api_messages.append({"role": "user", "content": request_prompt})
-
-        # Send to Copilot
-        if self._agent_client:
-            if hasattr(self._agent_client, "system_message"):
-                self._agent_client.system_message = system_prompt
-
-            # Pin MCP tools to the current tab so tools target it even if user switches tabs
-            if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-                tab_id = self._resolve_current_tab_id()
-                if tab_id:
-                    self._active_tool_target_id = tab_id
-                    self._mcp_server.tool_registry.pin_session(tab_id)
-
-            # Clear any previous assistant widget to ensure fresh response
-            self._current_assistant_widget = None
-            # Add animated thinking indicator
-            self._show_thinking_indicator()
-            self.thinking_started.emit()
-            self._agent_client.send_chat(api_messages)
-        else:
-            self._set_loading(False)
-            self._add_message("assistant", S.pynia.not_authenticated)
-
-        self.message_sent.emit(text)
 
     def _build_system_prompt(self) -> str:
         """Build Pynia system prompt (tools via API — not duplicated in text)."""
@@ -1820,16 +1246,6 @@ class PyniaChatPanel(QWidget):
 
         return build_system_prompt(include_tool_catalog=False)
 
-    def _build_request_context_section(self) -> str:
-        """Build a lightweight context snapshot for a single chat turn."""
-        from src.services.pynia.system_prompt import build_context_section
-
-        try:
-            context_json = json.dumps(self._build_context_snapshot(), indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.debug(f"Error building editor context snapshot: {e}")
-            context_json = "{}"
-        return build_context_section(context_json, "")
 
     def _build_context_snapshot(self) -> dict:
         """Return bounded editor state without triggering live database work."""
@@ -1914,6 +1330,17 @@ class PyniaChatPanel(QWidget):
         variables = self._build_namespace_summary(session_widget, session)
         if variables:
             context["variables"] = variables
+
+        # Last error + currently-displayed result, so "why did my query fail?"
+        # and "chart this result" work without an extra tool round.
+        try:
+            from src.services.pynia.execution_context import build_execution_context
+
+            execution_state = build_execution_context(mw, context["target_session_id"])
+            if execution_state:
+                context["execution_state"] = execution_state
+        except Exception as e:
+            logger.debug(f"Error building execution context: {e}")
 
         return context
 
@@ -2145,108 +1572,8 @@ class PyniaChatPanel(QWidget):
         """Scroll the messages area to the bottom via WebView."""
         self._run_chat_js("scrollToBottom()")
 
-    def _on_response_chunk(self, chunk: str):
-        """Handle streaming response chunk."""
-        # Hide thinking indicator on first chunk
-        self._hide_thinking_indicator()
-        # End collapsible thinking block when response starts
-        if self._is_thinking:
-            self._is_thinking = False
-            self._run_chat_js("endThinkingBlock()")
-        
-        if self._current_stream_id:
-            # Stream to existing message
-            chunk_escaped = json.dumps(chunk)
-            self._run_chat_js(f"streamChunk({chunk_escaped})")
-        else:
-            # Start a new streaming message
-            self._messages.append({"role": "assistant", "content": chunk})
-            self._current_stream_id = f"stream_{len(self._messages)}"
-            self._run_chat_js("startStreaming()")
-            chunk_escaped = json.dumps(chunk)
-            self._run_chat_js(f"streamChunk({chunk_escaped})")
 
-    def _on_response_complete(self, full_text: str):
-        """Handle complete response."""
-        self._set_loading(False)
-        self._hide_thinking_indicator()
 
-        # Unpin MCP tools session (response is complete)
-        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-            self._mcp_server.tool_registry.unpin_session()
-        self._active_tool_target_id = None
-        
-        # End collapsible thinking block
-        if self._is_thinking:
-            self._is_thinking = False
-            self._run_chat_js("endThinkingBlock()")
-        
-        # End streaming in WebView
-        self._run_chat_js("endStreaming()")
-        
-        # End tool group (mark as complete)
-        self._run_chat_js("endToolGroup()")
-        
-        # Mark thinking widget as complete (legacy - not used with WebView)
-        if self._current_thinking_widget:
-            self._current_thinking_widget = None
-        
-        # Mark actions widget as complete (legacy - not used with WebView)
-        if self._current_actions_widget:
-            self._current_actions_widget = None
-        
-        # Clear active tool calls tracking
-        self._active_tool_calls.clear()
-        
-        if not self._current_stream_id:
-            self._add_message("assistant", full_text)
-        else:
-            # Update the last message content in history
-            if self._messages and self._messages[-1]["role"] == "assistant":
-                self._messages[-1]["content"] = full_text
-        self._current_stream_id = None
-        
-        # Auto-save session after each exchange
-        self._save_current_session()
-
-    def _on_chat_error(self, error: str):
-        """Handle chat error."""
-        self._set_loading(False)
-        self._hide_thinking_indicator()
-
-        # Unpin MCP tools session (stream ended with error)
-        if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
-            self._mcp_server.tool_registry.unpin_session()
-        self._active_tool_target_id = None
-        
-        # End collapsible thinking block
-        if self._is_thinking:
-            self._is_thinking = False
-            self._run_chat_js("endThinkingBlock()")
-        
-        # End any streaming
-        self._run_chat_js("endStreaming()")
-        self._current_stream_id = None
-        
-        # End tool group (mark as complete)
-        self._run_chat_js("endToolGroup()")
-        
-        # Mark widgets as complete (legacy)
-        self._current_thinking_widget = None
-        self._current_actions_widget = None
-        
-        # Clear active tool calls tracking
-        self._active_tool_calls.clear()
-        
-        # Check if error is about missing Copilot extension
-        if "Cannot find GitHub Copilot CLI" in error or "Copilot CLI" in error:
-            self._on_gh_not_found()
-            self._add_message(
-                "assistant",
-                "GitHub Copilot extension not found. Click the button above to install it."
-            )
-        else:
-            self._add_message("assistant", f"Error: {error}")
 
     def _show_thinking_indicator(self):
         """Compact status only — no extra thinking rows in the message list."""
@@ -2258,87 +1585,13 @@ class PyniaChatPanel(QWidget):
         """Hide the thinking indicator via WebView."""
         self._run_chat_js("hideThinking()")
 
-    def _on_tool_called(self, tool_name: str, arguments: dict, tool_call_id: str = ""):
-        """Handle tool call from Copilot - show in WebView."""
-        logger.info(f"Tool called: {tool_name}({arguments})")
-        
-        # Build a short summary of the arguments for display
-        arg_summary = ""
-        if arguments:
-            parts = []
-            for key, val in arguments.items():
-                if key in ("thought",):
-                    continue  # Skip verbose params
-                val_str = str(val)
-                if len(val_str) > 40:
-                    val_str = val_str[:37] + "..."
-                parts.append(f'{key}={val_str}')
-            if parts:
-                arg_summary = ", ".join(parts[:3])
 
-        # Show tool use in WebView with argument summary
-        tool_name_escaped = json.dumps(tool_name)
-        arg_summary_escaped = json.dumps(arg_summary)
-        self._run_chat_js(f"addToolUse({tool_name_escaped}, {arg_summary_escaped})")
-        
-        # Track by name for later result update
-        self._active_tool_calls[tool_name] = True
-        
-        # Emit signal for external listeners (output panel)
-        self.tool_call_requested.emit(tool_name, arguments)
 
-    def _on_tool_result(self, tool_name: str, result: str):
-        """Handle tool execution result."""
-        logger.info(f"Tool result: {tool_name} -> {result[:100]}...")
-        
-        # Build short result preview (first meaningful line, max 80 chars)
-        result_preview = ""
-        is_error = "error" in result.lower()[:100]
-        if result:
-            # Get first non-empty, non-decoration line
-            for line in result.split("\n"):
-                line = line.strip()
-                if line and not line.startswith("```") and not line.startswith("##"):
-                    result_preview = line[:80]
-                    if len(line) > 80:
-                        result_preview += "..."
-                    break
-
-        # Update tool status in WebView
-        tool_name_escaped = json.dumps(tool_name)
-        result_preview_escaped = json.dumps(result_preview)
-        self._run_chat_js(
-            f"updateToolStatus({tool_name_escaped}, 'done', {str(is_error).lower()}, {result_preview_escaped})"
-        )
-
-    def _on_thinking(self, text: str):
-        """Handle reasoning/thinking text from Copilot."""
-        if not text.strip():
-            return
-        
-        logger.debug(f"Thinking: {text[:50]}...")
-        
-        # Start a collapsible thinking block if not already open
-        if not self._is_thinking:
-            self._is_thinking = True
-            self._run_chat_js("startThinkingBlock()")
-        
-        # Append thinking text to the block
-        text_escaped = json.dumps(text)
-        self._run_chat_js(f"appendThinking({text_escaped})")
 
     def _on_models_changed(self, models: list):
         """Handle dynamic model list update from SDK."""
         self._populate_model_combo(models)
 
-    def _on_refresh_models_clicked(self):
-        """Refresh model and usage metadata from the Copilot client."""
-        self._usage_label.setText(S.pynia.usage_loading)
-        self._usage_label.setVisible(True)
-        if self._agent_client and hasattr(self._agent_client, 'refresh_metadata'):
-            self._agent_client.refresh_metadata()
-        elif self._agent_client and hasattr(self._agent_client, 'start_auth'):
-            self._agent_client.start_auth()
 
     def _format_multiplier(self, multiplier) -> str:
         try:
@@ -2349,34 +1602,6 @@ class PyniaChatPanel(QWidget):
             return f"{int(value)}x"
         return f"{value:.2g}x"
 
-    def _populate_model_combo(self, models: list):
-        """Populate the model combo with normalized model metadata."""
-        normalized = normalize_models(models) or fallback_models()
-        current_model = self._preferred_model_id(self._model_combo.currentData())
-        self._available_models = normalized
-
-        self._model_combo.blockSignals(True)
-        self._model_combo.clear()
-        for model in normalized:
-            model_id = model.get("id", "")
-            model_name = model.get("name", model_id)
-            idx = self._model_combo.count()
-            self._model_combo.addItem(model_name, model_id)
-            self._model_combo.setItemData(idx, self._format_multiplier(model.get("multiplier", 1.0)), Qt.ItemDataRole.UserRole + 1)
-            self._model_combo.setItemData(idx, dict(model), Qt.ItemDataRole.UserRole + 2)
-
-        restore_idx = self._model_combo.findData(current_model) if current_model else -1
-        if restore_idx < 0 and self._model_combo.count() > 0:
-            restore_idx = 0
-        if restore_idx >= 0:
-            self._model_combo.setCurrentIndex(restore_idx)
-        self._model_combo.blockSignals(False)
-
-        selected_model = self._model_combo.currentData()
-        if selected_model and self._agent_client and hasattr(self._agent_client, 'model'):
-            self._agent_client.model = selected_model
-        self._update_reasoning_effort_state()
-        self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, selected_model))
 
     def _preferred_model_id(self, current_combo_value: str = "") -> str:
         """Restore the last model for the active connector when repopulating the list."""
@@ -2393,117 +1618,9 @@ class PyniaChatPanel(QWidget):
         """Update usage display from client/service metadata."""
         self._set_usage_snapshot(snapshot)
 
-    def _set_usage_snapshot(self, snapshot: dict):
-        """Render the compact usage pill. Never invent quota numbers."""
-        snapshot = snapshot if isinstance(snapshot, dict) else {}
-        self._usage_snapshot = snapshot
-        if snapshot.get("available"):
-            used = snapshot.get("used")
-            total = snapshot.get("total")
-            remaining = snapshot.get("remaining_percentage")
-            if used is not None and total is not None:
-                text = S.pynia.usage_format.format(used=used, total=total)
-            elif used is not None:
-                text = S.pynia.usage_used_format.format(used=used)
-            elif remaining is not None:
-                text = S.pynia.usage_remaining_format.format(remaining=remaining)
-            else:
-                text = S.pynia.usage_unavailable
-            reset_date = snapshot.get("reset_date")
-            tooltip = S.pynia.usage_tooltip_with_reset.format(reset_date=reset_date) if reset_date else S.pynia.usage_tooltip
-        else:
-            multiplier = self._format_multiplier(snapshot.get("multiplier", 1.0))
-            text = S.pynia.usage_unavailable
-            tooltip = S.pynia.usage_unavailable_tooltip.format(multiplier=multiplier)
-        self._usage_label.setText(text)
-        self._usage_label.setToolTip(tooltip)
-        self._usage_label.setVisible(True)
 
-    def _update_reasoning_effort_state(self):
-        """Enable reasoning effort choices only for supporting models."""
-        model_id = self._model_combo.currentData() or ""
-        supported = model_supports_reasoning_effort(self._available_models, model_id)
-        supported_efforts = model_supported_reasoning_efforts(self._available_models, model_id)
-        self._effort_combo.setEnabled(True)
-        for index in range(self._effort_combo.count()):
-            effort = self._effort_combo.itemData(index)
-            enabled = effort == "auto" or effort in supported_efforts
-            self._effort_combo.model().item(index).setEnabled(enabled)
-        current_effort = self._effort_combo.currentData()
-        if current_effort != "auto" and current_effort not in supported_efforts:
-            model = find_model(self._available_models, model_id) or {}
-            preferred_effort = model.get("default_reasoning_effort") if supported else "auto"
-            if preferred_effort not in supported_efforts:
-                preferred_effort = "auto"
-            effort_idx = self._effort_combo.findData(preferred_effort)
-            if effort_idx >= 0:
-                self._effort_combo.setCurrentIndex(effort_idx)
-        tooltip = S.pynia.reasoning_effort_tooltip
-        if not supported:
-            tooltip = S.pynia.reasoning_effort_unavailable
-        self._effort_combo.setToolTip(tooltip)
 
-    def _on_reasoning_effort_changed(self, index: int):
-        """Persist and apply the selected reasoning effort."""
-        effort = self._effort_combo.currentData() or "auto"
-        model_id = self._model_combo.currentData() or ""
-        supported_efforts = model_supported_reasoning_efforts(self._available_models, model_id)
-        if effort != "auto" and effort not in supported_efforts:
-            auto_idx = self._effort_combo.findData("auto")
-            if auto_idx >= 0:
-                self._effort_combo.setCurrentIndex(auto_idx)
-            return
-        get_copilot_settings().set_chat_reasoning_effort(effort)
-        if self._agent_client and hasattr(self._agent_client, 'reasoning_effort'):
-            self._agent_client.reasoning_effort = effort
 
-    def _on_auth_clicked(self):
-        """Handle auth button click."""
-        # Use centralized auth service
-        from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
-        
-        if auth_service.is_chat_authenticated:
-            # Show menu with options
-            colors = get_colors()
-            menu = QMenu(self)
-            menu.setStyleSheet(f"""
-                QMenu {{
-                    background-color: {colors.bg_secondary};
-                    border: 1px solid {colors.border_default};
-                    border-radius: 4px;
-                    padding: 4px;
-                }}
-                QMenu::item {{
-                    padding: 6px 12px;
-                    color: {colors.text_primary};
-                }}
-                QMenu::item:selected {{
-                    background-color: {colors.bg_tertiary};
-                }}
-            """)
-
-            # Show subscription
-            subscription_action = menu.addAction(S.pynia.show_subscription)
-            subscription_action.triggered.connect(
-                lambda: QDesktopServices.openUrl(QUrl("https://github.com/settings/copilot"))
-            )
-
-            menu.addSeparator()
-
-            # Logout
-            logout_action = menu.addAction(S.pynia.logout)
-            logout_action.triggered.connect(self._do_logout)
-
-            menu.exec(self._auth_btn.mapToGlobal(self._auth_btn.rect().bottomLeft()))
-            return
-
-        # Start login via centralized auth service
-        if auth_service.login_chat():
-            self._auth_btn.setText(S.pynia.signing_in)
-            self._auth_btn.setEnabled(False)
-        else:
-            logger.info("Chat login blocked - auth already in progress")
 
     def _do_logout(self):
         """Perform logout via centralized auth service."""
@@ -2651,22 +1768,6 @@ class PyniaChatPanel(QWidget):
         self._gh_install_worker = None
         self._refresh_auth_gate()
 
-    def _update_auth_state(self):
-        """Update UI based on authentication state."""
-        if self._agent_client and self._agent_client.is_authenticated:
-            # Get username from client
-            username = getattr(self._agent_client, "_username", None)
-            if username:
-                self._auth_btn.setText(f"@{username}")
-                self._auth_btn.setToolTip(S.pynia.click_to_sign_out)
-            else:
-                self._auth_btn.setText(S.pynia.connected)
-                self._auth_btn.setToolTip(S.pynia.click_to_sign_out)
-            self._auth_btn.setEnabled(True)
-        else:
-            self._auth_btn.setText(S.pynia.sign_in)
-            self._auth_btn.setToolTip(S.pynia.sign_in_tooltip)
-            self._auth_btn.setEnabled(True)
 
     def _on_auth_service_chat_updated(self, username: str):
         """Handle chat auth state change from auth service (e.g., login via Settings)."""
@@ -2837,11 +1938,6 @@ class PyniaChatPanel(QWidget):
             self.cleanup()
         return super().event(event)
 
-    def _on_auth_service_chat_logged_out(self):
-        """Handle chat logout from auth service (e.g., logout via Settings)."""
-        self._auth_success_shown = False
-        self._update_auth_state()
-        self._usage_label.setVisible(False)
 
     def _update_models_from_client(self):
         """Update model combo box from client's available models."""
@@ -2855,13 +1951,6 @@ class PyniaChatPanel(QWidget):
         except Exception as e:
             logger.debug(f"Could not update models from client: {e}")
 
-    def _on_model_changed(self, index: int):
-        """Handle model selection change."""
-        model_id = self._model_combo.currentData()
-        if model_id and self._agent_client:
-            self._agent_client.model = model_id
-        self._update_reasoning_effort_state()
-        self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, model_id))
 
     def set_theme_manager(self, theme_manager):
         """Set theme manager for dynamic theming."""
@@ -2878,12 +1967,6 @@ class PyniaChatPanel(QWidget):
             self._update_tab_badge(tab_name)
         self._sync_focused_block_chip()
     
-    def _update_tab_badge(self, tab_name: str):
-        """Update the tab context badge in the chat header."""
-        label_text = S.pynia.chat_context_tab.replace('{name}', tab_name)
-        if hasattr(self, '_tab_badge'):
-            self._tab_badge.setText(label_text)
-            self._tab_badge.setVisible(True)
         # If no badge widget exists yet, we will create it in _setup_ui update
 
     def clear_chat(self):
@@ -3483,6 +2566,11 @@ class PyniaChatPanel(QWidget):
             self._provider_combo.blockSignals(True)
             self._provider_combo.setCurrentIndex(idx)
             self._provider_combo.blockSignals(False)
+        # A programmatic switch (e.g. after saving a connector in Settings) must
+        # also refresh the auth gate and model list, not just the combo index.
+        if self._agent_client and hasattr(self._agent_client, "available_models"):
+            self._populate_model_combo(self._agent_client.available_models())
+        self._update_auth_state()
 
     def _open_pynia_settings(self) -> None:
         main = self.window()

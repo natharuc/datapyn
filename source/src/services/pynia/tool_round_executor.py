@@ -75,7 +75,9 @@ def process_tool_round(
                 name, args, tc_id = subagent_calls[0]
                 on_tool_call(name, args, tc_id)
                 result = truncate_tool_result(
-                    _format_orchestrator_result(subagent_orchestrator.run_subagent_tool(args))
+                    _format_orchestrator_result(
+                        subagent_orchestrator.run_subagent_tool(args, is_cancelled=is_cancelled)
+                    )
                 )
                 on_tool_result(name, result, tc_id)
                 outcomes.append((tc_id, name, result))
@@ -92,7 +94,9 @@ def process_tool_round(
                     )
                 for name, args, tc_id in subagent_calls:
                     on_tool_call(name, args, tc_id)
-                parallel_results = subagent_orchestrator.run_explore_parallel_blocking(tasks)
+                parallel_results = subagent_orchestrator.run_explore_parallel_blocking(
+                    tasks, is_cancelled=is_cancelled
+                )
                 by_id = {r.task_id: r.summary for r in parallel_results}
                 for name, args, tc_id in subagent_calls:
                     result = truncate_tool_result(by_id.get(tc_id, "Error: subagent returned no result."))

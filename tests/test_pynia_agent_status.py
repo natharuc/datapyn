@@ -1,6 +1,6 @@
 """Tests for human-readable Pynia agent status labels."""
 
-from src.services.pynia.agent_status import format_tool_display
+from src.services.pynia.agent_status import activity_line_for_tool, format_tool_display
 
 
 def test_format_inspect_block():

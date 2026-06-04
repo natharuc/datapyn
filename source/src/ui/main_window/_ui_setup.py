@@ -1065,11 +1065,34 @@ class UISetupMixin:
             initial_tab=initial_tab,
         )
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
+        dialog.pynia_connector_changed.connect(self._on_pynia_connector_changed)
         dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
         dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
         dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
         dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
         dialog.exec()
+
+    def _on_pynia_connector_changed(self, provider_id: str):
+        """A Pynia connector was saved in Settings — switch the live agent and
+        authenticate immediately so the chat reflects it without a restart."""
+        agent = getattr(self, "_pynia_agent", None)
+        if not agent:
+            return
+        try:
+            from src.services.pynia.settings import get_provider_secret
+
+            if getattr(agent, "provider_id", None) != provider_id and hasattr(agent, "set_provider"):
+                agent.set_provider(provider_id)
+            if provider_id == "copilot":
+                # GitHub device-flow login is driven by the auth service; just
+                # make sure the live agent is on the Copilot connector.
+                return
+            token = get_provider_secret(provider_id)
+            if token and hasattr(agent, "set_api_token"):
+                # Emits `authenticated`, which refreshes the chat auth gate.
+                agent.set_api_token(token, provider_id)
+        except Exception:
+            pass
 
     def _show_settings(self):
         """Shows the settings dialog"""
@@ -1079,7 +1102,8 @@ class UISetupMixin:
         """Shows the settings dialog on the Workspace tab."""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager, initial_tab="workspace")
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
-        
+        dialog.pynia_connector_changed.connect(self._on_pynia_connector_changed)
+
         # Connect Copilot auth signals
         dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
         dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)

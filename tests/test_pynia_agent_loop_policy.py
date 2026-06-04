@@ -44,19 +44,42 @@ def test_prepare_limits_read_only_per_round():
     assert "read-only" in msg.lower() or "skipped" in msg.lower()
 
 
-def test_prepare_limits_inspects_per_block():
+def test_prepare_caps_unanchored_inspects_per_block():
+    """Unanchored re-reads (structure / whole code) are capped at 2 per block."""
     seen: set[str] = set()
     block_counts: dict[str, int] = {}
     calls = [
         ("datapyn_inspect", {"kind": "block", "block_name": "block4", "detail": "structure"}, "a"),
-        ("datapyn_inspect", {"kind": "block", "block_name": "block4", "around": "1-100"}, "b"),
-        ("datapyn_inspect", {"kind": "block", "block_name": "block4", "around": "200-300"}, "c"),
+        ("datapyn_inspect", {"kind": "block", "block_name": "block4", "detail": "code"}, "b"),
+        ("datapyn_inspect", {"kind": "block", "block_name": "block4", "detail": "result"}, "c"),
     ]
     prepared = prepare_tool_calls(calls, seen_keys=seen, block_inspect_counts=block_counts)
     assert sum(1 for p in prepared if p[3]) == 2
     assert prepared[2][3] is False
     msg = skipped_tool_message(prepared[2][0], prepared[2][1], seen, block_counts)
     assert "block4" in msg
+
+
+def test_prepare_allows_distinct_section_reads():
+    """Anchored section reads (around=/line range) of a big block are not capped."""
+    seen: set[str] = set()
+    block_counts: dict[str, int] = {}
+    calls = [
+        ("datapyn_inspect", {"kind": "block", "block_name": "block3", "detail": "structure"}, "a"),
+        ("datapyn_inspect", {"kind": "block", "block_name": "block3", "around": "renderGroupTable"}, "b"),
+        ("datapyn_inspect", {"kind": "block", "block_name": "block3", "around": "renderSidePanel"}, "c"),
+        ("datapyn_inspect", {"kind": "block", "block_name": "block3", "start_line": 400, "end_line": 480}, "d"),
+    ]
+    prepared = prepare_tool_calls(calls, seen_keys=seen, block_inspect_counts=block_counts)
+    # structure (1 unanchored, under cap) + 3 distinct section reads all run.
+    assert sum(1 for p in prepared if p[3]) == 4
+    # An identical anchored read is still deduped.
+    dup = prepare_tool_calls(
+        [("datapyn_inspect", {"kind": "block", "block_name": "block3", "around": "renderGroupTable"}, "e")],
+        seen_keys=seen,
+        block_inspect_counts=block_counts,
+    )
+    assert dup[0][3] is False
 
 
 def test_evaluate_tool_call_guard():

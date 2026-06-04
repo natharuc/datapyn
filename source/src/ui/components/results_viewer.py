@@ -89,8 +89,39 @@ def _grid_is_null_scalar(value) -> bool:
         return False
 
 
+def _dedupe_grid_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a frame with unique column names (pandas-style ``.1`` suffixes).
+
+    A SQL result can have two columns with the same name; indexing such a frame
+    by name returns a DataFrame (not a Series) and breaks the whole grid
+    pipeline. We rename duplicates on a COPY so the caller's DataFrame (which
+    may be a live namespace variable) is never mutated. No-op when unique.
+    """
+    if df is None or df.columns.empty:
+        return df
+    names = [str(c) for c in df.columns]
+    if not df.columns.duplicated().any():
+        return df
+    seen: dict[str, int] = {}
+    new_names: list[str] = []
+    for name in names:
+        if name in seen:
+            seen[name] += 1
+            new_names.append(f"{name}.{seen[name]}")
+        else:
+            seen[name] = 0
+            new_names.append(name)
+    out = df.copy()
+    out.columns = new_names
+    return out
+
+
 def _grid_column_is_numeric(series: pd.Series) -> bool:
     """Detect numeric columns, including object columns with numeric strings."""
+    # Defensive: duplicate column names can yield a DataFrame here; treat as
+    # non-numeric rather than crashing pd.to_numeric.
+    if isinstance(series, pd.DataFrame):
+        return False
     if series is None or series.empty:
         return False
     if pd.api.types.is_numeric_dtype(series):
@@ -392,6 +423,9 @@ def prepare_grid_data(
 
     total_rows = len(source_df)
     filtered_df = filter_dataframe_with_specs(source_df, column_filters)
+    # Make column names unique so name-based access returns Series, not a
+    # DataFrame (two columns with the same name otherwise crashes the grid).
+    filtered_df = _dedupe_grid_columns(filtered_df)
     filtered_count = len(filtered_df)
     limited = filtered_count > limit
     display_df = filtered_df.head(limit) if limited else filtered_df
@@ -1801,8 +1835,10 @@ class ResultsViewer(QWidget):
         self._install_table_header(self.table_view)
         self._apply_table_style()
 
-        # Ctrl+C shortcut on the table view to copy selection
+        # Ctrl+C shortcut scoped to the grid only — a window-wide context would
+        # steal Ctrl+C from the output panel and the Pynia chat.
         copy_shortcut = QShortcut(QKeySequence.StandardKey.Copy, self.table_view)
+        copy_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         copy_shortcut.activated.connect(self._copy_selection_to_clipboard)
 
         # Context menu on right-click (viewport + headers + corner)
@@ -2361,6 +2397,7 @@ class ResultsViewer(QWidget):
         # que operam em self.table_view/self.model (trocados pelo handler
         # de mudanca de aba antes do usuario interagir).
         copy_shortcut = QShortcut(QKeySequence.StandardKey.Copy, table_view)
+        copy_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         copy_shortcut.activated.connect(self._copy_selection_to_clipboard)
         table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         table_view.customContextMenuRequested.connect(self._show_grid_context_menu)
@@ -5413,6 +5450,9 @@ class ResultsViewer(QWidget):
             menu,
         )
         act_copy.setShortcut(QKeySequence.StandardKey.Copy)
+        # Keep the menu hint, but don't register a window-wide Ctrl+C grab
+        # (the grid's keyPressEvent already handles copy when it has focus).
+        act_copy.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         act_copy.triggered.connect(lambda: self._copy_selection_to_clipboard(include_headers=False))
         menu.addAction(act_copy)
 

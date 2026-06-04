@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QSizePolicy, QApplication,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QKeySequence, QShortcut
 
 from .buttons import GhostButton
 from src.language import S
@@ -245,6 +245,12 @@ class OutputPanel(QWidget):
         self._list.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self._list)
 
+        # Ctrl+C copies the selected log entry (with its traceback). Scoped to
+        # the list so it doesn't collide with copy in other panels.
+        copy_sc = QShortcut(QKeySequence.StandardKey.Copy, self._list)
+        copy_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        copy_sc.activated.connect(self._copy_selected_entry)
+
     def _apply_theme(self):
         from src.design_system.tokens import get_colors, SCROLLBAR_STYLE
         colors = get_colors()
@@ -337,11 +343,63 @@ class OutputPanel(QWidget):
     def toPlainText(self) -> str:
         return self.get_text()
 
+    def get_last_error(self) -> Optional[dict]:
+        """Return the most recent error entry as a plain dict, or None.
+
+        Used by Pynia to answer "why did my query fail?" without an extra
+        tool round. ``is_latest`` is True when no info/success entry was
+        logged after the error (i.e. the failure is still the current state).
+        """
+        error_entry: Optional[LogEntry] = None
+        error_pos = -1
+        for pos, entry in enumerate(self._entries):
+            if entry.level == "error":
+                error_entry = entry
+                error_pos = pos
+        if error_entry is None:
+            return None
+
+        detail = (error_entry.detail or "").strip()
+        if len(detail) > 2000:
+            detail = detail[:2000] + "\n... (truncated)"
+        is_latest = not any(
+            e.level in ("info", "success") for e in self._entries[error_pos + 1 :]
+        )
+        return {
+            "message": (error_entry.message or "").strip(),
+            "detail": detail,
+            "log_type": error_entry.log_type or "",
+            "block_name": error_entry.block_name or "",
+            "block_index": error_entry.block_index,
+            "line_number": error_entry.line_number,
+            "connection_name": error_entry.connection_name or "",
+            "timestamp": error_entry.timestamp.strftime("%H:%M:%S"),
+            "is_latest": is_latest,
+        }
+
     def get_html(self) -> str:
         return self.get_text()
 
     def _copy_to_clipboard(self):
         QApplication.clipboard().setText(self.get_text())
+
+    def _copy_selected_entry(self):
+        """Copy the selected log entry (message + detail). Falls back to all."""
+        item = self._list.currentItem()
+        idx = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if idx is None or idx >= len(self._entries):
+            QApplication.clipboard().setText(self.get_text())
+            return
+        entry = self._entries[idx]
+        ts = entry.timestamp.strftime("%H:%M:%S")
+        header = f"[{ts}]"
+        if entry.log_type:
+            header += f"[{entry.log_type}]"
+        parts = [f"{header} {entry.message}".strip()]
+        detail = (entry.detail or "").strip()
+        if detail and detail != (entry.message or "").strip():
+            parts.append(detail)
+        QApplication.clipboard().setText("\n".join(parts))
 
     # Compat: some code accesses .text_edit or .verticalScrollBar()
     @property

@@ -1434,6 +1434,10 @@ class SessionWidget(QWidget):
     def _emit_queue_notification(self):
         """Emit a single notification summarizing the entire queue execution."""
         if self._queue_blocks_done == 0:
+            # Nothing user-facing to report, but the run still finished —
+            # emit a silent finish so the tab "running" indicator clears
+            # (the notification handler skips empty title/message).
+            self.execution_finished.emit("", "", True)
             return
 
         from PyQt6.QtCore import QSettings

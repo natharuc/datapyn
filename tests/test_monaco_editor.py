@@ -287,15 +287,16 @@ class TestInlineCompletionService:
         assert hasattr(service, "completion_ready")
     
     def test_service_set_copilot_client(self):
-        """Service should accept copilot client."""
+        """Service should accept a client via the backward-compatible alias."""
         from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
+
         service = InlineCompletionService()
         mock_client = Mock()
-        
+
         service.set_copilot_client(mock_client)
-        
-        assert service._copilot_client is mock_client
+
+        # set_copilot_client is now an alias for set_pynia_client.
+        assert service._pynia_client is mock_client
     
     def test_service_debounce_timer(self, qtbot):
         """Service should have debounce timer configured."""
@@ -330,15 +331,36 @@ class TestInlineCompletionService:
         assert "(self):" in completion or "():" in completion
     
     def test_python_class_completion(self):
-        """Service should complete Python class statements."""
+        """Service should close a class declaration without forcing a body.
+
+        The old heuristic injected a full ``__init__`` stub, which was
+        intrusive and frequently wrong; a bare ``:`` is the safe fallback.
+        """
         from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
+
         service = InlineCompletionService()
-        
+
         completion = service._python_completion("class Foo", "", "class Foo")
-        
+
         assert ":" in completion
-        assert "__init__" in completion
+        assert "__init__" not in completion
+
+    def test_python_def_module_level_has_no_self(self):
+        """A module-level def must not be completed with ``self``."""
+        from src.editors.monaco.inline_completion_service import InlineCompletionService
+
+        service = InlineCompletionService()
+        completion = service._python_completion("def foo", "", "def foo")
+        assert "self" not in completion
+
+    def test_python_def_in_class_uses_self(self):
+        """A def indented inside a class body should still suggest ``self``."""
+        from src.editors.monaco.inline_completion_service import InlineCompletionService
+
+        service = InlineCompletionService()
+        prefix = "class Foo:\n    def bar"
+        completion = service._python_completion("def bar", "    ", prefix)
+        assert "self" in completion
     
     def test_python_for_completion(self):
         """Service should complete Python for statements."""
@@ -384,6 +406,68 @@ class TestInlineCompletionService:
         # Should emit empty immediately (not debounced)
         assert len(results) == 1
         assert results[0] == ""
+
+    def test_ai_preferred_over_local_heuristics(self):
+        """When Pynia AI is available it must be used instead of local guesses."""
+        from unittest.mock import MagicMock, PropertyMock, patch
+        from src.editors.monaco.inline_completion_service import InlineCompletionService
+
+        service = InlineCompletionService()
+        service._pynia_client = MagicMock()
+        emitted = []
+        service.completion_ready.connect(emitted.append)
+        service._pending_request = {
+            "id": 1, "prefix": "def foo", "suffix": "",
+            "language": "python", "line": 1, "column": 7,
+        }
+        with patch.object(InlineCompletionService, "has_pynia", new_callable=PropertyMock, return_value=True):
+            service._execute_pending_request()
+
+        service._pynia_client.request_inline_completion.assert_called_once()
+        assert service._is_processing is True
+        # The local heuristic ("():") must NOT have been emitted.
+        assert emitted == []
+
+    def test_inflight_request_is_queued_not_dropped(self):
+        """A new request while one is in flight is queued, not silently dropped."""
+        from src.editors.monaco.inline_completion_service import InlineCompletionService
+
+        service = InlineCompletionService()
+        service._is_processing = True  # simulate in-flight request
+
+        service.request_completion("import pand", "", "python", 1, 12)
+        assert service._pending_request is not None
+
+        # Debounce firing while still in flight must keep the pending request.
+        service._execute_pending_request()
+        assert service._pending_request is not None
+
+    def test_pending_served_after_completion(self):
+        """Releasing the lock re-arms the debounce to serve a queued request."""
+        from src.editors.monaco.inline_completion_service import InlineCompletionService
+
+        service = InlineCompletionService()
+        service._is_processing = True
+        service._pending_request = {
+            "id": 5, "prefix": "x = ", "suffix": "",
+            "language": "python", "line": 1, "column": 5,
+        }
+        service._on_pynia_completion("1")
+        assert service._is_processing is False
+        assert service._debounce_timer.isActive()
+
+    def test_watchdog_releases_stuck_lock(self):
+        """The watchdog clears a wedged in-flight lock so typing keeps working."""
+        from src.editors.monaco.inline_completion_service import InlineCompletionService
+
+        service = InlineCompletionService()
+        emitted = []
+        service.completion_ready.connect(emitted.append)
+        service._is_processing = True
+
+        service._on_request_watchdog()
+        assert service._is_processing is False
+        assert emitted == [""]
 
 
 class TestEditorConfig:

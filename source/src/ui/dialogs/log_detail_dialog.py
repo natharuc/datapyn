@@ -192,13 +192,13 @@ class LogDetailDialog(QDialog):
             label = getattr(S.output_panel, "btn_resolve_pynia", S.output_panel.btn_resolve_copilot)
             copilot_btn = QPushButton(label)
             try:
-                from src.ui.components.copilot_chat_panel import _load_copilot_icon
-                copilot_icon = _load_copilot_icon("#ffffff", size=16)
-                if copilot_icon:
-                    copilot_btn.setIcon(copilot_icon)
+                from src.ui.components.copilot_chat_panel import _load_pynia_icon
+                pynia_icon = _load_pynia_icon("#ffffff", size=16)
+                if pynia_icon:
+                    copilot_btn.setIcon(pynia_icon)
             except Exception:
                 if HAS_QTAWESOME:
-                    copilot_btn.setIcon(qta.icon("mdi.github", color="#ffffff"))
+                    copilot_btn.setIcon(qta.icon("mdi.creation", color="#ffffff"))
             copilot_btn.setStyleSheet(self._btn_style(colors, accent=True))
             copilot_btn.clicked.connect(self._on_resolve_copilot)
             btn_row.addWidget(copilot_btn)

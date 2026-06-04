@@ -538,3 +538,30 @@ class TestNavigateSignalColumn:
 
         entry2 = LogEntry()
         assert entry2.column_number is None
+
+    def test_copy_selected_entry_includes_detail(self, output_panel):
+        """Ctrl+C on the output copies the selected entry plus its traceback."""
+        output_panel.log("info line")
+        output_panel.add_entry(
+            LogEntry(
+                level="error",
+                log_type="SQL",
+                message="boom",
+                detail="Traceback: boom detail",
+            )
+        )
+        output_panel._list.setCurrentRow(output_panel._list.count() - 1)
+        output_panel._copy_selected_entry()
+
+        text = QApplication.clipboard().text()
+        assert "boom" in text
+        assert "Traceback: boom detail" in text
+
+    def test_copy_with_no_selection_falls_back_to_all(self, output_panel):
+        """With nothing selected, copy returns the full log."""
+        output_panel.log("first")
+        output_panel.log("second")
+        output_panel._list.setCurrentRow(-1)
+        output_panel._copy_selected_entry()
+        text = QApplication.clipboard().text()
+        assert "first" in text and "second" in text

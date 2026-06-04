@@ -109,6 +109,68 @@ def test_process_tool_round_overflow_skips_readonly():
     assert "SKIPPED" in skipped
 
 
+def _install_hanging_worker(monkeypatch):
+    from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+    from src.services.pynia.subagents import orchestrator as orch_mod
+
+    class HangingWorker(QObject):
+        finished = pyqtSignal(object)
+
+        def __init__(self, task, *, provider_id, model, openai_tools, tool_executor, parent=None):
+            super().__init__(parent)
+            self._cancelled = False
+
+        def cancel(self):
+            self._cancelled = True
+
+        @pyqtSlot()
+        def run(self):
+            # Intentionally never emits `finished` — simulates a stalled LLM call.
+            return
+
+    monkeypatch.setattr(orch_mod, "ExploreSubagentWorker", HangingWorker)
+
+
+def test_run_explore_parallel_times_out(qtbot, monkeypatch):
+    """A hung subagent must not freeze the turn — the loop bails on timeout."""
+    import time
+
+    _install_hanging_worker(monkeypatch)
+    orch = SubagentOrchestrator(
+        provider_id="openai", model="gpt-4o", openai_tools=[], tool_executor=MagicMock()
+    )
+    tasks = [ExploreTask(task_id="t1", instruction="x"), ExploreTask(task_id="t2", instruction="y")]
+
+    start = time.monotonic()
+    results = orch.run_explore_parallel_blocking(tasks, timeout_ms=300)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5, "parallel explore should bail quickly, not hang"
+    assert len(results) == 2
+    assert all(not r.ok for r in results)
+    assert all("timed out" in r.summary.lower() for r in results)
+
+
+def test_run_explore_parallel_cancels(qtbot, monkeypatch):
+    """Pressing Stop (is_cancelled) unblocks the nested loop."""
+    import time
+
+    _install_hanging_worker(monkeypatch)
+    orch = SubagentOrchestrator(
+        provider_id="openai", model="gpt-4o", openai_tools=[], tool_executor=MagicMock()
+    )
+    tasks = [ExploreTask(task_id="t1", instruction="x")]
+
+    start = time.monotonic()
+    results = orch.run_explore_parallel_blocking(
+        tasks, is_cancelled=lambda: True, timeout_ms=10_000
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5, "cancellation should unblock promptly"
+    assert results and results[0].summary == "Cancelled by user."
+
+
 def test_orchestrator_format_subagent_results():
     from src.services.pynia.subagents.types import ExploreTaskResult
 

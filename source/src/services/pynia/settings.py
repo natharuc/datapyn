@@ -189,14 +189,23 @@ class PyniaSettingsManager:
     def set_autocomplete_enabled(self, enabled: bool) -> None:
         self._settings.setValue("autocomplete_enabled", "true" if enabled else "false")
 
-    def completion_model(self, provider_id: Optional[ProviderId] = None) -> str:
+    def completion_model_override(self, provider_id: Optional[ProviderId] = None) -> str:
+        """The explicit autocomplete model the user picked, or '' for auto."""
         pid = provider_id or self.active_provider
-        custom = self._settings.value(f"{pid}/completion_model", "") or ""
+        return self._settings.value(f"{pid}/completion_model", "") or ""
+
+    def completion_model(self, provider_id: Optional[ProviderId] = None) -> str:
+        """Model used for inline autocomplete.
+
+        Uses the user's explicit pick when set; otherwise reuses the connector's
+        selected chat model so autocomplete always targets a model the account
+        actually has (no dependency on a hardcoded, possibly-retired default).
+        """
+        pid = provider_id or self.active_provider
+        custom = self.completion_model_override(pid)
         if custom:
             return custom
-        from src.services.pynia.completion import COMPLETION_MODELS
-
-        return COMPLETION_MODELS.get(pid, COMPLETION_MODELS["openai"])
+        return self.selected_model(pid)
 
     def set_completion_model(self, provider_id: ProviderId, model_id: str) -> None:
         self._settings.setValue(f"{provider_id}/completion_model", model_id or "")

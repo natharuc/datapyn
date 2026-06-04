@@ -691,6 +691,10 @@ class ExecutionMixin:
         Envia notificacao apos execucao terminar.
         Suppresses notification if the user is focused on the originating tab.
         """
+        # Silent finish (no rows/blocks to report) — used only to clear the
+        # running indicator; never show an empty toast.
+        if not (title or message):
+            return
         tab_index = self.session_tabs.indexOf(widget)
         delivery = getattr(widget, "_last_notification_delivery", None) or {}
         tab_is_focused = (

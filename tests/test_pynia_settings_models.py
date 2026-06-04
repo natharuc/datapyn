@@ -56,6 +56,34 @@ def test_selected_model_uses_legacy_key_for_active_provider(settings_manager):
     assert store.get("openai/selected_model") == "gpt-4.1"
 
 
+def test_completion_model_falls_back_to_chat_model(settings_manager):
+    """With no explicit autocomplete model, completion reuses the chat model
+    (so it never depends on a hardcoded, possibly-retired default)."""
+    mgr, _store = settings_manager
+    mgr.set_selected_model("gpt-4.1", "openai")
+
+    assert mgr.completion_model_override("openai") == ""
+    assert mgr.completion_model("openai") == "gpt-4.1"
+
+
+def test_completion_model_uses_explicit_override(settings_manager):
+    mgr, _store = settings_manager
+    mgr.set_selected_model("gpt-4.1", "openai")
+    mgr.set_completion_model("openai", "gpt-4.1-mini")
+
+    assert mgr.completion_model_override("openai") == "gpt-4.1-mini"
+    assert mgr.completion_model("openai") == "gpt-4.1-mini"
+
+
+def test_completion_model_is_per_provider(settings_manager):
+    mgr, _store = settings_manager
+    mgr.set_completion_model("openai", "gpt-4.1-nano")
+    mgr.set_completion_model("anthropic", "claude-3-5-haiku-latest")
+
+    assert mgr.completion_model("openai") == "gpt-4.1-nano"
+    assert mgr.completion_model("anthropic") == "claude-3-5-haiku-latest"
+
+
 def test_copilot_selected_model_syncs_with_copilot_settings(settings_manager, monkeypatch):
     mgr, _store = settings_manager
     copilot_settings = MagicMock()

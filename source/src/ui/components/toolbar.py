@@ -26,7 +26,7 @@ def _load_pynia_icon(color: str, size: int = 20) -> QIcon:
         components_dir = os.path.dirname(os.path.abspath(__file__))
         ui_dir = os.path.dirname(components_dir)
         src_dir = os.path.dirname(ui_dir)
-        svg_path = os.path.join(src_dir, "assets", "icons", "copilot_icon.svg")
+        svg_path = os.path.join(src_dir, "assets", "icons", "pynia_icon.svg")
 
         with open(svg_path, "r", encoding="utf-8") as f:
             svg_content = f.read()

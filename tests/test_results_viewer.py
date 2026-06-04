@@ -1697,3 +1697,31 @@ class TestResultsViewerGridPrepare:
         assert "1779799229610000000" not in result.prepared.display_rows[0][0]
 
 
+
+
+class TestDuplicateColumns:
+    """Grid must handle SQL results with duplicate column names (no crash)."""
+
+    def test_prepare_grid_data_with_duplicate_columns(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame([[1, 2], [3, 4]], columns=["id", "id"])
+        result = prepare_grid_data(df, {}, {}, 1500)
+        # Duplicates get pandas-style suffixes; nothing crashes.
+        assert result.prepared.columns == ["id", "id.1"]
+        assert result.prepared.numeric_column_indices == frozenset({0, 1})
+        assert result.prepared.filtered_row_count == 2
+
+    def test_dedupe_does_not_mutate_input(self):
+        from src.ui.components.results_viewer import _dedupe_grid_columns
+
+        df = pd.DataFrame([[1, 2]], columns=["a", "a"])
+        out = _dedupe_grid_columns(df)
+        assert list(df.columns) == ["a", "a"]       # caller's frame untouched
+        assert list(out.columns) == ["a", "a.1"]
+
+    def test_dedupe_is_noop_when_unique(self):
+        from src.ui.components.results_viewer import _dedupe_grid_columns
+
+        df = pd.DataFrame([[1, 2]], columns=["a", "b"])
+        assert _dedupe_grid_columns(df) is df       # no copy when already unique

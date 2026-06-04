@@ -45,41 +45,6 @@ THEMES = {
             "border": "#3e3e42",
         },
     },
-    "light": {
-        "name": "Light",
-        "editor": {
-            "background": "#ffffff",
-            "foreground": "#000000",
-            "caret": "#000000",
-            "caret_line": "#f0f0f0",
-            "selection": "#add6ff",
-            "margin_bg": "#f5f5f5",
-            "margin_fg": "#237893",
-            "brace_match": "#e0e0e0",
-        },
-        "sql": {
-            "keyword": "#0000ff",
-            "string": "#a31515",
-            "number": "#098658",
-            "comment": "#008000",
-            "operator": "#000000",
-        },
-        "python": {
-            "keyword": "#0000ff",
-            "string": "#a31515",
-            "number": "#098658",
-            "comment": "#008000",
-            "classname": "#267f99",
-            "function": "#795e26",
-            "identifier": "#001080",
-        },
-        "app": {
-            "background": "#f3f3f3",
-            "foreground": "#333333",
-            "accent": "#3369FF",
-            "border": "#cccccc",
-        },
-    },
     "monokai": {
         "name": "Monokai",
         "editor": {

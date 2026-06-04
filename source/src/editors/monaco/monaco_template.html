@@ -384,14 +384,16 @@
                 // Request completion from Python side
                 pyBridge.requestCompletion(prefix, suffix, line, column);
                 
-                // Timeout after 5 seconds (Copilot uses gpt-4o-mini for speed)
+                // Safety timeout: kept above the Python worker timeout (~6s)
+                // so a slow-but-valid AI completion still resolves the promise
+                // instead of being dropped by a too-eager JS timeout.
                 setTimeout(() => {
                     if (pendingCompletion && pendingCompletion.id === requestId) {
                         console.log('[Monaco] Timeout for completion #' + requestId);
-                        pendingCompletion.reject('Timeout');
+                        pendingCompletion.resolve('');
                         pendingCompletion = null;
                     }
-                }, 5000);
+                }, 9000);
             });
         }
         

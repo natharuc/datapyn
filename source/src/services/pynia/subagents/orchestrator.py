@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from PyQt6.QtCore import QObject, QThread, QEventLoop
+from PyQt6.QtCore import QObject, QThread, QEventLoop, QTimer
 
 from src.services.pynia.subagents.explore_worker import ExploreSubagentWorker
 from src.services.pynia.subagents.types import ExploreTask, ExploreTaskResult
@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_PARALLEL_EXPLORE = 4
+# Safety net for the nested event loop. A hung subagent (e.g. a stalled LLM
+# stream) must never freeze the whole chat turn — we bail with partial results.
+EXPLORE_PARALLEL_TIMEOUT_MS = 120_000
+EXPLORE_CANCEL_POLL_MS = 200
 
 
 class SubagentOrchestrator(QObject):
@@ -56,8 +60,14 @@ class SubagentOrchestrator(QObject):
     def run_explore_parallel_blocking(
         self,
         tasks: List[ExploreTask],
+        is_cancelled: Optional[Callable[[], bool]] = None,
+        timeout_ms: int = EXPLORE_PARALLEL_TIMEOUT_MS,
     ) -> List[ExploreTaskResult]:
-        """Run up to MAX_PARALLEL_EXPLORE explore jobs; blocks until all finish."""
+        """Run up to MAX_PARALLEL_EXPLORE explore jobs; blocks until all finish.
+
+        The nested event loop is bounded by a safety timeout and (optionally)
+        a cancellation poll so a hung subagent can never freeze the chat turn.
+        """
         if not tasks:
             return []
         if not self._tool_executor:
@@ -81,6 +91,9 @@ class SubagentOrchestrator(QObject):
         results: Dict[str, ExploreTaskResult] = {}
         pending = len(capped)
         loop = QEventLoop()
+        workers: List[ExploreSubagentWorker] = []
+        timed_out = False
+        cancelled = False
 
         def on_one_done(result: ExploreTaskResult) -> None:
             nonlocal pending
@@ -105,11 +118,60 @@ class SubagentOrchestrator(QObject):
             worker.finished.connect(thread.quit)
             thread.finished.connect(worker.deleteLater)
             thread.finished.connect(thread.deleteLater)
+            workers.append(worker)
             threads.append(thread)
             thread.start()
 
+        # Safety timeout: a stalled subagent must not block the turn forever.
+        safety_timer = QTimer()
+        safety_timer.setSingleShot(True)
+
+        def _on_timeout() -> None:
+            nonlocal timed_out
+            timed_out = True
+            logger.warning("Parallel explore timed out after %sms; cancelling workers", timeout_ms)
+            for w in workers:
+                w.cancel()
+            loop.quit()
+
+        safety_timer.timeout.connect(_on_timeout)
+        safety_timer.start(timeout_ms)
+
+        # Cancellation poll: respond to the user pressing Stop on the main turn.
+        cancel_timer = QTimer()
+        if is_cancelled is not None:
+            def _check_cancel() -> None:
+                nonlocal cancelled
+                if is_cancelled():
+                    cancelled = True
+                    for w in workers:
+                        w.cancel()
+                    loop.quit()
+
+            cancel_timer.timeout.connect(_check_cancel)
+            cancel_timer.start(EXPLORE_CANCEL_POLL_MS)
+
         loop.exec()
-        return [results.get(t.task_id, ExploreTaskResult(t.task_id, "Error: no result.", False)) for t in capped]
+        safety_timer.stop()
+        cancel_timer.stop()
+
+        # Wind down any worker that didn't finish on its own (timeout/cancel).
+        # quit() only unblocks threads idling in their event loop; a worker
+        # still inside a blocking call cleans up when that call returns.
+        for w in workers:
+            w.cancel()
+        for thread in threads:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(100)
+
+        if timed_out:
+            fallback = "Error: subagent timed out before returning."
+        elif cancelled:
+            fallback = "Cancelled by user."
+        else:
+            fallback = "Error: no result."
+        return [results.get(t.task_id, ExploreTaskResult(t.task_id, fallback, False)) for t in capped]
 
     def format_subagent_results(self, results: List[ExploreTaskResult]) -> str:
         parts: List[str] = []
@@ -124,7 +186,11 @@ class SubagentOrchestrator(QObject):
             parts.append(section)
         return "\n\n".join(parts)
 
-    def run_subagent_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    def run_subagent_tool(
+        self,
+        arguments: Dict[str, Any],
+        is_cancelled: Optional[Callable[[], bool]] = None,
+    ) -> Dict[str, Any]:
         """
         Handle datapyn_subagent from the tool dispatcher (may run on main thread).
 
@@ -190,7 +256,7 @@ class SubagentOrchestrator(QObject):
         if not explore_tasks:
             return {"error": "No valid subagent tasks."}
 
-        results = self.run_explore_parallel_blocking(explore_tasks)
+        results = self.run_explore_parallel_blocking(explore_tasks, is_cancelled=is_cancelled)
         text = self.format_subagent_results(results)
         return {"content": [{"type": "text", "text": text}]}
 

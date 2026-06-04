@@ -13,12 +13,27 @@ from src.services.pynia.types import PROVIDERS, ProviderId
 
 logger = logging.getLogger(__name__)
 
-# Fast models per provider (low latency, low cost)
+# Last-resort default fast models per provider. Only used when the user has
+# not picked an autocomplete model AND no chat model is selected; normally
+# completion reuses the connector's chat model (see PyniaSettings.completion_model).
 COMPLETION_MODELS: dict[ProviderId, str] = {
     "openai": "gpt-4o-mini",
     "openrouter": "openai/gpt-4o-mini",
-    "anthropic": "claude-3-5-haiku-20241022",
+    "anthropic": "claude-3-5-haiku-latest",
     "copilot": "gpt-4o-mini",
+}
+
+# Convenience suggestions for the autocomplete model picker (editable — the
+# user can type any model id their connector supports).
+COMPLETION_MODEL_SUGGESTIONS: dict[ProviderId, list[str]] = {
+    "openai": ["gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini"],
+    "openrouter": [
+        "openai/gpt-4.1-mini",
+        "anthropic/claude-3.5-haiku",
+        "google/gemini-2.0-flash-001",
+    ],
+    "anthropic": ["claude-3-5-haiku-latest", "claude-3-5-haiku-20241022"],
+    "copilot": ["gpt-4.1", "gpt-4o-mini"],
 }
 
 SYSTEM_PROMPT = (
@@ -74,9 +89,13 @@ def fetch_inline_completion(
     model: str,
     language: str,
     prompt: str,
-    timeout: float = 8.0,
+    timeout: float = 6.0,
 ) -> str:
-    """Blocking HTTP completion (run from worker thread only)."""
+    """Blocking HTTP completion (run from worker thread only).
+
+    Keep this below the Monaco JS promise timeout (~9s) so a slow-but-valid
+    completion still reaches the editor instead of being dropped client-side.
+    """
     settings = get_pynia_settings()
     api_key = get_provider_secret(provider_id)
     if not api_key:

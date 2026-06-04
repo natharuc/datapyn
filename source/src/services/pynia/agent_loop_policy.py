@@ -72,6 +72,22 @@ def inspect_block_name(args: Dict[str, Any]) -> str:
     return str(args.get("block_name") or "").strip()
 
 
+def _inspect_targets_section(args: Dict[str, Any]) -> bool:
+    """True when an inspect reads a *specific section* (anchor or line range).
+
+    Section reads target different parts of a large block, so they should not
+    count toward the per-block re-read limit — identical repeats are already
+    caught by the duplicate (seen_keys) guard.
+    """
+    if not args:
+        return False
+    return bool(
+        str(args.get("around") or "").strip()
+        or args.get("start_line") is not None
+        or args.get("end_line") is not None
+    )
+
+
 def prepare_tool_calls(
     parsed_calls: List[Tuple[str, Dict[str, Any], str]],
     *,
@@ -100,7 +116,10 @@ def prepare_tool_calls(
             continue
 
         block_name = inspect_block_name(args or {})
-        if block_name:
+        # Section reads (around=/line range) target distinct parts of a large
+        # block and are exempt from the per-block limit (still deduped above).
+        counts_against_block = bool(block_name) and not _inspect_targets_section(args or {})
+        if counts_against_block:
             if block_counts.get(block_name, 0) >= MAX_INSPECTS_PER_BLOCK:
                 prepared.append((name, args, tc_id, False))
                 continue
@@ -127,7 +146,7 @@ def prepare_tool_calls(
             mutating_this_round += 1
 
         seen_keys.add(key)
-        if block_name:
+        if counts_against_block:
             block_counts[block_name] = block_counts.get(block_name, 0) + 1
         prepared.append((name, args, tc_id, True))
 
@@ -176,6 +195,7 @@ def skipped_tool_message(
     block_name = inspect_block_name(args or {})
     if (
         block_name
+        and not _inspect_targets_section(args or {})
         and block_inspect_counts is not None
         and block_inspect_counts.get(block_name, 0) >= MAX_INSPECTS_PER_BLOCK
     ):
