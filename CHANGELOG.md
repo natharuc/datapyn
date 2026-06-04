@@ -2,6 +2,111 @@
 
 <!-- version list -->
 
+## v1.37.0 (2026-06-04)
+
+### Bug Fixes
+
+- Ajuste em testes
+  ([`05e2652`](https://github.com/natharuc/datapyn/commit/05e265282159577881e125a0eed5d834bac6dd3d))
+
+- Readme
+  ([`ecc479a`](https://github.com/natharuc/datapyn/commit/ecc479acc58c6a9c02c03f30f6e5529a9c3d3e38))
+
+- **execution**: Cancel SQL on worker thread to avoid UI freeze
+  ([`c45072f`](https://github.com/natharuc/datapyn/commit/c45072fe2555e9146cd0815afdc801df436e767a))
+
+- **execution**: Initialize _sql_worker before Databricks DB switch retry
+  ([`14edc40`](https://github.com/natharuc/datapyn/commit/14edc40c0bff54b79dcfda5907243f114fcfc190))
+
+- **execution**: Run SQL for current editor selection, not stale cache
+  ([`70b0094`](https://github.com/natharuc/datapyn/commit/70b00949ec28afb42bc1fcd73a674644fe54ece7))
+
+- **pynia**: Add BlockEditor.set_pynia_client and chat integration tests
+  ([`0ff5a79`](https://github.com/natharuc/datapyn/commit/0ff5a79ec625a8ba6226fc99e431cf58adb45e18))
+
+- **pynia**: Fix Copilot SDK auth init and auto-login on open
+  ([`c36eb14`](https://github.com/natharuc/datapyn/commit/c36eb1454721c4a487abca582584bdf1e41a15bb))
+
+- **pynia**: Recover stuck chat turns after errors or cancel
+  ([`52d61b2`](https://github.com/natharuc/datapyn/commit/52d61b2f051bba15561409e89314e8244754eb91))
+
+- **pynia**: Stop chat tool loops and stuck running UI
+  ([`cf84b23`](https://github.com/natharuc/datapyn/commit/cf84b23bff39e064927e23a930560d8f00229e82))
+
+- **pynia**: Stop inspect loops and stuck running tools in Copilot
+  ([`d6bedb2`](https://github.com/natharuc/datapyn/commit/d6bedb276f8f22a3064b9f44783e6a247cd6170d))
+
+- **pynia**: Unblock Copilot tool UI stuck on running forever
+  ([`219968d`](https://github.com/natharuc/datapyn/commit/219968d433e030f5582053f9262e8c4c5aeb4c15))
+
+- **tests**: Align Pynia, charts, and tab paint tests with current UI
+  ([`956ad1c`](https://github.com/natharuc/datapyn/commit/956ad1cd228b09eb41115501f37a7722ce35bca6))
+
+### Features
+
+- Cross-database SQL autocomplete, Monaco UX, and editor improvements
+  ([`6bf2cad`](https://github.com/natharuc/datapyn/commit/6bf2cad011e84f94cd50ba10f68a7811d84c9be8))
+
+- Integrate official Pynia logo across the UI
+  ([`c3a672c`](https://github.com/natharuc/datapyn/commit/c3a672c89fbe76aee96dc931ad3b98ee29fa4810))
+
+- Melhorias
+  ([`a46efff`](https://github.com/natharuc/datapyn/commit/a46efffb48956697fdcfba07b8868f83b0abb742))
+
+- Melhorias gerais
+  ([`1aeee4e`](https://github.com/natharuc/datapyn/commit/1aeee4e04ab7ba898ed6a1c7e472d4d4c9676f29))
+
+- **pynia**: Add multi-provider AI agent with LLM connectors
+  ([`99914d8`](https://github.com/natharuc/datapyn/commit/99914d89e6064978834f872798756499e6e55428))
+
+- **pynia**: Add parallel explore subagents and higher read-only limits
+  ([`f5aaa62`](https://github.com/natharuc/datapyn/commit/f5aaa62212654a4d04e857352ebd8f0f25f5a69d))
+
+- **pynia**: Anchor chat on focused block and speed up tool rounds
+  ([`c28c195`](https://github.com/natharuc/datapyn/commit/c28c1958833e6ee1993d253366c99314838101ab))
+
+- **pynia**: Compact chat UX like Cursor (single activity line)
+  ([`fac88b5`](https://github.com/natharuc/datapyn/commit/fac88b52aa6b88ef963bfc2f46fff9f2248a3247))
+
+- **pynia**: Consolidate agent tools into nine datapyn_* APIs
+  ([`ae56410`](https://github.com/natharuc/datapyn/commit/ae56410a6639b9a0537e5e2eff1b35f880b1cdfa))
+
+- **pynia**: Fluid agent progress UI with timeline and block labels
+  ([`294549a`](https://github.com/natharuc/datapyn/commit/294549ac8409fb1ce65d96f34457a5483c351bf9))
+
+- **pynia**: Multi-provider agent, UX, and execution fixes
+  ([`78e893a`](https://github.com/natharuc/datapyn/commit/78e893a9f6fa7379c803e4e4088226a2f7ceaee5))
+
+- **pynia**: Native agent identity, faster tools, and UI cleanup
+  ([`e144860`](https://github.com/natharuc/datapyn/commit/e1448605fe538a4152aa8c6cbd3172837d28adee))
+
+- **pynia**: Native inline autocomplete and remove Copilot settings tab
+  ([`cc609ec`](https://github.com/natharuc/datapyn/commit/cc609ecec3b54f1131dd7a1b916eeb2e27632efe))
+
+- **pynia**: Persist last chat model per provider
+  ([`d9fc218`](https://github.com/natharuc/datapyn/commit/d9fc21898921257dfcc4031d064197a9b74f8e14))
+
+- **pynia**: Rebrand chat UI and show per-provider limits
+  ([`75439a2`](https://github.com/natharuc/datapyn/commit/75439a2c577c4d1937e6a72f5e481d22eeec3277))
+
+- **pynia**: Sequential thinking UI and system prompt standard
+  ([`27262f1`](https://github.com/natharuc/datapyn/commit/27262f14b7b3e9a3d8c1e707fdc67b3dbc0f807f))
+
+- **pynia**: Session intelligence, block summaries, and smarter subagents
+  ([`a3d83d8`](https://github.com/natharuc/datapyn/commit/a3d83d8212a06799b05cfc2784e257bf9644af56))
+
+- **pynia**: Show focused block as chat attachment chip
+  ([`999acca`](https://github.com/natharuc/datapyn/commit/999accad8339244f00156b69db3b8ea77439b159))
+
+### Heuristic
+
+- Merge pull request #115 from natharuc/cursor/pynia
+  ([`78e893a`](https://github.com/natharuc/datapyn/commit/78e893a9f6fa7379c803e4e4088226a2f7ceaee5))
+
+- Merge pull request #117 from natharuc/cursor/pynia
+  ([`8b5d3ab`](https://github.com/natharuc/datapyn/commit/8b5d3abb2e456007eb2e3183bff046f60447a730))
+
+
 ## v1.36.1 (2026-06-02)
 
 ### Documentation
