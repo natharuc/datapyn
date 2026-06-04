@@ -158,7 +158,7 @@ class TestVisualIntegration:
         ), patch.object(tab_bar, "count", return_value=1), patch.object(
             tab_bar, "_close_button_rect", return_value=QRect(90, 4, 20, 20)
         ), patch(
-            "src.ui.components.session_tabs.paint_tab_close_control"
+            "src.design_system.tab_controls.paint_tab_close_control"
         ), patch("src.ui.components.session_tabs.qta.icon", return_value=icon_mock):
             tab_bar.paintEvent(QPaintEvent(tab_bar.rect()))
 

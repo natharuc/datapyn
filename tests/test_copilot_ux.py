@@ -495,10 +495,7 @@ class TestChatPanelThinkingState:
         with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
             from src.ui.components.copilot_chat_panel import PyniaChatPanel
             panel = PyniaChatPanel()
-        panel._chat_runtime._active_turn = {  # noqa: SLF001 — allow turn UI paths in unit tests
-            "turn_id": "test-turn",
-            "state": "thinking",
-        }
+        panel._chat_runtime.start_turn("test prompt")  # noqa: SLF001 — full active turn for UI paths
         return panel
 
     def test_initial_thinking_state(self, panel):

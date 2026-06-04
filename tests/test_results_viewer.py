@@ -734,16 +734,18 @@ class TestResultsViewerMultiTab:
         assert viewer._result_tabs.tabBar()._connection_color == "#8b5cf6"
 
     def test_visualization_button_matches_result_tab_style(self, viewer):
-        """The chart action should be a small flat tab-bar control, not a framed square."""
+        """The chart action should be a small flat tab-bar accessory control."""
+        from src.design_system.tab_controls import TAB_ACCESSORY_BUTTON_SIZE, TAB_ACCESSORY_ICON_SIZE
+
         button = viewer.btn_visualization
         stylesheet = button.styleSheet()
 
         assert button.autoRaise() is True
-        assert button.width() == 24
-        assert button.height() == 24
-        assert button.iconSize().width() == 14
+        assert button.width() == TAB_ACCESSORY_BUTTON_SIZE
+        assert button.height() == TAB_ACCESSORY_BUTTON_SIZE
+        assert button.iconSize().width() == TAB_ACCESSORY_ICON_SIZE
         assert "border: none" in stylesheet
-        assert "margin: 3px 8px 3px 2px" in stylesheet
+        assert "background: transparent" in stylesheet
 
     def test_reusable_tab_close_helper_styles_buttons(self, viewer, qtbot):
         """Shared tab close helper should provide the same icon and hover style."""
@@ -1094,12 +1096,16 @@ class TestResultsViewerFiltering:
         image.save(buffer, "PNG")
         return bytes(byte_array)
 
+    def _tiny_chart_html(self) -> str:
+        """Minimal Plotly-style HTML payload for chart render mocks."""
+        return "<html><body><div id='chart' style='width:640px;height:360px'>ok</div></body></html>"
+
     def test_visualization_button_and_config_are_session_state(self, viewer, qtbot, monkeypatch):
         """Chart configuration should create a Results tab and live in session state."""
         from src.core.session import Session
 
-        png_bytes = self._tiny_png_bytes()
-        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
+        chart_html = self._tiny_chart_html()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: chart_html)
 
         session = Session("s1")
         viewer.set_session(session)
@@ -1122,8 +1128,9 @@ class TestResultsViewerFiltering:
         chart_page = viewer._result_tabs.widget(1)
         assert chart_page._page_kind == "chart"
         qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
-        assert chart_page._image_bytes
-        assert chart_page._image_label.pixmap() is not None
+        assert chart_page._chart_html or chart_page._image_bytes
+        chart_view = getattr(chart_page, "_chart_view", None)
+        assert chart_view is not None
         assert session.result_view_state["charts"]["configs"][0]["x_column"] == "mes"
         assert session.result_view_state["charts"]["configs"][0]["y_columns"] == ["valor"]
 
@@ -1564,8 +1571,8 @@ class TestResultsViewerFiltering:
         """Saved chart configs should become result tabs when matching data is displayed."""
         from src.core.session import Session
 
-        png_bytes = self._tiny_png_bytes()
-        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
+        chart_html = self._tiny_chart_html()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: chart_html)
 
         session = Session("s1")
         session.result_view_state = {
@@ -1592,7 +1599,7 @@ class TestResultsViewerFiltering:
         _switch_result_tab(viewer, qtbot, 1)
 
         qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
-        assert chart_page._image_bytes
+        assert chart_page._chart_html or chart_page._image_bytes
 
     def test_saved_visualization_does_not_render_on_display_dataframe(self, viewer, monkeypatch):
         """Displaying query results must not block the UI by rendering saved chart tabs immediately."""
@@ -1616,8 +1623,8 @@ class TestResultsViewerFiltering:
 
     def test_grouped_visualization_renders_chart_image(self, viewer, qtbot, monkeypatch):
         """Grouped chart settings should produce a real chart image tab."""
-        png_bytes = self._tiny_png_bytes()
-        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
+        chart_html = self._tiny_chart_html()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: chart_html)
 
         df = pd.DataFrame({
             "mes": ["Jan", "Jan", "Fev", "Fev"],
@@ -1637,8 +1644,9 @@ class TestResultsViewerFiltering:
 
         chart_page = viewer._result_tabs.widget(1)
         qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
-        assert chart_page._image_bytes
-        assert len(chart_page._image_bytes) > 1000
+        assert chart_page._chart_html or chart_page._image_bytes
+        payload = chart_page._chart_html or chart_page._image_bytes
+        assert len(payload) > 50
 
 
 class TestSessionResultViewState:
