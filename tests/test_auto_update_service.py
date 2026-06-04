@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from PyQt6.QtCore import QSettings
 from src.services.auto_update_service import AutoUpdateService, UpdateChecker, UpdateDownloader
+from src.services.windows_installer import is_newer_version
 
 
 @pytest.fixture
@@ -21,28 +22,19 @@ class TestUpdateChecker:
     """Testes para UpdateChecker"""
 
     def test_is_newer_version_returns_true_for_newer(self):
-        """Testa se detecta versao mais nova corretamente"""
-        checker = UpdateChecker("1.0.0", "owner", "repo")
-        assert checker._is_newer_version("1.1.0", "1.0.0") is True
-        assert checker._is_newer_version("2.0.0", "1.0.0") is True
-        assert checker._is_newer_version("1.0.1", "1.0.0") is True
+        assert is_newer_version("1.1.0", "1.0.0") is True
+        assert is_newer_version("2.0.0", "1.0.0") is True
+        assert is_newer_version("1.0.1", "1.0.0") is True
 
     def test_is_newer_version_returns_false_for_older_or_same(self):
-        """Testa se detecta versao mais antiga ou igual corretamente"""
-        checker = UpdateChecker("1.0.0", "owner", "repo")
-        assert checker._is_newer_version("1.0.0", "1.0.0") is False
-        assert checker._is_newer_version("0.9.0", "1.0.0") is False
-        assert checker._is_newer_version("1.0.0", "1.1.0") is False
+        assert is_newer_version("1.0.0", "1.0.0") is False
+        assert is_newer_version("0.9.0", "1.0.0") is False
+        assert is_newer_version("1.0.0", "1.1.0") is False
 
     def test_is_newer_version_handles_prereleases(self):
-        """Testa se lida com pre-releases corretamente removendo sufixos"""
-        checker = UpdateChecker("1.0.0", "owner", "repo")
-        # Pre-release suffixes sao removidos, entao 1.1.0-alpha e tratado como 1.1.0
-        assert checker._is_newer_version("1.1.0-alpha", "1.0.0") is True
-        # Ambos 1.0.0-alpha e 1.0.0-beta sao tratados como 1.0.0, logo nao ha diferenca
-        assert checker._is_newer_version("1.0.0-beta", "1.0.0-alpha") is False
-        # 1.0.0 nao e mais novo que 1.0.0
-        assert checker._is_newer_version("1.0.0", "1.0.0") is False
+        assert is_newer_version("1.1.0-alpha", "1.0.0") is True
+        assert is_newer_version("1.0.0-beta", "1.0.0-alpha") is False
+        assert is_newer_version("1.0.0", "1.0.0") is False
 
     @patch("src.services.auto_update_service.requests.get")
     def test_check_for_updates_emits_update_available(self, mock_get, qtbot):
@@ -53,7 +45,7 @@ class TestUpdateChecker:
         mock_response.json.return_value = {
             "tag_name": "v1.1.0",
             "body": "Release notes",
-            "assets": [{"name": "App-1.1.0-windows.msi", "browser_download_url": "http://example.com/file.msi"}],
+            "assets": [{"name": "DataPyn-1.1.0-windows.zip", "browser_download_url": "http://example.com/file.zip"}],
         }
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -70,7 +62,7 @@ class TestUpdateChecker:
         mock_response.json.return_value = {
             "tag_name": "v1.0.0",
             "body": "Release notes",
-            "assets": [{"name": "App-1.0.0-windows.msi", "browser_download_url": "http://example.com/file.msi"}],
+            "assets": [{"name": "DataPyn-1.0.0-windows.zip", "browser_download_url": "http://example.com/file.zip"}],
         }
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -127,7 +119,7 @@ class TestAutoUpdateService:
         on_complete = Mock()
         on_error = Mock()
 
-        auto_update_service.download_update("http://example.com/file.msi", "1.1.0", on_progress, on_complete, on_error)
+        auto_update_service.download_update("http://example.com/file.zip", "1.1.0", on_progress, on_complete, on_error)
 
         assert auto_update_service._download_thread is not None
         assert auto_update_service._download_thread.isRunning()
@@ -135,26 +127,21 @@ class TestAutoUpdateService:
         # Cleanup
         auto_update_service.cleanup()
 
-    @patch("src.services.auto_update_service.subprocess.Popen")
+    @patch("src.services.auto_update_service.apply_downloaded_update")
     @patch("src.services.auto_update_service.os.path.exists", return_value=True)
-    def test_install_update_starts_installer(self, mock_exists, mock_popen, auto_update_service):
-        """Testa se inicia o instalador MSI"""
+    def test_install_update_applies_zip(self, mock_exists, mock_apply, auto_update_service):
         import tempfile
+
         temp_dir = tempfile.gettempdir()
-        installer_path = os.path.join(temp_dir, "installer.msi")
-        result = auto_update_service.install_update(installer_path)
+        package_path = os.path.join(temp_dir, "DataPyn-1.1.0-windows.zip")
+        result = auto_update_service.install_update(package_path, "1.1.0")
 
         assert result is True
-        mock_popen.assert_called_once()
-        args = mock_popen.call_args[0][0]
-        assert args[0] == "msiexec"
-        assert args[1] == "/i"
-        assert "installer.msi" in args[2]
+        mock_apply.assert_called_once()
 
     @patch("src.services.auto_update_service.os.path.exists", return_value=False)
     def test_install_update_fails_if_file_not_found(self, mock_exists, auto_update_service):
-        """Testa se falha quando arquivo nao existe"""
-        result = auto_update_service.install_update("C:\\temp\\nonexistent.msi")
+        result = auto_update_service.install_update("C:\\temp\\nonexistent.zip", "1.1.0")
 
         assert result is False
 
@@ -181,7 +168,7 @@ class TestUpdateDownloader:
     @patch("builtins.open", create=True)
     def test_download_emits_progress(self, mock_open, mock_get, qtbot):
         """Testa se emite progresso durante download"""
-        downloader = UpdateDownloader("http://example.com/file.msi", "installer.msi")
+        downloader = UpdateDownloader("http://example.com/file.zip", "DataPyn-1.1.0-windows.zip")
 
         mock_response = Mock()
         mock_response.headers.get.return_value = "1000"
@@ -195,7 +182,7 @@ class TestUpdateDownloader:
     @patch("src.services.auto_update_service.requests.get")
     def test_download_handles_error(self, mock_get, qtbot):
         """Testa se lida com erros de download"""
-        downloader = UpdateDownloader("http://example.com/file.msi", "installer.msi")
+        downloader = UpdateDownloader("http://example.com/file.zip", "DataPyn-1.1.0-windows.zip")
 
         mock_get.side_effect = Exception("Download error")
 

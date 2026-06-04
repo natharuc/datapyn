@@ -113,6 +113,10 @@ O projeto usa [uv](https://docs.astral.sh/uv/) como gerenciador de dependencias.
 
 ### Windows
 
+**End users:** download `DataPyn-Setup.exe` from [GitHub Releases](https://github.com/natharuc/datapyn/releases/latest). The setup wizard installs the latest build under `%LOCALAPPDATA%\DataPyn` and creates Start Menu / Desktop shortcuts.
+
+**Developers:**
+
 ```powershell
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
@@ -124,6 +128,8 @@ scripts\run.bat
 uv sync
 uv run python source/main.py
 ```
+
+Build the setup helper locally: `uv run pyinstaller installer/datapyn_setup.spec --clean`
 
 ### Linux (Ubuntu/Debian)
 
