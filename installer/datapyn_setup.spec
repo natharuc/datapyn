@@ -10,12 +10,22 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(ROOT, "source", "src", "assets", "datapyn_logo.svg"), "assets"),
+        (os.path.join(ROOT, "source", "src", "assets", "datapyn-logo.ico"), "assets"),
         (
             os.path.join(ROOT, "source", "src", "services", "windows_installer.py"),
             os.path.join("src", "services"),
         ),
     ],
-    hiddenimports=["_bootstrap", "datapyn_windows_installer", "PyQt6.QtSvg"],
+    hiddenimports=[
+        "_bootstrap",
+        "_bundle_deps",
+        "datapyn_windows_installer",
+        "PyQt6.QtSvg",
+        "json",
+        "zipfile",
+        "urllib.request",
+        "winreg",
+    ],
     pathex=[os.path.join(ROOT, "source"), os.path.join(ROOT, "installer")],
     hookspath=[],
     hooksconfig={},

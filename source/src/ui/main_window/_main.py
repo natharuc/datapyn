@@ -135,7 +135,7 @@ class MainWindow(
             if self._splash:
                 self._splash.set_progress(value, msg)
 
-        _sp(45, "Loading managers...")
+        _sp(45, "Carregando módulos…")
 
         # Inicializar atributos ANTES de chamar super().__init__()
         # to prevent DockingMainWindow._setup_ui() from accessing uninitialized attributes
@@ -198,7 +198,7 @@ class MainWindow(
         # Icons
         self.icons = self._setup_icons()
 
-        _sp(55, "Building docking system...")
+        _sp(55, "Montando painéis…")
 
         # Agora chama super().__init__() que vai inicializar o docking system
         super().__init__()
@@ -224,12 +224,12 @@ class MainWindow(
         # Apply theme after configuring editor themes
         self._apply_app_theme()
 
-        _sp(65, "Building interface...")
+        _sp(65, "Construindo interface…")
 
         # Configure MainWindow-specific UI
         self._setup_ui()
 
-        _sp(75, "Creating menus and toolbar...")
+        _sp(75, "Menus e barra de ferramentas…")
 
         self._create_menus()
         self._create_toolbar()
@@ -243,7 +243,7 @@ class MainWindow(
         # Connect signals do SessionManager
         self.session_manager.session_focused.connect(self._on_session_focused)
 
-        _sp(90, "Applying theme...")
+        _sp(90, "Aplicando tema…")
 
         # Apply initial theme
         self._apply_app_theme()

@@ -1,201 +1,224 @@
 """
 Splash Screen - Tela de carregamento do DataPyn
 
-Exibe o logo SVG com barra de progresso enquanto a aplicacao inicializa.
+Exibe o logo imediatamente após QApplication; atualiza barra de progresso durante o boot.
 """
 
+from __future__ import annotations
+
+import functools
 import os
 import sys
 
 from PyQt6.QtCore import Qt, QTimer, QRectF
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPixmap
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+    QRegion,
+)
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import QSplashScreen
+from PyQt6.QtWidgets import QApplication, QSplashScreen
+
+# DataPyn brand (site / installer)
+C_BG = QColor("#0c111b")
+C_BG_DEEP = QColor("#070b12")
+C_TEXT = QColor("#eef2f7")
+C_MUTED = QColor("#8b9cb3")
+C_DIM = QColor("#5c6d85")
+C_ACCENT = QColor("#3369ff")
+C_CYAN = QColor("#33c2ff")
+C_BAR_BG = QColor("#161f30")
+
+_ROUND_RADIUS = 14
 
 
-def _get_svg_path() -> str:
-    """Retorna caminho do logo SVG, funciona em dev e no EXE"""
+def _assets_base() -> str:
     if getattr(sys, "frozen", False):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_path, "src", "assets", "datapyn_logo.svg") if getattr(sys, "frozen", False) else os.path.join(base_path, "assets", "datapyn_logo.svg")
+        return os.path.join(sys._MEIPASS, "src", "assets")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 
 
+def _svg_path() -> str:
+    return os.path.join(_assets_base(), "datapyn_logo.svg")
+
+
+@functools.lru_cache(maxsize=1)
 def _get_version() -> str:
-    """Le versao do pyproject.toml"""
     try:
         import tomllib
 
         if getattr(sys, "frozen", False):
-            base_path = sys._MEIPASS
+            base = sys._MEIPASS
         else:
-            base_path = os.path.dirname(
+            base = os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             )
-        pyproject_path = os.path.join(base_path, "pyproject.toml")
-        if os.path.exists(pyproject_path):
-            with open(pyproject_path, "rb") as f:
-                data = tomllib.load(f)
-                return data.get("project", {}).get("version", "1.0.0")
+        pyproject = os.path.join(base, "pyproject.toml")
+        if os.path.isfile(pyproject):
+            with open(pyproject, "rb") as handle:
+                data = tomllib.load(handle)
+            return str(data.get("project", {}).get("version", "")) or "1.0.0"
     except Exception:
         pass
     return "1.0.0"
 
 
+def _ui_font(size: int, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
+    family = "Segoe UI" if sys.platform == "win32" else "Ubuntu"
+    font = QFont(family, size, weight)
+    if not font.exactMatch() and family != "Segoe UI":
+        font = QFont("Segoe UI", size, weight)
+    return font
+
+
+def _transparent_pixmap(width: int, height: int) -> QPixmap:
+    pixmap = QPixmap(width, height)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    return pixmap
+
+
+def _rounded_rect_path(width: int, height: int, radius: float = _ROUND_RADIUS) -> QPainterPath:
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, width, height), radius, radius)
+    return path
+
+
 class SplashScreen(QSplashScreen):
-    """Splash screen com logo SVG, barra de progresso e mensagens de status."""
+    """Splash com frame estático em cache e overlay leve de progresso."""
 
-    # Dimensoes
-    WIDTH = 480
-    HEIGHT = 360
+    WIDTH = 460
+    HEIGHT = 340
 
-    # Cores
-    BG_COLOR = QColor("#181A20")
-    ACCENT_COLOR = QColor("#3369FF")
-    ACCENT_END = QColor("#6C8CFF")
-    TEXT_COLOR = QColor("#CCCCCC")
-    TEXT_DIM = QColor("#888888")
-    BAR_BG = QColor("#2D2D30")
+    _LOGO_SIZE = 108
+    _BAR_MARGIN = 56
+    _BAR_Y = HEIGHT - 72
+    _BAR_H = 6
 
     def __init__(self):
-        # Cria pixmap base
-        pixmap = QPixmap(self.WIDTH, self.HEIGHT)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        super().__init__(pixmap)
-
-        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(_transparent_pixmap(self.WIDTH, self.HEIGHT))
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
         self._progress = 0
-        self._status_text = "Initializing..."
+        self._status_text = "Iniciando…"
         self._version = _get_version()
 
-        # Carrega SVG
-        svg_path = _get_svg_path()
-        self._svg_renderer = None
-        if os.path.exists(svg_path):
-            self._svg_renderer = QSvgRenderer(svg_path)
+        svg = _svg_path()
+        self._svg_renderer = QSvgRenderer(svg) if os.path.isfile(svg) else None
 
-        # Renderiza o pixmap completo
-        self._render_pixmap()
+        self._base_pixmap = _transparent_pixmap(self.WIDTH, self.HEIGHT)
+        self._paint_static(self._base_pixmap)
+        self._apply_progress_overlay()
+        self._apply_rounded_mask()
 
-    def _render_pixmap(self):
-        """Renderiza o splash completo no pixmap."""
-        pixmap = QPixmap(self.WIDTH, self.HEIGHT)
-        pixmap.fill(self.BG_COLOR)
+    def _apply_rounded_mask(self) -> None:
+        path = _rounded_rect_path(self.WIDTH, self.HEIGHT)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
-        painter = QPainter(pixmap)
+    def _paint_static(self, target: QPixmap) -> None:
+        target.fill(Qt.GlobalColor.transparent)
+        rounded = _rounded_rect_path(self.WIDTH, self.HEIGHT)
+
+        painter = QPainter(target)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # -- Borda sutil arredondada --
-        border_path = QPainterPath()
-        border_path.addRoundedRect(QRectF(0, 0, self.WIDTH, self.HEIGHT), 12, 12)
-        painter.setClipPath(border_path)
-        painter.fillPath(border_path, self.BG_COLOR)
+        grad_bg = QLinearGradient(0, 0, 0, self.HEIGHT)
+        grad_bg.setColorAt(0, C_BG)
+        grad_bg.setColorAt(1, C_BG_DEEP)
+        painter.fillPath(rounded, grad_bg)
 
-        # Linha accent no topo
-        grad_top = QLinearGradient(0, 0, self.WIDTH, 0)
-        grad_top.setColorAt(0, self.ACCENT_COLOR)
-        grad_top.setColorAt(1, self.ACCENT_END)
-        painter.fillRect(0, 0, self.WIDTH, 3, grad_top)
+        painter.setClipPath(rounded)
 
-        # -- Logo SVG --
-        logo_size = 128
-        logo_x = (self.WIDTH - logo_size) // 2
-        logo_y = 40
-        if self._svg_renderer:
+        border_pen = QColor(148, 163, 184, 40)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(QRectF(0.5, 0.5, self.WIDTH - 1, self.HEIGHT - 1), _ROUND_RADIUS, _ROUND_RADIUS)
+
+        logo_x = (self.WIDTH - self._LOGO_SIZE) // 2
+        logo_y = 52
+        if self._svg_renderer and self._svg_renderer.isValid():
             self._svg_renderer.render(
-                painter, QRectF(logo_x, logo_y, logo_size, logo_size)
+                painter, QRectF(logo_x, logo_y, self._LOGO_SIZE, self._LOGO_SIZE)
             )
 
-        # -- Titulo --
-        title_y = logo_y + logo_size + 16
-        font_title = QFont("Inter", 22, QFont.Weight.Bold)
-        painter.setFont(font_title)
-        painter.setPen(QColor("#FFFFFF"))
+        title_y = logo_y + self._LOGO_SIZE + 14
+        painter.setFont(_ui_font(20, QFont.Weight.Bold))
+        painter.setPen(C_TEXT)
+        painter.drawText(QRectF(0, title_y, self.WIDTH, 30), Qt.AlignmentFlag.AlignCenter, "DataPyn")
+
+        painter.setFont(_ui_font(10))
+        painter.setPen(C_MUTED)
         painter.drawText(
-            QRectF(0, title_y, self.WIDTH, 36),
+            QRectF(0, title_y + 28, self.WIDTH, 22),
             Qt.AlignmentFlag.AlignCenter,
-            "DataPyn",
+            "SQL + Python · Pynia",
         )
 
-        # -- Subtitulo --
-        sub_y = title_y + 34
-        font_sub = QFont("Inter", 10)
-        painter.setFont(font_sub)
-        painter.setPen(self.TEXT_DIM)
+        painter.setFont(_ui_font(9))
+        painter.setPen(C_DIM)
         painter.drawText(
-            QRectF(0, sub_y, self.WIDTH, 20),
-            Qt.AlignmentFlag.AlignCenter,
-            "Data Analysis Tool",
-        )
-
-        # -- Versao --
-        font_ver = QFont("Inter", 8)
-        painter.setFont(font_ver)
-        painter.setPen(self.TEXT_DIM)
-        painter.drawText(
-            QRectF(0, self.HEIGHT - 28, self.WIDTH, 20),
+            QRectF(0, self.HEIGHT - 36, self.WIDTH, 18),
             Qt.AlignmentFlag.AlignCenter,
             f"v{self._version}",
         )
 
-        # -- Barra de progresso (fundo) --
-        bar_x = 60
-        bar_y = self.HEIGHT - 60
-        bar_w = self.WIDTH - 120
-        bar_h = 4
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self.BAR_BG)
-        bar_path = QPainterPath()
-        bar_path.addRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 2, 2)
-        painter.drawPath(bar_path)
+        painter.end()
 
-        # -- Barra de progresso (preenchida) --
+    def _apply_progress_overlay(self) -> None:
+        pixmap = self._base_pixmap.copy()
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setClipPath(_rounded_rect_path(self.WIDTH, self.HEIGHT))
+
+        bar_x = self._BAR_MARGIN
+        bar_w = self.WIDTH - 2 * self._BAR_MARGIN
+        bar_y = self._BAR_Y
+
+        track = QPainterPath()
+        track.addRoundedRect(QRectF(bar_x, bar_y, bar_w, self._BAR_H), 3, 3)
+        painter.fillPath(track, C_BAR_BG)
+
         if self._progress > 0:
-            fill_w = bar_w * self._progress / 100
+            fill_w = max(self._BAR_H, bar_w * self._progress / 100)
             grad = QLinearGradient(bar_x, 0, bar_x + bar_w, 0)
-            grad.setColorAt(0, self.ACCENT_COLOR)
-            grad.setColorAt(1, self.ACCENT_END)
-            painter.setBrush(grad)
-            fill_path = QPainterPath()
-            fill_path.addRoundedRect(QRectF(bar_x, bar_y, fill_w, bar_h), 2, 2)
-            painter.drawPath(fill_path)
+            grad.setColorAt(0, C_ACCENT)
+            grad.setColorAt(1, C_CYAN)
+            fill = QPainterPath()
+            fill.addRoundedRect(QRectF(bar_x, bar_y, fill_w, self._BAR_H), 3, 3)
+            painter.fillPath(fill, grad)
 
-        # -- Texto de status --
-        status_y = bar_y + 10
-        font_status = QFont("Inter", 8)
-        painter.setFont(font_status)
-        painter.setPen(self.TEXT_DIM)
+        painter.setFont(_ui_font(9))
+        painter.setPen(C_MUTED)
         painter.drawText(
-            QRectF(bar_x, status_y, bar_w, 16),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            QRectF(bar_x, bar_y + 12, bar_w, 18),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
             self._status_text,
         )
 
         painter.end()
         self.setPixmap(pixmap)
 
-    def set_progress(self, value: int, status: str = ""):
-        """Atualiza progresso (0-100) e mensagem de status."""
+    def set_progress(self, value: int, status: str = "") -> None:
         self._progress = max(0, min(100, value))
         if status:
             self._status_text = status
-        self._render_pixmap()
+        self._apply_progress_overlay()
         self.repaint()
-        # Processa eventos para manter splash responsivo
-        from PyQt6.QtWidgets import QApplication
-        QApplication.processEvents()
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
 
-    def finish_with_window(self, window):
-        """Anima o fechamento do splash e mostra a janela."""
-        self.set_progress(100, "Ready!")
-        # Pequeno delay para o usuario ver 100%
-        QTimer.singleShot(300, lambda: self._do_finish(window))
+    def finish_with_window(self, window) -> None:
+        self.set_progress(100, "Pronto!")
+        QTimer.singleShot(120, lambda: self._do_finish(window))
 
-    def _do_finish(self, window):
-        """Fecha o splash e mostra a janela principal."""
+    def _do_finish(self, window) -> None:
         self.finish(window)
         window.show()

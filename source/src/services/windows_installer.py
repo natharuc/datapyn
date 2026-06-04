@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from datetime import date
 
 if sys.platform == "win32":
     import winreg
@@ -31,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 APP_NAME = "DataPyn"
 REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\DataPyn"
+REGISTRY_DELETE_ARG = rf"HKCU\{REGISTRY_KEY}"
+ICON_FILE_NAME = "datapyn-logo.ico"
+EXE_NAME = "DataPyn.exe"
 DEFAULT_INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "DataPyn"
 GITHUB_OWNER = "natharuc"
 GITHUB_REPO = "datapyn"
@@ -166,7 +170,7 @@ def get_install_dir() -> Optional[Path]:
         except OSError:
             pass
 
-    if DEFAULT_INSTALL_DIR.is_dir() and (DEFAULT_INSTALL_DIR / "DataPyn.exe").exists():
+    if DEFAULT_INSTALL_DIR.is_dir() and (DEFAULT_INSTALL_DIR / EXE_NAME).exists():
         return DEFAULT_INSTALL_DIR
     return None
 
@@ -234,7 +238,7 @@ def install_from_zip(
             archive.extractall(staging_parent)
 
         source_root = _resolve_zip_root(staging_parent)
-        exe_name = "DataPyn.exe"
+        exe_name = EXE_NAME
 
         if install_dir.exists():
             if on_progress:
@@ -269,36 +273,112 @@ def install_from_zip(
             shutil.rmtree(old_dir, ignore_errors=True)
 
 
-def register_uninstall(install_dir: Path, version: str) -> None:
+def _no_window_flags() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _source_brand_icon() -> Optional[Path]:
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidates.append(Path(sys._MEIPASS) / "src" / "assets" / ICON_FILE_NAME)
+    candidates.append(Path(__file__).resolve().parent.parent / "assets" / ICON_FILE_NAME)
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def _ensure_brand_icon(install_dir: Path, exe_path: Path) -> Path:
+    """Copy .ico beside the app when possible; used for Apps & Features icon."""
     install_dir = Path(install_dir)
-    uninstall_cmd = install_dir / "uninstall.cmd"
-    uninstall_cmd.write_text(
+    dest = install_dir / ICON_FILE_NAME
+    if dest.is_file():
+        return dest
+
+    for src in (
+        install_dir / "src" / "assets" / ICON_FILE_NAME,
+        _source_brand_icon(),
+    ):
+        if src is None or not Path(src).is_file():
+            continue
+        try:
+            shutil.copy2(src, dest)
+            return dest
+        except OSError as exc:
+            logger.warning("Could not copy icon to install dir: %s", exc)
+    return exe_path
+
+
+def _display_icon_value(icon_path: Path) -> str:
+    return f"{icon_path},0"
+
+
+def _delete_uninstall_registry() -> None:
+    if sys.platform != "win32":
+        return
+    if winreg is not None:
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY)
+            return
+        except OSError:
+            pass
+    subprocess.run(
+        ["reg", "delete", REGISTRY_DELETE_ARG, "/f"],
+        check=False,
+        creationflags=_no_window_flags(),
+    )
+
+
+def _build_uninstall_command(install_dir: Path) -> str:
+    """One-shot uninstall for Settings (registry removed before folder delete)."""
+    root = str(install_dir)
+    return (
+        f'cmd.exe /c reg delete "{REGISTRY_DELETE_ARG}" /f '
+        f"&& taskkill /IM {EXE_NAME} /F "
+        f'&& rmdir /s /q "{root}"'
+    )
+
+
+def _write_uninstall_cmd(install_dir: Path) -> Path:
+    install_dir = Path(install_dir)
+    script = install_dir / "uninstall.cmd"
+    script.write_text(
         "\r\n".join(
             [
                 "@echo off",
-                f'cd /d "{install_dir}"',
-                'taskkill /IM DataPyn.exe /F >nul 2>&1',
-                f'cd /d "{install_dir.parent}"',
+                f'reg delete "{REGISTRY_DELETE_ARG}" /f >nul 2>&1',
+                f"taskkill /IM {EXE_NAME} /F >nul 2>&1",
                 f'rmdir /s /q "{install_dir}"',
-                r'reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DataPyn" /f >nul 2>&1',
-                "echo DataPyn was removed.",
+                "echo DataPyn foi removido.",
                 "pause",
             ]
         ),
         encoding="utf-8",
     )
+    return script
+
+
+def register_uninstall(install_dir: Path, version: str) -> None:
+    install_dir = Path(install_dir)
+    exe_path = install_dir / EXE_NAME
+    icon_path = _ensure_brand_icon(install_dir, exe_path)
+    _write_uninstall_cmd(install_dir)
 
     if sys.platform != "win32" or winreg is None:
         return
 
-    display_name = APP_NAME
+    uninstall_string = _build_uninstall_command(install_dir)
+    install_date = int(date.today().strftime("%Y%m%d"))
+
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
-        winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, display_name)
+        winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, APP_NAME)
         winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, normalize_version(version))
         winreg.SetValueEx(key, "Publisher", 0, winreg.REG_SZ, "natharuc")
         winreg.SetValueEx(key, "InstallLocation", 0, winreg.REG_SZ, str(install_dir))
-        winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, str(uninstall_cmd))
-        winreg.SetValueEx(key, "QuietUninstallString", 0, winreg.REG_SZ, f'"{uninstall_cmd}"')
+        winreg.SetValueEx(key, "DisplayIcon", 0, winreg.REG_SZ, _display_icon_value(icon_path))
+        winreg.SetValueEx(key, "InstallDate", 0, winreg.REG_DWORD, install_date)
+        winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, uninstall_string)
+        winreg.SetValueEx(key, "QuietUninstallString", 0, winreg.REG_SZ, uninstall_string)
         winreg.SetValueEx(key, "NoModify", 0, winreg.REG_DWORD, 1)
         winreg.SetValueEx(key, "NoRepair", 0, winreg.REG_DWORD, 1)
 
@@ -337,18 +417,19 @@ def uninstall(install_dir: Optional[Path] = None) -> bool:
     root = install_dir or get_install_dir()
     if root is None:
         return False
+
+    _delete_uninstall_registry()
+
     try:
         subprocess.run(
-            ["taskkill", "/IM", "DataPyn.exe", "/F"],
+            ["taskkill", "/IM", EXE_NAME, "/F"],
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=_no_window_flags(),
         )
     except Exception:
         pass
     try:
         shutil.rmtree(root, ignore_errors=True)
-        if sys.platform == "win32" and winreg is not None:
-            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY)
     except OSError as exc:
         logger.error("Uninstall failed: %s", exc)
         return False

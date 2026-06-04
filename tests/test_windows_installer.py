@@ -8,6 +8,9 @@ from unittest.mock import patch
 import pytest
 
 from src.services.windows_installer import (
+    REGISTRY_DELETE_ARG,
+    _build_uninstall_command,
+    _display_icon_value,
     compare_versions,
     find_windows_zip_asset,
     install_from_zip,
@@ -71,3 +74,27 @@ class TestZipInstall:
         install_dir.mkdir()
         write_installed_version(install_dir, "9.8.7")
         assert read_installed_version(install_dir) == "9.8.7"
+
+
+class TestUninstallRegistry:
+    def test_uninstall_command_removes_registry_before_folder(self, tmp_path):
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        cmd = _build_uninstall_command(install_dir)
+        assert f'reg delete "{REGISTRY_DELETE_ARG}"' in cmd
+        assert cmd.index("reg delete") < cmd.index("rmdir")
+
+    def test_display_icon_value(self, tmp_path):
+        icon = tmp_path / "datapyn-logo.ico"
+        icon.write_bytes(b"ico")
+        assert _display_icon_value(icon) == f"{icon},0"
+
+    def test_uninstall_cmd_script_removes_registry_first(self, tmp_path):
+        from src.services.windows_installer import _write_uninstall_cmd
+
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        script = _write_uninstall_cmd(install_dir)
+        text = script.read_text(encoding="utf-8")
+        assert "reg delete" in text
+        assert text.index("reg delete") < text.index("rmdir")
