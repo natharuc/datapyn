@@ -8,12 +8,21 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "source"))
+_INSTALLER_DIR = Path(__file__).resolve().parent
+if str(_INSTALLER_DIR) not in sys.path:
+    sys.path.insert(0, str(_INSTALLER_DIR))
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon
+from _bootstrap import load_windows_installer
+
+wi = load_windows_installer()
+
+from PyQt6.QtCore import QByteArray, Qt, QPoint, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QIcon, QMouseEvent, QPainter, QPixmap
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
+    QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -25,12 +34,70 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.services import windows_installer as wi
+C_BG_DEEP = "#070b12"
+C_BG_BASE = "#0c111b"
+C_BG_CARD = "#161f30"
+C_BORDER = "rgba(148, 163, 184, 0.18)"
+C_TEXT = "#eef2f7"
+C_MUTED = "#8b9cb3"
+C_DIM = "#5c6d85"
+C_ACCENT = "#3369ff"
+C_CYAN = "#33c2ff"
+C_SUCCESS = "#4ade80"
+
+
+def _load_logo_pixmap(size: int = 40) -> QPixmap:
+    for name in ("datapyn_logo.svg", "datapyn-logo.svg"):
+        path = ROOT / "source" / "src" / "assets" / name
+        if path.is_file():
+            renderer = QSvgRenderer(QByteArray(path.read_bytes()))
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            return pixmap
+    return QPixmap()
+
+
+class TitleBar(QWidget):
+    """Draggable header for frameless window."""
+
+    def __init__(self, parent_window: QMainWindow):
+        super().__init__(parent_window)
+        self._window = parent_window
+        self._drag_pos: QPoint | None = None
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 8, 8, 8)
+        row.setSpacing(0)
+
+        row.addStretch()
+
+        close_btn = QPushButton("×")
+        close_btn.setObjectName("closeBtn")
+        close_btn.setFixedSize(32, 32)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.clicked.connect(parent_window.close)
+        row.addWidget(close_btn)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self._window.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        self._drag_pos = None
 
 
 class InstallWorker(QThread):
     progress = pyqtSignal(int, str)
-    finished_ok = pyqtSignal(str, str)  # exe path, version
+    finished_ok = pyqtSignal(str, str)
     failed = pyqtSignal(str)
 
     def __init__(self, install_dir: Path, mode: str, zip_path: Path | None, version: str):
@@ -62,146 +129,246 @@ class SetupWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DataPyn Setup")
-        self.setFixedSize(520, 420)
+        self.setFixedSize(440, 380)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
         self._install_dir = wi.DEFAULT_INSTALL_DIR
         self._worker: InstallWorker | None = None
         self._exe_path: str | None = None
 
-        logo_path = ROOT / "source" / "src" / "assets" / "datapyn_logo.svg"
-        if logo_path.exists():
-            self.setWindowIcon(QIcon(str(logo_path)))
+        icon_path = ROOT / "source" / "src" / "assets"
+        for name in ("datapyn-logo.ico", "datapyn_logo.svg"):
+            p = icon_path / name
+            if p.exists():
+                self.setWindowIcon(QIcon(str(p)))
+                break
+
+        shell = QFrame()
+        shell.setObjectName("shell")
+        shadow = QGraphicsDropShadowEffect(shell)
+        shadow.setBlurRadius(28)
+        shadow.setOffset(0, 8)
+        shadow.setColor(Qt.GlobalColor.black)
+        shell.setGraphicsEffect(shadow)
+
+        root = QVBoxLayout(shell)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self._title_bar = TitleBar(self)
+        root.addWidget(self._title_bar)
+
+        accent = QFrame()
+        accent.setObjectName("accentLine")
+        accent.setFixedHeight(2)
+        root.addWidget(accent)
+
+        body = QWidget()
+        body.setObjectName("body")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(36, 8, 36, 36)
+        body_layout.setSpacing(0)
 
         self._stack = QStackedWidget()
-        self.setCentralWidget(self._stack)
         self._stack.addWidget(self._page_welcome())
         self._stack.addWidget(self._page_progress())
         self._stack.addWidget(self._page_done())
+        body_layout.addWidget(self._stack)
+        root.addWidget(body, 1)
+
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(16, 16, 16, 16)
+        outer_layout.addWidget(shell)
+        self.setCentralWidget(outer)
         self._apply_theme()
 
     def _apply_theme(self):
         self.setStyleSheet(
-            """
-            QMainWindow { background: #0c111b; }
-            QLabel { color: #eef2f7; }
-            QLabel#muted { color: #8b9cb3; font-size: 12px; }
-            QLabel#title { font-size: 22px; font-weight: 600; }
-            QPushButton {
-                background: #3369ff;
-                color: white;
+            f"""
+            QFrame#shell {{
+                background: {C_BG_BASE};
+                border: 1px solid {C_BORDER};
+                border-radius: 14px;
+            }}
+            QFrame#accentLine {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {C_ACCENT}, stop:0.5 {C_CYAN}, stop:1 {C_ACCENT});
+                border: none;
+            }}
+            QWidget#body {{
+                background: transparent;
+            }}
+            QLabel {{
+                color: {C_TEXT};
+                background: transparent;
+            }}
+            QLabel#title {{
+                font-size: 18px;
+                font-weight: 600;
+            }}
+            QLabel#muted {{
+                color: {C_DIM};
+                font-size: 11px;
+            }}
+            QLabel#path {{
+                color: {C_MUTED};
+                font-size: 10px;
+                font-family: "Cascadia Mono", Consolas, monospace;
+            }}
+            QPushButton {{
+                background: {C_ACCENT};
+                color: #ffffff;
                 border: none;
                 border-radius: 8px;
-                padding: 10px 20px;
+                padding: 10px 24px;
                 font-weight: 600;
-            }
-            QPushButton:hover { background: #4f80ff; }
-            QPushButton#ghost {
+                font-size: 13px;
+                min-width: 108px;
+            }}
+            QPushButton:hover {{
+                background: #4f80ff;
+            }}
+            QPushButton:pressed {{
+                background: #2858e0;
+            }}
+            QPushButton#ghost {{
                 background: transparent;
-                color: #8b9cb3;
-                border: 1px solid rgba(148,163,184,0.25);
-            }
-            QPushButton#ghost:hover { color: #eef2f7; border-color: #3369ff; }
-            QProgressBar {
+                color: {C_MUTED};
+                border: 1px solid {C_BORDER};
+            }}
+            QPushButton#ghost:hover {{
+                color: {C_TEXT};
+                border-color: rgba(51, 105, 255, 0.45);
+            }}
+            QPushButton#closeBtn {{
+                background: transparent;
+                color: {C_MUTED};
                 border: none;
-                border-radius: 6px;
-                background: #161f30;
-                height: 10px;
-                text-align: center;
-                color: #8b9cb3;
-            }
-            QProgressBar::chunk {
-                border-radius: 6px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3369ff, stop:1 #33c2ff);
-            }
+                border-radius: 8px;
+                font-size: 18px;
+                min-width: 32px;
+                padding: 0;
+            }}
+            QPushButton#closeBtn:hover {{
+                background: rgba(239, 68, 68, 0.12);
+                color: #f87171;
+            }}
+            QProgressBar {{
+                border: none;
+                border-radius: 4px;
+                background: {C_BG_CARD};
+                height: 6px;
+            }}
+            QProgressBar::chunk {{
+                border-radius: 4px;
+                background: {C_ACCENT};
+            }}
             """
         )
 
-    def _page_welcome(self) -> QWidget:
+    def _centered_page(self) -> tuple[QWidget, QVBoxLayout]:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        return page, layout
+
+    def _button_row(self, primary_text: str, primary_slot, ghost_text: str, ghost_slot) -> QWidget:
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(10)
+        h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ghost = QPushButton(ghost_text)
+        ghost.setObjectName("ghost")
+        ghost.setCursor(Qt.CursorShape.PointingHandCursor)
+        ghost.clicked.connect(ghost_slot)
+        primary = QPushButton(primary_text)
+        primary.setCursor(Qt.CursorShape.PointingHandCursor)
+        primary.clicked.connect(primary_slot)
+        h.addWidget(ghost)
+        h.addWidget(primary)
+        return row
+
+    def _page_welcome(self) -> QWidget:
+        page, layout = self._centered_page()
         layout.setSpacing(12)
 
-        title = QLabel("Install DataPyn")
-        title.setObjectName("title")
-        layout.addWidget(title)
+        logo = QLabel()
+        logo.setPixmap(_load_logo_pixmap(56))
+        logo.setFixedSize(56, 56)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        subtitle = QLabel(
-            "Downloads the latest release from GitHub, installs for your user "
-            f"({self._install_dir}) and creates shortcuts."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setObjectName("muted")
-        layout.addWidget(subtitle)
+        title = QLabel("DataPyn")
+        title.setObjectName("title")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
 
         existing = wi.read_installed_version()
         if existing:
-            hint = QLabel(f"Installed version: {existing}. Setup will upgrade to the latest release.")
-            hint.setWordWrap(True)
-            hint.setObjectName("muted")
-            layout.addWidget(hint)
+            sub = QLabel(f"Atualizar · v{existing}")
+            sub.setObjectName("muted")
+            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        else:
+            sub = QLabel("Instalar")
+            sub.setObjectName("muted")
+            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(sub)
+
+        path = QLabel(str(self._install_dir))
+        path.setObjectName("path")
+        path.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(path)
 
         layout.addStretch()
-
-        row = QHBoxLayout()
-        row.addStretch()
-        cancel = QPushButton("Cancel")
-        cancel.setObjectName("ghost")
-        cancel.clicked.connect(self.close)
-        row.addWidget(cancel)
-        install = QPushButton("Install")
-        install.clicked.connect(self._start_install)
-        row.addWidget(install)
-        layout.addLayout(row)
+        layout.addWidget(
+            self._button_row("Instalar", self._start_install, "Cancelar", self.close)
+        )
         return page
 
     def _page_progress(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(16)
+        page, layout = self._centered_page()
+        layout.setSpacing(20)
 
-        self._progress_title = QLabel("Downloading…")
-        self._progress_title.setObjectName("title")
-        layout.addWidget(self._progress_title)
-
-        self._progress_status = QLabel("Connecting to GitHub…")
-        self._progress_status.setObjectName("muted")
-        self._progress_status.setWordWrap(True)
-        layout.addWidget(self._progress_status)
+        layout.addStretch()
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
-        layout.addWidget(self._progress_bar)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setFixedWidth(280)
+        layout.addWidget(self._progress_bar, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self._progress_status = QLabel("…")
+        self._progress_status.setObjectName("muted")
+        self._progress_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._progress_status)
+
         layout.addStretch()
         return page
 
     def _page_done(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(12)
+        page, layout = self._centered_page()
 
-        done_title = QLabel("DataPyn is ready")
-        done_title.setObjectName("title")
-        layout.addWidget(done_title)
-
-        self._done_label = QLabel("")
-        self._done_label.setWordWrap(True)
-        self._done_label.setObjectName("muted")
-        layout.addWidget(self._done_label)
         layout.addStretch()
 
-        row = QHBoxLayout()
-        row.addStretch()
-        close_btn = QPushButton("Close")
-        close_btn.setObjectName("ghost")
-        close_btn.clicked.connect(self.close)
-        row.addWidget(close_btn)
-        self._launch_btn = QPushButton("Open DataPyn")
-        self._launch_btn.clicked.connect(self._launch_app)
-        row.addWidget(self._launch_btn)
-        layout.addLayout(row)
+        ok = QLabel("✓")
+        ok.setStyleSheet(f"font-size: 32px; color: {C_SUCCESS}; font-weight: 700;")
+        ok.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(ok)
+
+        self._done_label = QLabel("")
+        self._done_label.setObjectName("title")
+        self._done_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._done_label)
+
+        layout.addStretch()
+        layout.addWidget(
+            self._button_row("Abrir", self._launch_app, "Fechar", self.close)
+        )
         return page
 
     def _start_install(self):
@@ -215,20 +382,14 @@ class SetupWindow(QMainWindow):
     def _on_progress(self, pct: int, msg: str):
         self._progress_bar.setValue(pct)
         self._progress_status.setText(msg)
-        if pct < 30:
-            self._progress_title.setText("Downloading…")
-        elif pct < 70:
-            self._progress_title.setText("Installing…")
-        else:
-            self._progress_title.setText("Finishing…")
 
     def _on_success(self, exe_path: str, version: str):
         self._exe_path = exe_path
-        self._done_label.setText(f"Version {version} installed at:\n{Path(exe_path).parent}")
+        self._done_label.setText(f"v{version}")
         self._stack.setCurrentIndex(2)
 
     def _on_failed(self, message: str):
-        QMessageBox.critical(self, "Setup failed", message)
+        QMessageBox.critical(self, "Falha na instalação", message)
         self._stack.setCurrentIndex(0)
 
     def _launch_app(self):

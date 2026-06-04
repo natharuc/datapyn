@@ -7,12 +7,16 @@ ROOT = os.path.abspath(os.path.join(SPEC, "..", ".."))
 
 a = Analysis(
     [os.path.join(ROOT, "installer", "main.py")],
-    pathex=[os.path.join(ROOT, "source")],
     binaries=[],
     datas=[
         (os.path.join(ROOT, "source", "src", "assets", "datapyn_logo.svg"), "assets"),
+        (
+            os.path.join(ROOT, "source", "src", "services", "windows_installer.py"),
+            os.path.join("src", "services"),
+        ),
     ],
-    hiddenimports=[],
+    hiddenimports=["_bootstrap", "datapyn_windows_installer", "PyQt6.QtSvg"],
+    pathex=[os.path.join(ROOT, "source"), os.path.join(ROOT, "installer")],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
