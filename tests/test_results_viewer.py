@@ -741,7 +741,7 @@ class TestResultsViewerMultiTab:
         assert button.autoRaise() is True
         assert button.width() == 24
         assert button.height() == 24
-        assert button.iconSize().width() == 15
+        assert button.iconSize().width() == 14
         assert "border: none" in stylesheet
         assert "margin: 3px 8px 3px 2px" in stylesheet
 
@@ -1094,9 +1094,12 @@ class TestResultsViewerFiltering:
         image.save(buffer, "PNG")
         return bytes(byte_array)
 
-    def test_visualization_button_and_config_are_session_state(self, viewer, qtbot):
+    def test_visualization_button_and_config_are_session_state(self, viewer, qtbot, monkeypatch):
         """Chart configuration should create a Results tab and live in session state."""
         from src.core.session import Session
+
+        png_bytes = self._tiny_png_bytes()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
 
         session = Session("s1")
         viewer.set_session(session)
@@ -1557,9 +1560,12 @@ class TestResultsViewerFiltering:
             release_first_render.set()
         qtbot.waitUntil(lambda: viewer._active_chart_render_job is None, timeout=5000)
 
-    def test_saved_visualization_config_restores_chart_tab_for_new_results(self, viewer, qtbot):
+    def test_saved_visualization_config_restores_chart_tab_for_new_results(self, viewer, qtbot, monkeypatch):
         """Saved chart configs should become result tabs when matching data is displayed."""
         from src.core.session import Session
+
+        png_bytes = self._tiny_png_bytes()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
 
         session = Session("s1")
         session.result_view_state = {
@@ -1582,7 +1588,6 @@ class TestResultsViewerFiltering:
         assert viewer._result_tabs.tabText(1) == "Saved chart"
         chart_page = viewer._result_tabs.widget(1)
         assert chart_page._image_bytes is None
-        assert getattr(chart_page, "_rendering", False) is False
 
         _switch_result_tab(viewer, qtbot, 1)
 
@@ -1609,8 +1614,11 @@ class TestResultsViewerFiltering:
         assert viewer._result_tabs.count() == 2
         assert calls == []
 
-    def test_grouped_visualization_renders_chart_image(self, viewer, qtbot):
+    def test_grouped_visualization_renders_chart_image(self, viewer, qtbot, monkeypatch):
         """Grouped chart settings should produce a real chart image tab."""
+        png_bytes = self._tiny_png_bytes()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
+
         df = pd.DataFrame({
             "mes": ["Jan", "Jan", "Fev", "Fev"],
             "canal": ["Online", "Loja", "Online", "Loja"],

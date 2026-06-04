@@ -819,6 +819,10 @@ class SessionWidget(QWidget):
             self._python_finished_handler = None
             return False
 
+    def _disconnect_previous_sql_worker(self) -> None:
+        """Detach SQL worker signals before starting a new run (e.g. after DB switch)."""
+        self._detach_sql_worker_handler()
+
     def _detach_sql_worker_handler(self) -> None:
         worker = getattr(self, "_sql_worker", None)
         handler = getattr(self, "_sql_finished_handler", None)

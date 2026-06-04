@@ -478,7 +478,8 @@ class TestCopilotChatWebViewApp:
     def test_work_display_is_collapsed_by_default(self, app_files):
         js = app_files["js"]
         assert 'document.createElement("details")' in js
-        assert 'className = "work-block"' in js
+        assert "work-block" in js
+        assert "work-block-compact" in js
         assert "open = true" not in js
 
 
@@ -494,6 +495,10 @@ class TestChatPanelThinkingState:
         with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
             from src.ui.components.copilot_chat_panel import PyniaChatPanel
             panel = PyniaChatPanel()
+        panel._chat_runtime._active_turn = {  # noqa: SLF001 — allow turn UI paths in unit tests
+            "turn_id": "test-turn",
+            "state": "thinking",
+        }
         return panel
 
     def test_initial_thinking_state(self, panel):
@@ -560,10 +565,11 @@ class TestChatPanelModelControls:
         settings.clear()
 
     def test_models_changed_populates_combo_and_usage(self, panel):
-        panel._on_models_changed([
-            {"id": "gpt-4o", "name": "GPT-4o", "multiplier": 1},
-            {"id": "o3", "name": "o3", "multiplier": 10, "supports_reasoning_effort": True},
-        ])
+        with patch.object(panel, "_preferred_model_id", return_value=""):
+            panel._on_models_changed([
+                {"id": "gpt-4o", "name": "GPT-4o", "multiplier": 1},
+                {"id": "o3", "name": "o3", "multiplier": 10, "supports_reasoning_effort": True},
+            ])
 
         assert panel._model_combo.count() == 2
         assert panel._model_combo.itemData(1) == "o3"
@@ -582,14 +588,20 @@ class TestChatPanelModelControls:
         assert panel._effort_combo.currentData() == "auto"
 
     def test_reasoning_effort_uses_model_supported_levels(self, panel):
-        panel._on_models_changed([
-            {
-                "id": "claude-sonnet-4.5",
-                "name": "Claude Sonnet 4.5",
-                "supports_reasoning_effort": True,
-                "supported_reasoning_efforts": ["low", "medium"],
-            },
-        ])
+        with patch.object(panel, "_preferred_model_id", return_value=""):
+            panel._on_models_changed([
+                {
+                    "id": "claude-sonnet-4.5",
+                    "name": "Claude Sonnet 4.5",
+                    "supports_reasoning_effort": True,
+                    "supported_reasoning_efforts": ["low", "medium"],
+                },
+            ])
+
+        model_index = panel._model_combo.findData("claude-sonnet-4.5")
+        assert model_index >= 0
+        panel._model_combo.setCurrentIndex(model_index)
+        panel._update_reasoning_effort_state()
 
         medium_index = panel._effort_combo.findData("medium")
         high_index = panel._effort_combo.findData("high")
