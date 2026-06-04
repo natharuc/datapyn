@@ -1271,7 +1271,8 @@ class UISetupMixin:
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            if self.auto_update_service.install_update(installer_path):
+            version = getattr(download_dialog, "version", "")
+            if self.auto_update_service.install_update(installer_path, version):
                 QApplication.quit()
             else:
                 QMessageBox.critical(
