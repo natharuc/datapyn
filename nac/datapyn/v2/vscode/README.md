@@ -25,8 +25,11 @@ chmod +x scripts/*.sh
 ./scripts/install-linux-deps.sh   # opcional se o build falhar por libs
 ./scripts/build.sh            # npm install + compile (~5–15 min)
 
-./scripts/start.sh            # inicia DataPyn em background (PID em /tmp/datapyn-app.pid)
-./scripts/run.sh              # mesmo app, terminal em foreground
+./scripts/stop.sh
+DATAPYN_FRESH=1 DATAPYN_LITE=1 ./scripts/start.sh   # VM/cloud (evita launch-failed 1002)
+# ou só: ./scripts/start.sh   # tenta normal; se falhar, retry automático em lite
+
+./scripts/run.sh              # foreground
 ```
 
 No app: Command Palette → **DataPyn: PoC Ping Runtime** ou **DataPyn: PoC Run SQL**.
