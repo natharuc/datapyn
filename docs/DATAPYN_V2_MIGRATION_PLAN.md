@@ -12,7 +12,8 @@
 |---|---------|-----------|
 | 1 | Formato de análise multi-bloco | **Manter `.dpw`** — mesmo formato JSON do v1; não criar `.dpyn` como substituto |
 | 2 | Granularidade do arquivo | **Um arquivo `.dpw` pode conter blocos SQL, Python ou os dois**, como hoje (lista `blocks` com `language` por bloco) |
-| 3 | Repositório | **Monorepo** — código v2 em `nac/datapyn/v2/` (`extension/`, `runtime/`, `vscode/`, `cli/`); v1 permanece em `source/` |
+| 3 | Repositório | **Monorepo** — v2 em `nac/datapyn/v2/`; **produto = `vscode/` (fork)**; `extension/` = built-in; v1 em `source/` |
+| 4 | Entrega UI | **Fork VS Code (app DataPyn)** — não extensão instalável no VS Code stock |
 
 Arquivos `.sql` e `.py` continuam como **um bloco por arquivo** (paridade v1). O fluxo principal de análise mista é **`.dpw`**.
 
@@ -32,7 +33,7 @@ O **DataPyn v2** propõe:
 | **Projeto do usuário** | JSON central (`sessions.json`, `connections.json`) + abas efêmeras | **Pasta de projeto** versionável (Git-friendly) |
 | **Motor de dados** | Python in-process (pandas, SQLAlchemy) | Serviço Python (ou extensão + language server) reutilizando lógica v1 |
 
-A mudança não é “trocar o editor”: é **reposicionar o produto** como extensão/distribuição especializada do ecossistema VS Code, com runtime de análise de dados preservado.
+A mudança não é “trocar o editor” nem “publicar uma extensão na Marketplace”: é **substituir o shell PyQt6 por um aplicativo fork do VS Code** (nova janela / executável DataPyn), com runtime de análise de dados preservado. O código em `extension/` é **extensão built-in** dentro desse fork — não o produto instalável à parte.
 
 ---
 
@@ -75,7 +76,7 @@ Estas capacidades do v1 devem existir no v2 com comportamento equivalente para o
 |----|-----------------------------------------------------------------------------------|
 | UI | `VariablesPanel`, `ResultsViewer` |
 
-**v2:** namespace **por “sessão de execução”** (documento ou kernel), in-memory; painéis como **Webview / Tree View** da extensão DataPyn.
+**v2:** namespace **por “sessão de execução”** (documento ou kernel), in-memory; painéis como **Webview / Tree View** do built-in DataPyn no fork.
 
 ---
 
@@ -86,7 +87,7 @@ flowchart TB
     subgraph vscode ["VS Code Fork (Electron)"]
         UI["Workbench VS Code"]
         CopilotExt["GitHub Copilot (oficial)"]
-        DatapynExt["Extensão DataPyn"]
+        DatapynExt["Built-in DataPyn"]
         UI --> DatapynExt
         UI --> CopilotExt
     end
@@ -114,22 +115,22 @@ flowchart TB
 
 | Pasta | Papel |
 |-------|--------|
-| [`nac/datapyn/v2/vscode/`](../nac/datapyn/v2/vscode/README.md) | Fork [Code-OSS](https://github.com/microsoft/vscode), branding, build CI |
-| [`nac/datapyn/v2/extension/`](../nac/datapyn/v2/extension/README.md) | Extensão TypeScript: comandos, views, `.dpw`, integração runtime |
-| [`nac/datapyn/v2/runtime/`](../nac/datapyn/v2/runtime/README.md) | Python: `database/`, execução, schema (extraído do v1) |
+| [`nac/datapyn/v2/vscode/`](../nac/datapyn/v2/vscode/README.md) | **Produto:** fork [Code-OSS](https://github.com/microsoft/vscode) → executável/janela DataPyn |
+| [`nac/datapyn/v2/extension/`](../nac/datapyn/v2/extension/README.md) | **Built-in** (TypeScript): comandos, views, `.dpw` — symlink em `vscode/checkout/extensions/datapyn` |
+| [`nac/datapyn/v2/runtime/`](../nac/datapyn/v2/runtime/README.md) | Python: execução, schema, conexões (extraído do v1) |
 | [`nac/datapyn/v2/cli/`](../nac/datapyn/v2/cli/README.md) | `datapyn migrate`, `datapyn run` (headless) |
 
 v1 inalterado em `source/` até EOL (Fase 5).
 
-### 3.2 Por que fork e não só extensão no VS Code stock?
+### 3.2 Fork vs extensão no VS Code da Microsoft
 
-| Abordagem | Prós | Contras |
-|-----------|------|---------|
-| **Extensão no VS Code público** | Menor manutenção do shell | Marketplace/Copilot policies; menos controle de UX “IDE de dados” |
-| **Fork (recomendado no estudo)** | Copilot + extensão DataPyn pré-instalados; product.json custom; atalhos e layouts padrão | Custo de merge upstream (~mensal) |
-| **Cursor / outros** | Copilot-like já embutido | Não é o pedido explícito (fork VS Code) |
+| Abordagem | O que o usuário abre | Status no projeto |
+|-----------|----------------------|-------------------|
+| **Extensão no VS Code stock** | `code` + instalar plugin | **Não é o v2** (só modo dev opcional) |
+| **Fork VS Code (escolhido)** | **DataPyn** — mesma base do VS Code, app próprio | `vscode/scripts/bootstrap.sh` + `product.json` |
+| Cursor / outros | App terceiro | Fora do escopo pedido |
 
-**Recomendação:** fork **Code - OSS** + extensão DataPyn publicável separadamente (usuários avançados podem instalar só a extensão).
+**Entrega:** instalador do fork (Windows/Linux), com Copilot oficial e built-in DataPyn. Não depende do usuário instalar extensão manualmente.
 
 ---
 
@@ -263,12 +264,13 @@ Módulos Python candidatos a **`datapyn-runtime`** (mínima alteração inicial)
 ### Fase 0 — Fundação (estudo + PoC)
 
 - [ ] Decisão fork vs extensão-only (este documento recomenda fork).
-- [x] PoC: extensão VS Code + subprocess Python executando `SELECT 1` (`nac/datapyn/v2/extension/` + `runtime/`).
-- [ ] Validar schema `.dpw` v1.0 (compatível com v1) na extensão.
+- [x] PoC **runtime** + código **built-in** (`extension/` + `runtime/`) — testável via subprocess; embutido no fork via symlink.
+- [ ] **Primeiro build do fork** (`vscode/scripts/bootstrap.sh` + `build.sh` → `checkout/scripts/code.sh`).
+- [ ] Validar schema `.dpw` v1.0 no built-in.
 - [ ] Spike: SecretStorage para credenciais.
-- [x] Scaffold monorepo em `nac/datapyn/v2/`.
+- [x] Scaffold monorepo + scripts fork em `nac/datapyn/v2/vscode/`.
 
-**Entregável:** build do fork em `nac/datapyn/v2/vscode/` + extensão mínima em `extension/` (PoC extensão+runtime feito; fork VS Code pendente).
+**Entregável Fase 0:** janela **DataPyn** = binário do fork com built-in; não `.vsix` na Marketplace.
 
 ### Fase 1 — Runtime desacoplado
 

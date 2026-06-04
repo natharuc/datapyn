@@ -1,0 +1,20 @@
+{
+  "nameShort": "DataPyn",
+  "nameLong": "DataPyn",
+  "applicationName": "datapyn",
+  "dataFolderName": ".datapyn",
+  "win32MutexName": "datapyn",
+  "win32DirName": "DataPyn",
+  "win32NameVersion": "DataPyn",
+  "win32RegValueName": "DataPyn",
+  "win32AppUserModelId": "DataPyn.DataPyn",
+  "darwinBundleIdentifier": "com.datapyn.app",
+  "linuxIconName": "datapyn",
+  "urlProtocol": "datapyn",
+  "reportIssueUrl": "https://github.com/natharuc/datapyn/issues",
+  "licenseUrl": "https://github.com/natharuc/datapyn/blob/main/LICENSE",
+  "extensionsGallery": {
+    "serviceUrl": "https://open-vsx.org/vscode/gallery",
+    "itemUrl": "https://open-vsx.org/vscode/item"
+  }
+}

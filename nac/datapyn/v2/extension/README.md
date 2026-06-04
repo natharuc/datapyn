@@ -1,32 +1,39 @@
-# DataPyn v2 — VS Code extension (PoC)
+# DataPyn built-in extension (código-fonte)
 
-Extensão mínima que inicia o runtime Python e executa SQL.
+**Não é o produto final.** Este diretório contém o código TypeScript da extensão que será **embutida no fork do VS Code** (`../vscode/`), em `extensions/datapyn`.
 
-## Build
+O usuário final abre o aplicativo **DataPyn** (fork), não instala esta pasta no VS Code.
 
-```bash
-cd nac/datapyn/v2/extension
-npm install
-npm run compile
+## Papel na arquitetura
+
+```
+vscode/checkout/          ← fork Code-OSS (a “tela nova”)
+  extensions/datapyn/     ← symlink para este diretório (bootstrap.sh)
+  product.json            ← nome DataPyn, ícones, built-ins
+
+extension/                ← você edita aqui
+runtime/                  ← motor Python (subprocess)
 ```
 
-Requisitos: **Node.js 18+**, **uv** (para `datapyn.runtime.useUv`, padrão `true`).
+## Desenvolvimento
 
-## Testar no VS Code / Cursor
+### 1) Dentro do fork (caminho real)
 
-1. Abra a pasta `nac/datapyn/v2/extension` no editor.
-2. Copie `launch.example.json` → `.vscode/launch.json` (a pasta `.vscode` é ignorada pelo git do repo).
-3. **Run and Debug** → **Run Extension** (abre Extension Development Host).
-3. No host, Command Palette:
-   - **DataPyn: PoC Ping Runtime**
-   - **DataPyn: PoC Run SQL (SELECT 1)** — usa seleção ou texto do editor, senão `SELECT 1 AS n`
-4. Resultado em **Output → DataPyn**.
+Após `../vscode/scripts/bootstrap.sh` e `build.sh`, use `checkout/scripts/code.sh` — a extensão já está no app.
 
-## Configuração
+### 2) Modo rápido (só para debug da extensão)
+
+Opcional: F5 com `launch.example.json` no VS Code **stock** — apenas para testar RPC antes do fork compilar. Não confundir com o produto v2.
+
+```bash
+cd nac/datapyn/v2/runtime && uv sync --dev
+cd ../extension && npm install && npm run compile
+# cp launch.example.json .vscode/launch.json
+```
+
+## Configuração (no fork)
 
 | Setting | Descrição |
 |---------|-----------|
-| `datapyn.runtime.directory` | Caminho para `nac/datapyn/v2/runtime` (vazio = `../runtime` relativo à extensão) |
-| `datapyn.runtime.useUv` | `true` → `uv run python -m datapyn_runtime` |
-
-Antes do primeiro uso, rode `uv sync` em `../runtime`.
+| `datapyn.runtime.directory` | Pasta `../runtime` |
+| `datapyn.runtime.useUv` | `uv run python -m datapyn_runtime` |
