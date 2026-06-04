@@ -553,27 +553,33 @@ class UISetupMixin:
         self.main_toolbar.new_tab_clicked.connect(self._new_session)
         self.main_toolbar.run_clicked.connect(self._execute_from_toolbar)
         self.main_toolbar.run_timer_clicked.connect(self._toggle_run_timer)
+        # Only pynia_clicked — copilot_clicked is an alias emitted from the same click;
+        # connecting both would toggle the dock twice per button press.
         self.main_toolbar.pynia_clicked.connect(self._toggle_copilot_dock)
-        self.main_toolbar.copilot_clicked.connect(self._toggle_copilot_dock)
         self.main_toolbar.workspace_switch_requested.connect(self._on_workspace_switch)
         self.main_toolbar.workspace_settings_requested.connect(self._show_workspace_settings)
 
     def _toggle_copilot_dock(self):
-        """Toggle Copilot dock visibility and focus."""
-        if hasattr(self, "copilot_dock"):
-            if self.copilot_dock.isVisible():
-                self.copilot_dock.hide()
-            else:
-                self.copilot_dock.show()
-                self.copilot_dock.raise_()
-                # Focus input field
-                if hasattr(self, "_copilot_chat_panel"):
-                    if hasattr(self._copilot_chat_panel, "focus_input"):
-                        self._copilot_chat_panel.focus_input()
-                    else:
-                        input_field = getattr(self._copilot_chat_panel, "_input", None)
-                        if input_field and hasattr(input_field, "setFocus"):
-                            input_field.setFocus()
+        """Toggle Pynia chat dock visibility and focus."""
+        if not hasattr(self, "copilot_dock"):
+            return
+        dock = self.copilot_dock
+        if dock.isVisible() and self._is_dock_tab_active(dock):
+            dock.hide()
+            if hasattr(self, "copilot_action"):
+                self.copilot_action.setChecked(False)
+        else:
+            self.show_panel("copilot")
+            if hasattr(self, "copilot_action"):
+                self.copilot_action.setChecked(True)
+            panel = getattr(self, "_copilot_chat_panel", None)
+            if panel is not None:
+                if hasattr(panel, "focus_input"):
+                    panel.focus_input()
+                else:
+                    input_field = getattr(panel, "_input", None)
+                    if input_field and hasattr(input_field, "setFocus"):
+                        input_field.setFocus()
 
     def _on_workspace_switch(self, path: str):
         """Handle workspace switch request from toolbar."""

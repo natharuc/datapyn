@@ -37,8 +37,12 @@ COMPLETION_MODEL_SUGGESTIONS: dict[ProviderId, list[str]] = {
 }
 
 SYSTEM_PROMPT = (
-    "You are Pynia inline autocomplete inside DataPyn. "
-    "Output ONLY the text to insert at <CURSOR>. No markdown, no fences, no explanation."
+    "You are Pynia, an inline code-completion engine inside the DataPyn IDE "
+    "(like GitHub Copilot ghost text). Continue the code at <CURSOR>.\n"
+    "- Output ONLY the raw text to insert at <CURSOR> — it MAY span multiple lines.\n"
+    "- No markdown, no code fences, no comments explaining, no restating existing code.\n"
+    "- Match the surrounding style/indentation and the given language.\n"
+    "- Use the provided schema/variables when relevant. If nothing sensible fits, output nothing."
 )
 
 
@@ -49,15 +53,23 @@ def build_inline_prompt(
     suffix: str,
     context: str = "",
 ) -> str:
-    """Build a minimal completion prompt."""
-    prefix_trunc = prefix[-1200:] if len(prefix) > 1200 else prefix
-    suffix_trunc = suffix[:300] if len(suffix) > 300 else suffix
+    """Build a fill-in-the-middle completion prompt for a chat model.
+
+    The code is the FOCUSED block only (prefix before the cursor, suffix after);
+    ``context`` carries the extra data the editor already has (SQL schema or the
+    Python namespace).
+    """
+    prefix_trunc = prefix[-2000:] if len(prefix) > 2000 else prefix
+    suffix_trunc = suffix[:500] if len(suffix) > 500 else suffix
     ctx = ""
     if context:
         ctx_block = context[:2000] if len(context) > 2000 else context
-        ctx = f"\n\nContext:\n{ctx_block}\n"
+        label = "Database schema" if language == "sql" else "Context"
+        ctx = f"{label}:\n{ctx_block}\n\n"
     return (
-        f"Complete this {language} code at <CURSOR>. Output only the insertion text.{ctx}\n"
+        f"{ctx}"
+        f"Complete the following {language} code at <CURSOR>. "
+        f"Output only the text to insert (may be multiple lines):\n\n"
         f"```{language}\n{prefix_trunc}<CURSOR>{suffix_trunc}\n```"
     )
 
@@ -80,7 +92,10 @@ def clean_completion_text(text: str, prefix: str, suffix: str) -> str:
     # Strip accidental duplicate of prefix tail
     if prefix and cleaned.startswith(prefix[-80:]):
         cleaned = cleaned[len(prefix[-80:]) :]
-    return cleaned.rstrip("\n")
+    # Keep internal newlines; only trim trailing blank lines at the end.
+    while cleaned.endswith("\n"):
+        cleaned = cleaned[:-1]
+    return cleaned
 
 
 def fetch_inline_completion(
@@ -138,7 +153,7 @@ def _fetch_openai_compatible(
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 256,
+        "max_tokens": 512,
         "temperature": 0.2,
         "stream": False,
     }
@@ -174,7 +189,7 @@ def _fetch_anthropic(
     }
     payload = {
         "model": model,
-        "max_tokens": 256,
+        "max_tokens": 512,
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": prompt}],
     }

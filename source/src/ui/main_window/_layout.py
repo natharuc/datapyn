@@ -143,9 +143,18 @@ class LayoutMixin:
         # Connect Copilot signals to output panel
         self._connect_copilot_to_output()
 
-        # Wire Pynia auth (chat + inline autocomplete)
+        # Wire Pynia auth (chat) + inline autocomplete.
         self._setup_copilot_auth_service()
         self._update_editors_pynia_client()
+
+        # Start the native Copilot LSP for inline completion (it authenticates
+        # off the existing gh login). Guarded so a hiccup can't block startup.
+        try:
+            if getattr(self, "_lsp_server_available", False) and not getattr(self, "_lsp_client", None):
+                self._setup_lsp_client()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Copilot LSP autocomplete setup skipped: %s", exc)
 
         # Tabifica Results, Summarize e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.summarize_dock)
@@ -310,6 +319,7 @@ class LayoutMixin:
 
         dock.show()
         dock.raise_()
+        self._activate_tabified_dock(dock)
 
         # Se mostrando results pela primeira vez, mostrar variables e summarize tambem
         if name == "results":
@@ -325,8 +335,20 @@ class LayoutMixin:
         # Para docks tabificados, raise_() nao troca a aba visivel.
         # Precisamos encontrar o QTabBar que controla o grupo e selecionar
         # a aba correspondente manualmente.
+        # Tabified bottom docks need an explicit tab switch (raise_ alone is not enough).
         if name in ("results", "output", "summarize"):
             self._activate_tabified_dock(dock)
+
+    def _is_dock_tab_active(self, dock: QDockWidget) -> bool:
+        """True when this dock is the selected tab (or not in a tab group)."""
+        from PyQt6.QtWidgets import QTabBar
+
+        target_title = dock.windowTitle()
+        for tab_bar in self.findChildren(QTabBar):
+            for i in range(tab_bar.count()):
+                if tab_bar.tabText(i) == target_title:
+                    return tab_bar.currentIndex() == i
+        return True
 
     def _activate_tabified_dock(self, dock: QDockWidget):
         """Activates the correct tab in a group of tabified docks.

@@ -98,6 +98,13 @@ class BlockEditor(QWidget):
         self._maximized_block: Optional[CodeBlock] = None  # Block in maximized/focus mode
         self._maximized_block: Optional[CodeBlock] = None  # Block in maximized/focus mode
 
+        self._completion_context_timer = QTimer(self)
+        self._completion_context_timer.setSingleShot(True)
+        self._completion_context_timer.setInterval(1200)
+        self._completion_context_timer.timeout.connect(
+            lambda: self.refresh_completion_context(self._focused_block)
+        )
+
         self._setup_ui()
 
         # Enable drop
@@ -124,6 +131,10 @@ class BlockEditor(QWidget):
         self._lsp_client = client
         for block in self._blocks:
             block.set_lsp_client(client)
+
+    def _schedule_completion_context_refresh(self) -> None:
+        """Debounce LSP/Monaco context refresh while the user edits."""
+        self._completion_context_timer.start()
     
     def set_database_context(self, context: str) -> None:
         """Set database schema context for SQL completions in all blocks."""
@@ -383,35 +394,101 @@ class BlockEditor(QWidget):
         return None
 
     # === Autocomplete Management ===
-    
+
+    def refresh_completion_context(
+        self,
+        focus_block: Optional[CodeBlock] = None,
+        *,
+        sync_lsp_documents: bool = False,
+    ) -> None:
+        """Push in-memory session context (namespace, blocks) to Monaco + LSP.
+
+        Schema/SQL autocomplete is applied via set_sql_schema — do not reopen every
+        LSP document here or schema load will stall the UI.
+        """
+        from src.editors.completion_context import (
+            build_lsp_preamble_for_block,
+            build_sibling_block_completions,
+            collect_session_python_context,
+        )
+
+        namespace = ApplicationState.instance().get_namespace()
+        shared_imports = collect_session_python_context(
+            self._blocks, namespace
+        ).global_imports
+
+        for block in self._blocks:
+            try:
+                lang = block.get_language()
+                py_ctx = collect_session_python_context(
+                    self._blocks, namespace, current_block=block if lang == "python" else None
+                )
+                preamble, line_offset = build_lsp_preamble_for_block(
+                    lang,
+                    global_imports=shared_imports,
+                    namespace=namespace,
+                    blocks_code_context=py_ctx.blocks_code_context,
+                    database_context=self._database_context,
+                )
+
+                if hasattr(block, "apply_session_completion_context"):
+                    block.apply_session_completion_context(
+                        namespace=namespace if lang == "python" else None,
+                        global_imports=shared_imports if lang == "python" else "",
+                        blocks_code_context=py_ctx.blocks_code_context if lang == "python" else "",
+                        lsp_preamble=preamble,
+                        lsp_line_offset=line_offset,
+                    )
+                else:
+                    if lang == "python":
+                        block.set_python_namespace(namespace)
+                    block.set_lsp_completion_preamble(preamble, line_offset)
+
+                if hasattr(block, "editor") and hasattr(block.editor, "set_sibling_block_completions"):
+                    block.editor.set_sibling_block_completions(
+                        build_sibling_block_completions(
+                            self._blocks,
+                            current_block=block,
+                            target_language=lang,
+                        )
+                    )
+
+                if sync_lsp_documents and (
+                    focus_block is None or block is focus_block
+                ) and hasattr(block, "_update_document_info"):
+                    block._update_document_info()
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).debug(
+                    "refresh_completion_context skipped block: %s", exc
+                )
+
     def update_python_completions_all(self):
         """Update Python completions for all Python blocks with current namespace."""
-        app_state = ApplicationState.instance()
-        namespace = app_state.get_namespace()
-        
-        for block in self._blocks:
-            if block.get_language() == "python" and hasattr(block.editor, "set_python_namespace"):
-                block.editor.set_python_namespace(namespace)
+        self.refresh_completion_context()
     
     def set_database_context(self, context: str):
         """Set database context for SQL completions (Monaco)."""
         self._database_context = context
-        # Propagate to existing blocks
         for block in self._blocks:
             if hasattr(block, "set_database_context"):
                 block.set_database_context(context)
     
     def set_sql_schema(self, schema: dict):
         """Set SQL schema for autocomplete in all SQL blocks.
-        
+
         Args:
             schema: Dict with tables, columns, database info from SchemaService
         """
-        self._sql_schema = schema
-        # Propagate to existing SQL blocks
+        self._sql_schema = schema or {}
         for block in self._blocks:
-            if block.get_language() == "sql" and hasattr(block, "set_sql_schema"):
-                block.set_sql_schema(schema)
+            if block.get_language() != "sql":
+                continue
+            if hasattr(block, "set_sql_schema"):
+                block.set_sql_schema(self._sql_schema)
+            elif hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
+                block.editor.set_sql_schema(self._sql_schema)
     
     def _on_block_language_changed(self, block: CodeBlock, language: str):
         """Handle block language change - update completions."""
@@ -420,11 +497,7 @@ class BlockEditor(QWidget):
             if hasattr(block, "set_sql_schema"):
                 block.set_sql_schema(self._sql_schema)
         elif language == "python":
-            # Block switched to Python - apply namespace
-            app_state = ApplicationState.instance()
-            namespace = app_state.get_namespace()
-            if hasattr(block.editor, "set_python_namespace"):
-                block.editor.set_python_namespace(namespace)
+            self.refresh_completion_context(focus_block=block)
 
     # === Block Management ===
 
@@ -469,6 +542,8 @@ class BlockEditor(QWidget):
         if self._sql_schema and language == "sql" and hasattr(block, "set_sql_schema"):
             block.set_sql_schema(self._sql_schema)
 
+        self.refresh_completion_context(focus_block=block)
+
         # Connect signals
         # execute_requested runs only that block
         block.execute_requested.connect(lambda b, sel: self._on_block_execute_requested(b, sel))
@@ -481,6 +556,7 @@ class BlockEditor(QWidget):
         block.database_changed.connect(self.block_database_changed.emit)
         block.completion_log.connect(self.completion_log.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
+        block.editor.textChanged.connect(self._schedule_completion_context_refresh)
         block.language_changed.connect(lambda b, lang: self._on_block_language_changed(b, lang))
         block.maximize_requested.connect(self._toggle_maximize_block)
         
@@ -642,6 +718,9 @@ class BlockEditor(QWidget):
         if has_focus:
             self._focused_block = block
             self._last_focused_block = block
+            self.refresh_completion_context(
+                focus_block=block, sync_lsp_documents=True
+            )
             # Notify listeners (MainWindow) so Object Explorer can track focused connection
             self.block_focused.emit(block)
             # Cursor position will be updated by the editor's cursor_changed signal

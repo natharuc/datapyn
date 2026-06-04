@@ -1517,7 +1517,7 @@ class CopilotWorker(QObject):
                 return
             self._session = await _sdk_create_session(
                 self._sdk_client,
-                model="gpt-4o-mini",
+                model=self._model,
                 streaming=True,
                 system_message=self._system_message,
             )
@@ -1544,24 +1544,41 @@ class CopilotWorker(QObject):
             self.inline_complete.emit("")
             return
         
-        # Initialize client if needed
-        if not self._sdk_client:
-            logger.info("[COPILOT-WORKER] Creating new SDK client...")
-            self._sdk_client = _create_sdk_client(SDKClient)
-            await self._sdk_client.start()
-            logger.info("[COPILOT-WORKER] SDK client started")
-        
-        # Create session without tools for faster response
-        if not self._session:
-            logger.info("[COPILOT-WORKER] Creating new session (gpt-4o-mini)...")
-            self._session = await _sdk_create_session(
-                self._sdk_client,
-                model="gpt-4o-mini",
-                streaming=True,
-                system_message=self._system_message,
-            )
-            logger.info("[COPILOT-WORKER] Session created successfully")
-        
+        # Initialize client + session. This MUST be guarded: an unhandled error
+        # here (e.g. a model that the account can't use, or a hung RPC) left the
+        # worker without emitting anything, so the editor sat "stuck" until the
+        # watchdog fired and every later request piled up behind it.
+        try:
+            if not self._sdk_client:
+                logger.info("[COPILOT-WORKER] Creating new SDK client...")
+                self._sdk_client = _create_sdk_client(SDKClient)
+                await asyncio.wait_for(self._sdk_client.start(), timeout=6)
+                logger.info("[COPILOT-WORKER] SDK client started")
+
+            # Create session without tools for faster response
+            if not self._session:
+                logger.info(f"[COPILOT-WORKER] Creating new session ({self._model})...")
+                self._session = await asyncio.wait_for(
+                    _sdk_create_session(
+                        self._sdk_client,
+                        model=self._model,
+                        streaming=True,
+                        system_message=self._system_message,
+                    ),
+                    timeout=6,
+                )
+                logger.info("[COPILOT-WORKER] Session created successfully")
+        except asyncio.TimeoutError:
+            logger.warning("[COPILOT-WORKER] Timed out initializing completion session")
+            self._session = None
+            self.error.emit("completion session timed out")
+            return
+        except Exception as exc:
+            logger.warning(f"[COPILOT-WORKER] Failed to create completion session: {exc}")
+            self._session = None
+            self.error.emit(str(exc))
+            return
+
         if not self._inline_prompt:
             logger.info("[COPILOT-WORKER] No inline prompt set, emitting empty")
             self.inline_complete.emit("")
@@ -1588,14 +1605,29 @@ class CopilotWorker(QObject):
         
         unsubscribe = self._session.on(on_event)
         
+        def _drain_events():
+            """Process accumulated SDK events into full_response."""
+            nonlocal full_response
+            while events:
+                event = events.pop(0)
+                if event.type == EventType.ASSISTANT_MESSAGE_DELTA:
+                    delta = getattr(event.data, "delta_content", "") or ""
+                    if delta:
+                        full_response += delta
+                elif event.type == EventType.ASSISTANT_MESSAGE:
+                    content = getattr(event.data, "content", "") or ""
+                    if content:
+                        full_response = content
+
         try:
             await self._session.send(self._inline_prompt)
             logger.info("[COPILOT-WORKER] Prompt sent, waiting for response...")
-            
-            # Short timeout for fast completions (3 seconds)
+
+            # gpt-4o is slower than the retired gpt-4o-mini; 3s cut off most
+            # responses as empty. Keep it under the editor watchdog (~7s).
             start_time = time.time()
-            timeout = 3
-            
+            timeout = 6
+
             while not idle_event.is_set() and not self._cancelled:
                 elapsed = time.time() - start_time
                 if elapsed > timeout:
@@ -1604,24 +1636,23 @@ class CopilotWorker(QObject):
                         f"response so far: {len(full_response)} chars"
                     )
                     break
-                
-                while events:
-                    event = events.pop(0)
-                    if event.type == EventType.ASSISTANT_MESSAGE_DELTA:
-                        delta = getattr(event.data, "delta_content", "") or ""
-                        if delta:
-                            full_response += delta
-                    elif event.type == EventType.ASSISTANT_MESSAGE:
-                        content = getattr(event.data, "content", "") or ""
-                        if content:
-                            full_response = content
-                
+                _drain_events()
                 await asyncio.sleep(0.02)
-            
+
+            # Drain whatever arrived alongside SESSION_IDLE — the final
+            # ASSISTANT_MESSAGE often lands in the same batch as idle, so
+            # breaking out of the loop without this dropped the real answer.
+            _drain_events()
+
             logger.info(
                 f"[COPILOT-WORKER] Response collected: {len(full_response)} chars"
             )
             self.inline_complete.emit(full_response)
+        except Exception as exc:
+            # Always emit something so the editor's completion promise resolves
+            # instead of hanging until the watchdog.
+            logger.warning(f"[COPILOT-WORKER] Completion failed: {exc}")
+            self.error.emit(str(exc))
         finally:
             unsubscribe()
 
@@ -2062,7 +2093,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
             self._cleanup_completion_worker()
             
             self._completion_worker = CopilotWorker(None)  # No tool executor
-            self._completion_worker.set_model("gpt-4o-mini")  # Use faster model
+            self._completion_worker.set_model(self._model or "gpt-4o")  # Use faster model
             self._completion_worker.set_inline_prompt(prompt)
             self._completion_worker.set_system_message(system_msg)
             
@@ -2198,7 +2229,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         
         try:
             self._completion_worker = CopilotWorker(None)  # No tool executor
-            self._completion_worker.set_model("gpt-4o-mini")  # Fast model
+            self._completion_worker.set_model(self._model or "gpt-4o")  # Fast model
             self._completion_worker.set_system_message(
                 "You are a code completion assistant. Output ONLY the code completion, nothing else."
             )

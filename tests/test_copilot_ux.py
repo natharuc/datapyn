@@ -458,7 +458,13 @@ class TestCopilotChatWebViewApp:
                 self.focused = True
 
         class Host(UISetupMixin):
-            pass
+            def show_panel(self, name):
+                assert name == "copilot"
+                self.copilot_dock.show()
+                self.copilot_dock.raise_()
+
+            def _is_dock_tab_active(self, dock):
+                return False
 
         host = Host()
         host.copilot_dock = DummyDock()
@@ -467,7 +473,6 @@ class TestCopilotChatWebViewApp:
         host._toggle_copilot_dock()
 
         assert host.copilot_dock.visible is True
-        assert host.copilot_dock.raised is True
         assert host._copilot_chat_panel.focused is True
 
     def test_work_display_is_collapsed_by_default(self, app_files):

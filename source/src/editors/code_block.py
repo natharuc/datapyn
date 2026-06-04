@@ -6,6 +6,8 @@ Uses Monaco Editor for code editing with Copilot inline completions.
 """
 
 import time
+from typing import Optional
+
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -438,7 +440,7 @@ class CodeBlock(QFrame):
         self._sql_parameter_sync_timer.timeout.connect(self.sync_sql_parameters_from_query)
         self._lsp_document_sync_timer = QTimer(self)
         self._lsp_document_sync_timer.setSingleShot(True)
-        self._lsp_document_sync_timer.setInterval(250)
+        self._lsp_document_sync_timer.setInterval(650)
         self._lsp_document_sync_timer.timeout.connect(self._sync_lsp_document)
         self._default_language = default_language
         self._connection_name = None  # None = use session connection
@@ -850,6 +852,7 @@ class CodeBlock(QFrame):
         self.editor.SCN_FOCUSOUT.connect(self._on_focus_out)
         self.editor.textChanged.connect(self._schedule_sql_parameter_sync)
         self.editor.textChanged.connect(self._schedule_lsp_document_sync)
+        self._sync_syntax_dialect_to_editor()
         self.sql_parameters_panel.parameters_changed.connect(self._on_sql_parameters_panel_changed)
         self.sql_parameters_panel.close_requested.connect(self._on_sql_parameters_panel_close_requested)
         self.show_sql_parameters_btn.clicked.connect(lambda: self.set_sql_parameters_enabled(True))
@@ -862,6 +865,13 @@ class CodeBlock(QFrame):
         self._is_focused = True
         self._update_style()
         self.focus_changed.emit(self, True)
+        # Re-sync LSP document for this block (several blocks share one client).
+        if hasattr(self, "_completion_service"):
+            self._update_document_info()
+            text = self.get_code()
+            lang = self.get_language()
+            uri = f"file:///datapyn/block_{id(self)}.{self._get_extension()}"
+            self._completion_service.open_document(uri, lang, text)
 
     def _on_focus_out(self):
         self._is_focused = False
@@ -913,7 +923,9 @@ class CodeBlock(QFrame):
         from src.editors.monaco import InlineCompletionService
         
         self._completion_service = InlineCompletionService(self)
-        
+        self._completion_request_line = 1
+        self._completion_request_column = 1
+
         # Connect completion request from Monaco to service
         self.editor.completion_requested.connect(self._on_completion_requested)
         
@@ -923,8 +935,14 @@ class CodeBlock(QFrame):
         # Connect service completion ready to Monaco with logging
         def on_completion_ready(text):
             if text:
-                self.completion_log.emit(f"[CodeBlock] Forwarding {len(text)} chars to Monaco", "info")
-            self.editor.provide_completion(text)
+                self.completion_log.emit(
+                    f"[CodeBlock] Forwarding {len(text)} chars to Monaco", "info"
+                )
+            self.editor.provide_completion(
+                text,
+                getattr(self, "_completion_request_line", 1),
+                getattr(self, "_completion_request_column", 1),
+            )
         
         self._completion_service.completion_ready.connect(on_completion_ready)
         
@@ -975,9 +993,15 @@ class CodeBlock(QFrame):
         self.set_pynia_client(client)
 
     def set_lsp_client(self, client):
-        """Deprecated: autocomplete uses Pynia API."""
+        """Attach GitHub Copilot LSP for ghost-text completions."""
         if hasattr(self, "_completion_service"):
             self._completion_service.set_lsp_client(client)
+            self._update_document_info()
+
+    def _cancel_noisy_completions(self) -> None:
+        """Drop in-flight ghost-text while the user is still typing."""
+        if hasattr(self, "_completion_service"):
+            self._completion_service.cancel_request()
 
     def _schedule_lsp_document_sync(self):
         if not hasattr(self, "_completion_service") or not self._completion_service.has_lsp:
@@ -1005,48 +1029,70 @@ class CodeBlock(QFrame):
     
     def set_python_namespace(self, namespace: dict):
         """Set Python namespace for completions (Monaco only).
-        
+
         Args:
-            namespace: Dict mapping variable names to type names
+            namespace: Runtime variables (objects) or name -> type-name strings.
         """
-        if hasattr(self, '_completion_service'):
+        if hasattr(self, "_completion_service"):
             self._completion_service.set_python_namespace(namespace)
-        # Also pass to editor for local completion
-        if hasattr(self.editor, 'set_python_namespace'):
+        if hasattr(self.editor, "set_python_namespace"):
             self.editor.set_python_namespace(namespace)
     
     def set_blocks_code_context(self, code_context: str):
         """Set code context from other blocks for completions (Monaco only).
-        
+
         Args:
             code_context: Combined code from other blocks
         """
-        if hasattr(self, '_completion_service'):
+        if hasattr(self, "_completion_service"):
             self._completion_service.set_blocks_code_context(code_context)
+
+    def set_lsp_completion_preamble(self, preamble: str, line_offset: int) -> None:
+        """Session preamble for Copilot LSP (full tab context, not shown in Monaco)."""
+        if hasattr(self, "_completion_service"):
+            self._completion_service.set_lsp_preamble(preamble, line_offset)
+
+    def apply_session_completion_context(
+        self,
+        *,
+        namespace: Optional[dict] = None,
+        global_imports: str = "",
+        blocks_code_context: str = "",
+        lsp_preamble: str = "",
+        lsp_line_offset: int = 0,
+    ) -> None:
+        """Push in-memory session context into Monaco + LSP for this block."""
+        self.set_blocks_code_context(blocks_code_context)
+        self.set_lsp_completion_preamble(lsp_preamble, lsp_line_offset)
+        if namespace is not None:
+            self.set_python_namespace(namespace)
+        if hasattr(self.editor, "set_global_imports"):
+            self.editor.set_global_imports(global_imports)
     
     def _on_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
         """Handle completion request from Monaco editor."""
-        if hasattr(self, '_completion_service'):
+        if hasattr(self, "_completion_service"):
+            self._completion_request_line = line
+            self._completion_request_column = column
             language = self.get_language()
-            
-            # Sync document with LSP before requesting completion
+
             full_text = prefix + suffix
             self._completion_service.notify_document_changed(full_text)
-            
+
             self._completion_service.request_completion(
                 prefix, suffix, language, line, column
             )
     
     def _on_force_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
         """Handle force completion request (Ctrl+.) from Monaco editor."""
-        if hasattr(self, '_completion_service'):
+        if hasattr(self, "_completion_service"):
+            self._completion_request_line = line
+            self._completion_request_column = column
             language = self.get_language()
-            
-            # Sync document with LSP before requesting completion
+
             full_text = prefix + suffix
             self._completion_service.notify_document_changed(full_text)
-            
-            # Use force_completion to bypass throttling
+
             self._completion_service.force_completion(
                 prefix, suffix, language, line, column
             )
@@ -1062,9 +1108,15 @@ class CodeBlock(QFrame):
         if hasattr(self.editor, 'force_request_completion'):
             self.editor.force_request_completion()
 
+    def _sync_syntax_dialect_to_editor(self) -> None:
+        if hasattr(self.editor, "set_sql_dialect"):
+            db_type = getattr(self.conn_panel, "_db_type", None) or ""
+            self.editor.set_sql_dialect(db_type)
+
     def _on_language_changed(self):
         lang = self.lang_combo.currentData()
         self.editor.set_language(lang)
+        self._sync_syntax_dialect_to_editor()
         self._update_connection_panel_visibility()
         self._update_style()
         self._schedule_sql_parameter_sync()
@@ -1086,6 +1138,7 @@ class CodeBlock(QFrame):
         """Connection was dragged to panel"""
         self._connection_name = connection_name
         self.conn_panel.set_connection(connection_name, db_type or None, color or None)
+        self._sync_syntax_dialect_to_editor()
         self.connection_name_changed.emit(self, connection_name)
 
     def _on_database_panel_clicked(self):
@@ -1365,6 +1418,7 @@ class CodeBlock(QFrame):
         """Set custom connection for this block"""
         self._connection_name = conn_name
         self.conn_panel.set_connection(conn_name, db_type, color)
+        self._sync_syntax_dialect_to_editor()
         self.connection_name_changed.emit(self, conn_name)
 
     def set_connection_locked(self, locked: bool):

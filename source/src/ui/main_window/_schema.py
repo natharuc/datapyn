@@ -1018,50 +1018,8 @@ class SchemaMixin:
             else:
                 ns_types[key] = type_name
 
-        # Enviar para todos os blocos Python da sessao ativa
         current_widget = self._get_current_session_widget()
-        if current_widget and hasattr(current_widget, "editor") and current_widget.editor:
-            # Collect import lines from all blocks to share as global context
-            import_lines = []
-            blocks_code_context_parts = []
-            
-            for block in current_widget.editor.get_blocks():
-                block_name = block.get_block_name() if hasattr(block, 'get_block_name') else ""
-                block_lang = block.get_language()
-                block_code = block.get_code()
-                
-                if block_lang == "python":
-                    for line in block_code.splitlines():
-                        stripped = line.strip()
-                        if stripped.startswith("import ") or stripped.startswith("from "):
-                            import_lines.append(stripped)
-                
-                # Build context for other blocks (SQL blocks create DataFrames)
-                if block_lang == "sql" and block_name:
-                    # Show that this SQL block produces a DataFrame with block_name
-                    blocks_code_context_parts.append(
-                        f"# Block '{block_name}' (SQL) creates DataFrame `{block_name}`:\n"
-                        f"# {block_code.strip()[:200]}"
-                    )
-            
-            global_imports = "\n".join(dict.fromkeys(import_lines))  # deduplicate preserving order
-            blocks_code_context = "\n\n".join(blocks_code_context_parts)
-
-            for block in current_widget.editor.get_blocks():
-                # Only pass Python namespace to Python blocks
-                block_lang = block.get_language() if hasattr(block, "get_language") else ""
-                if block_lang != "python":
-                    continue
-                    
-                # Pass namespace to completion service via block
-                if hasattr(block, "set_python_namespace"):
-                    block.set_python_namespace(ns_types)
-                elif hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
-                    block.editor.set_python_namespace(ns_types)
-                
-                # Pass blocks code context for Python completions
-                if hasattr(block, "set_blocks_code_context"):
-                    block.set_blocks_code_context(blocks_code_context)
-                
-                if hasattr(block, "editor") and hasattr(block.editor, "set_global_imports"):
-                    block.editor.set_global_imports(global_imports)
+        if current_widget and hasattr(current_widget, "editor") and hasattr(
+            current_widget.editor, "refresh_completion_context"
+        ):
+            current_widget.editor.refresh_completion_context()

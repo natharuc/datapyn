@@ -682,6 +682,11 @@ class SessionsMixin:
             elif hasattr(self, "_copilot_client") and self._copilot_client:
                 widget.editor.set_pynia_client(self._copilot_client)
 
+        # Native Copilot LSP completion (preferred over the prompt path).
+        lsp_client = getattr(self, "_lsp_client", None)
+        if lsp_client and hasattr(widget.editor, "set_lsp_client"):
+            widget.editor.set_lsp_client(lsp_client)
+
         # Criar paineis por sessao (Results, Output, Variables)
         self._create_session_panels(session.session_id)
 
@@ -990,9 +995,8 @@ class SessionsMixin:
         panel._input.setPlainText(prompt)
         panel._on_send()
         # Show the Copilot chat dock
-        if hasattr(self, "copilot_chat_dock"):
-            self.copilot_chat_dock.show()
-            self.copilot_chat_dock.raise_()
+        if hasattr(self, "copilot_dock"):
+            self.show_panel("copilot")
 
     def _on_session_focused(self, session):
         """Callback when a session is focused"""

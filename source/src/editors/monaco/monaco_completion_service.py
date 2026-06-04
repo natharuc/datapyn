@@ -60,11 +60,25 @@ def _format_sql_context_completions(raw: List[Any], prefix: str) -> List[Dict[st
     return items
 
 
+_JEDI_TO_MONACO_KIND = {
+    "function": "function",
+    "method": "method",
+    "class": "class",
+    "module": "module",
+    "instance": "variable",
+    "param": "variable",
+    "property": "property",
+    "statement": "keyword",
+    "keyword": "keyword",
+}
+
+
 def _format_python_completions(raw: List[CompletionTuple]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for comp in raw or []:
         name = comp[0] if len(comp) > 0 else ""
-        kind = comp[1] if len(comp) > 1 else "text"
+        jedi_kind = (comp[1] if len(comp) > 1 else "text") or "text"
+        kind = _JEDI_TO_MONACO_KIND.get(jedi_kind, jedi_kind if jedi_kind in _JEDI_TO_MONACO_KIND.values() else "text")
         detail = comp[2] if len(comp) > 2 else ""
         items.append({
             "label": name,

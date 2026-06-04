@@ -62,6 +62,13 @@ class CopilotMixin:
             logging.info("[MAIN] LSP client started and initializing")
             if hasattr(self, "_copilot_auth_service") and self._copilot_auth_service:
                 self._copilot_auth_service.set_lsp_client(self._lsp_client)
+            # The LSP shares the GitHub (gh) session — check status so it
+            # authenticates against the existing token (no separate sign-in
+            # needed when the user is already on Copilot).
+            try:
+                self._lsp_client.check_status(auto_sign_in=False)
+            except Exception as exc:
+                logging.warning("[MAIN] LSP check_status failed: %s", exc)
             self._update_editors_lsp_client()
         else:
             logging.warning("[MAIN] Failed to attach LSP process")
@@ -150,8 +157,14 @@ class CopilotMixin:
         self._update_editors_lsp_client()
 
     def _update_editors_lsp_client(self):
-        """Deprecated: use _update_editors_pynia_client."""
-        self._update_editors_pynia_client()
+        """Attach the native Copilot LSP client to all session editors."""
+        client = getattr(self, "_lsp_client", None)
+        if not client:
+            return
+        for i in range(self.session_tabs.count()):
+            widget = self.session_tabs.widget(i)
+            if hasattr(widget, "editor") and hasattr(widget.editor, "set_lsp_client"):
+                widget.editor.set_lsp_client(client)
 
     def _update_editors_pynia_client(self):
         """Attach Pynia agent to all session editors for inline autocomplete."""

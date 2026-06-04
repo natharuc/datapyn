@@ -110,11 +110,8 @@ PYTHON_PACKAGES = [
 
 
 def build_python_completions(variables: Optional[dict]) -> List[Dict[str, Any]]:
-    if not variables:
-        return []
-
     completions: List[Dict[str, Any]] = []
-    for var_name, var_info in variables.items():
+    for var_name, var_info in (variables or {}).items():
         if str(var_name).startswith("_"):
             continue
         var_type = type(var_info).__name__ if not isinstance(var_info, str) else var_info

@@ -40,6 +40,36 @@ def _build_namespace_header(namespace: Dict[str, Any]) -> str:
             continue
 
         try:
+            # Type-hint strings from session namespace metadata (no live object).
+            if isinstance(value, str):
+                type_name = value
+                if type_name == "DataFrame":
+                    has_pandas = True
+                    lines.append(f"{name}: pd.DataFrame = pd.DataFrame()")
+                elif type_name == "Series":
+                    has_pandas = True
+                    lines.append(f"{name}: pd.Series = pd.Series()")
+                elif type_name == "ndarray":
+                    has_numpy = True
+                    lines.append(f"{name}: np.ndarray = np.array([])")
+                elif type_name == "list":
+                    lines.append(f"{name}: list = []")
+                elif type_name == "dict":
+                    lines.append(f"{name}: dict = {{}}")
+                elif type_name == "str":
+                    lines.append(f'{name}: str = ""')
+                elif type_name in ("int", "float"):
+                    lines.append(f"{name}: {type_name} = 0")
+                elif type_name == "bool":
+                    lines.append(f"{name}: bool = False")
+                elif type_name in ("module", "function", "class"):
+                    lines.append(f"# {name}: {type_name}")
+                    lines.append(f"{name} = None")
+                else:
+                    lines.append(f"# {name}: {type_name}")
+                    lines.append(f"{name} = None")
+                continue
+
             type_name = type(value).__name__
             module = type(value).__module__
 

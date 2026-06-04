@@ -127,7 +127,12 @@ class SessionController(QObject):
             widget.editor.set_pynia_client(self._main._pynia_agent)
         elif hasattr(self._main, "_copilot_client") and self._main._copilot_client:
             widget.editor.set_pynia_client(self._main._copilot_client)
-        
+
+        # Native Copilot LSP completion (preferred over the prompt path).
+        lsp_client = getattr(self._main, "_lsp_client", None)
+        if lsp_client and hasattr(widget.editor, "set_lsp_client"):
+            widget.editor.set_lsp_client(lsp_client)
+
         # Create panels for session
         self._main._create_session_panels(session.session_id)
         

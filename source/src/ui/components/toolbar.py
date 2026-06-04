@@ -61,7 +61,7 @@ class MainToolbar(QToolBar):
     run_clicked = pyqtSignal()
     run_timer_clicked = pyqtSignal()
     pynia_clicked = pyqtSignal()
-    copilot_clicked = pyqtSignal()  # alias for pynia_clicked
+    copilot_clicked = pyqtSignal()  # legacy alias — do not connect both to the same slot
     workspace_switch_requested = pyqtSignal(str)  # path
     workspace_settings_requested = pyqtSignal()  # open settings on workspace tab
 
@@ -170,9 +170,12 @@ class MainToolbar(QToolBar):
                 background-color: rgba(86, 156, 214, 0.35);
             }}
         """)
-        self.btn_pynia.clicked.connect(self.pynia_clicked.emit)
-        self.pynia_clicked.connect(self.copilot_clicked.emit)
+        self.btn_pynia.clicked.connect(self._on_pynia_button_clicked)
         self.addWidget(self.btn_pynia)
+
+    def _on_pynia_button_clicked(self):
+        """Emit a single click signal (avoid double-toggle if both signals were wired)."""
+        self.pynia_clicked.emit()
 
     def _setup_workspace_selector(self):
         """Setup workspace dropdown selector."""

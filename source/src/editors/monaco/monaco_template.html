@@ -74,6 +74,8 @@
         // Completion tracking
         let pendingCompletionId = 0;
         let pendingCompletion = null;
+        let cachedInlineCompletion = null;
+        let cachedInlinePosition = null;
         let completionRequestSeq = 0;
         let pendingSqlCompletions = new Map();
         let pendingSqlContextCompletions = new Map();
@@ -82,7 +84,8 @@
         let pythonDebounceTimer = null;
         let sqlDebounceSeq = 0;
         let pythonDebounceSeq = 0;
-        const COMPLETION_DEBOUNCE_MS = 120;
+        const COMPLETION_DEBOUNCE_MS = 320;
+        const INLINE_SUGGEST_IDLE_MS = 900;
         const COMPLETION_TIMEOUT_MS = 2500;
         
         // Current state
@@ -166,24 +169,26 @@
                         showClasses: true,
                         showKeywords: true,
                         maxVisibleSuggestions: 12,
-                        showStatusBar: true,
-                        preview: true,
-                        previewMode: 'subwordSmart'
+                        showStatusBar: false,
+                        preview: false,
+                        previewMode: 'subwordSmart',
+                        snippetsPreventQuickSuggestions: false
                     },
                     suggestFontSize: 13,
                     suggestLineHeight: 22,
                     inlineSuggest: {
                         enabled: true,
-                        mode: 'prefix'
+                        mode: 'subword'
                     },
                     quickSuggestions: {
                         other: true,
                         comments: false,
-                        strings: false
+                        strings: true
                     },
-                    quickSuggestionsDelay: 80,
+                    quickSuggestionsDelay: 350,
                     suggestOnTriggerCharacters: true,
                     wordBasedSuggestions: 'off',
+                    parameterHints: { enabled: true },
                 });
                 
                 // Register inline completion provider for ghost text
@@ -226,12 +231,47 @@
             if (editor) editor.layout();
         }
         
+        let inlineSuggestIdleTimer = null;
+        let lastTypingAt = 0;
+
+        function scheduleIdleInlineSuggest() {
+            if (inlineSuggestIdleTimer) {
+                clearTimeout(inlineSuggestIdleTimer);
+            }
+                inlineSuggestIdleTimer = setTimeout(function() {
+                    inlineSuggestIdleTimer = null;
+                    if (!editor || !pyBridge) {
+                        return;
+                    }
+                    if (!editor.hasTextFocus()) {
+                        return;
+                    }
+                    if (Date.now() - lastTypingAt < INLINE_SUGGEST_IDLE_MS - 40) {
+                        return;
+                    }
+                const pos = editor.getPosition();
+                const model = editor.getModel();
+                if (!pos || !model) {
+                    return;
+                }
+                const line = model.getLineContent(pos.lineNumber);
+                const before = line.substring(0, pos.column - 1);
+                const trimmed = before.trim();
+                if (trimmed.length < 3 && !/[.([=]$/.test(trimmed)) {
+                    return;
+                }
+                editor.trigger('datapyn', 'editor.action.inlineSuggest.trigger', {});
+            }, INLINE_SUGGEST_IDLE_MS);
+        }
+
         function setupEventListeners() {
             // Text change listener
             editor.onDidChangeModelContent(function(e) {
                 if (pyBridge) {
                     pyBridge.onTextChanged(editor.getValue());
                 }
+                lastTypingAt = Date.now();
+                scheduleIdleInlineSuggest();
             });
             
             // Focus listeners
@@ -299,6 +339,18 @@
                     editor.getAction('editor.action.commentLine').run();
                 }
             });
+
+            // IntelliSense dropdown (methods, tables, columns)
+            editor.addAction({
+                id: 'trigger-suggest',
+                label: 'Trigger Suggest',
+                keybindings: [
+                    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space
+                ],
+                run: function() {
+                    editor.trigger('datapyn', 'editor.action.triggerSuggest', {});
+                }
+            });
         }
         
         function registerInlineCompletionProvider() {
@@ -309,6 +361,25 @@
                     provideInlineCompletions: async function(model, position, context, token) {
                         if (token.isCancellationRequested) {
                             return { items: [] };
+                        }
+
+                        if (cachedInlineCompletion && cachedInlinePosition
+                            && cachedInlinePosition.lineNumber === position.lineNumber
+                            && cachedInlinePosition.column === position.column) {
+                            const cached = cachedInlineCompletion;
+                            cachedInlineCompletion = null;
+                            cachedInlinePosition = null;
+                            return {
+                                items: [{
+                                    insertText: cached,
+                                    range: new monaco.Range(
+                                        position.lineNumber,
+                                        position.column,
+                                        position.lineNumber,
+                                        position.column
+                                    )
+                                }]
+                            };
                         }
 
                         const textBeforeCursor = model.getValueInRange({
@@ -341,17 +412,19 @@
                                 return { items: [] };
                             }
 
-                            return {
-                                items: [{
-                                    insertText: completionText,
-                                    range: new monaco.Range(
-                                        position.lineNumber,
-                                        position.column,
-                                        position.lineNumber,
-                                        position.column
-                                    )
-                                }]
+                            const item = {
+                                insertText: completionText,
+                                range: new monaco.Range(
+                                    position.lineNumber,
+                                    position.column,
+                                    position.lineNumber,
+                                    position.column
+                                )
                             };
+                            if (completionText.indexOf('\n') >= 0) {
+                                item.filterText = completionText.split('\n')[0];
+                            }
+                            return { items: [item] };
                         } catch (e) {
                             return { items: [] };
                         }
@@ -364,6 +437,27 @@
             );
         }
         
+        function deliverInlineCompletion(text, line, column) {
+            if (!text) {
+                if (pendingCompletion) {
+                    pendingCompletion.resolve('');
+                    pendingCompletion = null;
+                }
+                return;
+            }
+            if (pendingCompletion) {
+                pendingCompletion.resolve(text);
+                pendingCompletion = null;
+                return;
+            }
+            cachedInlineCompletion = text;
+            cachedInlinePosition = { lineNumber: line, column: column };
+            console.log('[Monaco] Cached orphan completion, re-triggering inline suggest');
+            if (editor && editor.hasTextFocus()) {
+                editor.trigger('datapyn', 'editor.action.inlineSuggest.trigger', {});
+            }
+        }
+
         function requestCompletion(prefix, suffix, line, column) {
             return new Promise((resolve, reject) => {
                 if (!pyBridge) {
@@ -371,17 +465,19 @@
                     reject('No Python bridge');
                     return;
                 }
-                
-                // Increment request ID
+
+                if (pendingCompletion) {
+                    pendingCompletion.resolve('');
+                    pendingCompletion = null;
+                }
+
                 pendingCompletionId++;
                 const requestId = pendingCompletionId;
-                
+
                 console.log('[Monaco] Request completion #' + requestId + ' at L' + line + ':C' + column);
-                
-                // Store resolver for callback with ID
+
                 pendingCompletion = { resolve, reject, id: requestId };
-                
-                // Request completion from Python side
+
                 pyBridge.requestCompletion(prefix, suffix, line, column);
                 
                 // Safety timeout: kept above the Python worker timeout (~6s)
@@ -397,16 +493,19 @@
             });
         }
         
-        // Called from Python to provide completion result
-        function receiveCompletion(text) {
+        function receiveCompletion(text, line, column) {
             console.log('[Monaco] Received completion: ' + (text ? text.substring(0, 50) + '...' : 'empty'));
+            let useLine = line || 0;
+            let useColumn = column || 0;
+            if (!useLine || !useColumn) {
+                const pos = editor ? editor.getPosition() : null;
+                useLine = pos ? pos.lineNumber : 1;
+                useColumn = pos ? pos.column : 1;
+            }
             if (pendingCompletion) {
                 console.log('[Monaco] Resolving completion #' + pendingCompletion.id);
-                pendingCompletion.resolve(text);
-                pendingCompletion = null;
-            } else {
-                console.log('[Monaco] No pending completion to resolve');
             }
+            deliverInlineCompletion(text, useLine, useColumn);
         }
         
         function createCompletionRequest(kind, invokeBridge) {
@@ -495,6 +594,7 @@
         }
 
         function getSortText(c) {
+            if (c.category === 'block') return '00' + (c.blockName || c.label);
             if (c.category === 'variable') return '0' + c.label;
             if (c.category === 'column') return '0' + c.label;
             if (c.category === 'routine') return '1' + c.label;
@@ -503,14 +603,26 @@
         }
 
         function toMonacoSuggestions(items, range) {
-            return (items || []).map(c => ({
-                label: c.label,
-                kind: getCompletionKind(c.kind),
-                insertText: c.insertText || c.label,
-                detail: c.detail || '',
-                range: range,
-                sortText: getSortText(c)
-            }));
+            return (items || []).map(c => {
+                const insertText = c.insertText != null ? c.insertText : c.label;
+                const suggestion = {
+                    label: c.label,
+                    kind: getCompletionKind(c.kind),
+                    insertText: insertText,
+                    detail: c.detail || '',
+                    range: range,
+                    sortText: getSortText(c)
+                };
+                // Multiline block snippets: keep full insert, filter by block name / first line
+                if (c.category === 'block') {
+                    suggestion.filterText = c.filterText || c.blockName || c.label;
+                    if (typeof insertText === 'string' && insertText.indexOf('\n') >= 0) {
+                        suggestion.insertTextRules =
+                            monaco.languages.CompletionItemInsertTextRule.None;
+                    }
+                }
+                return suggestion;
+            });
         }
 
         function mergeSuggestions(primary, secondary) {
@@ -588,6 +700,41 @@
         
         // === API Functions (called from Python) ===
         
+        function setDiagnostics(markers) {
+            if (!editor) {
+                return;
+            }
+            const model = editor.getModel();
+            if (!model) {
+                return;
+            }
+            const severityMap = {
+                error: monaco.MarkerSeverity.Error,
+                warning: monaco.MarkerSeverity.Warning,
+                info: monaco.MarkerSeverity.Info,
+                hint: monaco.MarkerSeverity.Hint
+            };
+            const mapped = (markers || []).map(function(m) {
+                const sev = severityMap[(m.severity || 'error').toLowerCase()] || monaco.MarkerSeverity.Error;
+                const startLine = m.startLineNumber || 1;
+                const startCol = m.startColumn || 1;
+                let endLine = m.endLineNumber || startLine;
+                let endCol = m.endColumn || (startCol + 1);
+                if (endLine === startLine && endCol <= startCol) {
+                    endCol = startCol + 1;
+                }
+                return {
+                    severity: sev,
+                    message: m.message || 'Syntax error',
+                    startLineNumber: startLine,
+                    startColumn: startCol,
+                    endLineNumber: endLine,
+                    endColumn: endCol
+                };
+            });
+            monaco.editor.setModelMarkers(model, 'datapyn-syntax', mapped);
+        }
+
         function setValue(text) {
             if (editor) {
                 editor.setValue(text);
@@ -816,9 +963,13 @@
                         endLineNumber: position.lineNumber,
                         endColumn: position.column
                     });
+                    const invokeSuggest = context
+                        && context.triggerKind === monaco.languages.CompletionTriggerKind.Invoke;
                     const localItems = filterPrefixMatches(
                         filterSqlCompletions(textBeforeCursor),
-                        getCurrentWordPrefix(textBeforeCursor)
+                        getCurrentWordPrefix(textBeforeCursor),
+                        80,
+                        invokeSuggest
                     );
                     const localSuggestions = toMonacoSuggestions(localItems, range);
 
@@ -850,23 +1001,28 @@
                         };
                     }
 
-                    const remote = await debouncedRemote('sql', (requestId) => {
-                        pyBridge.requestSqlCompletion(fullText, position.lineNumber, position.column, requestId);
-                    }, token);
-                    if (token.isCancellationRequested) {
-                        return { suggestions: localSuggestions };
+                    const wordLen = (word.word || '').length;
+                    if (invokeSuggest || wordLen >= 1 || dotMatch) {
+                        const remote = await debouncedRemote('sql', (requestId) => {
+                            pyBridge.requestSqlCompletion(fullText, position.lineNumber, position.column, requestId);
+                        }, token);
+                        if (token.isCancellationRequested) {
+                            return { suggestions: localSuggestions };
+                        }
+                        return {
+                            suggestions: toMonacoSuggestions(
+                                mergeSuggestions(remote, localItems),
+                                range
+                            )
+                        };
                     }
-                    return {
-                        suggestions: toMonacoSuggestions(
-                            mergeSuggestions(remote, localItems),
-                            range
-                        )
-                    };
+
+                    return { suggestions: localSuggestions };
                 }
             });
             
             monaco.languages.registerCompletionItemProvider('python', {
-                triggerCharacters: ['.'],
+                triggerCharacters: ['.', '(', '[', '@'],
                 provideCompletionItems: async function(model, position, context, token) {
                     const word = model.getWordUntilPosition(position);
                     const range = {
@@ -883,7 +1039,14 @@
                         endLineNumber: position.lineNumber,
                         endColumn: position.column
                     });
-                    const localItems = filterCompletionsByContext(textBeforeCursor, 'python');
+                    const invokeSuggest = context
+                        && context.triggerKind === monaco.languages.CompletionTriggerKind.Invoke;
+                    const localItems = filterPrefixMatches(
+                        filterCompletionsByContext(textBeforeCursor, 'python'),
+                        getCurrentWordPrefix(textBeforeCursor),
+                        80,
+                        invokeSuggest
+                    );
                     const localSuggestions = toMonacoSuggestions(localItems, range);
 
                     if (token.isCancellationRequested) {
@@ -894,7 +1057,7 @@
                     const currentLine = lines[lines.length - 1];
                     const dotMatch = currentLine.match(/(\w+)\.$/);
 
-                    if (pyBridge && (dotMatch || word.word.length >= 1)) {
+                    if (pyBridge && (dotMatch || word.word.length >= 1 || invokeSuggest)) {
                         const remote = await debouncedRemote('python', (requestId) => {
                             pyBridge.requestPythonCompletion(fullText, position.lineNumber, position.column, requestId);
                         }, token);
@@ -926,7 +1089,7 @@
             // Separate by category for faster filtering
             tableCompletions = completions.filter(c => c.category === 'table');
             columnCompletions = completions.filter(c => c.category === 'column');
-            keywordCompletions = completions.filter(c => c.kind === 'keyword');
+            keywordCompletions = completions.filter(c => c.kind === 'keyword' && c.category !== 'block');
             
             console.log('[MONACO] Filtered:', tableCompletions.length, 'tables,', columnCompletions.length, 'columns,', keywordCompletions.length, 'keywords');
             
@@ -948,13 +1111,24 @@
             return match ? match[0] : '';
         }
 
-        function filterPrefixMatches(items, prefix, limit) {
+        function filterPrefixMatches(items, prefix, limit, includeBlocksWithoutPrefix) {
             const maxItems = limit || 80;
+            const list = items || [];
             if (!prefix) {
-                return (items || []).slice(0, maxItems);
+                if (includeBlocksWithoutPrefix) {
+                    const blocks = list.filter(i => i.category === 'block');
+                    const rest = list.filter(i => i.category !== 'block');
+                    return blocks.concat(rest).slice(0, maxItems);
+                }
+                return list.filter(i => i.category !== 'block').slice(0, maxItems);
             }
-            const lower = prefix.toLowerCase();
-            return (items || []).filter(item => {
+            const lower = prefix.toLowerCase().replace(/^@+/, '');
+            return list.filter(item => {
+                if (item.category === 'block') {
+                    const name = String(item.blockName || item.filterText || '').toLowerCase();
+                    const label = String(item.label || '').toLowerCase();
+                    return !lower || name.startsWith(lower) || label.includes(lower);
+                }
                 const label = String(item.label || '').toLowerCase();
                 return label.startsWith(lower);
             }).slice(0, maxItems);
@@ -1028,6 +1202,7 @@
                 'property': monaco.languages.CompletionItemKind.Property,
                 'method': monaco.languages.CompletionItemKind.Method,
                 'field': monaco.languages.CompletionItemKind.Field,
+                'snippet': monaco.languages.CompletionItemKind.Snippet,
                 'text': monaco.languages.CompletionItemKind.Text
             };
             return kinds[kind] || monaco.languages.CompletionItemKind.Text;
