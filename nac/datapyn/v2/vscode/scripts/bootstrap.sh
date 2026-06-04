@@ -33,5 +33,5 @@ echo "[datapyn-v2] Merging product.json (DataPyn branding)"
 python3 "$ROOT/scripts/merge_product_json.py" "$ROOT/product.json" "$CHECKOUT/product.json"
 
 echo "[datapyn-v2] Bootstrap done."
-echo "  Next: cd $CHECKOUT && yarn && yarn compile"
+echo "  Next: ./scripts/build.sh   (uses Node from checkout/.nvmrc via nvm)"
 echo "  Run:  $CHECKOUT/scripts/code.sh   (Linux)  or  scripts\\\\code.bat  (Windows)"

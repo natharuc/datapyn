@@ -1,51 +1,41 @@
 # DataPyn v2 (monorepo)
 
-**Produto:** aplicativo desktop = **fork do VS Code** (nova janela, workbench Electron), não extensão para VS Code.
+**Produto = fork do VS Code** em [`vscode/`](vscode/README.md) — aplicativo **DataPyn**, não extensão Marketplace.
 
 | Decisão | Escolha |
 |---------|---------|
-| Formato de análise | **`.dpw`** (mesmo JSON do v1) |
-| Documento | **Um `.dpw` = vários blocos** SQL, Python ou mistos |
-| Layout do repo | **`nac/datapyn/v2/`** |
+| Formato | **`.dpw`** (igual v1) |
+| Blocos | SQL, Python ou mistos no mesmo arquivo |
+| Código v2 | `nac/datapyn/v2/` |
 
-Plano: [`docs/DATAPYN_V2_MIGRATION_PLAN.md`](../../../docs/DATAPYN_V2_MIGRATION_PLAN.md)
-
-## Estrutura
-
-```
-nac/datapyn/v2/
-├── vscode/       ← FORK Code-OSS = a “tela nova” (produto)
-├── extension/    ← extensão built-in (embutida no fork, não Marketplace)
-├── runtime/      ← motor Python
-└── cli/          ← migrate / headless
-```
-
-## O que confundir
-
-| Você pediu | O que o PoC inicial parecia |
-|------------|----------------------------|
-| Fork VS Code → app **DataPyn** | Extensão `.vsix` no VS Code normal |
-
-O código em `extension/` continua válido: é o módulo **interno** do fork (`extensions/datapyn`), ligado pelo [`vscode/scripts/bootstrap.sh`](vscode/scripts/bootstrap.sh).
-
-## Começar (fork)
+## Quick start (Linux)
 
 ```bash
 cd nac/datapyn/v2/runtime && uv sync --dev
-cd ../vscode && chmod +x scripts/*.sh && ./scripts/bootstrap.sh
-# depois: ./scripts/build.sh  (longo)
-# ./checkout/scripts/code.sh
+cd ../vscode && chmod +x scripts/*.sh
+./scripts/bootstrap.sh
+./scripts/build.sh          # corrigido: Node 24 + npm
+./scripts/run.sh            # abre o fork
 ```
 
-Ver [`vscode/README.md`](vscode/README.md).
+## Estrutura
+
+| Pasta | Papel |
+|-------|--------|
+| **`vscode/`** | Fork Code-OSS — **a tela nova** |
+| `extension/` | Código built-in (`extensions/datapyn` no fork) |
+| `runtime/` | Motor Python JSON-RPC |
+| `cli/` | migrate / headless (futuro) |
+
+Plano: [`docs/DATAPYN_V2_MIGRATION_PLAN.md`](../../../docs/DATAPYN_V2_MIGRATION_PLAN.md)
 
 ## Status
 
 | Componente | Estado |
 |------------|--------|
-| `vscode/` | bootstrap + product.json + scripts de build |
-| `runtime/` | PoC JSON-RPC + `execute_sql` |
-| `extension/` | PoC built-in (comandos); entra no fork via symlink |
+| `vscode/` | bootstrap + **build OK** + `run.sh` |
+| `runtime/` | PoC `execute_sql` + testes |
+| `extension/` | PoC built-in no fork |
 | `cli/` | scaffold |
 
-v1 PyQt permanece em `source/` até EOL.
+v1 PyQt: `source/`

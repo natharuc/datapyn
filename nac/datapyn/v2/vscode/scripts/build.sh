@@ -6,23 +6,32 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 V2_ROOT="$(cd "$ROOT/.." && pwd)"
 CHECKOUT="${VSCODE_CHECKOUT:-$ROOT/checkout}"
 
+# VS Code upstream requires Node major from checkout/.nvmrc (currently 24.x)
+# shellcheck source=/dev/null
+. "$ROOT/scripts/use-node.sh"
+
 if [[ ! -d "$CHECKOUT" ]]; then
   echo "[datapyn-v2] Run bootstrap first: $ROOT/scripts/bootstrap.sh" >&2
   exit 1
 fi
 
+NPM="${DATAPYN_NODE%/*}/npm"
+if [[ ! -x "$NPM" ]]; then
+  NPM="$(command -v npm)"
+fi
+
 echo "[datapyn-v2] Compile built-in extension"
 cd "$V2_ROOT/extension"
-npm install
-npm run compile
+"$NPM" install
+"$NPM" run compile
 
-echo "[datapyn-v2] Compile VS Code (this takes a long time on first run)"
+echo "[datapyn-v2] Install + compile VS Code (first run takes a long time)"
 cd "$CHECKOUT"
-if ! command -v yarn >/dev/null 2>&1; then
-  echo "[datapyn-v2] ERROR: yarn is required (Node 18+)." >&2
-  exit 1
-fi
-yarn
-yarn compile
+echo "[datapyn-v2] npm $($NPM -v) + node $($DATAPYN_NODE -v)"
+
+# Upstream vscode no longer supports yarn; npm must be < 12 (bundled with Node 24 is ok).
+export npm_config_user_agent="npm/11.0.0"
+"$NPM" install --no-audit --no-fund
+"$NPM" run compile
 
 echo "[datapyn-v2] Build finished. Launch: $CHECKOUT/scripts/code.sh"
