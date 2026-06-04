@@ -2,14 +2,11 @@
 Toolbar principal da aplicacao
 """
 
-import os
-import re
-
 from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy, QComboBox
-from PyQt6.QtCore import pyqtSignal, QSize, Qt, QByteArray
-from PyQt6.QtGui import QIcon, QPixmap, QPainter
-from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtCore import pyqtSignal, QSize, Qt
 import qtawesome as qta
+
+from src.assets.pynia_branding import load_pynia_logo
 
 from src.language import S
 from src.core.workspace_service import get_workspace_service
@@ -17,40 +14,6 @@ from src.core.workspace_service import get_workspace_service
 # Default color for all toolbar icons (consistent)
 _ICON_COLOR = "#b0b0b0"
 _ICON_HOVER = "#ffffff"
-
-
-def _load_pynia_icon(color: str, size: int = 20) -> QIcon:
-    """Load Pynia mark icon with custom color."""
-    try:
-        # Get path relative to this file (ui/components -> ui -> src -> assets/icons)
-        components_dir = os.path.dirname(os.path.abspath(__file__))
-        ui_dir = os.path.dirname(components_dir)
-        src_dir = os.path.dirname(ui_dir)
-        svg_path = os.path.join(src_dir, "assets", "icons", "pynia_icon.svg")
-
-        with open(svg_path, "r", encoding="utf-8") as f:
-            svg_content = f.read()
-
-        # Replace all fill colors
-        svg_content = re.sub(r"fill\s*:\s*#[0-9a-fA-F]{3,6}", f"fill:{color}", svg_content)
-        svg_content = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg_content)
-
-        svg_bytes = QByteArray(svg_content.encode("utf-8"))
-        renderer = QSvgRenderer(svg_bytes)
-
-        if not renderer.isValid():
-            return None
-
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-
-        painter = QPainter(pixmap)
-        renderer.render(painter)
-        painter.end()
-
-        return QIcon(pixmap)
-    except Exception:
-        return None
 
 
 class MainToolbar(QToolBar):
@@ -149,7 +112,7 @@ class MainToolbar(QToolBar):
         # Pynia button (right side) - icon only
         self.btn_pynia = QPushButton()
         self.btn_copilot = self.btn_pynia  # backward compat
-        pynia_icon = _load_pynia_icon("#9cdcfe", size=18)
+        pynia_icon = load_pynia_logo(18)
         if pynia_icon:
             self.btn_pynia.setIcon(pynia_icon)
         else:

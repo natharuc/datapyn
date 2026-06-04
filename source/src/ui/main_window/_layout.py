@@ -128,6 +128,11 @@ class LayoutMixin:
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
         self.copilot_dock.setMinimumWidth(280)
         self.copilot_dock.setMinimumHeight(200)
+        from src.assets.pynia_branding import load_pynia_logo
+
+        pynia_dock_icon = load_pynia_logo(16)
+        if pynia_dock_icon:
+            self.copilot_dock.setWindowIcon(pynia_dock_icon)
         self.copilot_dock.visibilityChanged.connect(
             lambda _visible: QTimer.singleShot(0, self._reposition_tab_accessories)
         )
@@ -142,6 +147,8 @@ class LayoutMixin:
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.copilot_output_dock)
         self.copilot_output_dock.setMinimumWidth(200)
         self.copilot_output_dock.setMinimumHeight(150)
+        if pynia_dock_icon:
+            self.copilot_output_dock.setWindowIcon(pynia_dock_icon)
 
         # Connect Copilot signals to output panel
         self._connect_copilot_to_output()

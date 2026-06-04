@@ -649,6 +649,25 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(4, 4, 4, 12)
         layout.setSpacing(14)
 
+        from src.assets.pynia_branding import load_pynia_logo
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+        logo_label = QLabel()
+        logo_label.setFixedSize(40, 40)
+        logo_icon = load_pynia_logo(40)
+        if logo_icon:
+            logo_label.setPixmap(logo_icon.pixmap(40, 40))
+        header_row.addWidget(logo_label)
+        title_label = QLabel(
+            S.pynia.title if hasattr(S, "pynia") else "Pynia"
+        )
+        title_label.setStyleSheet(
+            f"color: {colors.text_primary}; font-size: 18px; font-weight: 600;"
+        )
+        header_row.addWidget(title_label, 1)
+        layout.addLayout(header_row)
+
         intro = QLabel(
             S.pynia.settings_intro if hasattr(S, "pynia") else "Configure Pynia AI connectors."
         )
@@ -829,7 +848,9 @@ class SettingsDialog(QDialog):
         self._refresh_pynia_autocomplete_status()
 
         tab_title = S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia"
-        self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
+        tab_index = self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
+        if logo_icon:
+            self.tabs.setTabIcon(tab_index, logo_icon)
 
     def _refresh_pynia_autocomplete_status(self) -> None:
         from src.services.pynia.settings import get_provider_secret

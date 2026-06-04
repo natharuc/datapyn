@@ -506,7 +506,12 @@ class UISetupMixin:
         pynia_menu = tools_menu.addMenu(
             S.menu.pynia_submenu if hasattr(S.menu, "pynia_submenu") else "Pynia"
         )
-        if HAS_QTAWESOME:
+        from src.assets.pynia_branding import load_pynia_logo
+
+        pynia_menu_icon = load_pynia_logo(16)
+        if pynia_menu_icon:
+            pynia_menu.setIcon(pynia_menu_icon)
+        elif HAS_QTAWESOME:
             pynia_menu.setIcon(qta.icon("mdi.robot", color="#b0b0b0"))
         open_pynia_action = QAction(
             S.menu.pynia_open_chat if hasattr(S.menu, "pynia_open_chat") else "Open Pynia Chat",

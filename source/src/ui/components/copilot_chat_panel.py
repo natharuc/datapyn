@@ -65,39 +65,16 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def _load_pynia_icon(color: str, size: int = 20) -> QIcon:
-    """Load Pynia mark icon (SVG) with custom color."""
-    try:
-        # Get path relative to this file (ui/components -> ui -> src -> assets/icons)
-        components_dir = os.path.dirname(os.path.abspath(__file__))
-        ui_dir = os.path.dirname(components_dir)
-        src_dir = os.path.dirname(ui_dir)
-        svg_path = os.path.join(src_dir, "assets", "icons", "pynia_icon.svg")
+def _load_pynia_icon(color: str = "", size: int = 20) -> QIcon | None:
+    """Load official Pynia logo (backward-compatible helper)."""
+    from src.assets.pynia_branding import load_pynia_icon
 
-        with open(svg_path, "r", encoding="utf-8") as f:
-            svg_content = f.read()
-
-        # Replace all fill colors
-        svg_content = re.sub(r"fill\s*:\s*#[0-9a-fA-F]{3,6}", f"fill:{color}", svg_content)
-        svg_content = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg_content)
-
-        svg_bytes = QByteArray(svg_content.encode("utf-8"))
-        renderer = QSvgRenderer(svg_bytes)
-
-        if not renderer.isValid():
-            return None
-
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-
-        painter = QPainter(pixmap)
-        renderer.render(painter)
-        painter.end()
-
-        return QIcon(pixmap)
-    except Exception as e:
-        logger.error(f"Failed to load Pynia icon: {e}")
-        return None
+    icon = load_pynia_icon(size, color=None)
+    if icon is not None:
+        return icon
+    if color:
+        return load_pynia_icon(size, color=color)
+    return None
 
 
 class ModelItemDelegate(QStyledItemDelegate):
@@ -2247,6 +2224,9 @@ class PyniaChatPanel(QWidget):
         self._run_chat_js(
             f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(S.pynia.welcome_message)})"
         )
+        from src.assets.pynia_branding import pynia_logo_data_uri
+
+        self._run_chat_js(f"setWelcomeLogo({json.dumps(pynia_logo_data_uri())})")
         self._apply_theme()
         self._sync_all_web_state()
         self._try_begin_auto_auth_on_open()

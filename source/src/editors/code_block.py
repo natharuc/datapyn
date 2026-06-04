@@ -651,13 +651,14 @@ class CodeBlock(QFrame):
         copilot_ind_layout = QHBoxLayout(self._copilot_indicator)
         copilot_ind_layout.setContentsMargins(4, 0, 4, 0)
         copilot_ind_layout.setSpacing(4)
-        self._copilot_icon = qta.IconWidget()
-        self._copilot_icon.setFixedSize(14, 14)
-        copilot_sparkle = qta.icon(
-            "mdi.creation",
-            color="#b48ead",
-        )
-        self._copilot_icon.setIcon(copilot_sparkle)
+        self._copilot_icon = QLabel()
+        self._copilot_icon.setFixedSize(16, 16)
+        self._copilot_icon.setScaledContents(True)
+        from src.assets.pynia_branding import load_pynia_logo
+
+        pynia_logo = load_pynia_logo(16)
+        if pynia_logo:
+            self._copilot_icon.setPixmap(pynia_logo.pixmap(16, 16))
         copilot_ind_layout.addWidget(self._copilot_icon)
         label_text = getattr(S.block, "pynia_editing", None) or getattr(
             S.block, "copilot_editing", "Pynia editing..."
@@ -1467,23 +1468,15 @@ class CodeBlock(QFrame):
         self._is_copilot_editing = editing
         self._copilot_indicator.setVisible(editing)
         
-        # Start/stop animation on the icon
-        if editing:
-            if self._copilot_animation is not None:
-                self._copilot_animation.stop()
-            self._copilot_animation = qta.Spin(self._copilot_icon)
-            animated_icon = qta.icon(
-                "mdi.creation",
-                color="#b48ead",
-                animation=self._copilot_animation,
-            )
-            self._copilot_icon.setIcon(animated_icon)
-        else:
-            if self._copilot_animation is not None:
-                self._copilot_animation.stop()
-                self._copilot_animation = None
-            static_icon = qta.icon("mdi.creation", color="#b48ead")
-            self._copilot_icon.setIcon(static_icon)
+        if self._copilot_animation is not None:
+            self._copilot_animation.stop()
+            self._copilot_animation = None
+        if editing and hasattr(self._copilot_icon, "setPixmap"):
+            from src.assets.pynia_branding import load_pynia_logo
+
+            logo = load_pynia_logo(16)
+            if logo:
+                self._copilot_icon.setPixmap(logo.pixmap(16, 16))
         
         self._update_style()
         
