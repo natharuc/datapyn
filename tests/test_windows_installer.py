@@ -12,6 +12,7 @@ from src.services.windows_installer import (
     _build_uninstall_command,
     _display_icon_value,
     compare_versions,
+    detect_existing_installation,
     find_windows_zip_asset,
     install_from_zip,
     is_newer_version,
@@ -74,6 +75,29 @@ class TestZipInstall:
         install_dir.mkdir()
         write_installed_version(install_dir, "9.8.7")
         assert read_installed_version(install_dir) == "9.8.7"
+
+
+class TestDetectInstallation:
+    def test_detect_fresh_default_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "src.services.windows_installer.DEFAULT_INSTALL_DIR",
+            tmp_path / "DataPyn",
+        )
+        monkeypatch.setattr("src.services.windows_installer.get_install_dir", lambda: None)
+        installed, path, version = detect_existing_installation()
+        assert installed is False
+        assert path == tmp_path / "DataPyn"
+        assert version is None
+
+    def test_detect_from_manifest(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        write_installed_version(install_dir, "3.2.1")
+        monkeypatch.setattr("src.services.windows_installer.get_install_dir", lambda: install_dir)
+        installed, path, version = detect_existing_installation()
+        assert installed is True
+        assert path == install_dir
+        assert version == "3.2.1"
 
 
 class TestUninstallRegistry:

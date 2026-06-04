@@ -14,7 +14,9 @@ uv run pyinstaller installer/datapyn_setup.spec --clean
 
 | Command | Description |
 |---------|-------------|
-| `DataPyn-Setup.exe` | Fresh install (default `%LOCALAPPDATA%\DataPyn`) |
+| `DataPyn-Setup.exe` | Fresh install, or **Reparar** if an install is already detected |
+| `DataPyn-Setup.exe --repair` | Re-download latest ZIP and replace files (waits for DataPyn to close) |
+| `DataPyn-Setup.exe --repair --dir <path>` | Repair a custom install folder |
 | `DataPyn-Setup.exe --update <zip> --version 1.2.3 --dir <path>` | Silent upgrade from downloaded ZIP |
 | `DataPyn-Setup.exe --uninstall` | Remove install dir, shortcuts, registry |
 
