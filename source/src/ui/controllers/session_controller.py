@@ -123,14 +123,16 @@ class SessionController(QObject):
         """Creates widget for a session and adds it to a tab"""
         widget = SessionWidget(session, theme_manager=self.theme_manager)
         
-        # Pass Copilot client to BlockEditor for inline completions
-        if hasattr(self._main, "_copilot_client") and self._main._copilot_client:
-            widget.editor.set_copilot_client(self._main._copilot_client)
-        
-        # Pass LSP client if available
-        if hasattr(self._main, "_lsp_client") and self._main._lsp_client:
-            widget.editor.set_lsp_client(self._main._lsp_client)
-        
+        if hasattr(self._main, "_pynia_agent") and self._main._pynia_agent:
+            widget.editor.set_pynia_client(self._main._pynia_agent)
+        elif hasattr(self._main, "_copilot_client") and self._main._copilot_client:
+            widget.editor.set_pynia_client(self._main._copilot_client)
+
+        # Native Copilot LSP completion (preferred over the prompt path).
+        lsp_client = getattr(self._main, "_lsp_client", None)
+        if lsp_client and hasattr(widget.editor, "set_lsp_client"):
+            widget.editor.set_lsp_client(lsp_client)
+
         # Create panels for session
         self._main._create_session_panels(session.session_id)
         
@@ -214,6 +216,9 @@ class SessionController(QObject):
         # Editor modification tracking
         widget.editor.content_changed.connect(
             lambda w=widget: self._main._on_editor_modified(w)
+        )
+        widget.editor.content_changed.connect(
+            lambda w=widget: self._main._schedule_cross_database_schema_sync(w)
         )
         
         # Namespace changes (for autocomplete)
@@ -403,8 +408,6 @@ class SessionController(QObject):
             insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
             tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
             
-            self.session_tabs._setup_close_button(tab_index)
-            
             # Apply tab color
             if session.connection_name:
                 config = self.connection_manager.get_connection_config(session.connection_name)
@@ -518,11 +521,6 @@ class SessionController(QObject):
     def on_tab_changed(self, index: int):
         """Handle tab changed event"""
         if self._restoring_sessions or self._creating_session or self._closing_session:
-            return
-        
-        # "+" tab creates new session
-        if self.session_tabs.tabText(index).strip() == "+":
-            self.new_session()
             return
         
         widget = self.session_tabs.widget(index)

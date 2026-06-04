@@ -26,6 +26,7 @@ class MonacoBridge(QObject):
     execute_requested = pyqtSignal(str)  # selected_text (empty if no selection)
     completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column
     force_completion_requested = pyqtSignal(str, str, int, int)  # prefix, suffix, line, column (bypasses throttling)
+    cancel_inline_completion = pyqtSignal()
     
     # SQL context-aware completion request (for dot patterns)
     sql_context_requested = pyqtSignal(str, str, int, int, int)  # full_text, prefix, line, column, request_id
@@ -51,6 +52,11 @@ class MonacoBridge(QObject):
     def onTextChanged(self, text: str):
         """Called when editor text changes."""
         self.text_changed.emit(text)
+
+    @pyqtSlot()
+    def cancelInlineCompletion(self):
+        """Called from JS when the user types — drop stale ghost-text requests."""
+        self.cancel_inline_completion.emit()
     
     @pyqtSlot()
     def onFocusIn(self):

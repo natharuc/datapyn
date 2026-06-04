@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +60,25 @@ def _format_sql_context_completions(raw: List[Any], prefix: str) -> List[Dict[st
     return items
 
 
+_JEDI_TO_MONACO_KIND = {
+    "function": "function",
+    "method": "method",
+    "class": "class",
+    "module": "module",
+    "instance": "variable",
+    "param": "variable",
+    "property": "property",
+    "statement": "keyword",
+    "keyword": "keyword",
+}
+
+
 def _format_python_completions(raw: List[CompletionTuple]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for comp in raw or []:
         name = comp[0] if len(comp) > 0 else ""
-        kind = comp[1] if len(comp) > 1 else "text"
+        jedi_kind = (comp[1] if len(comp) > 1 else "text") or "text"
+        kind = _JEDI_TO_MONACO_KIND.get(jedi_kind, jedi_kind if jedi_kind in _JEDI_TO_MONACO_KIND.values() else "text")
         detail = comp[2] if len(comp) > 2 else ""
         items.append({
             "label": name,
@@ -137,7 +151,7 @@ class _CompletionWorker(QThread):
             else:
                 payload = []
         except Exception as exc:
-            logger.debug("Completion worker error (%s): %s", self.kind, exc)
+            logger.warning("Completion worker error (%s): %s", self.kind, exc)
             payload = []
 
         if self.isInterruptionRequested():
@@ -158,6 +172,12 @@ class MonacoCompletionService(QObject):
         self._namespace: Dict[str, Any] = {}
         self._global_imports = ""
         self._worker: Optional[_CompletionWorker] = None
+        self._context_worker: Optional[_CompletionWorker] = None
+        self._pending: Optional[tuple] = None
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(80)
+        self._debounce_timer.timeout.connect(self._start_pending_worker)
 
     def set_sql_schema(self, schema: Dict[str, Any]) -> None:
         self._schema = schema or {}
@@ -167,7 +187,10 @@ class MonacoCompletionService(QObject):
         self._global_imports = global_imports or ""
 
     def cancel(self) -> None:
+        self._debounce_timer.stop()
+        self._pending = None
         self._stop_worker()
+        self._stop_context_worker()
 
     def request_sql_completions(self, request_id: int, full_text: str, line: int, column: int) -> None:
         self._start_worker(
@@ -198,7 +221,21 @@ class MonacoCompletionService(QObject):
         )
 
     def _start_worker(self, request_id: int, kind: str, **kwargs) -> None:
-        self._stop_worker()
+        self._pending = (request_id, kind, kwargs)
+        # Alias/table dot completions must feel instant (Monaco already debounces).
+        if kind == "sql_context":
+            self._debounce_timer.stop()
+            self._start_pending_worker()
+            return
+        self._debounce_timer.start()
+
+    def _start_pending_worker(self) -> None:
+        pending = self._pending
+        if not pending:
+            return
+        request_id, kind, kwargs = pending
+        self._pending = None
+
         worker = _CompletionWorker(
             request_id,
             kind,
@@ -209,7 +246,16 @@ class MonacoCompletionService(QObject):
             **kwargs,
         )
         worker.result_ready.connect(self._on_worker_result)
-        worker.finished.connect(lambda: self._finalize_worker(worker))
+
+        if kind == "sql_context":
+            self._stop_context_worker()
+            worker.finished.connect(lambda w=worker: self._finalize_context_worker(w))
+            self._context_worker = worker
+            worker.start()
+            return
+
+        self._stop_worker()
+        worker.finished.connect(lambda w=worker: self._finalize_worker(w))
         self._worker = worker
         worker.start()
 
@@ -226,11 +272,30 @@ class MonacoCompletionService(QObject):
             self._worker = None
         worker.deleteLater()
 
+    def _finalize_context_worker(self, worker: _CompletionWorker) -> None:
+        if self._context_worker is worker:
+            self._context_worker = None
+        worker.deleteLater()
+
     def _stop_worker(self) -> None:
         worker = self._worker
         if worker is None:
             return
         self._worker = None
+        try:
+            worker.result_ready.disconnect(self._on_worker_result)
+        except (TypeError, RuntimeError):
+            pass
+        if worker.isRunning():
+            worker.requestInterruption()
+            return
+        worker.deleteLater()
+
+    def _stop_context_worker(self) -> None:
+        worker = self._context_worker
+        if worker is None:
+            return
+        self._context_worker = None
         try:
             worker.result_ready.disconnect(self._on_worker_result)
         except (TypeError, RuntimeError):

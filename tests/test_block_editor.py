@@ -1485,11 +1485,12 @@ class TestBlockActiveToggle:
         assert block.is_active() is True
 
     def test_inactive_block_editor_disabled(self, block):
-        """Editor deve ficar desabilitado quando bloco inativo"""
+        """Bloco inativo fica somente leitura (container permanece habilitado para Monaco)."""
         block.set_active(False)
-        assert block.editor_container.isEnabled() is False
-        block.set_active(True)
         assert block.editor_container.isEnabled() is True
+        assert getattr(block.editor, "_read_only", False) is True
+        block.set_active(True)
+        assert getattr(block.editor, "_read_only", True) is False
 
     def test_to_dict_saves_active_state(self, block):
         """to_dict deve salvar estado ativo"""

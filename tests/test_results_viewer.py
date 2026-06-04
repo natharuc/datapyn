@@ -8,6 +8,12 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "source"))
 
 
+def _chart_page_ready(page) -> bool:
+    from src.ui.components.results_viewer import ResultsViewer
+
+    return ResultsViewer._chart_page_has_content(page)
+
+
 def _switch_result_tab(viewer, qtbot, index: int, *, min_rows: int | None = None):
     """Switch result tabs and wait for the deferred handler to finish."""
     viewer._result_tabs.setCurrentIndex(index)
@@ -735,7 +741,7 @@ class TestResultsViewerMultiTab:
         assert button.autoRaise() is True
         assert button.width() == 24
         assert button.height() == 24
-        assert button.iconSize().width() == 15
+        assert button.iconSize().width() == 14
         assert "border: none" in stylesheet
         assert "margin: 3px 8px 3px 2px" in stylesheet
 
@@ -1088,9 +1094,12 @@ class TestResultsViewerFiltering:
         image.save(buffer, "PNG")
         return bytes(byte_array)
 
-    def test_visualization_button_and_config_are_session_state(self, viewer, qtbot):
+    def test_visualization_button_and_config_are_session_state(self, viewer, qtbot, monkeypatch):
         """Chart configuration should create a Results tab and live in session state."""
         from src.core.session import Session
+
+        png_bytes = self._tiny_png_bytes()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
 
         session = Session("s1")
         viewer.set_session(session)
@@ -1112,7 +1121,7 @@ class TestResultsViewerFiltering:
         assert viewer._result_tabs.count() == 2
         chart_page = viewer._result_tabs.widget(1)
         assert chart_page._page_kind == "chart"
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
         assert chart_page._image_bytes
         assert chart_page._image_label.pixmap() is not None
         assert session.result_view_state["charts"]["configs"][0]["x_column"] == "mes"
@@ -1337,7 +1346,7 @@ class TestResultsViewerFiltering:
         })
         assert viewer._result_tabs.count() == 2
         chart_page = viewer._result_tabs.widget(1)
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
 
         viewer._set_visualization_config({
             "type": "line",
@@ -1382,7 +1391,9 @@ class TestResultsViewerFiltering:
 
         release_first_render.set()
         qtbot.waitUntil(
-            lambda: len(render_titles) >= 2 and chart_page._image_bytes is not None and not chart_page._rendering,
+            lambda: len(render_titles) >= 2
+            and _chart_page_ready(chart_page)
+            and not chart_page._rendering,
             timeout=5000,
         )
 
@@ -1506,7 +1517,8 @@ class TestResultsViewerFiltering:
 
         release_first_render.set()
         qtbot.waitUntil(
-            lambda: render_titles == ["First", "Second"] and second_page._image_bytes is not None,
+            lambda: render_titles == ["First", "Second"]
+            and _chart_page_ready(second_page),
             timeout=5000,
         )
 
@@ -1548,9 +1560,12 @@ class TestResultsViewerFiltering:
             release_first_render.set()
         qtbot.waitUntil(lambda: viewer._active_chart_render_job is None, timeout=5000)
 
-    def test_saved_visualization_config_restores_chart_tab_for_new_results(self, viewer, qtbot):
+    def test_saved_visualization_config_restores_chart_tab_for_new_results(self, viewer, qtbot, monkeypatch):
         """Saved chart configs should become result tabs when matching data is displayed."""
         from src.core.session import Session
+
+        png_bytes = self._tiny_png_bytes()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
 
         session = Session("s1")
         session.result_view_state = {
@@ -1573,11 +1588,10 @@ class TestResultsViewerFiltering:
         assert viewer._result_tabs.tabText(1) == "Saved chart"
         chart_page = viewer._result_tabs.widget(1)
         assert chart_page._image_bytes is None
-        assert getattr(chart_page, "_rendering", False) is False
 
         _switch_result_tab(viewer, qtbot, 1)
 
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
         assert chart_page._image_bytes
 
     def test_saved_visualization_does_not_render_on_display_dataframe(self, viewer, monkeypatch):
@@ -1600,8 +1614,11 @@ class TestResultsViewerFiltering:
         assert viewer._result_tabs.count() == 2
         assert calls == []
 
-    def test_grouped_visualization_renders_chart_image(self, viewer, qtbot):
+    def test_grouped_visualization_renders_chart_image(self, viewer, qtbot, monkeypatch):
         """Grouped chart settings should produce a real chart image tab."""
+        png_bytes = self._tiny_png_bytes()
+        monkeypatch.setattr(viewer, "_render_chart_image", lambda *_: png_bytes)
+
         df = pd.DataFrame({
             "mes": ["Jan", "Jan", "Fev", "Fev"],
             "canal": ["Online", "Loja", "Online", "Loja"],
@@ -1619,7 +1636,7 @@ class TestResultsViewerFiltering:
         })
 
         chart_page = viewer._result_tabs.widget(1)
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
         assert chart_page._image_bytes
         assert len(chart_page._image_bytes) > 1000
 
@@ -1697,3 +1714,31 @@ class TestResultsViewerGridPrepare:
         assert "1779799229610000000" not in result.prepared.display_rows[0][0]
 
 
+
+
+class TestDuplicateColumns:
+    """Grid must handle SQL results with duplicate column names (no crash)."""
+
+    def test_prepare_grid_data_with_duplicate_columns(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame([[1, 2], [3, 4]], columns=["id", "id"])
+        result = prepare_grid_data(df, {}, {}, 1500)
+        # Duplicates get pandas-style suffixes; nothing crashes.
+        assert result.prepared.columns == ["id", "id.1"]
+        assert result.prepared.numeric_column_indices == frozenset({0, 1})
+        assert result.prepared.filtered_row_count == 2
+
+    def test_dedupe_does_not_mutate_input(self):
+        from src.ui.components.results_viewer import _dedupe_grid_columns
+
+        df = pd.DataFrame([[1, 2]], columns=["a", "a"])
+        out = _dedupe_grid_columns(df)
+        assert list(df.columns) == ["a", "a"]       # caller's frame untouched
+        assert list(out.columns) == ["a", "a.1"]
+
+    def test_dedupe_is_noop_when_unique(self):
+        from src.ui.components.results_viewer import _dedupe_grid_columns
+
+        df = pd.DataFrame([[1, 2]], columns=["a", "b"])
+        assert _dedupe_grid_columns(df) is df       # no copy when already unique

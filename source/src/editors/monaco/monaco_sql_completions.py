@@ -27,45 +27,64 @@ def build_sql_completions(schema: Optional[dict]) -> List[Dict[str, Any]]:
         if isinstance(table, dict):
             table_name = table.get("name", "")
             table_schema = table.get("schema", "")
+            table_database = table.get("database", "") or table.get("catalog", "")
             table_type = table.get("type", "TABLE")
-            detail = f"{table_schema}.{table_name}" if table_schema else table_name
+            if table_database and table_schema:
+                detail = f"{table_database}.{table_schema}.{table_name}"
+            elif table_database:
+                detail = f"{table_database}..{table_name}"
+            elif table_schema:
+                detail = f"{table_schema}.{table_name}"
+            else:
+                detail = table_name
             detail = f"view: {detail}" if table_type == "VIEW" else f"table: {detail}"
         else:
             table_name = str(table)
+            table_database = ""
             detail = "table"
 
         if table_name:
+            filter_text = table_name
+            if table_database:
+                filter_text = f"{table_database}..{table_name}"
             completions.append({
                 "label": table_name,
                 "kind": "property",
                 "insertText": table_name,
                 "detail": detail,
                 "category": "table",
+                "database": table_database,
+                "filterText": filter_text,
             })
 
-    for table_name, column_list in (schema.get("columns") or {}).items():
+    # Offline cache (main): all columns for instant suggest + columnsByTable in JS.
+    # Python SqlAutoCompleteService still enriches with aliases/joins/context.
+    for table_key, column_list in (schema.get("columns") or {}).items():
+        bare_table = str(table_key).split(".")[-1] if table_key else ""
         for column in column_list or []:
             if isinstance(column, dict):
                 column_name = column.get("name", "")
-                column_type = column.get("type", "")
+                column_type = column.get("type", "") or column.get("display_type", "")
                 detail = (
-                    f"{table_name}.{column_name} ({column_type})"
+                    f"{table_key}.{column_name} ({column_type})"
                     if column_type
-                    else f"{table_name}.{column_name}"
+                    else f"{table_key}.{column_name}"
                 )
             else:
                 column_name = str(column)
-                detail = f"{table_name}.{column_name}"
+                detail = f"{table_key}.{column_name}"
 
-            if column_name:
-                completions.append({
-                    "label": column_name,
-                    "kind": "field",
-                    "insertText": column_name,
-                    "detail": detail,
-                    "category": "column",
-                    "table": table_name,
-                })
+            if not column_name:
+                continue
+            completions.append({
+                "label": column_name,
+                "kind": "field",
+                "insertText": column_name,
+                "detail": detail,
+                "category": "column",
+                "table": table_key,
+                "tableBare": bare_table or table_key,
+            })
 
     for kw in SQL_KEYWORDS:
         completions.append({
@@ -110,11 +129,10 @@ PYTHON_PACKAGES = [
 
 
 def build_python_completions(variables: Optional[dict]) -> List[Dict[str, Any]]:
-    if not variables:
-        return []
+    from src.editors.completion_context import build_dataframe_member_completions
 
     completions: List[Dict[str, Any]] = []
-    for var_name, var_info in variables.items():
+    for var_name, var_info in (variables or {}).items():
         if str(var_name).startswith("_"):
             continue
         var_type = type(var_info).__name__ if not isinstance(var_info, str) else var_info
@@ -124,6 +142,8 @@ def build_python_completions(variables: Optional[dict]) -> List[Dict[str, Any]]:
             "insertText": var_name,
             "detail": var_type,
         })
+
+    completions.extend(build_dataframe_member_completions(variables or {}))
 
     for kw in PYTHON_KEYWORDS:
         completions.append({

@@ -187,53 +187,6 @@ DARK_COLORS = ColorPalette(
 )
 
 
-LIGHT_COLORS = ColorPalette(
-    # Backgrounds
-    bg_primary="#ffffff",
-    bg_secondary="#f5f5f5",
-    bg_tertiary="#eeeeee",
-    bg_elevated="#fafafa",
-    bg_overlay="rgba(0, 0, 0, 0.5)",
-    # Borders - very subtle (shadow-friendly)
-    border_default="rgba(0, 0, 0, 0.06)",
-    border_muted="rgba(0, 0, 0, 0.03)",
-    border_strong="rgba(0, 0, 0, 0.10)",
-    # Text
-    text_primary="#333333",
-    text_secondary="#666666",
-    text_tertiary="#999999",
-    text_disabled="#bdbdbd",
-    text_inverse="#ffffff",
-    # Interactive
-    interactive_primary="#3369FF",
-    interactive_primary_hover="#4d7fff",
-    interactive_primary_active="#2952cc",
-    interactive_secondary="#e0e0e0",
-    interactive_secondary_hover="#d0d0d0",
-    interactive_secondary_active="#c0c0c0",
-    # Semantic
-    success="#2e7d32",
-    success_hover="#388e3c",
-    success_active="#1b5e20",
-    warning="#ed6c02",
-    warning_hover="#ff9800",
-    warning_active="#c77700",
-    danger="#d32f2f",
-    danger_hover="#e53935",
-    danger_active="#b71c1c",
-    info="#0288d1",
-    info_hover="#03a9f4",
-    info_active="#01579b",
-    # Editor
-    editor_bg="#ffffff",
-    editor_fg="#000000",
-    editor_selection="#add6ff",
-    editor_line_highlight="#f0f0f0",
-    editor_gutter_bg="#f5f5f5",
-    editor_gutter_fg="#237893",
-)
-
-
 TYPOGRAPHY = Typography(
     font_family_primary="Ubuntu, Roboto, Segoe UI, -apple-system, BlinkMacSystemFont, sans-serif",
     font_family_mono="JetBrains Mono, Fira Code, Consolas, monospace",
@@ -287,20 +240,20 @@ SHADOW = Shadow(
 )
 
 
-# Tema ativo (pode ser trocado dinamicamente)
+# DataPyn ships dark-only. The theme indirection is kept so existing callers
+# (get_colors / set_theme / get_theme) keep working, but it always resolves
+# to the dark palette.
 _current_theme = "dark"
 
 
 def get_colors() -> ColorPalette:
-    """Retorna paleta de cores do tema ativo"""
-    return DARK_COLORS if _current_theme == "dark" else LIGHT_COLORS
+    """Return the active color palette (dark-only)."""
+    return DARK_COLORS
 
 
 def set_theme(theme: str):
-    """Altera tema ativo"""
-    global _current_theme
-    if theme in ("dark", "light"):
-        _current_theme = theme
+    """No-op kept for backward compatibility — DataPyn is dark-only."""
+    return
 
 
 def get_theme() -> str:
@@ -317,8 +270,8 @@ class StateColors:
     
     # Execution states
     running: str = "#f39c12"           # Amber/yellow for running
-    running_text: str = "#000000"       # Black text on running
-    running_bg: str = "#fff3cd"         # Light amber background
+    running_text: str = "#1e1e1e"       # Dark text on the amber badge
+    running_bg: str = "#f39c12"         # Solid amber badge (dark-theme friendly)
     
     # Connection states  
     connected: str = "#4ec9b0"          # Teal for connected
@@ -344,41 +297,19 @@ class ChartColors:
     legend_edge: str = "#3b404d"
 
 
-# Singleton instances
+# Singleton instances (dark-only)
 DARK_STATE_COLORS = StateColors()
 DARK_CHART_COLORS = ChartColors()
 
-LIGHT_STATE_COLORS = StateColors(
-    running="#f39c12",
-    running_text="#000000",
-    running_bg="#fff3cd",
-    connected="#2e7d32",
-    disconnected="#d32f2f",
-    connecting="#ed6c02",
-    valid="#2e7d32",
-    invalid="#d32f2f",
-    pending="#ed6c02",
-)
-
-LIGHT_CHART_COLORS = ChartColors(
-    figure_bg="#ffffff",
-    axes_bg="#ffffff",
-    axes_edge="#d1d5db",
-    text="#333333",
-    grid="#e5e7eb",
-    legend_bg="#ffffff",
-    legend_edge="#d1d5db",
-)
-
 
 def get_state_colors() -> StateColors:
-    """Returns state colors for current theme"""
-    return DARK_STATE_COLORS if _current_theme == "dark" else LIGHT_STATE_COLORS
+    """Returns state colors (dark-only)."""
+    return DARK_STATE_COLORS
 
 
 def get_chart_colors() -> ChartColors:
-    """Returns chart colors for current theme"""
-    return DARK_CHART_COLORS if _current_theme == "dark" else LIGHT_CHART_COLORS
+    """Returns chart colors (dark-only)."""
+    return DARK_CHART_COLORS
 
 
 # =============================================================================

@@ -25,14 +25,16 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QLineEdit,
+    QStackedWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSettings
-from PyQt6.QtGui import QKeySequence
+from PyQt6.QtCore import Qt, pyqtSignal, QSettings, QObject, QThread, pyqtSlot
+from PyQt6.QtGui import QKeySequence, QColor, QBrush
 from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
 from src.design_system.tokens import get_colors, RADIUS
 from src.services.copilot.copilot_settings import get_copilot_settings
+from src.ui.components.toggle_switch import LabeledToggleSwitch
 from src.services.notification_delivery_service import (
     EMAIL_PASSWORD_KEY,
     TELEGRAM_TOKEN_KEY,
@@ -42,10 +44,44 @@ from src.services.notification_delivery_service import (
 )
 
 
+class _PyniaModelFetchWorker(QObject):
+    """Fetch the connector's available model ids off the UI thread."""
+
+    done = pyqtSignal(str, list)  # provider_id, [model_id, ...]
+
+    def __init__(self, provider_id: str):
+        super().__init__()
+        self._provider_id = provider_id
+
+    @pyqtSlot()
+    def run(self):
+        pid = self._provider_id
+        ids: list = []
+        try:
+            from src.services.pynia.settings import get_pynia_settings, get_provider_secret
+            from src.services.pynia.providers.token_worker import FALLBACK_MODELS
+            from src.services.copilot.copilot_models import normalize_models
+
+            token = get_provider_secret(pid)
+            settings = get_pynia_settings()
+            models = list(FALLBACK_MODELS.get(pid, []))
+            if token and pid in ("openai", "openrouter"):
+                from src.services.pynia.openai_agent_loop import fetch_openai_models
+
+                fetched = fetch_openai_models(settings.base_url(pid), token)
+                if fetched:
+                    models = normalize_models(fetched) or models
+            ids = [m.get("id") for m in models if isinstance(m, dict) and m.get("id")]
+        except Exception:
+            ids = []
+        self.done.emit(pid, ids)
+
+
 class SettingsDialog(QDialog):
     """Settings dialog with tabs for General and Shortcuts"""
 
     shortcuts_changed = pyqtSignal()  # Signal emitted when shortcuts are saved
+    pynia_connector_changed = pyqtSignal(str)  # Active Pynia connector saved (provider_id)
     copilot_chat_login_requested = pyqtSignal()  # User wants to login to Chat
     copilot_chat_logout_requested = pyqtSignal()  # User wants to logout from Chat
     copilot_lsp_login_requested = pyqtSignal()  # User wants to login to LSP/Autocomplete
@@ -59,7 +95,7 @@ class SettingsDialog(QDialog):
             shortcut_manager: Shortcut manager instance
             theme_manager: Theme manager instance
             parent: Parent widget
-            initial_tab: Tab to show initially ("general", "shortcuts", "copilot", "workspace")
+            initial_tab: Tab to show initially ("general", "shortcuts", "pynia", "workspace")
         """
         super().__init__(parent)
         self.shortcut_manager = shortcut_manager
@@ -67,6 +103,8 @@ class SettingsDialog(QDialog):
         self._original_language = S.language_code
         self._initial_tab = initial_tab
         self._pending_notification_test = None
+        self._pynia_model_cache: dict[str, list] = {}
+        self._pynia_model_thread = None
         self._notification_delivery_service = get_notification_delivery_service(self)
         self._setup_ui()
         self._load_shortcuts()
@@ -126,8 +164,8 @@ class SettingsDialog(QDialog):
         # Shortcuts tab
         self._setup_shortcuts_tab()
 
-        # Copilot tab
-        self._setup_copilot_tab()
+        # Pynia tab (connectors + inline autocomplete)
+        self._setup_pynia_tab()
 
         # Notifications tab
         self._setup_notifications_tab()
@@ -139,7 +177,14 @@ class SettingsDialog(QDialog):
 
         # Select initial tab if specified
         if self._initial_tab:
-            tab_map = {"general": 0, "shortcuts": 1, "copilot": 2, "notifications": 3, "workspace": 4}
+            tab_map = {
+                "general": 0,
+                "shortcuts": 1,
+                "pynia": 2,
+                "notifications": 3,
+                "workspace": 4,
+                "copilot": 2,
+            }
             if self._initial_tab in tab_map:
                 self.tabs.setCurrentIndex(tab_map[self._initial_tab])
 
@@ -320,30 +365,79 @@ class SettingsDialog(QDialog):
         row.setSpacing(10)
         lbl = self._make_label(label_text, colors, fixed_width=label_width)
         row.addWidget(lbl)
-        row.addWidget(widget)
+        row.addWidget(widget, 1)
         return row
+
+    def _wrap_scroll_tab(self, content: QWidget) -> QScrollArea:
+        """Scrollable tab body — keeps long settings pages usable."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
+
+    def _make_section_card(self, title: str, colors) -> tuple[QFrame, QVBoxLayout]:
+        card = QFrame()
+        card.setObjectName("settingsSectionCard")
+        card.setStyleSheet(f"""
+            QFrame#settingsSectionCard {{
+                background-color: {colors.bg_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_md}px;
+            }}
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        if title:
+            heading = QLabel(title)
+            heading.setStyleSheet(
+                f"color: {colors.text_primary}; font-size: 12px; font-weight: 600; "
+                f"background: transparent; border: none;"
+            )
+            layout.addWidget(heading)
+        return card, layout
+
+    def _get_switch_style(self, colors) -> str:
+        return f"""
+            QCheckBox {{
+                color: {colors.text_secondary};
+                font-size: 11px;
+                spacing: 10px;
+            }}
+            QCheckBox::indicator {{
+                width: 40px;
+                height: 22px;
+                border-radius: 11px;
+                border: 1px solid {colors.border_default};
+                background: {colors.bg_tertiary};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {colors.interactive_primary};
+                border-color: {colors.interactive_primary};
+            }}
+            QCheckBox::indicator:hover {{
+                border-color: {colors.interactive_primary};
+            }}
+        """
 
     # ==================== TAB SETUP ====================
 
     def _setup_general_tab(self):
         """Sets up the General tab with language selector"""
-        general_widget = QWidget()
-        general_layout = QVBoxLayout(general_widget)
-        general_layout.setSpacing(16)
-        general_layout.setContentsMargins(20, 20, 20, 20)
+        page = QWidget()
+        general_layout = QVBoxLayout(page)
+        general_layout.setSpacing(14)
+        general_layout.setContentsMargins(4, 4, 4, 12)
 
         colors = get_colors()
         input_style = self._get_input_style(colors)
 
-        # --- Language section ---
-        lang_group = self._make_group(S.settings.section_language, colors)
-        lang_layout = QVBoxLayout(lang_group)
-        lang_layout.setSpacing(8)
-
+        lang_card, lang_layout = self._make_section_card(S.settings.section_language, colors)
         self.lang_combo = QComboBox()
-        self.lang_combo.setFixedWidth(250)
+        self.lang_combo.setMinimumWidth(220)
         self.lang_combo.setStyleSheet(input_style)
-
         languages = get_available_languages()
         current_idx = 0
         for i, lang in enumerate(languages):
@@ -351,68 +445,60 @@ class SettingsDialog(QDialog):
             if lang["code"] == S.language_code:
                 current_idx = i
         self.lang_combo.setCurrentIndex(current_idx)
-
         lang_layout.addLayout(
-            self._make_field_row(S.settings.label_language, self.lang_combo, colors, label_width=150)
+            self._make_field_row(S.settings.label_language, self.lang_combo, colors, label_width=140)
         )
         lang_layout.addWidget(self._make_hint(S.settings.language_restart_hint, colors))
-        general_layout.addWidget(lang_group)
+        general_layout.addWidget(lang_card)
 
-        # --- Display section ---
-        display_group = self._make_group(
-            S.settings.section_display if hasattr(S.settings, 'section_display') else "DISPLAY",
+        display_card, display_layout = self._make_section_card(
+            S.settings.section_display if hasattr(S.settings, "section_display") else "DISPLAY",
             colors,
         )
-        display_layout = QVBoxLayout(display_group)
-        display_layout.setSpacing(8)
-
         self.grid_row_limit_spin = QSpinBox()
         self.grid_row_limit_spin.setRange(10, 1000000)
         self.grid_row_limit_spin.setSingleStep(100)
         settings = QSettings("DataPyn", "DataPyn")
         self.grid_row_limit_spin.setValue(int(settings.value("grid/display_row_limit", 100)))
-        self.grid_row_limit_spin.setFixedWidth(120)
+        self.grid_row_limit_spin.setMinimumWidth(120)
         self.grid_row_limit_spin.setStyleSheet(input_style)
-
         display_layout.addLayout(
             self._make_field_row(
-                S.settings.label_grid_row_limit if hasattr(S.settings, 'label_grid_row_limit')
+                S.settings.label_grid_row_limit if hasattr(S.settings, "label_grid_row_limit")
                 else "Default grid display limit (rows):",
-                self.grid_row_limit_spin, colors, label_width=250,
+                self.grid_row_limit_spin,
+                colors,
+                label_width=220,
             )
         )
         display_layout.addWidget(self._make_hint(
-            S.settings.grid_row_limit_hint if hasattr(S.settings, 'grid_row_limit_hint')
+            S.settings.grid_row_limit_hint if hasattr(S.settings, "grid_row_limit_hint")
             else "Only affects display. Exports always include all data.",
             colors,
         ))
-        general_layout.addWidget(display_group)
+        general_layout.addWidget(display_card)
 
-        # --- Editor section ---
-        editor_group = self._make_group(
-            S.settings.section_editor if hasattr(S.settings, 'section_editor') else "CODE EDITOR",
+        editor_card, editor_layout = self._make_section_card(
+            S.settings.section_editor if hasattr(S.settings, "section_editor") else "CODE EDITOR",
             colors,
         )
-        editor_layout = QVBoxLayout(editor_group)
-        editor_layout.setSpacing(8)
-
         editor_layout.addWidget(self._make_label(
-            S.settings.editor_monaco if hasattr(S.settings, 'editor_monaco')
-            else "Monaco Editor with Copilot inline completions",
+            S.settings.editor_monaco if hasattr(S.settings, "editor_monaco")
+            else "Monaco Editor with Pynia AI inline autocomplete",
             colors,
         ))
         editor_layout.addWidget(self._make_hint("Powered by Monaco (VS Code editor engine)", colors))
-        general_layout.addWidget(editor_group)
+        general_layout.addWidget(editor_card)
 
         general_layout.addStretch()
-        self.tabs.addTab(general_widget, S.settings.tab_general)
+        self.tabs.addTab(self._wrap_scroll_tab(page), S.settings.tab_general)
 
     def _setup_shortcuts_tab(self):
         """Sets up the Shortcuts tab"""
-        shortcuts_widget = QWidget()
-        shortcuts_layout = QVBoxLayout(shortcuts_widget)
+        page = QWidget()
+        shortcuts_layout = QVBoxLayout(page)
         shortcuts_layout.setSpacing(16)
-        shortcuts_layout.setContentsMargins(20, 20, 20, 20)
+        shortcuts_layout.setContentsMargins(4, 4, 4, 12)
 
         colors = get_colors()
 
@@ -454,7 +540,7 @@ class SettingsDialog(QDialog):
         """)
         shortcuts_layout.addWidget(self.table)
 
-        self.tabs.addTab(shortcuts_widget, S.settings.tab_shortcuts)
+        self.tabs.addTab(self._wrap_scroll_tab(page), S.settings.tab_shortcuts)
 
     def _setup_copilot_tab(self):
         """Sets up the Copilot tab with Chat and Autocomplete settings."""
@@ -550,6 +636,416 @@ class SettingsDialog(QDialog):
         auth_service.chat_logged_out.connect(self._on_auth_service_chat_updated)
         auth_service.lsp_authenticated.connect(self._on_auth_service_lsp_updated)
         auth_service.lsp_logged_out.connect(self._on_auth_service_lsp_updated)
+
+    def _setup_pynia_tab(self):
+        """Pynia connectors: OpenAI, Open Router, Claude API tokens."""
+        from src.services.pynia import PROVIDERS, get_pynia_settings, get_provider_secret, set_provider_secret
+        from src.services.pynia.types import ProviderId
+
+        colors = get_colors()
+        input_style = self._get_input_style(colors)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 4, 4, 12)
+        layout.setSpacing(14)
+
+        from src.assets.pynia_branding import load_pynia_logo
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+        logo_label = QLabel()
+        logo_label.setFixedSize(40, 40)
+        logo_icon = load_pynia_logo(40)
+        if logo_icon:
+            logo_label.setPixmap(logo_icon.pixmap(40, 40))
+        header_row.addWidget(logo_label)
+        title_label = QLabel(
+            S.pynia.title if hasattr(S, "pynia") else "Pynia"
+        )
+        title_label.setStyleSheet(
+            f"color: {colors.text_primary}; font-size: 18px; font-weight: 600;"
+        )
+        header_row.addWidget(title_label, 1)
+        layout.addLayout(header_row)
+
+        intro = QLabel(
+            S.pynia.settings_intro if hasattr(S, "pynia") else "Configure Pynia AI connectors."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(self._get_info_box_style(colors))
+        layout.addWidget(intro)
+
+        self._pynia_settings = get_pynia_settings()
+
+        conn_card, form = self._make_section_card(
+            S.pynia.section_connectors if hasattr(S, "pynia") else "CONNECTORS",
+            colors,
+        )
+        form.addWidget(self._make_label(
+            S.pynia.title if hasattr(S, "pynia") else "Connector", colors
+        ))
+        self._pynia_provider_combo = QComboBox()
+        self._pynia_provider_combo.setStyleSheet(input_style)
+        labels = {
+            "copilot": getattr(S.pynia, "provider_copilot", "GitHub Copilot") if hasattr(S, "pynia") else "GitHub Copilot",
+            "openai": S.pynia.provider_openai,
+            "openrouter": S.pynia.provider_openrouter,
+            "anthropic": S.pynia.provider_anthropic,
+        }
+        for pid in ("copilot", "openai", "openrouter", "anthropic"):
+            self._pynia_provider_combo.addItem(labels.get(pid, pid), pid)
+        form.addWidget(self._pynia_provider_combo)
+
+        # --- API-token connectors (OpenAI / OpenRouter / Anthropic) ---
+        self._pynia_token_section = QWidget()
+        token_layout = QVBoxLayout(self._pynia_token_section)
+        token_layout.setContentsMargins(0, 0, 0, 0)
+        token_layout.setSpacing(6)
+        token_layout.addWidget(self._make_label(
+            S.pynia.label_api_token if hasattr(S, "pynia") else "API token", colors
+        ))
+        self._pynia_token_edit = QLineEdit()
+        self._pynia_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._pynia_token_edit.setPlaceholderText(S.pynia.label_api_token if hasattr(S, "pynia") else "API token")
+        self._pynia_token_edit.setStyleSheet(input_style)
+        token_layout.addWidget(self._pynia_token_edit)
+        token_layout.addWidget(self._make_label(
+            S.pynia.label_base_url if hasattr(S, "pynia") else "API base URL (optional)", colors
+        ))
+        self._pynia_base_url_edit = QLineEdit()
+        self._pynia_base_url_edit.setStyleSheet(input_style)
+        token_layout.addWidget(self._pynia_base_url_edit)
+        btn_row = QHBoxLayout()
+        self._pynia_save_btn = QPushButton(S.pynia.btn_save_token if hasattr(S, "pynia") else "Save")
+        self._pynia_verify_btn = QPushButton(S.pynia.btn_verify if hasattr(S, "pynia") else "Verify")
+        self._pynia_save_btn.clicked.connect(self._on_pynia_save_token)
+        self._pynia_verify_btn.clicked.connect(self._on_pynia_verify_token)
+        btn_row.addWidget(self._pynia_save_btn)
+        btn_row.addWidget(self._pynia_verify_btn)
+        btn_row.addStretch()
+        token_layout.addSpacing(4)
+        token_layout.addLayout(btn_row)
+
+        # --- GitHub Copilot connector (GitHub sign-in, no API token) ---
+        self._copilot_settings = get_copilot_settings()
+        self._pynia_copilot_section = QWidget()
+        copilot_layout = QVBoxLayout(self._pynia_copilot_section)
+        copilot_layout.setContentsMargins(0, 0, 0, 0)
+        copilot_layout.setSpacing(6)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        status_row.addWidget(self._make_label(
+            S.settings.copilot_status if hasattr(S.settings, "copilot_status") else "Status:", colors
+        ))
+        self._chat_status_value = QLabel()
+        self._chat_status_value.setStyleSheet(
+            f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;"
+        )
+        status_row.addWidget(self._chat_status_value)
+        status_row.addStretch()
+        self._chat_auth_btn = QPushButton()
+        self._chat_auth_btn.setFixedHeight(28)
+        self._chat_auth_btn.setMinimumWidth(100)
+        self._chat_auth_btn.clicked.connect(self._on_chat_auth_clicked)
+        status_row.addWidget(self._chat_auth_btn)
+        copilot_layout.addLayout(status_row)
+        self._chat_hint_label = QLabel(self._get_chat_auth_hint())
+        self._chat_hint_label.setWordWrap(True)
+        self._chat_hint_label.setStyleSheet(self._get_hint_style(colors))
+        copilot_layout.addWidget(self._chat_hint_label)
+        self._update_chat_status_label()
+        self._update_chat_button_state()
+
+        # One page shown at a time — a stack avoids the overlap that
+        # show/hide of sibling widgets produced when switching providers.
+        self._pynia_connector_stack = QStackedWidget()
+        self._pynia_connector_stack.addWidget(self._pynia_token_section)    # index 0
+        self._pynia_connector_stack.addWidget(self._pynia_copilot_section)  # index 1
+        form.addWidget(self._pynia_connector_stack)
+
+        self._pynia_status_label = QLabel("")
+        self._pynia_status_label.setStyleSheet(self._get_hint_style(colors))
+        form.addWidget(self._pynia_status_label)
+
+        layout.addWidget(conn_card)
+
+        # Reflect the active connector + live Copilot auth updates.
+        active_index = self._pynia_provider_combo.findData(self._pynia_settings.active_provider)
+        if active_index >= 0:
+            self._pynia_provider_combo.setCurrentIndex(active_index)
+        try:
+            # The live Copilot login runs through the Pynia auth service (it
+            # wraps the agent), so listen there to refresh the status row.
+            from src.services.pynia import get_pynia_auth_service
+
+            pynia_auth = get_pynia_auth_service()
+            pynia_auth.chat_authenticated.connect(self._on_auth_service_chat_updated)
+            pynia_auth.chat_logged_out.connect(self._on_auth_service_chat_updated)
+            pynia_auth.chat_auth_failed.connect(self._on_auth_service_chat_updated)
+        except Exception:
+            pass  # Auth service not available — live status updates disabled.
+
+        auto_card, auto_layout = self._make_section_card(
+            S.pynia.section_autocomplete if hasattr(S, "pynia") else "INLINE AUTOCOMPLETE",
+            colors,
+        )
+
+        self._pynia_autocomplete_cb = LabeledToggleSwitch(
+            S.pynia.autocomplete_enable
+            if hasattr(S, "pynia")
+            else "Enable AI inline autocomplete in code blocks",
+            checked=self._pynia_settings.autocomplete_enabled,
+        )
+        auto_layout.addWidget(self._pynia_autocomplete_cb)
+
+        auto_hint = QLabel(
+            S.pynia.autocomplete_hint if hasattr(S, "pynia") else ""
+        )
+        auto_hint.setWordWrap(True)
+        auto_hint.setStyleSheet(self._get_hint_style(colors))
+        auto_layout.addWidget(auto_hint)
+
+        # Autocomplete model picker (editable — blank = use the chat model).
+        model_row = QHBoxLayout()
+        model_label = QLabel(
+            getattr(S.pynia, "autocomplete_model_label", "Autocomplete model:")
+            if hasattr(S, "pynia")
+            else "Autocomplete model:"
+        )
+        model_label.setStyleSheet(self._get_hint_style(colors))
+        self._pynia_completion_model_combo = QComboBox()
+        self._pynia_completion_model_combo.setEditable(True)
+        self._pynia_completion_model_combo.setMinimumWidth(240)
+        self._pynia_completion_model_combo.setStyleSheet(input_style)
+        model_row.addWidget(model_label)
+        model_row.addWidget(self._pynia_completion_model_combo, 1)
+        auto_layout.addLayout(model_row)
+
+        model_hint = QLabel(
+            getattr(
+                S.pynia,
+                "autocomplete_model_hint",
+                "Leave blank to use your chat model. Pick a smaller/faster model for snappier suggestions.",
+            )
+            if hasattr(S, "pynia")
+            else "Leave blank to use your chat model."
+        )
+        model_hint.setWordWrap(True)
+        model_hint.setStyleSheet(self._get_hint_style(colors))
+        auto_layout.addWidget(model_hint)
+
+        self._pynia_autocomplete_status = QLabel("")
+        self._pynia_autocomplete_status.setStyleSheet(self._get_hint_style(colors))
+        auto_layout.addWidget(self._pynia_autocomplete_status)
+        self._refresh_pynia_autocomplete_status()
+
+        layout.addWidget(auto_card)
+        layout.addStretch()
+
+        self._pynia_provider_combo.currentIndexChanged.connect(self._load_pynia_connector_fields)
+        self._pynia_provider_combo.currentIndexChanged.connect(self._refresh_pynia_autocomplete_status)
+        self._load_pynia_connector_fields()
+        self._refresh_pynia_autocomplete_status()
+
+        tab_title = S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia"
+        tab_index = self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
+        if logo_icon:
+            self.tabs.setTabIcon(tab_index, logo_icon)
+
+    def _refresh_pynia_autocomplete_status(self) -> None:
+        from src.services.pynia.settings import get_provider_secret
+
+        if not hasattr(self, "_pynia_autocomplete_status"):
+            return
+        pid = self._current_pynia_connector_id() if hasattr(self, "_pynia_provider_combo") else "openai"
+        if pid == "copilot":
+            settings = getattr(self, "_copilot_settings", None)
+            ready = bool(
+                settings
+                and settings.chat_was_authenticated
+                and not settings.chat_user_logged_out
+            )
+            self._pynia_autocomplete_status.setText(
+                (S.pynia.autocomplete_ready.format(provider="copilot")
+                 if hasattr(S, "pynia") and hasattr(S.pynia, "autocomplete_ready")
+                 else "Autocomplete will use GitHub Copilot when enabled.")
+                if ready
+                else "Sign in to GitHub Copilot above to enable AI autocomplete."
+            )
+            return
+        if get_provider_secret(pid):
+            text = (
+                S.pynia.autocomplete_ready.format(provider=pid)
+                if hasattr(S, "pynia") and hasattr(S.pynia, "autocomplete_ready")
+                else f"Autocomplete will use the {pid} connector when enabled."
+            )
+        else:
+            text = (
+                S.pynia.autocomplete_need_token
+                if hasattr(S, "pynia")
+                else "Save an API token above to enable AI autocomplete."
+            )
+        self._pynia_autocomplete_status.setText(text)
+
+    def _current_pynia_connector_id(self) -> str:
+        return self._pynia_provider_combo.currentData() or "openai"
+
+    def _load_pynia_connector_fields(self):
+        from src.services.pynia import get_provider_secret
+
+        pid = self._current_pynia_connector_id()
+        is_copilot = pid == "copilot"
+
+        # Copilot authenticates via GitHub (no API token), so swap the token
+        # fields for the sign-in UI instead of showing an irrelevant token box.
+        if hasattr(self, "_pynia_connector_stack"):
+            self._pynia_connector_stack.setCurrentWidget(
+                self._pynia_copilot_section if is_copilot else self._pynia_token_section
+            )
+
+        if is_copilot:
+            self._update_chat_status_label()
+            self._update_chat_button_state()
+            self._chat_hint_label.setText(self._get_chat_auth_hint())
+        else:
+            self._pynia_token_edit.setText(get_provider_secret(pid))
+            self._pynia_base_url_edit.setText(self._pynia_settings.base_url(pid))
+        self._pynia_status_label.setText("")
+        self._load_pynia_completion_model()
+        self._fetch_pynia_models(pid)
+
+    def _load_pynia_completion_model(self):
+        """Populate the autocomplete model picker for the current connector.
+
+        Order: fast suggestions first (easy to pick), then the chat model, then
+        every model fetched from the connector. Editable so a model that isn't
+        listed can still be typed.
+        """
+        if not hasattr(self, "_pynia_completion_model_combo"):
+            return
+        from src.services.pynia.completion import COMPLETION_MODEL_SUGGESTIONS
+
+        pid = self._current_pynia_connector_id()
+        combo = self._pynia_completion_model_combo
+
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def _add(model_id: str) -> None:
+            mid = (model_id or "").strip()
+            if mid and mid not in seen:
+                seen.add(mid)
+                ordered.append(mid)
+
+        for mid in COMPLETION_MODEL_SUGGESTIONS.get(pid, []):
+            _add(mid)
+        _add(self._pynia_settings.selected_model(pid))
+        for mid in self._pynia_model_cache.get(pid, []):
+            _add(mid)
+
+        current = self._pynia_completion_model_combo.currentText().strip()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(ordered)
+        combo.setEditText(current or self._pynia_settings.completion_model_override(pid))
+        line_edit = combo.lineEdit()
+        if line_edit is not None:
+            placeholder = (
+                getattr(S.pynia, "autocomplete_model_placeholder", "Auto (use chat model)")
+                if hasattr(S, "pynia")
+                else "Auto (use chat model)"
+            )
+            line_edit.setPlaceholderText(placeholder)
+        combo.blockSignals(False)
+
+    def _fetch_pynia_models(self, pid: str):
+        """Fetch the connector's real model list in the background (best-effort)."""
+        from src.services.pynia import get_provider_secret
+
+        if pid in self._pynia_model_cache:
+            return
+        if not get_provider_secret(pid):
+            return  # no token → nothing to fetch; suggestions are shown instead
+        if self._pynia_model_thread is not None:
+            return  # one fetch at a time is enough for a settings dialog
+
+        thread = QThread(self)
+        worker = _PyniaModelFetchWorker(pid)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_pynia_models_fetched)
+        worker.done.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_pynia_model_thread)
+        self._pynia_model_thread = thread
+        thread.start()
+
+    def _clear_pynia_model_thread(self):
+        self._pynia_model_thread = None
+
+    def closeEvent(self, event):
+        # Don't let an in-flight model fetch outlive the dialog.
+        thread = self._pynia_model_thread
+        if thread is not None and thread.isRunning():
+            thread.quit()
+            thread.wait(1500)
+        super().closeEvent(event)
+
+    def _on_pynia_models_fetched(self, pid: str, model_ids: list):
+        self._pynia_model_cache[pid] = list(model_ids or [])
+        # Repopulate only if the user is still looking at this connector.
+        if hasattr(self, "_pynia_provider_combo") and self._current_pynia_connector_id() == pid:
+            self._load_pynia_completion_model()
+
+    def _save_pynia_completion_model(self):
+        if not hasattr(self, "_pynia_completion_model_combo"):
+            return
+        pid = self._current_pynia_connector_id()
+        self._pynia_settings.set_completion_model(
+            pid, self._pynia_completion_model_combo.currentText().strip()
+        )
+
+    def _on_pynia_save_token(self):
+        from src.services.pynia import set_provider_secret
+
+        pid = self._current_pynia_connector_id()
+        token = self._pynia_token_edit.text().strip()
+        set_provider_secret(pid, token)
+        self._pynia_settings.set_base_url(pid, self._pynia_base_url_edit.text().strip())
+        self._save_pynia_completion_model()
+        if token:
+            self._pynia_settings.on_token_authenticated(pid, pid)
+            # Make the saved connector the active one and tell the live agent,
+            # so the chat authenticates immediately (no restart needed).
+            self._pynia_settings.set_active_provider(pid)
+            self.pynia_connector_changed.emit(pid)
+        self._pynia_status_label.setText(S.pynia.verify_ok if hasattr(S, "pynia") else "Saved.")
+        self._refresh_pynia_autocomplete_status()
+
+    def _on_pynia_verify_token(self):
+        from src.services.pynia.agent_client import PyniaAgentClient
+        from src.services.pynia.types import ProviderId
+
+        pid: ProviderId = self._current_pynia_connector_id()
+        self._on_pynia_save_token()
+        client = PyniaAgentClient(parent=self)
+        client.set_provider(pid)
+
+        def _ok(username: str):
+            template = S.pynia.verify_ok if hasattr(S, "pynia") else "OK"
+            self._pynia_status_label.setText(template)
+            client.deleteLater()
+
+        def _fail(msg: str):
+            template = S.pynia.verify_failed if hasattr(S, "pynia") else "Failed: {error}"
+            self._pynia_status_label.setText(template.format(error=msg))
+            client.deleteLater()
+
+        client.authenticated.connect(_ok)
+        client.auth_failed.connect(_fail)
+        client.chat_error.connect(_fail)
+        client.start_auth()
 
     def _update_chat_status_label(self):
         """Update the Chat status label based on current state."""
@@ -684,20 +1180,30 @@ class SettingsDialog(QDialog):
             return "Auto-connect: OFF - Never authenticated"
 
     def _on_chat_auth_clicked(self):
-        """Handle Chat login/logout button click."""
-        from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
-        
-        if auth_service.is_chat_authenticated or (auth_service.chat_was_authenticated and not auth_service.chat_user_logged_out):
-            # Logout
+        """Handle the GitHub Copilot sign in/out button.
+
+        Routes through the Pynia auth service (which wraps the live agent) and
+        makes Copilot the active connector first — otherwise login takes the
+        API-token path and fails with "API token not configured".
+        """
+        from src.services.pynia import get_pynia_auth_service
+
+        auth_service = get_pynia_auth_service()
+        settings = self._copilot_settings
+        signed_in = settings.chat_was_authenticated and not settings.chat_user_logged_out
+
+        # Switch the live agent to the Copilot connector for both login & logout.
+        self._pynia_settings.set_active_provider("copilot")
+        self.pynia_connector_changed.emit("copilot")
+
+        if signed_in:
             auth_service.logout_chat()
             self.copilot_chat_logout_requested.emit()  # Notify MainWindow
         else:
-            # Login
             if auth_service.login_chat():
                 self.copilot_chat_login_requested.emit()  # Notify MainWindow
             # else: login blocked - auth already in progress
-        
+
         self._update_chat_status_label()
         self._update_chat_button_state()
         self._chat_hint_label.setText(self._get_chat_auth_hint())
@@ -754,18 +1260,16 @@ class SettingsDialog(QDialog):
         general_layout = QVBoxLayout(general_group)
         general_layout.setSpacing(8)
 
-        self.notif_enabled_cb = QCheckBox(S.settings.label_notifications_enabled)
-        self.notif_enabled_cb.setChecked(
-            settings.value("notifications/enabled", True, type=bool)
+        self.notif_enabled_cb = LabeledToggleSwitch(
+            S.settings.label_notifications_enabled,
+            checked=settings.value("notifications/enabled", True, type=bool),
         )
-        self.notif_enabled_cb.setStyleSheet(checkbox_style)
         general_layout.addWidget(self.notif_enabled_cb)
 
-        self.notif_sound_cb = QCheckBox(S.settings.label_notifications_sound)
-        self.notif_sound_cb.setChecked(
-            settings.value("notifications/sound", True, type=bool)
+        self.notif_sound_cb = LabeledToggleSwitch(
+            S.settings.label_notifications_sound,
+            checked=settings.value("notifications/sound", True, type=bool),
         )
-        self.notif_sound_cb.setStyleSheet(checkbox_style)
         general_layout.addWidget(self.notif_sound_cb)
 
         notif_layout.addWidget(general_group)
@@ -1034,20 +1538,19 @@ class SettingsDialog(QDialog):
         from src.core.workspace_service import get_workspace_service
         colors = get_colors()
 
-        workspace_widget = QWidget()
-        workspace_layout = QVBoxLayout(workspace_widget)
-        workspace_layout.setSpacing(16)
-        workspace_layout.setContentsMargins(20, 20, 20, 20)
+        page = QWidget()
+        workspace_layout = QVBoxLayout(page)
+        workspace_layout.setSpacing(14)
+        workspace_layout.setContentsMargins(4, 4, 4, 12)
 
         self._workspace_service = get_workspace_service()
 
         # --- Current workspace section ---
-        current_group = self._make_group(
+        current_group, current_layout = self._make_section_card(
             S.settings.section_workspace_current if hasattr(S.settings, 'section_workspace_current')
             else "CURRENT WORKSPACE",
             colors,
         )
-        current_layout = QVBoxLayout(current_group)
         current_layout.setSpacing(8)
 
         self._workspace_name_label = QLabel(self._workspace_service.current_workspace_name)
@@ -1077,12 +1580,11 @@ class SettingsDialog(QDialog):
         workspace_layout.addWidget(current_group)
 
         # --- Saved workspaces section ---
-        saved_group = self._make_group(
+        saved_group, saved_layout = self._make_section_card(
             S.settings.section_workspaces if hasattr(S.settings, 'section_workspaces')
             else "SAVED WORKSPACES",
             colors,
         )
-        saved_layout = QVBoxLayout(saved_group)
         saved_layout.setSpacing(10)
 
         self._workspace_list = QListWidget()
@@ -1115,51 +1617,20 @@ class SettingsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        add_btn = QPushButton(
-            S.settings.workspace_add if hasattr(S.settings, 'workspace_add') else "Add..."
-        )
-        add_btn.setFixedHeight(28)
-        add_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 11px;
-                padding: 0 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary}dd;
-            }}
-        """)
+        add_label = S.settings.workspace_add if hasattr(S.settings, "workspace_add") else "Add..."
+        add_btn = self._make_workspace_action_button(add_label, colors, variant="primary")
         add_btn.clicked.connect(self._on_add_workspace)
         btn_row.addWidget(add_btn)
 
-        duplicate_btn = QPushButton(
-            S.settings.workspace_duplicate if hasattr(S.settings, 'workspace_duplicate') else "Duplicate..."
+        dup_label = (
+            S.settings.workspace_duplicate if hasattr(S.settings, "workspace_duplicate") else "Duplicate..."
         )
-        duplicate_btn.setFixedHeight(28)
-        duplicate_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.bg_elevated};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                font-size: 11px;
-                padding: 0 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary};
-                color: white;
-            }}
-        """)
+        duplicate_btn = self._make_workspace_action_button(dup_label, colors, variant="secondary")
         duplicate_btn.clicked.connect(self._on_duplicate_workspace)
         btn_row.addWidget(duplicate_btn)
 
-        self._remove_btn = QPushButton(
-            S.settings.workspace_remove if hasattr(S.settings, 'workspace_remove') else "Remove"
-        )
-        self._remove_btn.setFixedHeight(28)
+        remove_label = S.settings.workspace_remove if hasattr(S.settings, "workspace_remove") else "Remove"
+        self._remove_btn = self._make_workspace_action_button(remove_label, colors, variant="muted")
         self._remove_btn.clicked.connect(self._on_remove_workspace)
         btn_row.addWidget(self._remove_btn)
 
@@ -1178,8 +1649,77 @@ class SettingsDialog(QDialog):
         workspace_layout.addStretch()
 
         tab_title = S.settings.tab_workspace if hasattr(S.settings, 'tab_workspace') else "Workspace"
-        self.tabs.addTab(workspace_widget, tab_title)
+        self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
     
+    def _workspace_button_stylesheet(self, colors, variant: str) -> str:
+        if variant == "primary":
+            return f"""
+                QPushButton {{
+                    background-color: {colors.interactive_primary};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    padding: 0 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.interactive_primary}dd;
+                }}
+                QPushButton:disabled {{
+                    background-color: {colors.bg_tertiary};
+                    color: {colors.text_tertiary};
+                }}
+            """
+        if variant == "danger":
+            return f"""
+                QPushButton {{
+                    background-color: {colors.danger};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    padding: 0 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.danger}dd;
+                }}
+                QPushButton:disabled {{
+                    background-color: {colors.bg_tertiary};
+                    color: {colors.text_tertiary};
+                    border: 1px solid {colors.border_muted};
+                }}
+            """
+        return f"""
+            QPushButton {{
+                background-color: {colors.bg_elevated};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                font-size: 11px;
+                padding: 0 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary};
+                color: white;
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_tertiary};
+                border: 1px solid {colors.border_muted};
+            }}
+        """
+
+    def _make_workspace_action_button(self, label: str, colors, *, variant: str = "secondary") -> QPushButton:
+        """Fixed-size toolbar button so disabled Remove does not stretch in the row."""
+        from PyQt6.QtWidgets import QSizePolicy
+
+        btn = QPushButton(label)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        text_w = btn.fontMetrics().horizontalAdvance(label)
+        btn.setFixedSize(max(72, text_w + 24), 28)
+        btn.setStyleSheet(self._workspace_button_stylesheet(colors, variant))
+        return btn
+
     def _refresh_workspace_list(self):
         """Refresh the workspace list widget."""
         self._workspace_list.clear()
@@ -1224,35 +1764,18 @@ class SettingsDialog(QDialog):
             
             can_remove = not is_current and not is_default_path
         
+        label = (
+            S.settings.workspace_remove if hasattr(S.settings, "workspace_remove") else "Remove"
+        )
+        text_w = self._remove_btn.fontMetrics().horizontalAdvance(label)
+        self._remove_btn.setFixedSize(max(72, text_w + 24), 28)
+
         if can_remove:
-            # Enable with red danger style
             self._remove_btn.setEnabled(True)
-            self._remove_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.danger};
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    padding: 0 12px;
-                }}
-                QPushButton:hover {{
-                    background-color: {colors.danger}dd;
-                }}
-            """)
+            self._remove_btn.setStyleSheet(self._workspace_button_stylesheet(colors, "danger"))
         else:
-            # Disable with muted style
             self._remove_btn.setEnabled(False)
-            self._remove_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.bg_tertiary};
-                    color: {colors.text_tertiary};
-                    border: 1px solid {colors.border_muted};
-                    border-radius: 4px;
-                    font-size: 11px;
-                    padding: 0 12px;
-                }}
-            """)
+            self._remove_btn.setStyleSheet(self._workspace_button_stylesheet(colors, "muted"))
     
     def _on_add_workspace(self):
         """Handle add workspace button click."""
@@ -1499,6 +2022,61 @@ class SettingsDialog(QDialog):
         for i in range(self.table.rowCount()):
             self.table.setRowHeight(i, 36)
 
+        # Surface any pre-existing conflicts (e.g. from an old saved config)
+        self._highlight_shortcut_conflicts()
+
+    def _highlight_shortcut_conflicts(self) -> list:
+        """Flag rows whose shortcut is bound to more than one action.
+
+        Returns a list of (shortcut, [action_names]) for the conflicts found.
+        The per-edit check prevents new conflicts, but a stale shortcuts.json
+        could still carry duplicates — this makes them visible (red) instead
+        of silently ambiguous.
+        """
+        from collections import defaultdict
+
+        colors = get_colors()
+        normal = QBrush(QColor(colors.text_primary))
+        danger = QBrush(QColor(colors.danger))
+
+        by_key: dict[str, list[int]] = defaultdict(list)
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 1)
+            key = (item.text() or "").strip() if item else ""
+            if key:
+                by_key[key].append(r)
+
+        conflicts = []
+        for r in range(self.table.rowCount()):
+            sc_item = self.table.item(r, 1)
+            ac_item = self.table.item(r, 0)
+            if sc_item is None:
+                continue
+            rows = by_key.get((sc_item.text() or "").strip(), [])
+            if len(rows) > 1:
+                sc_item.setForeground(danger)
+                others = ", ".join(
+                    self.table.item(x, 0).text() for x in rows if x != r
+                )
+                tip = S.settings.conflict_msg.format(
+                    shortcut=sc_item.text(), action=others
+                )
+                sc_item.setToolTip(tip)
+                if ac_item is not None:
+                    ac_item.setToolTip(tip)
+            else:
+                sc_item.setForeground(normal)
+                sc_item.setToolTip("")
+                if ac_item is not None:
+                    ac_item.setToolTip("")
+
+        seen = set()
+        for key, rows in by_key.items():
+            if len(rows) > 1 and key not in seen:
+                seen.add(key)
+                conflicts.append((key, [self.table.item(x, 0).text() for x in rows]))
+        return conflicts
+
     def _edit_shortcut(self, row, column):
         """Edits a shortcut"""
         if column != 1:  # Only shortcut column is editable (changed from 2 to 1)
@@ -1586,6 +2164,7 @@ class SettingsDialog(QDialog):
                         return
 
                 self.table.item(row, 1).setText(new_sequence)
+                self._highlight_shortcut_conflicts()
 
     def _save_all(self):
         """Saves all settings (language + shortcuts)"""
@@ -1606,6 +2185,42 @@ class SettingsDialog(QDialog):
         settings.setValue("notifications/error_message", self.notif_error_msg.text())
         self._persist_notification_transport_settings()
         self._refresh_notification_transport_status()
+
+        if hasattr(self, "_pynia_autocomplete_cb"):
+            from src.services.pynia.settings import get_pynia_settings
+
+            get_pynia_settings().set_autocomplete_enabled(
+                self._pynia_autocomplete_cb.isChecked()
+            )
+            self._save_pynia_completion_model()
+            # If Copilot is the chosen connector, make it active so the chat
+            # switches to it (the actual GitHub login is the Sign in button).
+            if (
+                hasattr(self, "_pynia_provider_combo")
+                and self._current_pynia_connector_id() == "copilot"
+                and self._pynia_settings.active_provider != "copilot"
+            ):
+                self._pynia_settings.set_active_provider("copilot")
+                self.pynia_connector_changed.emit("copilot")
+
+        # Surface conflicting shortcuts before persisting (e.g. duplicates
+        # carried over from an old config). Let the user go back and fix them.
+        conflicts = self._highlight_shortcut_conflicts()
+        if conflicts:
+            details = "\n".join(
+                f"• {key} → {', '.join(actions)}" for key, actions in conflicts
+            )
+            proceed = QMessageBox.question(
+                self,
+                S.settings.conflict_title,
+                f"{details}\n\n{S.settings.conflict_save_anyway}"
+                if hasattr(S.settings, "conflict_save_anyway")
+                else f"{details}\n\nSave anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if proceed != QMessageBox.StandardButton.Yes:
+                return
 
         # Save shortcuts
         for row in range(self.table.rowCount()):

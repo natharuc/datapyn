@@ -13,7 +13,7 @@ from src.ui.components.results_viewer import ResultsViewer
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.summarize_panel import SummarizePanel
-from src.ui.components.copilot_chat_panel import CopilotChatPanel
+from src.ui.components.copilot_chat_panel import PyniaChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.design_system.tokens import get_colors
 from src.language import S
@@ -110,12 +110,13 @@ class LayoutMixin:
         self.variables_dock.setMinimumHeight(180)
 
         # Copilot Chat Panel
-        self._copilot_chat_panel = CopilotChatPanel(
-            copilot_client=self._copilot_client,
+        agent_client = getattr(self, "_pynia_agent", None) or self._copilot_client
+        self._copilot_chat_panel = PyniaChatPanel(
+            copilot_client=agent_client,
             mcp_server=self._mcp_server,
             theme_manager=self.theme_manager,
         )
-        self._copilot_chat_panel.set_copilot_client(self._copilot_client)
+        self._copilot_chat_panel.set_agent_client(agent_client)
         self._copilot_chat_panel.set_mcp_server(self._mcp_server)
         self._copilot_chat_panel.insert_code_requested.connect(self._on_insert_code_from_chat)
 
@@ -127,10 +128,18 @@ class LayoutMixin:
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
         self.copilot_dock.setMinimumWidth(280)
         self.copilot_dock.setMinimumHeight(200)
+        from src.assets.pynia_branding import load_pynia_logo
+
+        pynia_dock_icon = load_pynia_logo(16)
+        if pynia_dock_icon:
+            self.copilot_dock.setWindowIcon(pynia_dock_icon)
+        self.copilot_dock.visibilityChanged.connect(
+            lambda _visible: QTimer.singleShot(0, self._reposition_tab_accessories)
+        )
 
         # Copilot Output Panel (shows tool calls, results, debug info)
         self._copilot_output_panel = CopilotOutputPanel(theme_manager=self.theme_manager)
-        self.copilot_output_dock = QDockWidget("Copilot Output", self)
+        self.copilot_output_dock = QDockWidget("Pynia Output", self)
         self.copilot_output_dock.setObjectName("CopilotOutputDock")
         self.copilot_output_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.copilot_output_dock.setWidget(self._copilot_output_panel)
@@ -138,16 +147,24 @@ class LayoutMixin:
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.copilot_output_dock)
         self.copilot_output_dock.setMinimumWidth(200)
         self.copilot_output_dock.setMinimumHeight(150)
+        if pynia_dock_icon:
+            self.copilot_output_dock.setWindowIcon(pynia_dock_icon)
 
         # Connect Copilot signals to output panel
         self._connect_copilot_to_output()
 
-        # Setup LSP client for fast inline completions (if server is available)
-        if hasattr(self, "_lsp_server_available") and self._lsp_server_available:
-            self._setup_lsp_client()
-        
-        # Initialize centralized Copilot auth service
+        # Wire Pynia auth (chat) + inline autocomplete.
         self._setup_copilot_auth_service()
+        self._update_editors_pynia_client()
+
+        # Start the native Copilot LSP for inline completion (it authenticates
+        # off the existing gh login). Guarded so a hiccup can't block startup.
+        try:
+            if getattr(self, "_lsp_server_available", False) and not getattr(self, "_lsp_client", None):
+                self._setup_lsp_client()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Copilot LSP autocomplete setup skipped: %s", exc)
 
         # Tabifica Results, Summarize e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.summarize_dock)
@@ -312,6 +329,7 @@ class LayoutMixin:
 
         dock.show()
         dock.raise_()
+        self._activate_tabified_dock(dock)
 
         # Se mostrando results pela primeira vez, mostrar variables e summarize tambem
         if name == "results":
@@ -327,8 +345,20 @@ class LayoutMixin:
         # Para docks tabificados, raise_() nao troca a aba visivel.
         # Precisamos encontrar o QTabBar que controla o grupo e selecionar
         # a aba correspondente manualmente.
+        # Tabified bottom docks need an explicit tab switch (raise_ alone is not enough).
         if name in ("results", "output", "summarize"):
             self._activate_tabified_dock(dock)
+
+    def _is_dock_tab_active(self, dock: QDockWidget) -> bool:
+        """True when this dock is the selected tab (or not in a tab group)."""
+        from PyQt6.QtWidgets import QTabBar
+
+        target_title = dock.windowTitle()
+        for tab_bar in self.findChildren(QTabBar):
+            for i in range(tab_bar.count()):
+                if tab_bar.tabText(i) == target_title:
+                    return tab_bar.currentIndex() == i
+        return True
 
     def _activate_tabified_dock(self, dock: QDockWidget):
         """Activates the correct tab in a group of tabified docks.
@@ -346,6 +376,12 @@ class LayoutMixin:
                     tab_bar.setCurrentIndex(i)
                     return
 
+    def _reposition_tab_accessories(self) -> None:
+        """Keep session/results '+' and chart buttons aligned after dock layout changes."""
+        from src.design_system.tab_controls import reposition_tab_bar_accessories
+
+        reposition_tab_bar_accessories(self)
+
     def hide_panel(self, name: str):
         """Hides specific panel using QDockWidget"""
         if name == "results":
@@ -362,6 +398,7 @@ class LayoutMixin:
             self.object_explorer_dock.hide()
         elif name == "copilot" and hasattr(self, "copilot_dock"):
             self.copilot_dock.hide()
+            QTimer.singleShot(0, self._reposition_tab_accessories)
 
     def _refresh_connections_list(self):
         """Updates the saved connections list"""

@@ -1,5 +1,5 @@
 """
-MCP Tools - Tools exposed to Copilot via the Model Context Protocol.
+MCP Tools - DataPyn operations exposed to Pynia via the Model Context Protocol.
 
 Each tool maps to a DataPyn operation:
 - create_tab: Creates a new session tab
@@ -48,6 +48,24 @@ def _truncate_code_for_tool(code: str, max_lines: int = MAX_TOOL_CODE_LINES, max
         code = code[:max_chars] + f"\n# ... truncated ({len(code) - max_chars} chars omitted) ..."
         notes.append("truncated for token limits")
     return code, "; ".join(notes)
+
+
+def _code_from_tool_args(args: Dict[str, Any]) -> str:
+    """Accept legacy ``code`` or Pynia ``content`` parameter names."""
+    if args.get("code") is not None:
+        return str(args.get("code") or "")
+    return str(args.get("content") or "")
+
+
+def _line_edit_from_tool_args(args: Dict[str, Any]) -> tuple[str, str]:
+    """Return (new_code, mode) for edit_block_lines from legacy or Pynia args."""
+    new_code = args.get("new_code")
+    if new_code is None:
+        new_code = args.get("content", "")
+    else:
+        new_code = new_code or ""
+    mode = (args.get("mode") or args.get("line_operation") or "replace").lower().strip()
+    return str(new_code), mode
 
 
 def _merge_line_ranges(ranges: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
@@ -227,13 +245,13 @@ class MCPToolRegistry(QObject):
         self._register(MCPTool(
             name="think",
             description=(
-                "Plan and reason about your approach BEFORE acting. "
-                "Decide: silent tools for exploration, visible tools for user-facing code."
+                "ONLY for 4+ step ambiguous plans. Skip for edits, single queries, charts. "
+                "One short sentence max."
             ),
             parameters={
                 "thought": {
                     "type": "string",
-                    "description": "Your reasoning about how to approach the task.",
+                    "description": "Brief plan (one sentence).",
                 },
             },
             handler=self._think,
@@ -276,8 +294,7 @@ class MCPToolRegistry(QObject):
         self._register(MCPTool(
             name="get_context",
             description=(
-                "Get current tab state: block catalog (name, language, hints, previews), "
-                "block_map, connection, variables, schema. Call ONCE at start — do not repeat."
+                "Tab snapshot (blocks, schema, variables). Skip if turn context JSON already has blocks."
             ),
             parameters={},
             handler=self._get_context,
@@ -286,8 +303,8 @@ class MCPToolRegistry(QObject):
         self._register(MCPTool(
             name="list_blocks",
             description=(
-                "List all code blocks in the chat target tab with name, language, line count, "
-                "focus state, and hints such as generates_html. Use BEFORE search_in_code."
+                "Block names/languages/hints in target tab. Skip if context has block_map. "
+                "Use before search_in_code."
             ),
             parameters={},
             handler=self._list_blocks,
@@ -1105,23 +1122,15 @@ class MCPToolRegistry(QObject):
     # === Tool Implementations ===
 
     def _think(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a thinking/reasoning step - helps Copilot plan before acting.
-        
-        This tool doesn't perform any action, it just returns the thought
-        back to Copilot so it can reason through its approach.
-        """
-        thought = args.get("thought", "")
+        """Lightweight plan ack — prefer acting without this tool."""
+        thought = (args.get("thought") or "").strip()
         if not thought:
-            return {"error": "No thought provided. Use this tool to reason about your approach."}
-        
-        logger.info(f"think: {thought}")
-        
-        # Return the thought back - this helps Copilot "think out loud"
-        # The thought is shown in the UI via the ToolCallWidget
+            return {"content": [{"type": "text", "text": "ok"}]}
+        logger.info("Pynia think: %s", thought[:200])
         return {
             "content": [{
-                "type": "text", 
-                "text": f"Thought recorded. Now proceed with your plan:\n{thought}"
+                "type": "text",
+                "text": "ok — proceed with your plan.",
             }]
         }
 
@@ -1231,7 +1240,7 @@ class MCPToolRegistry(QObject):
             block = block_editor.add_block(language=language)
         if code and block:
             # Show copilot editing indicator
-            self._signal_copilot_editing(block, block_editor)
+            self._signal_pynia_editing(block, block_editor)
             block.set_code(code)
             logger.info(f"create_block: Set code on block")
         
@@ -1255,13 +1264,13 @@ class MCPToolRegistry(QObject):
 
     def _edit_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Edit code in a block. Resolved by name, index, or focused block."""
-        code = args.get("code", "")
+        code = _code_from_tool_args(args)
 
         target_block, block_editor, idx, error = self._resolve_block(args)
         if error:
             return {"error": error}
 
-        self._signal_copilot_editing(target_block, block_editor)
+        self._signal_pynia_editing(target_block, block_editor)
         target_block.set_code(code)
         # Move cursor to top of block
         editor = getattr(target_block, "editor", None)
@@ -1766,20 +1775,22 @@ class MCPToolRegistry(QObject):
         idx = blocks.index(target) if target in blocks else -1
         return target, block_editor, idx, None
 
-    def _signal_copilot_editing(self, block, block_editor=None):
+    def _signal_pynia_editing(self, block, block_editor=None):
         """Show Copilot editing indicator on a block and scroll it into view.
         
         Sets the purple sparkle indicator on the block, and ensures
         the block is visible to the user by scrolling to it.
         """
         try:
-            if hasattr(block, "set_copilot_editing"):
+            if hasattr(block, "set_pynia_editing"):
+                block.set_pynia_editing(True)
+            elif hasattr(block, "set_copilot_editing"):
                 block.set_copilot_editing(True)
             # Scroll block into view
             if block_editor and hasattr(block_editor, "ensureWidgetVisible"):
                 block_editor.ensureWidgetVisible(block)
         except Exception as e:
-            logger.debug(f"_signal_copilot_editing failed: {e}")
+            logger.debug(f"_signal_pynia_editing failed: {e}")
 
     def _highlight_edited_lines(self, block, start_line, end_line):
         """Highlight edited lines and move cursor to the edit location.
@@ -2186,7 +2197,7 @@ class MCPToolRegistry(QObject):
 
         logger.info("write_and_run: Setting code...")
         # Show copilot editing indicator and scroll into view
-        self._signal_copilot_editing(block, block_editor)
+        self._signal_pynia_editing(block, block_editor)
         block.set_code(code)
         block_index = block_editor.blocks.index(block) if block in block_editor.blocks else len(block_editor.blocks) - 1
         actual_name = block.get_block_name()
@@ -2267,7 +2278,7 @@ class MCPToolRegistry(QObject):
         if error:
             return {"error": error}
 
-        self._signal_copilot_editing(block, block_editor)
+        self._signal_pynia_editing(block, block_editor)
         block.set_code(code)
         # Move cursor to top
         editor = getattr(block, "editor", None)
@@ -2320,7 +2331,7 @@ class MCPToolRegistry(QObject):
 
     def _replace_selection(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Replace the selected text with new code."""
-        code = args.get("code", "")
+        code = _code_from_tool_args(args)
         block, block_editor, error = self._get_focused_block()
         if error:
             return {"error": error}
@@ -2425,7 +2436,7 @@ class MCPToolRegistry(QObject):
             return {"error": error}
 
         # Update the code
-        self._signal_copilot_editing(block, block_editor)
+        self._signal_pynia_editing(block, block_editor)
         block.set_code(fixed_code)
         block_index = block_editor.blocks.index(block) if block in block_editor.blocks else -1
 
@@ -2930,8 +2941,7 @@ class MCPToolRegistry(QObject):
         """Edit specific lines in a block (replace, insert, or delete)."""
         start_line = args.get("start_line")
         end_line = args.get("end_line")
-        new_code = args.get("new_code", "")
-        mode = args.get("mode", "replace")
+        new_code, mode = _line_edit_from_tool_args(args)
 
         if start_line is None:
             return {"error": "start_line is required."}
@@ -2983,7 +2993,7 @@ class MCPToolRegistry(QObject):
 
         result_code = "\n".join(lines)
         # Show copilot editing indicator and scroll into view
-        self._signal_copilot_editing(target_block, block_editor)
+        self._signal_pynia_editing(target_block, block_editor)
         target_block.set_code(result_code)
         # Highlight the edited region and move cursor there
         if mode == "replace":

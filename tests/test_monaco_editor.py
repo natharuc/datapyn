@@ -275,115 +275,167 @@ class TestMonacoEditorBasic:
 
 
 class TestInlineCompletionService:
-    """Tests for InlineCompletionService."""
-    
-    def test_service_creates(self):
-        """Service should create without errors."""
+    """Tests for the rewritten (HTTP connector) InlineCompletionService."""
+
+    def _service(self):
         from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
+        return InlineCompletionService()
+
+    def _patch_provider(self, monkeypatch, *, enabled=True, active="openrouter",
+                        token_for=("openrouter",), model="openai/gpt-4.1-mini"):
+        from src.editors.monaco import inline_completion_service as mod
+        settings = Mock()
+        settings.autocomplete_enabled = enabled
+        settings.active_provider = active
+        settings.completion_model = lambda pid: model
+        monkeypatch.setattr(mod, "get_pynia_settings", lambda: settings)
+        monkeypatch.setattr(mod, "get_provider_secret", lambda pid: "tok" if pid in token_for else "")
+
+    def test_service_creates(self):
+        service = self._service()
         assert service is not None
         assert hasattr(service, "completion_ready")
-    
-    def test_service_set_copilot_client(self):
-        """Service should accept copilot client."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        mock_client = Mock()
-        
-        service.set_copilot_client(mock_client)
-        
-        assert service._copilot_client is mock_client
-    
-    def test_service_debounce_timer(self, qtbot):
-        """Service should have debounce timer configured."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
-        assert service._debounce_timer.isSingleShot()
-        assert service._debounce_timer.interval() == 180
-    
-    def test_service_cancel_request(self):
-        """cancel_request should stop pending requests."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
-        # Request then cancel
-        service.request_completion("prefix", "suffix", "python", 1, 1)
-        service.cancel_request()
-        
-        assert service._pending_request is None
-        assert not service._debounce_timer.isActive()
-    
-    def test_python_def_completion(self):
-        """Service should complete Python def statements."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
-        completion = service._python_completion("def foo", "", "def foo")
-        
-        assert "(self):" in completion or "():" in completion
-    
-    def test_python_class_completion(self):
-        """Service should complete Python class statements."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
-        completion = service._python_completion("class Foo", "", "class Foo")
-        
-        assert ":" in completion
-        assert "__init__" in completion
-    
-    def test_python_for_completion(self):
-        """Service should complete Python for statements."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
-        completion = service._python_completion("for i", "", "for i")
-        
-        assert "in range" in completion
-    
-    def test_sql_select_completion(self):
-        """Service should complete SQL SELECT statements."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
-        completion = service._sql_completion("SELECT", "", "SELECT")
-        
-        assert "FROM" in completion
-    
-    def test_sql_from_completion(self):
-        """Service should complete SQL FROM clause."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
-        
-        completion = service._sql_completion("SELECT * FROM ", "", "SELECT * FROM ")
-        
-        assert "table" in completion.lower()
-    
+        assert service.has_lsp is False  # native LSP path removed
+
+    def test_compat_setters_are_noops(self):
+        service = self._service()
+        # Old callers still invoke these — must not raise.
+        service.set_pynia_client(Mock())
+        service.set_copilot_client(Mock())
+        service.set_lsp_client(Mock())
+        service.set_blocks_code_context("other block code")  # focused-block only
+        service.set_document_info("file:///x.py", "python")
+        service.open_document("file:///x.py", "python", "x = 1")
+        service.notify_document_changed("x = 1")
+
     def test_skips_short_prefix(self):
-        """Service should skip completion for very short prefix."""
-        from src.editors.monaco.inline_completion_service import InlineCompletionService
-        
-        service = InlineCompletionService()
+        service = self._service()
         results = []
-        service.completion_ready.connect(lambda x: results.append(x))
-        
-        # Very short prefix should be skipped
+        service.completion_ready.connect(results.append)
         service.request_completion("a", "", "python", 1, 2)
-        
-        # Should emit empty immediately (not debounced)
-        assert len(results) == 1
-        assert results[0] == ""
+        assert results == [""]
+
+    def test_cancel_request_clears_pending(self):
+        service = self._service()
+        service.request_completion("import pandas", "", "python", 1, 14)
+        service.cancel_request()
+        assert service._pending is None
+        assert not service._debounce.isActive()
+
+    def test_resolve_provider_prefers_active_api(self, monkeypatch):
+        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+        service = self._service()
+        assert service._resolve_provider() == ("openrouter", "openai/gpt-4.1-mini")
+        assert service.has_pynia is True
+
+    def test_resolve_provider_none_when_disabled(self, monkeypatch):
+        self._patch_provider(monkeypatch, enabled=False)
+        service = self._service()
+        assert service._resolve_provider() == (None, None)
+        assert service.has_pynia is False
+
+    def test_resolve_provider_none_without_token(self, monkeypatch):
+        self._patch_provider(monkeypatch, token_for=())  # no API token anywhere
+        service = self._service()
+        assert service._resolve_provider() == (None, None)
+
+    def test_fire_without_provider_emits_empty(self, monkeypatch):
+        self._patch_provider(monkeypatch, token_for=())
+        service = self._service()
+        results = []
+        service.completion_ready.connect(results.append)
+        service._pending = {"id": 1, "prefix": "x", "suffix": "", "language": "python", "line": 1, "column": 2}
+        service._fire()
+        assert results == [""]
+        assert service._busy is False
+
+    def test_fire_with_provider_starts_worker(self, monkeypatch):
+        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+        service = self._service()
+        started = []
+        service._start_worker = lambda pid, model, req: started.append((pid, model, req))
+        service._pending = {"id": 1, "prefix": "x =", "suffix": "", "language": "python", "line": 1, "column": 3}
+        service._fire()
+        assert service._busy is True
+        assert started and started[0][0] == "openrouter"
+        assert started[0][1] == "openai/gpt-4.1-mini"
+
+    def test_lsp_preferred_when_authenticated(self):
+        """When the Copilot LSP is signed in, it serves completions (0-indexed)."""
+        lsp = Mock()
+        lsp.is_authenticated = True
+        service = self._service()
+        service.set_lsp_client(lsp)
+        service.set_document_info("file:///x.py", "python")
+        assert service.has_lsp is True
+
+        service._pending = {
+            "id": 1, "prefix": "def f():\n    ", "suffix": "",
+            "language": "python", "line": 2, "column": 5,
+        }
+        service._fire()
+
+        lsp.request_completion.assert_called_once()
+        uri, _version, line, char = lsp.request_completion.call_args[0]
+        assert uri == "file:///x.py"
+        assert (line, char) == (1, 4)  # LSP is 0-indexed
+        assert service._busy is True
+
+    def test_lsp_result_ignored_for_other_block_uri(self):
+        """Shared LSP client must not show one block's ghost-text in another."""
+        lsp = Mock()
+        lsp.is_authenticated = True
+        service = self._service()
+        service.set_lsp_client(lsp)
+        service.set_document_info("file:///sql.sql", "sql")
+
+        results = []
+        service.completion_ready.connect(results.append)
+        service._on_lsp_result("file:///python.py", "df.head()")
+        assert results == []
+
+        service._on_lsp_result("file:///sql.sql", "SELECT 1")
+        assert results == ["SELECT 1"]
+
+    def test_on_complete_emits_and_releases(self):
+        service = self._service()
+        results = []
+        service.completion_ready.connect(results.append)
+        service._busy = True
+        service._on_complete("df.head()")
+        assert results == ["df.head()"]
+        assert service._busy is False
+
+    def test_on_error_emits_empty(self):
+        service = self._service()
+        results = []
+        service.completion_ready.connect(results.append)
+        service._busy = True
+        service._on_error("HTTP 401")
+        assert results == [""]
+        assert service._busy is False
+
+    def test_watchdog_releases_stuck_request(self):
+        service = self._service()
+        results = []
+        service.completion_ready.connect(results.append)
+        service._busy = True
+        service._on_watchdog()
+        assert service._busy is False
+        assert results == [""]
+
+    def test_context_for_sql_uses_schema(self):
+        service = self._service()
+        service.set_database_context("Tables: users(id, name)")
+        assert "users" in service._context_for("sql")
+
+    def test_context_for_python_uses_namespace(self):
+        service = self._service()
+        service.set_python_namespace({"df": "DataFrame"})
+        ctx = service._context_for("python")
+        assert "df: DataFrame" in ctx
+
+
 
 
 class TestEditorConfig:
@@ -446,6 +498,7 @@ class TestMonacoEditorInterface:
         assert callable(getattr(editor, "get_text", None))
         assert callable(getattr(editor, "set_text", None))
         assert callable(getattr(editor, "get_selected_text", None))
+        assert callable(getattr(editor, "request_execute", None))
         assert callable(getattr(editor, "has_selection", None))
         assert callable(getattr(editor, "clear", None))
         

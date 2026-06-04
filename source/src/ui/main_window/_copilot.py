@@ -62,6 +62,13 @@ class CopilotMixin:
             logging.info("[MAIN] LSP client started and initializing")
             if hasattr(self, "_copilot_auth_service") and self._copilot_auth_service:
                 self._copilot_auth_service.set_lsp_client(self._lsp_client)
+            # The LSP shares the GitHub (gh) session — check status so it
+            # authenticates against the existing token (no separate sign-in
+            # needed when the user is already on Copilot).
+            try:
+                self._lsp_client.check_status(auto_sign_in=False)
+            except Exception as exc:
+                logging.warning("[MAIN] LSP check_status failed: %s", exc)
             self._update_editors_lsp_client()
         else:
             logging.warning("[MAIN] Failed to attach LSP process")
@@ -72,27 +79,31 @@ class CopilotMixin:
         self._lsp_client = None
 
     def _setup_copilot_auth_service(self):
-        """Initialize the centralized Copilot authentication service."""
+        """Initialize Pynia chat auth and Copilot LSP auth services."""
         from src.services.copilot import get_copilot_auth_service
+        from src.services.pynia import get_pynia_auth_service
         import logging
         
         self._copilot_auth_service = get_copilot_auth_service()
+        self._pynia_auth_service = get_pynia_auth_service()
         
-        # Pass clients to auth service
-        if hasattr(self, "_copilot_client") and self._copilot_client:
+        # Chat agent: Pynia multi-provider client
+        if hasattr(self, "_pynia_agent") and self._pynia_agent:
+            self._pynia_auth_service.set_agent_client(self._pynia_agent)
+        elif hasattr(self, "_copilot_client") and self._copilot_client:
             self._copilot_auth_service.set_chat_client(self._copilot_client)
         
         if hasattr(self, "_lsp_client") and self._lsp_client:
             self._copilot_auth_service.set_lsp_client(self._lsp_client)
         
         # Connect auth service signals for UI updates
-        self._copilot_auth_service.chat_authenticated.connect(self._on_auth_service_chat_authenticated)
+        auth_chat = self._pynia_auth_service if getattr(self, "_pynia_auth_service", None) else self._copilot_auth_service
+        auth_chat.chat_authenticated.connect(self._on_auth_service_chat_authenticated)
         self._copilot_auth_service.lsp_authenticated.connect(self._on_auth_service_lsp_authenticated)
-        self._copilot_auth_service.chat_auth_required.connect(self._on_lsp_auth_required)  # Reuse existing handler
+        auth_chat.chat_auth_required.connect(self._on_lsp_auth_required)
         self._copilot_auth_service.lsp_auth_required.connect(self._on_lsp_auth_required)
         
-        # Trigger auto-auth after UI is ready
-        self._copilot_auth_service.trigger_auto_auth(delay_ms=500)
+        # Chat panel starts auto-auth when the WebView is ready (shows signing-in state)
         
         logging.info("[MAIN] Copilot auth service initialized")
 
@@ -146,14 +157,24 @@ class CopilotMixin:
         self._update_editors_lsp_client()
 
     def _update_editors_lsp_client(self):
-        """Update all editors with the LSP client."""
-        if not self._lsp_client:
+        """Attach the native Copilot LSP client to all session editors."""
+        client = getattr(self, "_lsp_client", None)
+        if not client:
             return
-        
         for i in range(self.session_tabs.count()):
             widget = self.session_tabs.widget(i)
             if hasattr(widget, "editor") and hasattr(widget.editor, "set_lsp_client"):
-                widget.editor.set_lsp_client(self._lsp_client)
+                widget.editor.set_lsp_client(client)
+
+    def _update_editors_pynia_client(self):
+        """Attach Pynia agent to all session editors for inline autocomplete."""
+        client = getattr(self, "_pynia_agent", None)
+        if not client:
+            return
+        for i in range(self.session_tabs.count()):
+            widget = self.session_tabs.widget(i)
+            if hasattr(widget, "editor") and hasattr(widget.editor, "set_pynia_client"):
+                widget.editor.set_pynia_client(client)
 
     def _on_settings_chat_login(self):
         """Handle Chat login request from settings dialog.
@@ -251,13 +272,12 @@ class CopilotMixin:
         msg.exec()
 
     def _connect_copilot_to_output(self):
-        """Connect Copilot client signals to output panel."""
-        if not hasattr(self, "_copilot_client") or not self._copilot_client:
+        """Connect Pynia agent signals to output panel."""
+        client = getattr(self, "_pynia_agent", None) or getattr(self, "_copilot_client", None)
+        if not client:
             return
         if not hasattr(self, "_copilot_output_panel") or not self._copilot_output_panel:
             return
-
-        client = self._copilot_client
         output = self._copilot_output_panel
 
         # Auth signals

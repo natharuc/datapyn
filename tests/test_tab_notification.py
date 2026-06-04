@@ -400,6 +400,7 @@ class TestSessionWidgetTabNotification:
 
         with qtbot.waitSignal(widget.execution_finished, timeout=1000) as blocker:
             widget._on_python_finished(df, "", "", {}, [])
+            widget._emit_queue_notification()
 
         assert blocker.args == ["TestTab", "Value: 42", True]
 
@@ -416,9 +417,11 @@ class TestSessionWidgetTabNotification:
 
         with qtbot.waitSignal(widget.execution_finished, timeout=1000) as first_blocker:
             widget._on_python_finished(first_df, "", "", {"_last_result": first_df}, [])
+            widget._emit_queue_notification()
 
         with qtbot.waitSignal(widget.execution_finished, timeout=1000) as second_blocker:
             widget._on_python_finished(second_df, "", "", {"_last_result": first_df}, [])
+            widget._emit_queue_notification()
 
         assert first_blocker.args == ["TestTab", "Value: 42", True]
         assert second_blocker.args == ["TestTab", "Value: 99", True]
@@ -443,6 +446,7 @@ class TestSessionWidgetTabNotification:
 
         with qtbot.waitSignal(widget.execution_finished, timeout=1000) as blocker:
             widget._on_python_finished(df, "", "", {}, [])
+            widget._emit_queue_notification()
 
         assert blocker.args == ["TestTab", "Status: Active", True]
         assert widget._last_notification_delivery["suppressed"] is True
@@ -470,6 +474,7 @@ class TestSessionWidgetTabNotification:
 
         with qtbot.waitSignal(widget.execution_finished, timeout=1000) as blocker:
             widget._on_python_finished(df, "", "", {}, [])
+            widget._emit_queue_notification()
 
         assert blocker.args == ["TestTab", "Status: Alert", True]
         assert widget._last_notification_delivery["suppressed"] is False

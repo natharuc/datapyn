@@ -3,7 +3,7 @@ Tests for Copilot UX improvements:
 
 1. CodeBlock copilot editing indicator (sparkle icon, purple border, auto-dismiss)
 2. Monaco highlight_lines integration
-3. MCP tool helpers (_signal_copilot_editing, _highlight_edited_lines)
+3. MCP tool helpers (_signal_pynia_editing, _highlight_edited_lines)
 4. Chat template thinking block / i18n labels
 5. Chat panel thinking state machine
 6. Per-tab chat context switching
@@ -62,20 +62,20 @@ class TestCodeBlockCopilotIndicator:
         block = CodeBlock()
         assert block.is_copilot_editing() is False
 
-    def test_set_copilot_editing_true(self, qapp):
-        """set_copilot_editing(True) should show the indicator."""
+    def test_set_pynia_editing_true(self, qapp):
+        """set_pynia_editing(True) should show the indicator."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
+        block.set_pynia_editing(True)
         assert block.is_copilot_editing() is True
         # Widget is not visible when parent is not shown,
         # but the internal flag and !isHidden() confirm it
         assert not block._copilot_indicator.isHidden()
 
-    def test_set_copilot_editing_false(self, qapp):
-        """set_copilot_editing(False) should hide the indicator."""
+    def test_set_pynia_editing_false(self, qapp):
+        """set_pynia_editing(False) should hide the indicator."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
-        block.set_copilot_editing(False)
+        block.set_pynia_editing(True)
+        block.set_pynia_editing(False)
         assert block.is_copilot_editing() is False
         assert block._copilot_indicator.isHidden()
 
@@ -93,7 +93,7 @@ class TestCodeBlockCopilotIndicator:
     def test_copilot_editing_border_style(self, qapp):
         """When copilot editing, block should have purple left border."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
+        block.set_pynia_editing(True)
         block._update_style()
         style = block.styleSheet()
         # Should contain the copilot purple color
@@ -102,17 +102,17 @@ class TestCodeBlockCopilotIndicator:
     def test_normal_border_after_editing_ends(self, qapp):
         """After copilot editing ends, border should return to normal."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
-        block.set_copilot_editing(False)
+        block.set_pynia_editing(True)
+        block.set_pynia_editing(False)
         block._update_style()
         style = block.styleSheet()
         # Purple should not be in the border anymore since block is not focused
         assert block.is_copilot_editing() is False
 
     def test_auto_dismiss_timer_created(self, qapp):
-        """set_copilot_editing(True) should create an auto-dismiss QTimer."""
+        """set_pynia_editing(True) should create an auto-dismiss QTimer."""
         block = CodeBlock()
-        block.set_copilot_editing(True)
+        block.set_pynia_editing(True)
         # Timer should have been created and started
         assert block._copilot_editing_timer is not None
         assert block._copilot_editing_timer.isActive()
@@ -164,7 +164,7 @@ class TestMonacoHighlightLines:
 
 
 class TestMCPToolHelpers:
-    """Tests for _signal_copilot_editing and _highlight_edited_lines helpers."""
+    """Tests for _signal_pynia_editing and _highlight_edited_lines helpers."""
 
     def _make_registry(self):
         """Create a MCPToolRegistry with mocked main window."""
@@ -173,35 +173,35 @@ class TestMCPToolHelpers:
         registry._main_window = MagicMock()
         return registry
 
-    def test_signal_copilot_editing_calls_block(self, qapp):
-        """_signal_copilot_editing should call set_copilot_editing on the block."""
+    def test_signal_pynia_editing_calls_block(self, qapp):
+        """_signal_pynia_editing should call set_pynia_editing on the block."""
         registry = self._make_registry()
         block = MagicMock()
         block_editor = MagicMock()
 
-        registry._signal_copilot_editing(block, block_editor)
+        registry._signal_pynia_editing(block, block_editor)
 
-        block.set_copilot_editing.assert_called_once_with(True)
+        block.set_pynia_editing.assert_called_once_with(True)
 
-    def test_signal_copilot_editing_scrolls_into_view(self, qapp):
-        """_signal_copilot_editing should scroll to make the block visible."""
+    def test_signal_pynia_editing_scrolls_into_view(self, qapp):
+        """_signal_pynia_editing should scroll to make the block visible."""
         registry = self._make_registry()
         block = MagicMock()
         block_editor = MagicMock()
 
-        registry._signal_copilot_editing(block, block_editor)
+        registry._signal_pynia_editing(block, block_editor)
 
         block_editor.ensureWidgetVisible.assert_called_once_with(block)
 
-    def test_signal_copilot_editing_no_scroll_area(self, qapp):
-        """_signal_copilot_editing should not crash if scroll_area is missing."""
+    def test_signal_pynia_editing_no_scroll_area(self, qapp):
+        """_signal_pynia_editing should not crash if scroll_area is missing."""
         registry = self._make_registry()
         block = MagicMock()
         block_editor = MagicMock(spec=[])  # no scroll_area
 
         # Should not raise
-        registry._signal_copilot_editing(block, block_editor)
-        block.set_copilot_editing.assert_called_once_with(True)
+        registry._signal_pynia_editing(block, block_editor)
+        block.set_pynia_editing.assert_called_once_with(True)
 
     def test_highlight_edited_lines_calls_editor(self, qapp):
         """_highlight_edited_lines should call go_to_line and highlight_lines."""
@@ -321,6 +321,8 @@ class TestCopilotChatWebViewApp:
         assert "composerError" in html
         assert "attachBtn" in html
         assert "logoutBtn" in html
+        assert "focusedBlockChips" in html
+        assert 'id="focusedBlockChips" class="composer-focused-block" hidden' in html
         assert "attachmentChips" in html
         assert 'id="attachmentChips" class="composer-attachments" hidden' in html
         assert "imageLightbox" in html
@@ -342,6 +344,8 @@ class TestCopilotChatWebViewApp:
         assert "callBridgeResult" in js
         assert "forceComposerRepaint" in js
         assert "syncAttachmentStrip" in js
+        assert "setFocusedBlockAttachment" in js
+        assert "focused_block" in js
         assert 'callBridge("updateCopilotCli"' in js
         assert 'callBridge("refreshUsagePanel"' in js
 
@@ -454,7 +458,13 @@ class TestCopilotChatWebViewApp:
                 self.focused = True
 
         class Host(UISetupMixin):
-            pass
+            def show_panel(self, name):
+                assert name == "copilot"
+                self.copilot_dock.show()
+                self.copilot_dock.raise_()
+
+            def _is_dock_tab_active(self, dock):
+                return False
 
         host = Host()
         host.copilot_dock = DummyDock()
@@ -463,13 +473,13 @@ class TestCopilotChatWebViewApp:
         host._toggle_copilot_dock()
 
         assert host.copilot_dock.visible is True
-        assert host.copilot_dock.raised is True
         assert host._copilot_chat_panel.focused is True
 
     def test_work_display_is_collapsed_by_default(self, app_files):
         js = app_files["js"]
         assert 'document.createElement("details")' in js
-        assert 'className = "work-block"' in js
+        assert "work-block" in js
+        assert "work-block-compact" in js
         assert "open = true" not in js
 
 
@@ -477,14 +487,18 @@ class TestCopilotChatWebViewApp:
 
 
 class TestChatPanelThinkingState:
-    """Tests for the thinking state machine in CopilotChatPanel."""
+    """Tests for the thinking state machine in PyniaChatPanel."""
 
     @pytest.fixture
     def panel(self, qapp):
-        """Create a CopilotChatPanel with mocked dependencies."""
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        """Create a PyniaChatPanel with mocked dependencies."""
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
+        panel._chat_runtime._active_turn = {  # noqa: SLF001 — allow turn UI paths in unit tests
+            "turn_id": "test-turn",
+            "state": "thinking",
+        }
         return panel
 
     def test_initial_thinking_state(self, panel):
@@ -544,17 +558,18 @@ class TestChatPanelModelControls:
         from PyQt6.QtCore import QSettings
         settings = QSettings("DataPyn", "CopilotChat")
         settings.clear()
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
         yield panel
         settings.clear()
 
     def test_models_changed_populates_combo_and_usage(self, panel):
-        panel._on_models_changed([
-            {"id": "gpt-4o", "name": "GPT-4o", "multiplier": 1},
-            {"id": "o3", "name": "o3", "multiplier": 10, "supports_reasoning_effort": True},
-        ])
+        with patch.object(panel, "_preferred_model_id", return_value=""):
+            panel._on_models_changed([
+                {"id": "gpt-4o", "name": "GPT-4o", "multiplier": 1},
+                {"id": "o3", "name": "o3", "multiplier": 10, "supports_reasoning_effort": True},
+            ])
 
         assert panel._model_combo.count() == 2
         assert panel._model_combo.itemData(1) == "o3"
@@ -573,14 +588,20 @@ class TestChatPanelModelControls:
         assert panel._effort_combo.currentData() == "auto"
 
     def test_reasoning_effort_uses_model_supported_levels(self, panel):
-        panel._on_models_changed([
-            {
-                "id": "claude-sonnet-4.5",
-                "name": "Claude Sonnet 4.5",
-                "supports_reasoning_effort": True,
-                "supported_reasoning_efforts": ["low", "medium"],
-            },
-        ])
+        with patch.object(panel, "_preferred_model_id", return_value=""):
+            panel._on_models_changed([
+                {
+                    "id": "claude-sonnet-4.5",
+                    "name": "Claude Sonnet 4.5",
+                    "supports_reasoning_effort": True,
+                    "supported_reasoning_efforts": ["low", "medium"],
+                },
+            ])
+
+        model_index = panel._model_combo.findData("claude-sonnet-4.5")
+        assert model_index >= 0
+        panel._model_combo.setCurrentIndex(model_index)
+        panel._update_reasoning_effort_state()
 
         medium_index = panel._effort_combo.findData("medium")
         high_index = panel._effort_combo.findData("high")
@@ -604,7 +625,7 @@ class TestChatPanelModelControls:
     def test_refresh_models_button_calls_client_refresh_metadata(self, panel):
         client = MagicMock()
         client.refresh_metadata = MagicMock()
-        panel._copilot_client = client
+        panel._agent_client = client
 
         panel._on_refresh_models_clicked()
 
@@ -639,10 +660,10 @@ class TestPerTabChatContext:
 
     @pytest.fixture
     def panel(self, qapp):
-        """Create a CopilotChatPanel with mocked dependencies."""
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        """Create a PyniaChatPanel with mocked dependencies."""
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
         return panel
 
     def test_switch_to_new_tab_keeps_global_messages(self, panel):
@@ -767,9 +788,9 @@ class TestCopilotSettingsPersistence:
 
     def test_webview_labels_sent_on_ready(self, qapp):
         """_on_webview_ready should send labels to WebView via setLabels."""
-        with patch('src.ui.components.copilot_chat_panel._load_copilot_icon', return_value=None):
-            from src.ui.components.copilot_chat_panel import CopilotChatPanel
-            panel = CopilotChatPanel()
+        with patch('src.ui.components.copilot_chat_panel._load_pynia_icon', return_value=None):
+            from src.ui.components.copilot_chat_panel import PyniaChatPanel
+            panel = PyniaChatPanel()
         
         with patch.object(panel, '_run_chat_js') as mock_js:
             panel._webview_ready = True

@@ -5,7 +5,7 @@ Displays Copilot tool calls, responses, and debug information.
 Shows what Copilot is doing in real-time.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCursor, QColor
 from PyQt6 import sip
@@ -47,6 +47,20 @@ class CopilotOutputPanel(QWidget):
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(5, 3, 5, 3)
         toolbar_layout.setSpacing(5)
+
+        self._logo_label = QLabel()
+        self._logo_label.setFixedSize(20, 20)
+        from src.assets.pynia_branding import load_pynia_logo
+
+        logo_icon = load_pynia_logo(20)
+        if logo_icon:
+            self._logo_label.setPixmap(logo_icon.pixmap(20, 20))
+            self._logo_label.setToolTip("Pynia")
+        toolbar_layout.addWidget(self._logo_label)
+
+        title = QLabel(getattr(S.dock, "copilot_output", "Pynia Output"))
+        title.setStyleSheet("color: #b0b0b0; font-size: 11px; font-weight: 600;")
+        toolbar_layout.addWidget(title)
 
         toolbar_layout.addStretch()
 

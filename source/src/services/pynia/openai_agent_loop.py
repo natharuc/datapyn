@@ -1,0 +1,288 @@
+"""OpenAI-compatible chat completions with tool calling (OpenAI, OpenRouter)."""
+
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from typing import Any, Callable, Dict, List, Optional
+
+from src.services.pynia.agent_progress import ProgressCallback, emit_progress
+from src.services.pynia.agent_loop_policy import (
+    FORCE_ANSWER_AFTER_ROUND,
+    MAX_TOOL_ROUNDS,
+    prepare_tool_calls,
+    should_offer_tools,
+)
+from src.services.pynia.session_memory import FORCE_ANSWER_NUDGE, compact_conversation_in_place
+from src.services.pynia.agent_status import PHASE_ANALYZING, PHASE_PLANNING, PHASE_SYNTHESIZING
+from src.services.pynia.tool_round_executor import process_tool_round
+
+logger = logging.getLogger(__name__)
+
+
+def _strip_optional_from_schema(properties: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned = {}
+    for name, spec in properties.items():
+        item = dict(spec)
+        item.pop("optional", None)
+        cleaned[name] = item
+    return cleaned
+
+
+def tools_to_openai(registry_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert MCP tool schemas to OpenAI tools format."""
+    return registry_tools
+
+
+def run_openai_agent_turn(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    attachments: Optional[List[Dict[str, Any]]],
+    execute_tool: Callable[[str, Dict[str, Any]], str],
+    tool_executor: Any = None,
+    subagent_orchestrator: Any = None,
+    on_progress: ProgressCallback = None,
+    on_chunk: Callable[[str], None],
+    on_tool_call: Callable[[str, dict, str], None],
+    on_tool_result: Callable[[str, str, str], None],
+    is_cancelled: Callable[[], bool],
+    max_tool_rounds: int = MAX_TOOL_ROUNDS,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> str:
+    """
+    Run a full agent turn with streaming and tool loops.
+
+    Returns the final assistant text for the turn.
+    """
+    import requests
+
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
+    conversation = _inject_attachments(messages, attachments)
+    final_text = ""
+    seen_tool_keys: set[str] = set()
+    block_inspect_counts: dict[str, int] = {}
+
+    from src.services.pynia.sequential_thinking import emit_thinking_step, round_step_title
+
+    emit_thinking_step(
+        on_progress,
+        title=round_step_title(0, planning=True),
+        body="Reviewing focused block and workspace context.",
+        step_id="plan-start",
+    )
+
+    for round_idx in range(max_tool_rounds):
+        if is_cancelled():
+            return final_text
+
+        emit_progress(
+            on_progress,
+            phase_key=PHASE_ANALYZING if round_idx == 0 else PHASE_SYNTHESIZING,
+            step_id="model",
+            step_state="active",
+        )
+
+        offer_tools = should_offer_tools(round_idx, max_rounds=max_tool_rounds) and bool(tools)
+        if round_idx == FORCE_ANSWER_AFTER_ROUND:
+            conversation.append({"role": "user", "content": FORCE_ANSWER_NUDGE})
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": conversation,
+            "stream": True,
+        }
+        if offer_tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=180)
+        if resp.status_code == 401:
+            raise RuntimeError("Invalid API token. Check your connector settings.")
+        if resp.status_code != 200:
+            body = resp.text[:500] if resp.text else ""
+            raise RuntimeError(f"API error HTTP {resp.status_code}: {body}")
+
+        assistant_content = ""
+        tool_calls_acc: Dict[int, Dict[str, Any]] = {}
+
+        for line in resp.iter_lines():
+            if is_cancelled():
+                return final_text + assistant_content
+            if not line:
+                continue
+            line_str = line.decode("utf-8")
+            if not line_str.startswith("data: "):
+                continue
+            data_str = line_str[6:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            choices = data.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content") or ""
+            if content:
+                assistant_content += content
+                final_text += content
+                on_chunk(content)
+
+            for tc_delta in delta.get("tool_calls") or []:
+                idx = tc_delta.get("index", 0)
+                entry = tool_calls_acc.setdefault(
+                    idx,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                if tc_delta.get("id"):
+                    entry["id"] = tc_delta["id"]
+                fn = tc_delta.get("function") or {}
+                if fn.get("name"):
+                    entry["name"] = fn["name"]
+                if fn.get("arguments"):
+                    entry["arguments"] += fn["arguments"]
+
+        if not tool_calls_acc:
+            return final_text
+
+        assistant_msg: Dict[str, Any] = {"role": "assistant", "content": assistant_content or None}
+        openai_tool_calls = []
+        for idx in sorted(tool_calls_acc.keys()):
+            tc = tool_calls_acc[idx]
+            tc_id = tc["id"] or f"call_{uuid.uuid4().hex[:12]}"
+            openai_tool_calls.append(
+                {
+                    "id": tc_id,
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": tc["arguments"] or "{}",
+                    },
+                }
+            )
+        assistant_msg["tool_calls"] = openai_tool_calls
+        conversation.append(assistant_msg)
+
+        parsed_calls = []
+        for tc in openai_tool_calls:
+            fn = tc["function"]
+            name = fn["name"]
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            parsed_calls.append((name, args, tc["id"]))
+
+        prepared = prepare_tool_calls(
+            parsed_calls,
+            seen_keys=seen_tool_keys,
+            block_inspect_counts=block_inspect_counts,
+        )
+
+        from src.services.pynia.sequential_thinking import emit_planned_tools_thinking
+
+        emit_planned_tools_thinking(on_progress, round_idx, prepared)
+
+        if len(parsed_calls) > len([p for p in prepared if p[3]]) and round_idx == 0:
+            logger.info(
+                "Tool round: %s requested, %s executing (dedupe/limit)",
+                len(parsed_calls),
+                sum(1 for p in prepared if p[3]),
+            )
+
+        round_outcomes = process_tool_round(
+            prepared,
+            seen_keys=seen_tool_keys,
+            execute_tool=execute_tool,
+            tool_executor=tool_executor,
+            subagent_orchestrator=subagent_orchestrator,
+            on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result,
+            is_cancelled=is_cancelled,
+            on_progress=on_progress,
+        )
+        for tc_id, _name, result in round_outcomes:
+            conversation.append(
+                {"role": "tool", "tool_call_id": tc_id, "content": result}
+            )
+        compact_conversation_in_place(conversation)
+
+        if not offer_tools:
+            continue
+
+        if round_idx >= max_tool_rounds - 1:
+            logger.warning("Max tool rounds (%s) reached", max_tool_rounds)
+            break
+
+    return final_text
+
+
+def _inject_attachments(
+    messages: List[Dict[str, Any]],
+    attachments: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    if not attachments:
+        return [dict(m) for m in messages]
+
+    result = [dict(m) for m in messages]
+    for idx in range(len(result) - 1, -1, -1):
+        if result[idx].get("role") != "user":
+            continue
+        text = result[idx].get("content", "")
+        parts: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+        for att in attachments:
+            path = att.get("path") or att.get("file_path")
+            mime = att.get("mime_type") or att.get("media_type") or "image/png"
+            if not path:
+                continue
+            try:
+                import base64
+                from pathlib import Path
+
+                data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{data}"},
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Skipping attachment %s: %s", path, exc)
+        result[idx] = {"role": "user", "content": parts}
+        break
+    return result
+
+
+def fetch_openai_models(base_url: str, api_key: str) -> List[Dict[str, Any]]:
+    import requests
+
+    url = f"{base_url.rstrip('/')}/models"
+    resp = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        return []
+    data = resp.json()
+    models = []
+    for item in data.get("data", []):
+        mid = item.get("id", "")
+        if mid:
+            models.append({"id": mid, "name": mid, "multiplier": 1.0})
+    return models

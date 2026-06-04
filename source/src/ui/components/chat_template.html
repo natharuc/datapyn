@@ -103,6 +103,13 @@
             max-width: 280px;
         }
 
+        #welcome-logo {
+            width: 72px;
+            height: 72px;
+            margin-bottom: 16px;
+            object-fit: contain;
+        }
+
         /* Message bubbles */
         .message {
             display: flex;
@@ -603,6 +610,7 @@
     <div id="chat-container">
         <div id="messages">
             <div id="welcome">
+                <img id="welcome-logo" alt="" />
                 <h2></h2>
                 <p></p>
             </div>
@@ -751,6 +759,15 @@
             const welcome = document.getElementById('welcome');
             welcome.querySelector('h2').textContent = title;
             welcome.querySelector('p').textContent = message;
+        }
+
+        function setWelcomeLogo(dataUri) {
+            const img = document.getElementById('welcome-logo');
+            if (!img) {
+                return;
+            }
+            img.src = dataUri || '';
+            img.style.display = dataUri ? 'block' : 'none';
         }
 
         function addMessage(role, content, id) {

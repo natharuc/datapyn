@@ -17,6 +17,7 @@ from PyQt6.QtCore import (
     QEvent,
     QSettings,
     Qt,
+    QThread,
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
@@ -34,6 +35,45 @@ from .monaco_sql_completions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _SyntaxValidateWorker(QThread):
+    """Run syntax checks off the UI thread."""
+
+    result_ready = pyqtSignal(int, list)
+
+    def __init__(
+        self,
+        generation: int,
+        language: str,
+        code: str,
+        db_type: str = "",
+        sql_schema: Optional[Dict[str, Any]] = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._generation = generation
+        self._language = language
+        self._code = code
+        self._db_type = db_type
+        self._sql_schema = sql_schema
+
+    def run(self):
+        if self.isInterruptionRequested():
+            return
+        from src.services.syntax_validator import validate_code
+
+        markers = [
+            m.to_dict()
+            for m in validate_code(
+                self._language,
+                self._code,
+                db_type=self._db_type or None,
+                schema=self._sql_schema if self._language == "sql" else None,
+            )
+        ]
+        if not self.isInterruptionRequested():
+            self.result_ready.emit(self._generation, markers)
 
 
 def _qthread_alive(worker) -> bool:
@@ -132,7 +172,16 @@ class MonacoEditor(QWidget):
         self._current_line_cache = 0
         self._python_namespace: Dict[str, Any] = {}
         self._global_imports: str = ""
+        self._static_completions: list = []
+        self._sibling_block_completions: list = []
+        self._sql_db_type: str = ""
         self._completion_service = MonacoCompletionService(self)
+        self._syntax_validate_timer = QTimer(self)
+        self._syntax_validate_timer.setSingleShot(True)
+        self._syntax_validate_timer.setInterval(750)
+        self._syntax_validate_generation = 0
+        self._syntax_validate_worker: Optional[QThread] = None
+        self._syntax_validate_timer.timeout.connect(self._run_syntax_validation)
         
         self._setup_ui()
         self._setup_channel()
@@ -188,6 +237,7 @@ class MonacoEditor(QWidget):
         self._python_completion_worker = None
         if hasattr(self, "_completion_service") and self._completion_service is not None:
             self._completion_service.cancel()
+        self._stop_syntax_worker()
 
         web_view = getattr(self, "_web_view", None)
         if web_view is not None and not sip.isdeleted(web_view):
@@ -306,17 +356,30 @@ class MonacoEditor(QWidget):
         self._bridge.sql_context_requested.connect(self._on_sql_context_requested)
         self._bridge.sql_completion_requested.connect(self._on_sql_completion_requested)
         self._bridge.python_completion_requested.connect(self._on_python_completion_requested)
+        self._bridge.cancel_inline_completion.connect(self._on_cancel_inline_completion)
 
         self._completion_service.sql_completions_ready.connect(self._deliver_sql_completions)
         self._completion_service.sql_context_completions_ready.connect(self._deliver_sql_context_completions)
         self._completion_service.python_completions_ready.connect(self._deliver_python_completions)
     
     def _deliver_sql_completions(self, request_id: int, completions: list) -> None:
-        payload = json.dumps(completions or [])
+        items = completions or []
+        if not items and self._sql_schema:
+            logger.warning(
+                "[MONACO] SQL completion #%s returned 0 items (schema loaded)",
+                request_id,
+            )
+        payload = json.dumps(items)
         self._run_js_when_ready(f"receiveSqlCompletions({int(request_id)}, {payload})")
 
     def _deliver_sql_context_completions(self, request_id: int, completions: list) -> None:
-        payload = json.dumps(completions or [])
+        items = completions or []
+        if not items and self._sql_schema:
+            logger.warning(
+                "[MONACO] SQL context completion #%s returned 0 items (schema loaded)",
+                request_id,
+            )
+        payload = json.dumps(items)
         self._run_js_when_ready(f"receiveSqlContextCompletions({int(request_id)}, {payload})")
 
     def _deliver_python_completions(self, request_id: int, completions: list) -> None:
@@ -341,12 +404,89 @@ class MonacoEditor(QWidget):
         # Apply read-only state
         if self._read_only:
             self._run_js("setReadOnly(true)")
+
+        if self._sql_schema:
+            self._run_js(f"registerSqlSchemaIndex({json.dumps(self._sql_schema)})")
+            self._push_merged_completions()
+        elif self._static_completions or self._sibling_block_completions:
+            self._push_merged_completions()
+
+        self._schedule_syntax_validation()
     
     def _on_text_changed(self, text: str):
         """Handle text change from JS."""
         self._text_cache = text
         self.text_changed.emit()
         self.textChanged.emit()
+        self._schedule_syntax_validation()
+
+    def _on_cancel_inline_completion(self) -> None:
+        """Drop in-flight AI ghost text while the user is typing."""
+        service = getattr(self, "_inline_completion_service", None)
+        if service is not None and hasattr(service, "cancel_request"):
+            service.cancel_request()
+
+    def set_sql_dialect(self, db_type: str) -> None:
+        """Connection db_type used for SQL syntax validation (mssql, mysql, ...)."""
+        self._sql_db_type = (db_type or "").strip()
+        self._schedule_syntax_validation()
+
+    def _schedule_syntax_validation(self) -> None:
+        lang = self._language
+        if lang not in ("python", "sql"):
+            self._clear_syntax_markers()
+            return
+        self._syntax_validate_timer.start()
+
+    def _clear_syntax_markers(self) -> None:
+        self._run_js_when_ready("setDiagnostics([])")
+
+    def _stop_syntax_worker(self) -> None:
+        worker = getattr(self, "_syntax_validate_worker", None)
+        self._syntax_validate_worker = None
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.quit()
+            worker.wait(200)
+        worker.deleteLater()
+
+    def _run_syntax_validation(self) -> None:
+        if self._cleaned_up or not self._is_ready:
+            return
+        lang = self._language
+        if lang not in ("python", "sql"):
+            self._clear_syntax_markers()
+            return
+
+        self._syntax_validate_generation += 1
+        generation = self._syntax_validate_generation
+        self._stop_syntax_worker()
+
+        worker = _SyntaxValidateWorker(
+            generation,
+            lang,
+            self._text_cache,
+            self._sql_db_type if lang == "sql" else "",
+            self._sql_schema if lang == "sql" else None,
+            self,
+        )
+        worker.result_ready.connect(self._on_syntax_validation_done)
+        worker.finished.connect(lambda w=worker: self._release_syntax_worker(w))
+        worker.finished.connect(worker.deleteLater)
+        self._syntax_validate_worker = worker
+        worker.start()
+
+    def _release_syntax_worker(self, worker: _SyntaxValidateWorker) -> None:
+        if getattr(self, "_syntax_validate_worker", None) is worker:
+            self._syntax_validate_worker = None
+
+    def _on_syntax_validation_done(self, generation: int, markers: list) -> None:
+        if generation != self._syntax_validate_generation:
+            return
+        payload = json.dumps(markers or [])
+        self._run_js_when_ready(f"setDiagnostics({payload})")
     
     def _on_focus_in(self):
         """Handle focus in from JS."""
@@ -381,11 +521,22 @@ class MonacoEditor(QWidget):
     
     def _on_sql_context_requested(self, full_text: str, prefix: str, line: int, column: int, request_id: int):
         """Handle SQL context-aware completion request off the UI thread."""
+        if not self._sql_schema.get("tables") and not self._sql_schema.get("columns"):
+            logger.warning(
+                "[MONACO] SQL context completion without schema (prefix=%s)",
+                prefix,
+            )
         self._completion_service.set_sql_schema(self._sql_schema)
         self._completion_service.request_sql_context(request_id, full_text, prefix, line, column)
     
     def _on_sql_completion_requested(self, full_text: str, line: int, column: int, request_id: int):
         """Handle SQL completion request off the UI thread."""
+        if not self._sql_schema.get("tables") and not self._sql_schema.get("columns"):
+            logger.warning(
+                "[MONACO] SQL completion request without schema (L%s:C%s)",
+                line,
+                column,
+            )
         self._completion_service.set_sql_schema(self._sql_schema)
         self._completion_service.request_sql_completions(request_id, full_text, line, column)
 
@@ -443,6 +594,13 @@ class MonacoEditor(QWidget):
         """Force trigger an inline completion request (Ctrl+. shortcut)."""
         self._run_js_when_ready("forceRequestCompletion()")
     
+    def request_execute(self) -> None:
+        """Run the current selection (or full block) using live Monaco selection."""
+        if self._is_ready:
+            self._run_js("triggerExecute()")
+        else:
+            self.execute_requested.emit(self.get_selected_text())
+
     def get_selected_text(self) -> str:
         """Returns selected text from the latest JS selection snapshot."""
         return self._selected_text_cache
@@ -472,6 +630,7 @@ class MonacoEditor(QWidget):
         
         escaped = json.dumps(monaco_lang)
         self._run_js_when_ready(f"setLanguage({escaped})")
+        self._schedule_syntax_validation()
     
     def get_language(self) -> str:
         """Returns the current language."""
@@ -625,9 +784,23 @@ class MonacoEditor(QWidget):
     def set_sql_schema(self, schema: dict) -> None:
         """Set SQL schema for autocompletion."""
         schema = schema or {}
-        logger.debug("[MONACO] set_sql_schema called with %s tables", len(schema.get('tables', [])))
+        tables = len(schema.get("tables", []))
+        columns = sum(len(v) for v in (schema.get("columns") or {}).values())
+        logger.debug(
+            "[MONACO] set_sql_schema: %s tables, %s column groups",
+            tables,
+            columns,
+        )
         self._sql_schema = schema
         self._completion_service.set_sql_schema(schema)
+        if schema.get("db_type"):
+            self.set_sql_dialect(str(schema.get("db_type", "")))
+        self._schedule_syntax_validation()
+        payload = json.dumps(schema)
+        self._run_js_when_ready(
+            f"registerSqlSchemaIndex({payload})",
+            replace_key="editor:sqlSchemaIndex",
+        )
         if schema:
             self.update_sql_completions(schema)
             return
@@ -636,7 +809,12 @@ class MonacoEditor(QWidget):
     def clear_sql_completions(self) -> None:
         """Clear Monaco SQL completions so a new schema can be loaded cleanly."""
         self._sql_schema = {}
-        self.register_completions([])
+        self._static_completions = []
+        self._run_js_when_ready(
+            "registerSqlSchemaIndex({})",
+            replace_key="editor:sqlSchemaIndex",
+        )
+        self._push_merged_completions()
     
     def set_python_namespace(self, namespace: dict) -> None:
         """Set Python namespace for autocompletion."""
@@ -685,22 +863,29 @@ class MonacoEditor(QWidget):
     
     # === Completion API ===
     
-    def provide_completion(self, text: str) -> None:
+    def provide_completion(
+        self,
+        text: str,
+        line: int = 0,
+        column: int = 0,
+    ) -> None:
         """
         Provide an inline completion (ghost text) to the editor.
-        
-        Called by the completion service after getting a suggestion from Copilot.
-        
-        Args:
-            text: The completion text to show as ghost text
+
+        line/column are 1-based Monaco coordinates from the original request
+        (important when the LSP response arrives after a short typing pause).
         """
-        logger.debug(f"[MONACO] provide_completion called: {len(text) if text else 0} chars, is_ready={self._is_ready}")
-        if not text:
-            logger.debug("[MONACO] provide_completion: empty text, skipping")
-            return
-        escaped = json.dumps(text)
-        logger.debug(f"[MONACO] Calling receiveCompletion with {len(escaped)} escaped chars")
-        self._run_js_when_ready(f"receiveCompletion({escaped})")
+        logger.debug(
+            "[MONACO] provide_completion: %s chars at L%s:C%s, ready=%s",
+            len(text) if text else 0,
+            line,
+            column,
+            self._is_ready,
+        )
+        escaped = json.dumps(text or "")
+        self._run_js_when_ready(
+            f"receiveCompletion({escaped}, {int(line or 0)}, {int(column or 0)})"
+        )
     
     def register_completions(self, completions: list) -> None:
         """
@@ -713,8 +898,19 @@ class MonacoEditor(QWidget):
                 - insertText: Text to insert (optional, defaults to label)
                 - detail: Additional info (optional)
         """
-        completions_json = json.dumps(completions or [])
-        self._run_js_when_ready(f"registerCompletions({completions_json})")
+        self._static_completions = completions or []
+        self._push_merged_completions()
+
+    def set_sibling_block_completions(self, completions: list) -> None:
+        """Other blocks in the tab — full multiline insertText per item."""
+        self._sibling_block_completions = completions or []
+        self._push_merged_completions()
+
+    def _push_merged_completions(self) -> None:
+        # Schema/Jedi items first; sibling block snippets after (offline autocomplete).
+        merged = (self._static_completions or []) + (self._sibling_block_completions or [])
+        payload = json.dumps(merged)
+        self._run_js_when_ready(f"registerCompletions({payload})")
     
     def update_sql_completions(self, schema: Optional[dict]) -> None:
         """Update SQL autocomplete with database schema (built off the UI thread)."""
@@ -742,19 +938,23 @@ class MonacoEditor(QWidget):
             return
         tables = len(self._sql_schema.get("tables", [])) if self._sql_schema else 0
         columns = sum(len(cols) for cols in (self._sql_schema.get("columns") or {}).values())
-        logger.debug(
-            "[MONACO] Registering %s contextual SQL completions (%s tables, %s columns)",
+        logger.info(
+            "[MONACO] Registering %s SQL completions (%s tables, %s column groups)",
             len(completions),
             tables,
             columns,
         )
-        self.register_completions(completions)
+        self._static_completions = completions
+        self._push_merged_completions()
+        if self._sql_schema:
+            payload = json.dumps(self._sql_schema)
+            self._run_js_when_ready(
+                f"registerSqlSchemaIndex({payload})",
+                replace_key="editor:sqlSchemaIndex",
+            )
     
     def update_python_completions(self, variables: Optional[dict]) -> None:
         """Update Python autocomplete with namespace variables (built off the UI thread)."""
-        if not variables:
-            return
-
         self._python_completion_generation += 1
         generation = self._python_completion_generation
 
@@ -778,4 +978,5 @@ class MonacoEditor(QWidget):
             "[MONACO] Registering %s Python completions",
             len(completions),
         )
-        self.register_completions(completions)
+        self._static_completions = completions
+        self._push_merged_completions()

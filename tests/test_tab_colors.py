@@ -141,47 +141,26 @@ class TestColorPersistence:
 class TestVisualIntegration:
     """Testes para integração visual das cores"""
 
-    @patch("PyQt6.QtGui.QPainter")
-    def test_paint_event_handles_colors(self, mock_painter, qapp):
-        """Testa se paintEvent maneja as cores corretamente"""
+    def test_paint_event_handles_colors(self, qapp):
+        """paintEvent should paint connection colors and timer glyphs without error."""
+        from PyQt6.QtCore import QRect, QSize
+        from PyQt6.QtGui import QPaintEvent, QPixmap
+
         tab_bar = SessionTabBar()
-
-        # Define algumas cores
         tab_bar.set_tab_connection_color(0, "#ff0000")
-        tab_bar.set_tab_connection_color(1, "#00ff00")
+        tab_bar.set_tab_timer_visible(0, True)
 
-        # Mock do painter e rect
-        mock_painter_instance = Mock()
-        mock_painter.return_value.__enter__.return_value = mock_painter_instance
+        icon_mock = Mock()
+        icon_mock.pixmap.return_value = QPixmap(QSize(16, 16))
 
-        # Mock do tabRect para retornar rect válido
-        tab_bar.tabRect = Mock(
-            return_value=Mock(
-                isValid=Mock(return_value=True),
-                left=Mock(return_value=0),
-                right=Mock(return_value=100),
-                bottom=Mock(return_value=30),
-            )
-        )
-        tab_bar.count = Mock(return_value=2)
-        tab_bar.rect = Mock(return_value=Mock())
-
-        # Mock do paintEvent pai
-        with patch.object(SessionTabBar.__bases__[0], "paintEvent"):
-            # Simula evento de pintura
-            from PyQt6.QtGui import QPaintEvent
-
-            paint_event = Mock(spec=QPaintEvent)
-
-            # Não deve dar erro
-            try:
-                tab_bar.paintEvent(paint_event)
-                success = True
-            except Exception as e:
-                print(f"Erro no paintEvent: {e}")
-                success = False
-
-            assert success, "paintEvent deve executar sem erro"
+        with patch.object(SessionTabBar.__bases__[0], "paintEvent"), patch.object(
+            tab_bar, "tabRect", return_value=QRect(0, 0, 120, 28)
+        ), patch.object(tab_bar, "count", return_value=1), patch.object(
+            tab_bar, "_close_button_rect", return_value=QRect(90, 4, 20, 20)
+        ), patch(
+            "src.ui.components.session_tabs.paint_tab_close_control"
+        ), patch("src.ui.components.session_tabs.qta.icon", return_value=icon_mock):
+            tab_bar.paintEvent(QPaintEvent(tab_bar.rect()))
 
 
 if __name__ == "__main__":

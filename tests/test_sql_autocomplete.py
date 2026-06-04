@@ -358,6 +358,20 @@ class TestCompletions:
         assert "name" in n
         assert "id" in n
 
+    def test_dot_after_multi_join_alias_partial_column(self, qualified_service):
+        """JOIN alias + partial column name (e.EventoOpe) resolves scoped columns."""
+        sql = (
+            "SELECT * FROM dbo.users u\n"
+            "JOIN dbo.orders o ON u.id = o.user_id\n"
+            "JOIN dbo.audit_log e ON e.EventoOpe"
+        )
+        line = 2
+        col = len(sql.split("\n")[line])
+        result = qualified_service.get_completions(sql, line, col)
+        n = names(result)
+        assert "id" in n
+        assert "payload" in n
+
     def test_join_shows_tables(self, service):
         sql = "SELECT * FROM users JOIN "
         result = service.get_completions(sql, 0, 25)

@@ -12,8 +12,18 @@ from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import QMessageBox
 
 from src.language import S
+from src.services.cross_database_schema import (
+    collect_sql_text_from_widget,
+    extract_referenced_catalogs,
+    extract_referenced_table_refs,
+    prepare_editor_sql_schema,
+    schema_has_columns_for_table,
+)
 
 logger = logging.getLogger(__name__)
+
+_EDITOR_REF_FROM_SQL = object()
+_EDITOR_REF_ALL_LAZY = object()
 
 
 class SchemaMixin:
@@ -143,77 +153,194 @@ class SchemaMixin:
             return
 
         db_type = getattr(explorer, "_db_type", "") or self._get_connection_db_type(connection_name)
-        editor_schema = self._filter_schema_for_active_database(schema, db_type=db_type)
+        editor_schema = self._editor_schema_for_session(
+            schema,
+            session_id=session_id,
+            db_type=db_type,
+            referenced_mode=_EDITOR_REF_ALL_LAZY,
+        )
         self._schema_service.update_cached_schema(connection_name, editor_schema, session_id=session_id)
-        self._apply_schema_to_session_blocks(session_id, connection_name, editor_schema, db_type=db_type)
+        self._apply_schema_to_session_blocks(
+            session_id,
+            connection_name,
+            schema,
+            db_type=db_type,
+            referenced_mode=_EDITOR_REF_ALL_LAZY,
+        )
 
-    def _filter_schema_for_active_database(self, schema: dict, db_type: str = "") -> dict:
-        """Keep editor/autocomplete schema scoped to the active database.
+    def _collect_session_sql_text(self, session_id: str) -> str:
+        widget = self._session_widgets.get(session_id) if hasattr(self, "_session_widgets") else None
+        if not widget:
+            return ""
+        return collect_sql_text_from_widget(widget)
 
-        Object Explorer can lazy-load other databases in the same session for browsing,
-        but Monaco autocomplete must stay restricted to the current connection database.
-        """
-        if not isinstance(schema, dict):
-            return {}
+    def _editor_schema_for_session(
+        self,
+        schema: dict,
+        *,
+        session_id: str,
+        db_type: str,
+        referenced_mode=_EDITOR_REF_FROM_SQL,
+    ) -> dict:
+        if referenced_mode is _EDITOR_REF_FROM_SQL:
+            sql_text = self._collect_session_sql_text(session_id) if session_id else ""
+            referenced_catalogs = extract_referenced_catalogs(
+                sql_text,
+                current_database=str(schema.get("database", "") or ""),
+                db_type=db_type,
+            )
+        elif referenced_mode is _EDITOR_REF_ALL_LAZY:
+            referenced_catalogs = None
+        else:
+            referenced_catalogs = referenced_mode
+        return prepare_editor_sql_schema(
+            schema,
+            db_type=db_type,
+            referenced_catalogs=referenced_catalogs,
+        )
 
-        normalized_db_type = str(db_type or schema.get("db_type", "") or "").lower()
-        current_database = str(schema.get("database", "") or "")
-        tables = list(schema.get("tables", []) or [])
+    def _schedule_cross_database_schema_sync(self, widget) -> None:
+        """Debounce lazy metadata loads for databases referenced in SQL text."""
+        if not widget or not hasattr(widget, "session") or not widget.session:
+            return
 
-        if normalized_db_type == "databricks" or not current_database or not tables:
-            return schema
+        session_id = widget.session.session_id
+        timers = getattr(self, "_cross_db_schema_timers", None)
+        if timers is None:
+            timers = {}
+            self._cross_db_schema_timers = timers
 
-        table_entries = [table for table in tables if isinstance(table, dict)]
-        if not table_entries:
-            return schema
+        existing = timers.pop(session_id, None)
+        if existing is not None:
+            try:
+                existing.stop()
+            except RuntimeError:
+                pass
 
-        has_database_scoped_tables = any(str(table.get("database", "") or "") for table in table_entries)
-        if not has_database_scoped_tables:
-            return schema
+        timer = QTimer(self)
+        timer.setSingleShot(True)
 
-        filtered_tables = []
-        allowed_column_keys = set()
-        current_database_lower = current_database.lower()
+        def run_sync(sid=session_id, w=widget):
+            timers.pop(sid, None)
+            self._sync_cross_database_schema_for_widget(w)
 
-        for table in tables:
-            if not isinstance(table, dict):
-                filtered_tables.append(table)
-                allowed_column_keys.add(str(table or ""))
+        timer.timeout.connect(run_sync)
+        timers[session_id] = timer
+        timer.start(400)
+
+    def _sync_cross_database_schema_for_widget(self, widget) -> None:
+        session = getattr(widget, "session", None)
+        if not session:
+            return
+
+        session_id = session.session_id
+        connection_name = getattr(session, "connection_name", "") or ""
+        if not connection_name:
+            return
+
+        connector = getattr(session, "connector", None)
+        if not connector or not self._connector_is_connected(connector):
+            get_connection = getattr(self.connection_manager, "get_connection", None)
+            if callable(get_connection):
+                connector = get_connection(connection_name)
+        if not connector or not self._connector_is_connected(connector):
+            return
+
+        db_type = ""
+        config = self.connection_manager.get_connection_config(connection_name)
+        if config:
+            db_type = config.get("db_type", "")
+
+        sql_text = collect_sql_text_from_widget(widget)
+        if not sql_text.strip():
+            return
+
+        explorer = self._session_explorers.get(session_id) if hasattr(self, "_session_explorers") else None
+        oe_schema = getattr(explorer, "_current_schema", None) if explorer else None
+        cached = self._schema_service.get_cached_schema(connection_name, session_id=session_id)
+        base_schema = oe_schema if isinstance(oe_schema, dict) else cached
+
+        current_database = ""
+        if isinstance(base_schema, dict):
+            current_database = str(base_schema.get("database", "") or "")
+
+        referenced_catalogs = extract_referenced_catalogs(
+            sql_text,
+            current_database=current_database,
+            db_type=db_type,
+        )
+        if not referenced_catalogs:
+            return
+
+        loaded_catalogs = set()
+        if isinstance(base_schema, dict):
+            for table in base_schema.get("tables", []) or []:
+                if isinstance(table, dict):
+                    db_name = str(table.get("database", "") or table.get("catalog", "") or "")
+                    if db_name:
+                        loaded_catalogs.add(db_name.lower())
+
+        server_databases = set()
+        if isinstance(base_schema, dict):
+            server_databases = {
+                str(name).lower() for name in (base_schema.get("databases", []) or []) if name
+            }
+
+        table_requests = getattr(self, "_pending_oe_table_requests", None)
+        if table_requests is None:
+            table_requests = {}
+            self._pending_oe_table_requests = table_requests
+
+        for catalog_name in sorted(referenced_catalogs):
+            catalog_lower = catalog_name.lower()
+            if catalog_lower == (current_database or "").lower():
+                continue
+            if server_databases and catalog_lower not in server_databases:
+                continue
+            if catalog_lower in loaded_catalogs:
                 continue
 
-            table_name = str(table.get("name", "") or "")
-            table_schema = str(table.get("schema", "") or "")
-            table_catalog = str(table.get("catalog", "") or "")
-            table_database = str(table.get("database", "") or "")
-            if table_database and table_database.lower() != current_database_lower:
+            request_key = (catalog_name, "")
+            if table_requests.get(request_key) == session_id:
+                continue
+            table_requests[request_key] = session_id
+            self._schema_service.load_tables_for_schema(
+                connector,
+                connection_name,
+                catalog_name,
+                "",
+            )
+
+        column_requests = getattr(self, "_pending_oe_column_requests", None)
+        if column_requests is None:
+            column_requests = {}
+            self._pending_oe_column_requests = column_requests
+
+        for catalog_name, schema_name, table_name in extract_referenced_table_refs(
+            sql_text,
+            current_database=current_database,
+            db_type=db_type,
+        ):
+            if not table_name:
+                continue
+            if catalog_name and catalog_name.lower() == (current_database or "").lower():
+                continue
+            if isinstance(base_schema, dict) and schema_has_columns_for_table(
+                base_schema, catalog_name, schema_name, table_name
+            ):
                 continue
 
-            filtered_tables.append(table)
-
-            table_key = str(table.get("key", "") or "")
-            if table_key:
-                allowed_column_keys.add(table_key)
-            if table_name:
-                allowed_column_keys.add(table_name)
-                allowed_column_keys.add(f"{current_database}.{table_name}")
-            if table_schema and table_name:
-                allowed_column_keys.add(f"{table_schema}.{table_name}")
-                if current_database != table_schema:
-                    allowed_column_keys.add(f"{current_database}.{table_schema}.{table_name}")
-            if table_catalog and table_schema and table_name:
-                allowed_column_keys.add(f"{table_catalog}.{table_schema}.{table_name}")
-
-        filtered_columns = {
-            key: value
-            for key, value in (schema.get("columns", {}) or {}).items()
-            if key in allowed_column_keys
-        }
-
-        return {
-            **schema,
-            "tables": filtered_tables,
-            "columns": filtered_columns,
-        }
+            request_key = (catalog_name, schema_name, table_name)
+            if column_requests.get(request_key) == session_id:
+                continue
+            column_requests[request_key] = session_id
+            self._schema_service.load_columns_for_table(
+                connector,
+                connection_name,
+                catalog_name,
+                schema_name,
+                table_name,
+            )
 
     def _clear_sql_autocomplete_for_connection(self, widget, connection_name: str):
         """Clear Monaco SQL autocomplete for blocks affected by a database switch."""
@@ -273,7 +400,15 @@ class SchemaMixin:
 
         return sorted(value for value in values if value)
 
-    def _apply_schema_to_session_blocks(self, session_id: str, connection_name: str, schema: dict, db_type: str = ""):
+    def _apply_schema_to_session_blocks(
+        self,
+        session_id: str,
+        connection_name: str,
+        schema: dict,
+        db_type: str = "",
+        *,
+        referenced_mode=_EDITOR_REF_FROM_SQL,
+    ):
         widget = self._session_widgets.get(session_id)
         if not widget or not hasattr(widget, "editor") or not widget.editor:
             return
@@ -284,8 +419,15 @@ class SchemaMixin:
 
         available_databases = self._available_databases_from_schema(schema, db_type)
 
+        editor_schema = self._editor_schema_for_session(
+            schema,
+            session_id=session_id,
+            db_type=db_type,
+            referenced_mode=referenced_mode,
+        )
+
         if session_conn == connection_name and hasattr(widget.editor, "set_sql_schema"):
-            widget.editor.set_sql_schema(schema)
+            widget.editor.set_sql_schema(editor_schema)
 
         for block in widget.editor.get_blocks():
             block_lang = block.get_language() if hasattr(block, "get_language") else ""
@@ -298,11 +440,11 @@ class SchemaMixin:
                 continue
 
             if hasattr(block.editor, "set_sql_schema"):
-                block.editor.set_sql_schema(schema)
+                block.editor.set_sql_schema(editor_schema)
             if hasattr(block, "set_available_databases"):
                 block.set_available_databases(available_databases)
 
-        schema_context = self._build_schema_context(schema, connection_name)
+        schema_context = self._build_schema_context(editor_schema, connection_name)
         widget.editor.set_database_context(schema_context)
 
     def _load_schema_with_loading(self, connector, connection_name: str, session_id: str = ""):
@@ -435,15 +577,6 @@ class SchemaMixin:
             ),
         )
 
-        # Build text context from schema for Copilot completions
-        schema_context = self._build_schema_context(schema, connection_name)
-        
-        # Propagate schema context only to the session that REQUESTED this schema
-        if requesting_sid:
-            widget = self._session_widgets.get(requesting_sid)
-            if widget and hasattr(widget, "editor"):
-                widget.editor.set_database_context(schema_context)
-
         # Update Object Explorer for the session that REQUESTED this schema
         # (not all sessions - each session has its own OE state)
         if hasattr(self, "_session_explorers"):
@@ -506,8 +639,17 @@ class SchemaMixin:
             if requesting_sid and sid != requesting_sid:
                 continue
 
+            editor_schema = self._editor_schema_for_session(
+                schema,
+                session_id=sid,
+                db_type=db_type,
+            )
+            schema_context = self._build_schema_context(editor_schema, connection_name)
+
             if session_conn == connection_name and hasattr(widget.editor, "set_sql_schema"):
-                widget.editor.set_sql_schema(schema)
+                widget.editor.set_sql_schema(editor_schema)
+                if hasattr(widget.editor, "set_database_context"):
+                    widget.editor.set_database_context(schema_context)
 
             for block in widget.editor.get_blocks():
                 block_lang = block.get_language() if hasattr(block, "get_language") else ""
@@ -516,14 +658,20 @@ class SchemaMixin:
 
                 block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
 
-                if block_conn and block_conn == connection_name:
-                    if hasattr(block.editor, "set_sql_schema"):
-                        block.editor.set_sql_schema(schema)
-                    if hasattr(block, "set_available_databases"):
-                        block.set_available_databases(all_databases)
-                elif not block_conn and session_conn == connection_name:
-                    if hasattr(block, "set_available_databases"):
-                        block.set_available_databases(all_databases)
+                uses_connection = (block_conn == connection_name) or (
+                    not block_conn and session_conn == connection_name
+                )
+                if not uses_connection:
+                    continue
+                if hasattr(block.editor, "set_sql_schema"):
+                    block.editor.set_sql_schema(editor_schema)
+                if hasattr(block, "set_available_databases"):
+                    block.set_available_databases(all_databases)
+
+        if requesting_sid and hasattr(self.connection_manager, "get_connection"):
+            widget = self._session_widgets.get(requesting_sid)
+            if widget:
+                QTimer.singleShot(0, lambda w=widget: self._sync_cross_database_schema_for_widget(w))
 
     def _build_schema_context(self, schema: dict, connection_name: str) -> str:
         """Build text context from schema for Copilot inline completions.
@@ -632,6 +780,11 @@ class SchemaMixin:
 
         This makes the OE follow the 'focused connection' — per-block or per-session.
         """
+        if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
+            try:
+                self._copilot_chat_panel.notify_block_focused(block)
+            except Exception:
+                pass
         if not block or not widget:
             return
 
@@ -1013,50 +1166,8 @@ class SchemaMixin:
             else:
                 ns_types[key] = type_name
 
-        # Enviar para todos os blocos Python da sessao ativa
         current_widget = self._get_current_session_widget()
-        if current_widget and hasattr(current_widget, "editor") and current_widget.editor:
-            # Collect import lines from all blocks to share as global context
-            import_lines = []
-            blocks_code_context_parts = []
-            
-            for block in current_widget.editor.get_blocks():
-                block_name = block.get_block_name() if hasattr(block, 'get_block_name') else ""
-                block_lang = block.get_language()
-                block_code = block.get_code()
-                
-                if block_lang == "python":
-                    for line in block_code.splitlines():
-                        stripped = line.strip()
-                        if stripped.startswith("import ") or stripped.startswith("from "):
-                            import_lines.append(stripped)
-                
-                # Build context for other blocks (SQL blocks create DataFrames)
-                if block_lang == "sql" and block_name:
-                    # Show that this SQL block produces a DataFrame with block_name
-                    blocks_code_context_parts.append(
-                        f"# Block '{block_name}' (SQL) creates DataFrame `{block_name}`:\n"
-                        f"# {block_code.strip()[:200]}"
-                    )
-            
-            global_imports = "\n".join(dict.fromkeys(import_lines))  # deduplicate preserving order
-            blocks_code_context = "\n\n".join(blocks_code_context_parts)
-
-            for block in current_widget.editor.get_blocks():
-                # Only pass Python namespace to Python blocks
-                block_lang = block.get_language() if hasattr(block, "get_language") else ""
-                if block_lang != "python":
-                    continue
-                    
-                # Pass namespace to completion service via block
-                if hasattr(block, "set_python_namespace"):
-                    block.set_python_namespace(ns_types)
-                elif hasattr(block, "editor") and hasattr(block.editor, "set_python_namespace"):
-                    block.editor.set_python_namespace(ns_types)
-                
-                # Pass blocks code context for Python completions
-                if hasattr(block, "set_blocks_code_context"):
-                    block.set_blocks_code_context(blocks_code_context)
-                
-                if hasattr(block, "editor") and hasattr(block.editor, "set_global_imports"):
-                    block.editor.set_global_imports(global_imports)
+        if current_widget and hasattr(current_widget, "editor") and hasattr(
+            current_widget.editor, "refresh_completion_context"
+        ):
+            current_widget.editor.refresh_completion_context()

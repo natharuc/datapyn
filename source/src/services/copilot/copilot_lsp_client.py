@@ -44,7 +44,7 @@ class CopilotLSPClient(QObject):
         initialized: Server has been initialized
         auth_required(str, str): user_code, verification_uri
         authenticated(str): username/status
-        completion_ready(str): inline completion text
+        completion_ready(str, str): document_uri, inline completion text
         error(str): error message
         status_changed(str): status update (e.g., "SignedIn", "SignedOut")
         log_message(str, str): message and level (info/error/debug)
@@ -53,7 +53,7 @@ class CopilotLSPClient(QObject):
     initialized = pyqtSignal()
     auth_required = pyqtSignal(str, str)  # user_code, verification_uri
     authenticated = pyqtSignal(str)
-    completion_ready = pyqtSignal(str)
+    completion_ready = pyqtSignal(str, str)  # document_uri, text
     error = pyqtSignal(str)
     status_changed = pyqtSignal(str)
     log_message = pyqtSignal(str, str)  # message, level
@@ -76,8 +76,10 @@ class CopilotLSPClient(QObject):
         self._is_authenticated = False
         self._current_document_version = 0
         self._current_document_uri = ""
-        self._current_document_text = ""  # Cached document text for getCompletions
         self._current_document_language = "python"  # Language ID
+        # Per-URI buffers — required when several blocks share one LSP client.
+        self._documents: Dict[str, Dict[str, Any]] = {}
+        self._opened_uris: set = set()  # docs we've sent textDocument/didOpen for
         
         # Sign-in tracking
         self._sign_in_in_progress = False
@@ -86,6 +88,7 @@ class CopilotLSPClient(QObject):
         
         # Completion tracking
         self._pending_completion_id: Optional[int] = None
+        self._pending_completion_uri: str = ""
         self._panel_solutions: List[str] = []  # Solutions from getPanelCompletions
         self._panel_request_active = False
         self._panel_start_time: float = 0.0
@@ -100,9 +103,10 @@ class CopilotLSPClient(QObject):
         """Check if the user is authenticated."""
         return self._is_authenticated
 
-    def _queue_completion(self, text: str) -> None:
-        """Deliver completion results on the Qt main thread."""
-        QTimer.singleShot(0, lambda value=text: self.completion_ready.emit(value))
+    def _queue_completion(self, text: str, uri: str = "") -> None:
+        """Deliver the completion result to the block that requested it."""
+        target_uri = uri or self._pending_completion_uri or ""
+        self.completion_ready.emit(target_uri, text or "")
     
     def _set_authenticated(self, value: bool, source: str = "unknown") -> None:
         """Set authentication state with logging."""
@@ -206,6 +210,7 @@ class CopilotLSPClient(QObject):
             reader_thread.join(timeout=0.2)
         
         self._initialized = False
+        self._opened_uris.clear()
         self._set_authenticated(False, "stop")
         logger.info("[LSP] Server stopped")
     
@@ -503,6 +508,10 @@ class CopilotLSPClient(QObject):
             "arguments": args
         }, on_result)
     
+    def _doc_text(self, uri: str) -> str:
+        entry = self._documents.get(uri) or {}
+        return entry.get("text") or ""
+
     def open_document(self, uri: str, language_id: str, text: str, version: int = 1) -> None:
         """
         Notify server that a document was opened.
@@ -515,8 +524,12 @@ class CopilotLSPClient(QObject):
         """
         self._current_document_uri = uri
         self._current_document_version = version
-        self._current_document_text = text
         self._current_document_language = language_id
+        self._documents[uri] = {
+            "text": text,
+            "version": version,
+            "language": language_id,
+        }
         
         logger.info(f"[LSP] Opening document: uri={uri}, lang={language_id}, text_len={len(text)}")
         
@@ -528,7 +541,7 @@ class CopilotLSPClient(QObject):
                 "text": text
             }
         })
-        
+        self._opened_uris.add(uri)
         logger.debug(f"[LSP] Document opened: {uri}, lang={language_id}")
     
     def change_document(self, uri: str, version: int, text: str) -> None:
@@ -537,7 +550,13 @@ class CopilotLSPClient(QObject):
         """
         from .lsp_text_sync import compute_incremental_change
 
-        old_text = self._current_document_text
+        # The server can't accept didChange for a doc it never saw open.
+        if uri not in self._opened_uris:
+            lang = (self._documents.get(uri) or {}).get("language") or self._current_document_language
+            self.open_document(uri, lang, text, version)
+            return
+
+        old_text = self._doc_text(uri)
         if text == old_text:
             return
 
@@ -545,8 +564,11 @@ class CopilotLSPClient(QObject):
         if change is None:
             return
 
+        self._current_document_uri = uri
         self._current_document_version = version
-        self._current_document_text = text
+        entry = self._documents.setdefault(uri, {"language": self._current_document_language})
+        entry["text"] = text
+        entry["version"] = version
 
         if "range" not in change:
             content_changes = [{"text": text}]
@@ -568,6 +590,8 @@ class CopilotLSPClient(QObject):
     
     def close_document(self, uri: str) -> None:
         """Notify server that a document was closed."""
+        self._opened_uris.discard(uri)
+        self._documents.pop(uri, None)
         self._send_notification("textDocument/didClose", {
             "textDocument": {"uri": uri}
         })
@@ -591,111 +615,115 @@ class CopilotLSPClient(QObject):
             trigger_kind: 1=manual, 2=automatic
         """
         logger.info(f"[LSP] request_completion: uri={uri}, version={version}, line={line}, char={character}")
-        
+
         if not self._initialized or not self._is_authenticated:
             logger.warning(f"[LSP] request_completion blocked: init={self._initialized}, auth={self._is_authenticated}")
-            self._queue_completion("")
+            self._queue_completion("", uri)
             return
-        
+
+        self._pending_completion_uri = uri
+
+        # The modern copilot-language-server needs the document open before it
+        # will complete it. The editor may have "opened" it while this client
+        # was still None, so open it lazily here.
+        doc_entry = self._documents.get(uri) or {}
+        doc_text = doc_entry.get("text") or ""
+        doc_lang = doc_entry.get("language") or self._current_document_language
+
+        if uri not in self._opened_uris:
+            self.open_document(uri, doc_lang, doc_text, version)
+
         # Cancel any pending completion request
         if self._pending_completion_id:
             self._send_notification("$/cancelRequest", {"id": self._pending_completion_id})
-        
+
         start_time = time.time()
-        
-        # Reset panel solutions for new request
-        self._panel_solutions = []
-        self._panel_request_active = True
-        self._panel_start_time = start_time
-        
+
         def on_completion(result, error):
             elapsed = (time.time() - start_time) * 1000
-            
-            if error:
-                logger.warning(f"[LSP] Completion error after {elapsed:.0f}ms: {error}")
-                self._panel_request_active = False
-                self._queue_completion("")
-                return
-            
-            # Log full result structure for debugging
-            import json
-            logger.info(f"[LSP] Full completion result: {json.dumps(result, default=str)[:1000]}")
-            
-            # getPanelCompletions returns { solutionCountTarget: N }
-            # Actual solutions come via PanelSolution notifications
-            if result and "solutionCountTarget" in result:
-                target = result.get("solutionCountTarget", 0)
-                logger.info(f"[LSP] Expecting {target} panel solutions via notifications")
-                # Solutions will arrive via PanelSolution notifications
-                # Don't emit yet - wait for notifications
-                return
-            
-            # getCompletions returns { completions: [...] } structure
-            completions = result.get("completions", []) if result else []
-            
-            # Fallback to items for inlineCompletion format
-            if not completions:
-                completions = result.get("items", []) if result else []
-            
-            if completions:
-                item = completions[0]
-                logger.info(f"[LSP] Full completion item keys: {list(item.keys()) if isinstance(item, dict) else type(item)}")
-                
-                # getCompletions uses displayText or text
-                insert_text = item.get("displayText", "")
-                if not insert_text:
-                    insert_text = item.get("text", "")
-                if not insert_text:
-                    insert_text = item.get("insertText", "")
-                
-                logger.info(
-                    f"[LSP] Completion received in {elapsed:.0f}ms: "
-                    f"lines={insert_text.count(chr(10))+1}, "
-                    f"chars={len(insert_text)}, "
-                    f"preview={insert_text[:80].replace(chr(10), ' ')}..."
-                )
-                self._panel_request_active = False
-                self._queue_completion(insert_text)
-            else:
-                logger.debug(f"[LSP] No completions in {elapsed:.0f}ms")
-                self._panel_request_active = False
-                self._queue_completion("")
-            
             self._pending_completion_id = None
-        
-        # Use getPanelCompletions for more complete multi-line suggestions
-        # This is the method used by Copilot Panel (Ctrl+Enter in VS Code)
-        # Returns multiple longer suggestions compared to inline completions
-        
-        # Extract path from URI
+
+            if error:
+                logger.warning(f"[LSP] getCompletionsCycling error after {elapsed:.0f}ms: {error}")
+                self._queue_completion("", uri)
+                return
+
+            text = self._extract_inline_completion(result)
+            if text:
+                logger.info(
+                    f"[LSP] Completion in {elapsed:.0f}ms: {len(text)} chars, "
+                    f"uri={uri}, preview={text[:80].replace(chr(10), ' ')!r}"
+                )
+            else:
+                logger.debug(f"[LSP] No completion in {elapsed:.0f}ms (result={str(result)[:200]})")
+            self._queue_completion(text, uri)
+
+        # getCompletionsCycling is the method this copilot-language-server build
+        # actually returns suggestions from (verified live). textDocument/
+        # inlineCompletion and getCompletions return empty on this server.
         path = uri.replace("file:///", "").replace("file://", "")
-        relative_path = path
-        if path.startswith("datapyn/"):
-            relative_path = path[8:]
-        
+        relative_path = path[8:] if path.startswith("datapyn/") else path
         params = {
             "doc": {
                 "uri": uri,
                 "version": version,
                 "position": {"line": line, "character": character},
-                "source": self._current_document_text,
-                "languageId": self._current_document_language,
+                "source": doc_text,
+                "languageId": doc_lang,
                 "path": path,
                 "relativePath": relative_path,
                 "tabSize": 4,
                 "insertSpaces": True,
                 "indentSize": 4,
             },
-            "panelId": f"panel-{self._request_id}",
         }
-        
-        import json
-        logger.info(f"[LSP] getPanelCompletions request: {json.dumps(params, default=str)[:500]}")
-        
-        req_id = self._send_request("getPanelCompletions", params, on_completion)
-        
+
+        req_id = self._send_request("getCompletionsCycling", params, on_completion)
+
         self._pending_completion_id = req_id
-        logger.debug(f"[LSP] Requesting getPanelCompletions at {line}:{character}")
+        logger.debug(f"[LSP] Requesting getCompletionsCycling at {line}:{character}")
+
+        # Safety: emit empty if the server doesn't answer, so the editor never
+        # hangs waiting on a dropped request.
+        def _timeout(rid=req_id):
+            if self._pending_completion_id == rid:
+                logger.warning(f"[LSP] getCompletionsCycling timed out (id={rid}) — emitting empty")
+                self._pending_completion_id = None
+                self._pending_requests.pop(rid, None)
+                self._queue_completion("", uri)
+
+        QTimer.singleShot(6000, _timeout)
+
+    @staticmethod
+    def _extract_inline_completion(result) -> str:
+        """Pull the best (longest, most complete) suggestion out of a response.
+
+        getCompletionsCycling can return several alternatives — prefer the
+        longest so the user gets the fullest multiline suggestion.
+        """
+        if not result:
+            return ""
+        # getCompletions/getCompletionsCycling -> {"completions": [...]}
+        # textDocument/inlineCompletion        -> {"items": [...]}
+        items = []
+        if isinstance(result, dict):
+            items = result.get("completions") or result.get("items") or []
+        elif isinstance(result, list):
+            items = result
+        if not items:
+            return ""
+
+        def _text_of(item) -> str:
+            if not isinstance(item, dict):
+                return str(item or "")
+            # displayText is cursor-relative (no leading indent already typed);
+            # text/insertText include the replaced range.
+            insert = item.get("displayText") or item.get("insertText") or item.get("text") or ""
+            if isinstance(insert, dict):  # InsertReplaceEdit / {value: ...}
+                insert = insert.get("value", "")
+            return insert or ""
+
+        return max((_text_of(c) for c in items), key=len, default="")
     
     def _send_request(
         self,
@@ -845,7 +873,7 @@ class CopilotLSPClient(QObject):
             logger.info(f"[LSP] Panel solutions complete")
             if not self._panel_solutions:
                 # No solutions received, emit empty
-                self._queue_completion("")
+                self._queue_completion("", self._pending_completion_uri)
         
         elif method == "window/logMessage":
             msg = params.get("message", "")
@@ -895,6 +923,6 @@ class CopilotLSPClient(QObject):
             # Emit first solution immediately so user sees it
             if len(self._panel_solutions) == 1:
                 self._panel_request_active = False
-                self._queue_completion(solution_text)
+                self._queue_completion(solution_text, self._pending_completion_uri)
         else:
             logger.warning(f"[LSP] Empty panel solution: {list(params.keys())}")

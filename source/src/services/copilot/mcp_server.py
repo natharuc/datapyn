@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from .mcp_tools import MCPToolRegistry
+from src.services.pynia.tools import PyniaToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,11 @@ class MCPServer(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._tool_registry = MCPToolRegistry(parent=self)
+        self._tool_registry = PyniaToolRegistry(parent=self)
         self._initialized = False
 
     @property
-    def tool_registry(self) -> MCPToolRegistry:
+    def tool_registry(self) -> PyniaToolRegistry:
         return self._tool_registry
 
     def set_main_window(self, main_window) -> None:

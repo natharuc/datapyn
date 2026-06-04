@@ -112,36 +112,29 @@ class TestPerTabPeriodicTimer:
         assert signals_received == [True, False]
 
     def test_tab_timer_icon_shown(self, main_window):
-        """Timer icon appears on tab bar when periodic starts."""
+        """Timer glyph is painted on the tab bar when periodic starts."""
         main_window._new_session()
         QApplication.processEvents()
         QTest.qWait(100)
         widget = main_window._get_current_session_widget()
-        idx = main_window.session_tabs.currentIndex()
+        tab_index = main_window.session_tabs.indexOf(widget)
+        assert tab_index >= 0
+        tab_bar = main_window.session_tabs.tabBar()
 
-        # Before start: timer icon hidden
-        from PyQt6.QtWidgets import QTabBar, QToolButton
-        container = main_window.session_tabs.tabBar().tabButton(
-            idx, QTabBar.ButtonPosition.RightSide
-        )
-        assert container is not None
-        timer_icon = container.findChild(QToolButton, "timer_icon")
-        assert timer_icon is not None
-        assert not timer_icon.isVisible()
+        assert tab_index not in tab_bar._timer_tab_indices
 
-        # Start periodic
         widget.start_periodic(20)
         QApplication.processEvents()
+        QTest.qWait(50)
+        QApplication.processEvents()
 
-        # Timer icon should now be visible
-        assert timer_icon.isVisible()
+        assert tab_index in tab_bar._timer_tab_indices
 
         # Stop periodic
         widget.stop_periodic()
         QApplication.processEvents()
 
-        # Timer icon should be hidden again
-        assert not timer_icon.isVisible()
+        assert tab_index not in tab_bar._timer_tab_indices
 
 
 if __name__ == "__main__":

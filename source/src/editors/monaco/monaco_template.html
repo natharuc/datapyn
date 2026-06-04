@@ -74,6 +74,8 @@
         // Completion tracking
         let pendingCompletionId = 0;
         let pendingCompletion = null;
+        let cachedInlineCompletion = null;
+        let cachedInlinePosition = null;
         let completionRequestSeq = 0;
         let pendingSqlCompletions = new Map();
         let pendingSqlContextCompletions = new Map();
@@ -83,7 +85,18 @@
         let sqlDebounceSeq = 0;
         let pythonDebounceSeq = 0;
         const COMPLETION_DEBOUNCE_MS = 120;
-        const COMPLETION_TIMEOUT_MS = 2500;
+        const SQL_CONTEXT_DEBOUNCE_MS = 80;
+        // VS Code Copilot: ~300ms pause after last keystroke before ghost text.
+        const INLINE_SUGGEST_IDLE_MS = 300;
+        let inlineGhostTriggerToken = 0;
+        const COMPLETION_TIMEOUT_MS = 8000;
+        let sqlSchemaIndex = { columnsByKey: {}, tableItems: [], currentDatabase: '' };
+        let copilotSuggestText = '';
+        const SQL_JOIN_RESERVED = new Set([
+            'ON', 'WHERE', 'AND', 'OR', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER',
+            'CROSS', 'FULL', 'GROUP', 'ORDER', 'BY', 'HAVING', 'SET', 'SELECT', 'FROM'
+        ]);
+        const TEXT_CHANGE_DEBOUNCE_MS = 80;
         
         // Current state
         let currentLanguage = 'python';
@@ -168,22 +181,25 @@
                         maxVisibleSuggestions: 12,
                         showStatusBar: true,
                         preview: true,
-                        previewMode: 'subwordSmart'
+                        previewMode: 'subwordSmart',
+                        snippetsPreventQuickSuggestions: false
                     },
                     suggestFontSize: 13,
                     suggestLineHeight: 22,
                     inlineSuggest: {
                         enabled: true,
-                        mode: 'prefix'
+                        mode: 'subwordSmart',
+                        showToolbar: 'onHover'
                     },
                     quickSuggestions: {
-                        other: true,
+                        other: false,
                         comments: false,
                         strings: false
                     },
                     quickSuggestionsDelay: 80,
-                    suggestOnTriggerCharacters: true,
+                    suggestOnTriggerCharacters: false,
                     wordBasedSuggestions: 'off',
+                    parameterHints: { enabled: true },
                 });
                 
                 // Register inline completion provider for ghost text
@@ -194,6 +210,8 @@
                 
                 // Setup event listeners
                 setupEventListeners();
+
+                applyLanguageCompletionUx(currentLanguage);
                 
                 // Setup debounced resize observer for manual layout
                 setupResizeObserver();
@@ -226,12 +244,403 @@
             if (editor) editor.layout();
         }
         
+        let inlineSuggestIdleTimer = null;
+        let textChangeDebounceTimer = null;
+        let lastTypingAt = 0;
+
+        function getCompletionReplaceRange(model, position) {
+            const line = model.getLineContent(position.lineNumber);
+            const before = line.substring(0, Math.max(0, position.column - 1));
+            const match = before.match(/[\w.$@#[\]`"]*$/i);
+            const startColumn = match
+                ? Math.max(1, position.column - match[0].length)
+                : position.column;
+            return new monaco.Range(
+                position.lineNumber,
+                startColumn,
+                position.lineNumber,
+                position.column
+            );
+        }
+
+        /** Ghost text range at cursor only (Monaco 0.45 / VS Code — do not replace the word before cursor). */
+        function getInlineGhostRange(model, position) {
+            return new monaco.Range(
+                position.lineNumber,
+                position.column,
+                position.lineNumber,
+                position.column
+            );
+        }
+
+        function normalizeInlineInsertAtCursor(text, model, position) {
+            if (!text || !model || !position) {
+                return text || '';
+            }
+            const line = model.getLineContent(position.lineNumber);
+            const after = line.substring(position.column - 1);
+            if (after && text.startsWith(after)) {
+                const trimmed = text.substring(after.length);
+                return trimmed || text;
+            }
+            return text;
+        }
+
+        /** T-SQL database..tablePrefix at cursor (cross-database table list). */
+        function parseSqlCrossDatabaseTableContext(textBefore) {
+            const currentLine = (textBefore.split('\n').pop() || '');
+            const match = currentLine.match(/(?:^|[\s,(])([\w@#\[\]`"]+)\s*\.\s*\.\s*([\w$]*)$/i);
+            if (!match) {
+                return null;
+            }
+            let database = match[1] || '';
+            database = database.replace(/[\[\]`"]/g, '');
+            return { database: database, tablePrefix: match[2] || '' };
+        }
+
+        /** alias.columnPrefix at cursor — matches Python SqlAutoCompleteService dot detection. */
+        function parseSqlDotContext(textBefore) {
+            if (parseSqlCrossDatabaseTableContext(textBefore)) {
+                return null;
+            }
+            const currentLine = (textBefore.split('\n').pop() || '');
+            const match = currentLine.match(/([\w@#]+)\.([\w$]*)$/);
+            if (!match) {
+                return null;
+            }
+            return { qualifier: match[1], columnPrefix: match[2] || '' };
+        }
+
+        function getSqlCompletionPrefix(textBefore, dotCtx, crossDbCtx) {
+            if (crossDbCtx) {
+                return crossDbCtx.tablePrefix || '';
+            }
+            if (dotCtx) {
+                return dotCtx.columnPrefix || '';
+            }
+            const currentLine = (textBefore.split('\n').pop() || '');
+            if (parseSqlCrossDatabaseTableContext(textBefore)) {
+                return '';
+            }
+            return getCurrentWordPrefix(textBefore);
+        }
+
+        function collectCrossDatabaseTableItems(crossDbCtx) {
+            const dbLower = normalizeSchemaKey(crossDbCtx.database);
+            const prefix = (crossDbCtx.tablePrefix || '').toLowerCase();
+            const currentDb = normalizeSchemaKey(sqlSchemaIndex.currentDatabase || '');
+            const fromIndex = (sqlSchemaIndex.tableItems || []).filter(function(item) {
+                const itemDb = normalizeSchemaKey(item.database || item.catalog || '');
+                if (itemDb) {
+                    if (itemDb !== dbLower) {
+                        return false;
+                    }
+                } else if (currentDb && currentDb !== dbLower) {
+                    return false;
+                }
+                if (!prefix) {
+                    return true;
+                }
+                const label = String(item.label || '').toLowerCase();
+                const filterText = String(item.filterText || label).toLowerCase();
+                return label.startsWith(prefix) || filterText.endsWith('..' + prefix) || filterText.includes('..' + prefix);
+            });
+            if (fromIndex.length) {
+                return fromIndex;
+            }
+            return tableCompletions.filter(function(item) {
+                const itemDb = normalizeSchemaKey(item.database || '');
+                if (itemDb && itemDb !== dbLower) {
+                    return false;
+                }
+                if (!prefix) {
+                    return true;
+                }
+                const label = String(item.label || '').toLowerCase();
+                return label.startsWith(prefix);
+            });
+        }
+
+        function filterRemoteCompletionItems(items, textBefore, dotCtx) {
+            const prefix = dotCtx ? dotCtx.columnPrefix : getCurrentWordPrefix(textBefore);
+            return filterPrefixMatches(items || [], prefix, 80, false);
+        }
+
+        function normalizeInlineInsertText(text, model, position) {
+            if (!text || !model || !position) {
+                return text || '';
+            }
+            const replaceRange = getCompletionReplaceRange(model, position);
+            const line = model.getLineContent(position.lineNumber);
+            const existing = line.substring(
+                replaceRange.startColumn - 1,
+                replaceRange.endColumn - 1
+            );
+            if (existing && text.startsWith(existing)) {
+                const trimmed = text.substring(existing.length);
+                return trimmed || text;
+            }
+            return text;
+        }
+
+        function positionsClose(a, b) {
+            if (!a || !b) {
+                return false;
+            }
+            return a.lineNumber === b.lineNumber && Math.abs(a.column - b.column) <= 48;
+        }
+
+        function extractSqlAliases(fullText) {
+            const aliases = {};
+            if (!fullText) {
+                return aliases;
+            }
+            const re = /\b(?:FROM|JOIN)\s+([\w.@#\[\]]+)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?/gi;
+            let match;
+            while ((match = re.exec(fullText)) !== null) {
+                let tableRef = match[1] || '';
+                tableRef = tableRef.replace(/[\[\]`"]/g, '');
+                const bare = tableRef.split('.').pop() || tableRef;
+                const alias = match[2] || '';
+                const bareKey = normalizeSchemaKey(bare);
+                if (bareKey) {
+                    aliases[bareKey] = bareKey;
+                }
+                if (alias && !SQL_JOIN_RESERVED.has(alias.toUpperCase())) {
+                    aliases[normalizeSchemaKey(alias)] = bareKey;
+                }
+            }
+            return aliases;
+        }
+
+        function resolveQualifierColumns(qualifier, fullText) {
+            const key = normalizeSchemaKey(qualifier);
+            const aliasMap = extractSqlAliases(fullText || '');
+            const tableKey = aliasMap[key] || key;
+            return sqlSchemaIndex.columnsByKey[tableKey]
+                || sqlSchemaIndex.columnsByKey[key]
+                || [];
+        }
+
+        function mergeCompletionItems(primary, secondary) {
+            const seen = new Set();
+            const merged = [];
+            (primary || []).concat(secondary || []).forEach(function(item) {
+                const key = (item.label || '') + '|' + (item.insertText || item.label || '');
+                if (!key || seen.has(key)) {
+                    return;
+                }
+                seen.add(key);
+                merged.push(item);
+            });
+            return merged;
+        }
+
+        /** Offline (main) + schema index + alias map — always try every source. */
+        function collectDotColumnItems(qualifier, fullText) {
+            const q = qualifier || '';
+            const qLower = q.toLowerCase();
+            const aliasMap = extractSqlAliases(fullText || '');
+            const bareKey = aliasMap[normalizeSchemaKey(q)] || normalizeSchemaKey(q);
+            return mergeCompletionItems(
+                resolveQualifierColumns(q, fullText),
+                mergeCompletionItems(
+                    columnsByTable[q] || columnsByTable[qLower] || [],
+                    columnsByTable[bareKey] || sqlSchemaIndex.columnsByKey[bareKey] || []
+                )
+            );
+        }
+
+        function collectSqlLocalItems(textBefore, dotCtx, crossDbCtx, fullText) {
+            if (crossDbCtx) {
+                return collectCrossDatabaseTableItems(crossDbCtx);
+            }
+            // Main: filterSqlCompletions already expands WHERE/SELECT to columnCompletions.
+            // With dotCtx we merge alias-scoped columns on top (same UX as main + smarter p.*).
+            const contextual = filterSqlCompletions(textBefore, null);
+            if (!dotCtx) {
+                return contextual;
+            }
+            return mergeCompletionItems(
+                collectDotColumnItems(dotCtx.qualifier, fullText),
+                contextual
+            );
+        }
+
+        function buildCopilotSuggestItems(range) {
+            if (!copilotSuggestText) {
+                return [];
+            }
+            const preview = copilotSuggestText.split('\n')[0].substring(0, 100);
+            return [{
+                label: 'Copilot: ' + preview,
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: copilotSuggestText,
+                detail: 'Sugestão IA (Tab)',
+                range: range,
+                sortText: '!000',
+                filterText: preview,
+                category: 'copilot'
+            }];
+        }
+
+        function editorTypingIdleMs() {
+            return Date.now() - lastTypingAt;
+        }
+
+        function isTypingIdleForInlineAi() {
+            return editorTypingIdleMs() >= INLINE_SUGGEST_IDLE_MS - 40;
+        }
+
+        function applyLanguageCompletionUx(language) {
+            if (!editor) {
+                return;
+            }
+            if (language === 'python') {
+                // IA first: ghost on pause; offline list only via Ctrl+Space.
+                editor.updateOptions({
+                    quickSuggestions: { other: false, comments: false, strings: false },
+                    suggestOnTriggerCharacters: false,
+                    inlineSuggest: { enabled: true, mode: 'subwordSmart', showToolbar: 'onHover' }
+                });
+            } else if (language === 'sql') {
+                // Offline columns/tables while typing; IA ghost after idle pause.
+                editor.updateOptions({
+                    quickSuggestions: { other: true, comments: false, strings: true },
+                    suggestOnTriggerCharacters: true,
+                    inlineSuggest: { enabled: true, mode: 'subwordSmart', showToolbar: 'onHover' }
+                });
+            }
+        }
+
+        function presentInlineGhost(text, line, column) {
+            if (!editor || !text) {
+                return;
+            }
+            const model = editor.getModel();
+            const cursor = editor.getPosition();
+            let useLine = line || 1;
+            let useColumn = column || 1;
+            if (cursor) {
+                if (!line || !column) {
+                    useLine = cursor.lineNumber;
+                    useColumn = cursor.column;
+                } else if (positionsClose({ lineNumber: line, column: column }, cursor)) {
+                    useLine = cursor.lineNumber;
+                    useColumn = cursor.column;
+                }
+            }
+            const insertPos = { lineNumber: useLine, column: useColumn };
+            const ghostText = model
+                ? (normalizeInlineInsertAtCursor(text, model, insertPos) || text)
+                : text;
+            if (!ghostText) {
+                return;
+            }
+            copilotSuggestText = ghostText;
+            cachedInlineCompletion = ghostText;
+            cachedInlinePosition = insertPos;
+
+            dismissSuggestWidgetIfOpen();
+
+            inlineGhostTriggerToken += 1;
+            const token = inlineGhostTriggerToken;
+            function fireInlineTrigger() {
+                if (token !== inlineGhostTriggerToken) {
+                    return;
+                }
+                safeEditorAction('editor.action.inlineSuggest.trigger');
+            }
+            fireInlineTrigger();
+            setTimeout(fireInlineTrigger, 48);
+            setTimeout(fireInlineTrigger, 120);
+        }
+
+        function clearInlineCompletionCache() {
+            inlineGhostTriggerToken += 1;
+            cachedInlineCompletion = null;
+            cachedInlinePosition = null;
+            if (pendingCompletion) {
+                pendingCompletion.resolve('');
+                pendingCompletion = null;
+            }
+            if (pyBridge && pyBridge.cancelInlineCompletion) {
+                pyBridge.cancelInlineCompletion();
+            }
+        }
+
+        function scheduleIdleInlineSuggest() {
+            if (inlineSuggestIdleTimer) {
+                clearTimeout(inlineSuggestIdleTimer);
+            }
+            inlineSuggestIdleTimer = setTimeout(function() {
+                inlineSuggestIdleTimer = null;
+                if (!editor || !pyBridge) {
+                    return;
+                }
+                if (!editor.hasTextFocus()) {
+                    return;
+                }
+                if (!isTypingIdleForInlineAi()) {
+                    return;
+                }
+                const pos = editor.getPosition();
+                const model = editor.getModel();
+                if (!pos || !model) {
+                    return;
+                }
+                const line = model.getLineContent(pos.lineNumber);
+                const before = line.substring(0, pos.column - 1);
+                const trimmed = before.trim();
+                if (trimmed.length < 3 && !/[.([=]$/.test(trimmed)) {
+                    return;
+                }
+
+                const textBeforeCursor = model.getValueInRange({
+                    startLineNumber: 1,
+                    startColumn: 1,
+                    endLineNumber: pos.lineNumber,
+                    endColumn: pos.column
+                });
+                const textAfterCursor = model.getValueInRange({
+                    startLineNumber: pos.lineNumber,
+                    startColumn: pos.column,
+                    endLineNumber: model.getLineCount(),
+                    endColumn: model.getLineMaxColumn(model.getLineCount())
+                });
+
+                // Request IA directly after idle. Relying only on inlineSuggest.trigger
+                // fails when the SQL suggest widget is still open (Monaco 0.45).
+                requestCompletion(
+                    textBeforeCursor,
+                    textAfterCursor,
+                    pos.lineNumber,
+                    pos.column
+                ).then(function(text) {
+                    if (!text || !editor) {
+                        return;
+                    }
+                    presentInlineGhost(text, pos.lineNumber, pos.column);
+                }).catch(function() {});
+            }, INLINE_SUGGEST_IDLE_MS);
+        }
+
         function setupEventListeners() {
             // Text change listener
             editor.onDidChangeModelContent(function(e) {
-                if (pyBridge) {
-                    pyBridge.onTextChanged(editor.getValue());
+                lastTypingAt = Date.now();
+                copilotSuggestText = '';
+                clearInlineCompletionCache();
+                if (textChangeDebounceTimer) {
+                    clearTimeout(textChangeDebounceTimer);
                 }
+                textChangeDebounceTimer = setTimeout(function() {
+                    textChangeDebounceTimer = null;
+                    if (pyBridge) {
+                        pyBridge.onTextChanged(editor.getValue());
+                    }
+                }, TEXT_CHANGE_DEBOUNCE_MS);
+                scheduleIdleInlineSuggest();
             });
             
             // Focus listeners
@@ -284,11 +693,7 @@
                     monaco.KeyMod.Shift | monaco.KeyCode.Enter
                 ],
                 run: function() {
-                    if (pyBridge) {
-                        // Pass selected text so Python doesn't need async round-trip
-                        var selectedText = getSelectedText();
-                        pyBridge.onExecuteRequested(selectedText);
-                    }
+                    triggerExecute();
                 }
             });
             
@@ -303,6 +708,18 @@
                     editor.getAction('editor.action.commentLine').run();
                 }
             });
+
+            // IntelliSense dropdown (methods, tables, columns)
+            editor.addAction({
+                id: 'trigger-suggest',
+                label: 'Trigger Suggest',
+                keybindings: [
+                    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space
+                ],
+                run: function() {
+                    safeEditorAction('editor.action.triggerSuggest');
+                }
+            });
         }
         
         function registerInlineCompletionProvider() {
@@ -312,6 +729,24 @@
                 {
                     provideInlineCompletions: async function(model, position, context, token) {
                         if (token.isCancellationRequested) {
+                            return { items: [] };
+                        }
+
+                        if (cachedInlineCompletion && cachedInlinePosition
+                            && positionsClose(cachedInlinePosition, position)) {
+                            return {
+                                items: [{
+                                    insertText: cachedInlineCompletion,
+                                    range: getInlineGhostRange(model, position)
+                                }]
+                            };
+                        }
+
+                        const invokeKind = monaco.languages.InlineCompletionTriggerKind;
+                        const explicitInvoke = invokeKind
+                            && context
+                            && context.triggerKind === invokeKind.Invoke;
+                        if (!explicitInvoke) {
                             return { items: [] };
                         }
 
@@ -345,17 +780,27 @@
                                 return { items: [] };
                             }
 
-                            return {
-                                items: [{
-                                    insertText: completionText,
-                                    range: new monaco.Range(
-                                        position.lineNumber,
-                                        position.column,
-                                        position.lineNumber,
-                                        position.column
-                                    )
-                                }]
+                            const insertText = normalizeInlineInsertAtCursor(
+                                completionText,
+                                model,
+                                position
+                            );
+                            if (!insertText) {
+                                return { items: [] };
+                            }
+                            cachedInlineCompletion = insertText;
+                            cachedInlinePosition = {
+                                lineNumber: position.lineNumber,
+                                column: position.column
                             };
+                            const item = {
+                                insertText: insertText,
+                                range: getInlineGhostRange(model, position)
+                            };
+                            if (completionText.indexOf('\n') >= 0) {
+                                item.filterText = completionText.split('\n')[0];
+                            }
+                            return { items: [item] };
                         } catch (e) {
                             return { items: [] };
                         }
@@ -368,6 +813,80 @@
             );
         }
         
+        function deliverInlineCompletion(text, line, column) {
+            if (!text) {
+                if (pendingCompletion) {
+                    pendingCompletion.resolve('');
+                    pendingCompletion = null;
+                }
+                return;
+            }
+            if (pendingCompletion) {
+                pendingCompletion.resolve(text);
+                pendingCompletion = null;
+            }
+        }
+
+        function absorbTriggerPromise(result) {
+            if (result != null && typeof result.then === 'function') {
+                void result.then(function() {}, function() {
+                    // Monaco 0.45: missing commands reject the trigger promise
+                });
+            }
+        }
+
+        function safeEditorAction(actionId) {
+            if (!editor) {
+                return;
+            }
+            const action = editor.getAction(actionId);
+            if (action && typeof action.run === 'function') {
+                try {
+                    absorbTriggerPromise(action.run());
+                } catch (e) {
+                    console.log('[Monaco] action failed:', actionId, e);
+                }
+                return;
+            }
+            try {
+                absorbTriggerPromise(editor.trigger('datapyn', actionId, {}));
+            } catch (e) {
+                console.log('[Monaco] action failed:', actionId, e);
+            }
+        }
+
+        function dismissSuggestWidgetIfOpen() {
+            if (!editor) {
+                return;
+            }
+            const ids = ['hideSuggestWidget', 'cancelSuggestWidget', 'editor.action.hideSuggestWidget'];
+            for (let i = 0; i < ids.length; i++) {
+                const action = editor.getAction(ids[i]);
+                if (!action || typeof action.run !== 'function') {
+                    continue;
+                }
+                if (typeof action.isSupported === 'function' && !action.isSupported()) {
+                    continue;
+                }
+                try {
+                    absorbTriggerPromise(action.run());
+                } catch (e) {
+                    continue;
+                }
+                return;
+            }
+        }
+
+        function showInlineCompletionNow() {
+            if (cachedInlineCompletion && cachedInlinePosition) {
+                presentInlineGhost(
+                    cachedInlineCompletion,
+                    cachedInlinePosition.lineNumber,
+                    cachedInlinePosition.column
+                );
+            }
+        }
+
         function requestCompletion(prefix, suffix, line, column) {
             return new Promise((resolve, reject) => {
                 if (!pyBridge) {
@@ -375,39 +894,66 @@
                     reject('No Python bridge');
                     return;
                 }
-                
-                // Increment request ID
+
+                if (pendingCompletion) {
+                    pendingCompletion.resolve('');
+                    pendingCompletion = null;
+                }
+
                 pendingCompletionId++;
                 const requestId = pendingCompletionId;
-                
+
                 console.log('[Monaco] Request completion #' + requestId + ' at L' + line + ':C' + column);
-                
-                // Store resolver for callback with ID
+
                 pendingCompletion = { resolve, reject, id: requestId };
-                
-                // Request completion from Python side
+
                 pyBridge.requestCompletion(prefix, suffix, line, column);
                 
-                // Timeout after 5 seconds (Copilot uses gpt-4o-mini for speed)
+                // Safety timeout: kept above the Python worker timeout (~6s)
+                // so a slow-but-valid AI completion still resolves the promise
+                // instead of being dropped by a too-eager JS timeout.
                 setTimeout(() => {
                     if (pendingCompletion && pendingCompletion.id === requestId) {
                         console.log('[Monaco] Timeout for completion #' + requestId);
-                        pendingCompletion.reject('Timeout');
+                        pendingCompletion.resolve('');
                         pendingCompletion = null;
                     }
-                }, 5000);
+                }, 9000);
             });
         }
         
-        // Called from Python to provide completion result
-        function receiveCompletion(text) {
+        function receiveCompletion(text, line, column) {
             console.log('[Monaco] Received completion: ' + (text ? text.substring(0, 50) + '...' : 'empty'));
+            let useLine = line || 0;
+            let useColumn = column || 0;
+            const cursorPos = editor ? editor.getPosition() : null;
+            if (cursorPos) {
+                if (!useLine || !useColumn) {
+                    useLine = cursorPos.lineNumber;
+                    useColumn = cursorPos.column;
+                } else if (
+                    Math.abs(cursorPos.lineNumber - useLine) <= 1
+                    && Math.abs(cursorPos.column - useColumn) <= 32
+                ) {
+                    useLine = cursorPos.lineNumber;
+                    useColumn = cursorPos.column;
+                }
+            } else if (!useLine || !useColumn) {
+                useLine = 1;
+                useColumn = 1;
+            }
             if (pendingCompletion) {
                 console.log('[Monaco] Resolving completion #' + pendingCompletion.id);
-                pendingCompletion.resolve(text);
-                pendingCompletion = null;
-            } else {
-                console.log('[Monaco] No pending completion to resolve');
+            }
+            const model = editor ? editor.getModel() : null;
+            const insertPos = { lineNumber: useLine, column: useColumn };
+            let ghostText = text;
+            if (model) {
+                ghostText = normalizeInlineInsertAtCursor(text, model, insertPos) || text;
+            }
+            deliverInlineCompletion(ghostText, useLine, useColumn);
+            if (ghostText && editor) {
+                presentInlineGhost(ghostText, useLine, useColumn);
             }
         }
         
@@ -452,18 +998,18 @@
             pendingMap.delete(requestId);
         }
 
-        function debouncedRemote(kind, invokeBridge, token) {
+        function debouncedRemote(kind, invokeBridge, token, debounceMs) {
             return new Promise((resolve) => {
-                const timerRef = kind === 'sql' ? 'sqlDebounceTimer' : 'pythonDebounceTimer';
-                const seqRef = kind === 'sql' ? 'sqlDebounceSeq' : 'pythonDebounceSeq';
-                if (kind === 'sql') {
+                const delay = debounceMs != null ? debounceMs : COMPLETION_DEBOUNCE_MS;
+                const isSql = (kind === 'sql' || kind === 'sql_context');
+                if (isSql) {
                     sqlDebounceSeq += 1;
                 } else {
                     pythonDebounceSeq += 1;
                 }
-                const seq = kind === 'sql' ? sqlDebounceSeq : pythonDebounceSeq;
+                const seq = isSql ? sqlDebounceSeq : pythonDebounceSeq;
 
-                if (kind === 'sql' && sqlDebounceTimer) {
+                if (isSql && sqlDebounceTimer) {
                     clearTimeout(sqlDebounceTimer);
                 }
                 if (kind === 'python' && pythonDebounceTimer) {
@@ -476,7 +1022,7 @@
                 }
 
                 const timer = setTimeout(async () => {
-                    const activeSeq = kind === 'sql' ? sqlDebounceSeq : pythonDebounceSeq;
+                    const activeSeq = isSql ? sqlDebounceSeq : pythonDebounceSeq;
                     if (token && token.isCancellationRequested) {
                         resolve([]);
                         return;
@@ -486,9 +1032,9 @@
                         return;
                     }
                     resolve(await createCompletionRequest(kind, invokeBridge));
-                }, COMPLETION_DEBOUNCE_MS);
+                }, delay);
 
-                if (kind === 'sql') {
+                if (isSql) {
                     sqlDebounceTimer = timer;
                 } else {
                     pythonDebounceTimer = timer;
@@ -497,6 +1043,7 @@
         }
 
         function getSortText(c) {
+            if (c.category === 'block') return '00' + (c.blockName || c.label);
             if (c.category === 'variable') return '0' + c.label;
             if (c.category === 'column') return '0' + c.label;
             if (c.category === 'routine') return '1' + c.label;
@@ -505,14 +1052,26 @@
         }
 
         function toMonacoSuggestions(items, range) {
-            return (items || []).map(c => ({
-                label: c.label,
-                kind: getCompletionKind(c.kind),
-                insertText: c.insertText || c.label,
-                detail: c.detail || '',
-                range: range,
-                sortText: getSortText(c)
-            }));
+            return (items || []).map(c => {
+                const insertText = c.insertText != null ? c.insertText : c.label;
+                const suggestion = {
+                    label: c.label,
+                    kind: getCompletionKind(c.kind),
+                    insertText: insertText,
+                    detail: c.detail || '',
+                    range: range,
+                    sortText: getSortText(c)
+                };
+                // Multiline block snippets: keep full insert, filter by block name / first line
+                if (c.category === 'block') {
+                    suggestion.filterText = c.filterText || c.blockName || c.label;
+                    if (typeof insertText === 'string' && insertText.indexOf('\n') >= 0) {
+                        suggestion.insertTextRules =
+                            monaco.languages.CompletionItemInsertTextRule.None;
+                    }
+                }
+                return suggestion;
+            });
         }
 
         function mergeSuggestions(primary, secondary) {
@@ -537,6 +1096,7 @@
         }
         
         function receiveSqlContextCompletions(requestId, completions) {
+            console.log('[Monaco] receiveSqlContextCompletions #' + requestId + ' items=' + (completions ? completions.length : 0));
             resolveCompletionRequest('sql_context', requestId, completions);
         }
         
@@ -547,6 +1107,7 @@
         }
         
         function receiveSqlCompletions(requestId, completions) {
+            console.log('[Monaco] receiveSqlCompletions #' + requestId + ' items=' + (completions ? completions.length : 0));
             resolveCompletionRequest('sql', requestId, completions);
         }
         
@@ -590,6 +1151,41 @@
         
         // === API Functions (called from Python) ===
         
+        function setDiagnostics(markers) {
+            if (!editor) {
+                return;
+            }
+            const model = editor.getModel();
+            if (!model) {
+                return;
+            }
+            const severityMap = {
+                error: monaco.MarkerSeverity.Error,
+                warning: monaco.MarkerSeverity.Warning,
+                info: monaco.MarkerSeverity.Info,
+                hint: monaco.MarkerSeverity.Hint
+            };
+            const mapped = (markers || []).map(function(m) {
+                const sev = severityMap[(m.severity || 'error').toLowerCase()] || monaco.MarkerSeverity.Error;
+                const startLine = m.startLineNumber || 1;
+                const startCol = m.startColumn || 1;
+                let endLine = m.endLineNumber || startLine;
+                let endCol = m.endColumn || (startCol + 1);
+                if (endLine === startLine && endCol <= startCol) {
+                    endCol = startCol + 1;
+                }
+                return {
+                    severity: sev,
+                    message: m.message || 'Syntax error',
+                    startLineNumber: startLine,
+                    startColumn: startCol,
+                    endLineNumber: endLine,
+                    endColumn: endCol
+                };
+            });
+            monaco.editor.setModelMarkers(model, 'datapyn-syntax', mapped);
+        }
+
         function setValue(text) {
             if (editor) {
                 editor.setValue(text);
@@ -604,6 +1200,7 @@
             currentLanguage = language;
             if (editor) {
                 monaco.editor.setModelLanguage(editor.getModel(), language);
+                applyLanguageCompletionUx(language);
             }
         }
         
@@ -732,6 +1329,14 @@
             }
             return '';
         }
+
+        /** Read selection at execute time (avoids stale Python cache). */
+        function triggerExecute() {
+            if (!pyBridge || !pyBridge.onExecuteRequested) {
+                return;
+            }
+            pyBridge.onExecuteRequested(getSelectedText());
+        }
         
         function hasSelection() {
             if (editor) {
@@ -795,13 +1400,128 @@
             monaco.languages.registerCompletionItemProvider('sql', {
                 triggerCharacters: ['.', ' ', ',', '(', '=', '@', '#'],
                 provideCompletionItems: async function(model, position, context, token) {
-                    const word = model.getWordUntilPosition(position);
-                    const range = {
-                        startLineNumber: position.lineNumber,
+                    const fullText = model.getValue();
+                    const textBeforeCursor = model.getValueInRange({
+                        startLineNumber: 1,
+                        startColumn: 1,
                         endLineNumber: position.lineNumber,
-                        startColumn: word.startColumn,
-                        endColumn: word.endColumn
+                        endColumn: position.column
+                    });
+                    const invokeSuggest = context
+                        && context.triggerKind === monaco.languages.CompletionTriggerKind.Invoke;
+                    const crossDbCtx = parseSqlCrossDatabaseTableContext(textBeforeCursor);
+                    const dotCtx = parseSqlDotContext(textBeforeCursor);
+                    const word = model.getWordUntilPosition(position);
+                    const range = crossDbCtx
+                        ? {
+                            startLineNumber: position.lineNumber,
+                            endLineNumber: position.lineNumber,
+                            startColumn: position.column - (crossDbCtx.tablePrefix || '').length,
+                            endColumn: position.column
+                        }
+                        : {
+                            startLineNumber: position.lineNumber,
+                            endLineNumber: position.lineNumber,
+                            startColumn: word.startColumn,
+                            endColumn: word.endColumn
+                        };
+                    const prefixFilter = getSqlCompletionPrefix(textBeforeCursor, dotCtx, crossDbCtx);
+                    const localRaw = collectSqlLocalItems(textBeforeCursor, dotCtx, crossDbCtx, fullText);
+                    const localItems = filterPrefixMatches(
+                        localRaw,
+                        prefixFilter,
+                        dotCtx ? 200 : 80,
+                        invokeSuggest
+                    );
+                    const copilotItems = invokeSuggest ? buildCopilotSuggestItems(range) : [];
+                    const buildSuggestions = function(items) {
+                        return toMonacoSuggestions(
+                            mergeCompletionItems(copilotItems, items),
+                            range
+                        );
                     };
+
+                    if (token.isCancellationRequested) {
+                        return { suggestions: buildSuggestions(localItems) };
+                    }
+
+                    if (!pyBridge) {
+                        return { suggestions: buildSuggestions(localItems) };
+                    }
+
+                    // Dot after alias/table: offline cache first, Python refines (sqlglot scope).
+                    if (dotCtx) {
+                        const remote = await createCompletionRequest('sql_context', (requestId) => {
+                            pyBridge.requestSqlContext(
+                                fullText,
+                                dotCtx.qualifier,
+                                position.lineNumber,
+                                position.column,
+                                requestId
+                            );
+                        });
+                        if (token.isCancellationRequested) {
+                            return { suggestions: buildSuggestions(localItems) };
+                        }
+                        const filteredRemote = filterRemoteCompletionItems(
+                            remote,
+                            textBeforeCursor,
+                            dotCtx
+                        );
+                        const merged = mergeSuggestions(filteredRemote, localItems);
+                        return {
+                            suggestions: buildSuggestions(merged.length ? merged : localItems),
+                            incomplete: false
+                        };
+                    }
+
+                    const wordLen = crossDbCtx
+                        ? (crossDbCtx.tablePrefix || '').length
+                        : (word.word || '').length;
+                    if (invokeSuggest || wordLen >= 1 || crossDbCtx) {
+                        const remote = await debouncedRemote('sql', (requestId) => {
+                            pyBridge.requestSqlCompletion(
+                                fullText,
+                                position.lineNumber,
+                                position.column,
+                                requestId
+                            );
+                        }, token);
+                        if (token.isCancellationRequested) {
+                            return { suggestions: buildSuggestions(localItems) };
+                        }
+                        const filteredRemote = filterRemoteCompletionItems(
+                            remote,
+                            textBeforeCursor,
+                            null
+                        );
+                        const merged = mergeSuggestions(filteredRemote, localItems);
+                        return {
+                            suggestions: buildSuggestions(merged.length ? merged : localItems)
+                        };
+                    }
+
+                    return { suggestions: buildSuggestions(localItems) };
+                }
+            });
+            
+            monaco.languages.registerCompletionItemProvider('python', {
+                triggerCharacters: [],
+                provideCompletionItems: async function(model, position, context, token) {
+                    const invokeSuggest = context
+                        && context.triggerKind === monaco.languages.CompletionTriggerKind.Invoke;
+                    if (!invokeSuggest) {
+                        return { suggestions: [] };
+                    }
+
+                    const replaceRange = getCompletionReplaceRange(model, position);
+                    const range = {
+                        startLineNumber: replaceRange.startLineNumber,
+                        endLineNumber: replaceRange.endLineNumber,
+                        startColumn: replaceRange.startColumn,
+                        endColumn: replaceRange.endColumn
+                    };
+                    const word = model.getWordUntilPosition(position);
                     
                     const fullText = model.getValue();
                     const textBeforeCursor = model.getValueInRange({
@@ -811,8 +1531,10 @@
                         endColumn: position.column
                     });
                     const localItems = filterPrefixMatches(
-                        filterSqlCompletions(textBeforeCursor),
-                        getCurrentWordPrefix(textBeforeCursor)
+                        filterCompletionsByContext(textBeforeCursor, 'python'),
+                        getCurrentWordPrefix(textBeforeCursor),
+                        80,
+                        invokeSuggest
                     );
                     const localSuggestions = toMonacoSuggestions(localItems, range);
 
@@ -820,75 +1542,11 @@
                         return { suggestions: localSuggestions };
                     }
 
-                    if (!pyBridge) {
-                        return { suggestions: localSuggestions };
-                    }
-
                     const lines = textBeforeCursor.split('\n');
                     const currentLine = lines[lines.length - 1];
                     const dotMatch = currentLine.match(/(\w+)\.$/);
 
-                    if (dotMatch) {
-                        const prefix = dotMatch[1];
-                        const remote = await debouncedRemote('sql_context', (requestId) => {
-                            pyBridge.requestSqlContext(fullText, prefix, position.lineNumber, position.column, requestId);
-                        }, token);
-                        if (token.isCancellationRequested) {
-                            return { suggestions: localSuggestions };
-                        }
-                        return {
-                            suggestions: toMonacoSuggestions(
-                                mergeSuggestions(remote, localItems),
-                                range
-                            )
-                        };
-                    }
-
-                    const remote = await debouncedRemote('sql', (requestId) => {
-                        pyBridge.requestSqlCompletion(fullText, position.lineNumber, position.column, requestId);
-                    }, token);
-                    if (token.isCancellationRequested) {
-                        return { suggestions: localSuggestions };
-                    }
-                    return {
-                        suggestions: toMonacoSuggestions(
-                            mergeSuggestions(remote, localItems),
-                            range
-                        )
-                    };
-                }
-            });
-            
-            monaco.languages.registerCompletionItemProvider('python', {
-                triggerCharacters: ['.'],
-                provideCompletionItems: async function(model, position, context, token) {
-                    const word = model.getWordUntilPosition(position);
-                    const range = {
-                        startLineNumber: position.lineNumber,
-                        endLineNumber: position.lineNumber,
-                        startColumn: word.startColumn,
-                        endColumn: word.endColumn
-                    };
-                    
-                    const fullText = model.getValue();
-                    const textBeforeCursor = model.getValueInRange({
-                        startLineNumber: 1,
-                        startColumn: 1,
-                        endLineNumber: position.lineNumber,
-                        endColumn: position.column
-                    });
-                    const localItems = filterCompletionsByContext(textBeforeCursor, 'python');
-                    const localSuggestions = toMonacoSuggestions(localItems, range);
-
-                    if (token.isCancellationRequested) {
-                        return { suggestions: localSuggestions };
-                    }
-
-                    const lines = textBeforeCursor.split('\n');
-                    const currentLine = lines[lines.length - 1];
-                    const dotMatch = currentLine.match(/(\w+)\.$/);
-
-                    if (pyBridge && (dotMatch || word.word.length >= 1)) {
+                    if (pyBridge && (dotMatch || word.word.length >= 1 || invokeSuggest)) {
                         const remote = await debouncedRemote('python', (requestId) => {
                             pyBridge.requestPythonCompletion(fullText, position.lineNumber, position.column, requestId);
                         }, token);
@@ -910,6 +1568,152 @@
             });
         }
         
+        function normalizeSchemaKey(key) {
+            return String(key || '').toLowerCase().replace(/[\[\]`"]/g, '');
+        }
+
+        function registerSqlSchemaIndex(schema) {
+            schema = schema || {};
+            sqlSchemaIndex = {
+                columnsByKey: {},
+                tableItems: [],
+                currentDatabase: schema.database || ''
+            };
+            const columnsMap = schema.columns || {};
+            const tables = schema.tables || [];
+
+            tables.forEach(function(table) {
+                const name = typeof table === 'string' ? table : (table.name || '');
+                if (!name) {
+                    return;
+                }
+                const schemaName = typeof table === 'object' ? (table.schema || '') : '';
+                const catalog = typeof table === 'object' ? (table.catalog || '') : '';
+                const tableKey = typeof table === 'object' ? (table.key || '') : '';
+                const fallbackKey = schemaName ? (schemaName + '.' + name) : name;
+                const fullKey = tableKey || (
+                    catalog && schemaName
+                        ? (catalog + '.' + schemaName + '.' + name)
+                        : fallbackKey
+                );
+                const cols = columnsMap[fullKey]
+                    || columnsMap[fallbackKey]
+                    || columnsMap[name]
+                    || [];
+                const columnItems = cols.map(function(col) {
+                    const colName = col.name || col;
+                    const colType = col.display_type || col.type || '';
+                    return {
+                        label: colName,
+                        kind: 'field',
+                        insertText: colName,
+                        detail: colType,
+                        category: 'column',
+                        table: name
+                    };
+                });
+                const keys = new Set([
+                    normalizeSchemaKey(fullKey),
+                    normalizeSchemaKey(fallbackKey),
+                    normalizeSchemaKey(name)
+                ]);
+                keys.forEach(function(k) {
+                    if (k) {
+                        sqlSchemaIndex.columnsByKey[k] = columnItems;
+                    }
+                });
+                const tableDatabase = typeof table === 'object' ? (table.database || '') : '';
+                const tableCatalog = typeof table === 'object' ? (table.catalog || '') : '';
+                const filterText = tableDatabase ? (tableDatabase + '..' + name) : name;
+                sqlSchemaIndex.tableItems.push({
+                    label: name,
+                    kind: 'class',
+                    insertText: name,
+                    detail: tableDatabase ? (tableDatabase + '..' + name) : fallbackKey,
+                    category: 'table',
+                    database: tableDatabase || tableCatalog,
+                    catalog: tableCatalog,
+                    filterText: filterText
+                });
+            });
+
+            Object.keys(columnsMap).forEach(function(key) {
+                const nk = normalizeSchemaKey(key);
+                if (sqlSchemaIndex.columnsByKey[nk]) {
+                    return;
+                }
+                const cols = columnsMap[key] || [];
+                sqlSchemaIndex.columnsByKey[nk] = cols.map(function(col) {
+                    const colName = col.name || col;
+                    return {
+                        label: colName,
+                        kind: 'field',
+                        insertText: colName,
+                        detail: col.display_type || col.type || '',
+                        category: 'column',
+                        table: key
+                    };
+                });
+            });
+
+            console.log(
+                '[MONACO] sqlSchemaIndex:',
+                sqlSchemaIndex.tableItems.length,
+                'tables,',
+                Object.keys(sqlSchemaIndex.columnsByKey).length,
+                'column keys'
+            );
+        }
+
+        function getLocalSqlSuggestions(textBefore, dotCtx, fullText) {
+            if (dotCtx) {
+                const cols = resolveQualifierColumns(dotCtx.qualifier, fullText || textBefore);
+                return filterPrefixMatches(cols, dotCtx.columnPrefix, 80, false);
+            }
+            const upperText = textBefore.toUpperCase();
+            const tableKeywords = ['FROM', 'JOIN', 'INTO', 'UPDATE', 'TABLE'];
+            const columnKeywords = ['SELECT', 'WHERE', 'ON', 'ORDER BY', 'GROUP BY', 'HAVING', 'SET'];
+            let lastTableKwPos = -1;
+            let lastColumnKwPos = -1;
+            tableKeywords.forEach(function(kw) {
+                const pos = upperText.lastIndexOf(kw);
+                if (pos > lastTableKwPos) {
+                    lastTableKwPos = pos;
+                }
+            });
+            columnKeywords.forEach(function(kw) {
+                const pos = upperText.lastIndexOf(kw);
+                if (pos > lastColumnKwPos) {
+                    lastColumnKwPos = pos;
+                }
+            });
+            if (lastTableKwPos > lastColumnKwPos && lastTableKwPos > upperText.length - 120) {
+                return sqlSchemaIndex.tableItems.slice(0, 80);
+            }
+            if (lastColumnKwPos > lastTableKwPos && lastColumnKwPos > upperText.length - 120) {
+                const allCols = [];
+                Object.keys(sqlSchemaIndex.columnsByKey).forEach(function(k) {
+                    (sqlSchemaIndex.columnsByKey[k] || []).forEach(function(c) {
+                        allCols.push(c);
+                    });
+                });
+                return allCols.slice(0, 80);
+            }
+            const fallback = keywordCompletions.length
+                ? keywordCompletions
+                : [
+                    { label: 'SELECT', kind: 'keyword', insertText: 'SELECT', category: 'keyword' },
+                    { label: 'FROM', kind: 'keyword', insertText: 'FROM', category: 'keyword' },
+                    { label: 'WHERE', kind: 'keyword', insertText: 'WHERE', category: 'keyword' },
+                    { label: 'JOIN', kind: 'keyword', insertText: 'JOIN', category: 'keyword' },
+                    { label: 'ON', kind: 'keyword', insertText: 'ON', category: 'keyword' },
+                    { label: 'AND', kind: 'keyword', insertText: 'AND', category: 'keyword' },
+                    { label: 'ORDER BY', kind: 'keyword', insertText: 'ORDER BY', category: 'keyword' },
+                    { label: 'GROUP BY', kind: 'keyword', insertText: 'GROUP BY', category: 'keyword' }
+                ];
+            return fallback.slice(0, 40);
+        }
+
         function registerCompletions(completions) {
             // completions: [{ label, kind, insertText, detail, category, table }]
             console.log('[MONACO] registerCompletions called with', completions.length, 'items');
@@ -920,19 +1724,36 @@
             // Separate by category for faster filtering
             tableCompletions = completions.filter(c => c.category === 'table');
             columnCompletions = completions.filter(c => c.category === 'column');
-            keywordCompletions = completions.filter(c => c.kind === 'keyword');
+            keywordCompletions = completions.filter(c => c.kind === 'keyword' && c.category !== 'block');
             
             console.log('[MONACO] Filtered:', tableCompletions.length, 'tables,', columnCompletions.length, 'columns,', keywordCompletions.length, 'keywords');
             
             // Build table->columns map
             columnsByTable = {};
             columnCompletions.forEach(c => {
-                if (c.table) {
-                    if (!columnsByTable[c.table]) {
-                        columnsByTable[c.table] = [];
-                    }
-                    columnsByTable[c.table].push(c);
+                const tableKey = c.table || c.tableBare || '';
+                if (!tableKey) {
+                    return;
                 }
+                const keys = [tableKey];
+                const bare = String(c.tableBare || tableKey).split('.').pop();
+                if (bare && bare !== tableKey) {
+                    keys.push(bare);
+                }
+                keys.forEach(function(key) {
+                    const lk = key.toLowerCase();
+                    [key, lk].forEach(function(k) {
+                        if (!columnsByTable[k]) {
+                            columnsByTable[k] = [];
+                        }
+                        const dup = columnsByTable[k].some(function(x) {
+                            return x.label === c.label;
+                        });
+                        if (!dup) {
+                            columnsByTable[k].push(c);
+                        }
+                    });
+                });
             });
         }
         
@@ -942,36 +1763,83 @@
             return match ? match[0] : '';
         }
 
-        function filterPrefixMatches(items, prefix, limit) {
+        function filterPrefixMatches(items, prefix, limit, includeBlocksWithoutPrefix) {
             const maxItems = limit || 80;
+            const list = items || [];
             if (!prefix) {
-                return (items || []).slice(0, maxItems);
+                if (includeBlocksWithoutPrefix) {
+                    const blocks = list.filter(i => i.category === 'block');
+                    const rest = list.filter(i => i.category !== 'block');
+                    return blocks.concat(rest).slice(0, maxItems);
+                }
+                return list.filter(i => i.category !== 'block').slice(0, maxItems);
             }
-            const lower = prefix.toLowerCase();
-            return (items || []).filter(item => {
+            const lower = prefix.toLowerCase().replace(/^@+/, '');
+            return list.filter(item => {
+                if (item.category === 'block') {
+                    const name = String(item.blockName || item.filterText || '').toLowerCase();
+                    const label = String(item.label || '').toLowerCase();
+                    return !lower || name.startsWith(lower) || label.includes(lower);
+                }
                 const label = String(item.label || '').toLowerCase();
+                const filterText = String(item.filterText || '').toLowerCase();
+                if (filterText && (filterText.startsWith(lower) || lower.startsWith(filterText))) {
+                    return true;
+                }
                 return label.startsWith(lower);
             }).slice(0, maxItems);
         }
 
+        function parsePythonDotContext(textBefore) {
+            const currentLine = (textBefore.split('\n').pop() || '');
+            const match = currentLine.match(/(\w+)\.([\w]*)$/);
+            if (!match) {
+                return null;
+            }
+            return { qualifier: match[1], columnPrefix: match[2] || '' };
+        }
+
         function filterCompletionsByContext(textBefore, language) {
             if (language === 'sql') {
-                return filterPrefixMatches(filterSqlCompletions(textBefore), getCurrentWordPrefix(textBefore));
+                const crossDbCtx = parseSqlCrossDatabaseTableContext(textBefore);
+                const dotCtx = parseSqlDotContext(textBefore);
+                const fullText = editor ? editor.getValue() : textBefore;
+                return filterPrefixMatches(
+                    collectSqlLocalItems(textBefore, dotCtx, crossDbCtx, fullText),
+                    getSqlCompletionPrefix(textBefore, dotCtx, crossDbCtx)
+                );
             } else if (language === 'python') {
+                const dotCtx = parsePythonDotContext(textBefore);
+                if (dotCtx) {
+                    const scoped = (allCompletions || []).filter(function(item) {
+                        const ft = String(item.filterText || '');
+                        return ft.startsWith(dotCtx.qualifier + '.');
+                    });
+                    return filterPrefixMatches(scoped, dotCtx.columnPrefix, 80, false);
+                }
                 return filterPrefixMatches(allCompletions, getCurrentWordPrefix(textBefore));
             }
             return filterPrefixMatches(allCompletions, getCurrentWordPrefix(textBefore));
         }
         
-        function filterSqlCompletions(textBefore) {
+        function filterSqlCompletions(textBefore, dotCtx) {
+            const crossDbCtx = parseSqlCrossDatabaseTableContext(textBefore);
+            if (crossDbCtx) {
+                return collectCrossDatabaseTableItems(crossDbCtx);
+            }
+
             const upperText = textBefore.toUpperCase();
             const lines = textBefore.split('\n');
             const currentLine = lines[lines.length - 1];
-            
-            // Check for "table." pattern - suggest columns of that table
+
             const dotMatch = currentLine.match(/(\w+)\.$/);
             if (dotMatch) {
                 const tableName = dotMatch[1];
+                const fullText = editor ? editor.getValue() : textBefore;
+                const scoped = collectDotColumnItems(tableName, fullText);
+                if (scoped.length > 0) {
+                    return scoped;
+                }
                 const columns = columnsByTable[tableName] || columnsByTable[tableName.toLowerCase()];
                 if (columns && columns.length > 0) {
                     return columns;
@@ -1022,6 +1890,7 @@
                 'property': monaco.languages.CompletionItemKind.Property,
                 'method': monaco.languages.CompletionItemKind.Method,
                 'field': monaco.languages.CompletionItemKind.Field,
+                'snippet': monaco.languages.CompletionItemKind.Snippet,
                 'text': monaco.languages.CompletionItemKind.Text
             };
             return kinds[kind] || monaco.languages.CompletionItemKind.Text;

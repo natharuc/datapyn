@@ -89,6 +89,7 @@ class UISetupMixin:
         self.session_tabs.session_closed.connect(self._close_session_tab)
         self.session_tabs.session_renamed.connect(self._on_session_renamed)
         self.session_tabs.session_changed.connect(self._on_session_tab_changed)
+        self.session_tabs.new_session_requested.connect(self._new_session)
         self.session_tabs.duplicate_session.connect(self._duplicate_session)
 
         session_layout.addWidget(self.session_tabs)
@@ -501,24 +502,36 @@ class UISetupMixin:
 
         tools_menu.addSeparator()
 
-        # Copilot submenu
-        copilot_menu = tools_menu.addMenu(S.menu.copilot_submenu)
-        if HAS_QTAWESOME:
-            copilot_menu.setIcon(qta.icon("mdi.robot", color="#b0b0b0"))
+        # Pynia chat
+        pynia_menu = tools_menu.addMenu(
+            S.menu.pynia_submenu if hasattr(S.menu, "pynia_submenu") else "Pynia"
+        )
+        from src.assets.pynia_branding import load_pynia_logo
 
-        # Download Language Server
-        download_lsp_action = QAction(S.menu.copilot_download_lsp, self)
-        if HAS_QTAWESOME:
-            download_lsp_action.setIcon(qta.icon("mdi.download", color="#b0b0b0"))
-        download_lsp_action.triggered.connect(self._show_copilot_download_dialog)
-        copilot_menu.addAction(download_lsp_action)
+        pynia_menu_icon = load_pynia_logo(16)
+        if pynia_menu_icon:
+            pynia_menu.setIcon(pynia_menu_icon)
+        elif HAS_QTAWESOME:
+            pynia_menu.setIcon(qta.icon("mdi.robot", color="#b0b0b0"))
+        open_pynia_action = QAction(
+            S.menu.pynia_open_chat if hasattr(S.menu, "pynia_open_chat") else "Open Pynia Chat",
+            self,
+        )
+        open_pynia_action.triggered.connect(self._toggle_copilot_dock)
+        pynia_menu.addAction(open_pynia_action)
 
-        # Check Status
-        check_status_action = QAction(S.menu.copilot_check_status, self)
+        pynia_autocomplete_action = QAction(
+            S.menu.pynia_autocomplete_settings
+            if hasattr(S.menu, "pynia_autocomplete_settings")
+            else "Pynia autocomplete settings…",
+            self,
+        )
         if HAS_QTAWESOME:
-            check_status_action.setIcon(qta.icon("mdi.information-outline", color="#b0b0b0"))
-        check_status_action.triggered.connect(self._show_copilot_status)
-        copilot_menu.addAction(check_status_action)
+            pynia_autocomplete_action.setIcon(qta.icon("mdi.lightning-bolt", color="#b0b0b0"))
+        pynia_autocomplete_action.triggered.connect(
+            lambda: self.show_settings_dialog(initial_tab="pynia")
+        )
+        pynia_menu.addAction(pynia_autocomplete_action)
 
         # Help Menu
         help_menu = menubar.addMenu(S.menu.help)
@@ -546,26 +559,36 @@ class UISetupMixin:
         self.main_toolbar.new_tab_clicked.connect(self._new_session)
         self.main_toolbar.run_clicked.connect(self._execute_from_toolbar)
         self.main_toolbar.run_timer_clicked.connect(self._toggle_run_timer)
-        self.main_toolbar.copilot_clicked.connect(self._toggle_copilot_dock)
+        # Only pynia_clicked — copilot_clicked is an alias emitted from the same click;
+        # connecting both would toggle the dock twice per button press.
+        self.main_toolbar.pynia_clicked.connect(self._toggle_copilot_dock)
         self.main_toolbar.workspace_switch_requested.connect(self._on_workspace_switch)
         self.main_toolbar.workspace_settings_requested.connect(self._show_workspace_settings)
 
     def _toggle_copilot_dock(self):
-        """Toggle Copilot dock visibility and focus."""
-        if hasattr(self, "copilot_dock"):
-            if self.copilot_dock.isVisible():
-                self.copilot_dock.hide()
-            else:
-                self.copilot_dock.show()
-                self.copilot_dock.raise_()
-                # Focus input field
-                if hasattr(self, "_copilot_chat_panel"):
-                    if hasattr(self._copilot_chat_panel, "focus_input"):
-                        self._copilot_chat_panel.focus_input()
-                    else:
-                        input_field = getattr(self._copilot_chat_panel, "_input", None)
-                        if input_field and hasattr(input_field, "setFocus"):
-                            input_field.setFocus()
+        """Toggle Pynia chat dock visibility and focus."""
+        if not hasattr(self, "copilot_dock"):
+            return
+        dock = self.copilot_dock
+        if dock.isVisible() and self._is_dock_tab_active(dock):
+            dock.hide()
+            if hasattr(self, "copilot_action"):
+                self.copilot_action.setChecked(False)
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, self._reposition_tab_accessories)
+        else:
+            self.show_panel("copilot")
+            if hasattr(self, "copilot_action"):
+                self.copilot_action.setChecked(True)
+            panel = getattr(self, "_copilot_chat_panel", None)
+            if panel is not None:
+                if hasattr(panel, "focus_input"):
+                    panel.focus_input()
+                else:
+                    input_field = getattr(panel, "_input", None)
+                    if input_field and hasattr(input_field, "setFocus"):
+                        input_field.setFocus()
 
     def _on_workspace_switch(self, path: str):
         """Handle workspace switch request from toolbar."""
@@ -1049,24 +1072,53 @@ class UISetupMixin:
         dialog = PackageManagerDialog(theme_manager=self.theme_manager, parent=self)
         dialog.exec()
 
-    def _show_settings(self):
-        """Shows the settings dialog"""
-        dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager)
+    def show_settings_dialog(self, initial_tab: str = None):
+        """Shows the settings dialog, optionally selecting a tab."""
+        dialog = SettingsDialog(
+            self.shortcut_manager,
+            theme_manager=self.theme_manager,
+            initial_tab=initial_tab,
+        )
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
-        
-        # Connect Copilot auth signals
+        dialog.pynia_connector_changed.connect(self._on_pynia_connector_changed)
         dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
         dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
         dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
         dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
-        
         dialog.exec()
+
+    def _on_pynia_connector_changed(self, provider_id: str):
+        """A Pynia connector was saved in Settings — switch the live agent and
+        authenticate immediately so the chat reflects it without a restart."""
+        agent = getattr(self, "_pynia_agent", None)
+        if not agent:
+            return
+        try:
+            from src.services.pynia.settings import get_provider_secret
+
+            if getattr(agent, "provider_id", None) != provider_id and hasattr(agent, "set_provider"):
+                agent.set_provider(provider_id)
+            if provider_id == "copilot":
+                # GitHub device-flow login is driven by the auth service; just
+                # make sure the live agent is on the Copilot connector.
+                return
+            token = get_provider_secret(provider_id)
+            if token and hasattr(agent, "set_api_token"):
+                # Emits `authenticated`, which refreshes the chat auth gate.
+                agent.set_api_token(token, provider_id)
+        except Exception:
+            pass
+
+    def _show_settings(self):
+        """Shows the settings dialog"""
+        self.show_settings_dialog()
 
     def _show_workspace_settings(self):
         """Shows the settings dialog on the Workspace tab."""
         dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager, initial_tab="workspace")
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
-        
+        dialog.pynia_connector_changed.connect(self._on_pynia_connector_changed)
+
         # Connect Copilot auth signals
         dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
         dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)

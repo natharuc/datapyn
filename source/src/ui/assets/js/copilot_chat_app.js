@@ -7,6 +7,7 @@
         usage: {},
         references: [],
         attachments: [],
+        focusedBlock: null,
         maxAttachments: 4,
         maxImageBytes: 4 * 1024 * 1024,
         streamingEl: null,
@@ -28,6 +29,8 @@
         authReady: false,
         thinkingText: "",
         thinkingStartedAt: 0,
+        agentTimelineEl: null,
+        turnToolLog: [],
         pasteBusy: false,
         recentAttachmentKeys: new Set(),
         supportsVision: true,
@@ -332,7 +335,98 @@
         container.appendChild(wrap);
     }
 
-    function addMessage(role, content, id, references, attachments) {
+    function languageBadgeClass(language) {
+        const lang = String(language || "").toLowerCase();
+        if (lang.includes("python")) return "lang-python";
+        if (lang === "sql") return "lang-sql";
+        if (lang.includes("html")) return "lang-html";
+        return "";
+    }
+
+    function languageBadgeText(language) {
+        const lang = String(language || "").toLowerCase();
+        if (lang.includes("python")) return "Py";
+        if (lang === "sql") return "SQL";
+        if (lang.includes("html")) return "HTML";
+        if (lang.includes("javascript") || lang === "js") return "JS";
+        if (lang) return lang.slice(0, 4).toUpperCase();
+        return "?";
+    }
+
+    function buildFocusedBlockChipElement(item, { composer = false } = {}) {
+        if (!item || !item.label) return null;
+        const chip = document.createElement(composer ? "div" : "span");
+        chip.className = composer ? "focused-block-chip" : "message-focused-block-chip";
+        const aria = label("focused_block_chip_aria", "Focused block {label}").replace("{label}", item.label);
+        chip.title = label("focused_block_pin_title", "Primary context");
+        chip.setAttribute("aria-label", aria);
+
+        const pin = document.createElement("span");
+        pin.className = "focused-block-pin";
+        pin.setAttribute("aria-hidden", "true");
+        pin.textContent = "📌";
+        chip.appendChild(pin);
+
+        const lang = document.createElement("span");
+        lang.className = `focused-block-lang ${languageBadgeClass(item.language)}`.trim();
+        lang.textContent = languageBadgeText(item.language);
+        lang.setAttribute("aria-hidden", "true");
+        chip.appendChild(lang);
+
+        const text = document.createElement("span");
+        text.className = "focused-block-label";
+        text.textContent = item.label;
+        chip.appendChild(text);
+        return chip;
+    }
+
+    function renderMessageFocusedBlock(container, focusedBlock) {
+        if (!container || !focusedBlock || !focusedBlock.label) return;
+        const wrap = document.createElement("div");
+        wrap.className = "message-focused-blocks";
+        const chip = buildFocusedBlockChipElement(focusedBlock, { composer: false });
+        if (chip) wrap.appendChild(chip);
+        container.appendChild(wrap);
+    }
+
+    function syncFocusedBlockStrip() {
+        const wrap = $("focusedBlockChips");
+        const card = $("composerCard");
+        const hasItem = !!(state.focusedBlock && state.focusedBlock.label);
+        if (wrap) {
+            wrap.hidden = !hasItem;
+            wrap.classList.toggle("has-items", hasItem);
+            wrap.innerHTML = "";
+            if (hasItem) {
+                const chip = buildFocusedBlockChipElement(state.focusedBlock, { composer: true });
+                if (chip) wrap.appendChild(chip);
+            }
+        }
+        if (card) {
+            card.classList.toggle("has-focused-block", hasItem);
+        }
+        forceComposerRepaint();
+    }
+
+    function setFocusedBlockAttachment(payload) {
+        if (!payload || !payload.label) {
+            state.focusedBlock = null;
+        } else {
+            state.focusedBlock = {
+                type: "focused_block",
+                block_name: payload.block_name || "",
+                language: payload.language || "",
+                lines: payload.lines || 0,
+                line_range: payload.line_range || "",
+                label: payload.label,
+                index: payload.index,
+                is_primary_target: true,
+            };
+        }
+        syncFocusedBlockStrip();
+    }
+
+    function addMessage(role, content, id, references, attachments, focusedBlock) {
         hideWelcome();
         const row = document.createElement("article");
         row.className = `message-row ${role || "assistant"}`;
@@ -342,6 +436,7 @@
         stack.className = "message-stack";
 
         if (role === "user") {
+            renderMessageFocusedBlock(stack, focusedBlock);
             renderMessageAttachments(stack, attachments);
             renderAttachedReferences(stack, references);
         }
@@ -364,7 +459,7 @@
     function clearMessages() {
         const messages = $("messages");
         if (messages) {
-            messages.querySelectorAll(".message-row,.thinking-block,.work-block,.status-line,#activityLine").forEach((node) => node.remove());
+            messages.querySelectorAll(".message-row,.thinking-block,.work-block,.status-line,#activityLine,.agent-timeline,.turn-context-chip").forEach((node) => node.remove());
         }
         const welcome = $("welcome");
         if (welcome) welcome.hidden = false;
@@ -415,13 +510,24 @@
         scrollToBottom();
     }
 
+    function renderThinkingHtml(text) {
+        const raw = String(text || "");
+        if (window.marked && typeof window.marked.parse === "function") {
+            return window.marked.parse(raw);
+        }
+        return escapeHtml(raw).replace(/\n/g, "<br>");
+    }
+
     function appendThinking(text) {
         startThinkingBlock();
         const chunk = String(text || "");
         if (!chunk) return;
         state.thinkingText += chunk;
         const content = state.thinkingEl && state.thinkingEl.querySelector(".thinking-block-content");
-        if (content) content.textContent = state.thinkingText;
+        if (content) {
+            content.className = "thinking-block-content markdown-body";
+            content.innerHTML = renderThinkingHtml(state.thinkingText);
+        }
         const preview = summarizeThinkingPreview(state.thinkingText);
         const status = state.thinkingEl && state.thinkingEl.querySelector(".thinking-summary-status");
         if (status) status.textContent = preview || label("thinking_live", "");
@@ -446,6 +552,8 @@
     function startStreaming() {
         hideThinking();
         endThinkingBlock();
+        endToolGroup();
+        stopActivityTimer();
         const row = addMessage("assistant", "", `stream-${Date.now()}`);
         state.streamingEl = row.querySelector(".message");
     }
@@ -464,76 +572,183 @@
         state.streamingEl = null;
     }
 
-    function ensureWorkBlock() {
+    function ensureAgentTimeline() {
+        hideWelcome();
+        if (state.agentTimelineEl) return state.agentTimelineEl;
+        const el = document.createElement("div");
+        el.className = "agent-timeline";
+        el.id = "agentTimeline";
+        $("messages").appendChild(el);
+        state.agentTimelineEl = el;
+        return el;
+    }
+
+    function pushAgentProgress(payload) {
+        payload = payload || {};
+        const phase = payload.phase || "";
+        const detail = payload.detail || "";
+        if (phase || detail) {
+            setActivity({
+                phase: phase || label("activity_working", label("waiting_response", "")),
+                detail: detail && !phase.includes(detail) ? detail : "",
+            });
+        }
+        scrollToBottom();
+    }
+
+    function refreshCompactWorkSummary() {
+        if (!state.workEl) return;
+        const n = state.turnToolLog.length;
+        const titleSpan = state.workEl.querySelector(".work-summary-title");
+        const status = state.workEl.querySelector(".work-status");
+        if (!titleSpan) return;
+        if (n === 0) {
+            state.workEl.remove();
+            state.workEl = null;
+            return;
+        }
+        const tpl = label("work_summary_steps", "{n} steps");
+        titleSpan.textContent = tpl.replace("{n}", String(n));
+        if (status) {
+            status.textContent = label("work_expand_hint", "Show details");
+        }
+    }
+
+    function ensureCompactWorkBlock() {
         hideWelcome();
         if (state.workEl) return state.workEl;
         const block = document.createElement("details");
-        block.className = "work-block";
-        block.innerHTML = `<summary><span>${escapeHtml(label("work_title", label("thinking", "")))}</span><span class="work-status">${escapeHtml(label("work_running", label("tool_running", "")))}</span></summary><div class="work-list"></div>`;
+        block.className = "work-block work-block-compact";
+        block.innerHTML = `<summary><span class="work-summary-title">${escapeHtml(label("work_title", ""))}</span><span class="work-status">${escapeHtml(label("work_expand_hint", ""))}</span></summary><div class="work-list"></div>`;
         $("messages").appendChild(block);
         state.workEl = block;
         return block;
     }
 
-    function updateWorkStatus(done) {
-        if (!state.workEl) return;
-        const status = state.workEl.querySelector(".work-status");
-        if (!status) return;
-        status.textContent = done ? label("work_complete", label("tool_ok", "")) : label("work_running", label("tool_running", ""));
-    }
-
-    function addToolUse(toolName, argSummary, toolId) {
-        const block = ensureWorkBlock();
-        state.toolCount += 1;
-        updateWorkStatus(false);
-        setActivity({
-            phase: label("activity_running_tool", "Running {tool}...").replace("{tool}", toolName),
-            detail: argSummary || "",
-        });
-
-        const row = document.createElement("div");
-        row.className = "tool-row running";
-        row.dataset.toolName = toolName;
-        row.dataset.toolId = toolId || `${toolName}-${state.toolCount}`;
-        row.innerHTML = `<div class="tool-row-head"><span>${escapeHtml(toolName)}</span><span>${escapeHtml(label("tool_running", ""))}</span></div><div class="tool-row-detail">${escapeHtml(argSummary || "")}</div>`;
-        block.querySelector(".work-list").appendChild(row);
-        scrollToBottom();
-        return row.dataset.toolId;
-    }
-
-    function updateToolStatus(toolName, _status, isError, resultPreview, toolId) {
-        const rows = Array.from(document.querySelectorAll(".tool-row"));
-        let row = toolId ? rows.find((node) => node.dataset.toolId === toolId) : null;
+    function appendToolLogRow(title, toolId, status) {
+        const block = ensureCompactWorkBlock();
+        const list = block.querySelector(".work-list");
+        if (!list) return;
+        let row = list.querySelector(`[data-tool-id="${CSS.escape(toolId)}"]`);
         if (!row) {
-            row = rows.find((node) => node.dataset.toolName === toolName && node.classList.contains("running"));
+            row = document.createElement("div");
+            row.className = "tool-row";
+            row.dataset.toolId = toolId;
+            row.innerHTML = `<div class="tool-row-head"><span></span><span></span></div>`;
+            list.appendChild(row);
         }
-        if (!row) return;
-        row.classList.remove("running");
-        row.classList.toggle("error", !!isError);
-        const statusEl = row.querySelector(".tool-row-head span:last-child");
-        if (statusEl) statusEl.textContent = isError ? label("tool_error", "") : label("tool_ok", "");
-        const content = row.querySelector(".tool-row-detail");
-        if (content && resultPreview) content.textContent = resultPreview;
-        state.completedTools = Math.min(state.toolCount, state.completedTools + 1);
-        updateWorkStatus(state.toolCount > 0 && state.completedTools >= state.toolCount);
+        row.classList.toggle("running", status === "running");
+        row.classList.toggle("error", status === "error");
+        const spans = row.querySelectorAll(".tool-row-head span");
+        if (spans[0]) spans[0].textContent = title;
+        if (spans[1]) {
+            spans[1].textContent = status === "running"
+                ? label("tool_running", "")
+                : status === "error"
+                    ? label("tool_error", "")
+                    : label("tool_ok", "");
+        }
+    }
+
+    function trackAgentTool(toolId, labelText, phase) {
+        hideWelcome();
+        setWorking(true);
+        const title = String(labelText || "").trim();
+        if (phase === "start") {
+            const existing = state.turnToolLog.find((t) => t.id === toolId);
+            if (!existing) {
+                state.turnToolLog.push({ id: toolId, title, status: "running" });
+            } else {
+                existing.status = "running";
+            }
+            state.toolCount = state.turnToolLog.length;
+            if (title) {
+                setActivity({ phase: title, detail: "" });
+            }
+            appendToolLogRow(title, toolId, "running");
+            refreshCompactWorkSummary();
+        } else {
+            const entry = state.turnToolLog.find((t) => t.id === toolId);
+            if (entry) {
+                entry.status = phase === "error" ? "error" : "done";
+                appendToolLogRow(entry.title, toolId, entry.status);
+            }
+            state.completedTools = state.turnToolLog.filter((t) => t.status !== "running").length;
+            const next = state.turnToolLog.find((t) => t.status === "running");
+            if (next) {
+                setActivity({ phase: next.title, detail: "" });
+            } else if (state.turnToolLog.length) {
+                setActivity({
+                    phase: label("activity_synthesizing", label("waiting_response", "")),
+                    detail: "",
+                });
+            }
+            refreshCompactWorkSummary();
+        }
         scrollToBottom();
+        return toolId;
+    }
+
+    function startAgentTurn() {
+        hideWelcome();
+        hideThinking();
+        state.workEl = null;
+        state.toolCount = 0;
+        state.completedTools = 0;
+        state.turnToolLog = [];
+        document.querySelectorAll(".agent-timeline").forEach((node) => node.remove());
+        state.agentTimelineEl = null;
+        document.querySelectorAll(".turn-context-chip").forEach((node) => node.remove());
+        setActivity({
+            phase: label("activity_working", label("waiting_response", "")),
+            detail: "",
+        });
+        setWorking(true);
+        scrollToBottom();
+    }
+
+    function endAgentTurn() {
+        refreshCompactWorkSummary();
+        if (state.workEl) {
+            state.workEl.removeAttribute("open");
+        }
+    }
+
+    function ensureWorkBlock() {
+        return ensureCompactWorkBlock();
+    }
+
+    function updateWorkStatus(_done) {
+        refreshCompactWorkSummary();
+    }
+
+    function addToolUse(toolName, argSummary, toolId, displayLabel) {
+        const title = displayLabel || toolName;
+        return trackAgentTool(toolId || `${toolName}-${state.turnToolLog.length + 1}`, title, "start");
+    }
+
+    function updateToolStatus(toolName, _status, isError, _resultPreview, toolId) {
+        trackAgentTool(
+            toolId || toolName,
+            toolName,
+            isError ? "error" : "done",
+        );
     }
 
     function completeAllRunningTools() {
-        const running = Array.from(document.querySelectorAll(".tool-row.running"));
-        running.forEach((row) => {
-            row.classList.remove("running");
-            const statusEl = row.querySelector(".tool-row-head span:last-child");
-            if (statusEl) statusEl.textContent = label("tool_ok", "");
+        state.turnToolLog.forEach((t) => {
+            if (t.status === "running") t.status = "done";
         });
-        if (running.length) {
-            state.completedTools = state.toolCount;
-            updateWorkStatus(true);
-        }
+        state.completedTools = state.turnToolLog.length;
+        refreshCompactWorkSummary();
     }
 
     function endToolGroup() {
         completeAllRunningTools();
+        setActivity({
+            phase: label("activity_synthesizing", label("waiting_response", "")),
+            detail: "",
+        });
     }
 
     function formatMultiplier(multiplier) {
@@ -636,6 +851,10 @@
     }
 
     function usageSummaryText(usage) {
+        usage = usage || {};
+        if (usage.limits_summary) {
+            return String(usage.limits_summary);
+        }
         if (usage.available && usage.used != null && usage.total != null) {
             return label("usage_format", "{used}/{total}").replace("{used}", usage.used).replace("{total}", usage.total);
         }
@@ -646,6 +865,17 @@
             return label("usage_remaining_format", "{remaining}%").replace("{remaining}", usage.remaining_percentage);
         }
         return label("usage_unavailable", "");
+    }
+
+    function usagePanelTitleText(usage) {
+        usage = usage || {};
+        const provider = usage.provider_name || label("title", "Pynia");
+        if (usage.username) {
+            return label("usage_panel_title_user", "Pynia · {provider} · @{username}")
+                .replace("{provider}", provider)
+                .replace("{username}", usage.username);
+        }
+        return label("usage_panel_title", "Pynia · {provider}").replace("{provider}", provider);
     }
 
     function setUsagePanelOpen(open) {
@@ -798,20 +1028,44 @@
         const updateStatus = $("usagePanelUpdateStatus");
 
         if (title) {
-            title.textContent = usage.username
-                ? label("usage_panel_title_user", "GitHub Copilot").replace("{username}", usage.username)
-                : label("usage_panel_title", "GitHub Copilot");
+            title.textContent = usagePanelTitleText(usage);
         }
         if (planHint) {
-            planHint.textContent = usage.available
-                ? label("usage_panel_plan_included", "")
-                : label("usage_panel_plan_unknown", "");
+            if (usage.limits_detail) {
+                planHint.textContent = usage.limits_detail;
+            } else if (usage.available) {
+                planHint.textContent = label("usage_panel_plan_included", "");
+            } else {
+                planHint.textContent = label("usage_panel_plan_unknown", "");
+            }
         }
         if (quota) quota.textContent = usageSummaryText(usage);
         if (reset) {
             reset.textContent = usage.reset_date
                 ? label("usage_panel_reset", "").replace("{reset_date}", usage.reset_date)
                 : "";
+        }
+        const runtimeSection = $("usagePanelRuntimeSection");
+        if (runtimeSection) {
+            runtimeSection.hidden = usage.show_runtime === false;
+        }
+        const limitsLink = $("usagePanelLimitsLink");
+        if (limitsLink) {
+            const url = usage.limits_url || "";
+            limitsLink.hidden = !url;
+            limitsLink.onclick = url
+                ? () => {
+                    if (state.bridge && typeof state.bridge.openExternalUrl === "function") {
+                        state.bridge.openExternalUrl(url);
+                    } else {
+                        window.open(url, "_blank");
+                    }
+                }
+                : null;
+        }
+        const subscription = $("usagePanelSubscription");
+        if (subscription) {
+            subscription.hidden = usage.show_subscription === false;
         }
         if (cliRow) {
             const version = cli.version || label("usage_panel_not_installed", "Not installed");
@@ -857,7 +1111,9 @@
             }
         }
         const switchAccount = $("usagePanelSwitchAccount");
-        if (switchAccount) switchAccount.hidden = !state.authReady;
+        if (switchAccount) {
+            switchAccount.hidden = !state.authReady || usage.show_account_switch === false;
+        }
     }
 
     function renderUsage() {
@@ -1466,6 +1722,11 @@
     function setAppState(payload) {
         payload = payload || {};
         if (payload.tab_name && $("tabContext")) $("tabContext").textContent = payload.tab_name;
+        if (payload.provider_label && $("tabContext") && !payload.tab_name) {
+            $("tabContext").textContent = payload.provider_label;
+        } else if (payload.provider_label && $("tabContext") && payload.tab_name) {
+            $("tabContext").textContent = `${payload.provider_label} · ${payload.tab_name}`;
+        }
         if (payload.auth_label && $("authBtn")) $("authBtn").textContent = payload.auth_label;
         if (Object.prototype.hasOwnProperty.call(payload, "auth_ready")) {
             const authBtn = $("authBtn");
@@ -1497,10 +1758,22 @@
             size,
             source,
         }));
+        const focusedBlock = state.focusedBlock
+            ? {
+                type: "focused_block",
+                block_name: state.focusedBlock.block_name,
+                language: state.focusedBlock.language,
+                lines: state.focusedBlock.lines,
+                line_range: state.focusedBlock.line_range,
+                label: state.focusedBlock.label,
+                index: state.focusedBlock.index,
+            }
+            : null;
         callBridge("sendMessage", {
             text: text || label("attachment_only_prompt", "What do you see in this image?"),
             references: state.references,
             attachments,
+            focused_block: focusedBlock,
         });
         input.value = "";
         input.style.height = "auto";
@@ -1734,6 +2007,11 @@
     window.streamChunk = streamChunk;
     window.endStreaming = endStreaming;
     window.addToolUse = addToolUse;
+    window.trackAgentTool = trackAgentTool;
+    window.pushAgentProgress = pushAgentProgress;
+    window.startAgentTurn = startAgentTurn;
+    window.setFocusedBlockAttachment = setFocusedBlockAttachment;
+    window.endAgentTurn = endAgentTurn;
     window.updateToolStatus = updateToolStatus;
     window.completeAllRunningTools = completeAllRunningTools;
     window.endToolGroup = endToolGroup;
