@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.38.0 (2026-06-04)
+
+### Features
+
+- **installer**: Replace MSI with ZIP setup and in-app updates
+  ([`7f82d74`](https://github.com/natharuc/datapyn/commit/7f82d747268476273315f110dec790b83abc9d2b))
+
+- **installer**: Replace MSI with ZIP setup and in-app updates
+  ([`d5a34d6`](https://github.com/natharuc/datapyn/commit/d5a34d689fe933f293813029b1b9adcc82b25cca))
+
+### Heuristic
+
+- Merge pull request #118 from natharuc/cursor/pynia
+  ([`7f82d74`](https://github.com/natharuc/datapyn/commit/7f82d747268476273315f110dec790b83abc9d2b))
+
+- Merge pull request #119 from natharuc/cursor/pynia
+  ([`fd43556`](https://github.com/natharuc/datapyn/commit/fd43556eb3eaa7038e66b684d90620e4b0b5152b))
+
+
 ## v1.37.0 (2026-06-04)
 
 ### Bug Fixes
