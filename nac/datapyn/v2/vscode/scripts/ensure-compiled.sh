@@ -7,6 +7,7 @@ CHECKOUT="${VSCODE_CHECKOUT:-$ROOT/checkout}"
 
 MARKERS=(
   "$CHECKOUT/out/vs/nls.js"
+  "$CHECKOUT/out/nls.messages.json"
   "$CHECKOUT/out/vs/code/electron-browser/workbench/workbench.js"
   "$CHECKOUT/.build/electron/datapyn"
 )
@@ -31,7 +32,8 @@ echo "[datapyn-v2] Incomplete build — running transpile + electron..." >&2
 NPM="${DATAPYN_NODE%/*}/npm"
 cd "$CHECKOUT"
 export npm_config_user_agent="npm/11.0.0"
-"$NPM" run transpile-client
+"$DATAPYN_NODE" build/next/index.ts transpile
+"$ROOT/scripts/generate-nls-dev.sh"
 "$NPM" run electron
 
 for f in "${MARKERS[@]}"; do

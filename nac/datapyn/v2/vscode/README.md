@@ -34,7 +34,10 @@ No app: Command Palette → **DataPyn: PoC Ping Runtime** ou **DataPyn: PoC Run 
 
 | Erro | Solução |
 |------|---------|
-| `Cannot find module .../out/vs/nls.js` | Build incompleto — rode `./scripts/build.sh` até o fim (~5–15 min) ou `./scripts/ensure-compiled.sh` |
+| `Cannot find module .../out/vs/nls.js` | Build incompleto — rode `./scripts/build.sh` até o fim (~5–15 min) |
+| `ENOENT .../out/nls.messages.json` | Rode `./scripts/build.sh` de novo (precisa `transpile --nls`) |
+| `renderer launch-failed code 1002` | GPU/display na VM — `run.sh` já usa `--disable-gpu`; confira `DISPLAY=:1` |
+| Linhas `dbus/bus.cc` vermelhas | Normal em VM sem D-Bus; pode ignorar se a janela abrir |
 | Node 22 / `/exec-daemon/node` | Use `./scripts/run.sh` (não `code.sh` direto) — força Node 24 via nvm |
 | `please use npm i instead` | Não rode `yarn` no `checkout/`; use `./scripts/build.sh` |
 | `Please use Node.js v24…` | `nvm install 24.15.0` |

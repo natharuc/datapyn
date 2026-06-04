@@ -33,8 +33,9 @@ echo "[datapyn-v2] npm $($NPM -v) + node $($DATAPYN_NODE -v)"
 export npm_config_user_agent="npm/11.0.0"
 "$NPM" install --no-audit --no-fund
 "$NPM" run compile
-# Upstream may finish typecheck before all JS is in out/ — transpile fills gaps (nls.js, etc.)
-"$NPM" run transpile-client
+# Transpile JS into out/ (esbuild; NLS files need separate step in dev)
+"$DATAPYN_NODE" build/next/index.ts transpile
+"$ROOT/scripts/generate-nls-dev.sh"
 "$NPM" run electron
 
 "$ROOT/scripts/ensure-compiled.sh"

@@ -28,6 +28,7 @@ if [[ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]]; then
   check "Node 24 (nvm)" "[[ \"\$(nvm version 2>/dev/null)\" == v24* ]] || [[ -x \"$HOME/.nvm/versions/node/v24.15.0/bin/node\" ]]"
 fi
 check "out/vs/nls.js" "[[ -f '$CHECKOUT/out/vs/nls.js' ]]"
+check "out/nls.messages.json" "[[ -f '$CHECKOUT/out/nls.messages.json' ]]"
 check "electron binary" "[[ -x '$CHECKOUT/.build/electron/datapyn' ]]"
 check "built-in extension out" "[[ -f '$V2_ROOT/extension/out/extension.js' ]]"
 check "runtime venv" "[[ -d '$V2_ROOT/runtime/.venv' ]]"
