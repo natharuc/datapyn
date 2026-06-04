@@ -13,9 +13,9 @@ import requests
 from PyQt6.QtCore import QObject, QSettings, QThread, pyqtSignal
 
 from src.services.windows_installer import (
-    apply_downloaded_update,
     find_windows_zip_asset,
     is_newer_version,
+    launch_deferred_zip_update,
     normalize_version,
 )
 
@@ -183,7 +183,7 @@ class AutoUpdateService:
         self._download_thread.start()
 
     def install_update(self, package_path: str, version: str = "") -> bool:
-        """Apply a downloaded ZIP update (app should exit immediately after)."""
+        """Schedule ZIP update after the app exits (never applies in-process)."""
         try:
             if not os.path.exists(package_path):
                 logger.error(f"Update package not found: {package_path}")
@@ -203,12 +203,13 @@ class AutoUpdateService:
                 logger.error("Update version is required to apply ZIP update")
                 return False
 
-            apply_downloaded_update(Path(package_path), target_version)
-            logger.info("Update applied from %s", package_path)
-            return True
+            if launch_deferred_zip_update(Path(package_path), target_version):
+                logger.info("Deferred update scheduled for %s", package_path)
+                return True
+            return False
 
         except Exception as e:
-            logger.error(f"Error applying update: {e}")
+            logger.error(f"Error scheduling update: {e}")
             return False
 
     def cleanup(self):

@@ -37,7 +37,9 @@ hiddenimports = [
     # Database drivers
     'psycopg2',
     'pymysql',
-] + _mariadb_hiddenimports
+] + _mariadb_hiddenimports + collect_submodules("qtawesome")
+
+_qtawesome_datas = collect_data_files("qtawesome")
 
 # Dados adicionais (assets)
 # Destino 'src/assets' para que _MEIPASS atua como equivalente do diretorio source/
@@ -92,7 +94,7 @@ if os.path.isdir(_copilot_bin):
     for f in glob.glob(os.path.join(_copilot_bin, '*')):
         copilot_cli_datas.append((f, os.path.join('copilot', 'bin')))
 
-datas = assets_datas + language_datas + monaco_datas + chat_datas + js_assets_datas + css_assets_datas + copilot_cli_datas + [
+datas = assets_datas + language_datas + monaco_datas + chat_datas + js_assets_datas + css_assets_datas + copilot_cli_datas + _qtawesome_datas + [
     # pyproject.toml para leitura de versao
     (os.path.join(ROOT_DIR, 'pyproject.toml'), '.'),
 ] + _mariadb_datas

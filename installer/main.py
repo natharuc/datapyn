@@ -189,6 +189,11 @@ class InstallWorker(QThread):
                 self.finished_ok.emit(str(exe), self.version)
                 return
 
+            if self.mode == "repair":
+                exe, version = wi.repair_installation(self.install_dir, on_progress=on_progress)
+                self.finished_ok.emit(str(exe), version)
+                return
+
             exe, release = wi.install_latest_release(self.install_dir, on_progress=on_progress)
             self.finished_ok.emit(str(exe), release.version)
         except Exception as exc:
@@ -203,7 +208,10 @@ class SetupWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
-        self._install_dir = wi.DEFAULT_INSTALL_DIR
+        installed, install_dir, installed_version = wi.detect_existing_installation()
+        self._is_installed = installed
+        self._install_dir = install_dir
+        self._installed_version = installed_version
         self._worker: InstallWorker | None = None
         self._exe_path: str | None = None
 
@@ -385,12 +393,24 @@ class SetupWindow(QMainWindow):
         page, layout = self._centered_page()
         layout.setSpacing(12)
 
-        existing = wi.read_installed_version()
-        subtitle = f"Atualizar · v{existing}" if existing else "Instalar"
-        sub = QLabel(subtitle)
+        if self._is_installed:
+            ver = self._installed_version or "?"
+            sub = QLabel(f"Instalação detectada · v{ver}")
+            hint = QLabel("Reparar baixa a versão mais recente e substitui os arquivos.")
+            primary_label, primary_slot = "Reparar", self._start_repair
+        else:
+            sub = QLabel("Instalar")
+            hint = QLabel("Baixa a versão mais recente do GitHub.")
+            primary_label, primary_slot = "Instalar", self._start_install
+
         sub.setObjectName("muted")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(sub)
+
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
 
         path = QLabel(str(self._install_dir))
         path.setObjectName("path")
@@ -398,9 +418,7 @@ class SetupWindow(QMainWindow):
         layout.addWidget(path)
 
         layout.addStretch()
-        layout.addWidget(
-            self._button_row("Instalar", self._start_install, "Cancelar", self.close)
-        )
+        layout.addWidget(self._button_row(primary_label, primary_slot, "Cancelar", self.close))
         return page
 
     def _page_progress(self) -> QWidget:
@@ -442,13 +460,19 @@ class SetupWindow(QMainWindow):
         )
         return page
 
-    def _start_install(self):
+    def _begin_worker(self, mode: str):
         self._stack.setCurrentIndex(1)
-        self._worker = InstallWorker(self._install_dir, "install", None, "")
+        self._worker = InstallWorker(self._install_dir, mode, None, "")
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_success)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
+
+    def _start_install(self):
+        self._begin_worker("install")
+
+    def _start_repair(self):
+        self._begin_worker("repair")
 
     def _on_progress(self, pct: int, msg: str):
         self._progress_bar.setValue(pct)
@@ -477,12 +501,24 @@ def main(argv: list[str] | None = None) -> int:
         ok = wi.uninstall(Path(flags["--dir"]) if "--dir" in flags else None)
         return 0 if ok else 1
 
+    if "--repair" in flags:
+        install_dir = Path(flags.get("--dir", wi.DEFAULT_INSTALL_DIR))
+        try:
+            exe, version = wi.repair_installation(install_dir)
+            wi.launch_application(exe)
+            return 0
+        except Exception as exc:
+            print(exc, file=sys.stderr)
+            return 1
+
     if "--update" in flags:
         zip_path = Path(flags["--update"])
         version = flags.get("--version", "0.0.0")
         install_dir = Path(flags.get("--dir", wi.DEFAULT_INSTALL_DIR))
         try:
-            wi.install_from_zip(zip_path, install_dir, version)
+            wi.wait_for_datapyn_exit()
+            exe = wi.install_from_zip(zip_path, install_dir, version)
+            wi.launch_application(exe)
             return 0
         except Exception as exc:
             print(exc, file=sys.stderr)

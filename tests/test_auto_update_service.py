@@ -127,9 +127,9 @@ class TestAutoUpdateService:
         # Cleanup
         auto_update_service.cleanup()
 
-    @patch("src.services.auto_update_service.apply_downloaded_update")
+    @patch("src.services.auto_update_service.launch_deferred_zip_update", return_value=True)
     @patch("src.services.auto_update_service.os.path.exists", return_value=True)
-    def test_install_update_applies_zip(self, mock_exists, mock_apply, auto_update_service):
+    def test_install_update_schedules_deferred_apply(self, mock_exists, mock_launch, auto_update_service):
         import tempfile
 
         temp_dir = tempfile.gettempdir()
@@ -137,7 +137,7 @@ class TestAutoUpdateService:
         result = auto_update_service.install_update(package_path, "1.1.0")
 
         assert result is True
-        mock_apply.assert_called_once()
+        mock_launch.assert_called_once()
 
     @patch("src.services.auto_update_service.os.path.exists", return_value=False)
     def test_install_update_fails_if_file_not_found(self, mock_exists, auto_update_service):
