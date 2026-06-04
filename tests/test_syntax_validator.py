@@ -35,3 +35,8 @@ def test_validate_sql_go_batches():
 
 def test_validate_code_skips_cross():
     assert validate_code("cross", "{{ x }}") == []
+
+
+def test_validate_sql_without_schema_skips_column_check():
+    markers = validate_sql("SELECT nope FROM dbo.users", db_type="mssql")
+    assert not any("unknown column" in m.message.lower() for m in markers)

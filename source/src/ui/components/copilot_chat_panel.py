@@ -3216,14 +3216,27 @@ class PyniaChatPanel(QWidget):
             self._model_combo.setItemData(idx, self._format_multiplier(model.get("multiplier", 1.0)), Qt.ItemDataRole.UserRole + 1)
             self._model_combo.setItemData(idx, dict(model), Qt.ItemDataRole.UserRole + 2)
         restore_idx = self._model_combo.findData(current_model) if current_model else -1
+        if restore_idx < 0 and current_model:
+            # Keep last saved model even if the provider list was refreshed without it.
+            self._model_combo.addItem(current_model, current_model)
+            restore_idx = self._model_combo.count() - 1
         if restore_idx < 0 and self._model_combo.count() > 0:
             restore_idx = 0
         if restore_idx >= 0:
             self._model_combo.setCurrentIndex(restore_idx)
         self._model_combo.blockSignals(False)
         selected_model = self._model_combo.currentData()
-        if selected_model and self._agent_client and hasattr(self._agent_client, 'model'):
-            self._agent_client.model = selected_model
+        if selected_model:
+            from src.services.pynia.settings import get_pynia_settings
+
+            pid = (
+                getattr(self._agent_client, "provider_id", None)
+                if self._agent_client
+                else get_pynia_settings().active_provider
+            )
+            get_pynia_settings().set_selected_model(selected_model, pid)
+            if self._agent_client and hasattr(self._agent_client, "model"):
+                self._agent_client.model = selected_model
         self._update_reasoning_effort_state()
         self._set_usage_snapshot(usage_snapshot_for_model(self._available_models, selected_model))
         self._sync_models_to_webview()
@@ -3231,10 +3244,22 @@ class PyniaChatPanel(QWidget):
 
     def _on_model_changed(self, value):
         model_id = value if isinstance(value, str) else self._model_combo.currentData()
+        if not model_id and isinstance(value, int) and 0 <= value < self._model_combo.count():
+            model_id = self._model_combo.itemData(value)
         if model_id:
+            from src.services.pynia.settings import get_pynia_settings
+
+            pid = (
+                getattr(self._agent_client, "provider_id", None)
+                if self._agent_client
+                else get_pynia_settings().active_provider
+            )
+            get_pynia_settings().set_selected_model(model_id, pid)
             idx = self._model_combo.findData(model_id)
             if idx >= 0:
+                self._model_combo.blockSignals(True)
                 self._model_combo.setCurrentIndex(idx)
+                self._model_combo.blockSignals(False)
             if self._agent_client:
                 self._agent_client.model = model_id
         self._update_reasoning_effort_state()

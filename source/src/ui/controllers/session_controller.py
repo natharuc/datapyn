@@ -217,6 +217,9 @@ class SessionController(QObject):
         widget.editor.content_changed.connect(
             lambda w=widget: self._main._on_editor_modified(w)
         )
+        widget.editor.content_changed.connect(
+            lambda w=widget: self._main._schedule_cross_database_schema_sync(w)
+        )
         
         # Namespace changes (for autocomplete)
         session.variables_changed.connect(
@@ -405,8 +408,6 @@ class SessionController(QObject):
             insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
             tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
             
-            self.session_tabs._setup_close_button(tab_index)
-            
             # Apply tab color
             if session.connection_name:
                 config = self.connection_manager.get_connection_config(session.connection_name)
@@ -520,11 +521,6 @@ class SessionController(QObject):
     def on_tab_changed(self, index: int):
         """Handle tab changed event"""
         if self._restoring_sessions or self._creating_session or self._closing_session:
-            return
-        
-        # "+" tab creates new session
-        if self.session_tabs.tabText(index).strip() == "+":
-            self.new_session()
             return
         
         widget = self.session_tabs.widget(index)

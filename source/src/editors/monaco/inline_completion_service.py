@@ -14,7 +14,7 @@ HTTP connector path is simple, fast, and debuggable.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # excluded — its completion endpoint never worked reliably in this integration.
 COMPLETION_PROVIDERS = ("openai", "openrouter", "anthropic")
 
-_DEBOUNCE_MS = 550
+_DEBOUNCE_MS = 180
 _WATCHDOG_MS = 9000
 _MIN_PREFIX = 3
 
@@ -44,7 +44,8 @@ class InlineCompletionService(QObject):
         # Context Monaco already has (focused block only, by design).
         self._language = "python"
         self._database_context = ""               # SQL schema text
-        self._python_namespace: Dict[str, str] = {}  # var -> type
+        self._python_namespace: Dict[str, str] = {}  # var -> type (prompt summary)
+        self._python_namespace_objects: Dict[str, Any] = {}  # live session objects
         self._blocks_code_context = ""            # other blocks / SQL outputs
         self._lsp_preamble = ""                   # session context sent to Copilot LSP
         self._lsp_line_offset = 0                 # 0-based line of block body in LSP doc
@@ -61,6 +62,7 @@ class InlineCompletionService(QObject):
         self._watchdog.timeout.connect(self._on_watchdog)
 
         self._pending: Optional[dict] = None
+        self._active_req: Optional[dict] = None
         self._busy = False
         self._active_id = 0
         self._req_id = 0
@@ -93,9 +95,11 @@ class InlineCompletionService(QObject):
         """SQL schema text (tables/columns) for the focused block's connection."""
         self._database_context = context or ""
 
-    def set_python_namespace(self, namespace: Dict[str, str]) -> None:
-        """Python variables in scope (live objects or type-name strings)."""
-        self._python_namespace = self._namespace_type_map(namespace or {})
+    def set_python_namespace(self, namespace: Dict[str, Any]) -> None:
+        """Python variables in scope (live DataFrames + other objects)."""
+        raw = namespace or {}
+        self._python_namespace_objects = dict(raw)
+        self._python_namespace = self._namespace_type_map(raw)
 
     @staticmethod
     def _namespace_type_map(namespace: Dict) -> Dict[str, str]:
@@ -262,6 +266,7 @@ class InlineCompletionService(QObject):
 
         req = self._pending
         self._pending = None
+        self._active_req = dict(req)
 
         # Diagnostic so the output panel shows exactly why nothing appears.
         lsp_present = self._lsp_client is not None
@@ -343,8 +348,13 @@ class InlineCompletionService(QObject):
         if language == "sql":
             return self._database_context
         if language == "python":
+            from src.editors.completion_context import describe_namespace_dataframes
+
             parts: list[str] = []
-            if self._python_namespace:
+            df_schema = describe_namespace_dataframes(self._python_namespace_objects)
+            if df_schema.strip():
+                parts.append(df_schema.strip())
+            elif self._python_namespace:
                 rows = [
                     f"  {name}: {type_name}"
                     for name, type_name in sorted(self._python_namespace.items())
@@ -369,13 +379,27 @@ class InlineCompletionService(QObject):
     @pyqtSlot(str)
     def _on_complete(self, text: str) -> None:
         """Forward LSP/HTTP result to Monaco even if cancel raced (JS caches orphans)."""
+        req = self._active_req or {}
+        self._active_req = None
         self._release()
-        if text:
-            preview = text[:60].replace("\n", " ")
+        cleaned = text or ""
+        if cleaned and req:
+            try:
+                from src.services.pynia.completion import clean_completion_text
+
+                cleaned = clean_completion_text(
+                    cleaned,
+                    req.get("prefix", "") or "",
+                    req.get("suffix", "") or "",
+                )
+            except Exception:
+                pass
+        if cleaned:
+            preview = cleaned[:60].replace("\n", " ")
             self._log(f"Completion: {preview}…", "info")
         else:
             self._log("No suggestion", "debug")
-        self.completion_ready.emit(text or "")
+        self.completion_ready.emit(cleaned)
         self._maybe_serve_pending()
 
     @pyqtSlot(str)

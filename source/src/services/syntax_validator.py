@@ -188,25 +188,68 @@ def _marker_from_sqlglot_exception(exc: Exception, line_offset: int) -> SyntaxMa
     )
 
 
-def validate_sql(code: str, db_type: Optional[str] = None) -> List[SyntaxMarker]:
-    """Parse SQL with sqlglot; return syntax error markers."""
+def _iter_sql_statements_in_batch(batch: str) -> List[tuple[str, int]]:
+    """Split a batch into statements with 1-based start lines (T-SQL ``;`` / ``GO``)."""
+    try:
+        from src.services.sql_autocomplete_service import SqlAutoCompleteService
+
+        service = SqlAutoCompleteService()
+        from src.services.sql_schema_validator import _statement_slices
+
+        return _statement_slices(batch, service)
+    except Exception:
+        stripped = batch.strip()
+        return [(stripped, 1)] if stripped else []
+
+
+def validate_sql(
+    code: str,
+    db_type: Optional[str] = None,
+    *,
+    schema: Optional[dict] = None,
+) -> List[SyntaxMarker]:
+    """Parse SQL with sqlglot; return syntax and optional schema error markers."""
     text = code or ""
     if not text.strip():
         return []
 
     dialect = _sql_dialect(db_type)
+    if schema and not db_type:
+        dialect = _sql_dialect(schema.get("db_type"))
+
     markers: List[SyntaxMarker] = []
     for batch, start_line in _split_sql_batches(text):
-        batch_markers = _validate_sql_batch(batch, dialect, start_line - 1)
-        markers.extend(batch_markers)
+        batch_base = start_line - 1
+        for statement, stmt_line in _iter_sql_statements_in_batch(batch):
+            stmt = statement.strip()
+            if not stmt:
+                continue
+            line_offset = batch_base + stmt_line - 1
+            markers.extend(_validate_sql_batch(stmt, dialect, line_offset))
+
+    if schema:
+        try:
+            from src.services.sql_schema_validator import validate_sql_schema
+
+            schema_markers = validate_sql_schema(text, schema)
+            markers.extend(schema_markers)
+        except Exception:
+            pass
+
     return markers
 
 
-def validate_code(language: str, code: str, *, db_type: Optional[str] = None) -> List[SyntaxMarker]:
+def validate_code(
+    language: str,
+    code: str,
+    *,
+    db_type: Optional[str] = None,
+    schema: Optional[dict] = None,
+) -> List[SyntaxMarker]:
     """Validate by block language id (python, sql)."""
     lang = (language or "").lower()
     if lang == "python":
         return validate_python(code)
     if lang == "sql":
-        return validate_sql(code, db_type=db_type)
+        return validate_sql(code, db_type=db_type, schema=schema)
     return []

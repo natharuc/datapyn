@@ -373,7 +373,16 @@
   },
   "visualization": {
     "open_editor": "Charts",
+    "new_chart_tab": "New chart tab",
     "editor_title": "Visualization Editor",
+    "editor_subtitle": "Configure the chart and preview the result before applying.",
+    "preview_title": "Preview",
+    "preview_loading": "Updating preview…",
+    "preview_error": "Preview unavailable: {error}",
+    "preview_copy_error": "Copy error log",
+    "preview_error_copied": "Error log copied to clipboard",
+    "save_chart_html": "Save chart as HTML",
+    "filter_chart_html": "HTML files (*.html)",
     "chart_tab_label": "Chart {n}",
     "edit_chart": "Edit chart",
     "refresh_chart": "Refresh chart",
@@ -429,6 +438,7 @@
     "palette_categorical": "Categorical",
     "palette_teal": "Teal",
     "palette_warm": "Warm",
+    "palette_ocean": "Ocean",
     "label_custom_colors": "Custom colors",
     "custom_colors_placeholder": "#4f8cff, #34d399, #fbbf24",
     "color_placeholder": "Optional: #22c55e or CSS name",
@@ -601,6 +611,7 @@
     "btn_resolve_pynia": "Resolve with Pynia"
   },
   "session_tabs": {
+    "new_tab_tooltip": "New tab",
     "ctx_open_file_location": "Open File Location",
     "ctx_close_all": "Close All",
     "ctx_close_all_others": "Close All Others",

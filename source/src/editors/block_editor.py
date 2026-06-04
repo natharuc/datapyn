@@ -9,12 +9,14 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QScrollArea,
     QPushButton,
+    QToolButton,
     QHBoxLayout,
     QFrame,
     QSizePolicy,
     QSpacerItem,
+    QLabel,
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl, QEvent, QSize
 from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent, QKeySequence
 from typing import List, Optional
 import os
@@ -24,6 +26,85 @@ from src.core.theme_manager import ThemeManager
 from src.state.app_state import ApplicationState
 from src.editors.code_block import CodeBlock
 from src.language import S
+
+
+class StickyBlockHeader(QWidget):
+    """Pinned clone of the active block header while scrolling the notebook."""
+
+    HEADER_HEIGHT = 42
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("stickyBlockHeader")
+        self.setFixedHeight(self.HEADER_HEIGHT)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.hide()
+
+        from src.design_system.tokens import get_colors
+
+        colors = get_colors()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(8)
+
+        self._lang_icon = QLabel()
+        self._lang_icon.setFixedSize(18, 18)
+        layout.addWidget(self._lang_icon)
+
+        self._lang_label = QLabel()
+        self._lang_label.setStyleSheet(
+            f"color: {colors.text_primary}; font-size: 12px; font-weight: 600; background: transparent;"
+        )
+        layout.addWidget(self._lang_label)
+
+        self._name_label = QLabel()
+        self._name_label.setStyleSheet(
+            f"color: {colors.text_secondary}; font-size: 11px; background: transparent;"
+        )
+        layout.addWidget(self._name_label, 1)
+
+        self._status_label = QLabel()
+        self._status_label.setStyleSheet(
+            f"color: {colors.text_secondary}; font-size: 11px; background: transparent;"
+        )
+        layout.addWidget(self._status_label)
+
+        self._bound_block: Optional[CodeBlock] = None
+
+    def sync_from_block(self, block: CodeBlock) -> None:
+        from src.design_system.tokens import get_colors
+
+        self._bound_block = block
+        colors = get_colors()
+        lang = block.get_language()
+        accent = CodeBlock.LANGUAGE_COLORS.get(lang, "#888")
+        icon_color = "#E38C00" if lang == "sql" else "#3572A5"
+        icon_name = "mdi.database" if lang == "sql" else "mdi.language-python"
+        self._lang_icon.setPixmap(qta.icon(icon_name, color=icon_color).pixmap(18, 18))
+        self._lang_label.setText(lang.upper())
+        name = (block.get_block_name() or "").strip()
+        self._name_label.setText(name or S.block.placeholder_name)
+        status = block.status_label.text().strip()
+        self._status_label.setText(status)
+        self._status_label.setVisible(bool(status))
+
+        self.setStyleSheet(f"""
+            StickyBlockHeader {{
+                background: {colors.bg_secondary};
+                border-bottom: 1px solid {colors.border_muted};
+                border-left: 3px solid {accent};
+            }}
+        """)
+
+    def mousePressEvent(self, event):
+        if self._bound_block is not None:
+            host = self.parent()
+            while host is not None and not isinstance(host, BlockEditor):
+                host = host.parent()
+            if isinstance(host, BlockEditor):
+                host.scroll_area.ensureWidgetVisible(self._bound_block, 0, 60)
+                self._bound_block.focus_editor()
+        super().mousePressEvent(event)
 
 
 class BlockEditor(QWidget):
@@ -96,7 +177,7 @@ class BlockEditor(QWidget):
         self._database_context = ""  # Database schema context for SQL completions
         self._sql_schema = {}  # Cached SQL schema for completions
         self._maximized_block: Optional[CodeBlock] = None  # Block in maximized/focus mode
-        self._maximized_block: Optional[CodeBlock] = None  # Block in maximized/focus mode
+        self._session = None  # SessionWidget tab — namespace with SQL DataFrames
 
         self._completion_context_timer = QTimer(self)
         self._completion_context_timer.setSingleShot(True)
@@ -174,42 +255,116 @@ class BlockEditor(QWidget):
         self.scroll_area.setWidget(self.blocks_container)
         main_layout.addWidget(self.scroll_area)
 
-        # Button to add new block (horizontal line with +)
+        self._sticky_header = StickyBlockHeader(self.scroll_area.viewport())
+        self._sticky_header.raise_()
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._update_sticky_header)
+        self.scroll_area.viewport().installEventFilter(self)
+
+        # Add-block strip (divider + centered pill, matches tab accessory controls)
+        from src.design_system.tokens import get_colors
+        from src.design_system.tab_controls import TAB_ACCESSORY_BUTTON_SIZE, TAB_ACCESSORY_ICON_SIZE
+
+        colors = get_colors()
+        btn_size = TAB_ACCESSORY_BUTTON_SIZE
         self.add_button_container = QWidget()
-        add_layout = QHBoxLayout(self.add_button_container)
-        add_layout.setContentsMargins(8, 4, 8, 8)
+        self.add_button_container.setObjectName("blockAddStrip")
+        add_outer = QVBoxLayout(self.add_button_container)
+        add_outer.setContentsMargins(12, 10, 12, 12)
+        add_outer.setSpacing(0)
 
-        # Horizontal line (like <hr/>)
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        line.setStyleSheet("QFrame { color: #555; }")
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(0)
 
-        # Small button with + icon
-        self.add_btn = QPushButton()
-        self.add_btn.setIcon(qta.icon("mdi.plus", color="#888"))
+        line_left = QFrame()
+        line_left.setFrameShape(QFrame.Shape.HLine)
+        line_left.setFixedHeight(1)
+        line_left.setStyleSheet(f"background-color: {colors.border_muted}; border: none; max-height: 1px;")
+
+        self.add_btn = QToolButton()
+        self.add_btn.setObjectName("blockAddButton")
+        self.add_btn.setAutoRaise(True)
+        self.add_btn.setIcon(
+            qta.icon("mdi.plus", color=colors.text_secondary, scale_factor=0.85)
+        )
         self.add_btn.setToolTip(S.block_editor.tooltip_add_block)
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_btn.setFixedSize(24, 24)  # Small 24x24 button
-        self.add_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: 1px solid #555;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background: #333;
-                border-color: #888;
-            }
+        self.add_btn.setFixedSize(btn_size, btn_size)
+        self.add_btn.setIconSize(QSize(TAB_ACCESSORY_ICON_SIZE, TAB_ACCESSORY_ICON_SIZE))
+        self.add_btn.setStyleSheet(f"""
+            QToolButton#blockAddButton {{
+                background-color: {colors.bg_tertiary};
+                border: 1px solid {colors.border_muted};
+                border-radius: {btn_size // 2}px;
+                padding: 0px;
+            }}
+            QToolButton#blockAddButton:hover {{
+                background-color: {colors.bg_elevated};
+                border-color: {colors.interactive_primary};
+            }}
+            QToolButton#blockAddButton:pressed {{
+                background-color: {colors.bg_secondary};
+            }}
         """)
         self.add_btn.clicked.connect(lambda: self.add_block())
 
-        # Layout: horizontal line + button +
-        add_layout.addWidget(line, 1)  # Line takes all available space
-        add_layout.addWidget(self.add_btn)  # + button at the end
+        line_right = QFrame()
+        line_right.setFrameShape(QFrame.Shape.HLine)
+        line_right.setFixedHeight(1)
+        line_right.setStyleSheet(line_left.styleSheet())
 
-        # Add button to blocks container
+        row_layout.addWidget(line_left, 1)
+        row_layout.addWidget(self.add_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        row_layout.addWidget(line_right, 1)
+        add_outer.addWidget(row)
+
         self.blocks_layout.addWidget(self.add_button_container)
+
+    def eventFilter(self, obj, event):
+        if obj is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
+            self._position_sticky_header()
+        return super().eventFilter(obj, event)
+
+    def _position_sticky_header(self) -> None:
+        if not hasattr(self, "_sticky_header"):
+            return
+        viewport = self.scroll_area.viewport()
+        self._sticky_header.setFixedWidth(viewport.width())
+
+    def _update_sticky_header(self) -> None:
+        """Show a pinned header for the block currently crossing the scroll top."""
+        if not hasattr(self, "_sticky_header"):
+            return
+        self._position_sticky_header()
+
+        if self._maximized_block or len(self._blocks) <= 1:
+            self._sticky_header.hide()
+            return
+
+        scroll_top = self.scroll_area.verticalScrollBar().value()
+        sticky_block: Optional[CodeBlock] = None
+        for block in self._blocks:
+            top = block.pos().y()
+            if top <= scroll_top + 2:
+                sticky_block = block
+
+        if sticky_block is None:
+            self._sticky_header.hide()
+            return
+
+        header_bottom = sticky_block.pos().y() + sticky_block.control_bar.height()
+        if header_bottom >= scroll_top + 4:
+            self._sticky_header.hide()
+            return
+
+        self._sticky_header.sync_from_block(sticky_block)
+        self._sticky_header.show()
+        self._sticky_header.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_sticky_header()
 
     def keyPressEvent(self, event: QKeyEvent):
         """Intercept keys for execution shortcuts (reads from ShortcutManager)"""
@@ -393,6 +548,15 @@ class BlockEditor(QWidget):
             return self._blocks.index(block)
         return None
 
+    def bind_session(self, session) -> None:
+        """Attach tab session so completions use executed DataFrames (not global state)."""
+        self._session = session
+
+    def _get_completion_namespace(self) -> dict:
+        if self._session is not None and hasattr(self._session, "namespace"):
+            return self._session.namespace
+        return ApplicationState.instance().get_namespace()
+
     # === Autocomplete Management ===
 
     def refresh_completion_context(
@@ -412,7 +576,7 @@ class BlockEditor(QWidget):
             collect_session_python_context,
         )
 
-        namespace = ApplicationState.instance().get_namespace()
+        namespace = self._get_completion_namespace()
         shared_imports = collect_session_python_context(
             self._blocks, namespace
         ).global_imports
@@ -492,6 +656,7 @@ class BlockEditor(QWidget):
     
     def _on_block_language_changed(self, block: CodeBlock, language: str):
         """Handle block language change - update completions."""
+        self._update_sticky_header()
         if language == "sql" and self._sql_schema:
             # Block switched to SQL - apply cached schema
             if hasattr(block, "set_sql_schema"):
@@ -550,6 +715,8 @@ class BlockEditor(QWidget):
         block.remove_requested.connect(self.remove_block)
         block.cancel_requested.connect(lambda b: self.cancel_all_executions())
         block.focus_changed.connect(self._on_block_focus_changed)
+        if hasattr(block, "name_input"):
+            block.name_input.textChanged.connect(self._update_sticky_header)
         block.move_requested.connect(self._on_block_move_requested)
         block.select_connection_requested.connect(self.select_connection_for_block.emit)
         block.connection_name_changed.connect(self.block_connection_changed.emit)
@@ -584,6 +751,7 @@ class BlockEditor(QWidget):
 
         # Focus on new block after rendering
         QTimer.singleShot(50, block.focus_editor)
+        QTimer.singleShot(0, self._update_sticky_header)
 
         # Set default name if it doesn't have one
         if not block.get_block_name():
@@ -637,6 +805,7 @@ class BlockEditor(QWidget):
             self._last_focused_block = None
 
         self.content_changed.emit()
+        QTimer.singleShot(0, self._update_sticky_header)
 
     def _toggle_maximize_block(self, block: CodeBlock):
         """Toggle maximize/restore for a block."""
@@ -674,6 +843,7 @@ class BlockEditor(QWidget):
         self.blocks_layout.setContentsMargins(0, 0, 0, 0)
         self.blocks_layout.setSpacing(0)
         block.focus_editor()
+        self._sticky_header.hide()
 
     def _restore_all_blocks(self):
         """Restore all blocks from maximized mode."""
@@ -694,6 +864,7 @@ class BlockEditor(QWidget):
         self.blocks_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.blocks_layout.setContentsMargins(8, 8, 8, 8)
         self.blocks_layout.setSpacing(12)
+        QTimer.singleShot(0, self._update_sticky_header)
 
     @property
     def is_maximized(self) -> bool:
@@ -718,6 +889,9 @@ class BlockEditor(QWidget):
         if has_focus:
             self._focused_block = block
             self._last_focused_block = block
+            if self._sql_schema and block.get_language() == "sql":
+                if hasattr(block, "set_sql_schema"):
+                    block.set_sql_schema(self._sql_schema)
             self.refresh_completion_context(
                 focus_block=block, sync_lsp_documents=True
             )

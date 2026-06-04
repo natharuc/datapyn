@@ -38,6 +38,7 @@ dependencies = [
     "sqlglot>=26.0.0",
     # Charts
     "matplotlib>=3.7.0",
+    "plotly>=5.18.0",
     "jedi>=0.19.2",
     # GitHub Copilot SDK (optional, requires gh CLI auth)
     "github-copilot-sdk>=0.3.0",

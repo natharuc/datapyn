@@ -78,6 +78,89 @@ def collect_session_python_context(
     )
 
 
+def dataframe_column_names(value: Any) -> List[str]:
+    """Column names for pandas (or column-like) objects in the execution namespace."""
+    try:
+        import pandas as pd
+
+        if isinstance(value, pd.DataFrame):
+            return [str(c) for c in value.columns.tolist()]
+        if isinstance(value, pd.Series):
+            return [str(value.name)] if value.name is not None else []
+    except Exception:
+        pass
+
+    columns_attr = getattr(value, "columns", None)
+    if columns_attr is not None:
+        try:
+            if callable(columns_attr):
+                columns_attr = columns_attr()
+            if hasattr(columns_attr, "tolist"):
+                return [str(c) for c in columns_attr.tolist()]
+            return [str(c) for c in list(columns_attr)]
+        except Exception:
+            pass
+    return []
+
+
+def describe_namespace_dataframes(
+    namespace: Dict[str, Any],
+    *,
+    max_vars: int = 40,
+    max_cols_per_var: int = 60,
+) -> str:
+    """Compact schema text for Python IA / LSP (real columns only)."""
+    if not namespace:
+        return ""
+
+    lines: List[str] = []
+    for name in sorted(namespace.keys()):
+        if not name or str(name).startswith("_") or not str(name).isidentifier():
+            continue
+        if len(lines) >= max_vars:
+            lines.append(f"  ... +{len(namespace) - max_vars} more variables")
+            break
+        cols = dataframe_column_names(namespace[name])
+        if not cols:
+            continue
+        shown = cols[:max_cols_per_var]
+        col_text = ", ".join(shown)
+        if len(cols) > max_cols_per_var:
+            col_text += f", ... (+{len(cols) - max_cols_per_var} more)"
+        lines.append(f"  {name} ({len(cols)} cols): {col_text}")
+
+    if not lines:
+        return ""
+    return (
+        "DataFrames in scope — use ONLY these column names in .select() / joins:\n"
+        + "\n".join(lines)
+    )
+
+
+def build_dataframe_member_completions(
+    namespace: Dict[str, Any],
+    *,
+    max_cols_per_var: int = 80,
+) -> List[Dict[str, Any]]:
+    """Monaco items for `df.Column` after Ctrl+Space (offline)."""
+    items: List[Dict[str, Any]] = []
+    for var_name, value in (namespace or {}).items():
+        if str(var_name).startswith("_") or not str(var_name).isidentifier():
+            continue
+        cols = dataframe_column_names(value)[:max_cols_per_var]
+        for col in cols:
+            items.append(
+                {
+                    "label": col,
+                    "kind": "field",
+                    "insertText": col,
+                    "detail": f"{var_name} column",
+                    "filterText": f"{var_name}.{col}",
+                }
+            )
+    return items
+
+
 def _namespace_preamble(namespace: Dict[str, Any]) -> str:
     if not namespace:
         return ""
@@ -111,6 +194,10 @@ def build_python_lsp_preamble(
 
     if blocks_code_context.strip():
         sections.append(blocks_code_context.strip())
+
+    df_schema = describe_namespace_dataframes(namespace or {})
+    if df_schema.strip():
+        sections.append(df_schema.strip())
 
     sections.append("# === current block ===")
     preamble = "\n\n".join(sections)

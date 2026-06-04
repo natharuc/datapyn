@@ -89,6 +89,7 @@ class UISetupMixin:
         self.session_tabs.session_closed.connect(self._close_session_tab)
         self.session_tabs.session_renamed.connect(self._on_session_renamed)
         self.session_tabs.session_changed.connect(self._on_session_tab_changed)
+        self.session_tabs.new_session_requested.connect(self._new_session)
         self.session_tabs.duplicate_session.connect(self._duplicate_session)
 
         session_layout.addWidget(self.session_tabs)
@@ -568,6 +569,9 @@ class UISetupMixin:
             dock.hide()
             if hasattr(self, "copilot_action"):
                 self.copilot_action.setChecked(False)
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, self._reposition_tab_accessories)
         else:
             self.show_panel("copilot")
             if hasattr(self, "copilot_action"):

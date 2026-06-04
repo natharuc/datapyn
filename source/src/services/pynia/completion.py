@@ -42,7 +42,8 @@ SYSTEM_PROMPT = (
     "- Output ONLY the raw text to insert at <CURSOR> — it MAY span multiple lines.\n"
     "- No markdown, no code fences, no comments explaining, no restating existing code.\n"
     "- Match the surrounding style/indentation and the given language.\n"
-    "- Use the provided schema/variables when relevant. If nothing sensible fits, output nothing."
+    "- Use the provided schema/variables when relevant. If nothing sensible fits, output nothing.\n"
+    "- For Python DataFrames, use ONLY column names listed in Context — never invent columns."
 )
 
 

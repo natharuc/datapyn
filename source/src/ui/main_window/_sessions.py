@@ -139,12 +139,7 @@ class SessionsMixin:
             original_name = self.session_tabs.tabText(index)
             new_name = f"{original_name} (copia)"
 
-            # Insert before last tab (new tab button)
-            insert_position = self.session_tabs.count() - 1 if self.session_tabs.count() > 0 else 0
-            tab_index = self.session_tabs.insertTab(insert_position, new_widget, new_name)
-
-            # Configure custom close button
-            self.session_tabs._setup_close_button(tab_index)
+            tab_index = self.session_tabs.insertTab(self.session_tabs.count(), new_widget, new_name)
 
             # Apply tab color if original session had connection
             if session.connection_name:
@@ -650,7 +645,10 @@ class SessionsMixin:
 
         # Esconder o tab do estado vazio
         self.session_tabs.tabBar().setTabVisible(index, False)
+        self.session_tabs.tabBar().setVisible(False)
         self.session_tabs.setCurrentIndex(index)
+        if hasattr(self.session_tabs, "_sync_new_tab_button"):
+            self.session_tabs._sync_new_tab_button()
 
     def _hide_empty_state(self):
         """Removes empty state and restores panels"""
@@ -659,6 +657,10 @@ class SessionsMixin:
             if index >= 0:
                 self.session_tabs.removeTab(index)
             self._empty_state_widget = None
+
+        self.session_tabs.tabBar().setVisible(True)
+        if hasattr(self.session_tabs, "_sync_new_tab_button"):
+            self.session_tabs._sync_new_tab_button()
 
         # Restaurar paineis inferiores ao sair do estado vazio
         if hasattr(self, "results_dock"):
@@ -760,6 +762,7 @@ class SessionsMixin:
 
         # Conectar sinal de modificacao do editor para rastreamento por hash
         widget.editor.content_changed.connect(lambda w=widget: self._on_editor_modified(w))
+        widget.editor.content_changed.connect(lambda w=widget: self._schedule_cross_database_schema_sync(w))
 
         # Atualizar autocomplete quando namespace muda (apos SQL ou Python via SessionWidget)
         session.variables_changed.connect(
@@ -847,8 +850,11 @@ class SessionsMixin:
                 # Save the file before closing
                 self._save_file()
 
-        # Check if execution is running - ask user to confirm cancellation
-        if getattr(widget, "_is_executing", False):
+        is_busy = (
+            getattr(widget, "is_execution_busy", None)
+            and widget.is_execution_busy()
+        ) or getattr(widget, "_is_executing", False)
+        if is_busy:
             from PyQt6.QtWidgets import QMessageBox
             reply = QMessageBox.question(
                 self,
@@ -859,28 +865,47 @@ class SessionsMixin:
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            # User confirmed - cancel execution first
             widget._on_cancel_execution()
+            self._deferred_close_session_tab(index, widget, attempts=0)
+            return
 
-        # Guard para evitar criar sessao ao fechar
+        self._finalize_close_session_tab(index, widget)
+
+    def _deferred_close_session_tab(self, index: int, widget, *, attempts: int = 0) -> None:
+        """Wait for cancel to finish before cleanup — avoids QThread destroyed while running."""
+        if not widget.is_execution_busy():
+            self._finalize_close_session_tab(index, widget)
+            return
+        if attempts >= 80:
+            logger.warning("Close tab: execution still busy after timeout; forcing cleanup")
+            self._finalize_close_session_tab(index, widget)
+            return
+        QTimer.singleShot(100, lambda: self._deferred_close_session_tab(index, widget, attempts=attempts + 1))
+
+    def _finalize_close_session_tab(self, index: int, widget) -> None:
+        """Remove session tab and release resources after workers have stopped."""
+        if index < 0 or index >= self.session_tabs.count():
+            return
+        if self.session_tabs.widget(index) is not widget:
+            for i in range(self.session_tabs.count()):
+                if self.session_tabs.widget(i) is widget:
+                    index = i
+                    break
+            else:
+                return
+
         self._closing_session = True
-
         try:
-            # Se a aba fechada era a que fornecia o _original_file_path, limpar
             closed_file_path = getattr(widget, "file_path", None)
             if closed_file_path and closed_file_path == self._original_file_path:
                 self._original_file_path = None
                 self._original_file_type = None
 
-            # Cleanup e remover
             session_id = widget.session.session_id
             widget.cleanup()
             self.session_manager.close_session(session_id)
-
-            # Remover paineis da sessao dos stacks
             self._remove_session_panels(session_id)
 
-            # Remover do dicionario apenas se existir
             if session_id in self._session_widgets:
                 del self._session_widgets[session_id]
 
@@ -888,7 +913,6 @@ class SessionsMixin:
             widget.deleteLater()
             self._save_sessions()
 
-            # Verificar se nao ha mais sessoes REAIS (ignorar aba do botao +)
             session_count = sum(
                 1 for i in range(self.session_tabs.count()) if isinstance(self.session_tabs.widget(i), SessionWidget)
             )
@@ -896,7 +920,6 @@ class SessionsMixin:
                 self._original_file_path = None
                 self._original_file_type = None
                 self._show_empty_state()
-                # Limpar OE quando nao ha sessoes
                 if hasattr(self, "_object_explorer_stack"):
                     for i in range(self._object_explorer_stack.count()):
                         w = self._object_explorer_stack.widget(i)
@@ -904,18 +927,12 @@ class SessionsMixin:
                             w.clear()
                     self.object_explorer_dock.hide()
 
-            # Atualizar titulo e statusbar para refletir a aba ativa apos fechar
             self._update_window_title()
-            
-            # Atualizar OE para a nova aba ativa apos fechar
             new_widget = self._get_current_session_widget()
             if new_widget and hasattr(new_widget, "session"):
-                new_sid = new_widget.session.session_id
-                self._switch_session_panels(new_sid)
+                self._switch_session_panels(new_widget.session.session_id)
         finally:
             self._closing_session = False
-            # Sync global file context from the now-active widget
-            # (the guard skipped _on_session_tab_changed during close)
             self._sync_file_context_from_widget()
 
     def _on_session_tab_changed(self, index: int):
@@ -926,11 +943,6 @@ class SessionsMixin:
         if hasattr(self, "_creating_session") and self._creating_session:
             return
         if hasattr(self, "_closing_session") and self._closing_session:
-            return
-
-        # If clicking + creates new session
-        if self.session_tabs.tabText(index).strip() == "+":
-            self._new_session()
             return
 
         widget = self.session_tabs.widget(index)

@@ -370,10 +370,8 @@ def test_execute_sql_use_command_clears_autocomplete_before_emitting_change(qapp
     widget.connection_changed.emit.assert_called_once_with("Conn", "newdb")
 
 
-def test_filter_schema_for_active_database_drops_tables_from_other_databases(qapp):
-    widget = _DummyWidget("sid-1", "Conn")
-    explorer = MagicMock()
-    main_window = _DummyMainWindow(widget, explorer)
+def test_editor_schema_for_session_drops_unreferenced_cross_database_tables(qapp):
+    from src.services.cross_database_schema import prepare_editor_sql_schema
 
     schema = {
         "database": "db2",
@@ -393,7 +391,11 @@ def test_filter_schema_for_active_database_drops_tables_from_other_databases(qap
         },
     }
 
-    filtered = main_window._filter_schema_for_active_database(schema, db_type="sqlserver")
+    filtered = prepare_editor_sql_schema(
+        schema,
+        db_type="sqlserver",
+        referenced_catalogs=set(),
+    )
 
     assert [table["name"] for table in filtered["tables"]] == ["current_users"]
     assert set(filtered["columns"].keys()) == {
@@ -404,7 +406,7 @@ def test_filter_schema_for_active_database_drops_tables_from_other_databases(qap
     }
 
 
-def test_filter_schema_for_active_database_keeps_unscoped_schema_unchanged(qapp):
+def test_prepare_editor_sql_schema_keeps_unscoped_schema_unchanged(qapp):
     widget = _DummyWidget("sid-1", "Conn")
     explorer = MagicMock()
     main_window = _DummyMainWindow(widget, explorer)
@@ -421,12 +423,14 @@ def test_filter_schema_for_active_database_keeps_unscoped_schema_unchanged(qapp)
         },
     }
 
-    filtered = main_window._filter_schema_for_active_database(schema, db_type="sqlserver")
+    from src.services.cross_database_schema import prepare_editor_sql_schema
+
+    filtered = prepare_editor_sql_schema(schema, db_type="sqlserver", referenced_catalogs=set())
 
     assert filtered is schema
 
 
-def test_object_explorer_schema_changed_applies_only_active_database_to_editor(qapp):
+def test_object_explorer_schema_changed_keeps_lazy_loaded_cross_database_tables(qapp):
     widget = _DummyWidget("sid-1", "Conn")
     explorer = MagicMock()
     explorer._current_connection = "Conn"
@@ -449,5 +453,5 @@ def test_object_explorer_schema_changed_applies_only_active_database_to_editor(q
     main_window._on_object_explorer_schema_changed("sid-1", schema)
 
     cached_schema = main_window._schema_service.update_cached_schema.call_args.args[1]
-    assert [table["name"] for table in cached_schema["tables"]] == ["current_users"]
+    assert {table["name"] for table in cached_schema["tables"]} == {"current_users", "legacy_orders"}
     widget.editor.set_sql_schema.assert_called_once_with(cached_schema)

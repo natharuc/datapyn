@@ -115,6 +115,14 @@ _RE_DOT_CONTEXT = re.compile(
     r'\.\s*(?:[@#A-Za-z_][\w$]*)?$',
     re.IGNORECASE,
 )
+# T-SQL: database..table (schema omitted → dbo)
+_RE_CROSS_DB_TABLE = re.compile(
+    r"(?:^|[\s,(])"
+    r"((?:\[[^\]]+\]|`[^`]+`|\"[^\"]+\"|[A-Za-z_][\w$]*))"
+    r"\s*\.\s*\.\s*"
+    r"([\w$]*)$",
+    re.IGNORECASE,
+)
 
 CURSOR_PLACEHOLDER = "__datapyn_cursor__"
 DEFAULT_SCHEMA_PRIORITY = ("dbo", "public")
@@ -554,6 +562,13 @@ class SqlAutoCompleteService:
                 table_name = str(table.get("name", "") or "")
                 schema_name = str(table.get("schema", "") or "")
                 catalog_name = str(table.get("catalog", "") or "")
+                table_database = str(table.get("database", "") or "")
+                if (
+                    not catalog_name
+                    and table_database
+                    and self._schema_db_type in ("mssql", "sqlserver")
+                ):
+                    catalog_name = table_database
                 if self._schema_db_type == "databricks" and catalog_name and schema_name:
                     table_key = str(table.get("key") or f"{catalog_name}.{schema_name}.{table_name}")
                 else:
@@ -627,6 +642,13 @@ class SqlAutoCompleteService:
             lookup_names.add(self._normalize_relation_key(f"{schema_name}.{name}"))
         if catalog_name and schema_name:
             lookup_names.add(self._normalize_relation_key(f"{catalog_name}.{schema_name}.{name}"))
+        if catalog_name and not schema_name:
+            lookup_names.add(self._normalize_relation_key(f"{catalog_name}.{name}"))
+            lookup_names.add(self._normalize_relation_key(f"{catalog_name}..{name}"))
+            for default_schema in DEFAULT_SCHEMA_PRIORITY:
+                lookup_names.add(
+                    self._normalize_relation_key(f"{catalog_name}.{default_schema}.{name}")
+                )
         for index in range(len(parts)):
             suffix = ".".join(parts[index:])
             lookup_names.add(self._normalize_relation_key(suffix))
@@ -743,11 +765,18 @@ class SqlAutoCompleteService:
             tokens.append((token, depth))
         return tokens
 
-    def _detect_context(self, cleaned_text: str) -> Tuple[str, Optional[str]]:
+    def _detect_context(self, cleaned_text: str) -> Tuple[str, Optional[Any]]:
         """Determine what type of completions to show based on text before cursor."""
         stripped = cleaned_text.rstrip()
         if not stripped:
             return CTX_DEFAULT, None
+
+        cross_db_match = _RE_CROSS_DB_TABLE.search(stripped)
+        if cross_db_match:
+            return CTX_TABLE, {
+                "cross_database": self._strip_identifier_quotes(cross_db_match.group(1)),
+                "table_prefix": cross_db_match.group(2) or "",
+            }
 
         dot_match = _RE_DOT_CONTEXT.search(stripped)
         if dot_match:
@@ -1446,6 +1475,13 @@ class SqlAutoCompleteService:
         lookup_candidates = []
         if catalog_name and schema_name:
             lookup_candidates.append(self._normalize_relation_key(f"{catalog_name}.{schema_name}.{table_name}"))
+        if catalog_name and not schema_name:
+            lookup_candidates.append(self._normalize_relation_key(f"{catalog_name}..{table_name}"))
+            lookup_candidates.append(self._normalize_relation_key(f"{catalog_name}.{table_name}"))
+            for default_schema in DEFAULT_SCHEMA_PRIORITY:
+                lookup_candidates.append(
+                    self._normalize_relation_key(f"{catalog_name}.{default_schema}.{table_name}")
+                )
         if schema_name:
             lookup_candidates.append(self._normalize_relation_key(f"{schema_name}.{table_name}"))
         lookup_candidates.append(self._normalize_relation_key(table_name))
@@ -1550,7 +1586,8 @@ class SqlAutoCompleteService:
         if context == CTX_DOT:
             return self._dot_completions(context_arg or "", analysis)
         if context == CTX_TABLE:
-            return self._table_completions(analysis)
+            cross_db = context_arg if isinstance(context_arg, dict) else None
+            return self._table_completions(analysis, cross_db=cross_db)
         if context == CTX_COLUMN:
             return self._column_completions(analysis)
         if context == CTX_DATABASE:
@@ -1596,14 +1633,26 @@ class SqlAutoCompleteService:
                 result.append((upper.lower(), category, ""))
         return result
 
-    def _table_completions(self, analysis: Optional[dict[str, Any]] = None) -> List[Tuple[str, str, str]]:
+    def _table_completions(
+        self,
+        analysis: Optional[dict[str, Any]] = None,
+        *,
+        cross_db: Optional[dict[str, str]] = None,
+    ) -> List[Tuple[str, str, str]]:
         """Return table-like completions from schema, CTEs, temp tables and table variables."""
         result: List[Tuple[str, str, str]] = []
         seen: Set[str] = set()
+        database_filter = ""
+        table_prefix = ""
+        if cross_db:
+            database_filter = self._normalize_name(cross_db.get("cross_database", ""))
+            table_prefix = self._normalize_name(cross_db.get("table_prefix", ""))
 
         def append_table(label: str, detail: str) -> None:
             normalized_label = self._normalize_name(label)
             if not normalized_label or normalized_label in seen:
+                return
+            if table_prefix and not normalized_label.startswith(table_prefix):
                 return
             seen.add(normalized_label)
             result.append((label, CAT_TABLE, detail))
@@ -1623,6 +1672,10 @@ class SqlAutoCompleteService:
             entries = sorted(entries, key=self._databricks_entry_sort_key)
 
         for entry in entries:
+            if database_filter:
+                entry_db = self._normalize_name(entry.get("catalog", "") or "")
+                if entry_db and entry_db != database_filter:
+                    continue
             detail = f'{entry["type"]} - {entry["detail"]}'
             if self._schema_db_type == "databricks":
                 append_table(self._databricks_table_label(entry), detail)

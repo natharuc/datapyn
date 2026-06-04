@@ -69,18 +69,17 @@ def test_duplicate_inserts_before_plus_button(main_window):
 
 
 def test_close_button_has_custom_icon(main_window):
-    """Testa que close button tem configuração customizada"""
-    # Verificar que método _setup_close_button existe
-    assert hasattr(main_window.session_tabs, "_setup_close_button")
-
-    # Verificar que botão de fechar existe na primeira aba
-    from PyQt6.QtWidgets import QTabBar
+    """Session tabs paint the close control on the tab bar (same as results)."""
+    from PyQt6.QtCore import QRect
+    from src.design_system.tab_controls import tab_close_rect
+    from src.ui.components.session_tabs import SessionTabBar
 
     tab_bar = main_window.session_tabs.tabBar()
-    close_button = tab_bar.tabButton(0, QTabBar.ButtonPosition.RightSide)
-
-    # Deve ter um botão customizado (não None)
-    assert close_button is not None
+    assert isinstance(tab_bar, SessionTabBar)
+    assert hasattr(tab_bar, "closeRequested")
+    assert tab_close_rect(QRect(0, 0, 120, 28)).isValid()
+    assert hasattr(tab_bar, "_close_button_rect")
+    assert hasattr(tab_bar, "_close_index_at")
 
 
 def test_session_close_keyerror_fixed(main_window):

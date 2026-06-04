@@ -77,6 +77,23 @@ class TestPyniaToolDispatcher:
             "write_and_run", {"code": "SELECT 1", "language": "sql"}
         )
 
+    def test_edit_replace_maps_content_to_code(self):
+        legacy = self._legacy()
+        dispatcher = PyniaToolDispatcher(legacy)
+        sql = "SELECT 1 AS x"
+        dispatcher.dispatch(
+            "datapyn_edit",
+            {
+                "operation": "replace",
+                "block_name": "block1",
+                "content": sql,
+            },
+        )
+        legacy.execute.assert_called_with(
+            "edit_block",
+            {"block_name": "block1", "code": sql},
+        )
+
     def test_edit_lines(self):
         legacy = self._legacy()
         dispatcher = PyniaToolDispatcher(legacy)
@@ -88,6 +105,7 @@ class TestPyniaToolDispatcher:
                 "start_line": 1,
                 "end_line": 2,
                 "content": "x",
+                "line_operation": "replace",
             },
         )
         legacy.execute.assert_called_with(
@@ -96,7 +114,8 @@ class TestPyniaToolDispatcher:
                 "block_name": "a",
                 "start_line": 1,
                 "end_line": 2,
-                "content": "x",
+                "new_code": "x",
+                "mode": "replace",
             },
         )
 

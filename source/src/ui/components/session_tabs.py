@@ -5,7 +5,7 @@ Manages session tabs in the IDE.
 """
 
 from PyQt6.QtWidgets import QTabWidget, QTabBar, QWidget, QInputDialog, QMenu, QLineEdit, QToolButton
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QRect, QPoint
 from PyQt6.QtGui import QColor, QAction, QPainter, QPen, QMovie, QIcon, QPixmap
 import qtawesome as qta
 from typing import Dict
@@ -20,10 +20,15 @@ class SessionTabBar(QTabBar):
     """Custom TabBar for sessions"""
 
     tab_renamed = pyqtSignal(int, str)  # index, new_name
+    closeRequested = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._tab_colors: Dict[int, str] = {}  # Store color by tab index
+        self._timer_tab_indices: set[int] = set()
+        self._hovered_close_index = -1
+        self._pressed_close_index = -1
+        self.setMouseTracking(True)
 
         self._setup_style()
         self._setup_context_menu()
@@ -42,7 +47,7 @@ class SessionTabBar(QTabBar):
                 background-color: transparent;
                 color: {colors.text_secondary};
                 padding: 10px 16px;
-                padding-right: 8px;
+                padding-right: 28px;
                 border: none;
                 border-bottom: 2px solid transparent;
                 margin-right: 2px;
@@ -195,7 +200,7 @@ class SessionTabBar(QTabBar):
 
         # Position line_edit over the tab (leave 60px on right for close button)
         tab_rect = self.tabRect(index)
-        line_edit.setGeometry(tab_rect.adjusted(8, 6, -60, -6))
+        line_edit.setGeometry(tab_rect.adjusted(8, 6, -36, -6))
         line_edit.show()
         line_edit.setFocus()
 
@@ -228,9 +233,20 @@ class SessionTabBar(QTabBar):
         if tab_widget:
             tab_widget.session_closed.emit(index)
 
+    def _timer_button_rect(self, index: int) -> QRect:
+        close_rect = self._close_button_rect(index)
+        if not close_rect.isValid():
+            return QRect()
+        size = close_rect.height()
+        return QRect(close_rect.left() - size - 2, close_rect.top(), size, size)
+
     def mouseDoubleClickEvent(self, event):
         """Rename tab on double-click using inline input"""
-        index = self.tabAt(event.pos())
+        pos = event.position().toPoint()
+        if self._close_index_at(pos) >= 0:
+            super().mouseDoubleClickEvent(event)
+            return
+        index = self.tabAt(pos)
         if index >= 0:
             self._rename_tab_inline(index)
         else:
@@ -247,24 +263,123 @@ class SessionTabBar(QTabBar):
             del self._tab_colors[index]
             self.update()
 
+    def _close_button_rect(self, index: int) -> QRect:
+        if index < 0 or index >= self.count():
+            return QRect()
+        from src.design_system.tab_controls import tab_close_rect
+        return tab_close_rect(self.tabRect(index))
+
+    def _close_index_at(self, pos: QPoint) -> int:
+        index = self.tabAt(pos)
+        if index < 0:
+            return -1
+        return index if self._close_button_rect(index).contains(pos) else -1
+
+    def set_tab_timer_visible(self, index: int, visible: bool) -> None:
+        if visible:
+            self._timer_tab_indices.add(index)
+        else:
+            self._timer_tab_indices.discard(index)
+        self.update()
+
     def paintEvent(self, event):
         """Override to paint colored borders on tabs"""
-        # Pintar normalmente primeiro
         super().paintEvent(event)
 
-        # Pintar bordas coloridas
+        from src.design_system.tab_controls import paint_tab_close_control
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         for index, color in self._tab_colors.items():
-            if index < self.count():  # Check if index is still valid
+            if index < self.count():
                 rect = self.tabRect(index)
                 if rect.isValid():
-                    # Paint colored line at bottom of tab
                     pen = QPen(QColor(color))
                     pen.setWidth(3)
                     painter.setPen(pen)
                     painter.drawLine(rect.left() + 2, rect.bottom() - 1, rect.right() - 2, rect.bottom() - 1)
+
+        for index in sorted(self._timer_tab_indices):
+            if 0 <= index < self.count():
+                close_rect = self._close_button_rect(index)
+                if close_rect.isValid():
+                    timer_rect = QRect(
+                        close_rect.left() - close_rect.height() - 2,
+                        close_rect.top(),
+                        close_rect.height(),
+                        close_rect.height(),
+                    )
+                    icon = qta.icon("mdi.timer-outline", color="#4ec9b0", scale_factor=0.65)
+                    painter.drawPixmap(
+                        timer_rect,
+                        icon.pixmap(QSize(timer_rect.width(), timer_rect.height())),
+                    )
+
+        for index in range(self.count()):
+            paint_tab_close_control(
+                painter,
+                self._close_button_rect(index),
+                hovered=index == self._hovered_close_index,
+            )
+
+    def mouseMoveEvent(self, event):
+        pos = event.position().toPoint()
+        hovered = self._close_index_at(pos)
+        if hovered != self._hovered_close_index:
+            old_index = self._hovered_close_index
+            self._hovered_close_index = hovered
+            if old_index >= 0:
+                self.update(self._close_button_rect(old_index))
+            if hovered >= 0:
+                self.update(self._close_button_rect(hovered))
+        if hovered >= 0:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            close_index = self._close_index_at(event.position().toPoint())
+            if close_index >= 0:
+                self._pressed_close_index = close_index
+                event.accept()
+                return
+        self._pressed_close_index = -1
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._pressed_close_index >= 0:
+            pos = event.position().toPoint()
+            close_index = self._close_index_at(pos)
+            if close_index == self._pressed_close_index:
+                self.closeRequested.emit(close_index)
+                self._pressed_close_index = -1
+                event.accept()
+                return
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            for index in sorted(self._timer_tab_indices):
+                if self._timer_button_rect(index).contains(pos):
+                    tab_widget = self.parent()
+                    if tab_widget is not None:
+                        widget = tab_widget.widget(index)
+                        if widget is not None and hasattr(widget, "stop_periodic"):
+                            widget.stop_periodic()
+                    event.accept()
+                    return
+        self._pressed_close_index = -1
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event):
+        old_index = self._hovered_close_index
+        self._hovered_close_index = -1
+        self._pressed_close_index = -1
+        self.unsetCursor()
+        if old_index >= 0:
+            self.update(self._close_button_rect(old_index))
+        super().leaveEvent(event)
 
 
 class SessionTabs(QTabWidget):
@@ -293,6 +408,21 @@ class SessionTabs(QTabWidget):
         self._setup_ui()
         self._setup_style()
         self._connect_signals()
+        self._sync_new_tab_button()
+
+    def _has_session_widgets(self) -> bool:
+        from src.ui.components.session_widget import SessionWidget
+
+        return any(isinstance(self.widget(index), SessionWidget) for index in range(self.count()))
+
+    def _sync_new_tab_button(self) -> None:
+        accessory = getattr(self, "_new_tab_accessory", None)
+        if accessory is None:
+            return
+        accessory.set_visible(self._has_session_widgets())
+
+    def _on_new_tab_button_clicked(self) -> None:
+        self.new_session_requested.emit()
 
     def _setup_ui(self):
         """Configure UI"""
@@ -300,129 +430,30 @@ class SessionTabs(QTabWidget):
         self.tab_bar = SessionTabBar()
         self.setTabBar(self.tab_bar)
 
-        # Settings
-        self.setTabsClosable(True)
+        # Close control is painted on SessionTabBar (same as result tabs)
+        self.setTabsClosable(False)
         self.setMovable(True)
         self.setDocumentMode(True)
 
-    def _setup_close_button(self, index):
-        """Configure tab right-side widget: [timer icon] [close button]
+        from src.design_system.tab_controls import TabBarAccessoryStrip
 
-        Design matches the code block control bar buttons (26px, rounded,
-        subtle hover with red tint for close, teal tint for timer).
-        """
-        from src.design_system.tab_controls import TAB_CLOSE_BUTTON_SIZE, create_tab_close_button
-        from PyQt6.QtWidgets import QToolButton, QWidget, QHBoxLayout
-        from PyQt6.QtCore import Qt, QSize
-
-        BTN_SIZE = TAB_CLOSE_BUTTON_SIZE  # compact for tab bar
-        H_MARGIN = 4   # horizontal margins (2 each side)
-
-        # --- Resizable container ---
-        # QTabBar caches the button sizeHint at setTabButton time, so we
-        # use a wrapper whose sizeHint/minimumSizeHint change dynamically
-        # when the timer icon is shown/hidden.
-        class _TabButtonContainer(QWidget):
-            """Container that reports correct sizeHint depending on
-            whether the timer icon is visible."""
-            def __init__(self, btn_size, h_margin, parent=None):
-                super().__init__(parent)
-                self._btn_size = btn_size
-                self._h_margin = h_margin
-                self._timer_visible = False
-
-            def set_timer_visible(self, visible):
-                self._timer_visible = visible
-                self.updateGeometry()          # tell QTabBar to re-layout
-
-            def sizeHint(self):
-                n = 2 if self._timer_visible else 1
-                w = self._btn_size * n + self._h_margin
-                return QSize(w, self._btn_size)
-
-            def minimumSizeHint(self):
-                return self.sizeHint()
-
-        container = _TabButtonContainer(BTN_SIZE, H_MARGIN)
-        container_layout = QHBoxLayout(container)
-        container_layout.setContentsMargins(2, 0, 2, 0)
-        container_layout.setSpacing(0)
-
-        # Timer icon (hidden by default, shown when periodic is active)
-        timer_icon = QToolButton()
-        timer_icon.setIcon(qta.icon("mdi.timer-outline", color="#4ec9b0", scale_factor=0.7))
-        timer_icon.setFixedSize(BTN_SIZE, BTN_SIZE)
-        timer_icon.setVisible(False)
-        timer_icon.setObjectName("timer_icon")
-        timer_icon.setCursor(Qt.CursorShape.PointingHandCursor)
-        timer_icon.setStyleSheet(f"""
-            QToolButton {{
-                background: transparent;
-                border: none;
-                border-radius: {BTN_SIZE // 2}px;
-                padding: 0px;
-            }}
-            QToolButton:hover {{
-                background: rgba(78, 201, 176, 0.2);
-            }}
-        """)
-        container_layout.addWidget(timer_icon)
-
-        # Close button
-        close_btn = create_tab_close_button()
-
-        # IMPORTANT: Find index dynamically at click time
-        # because indices change when tabs are removed
-        def request_close():
-            for i in range(self.count()):
-                btn = self.tabBar().tabButton(i, QTabBar.ButtonPosition.RightSide)
-                if btn == container:
-                    self.tabCloseRequested.emit(i)
-                    return
-
-        close_btn.clicked.connect(request_close)
-
-        # Timer icon click: stop periodic on that tab
-        def toggle_timer():
-            for i in range(self.count()):
-                btn = self.tabBar().tabButton(i, QTabBar.ButtonPosition.RightSide)
-                if btn == container:
-                    widget = self.widget(i)
-                    if hasattr(widget, "stop_periodic"):
-                        widget.stop_periodic()
-                    return
-
-        timer_icon.clicked.connect(toggle_timer)
-
-        container_layout.addWidget(close_btn)
-
-        # Replace default button with container
-        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, container)
+        self._new_tab_accessory = TabBarAccessoryStrip(self.tab_bar, host=self)
+        self._new_tab_accessory.add_button(
+            "mdi.plus",
+            tooltip=S.session_tabs.new_tab_tooltip,
+            callback=self._on_new_tab_button_clicked,
+            object_name="sessionNewTabButton",
+            icon_scale=0.85,
+        )
+        self._new_tab_accessory.set_visible(False)
 
     def set_tab_timer_icon(self, index: int, visible: bool, interval: int = 0):
-        """Show or hide the timer icon on a tab.
-
-        Dynamically resizes the container so the tab grows/shrinks to fit.
-        """
-        container = self.tabBar().tabButton(index, QTabBar.ButtonPosition.RightSide)
-        if not container:
-            return
-        from PyQt6.QtWidgets import QToolButton
-        timer_icon = container.findChild(QToolButton, "timer_icon")
-        if timer_icon:
-            timer_icon.setVisible(visible)
-            if visible and interval > 0:
-                timer_icon.setToolTip(f"{interval}s")
-            else:
-                timer_icon.setToolTip("")
-
-        # Tell the container its size changed so QTabBar re-lays out
-        if hasattr(container, "set_timer_visible"):
-            container.set_timer_visible(visible)
-
-        # Force QTabBar to recalculate tab sizes by toggling the button
-        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, None)
-        self.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, container)
+        """Show or hide the periodic timer glyph painted on the tab."""
+        self.tab_bar.set_tab_timer_visible(index, visible)
+        if visible and interval > 0:
+            self.setTabToolTip(index, f"Periodic: {interval}s")
+        else:
+            self.setTabToolTip(index, "")
 
     def _setup_style(self):
         """Configure style - modern, clean"""
@@ -443,8 +474,14 @@ class SessionTabs(QTabWidget):
     def _connect_signals(self):
         """Connect signals"""
         self.currentChanged.connect(self.session_changed.emit)
-        self.tabCloseRequested.connect(self._on_close_requested)
+        self.currentChanged.connect(lambda _index: self._reposition_new_tab_button())
+        self.tab_bar.closeRequested.connect(self._on_close_requested)
         self.tab_bar.tab_renamed.connect(self.session_renamed.emit)
+
+    def _reposition_new_tab_button(self) -> None:
+        accessory = getattr(self, "_new_tab_accessory", None)
+        if accessory is not None and self._has_session_widgets():
+            accessory.reposition()
 
     def _on_close_requested(self, index: int):
         """Trata pedido de fechar aba"""
@@ -457,11 +494,10 @@ class SessionTabs(QTabWidget):
         Returns:
             Index of new tab
         """
-        # Adicionar aba normalmente
         index = self.addTab(widget, name)
 
-        # Configure custom close button
-        self._setup_close_button(index)
+        self._sync_new_tab_button()
+        self._reposition_new_tab_button()
 
         if make_current:
             self.setCurrentIndex(index)
@@ -473,6 +509,8 @@ class SessionTabs(QTabWidget):
         # Clear tab color before removing
         self.tab_bar.clear_tab_connection_color(index)
         self.removeTab(index)
+        self._sync_new_tab_button()
+        self._reposition_new_tab_button()
 
     def rename_session(self, index: int, name: str):
         """Rename session"""
@@ -552,16 +590,5 @@ class SessionTabs(QTabWidget):
         return self.tabText(index)
 
     def refresh_close_buttons(self):
-        """Reapply custom close button to all tabs (except last 'new tab').
-
-        Use this when style has been changed at runtime to force button update.
-        """
-        total = self.count()
-        # Don't touch last tab which is the new tab button (index = total-1)
-        for i in range(total - 1):
-            # Reapply custom button
-            try:
-                self._setup_close_button(i)
-            except Exception:
-                # Don't fail if a tab is being removed
-                continue
+        """Repaint tab chrome after a runtime style refresh."""
+        self.tab_bar.update()

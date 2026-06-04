@@ -34,6 +34,7 @@ from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
 from src.design_system.tokens import get_colors, RADIUS
 from src.services.copilot.copilot_settings import get_copilot_settings
+from src.ui.components.toggle_switch import LabeledToggleSwitch
 from src.services.notification_delivery_service import (
     EMAIL_PASSWORD_KEY,
     TELEGRAM_TOKEN_KEY,
@@ -364,30 +365,79 @@ class SettingsDialog(QDialog):
         row.setSpacing(10)
         lbl = self._make_label(label_text, colors, fixed_width=label_width)
         row.addWidget(lbl)
-        row.addWidget(widget)
+        row.addWidget(widget, 1)
         return row
+
+    def _wrap_scroll_tab(self, content: QWidget) -> QScrollArea:
+        """Scrollable tab body — keeps long settings pages usable."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
+
+    def _make_section_card(self, title: str, colors) -> tuple[QFrame, QVBoxLayout]:
+        card = QFrame()
+        card.setObjectName("settingsSectionCard")
+        card.setStyleSheet(f"""
+            QFrame#settingsSectionCard {{
+                background-color: {colors.bg_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_md}px;
+            }}
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        if title:
+            heading = QLabel(title)
+            heading.setStyleSheet(
+                f"color: {colors.text_primary}; font-size: 12px; font-weight: 600; "
+                f"background: transparent; border: none;"
+            )
+            layout.addWidget(heading)
+        return card, layout
+
+    def _get_switch_style(self, colors) -> str:
+        return f"""
+            QCheckBox {{
+                color: {colors.text_secondary};
+                font-size: 11px;
+                spacing: 10px;
+            }}
+            QCheckBox::indicator {{
+                width: 40px;
+                height: 22px;
+                border-radius: 11px;
+                border: 1px solid {colors.border_default};
+                background: {colors.bg_tertiary};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {colors.interactive_primary};
+                border-color: {colors.interactive_primary};
+            }}
+            QCheckBox::indicator:hover {{
+                border-color: {colors.interactive_primary};
+            }}
+        """
 
     # ==================== TAB SETUP ====================
 
     def _setup_general_tab(self):
         """Sets up the General tab with language selector"""
-        general_widget = QWidget()
-        general_layout = QVBoxLayout(general_widget)
-        general_layout.setSpacing(16)
-        general_layout.setContentsMargins(20, 20, 20, 20)
+        page = QWidget()
+        general_layout = QVBoxLayout(page)
+        general_layout.setSpacing(14)
+        general_layout.setContentsMargins(4, 4, 4, 12)
 
         colors = get_colors()
         input_style = self._get_input_style(colors)
 
-        # --- Language section ---
-        lang_group = self._make_group(S.settings.section_language, colors)
-        lang_layout = QVBoxLayout(lang_group)
-        lang_layout.setSpacing(8)
-
+        lang_card, lang_layout = self._make_section_card(S.settings.section_language, colors)
         self.lang_combo = QComboBox()
-        self.lang_combo.setFixedWidth(250)
+        self.lang_combo.setMinimumWidth(220)
         self.lang_combo.setStyleSheet(input_style)
-
         languages = get_available_languages()
         current_idx = 0
         for i, lang in enumerate(languages):
@@ -395,68 +445,60 @@ class SettingsDialog(QDialog):
             if lang["code"] == S.language_code:
                 current_idx = i
         self.lang_combo.setCurrentIndex(current_idx)
-
         lang_layout.addLayout(
-            self._make_field_row(S.settings.label_language, self.lang_combo, colors, label_width=150)
+            self._make_field_row(S.settings.label_language, self.lang_combo, colors, label_width=140)
         )
         lang_layout.addWidget(self._make_hint(S.settings.language_restart_hint, colors))
-        general_layout.addWidget(lang_group)
+        general_layout.addWidget(lang_card)
 
-        # --- Display section ---
-        display_group = self._make_group(
-            S.settings.section_display if hasattr(S.settings, 'section_display') else "DISPLAY",
+        display_card, display_layout = self._make_section_card(
+            S.settings.section_display if hasattr(S.settings, "section_display") else "DISPLAY",
             colors,
         )
-        display_layout = QVBoxLayout(display_group)
-        display_layout.setSpacing(8)
-
         self.grid_row_limit_spin = QSpinBox()
         self.grid_row_limit_spin.setRange(10, 1000000)
         self.grid_row_limit_spin.setSingleStep(100)
         settings = QSettings("DataPyn", "DataPyn")
         self.grid_row_limit_spin.setValue(int(settings.value("grid/display_row_limit", 100)))
-        self.grid_row_limit_spin.setFixedWidth(120)
+        self.grid_row_limit_spin.setMinimumWidth(120)
         self.grid_row_limit_spin.setStyleSheet(input_style)
-
         display_layout.addLayout(
             self._make_field_row(
-                S.settings.label_grid_row_limit if hasattr(S.settings, 'label_grid_row_limit')
+                S.settings.label_grid_row_limit if hasattr(S.settings, "label_grid_row_limit")
                 else "Default grid display limit (rows):",
-                self.grid_row_limit_spin, colors, label_width=250,
+                self.grid_row_limit_spin,
+                colors,
+                label_width=220,
             )
         )
         display_layout.addWidget(self._make_hint(
-            S.settings.grid_row_limit_hint if hasattr(S.settings, 'grid_row_limit_hint')
+            S.settings.grid_row_limit_hint if hasattr(S.settings, "grid_row_limit_hint")
             else "Only affects display. Exports always include all data.",
             colors,
         ))
-        general_layout.addWidget(display_group)
+        general_layout.addWidget(display_card)
 
-        # --- Editor section ---
-        editor_group = self._make_group(
-            S.settings.section_editor if hasattr(S.settings, 'section_editor') else "CODE EDITOR",
+        editor_card, editor_layout = self._make_section_card(
+            S.settings.section_editor if hasattr(S.settings, "section_editor") else "CODE EDITOR",
             colors,
         )
-        editor_layout = QVBoxLayout(editor_group)
-        editor_layout.setSpacing(8)
-
         editor_layout.addWidget(self._make_label(
-            S.settings.editor_monaco if hasattr(S.settings, 'editor_monaco')
+            S.settings.editor_monaco if hasattr(S.settings, "editor_monaco")
             else "Monaco Editor with Pynia AI inline autocomplete",
             colors,
         ))
         editor_layout.addWidget(self._make_hint("Powered by Monaco (VS Code editor engine)", colors))
-        general_layout.addWidget(editor_group)
+        general_layout.addWidget(editor_card)
 
         general_layout.addStretch()
-        self.tabs.addTab(general_widget, S.settings.tab_general)
+        self.tabs.addTab(self._wrap_scroll_tab(page), S.settings.tab_general)
 
     def _setup_shortcuts_tab(self):
         """Sets up the Shortcuts tab"""
-        shortcuts_widget = QWidget()
-        shortcuts_layout = QVBoxLayout(shortcuts_widget)
+        page = QWidget()
+        shortcuts_layout = QVBoxLayout(page)
         shortcuts_layout.setSpacing(16)
-        shortcuts_layout.setContentsMargins(20, 20, 20, 20)
+        shortcuts_layout.setContentsMargins(4, 4, 4, 12)
 
         colors = get_colors()
 
@@ -498,7 +540,7 @@ class SettingsDialog(QDialog):
         """)
         shortcuts_layout.addWidget(self.table)
 
-        self.tabs.addTab(shortcuts_widget, S.settings.tab_shortcuts)
+        self.tabs.addTab(self._wrap_scroll_tab(page), S.settings.tab_shortcuts)
 
     def _setup_copilot_tab(self):
         """Sets up the Copilot tab with Chat and Autocomplete settings."""
@@ -601,34 +643,30 @@ class SettingsDialog(QDialog):
         from src.services.pynia.types import ProviderId
 
         colors = get_colors()
-        pynia_widget = QWidget()
-        layout = QVBoxLayout(pynia_widget)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        input_style = self._get_input_style(colors)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 4, 4, 12)
+        layout.setSpacing(14)
 
         intro = QLabel(
             S.pynia.settings_intro if hasattr(S, "pynia") else "Configure Pynia AI connectors."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet(self._get_hint_style(colors))
+        intro.setStyleSheet(self._get_info_box_style(colors))
         layout.addWidget(intro)
 
         self._pynia_settings = get_pynia_settings()
 
-        group = self._make_group(
+        conn_card, form = self._make_section_card(
             S.pynia.section_connectors if hasattr(S, "pynia") else "CONNECTORS",
             colors,
         )
-        # Vertical layout (label above field) — matches the other tabs and
-        # avoids the QFormLayout-in-styled-QGroupBox rendering glitch.
-        form = QVBoxLayout(group)
-        form.setSpacing(6)
-        form.setContentsMargins(12, 8, 12, 12)
-
         form.addWidget(self._make_label(
             S.pynia.title if hasattr(S, "pynia") else "Connector", colors
         ))
         self._pynia_provider_combo = QComboBox()
+        self._pynia_provider_combo.setStyleSheet(input_style)
         labels = {
             "copilot": getattr(S.pynia, "provider_copilot", "GitHub Copilot") if hasattr(S, "pynia") else "GitHub Copilot",
             "openai": S.pynia.provider_openai,
@@ -650,11 +688,13 @@ class SettingsDialog(QDialog):
         self._pynia_token_edit = QLineEdit()
         self._pynia_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._pynia_token_edit.setPlaceholderText(S.pynia.label_api_token if hasattr(S, "pynia") else "API token")
+        self._pynia_token_edit.setStyleSheet(input_style)
         token_layout.addWidget(self._pynia_token_edit)
         token_layout.addWidget(self._make_label(
             S.pynia.label_base_url if hasattr(S, "pynia") else "API base URL (optional)", colors
         ))
         self._pynia_base_url_edit = QLineEdit()
+        self._pynia_base_url_edit.setStyleSheet(input_style)
         token_layout.addWidget(self._pynia_base_url_edit)
         btn_row = QHBoxLayout()
         self._pynia_save_btn = QPushButton(S.pynia.btn_save_token if hasattr(S, "pynia") else "Save")
@@ -708,7 +748,7 @@ class SettingsDialog(QDialog):
         self._pynia_status_label.setStyleSheet(self._get_hint_style(colors))
         form.addWidget(self._pynia_status_label)
 
-        layout.addWidget(group)
+        layout.addWidget(conn_card)
 
         # Reflect the active connector + live Copilot auth updates.
         active_index = self._pynia_provider_combo.findData(self._pynia_settings.active_provider)
@@ -726,21 +766,17 @@ class SettingsDialog(QDialog):
         except Exception:
             pass  # Auth service not available — live status updates disabled.
 
-        auto_group = self._make_group(
+        auto_card, auto_layout = self._make_section_card(
             S.pynia.section_autocomplete if hasattr(S, "pynia") else "INLINE AUTOCOMPLETE",
             colors,
         )
-        auto_layout = QVBoxLayout(auto_group)
-        auto_layout.setSpacing(8)
 
-        from PyQt6.QtWidgets import QCheckBox
-
-        self._pynia_autocomplete_cb = QCheckBox(
+        self._pynia_autocomplete_cb = LabeledToggleSwitch(
             S.pynia.autocomplete_enable
             if hasattr(S, "pynia")
-            else "Enable AI inline autocomplete in code blocks"
+            else "Enable AI inline autocomplete in code blocks",
+            checked=self._pynia_settings.autocomplete_enabled,
         )
-        self._pynia_autocomplete_cb.setChecked(self._pynia_settings.autocomplete_enabled)
         auto_layout.addWidget(self._pynia_autocomplete_cb)
 
         auto_hint = QLabel(
@@ -761,6 +797,7 @@ class SettingsDialog(QDialog):
         self._pynia_completion_model_combo = QComboBox()
         self._pynia_completion_model_combo.setEditable(True)
         self._pynia_completion_model_combo.setMinimumWidth(240)
+        self._pynia_completion_model_combo.setStyleSheet(input_style)
         model_row.addWidget(model_label)
         model_row.addWidget(self._pynia_completion_model_combo, 1)
         auto_layout.addLayout(model_row)
@@ -783,7 +820,7 @@ class SettingsDialog(QDialog):
         auto_layout.addWidget(self._pynia_autocomplete_status)
         self._refresh_pynia_autocomplete_status()
 
-        layout.addWidget(auto_group)
+        layout.addWidget(auto_card)
         layout.addStretch()
 
         self._pynia_provider_combo.currentIndexChanged.connect(self._load_pynia_connector_fields)
@@ -792,7 +829,7 @@ class SettingsDialog(QDialog):
         self._refresh_pynia_autocomplete_status()
 
         tab_title = S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia"
-        self.tabs.addTab(pynia_widget, tab_title)
+        self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
 
     def _refresh_pynia_autocomplete_status(self) -> None:
         from src.services.pynia.settings import get_provider_secret
@@ -1202,18 +1239,16 @@ class SettingsDialog(QDialog):
         general_layout = QVBoxLayout(general_group)
         general_layout.setSpacing(8)
 
-        self.notif_enabled_cb = QCheckBox(S.settings.label_notifications_enabled)
-        self.notif_enabled_cb.setChecked(
-            settings.value("notifications/enabled", True, type=bool)
+        self.notif_enabled_cb = LabeledToggleSwitch(
+            S.settings.label_notifications_enabled,
+            checked=settings.value("notifications/enabled", True, type=bool),
         )
-        self.notif_enabled_cb.setStyleSheet(checkbox_style)
         general_layout.addWidget(self.notif_enabled_cb)
 
-        self.notif_sound_cb = QCheckBox(S.settings.label_notifications_sound)
-        self.notif_sound_cb.setChecked(
-            settings.value("notifications/sound", True, type=bool)
+        self.notif_sound_cb = LabeledToggleSwitch(
+            S.settings.label_notifications_sound,
+            checked=settings.value("notifications/sound", True, type=bool),
         )
-        self.notif_sound_cb.setStyleSheet(checkbox_style)
         general_layout.addWidget(self.notif_sound_cb)
 
         notif_layout.addWidget(general_group)
@@ -1482,20 +1517,19 @@ class SettingsDialog(QDialog):
         from src.core.workspace_service import get_workspace_service
         colors = get_colors()
 
-        workspace_widget = QWidget()
-        workspace_layout = QVBoxLayout(workspace_widget)
-        workspace_layout.setSpacing(16)
-        workspace_layout.setContentsMargins(20, 20, 20, 20)
+        page = QWidget()
+        workspace_layout = QVBoxLayout(page)
+        workspace_layout.setSpacing(14)
+        workspace_layout.setContentsMargins(4, 4, 4, 12)
 
         self._workspace_service = get_workspace_service()
 
         # --- Current workspace section ---
-        current_group = self._make_group(
+        current_group, current_layout = self._make_section_card(
             S.settings.section_workspace_current if hasattr(S.settings, 'section_workspace_current')
             else "CURRENT WORKSPACE",
             colors,
         )
-        current_layout = QVBoxLayout(current_group)
         current_layout.setSpacing(8)
 
         self._workspace_name_label = QLabel(self._workspace_service.current_workspace_name)
@@ -1525,12 +1559,11 @@ class SettingsDialog(QDialog):
         workspace_layout.addWidget(current_group)
 
         # --- Saved workspaces section ---
-        saved_group = self._make_group(
+        saved_group, saved_layout = self._make_section_card(
             S.settings.section_workspaces if hasattr(S.settings, 'section_workspaces')
             else "SAVED WORKSPACES",
             colors,
         )
-        saved_layout = QVBoxLayout(saved_group)
         saved_layout.setSpacing(10)
 
         self._workspace_list = QListWidget()
@@ -1563,51 +1596,20 @@ class SettingsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        add_btn = QPushButton(
-            S.settings.workspace_add if hasattr(S.settings, 'workspace_add') else "Add..."
-        )
-        add_btn.setFixedHeight(28)
-        add_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 11px;
-                padding: 0 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary}dd;
-            }}
-        """)
+        add_label = S.settings.workspace_add if hasattr(S.settings, "workspace_add") else "Add..."
+        add_btn = self._make_workspace_action_button(add_label, colors, variant="primary")
         add_btn.clicked.connect(self._on_add_workspace)
         btn_row.addWidget(add_btn)
 
-        duplicate_btn = QPushButton(
-            S.settings.workspace_duplicate if hasattr(S.settings, 'workspace_duplicate') else "Duplicate..."
+        dup_label = (
+            S.settings.workspace_duplicate if hasattr(S.settings, "workspace_duplicate") else "Duplicate..."
         )
-        duplicate_btn.setFixedHeight(28)
-        duplicate_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.bg_elevated};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                font-size: 11px;
-                padding: 0 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary};
-                color: white;
-            }}
-        """)
+        duplicate_btn = self._make_workspace_action_button(dup_label, colors, variant="secondary")
         duplicate_btn.clicked.connect(self._on_duplicate_workspace)
         btn_row.addWidget(duplicate_btn)
 
-        self._remove_btn = QPushButton(
-            S.settings.workspace_remove if hasattr(S.settings, 'workspace_remove') else "Remove"
-        )
-        self._remove_btn.setFixedHeight(28)
+        remove_label = S.settings.workspace_remove if hasattr(S.settings, "workspace_remove") else "Remove"
+        self._remove_btn = self._make_workspace_action_button(remove_label, colors, variant="muted")
         self._remove_btn.clicked.connect(self._on_remove_workspace)
         btn_row.addWidget(self._remove_btn)
 
@@ -1626,8 +1628,77 @@ class SettingsDialog(QDialog):
         workspace_layout.addStretch()
 
         tab_title = S.settings.tab_workspace if hasattr(S.settings, 'tab_workspace') else "Workspace"
-        self.tabs.addTab(workspace_widget, tab_title)
+        self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
     
+    def _workspace_button_stylesheet(self, colors, variant: str) -> str:
+        if variant == "primary":
+            return f"""
+                QPushButton {{
+                    background-color: {colors.interactive_primary};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    padding: 0 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.interactive_primary}dd;
+                }}
+                QPushButton:disabled {{
+                    background-color: {colors.bg_tertiary};
+                    color: {colors.text_tertiary};
+                }}
+            """
+        if variant == "danger":
+            return f"""
+                QPushButton {{
+                    background-color: {colors.danger};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    padding: 0 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors.danger}dd;
+                }}
+                QPushButton:disabled {{
+                    background-color: {colors.bg_tertiary};
+                    color: {colors.text_tertiary};
+                    border: 1px solid {colors.border_muted};
+                }}
+            """
+        return f"""
+            QPushButton {{
+                background-color: {colors.bg_elevated};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
+                border-radius: 4px;
+                font-size: 11px;
+                padding: 0 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.interactive_primary};
+                color: white;
+            }}
+            QPushButton:disabled {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_tertiary};
+                border: 1px solid {colors.border_muted};
+            }}
+        """
+
+    def _make_workspace_action_button(self, label: str, colors, *, variant: str = "secondary") -> QPushButton:
+        """Fixed-size toolbar button so disabled Remove does not stretch in the row."""
+        from PyQt6.QtWidgets import QSizePolicy
+
+        btn = QPushButton(label)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        text_w = btn.fontMetrics().horizontalAdvance(label)
+        btn.setFixedSize(max(72, text_w + 24), 28)
+        btn.setStyleSheet(self._workspace_button_stylesheet(colors, variant))
+        return btn
+
     def _refresh_workspace_list(self):
         """Refresh the workspace list widget."""
         self._workspace_list.clear()
@@ -1672,35 +1743,18 @@ class SettingsDialog(QDialog):
             
             can_remove = not is_current and not is_default_path
         
+        label = (
+            S.settings.workspace_remove if hasattr(S.settings, "workspace_remove") else "Remove"
+        )
+        text_w = self._remove_btn.fontMetrics().horizontalAdvance(label)
+        self._remove_btn.setFixedSize(max(72, text_w + 24), 28)
+
         if can_remove:
-            # Enable with red danger style
             self._remove_btn.setEnabled(True)
-            self._remove_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.danger};
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    padding: 0 12px;
-                }}
-                QPushButton:hover {{
-                    background-color: {colors.danger}dd;
-                }}
-            """)
+            self._remove_btn.setStyleSheet(self._workspace_button_stylesheet(colors, "danger"))
         else:
-            # Disable with muted style
             self._remove_btn.setEnabled(False)
-            self._remove_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.bg_tertiary};
-                    color: {colors.text_tertiary};
-                    border: 1px solid {colors.border_muted};
-                    border-radius: 4px;
-                    font-size: 11px;
-                    padding: 0 12px;
-                }}
-            """)
+            self._remove_btn.setStyleSheet(self._workspace_button_stylesheet(colors, "muted"))
     
     def _on_add_workspace(self):
         """Handle add workspace button click."""

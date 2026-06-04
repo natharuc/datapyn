@@ -35,6 +35,8 @@ from .inputs import (
     SearchInput,
 )
 
+from .toggle_switch import ToggleSwitch, LabeledToggleSwitch
+
 # Toolbar
 from .toolbar import MainToolbar
 

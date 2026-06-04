@@ -8,6 +8,12 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "source"))
 
 
+def _chart_page_ready(page) -> bool:
+    from src.ui.components.results_viewer import ResultsViewer
+
+    return ResultsViewer._chart_page_has_content(page)
+
+
 def _switch_result_tab(viewer, qtbot, index: int, *, min_rows: int | None = None):
     """Switch result tabs and wait for the deferred handler to finish."""
     viewer._result_tabs.setCurrentIndex(index)
@@ -1112,7 +1118,7 @@ class TestResultsViewerFiltering:
         assert viewer._result_tabs.count() == 2
         chart_page = viewer._result_tabs.widget(1)
         assert chart_page._page_kind == "chart"
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
         assert chart_page._image_bytes
         assert chart_page._image_label.pixmap() is not None
         assert session.result_view_state["charts"]["configs"][0]["x_column"] == "mes"
@@ -1337,7 +1343,7 @@ class TestResultsViewerFiltering:
         })
         assert viewer._result_tabs.count() == 2
         chart_page = viewer._result_tabs.widget(1)
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
 
         viewer._set_visualization_config({
             "type": "line",
@@ -1382,7 +1388,9 @@ class TestResultsViewerFiltering:
 
         release_first_render.set()
         qtbot.waitUntil(
-            lambda: len(render_titles) >= 2 and chart_page._image_bytes is not None and not chart_page._rendering,
+            lambda: len(render_titles) >= 2
+            and _chart_page_ready(chart_page)
+            and not chart_page._rendering,
             timeout=5000,
         )
 
@@ -1506,7 +1514,8 @@ class TestResultsViewerFiltering:
 
         release_first_render.set()
         qtbot.waitUntil(
-            lambda: render_titles == ["First", "Second"] and second_page._image_bytes is not None,
+            lambda: render_titles == ["First", "Second"]
+            and _chart_page_ready(second_page),
             timeout=5000,
         )
 
@@ -1577,7 +1586,7 @@ class TestResultsViewerFiltering:
 
         _switch_result_tab(viewer, qtbot, 1)
 
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
         assert chart_page._image_bytes
 
     def test_saved_visualization_does_not_render_on_display_dataframe(self, viewer, monkeypatch):
@@ -1619,7 +1628,7 @@ class TestResultsViewerFiltering:
         })
 
         chart_page = viewer._result_tabs.widget(1)
-        qtbot.waitUntil(lambda: chart_page._image_bytes is not None, timeout=5000)
+        qtbot.waitUntil(lambda: _chart_page_ready(chart_page), timeout=5000)
         assert chart_page._image_bytes
         assert len(chart_page._image_bytes) > 1000
 

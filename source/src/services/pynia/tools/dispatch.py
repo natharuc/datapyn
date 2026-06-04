@@ -196,7 +196,7 @@ class PyniaToolDispatcher:
         if operation == "selection":
             payload: Dict[str, Any] = {}
             if args.get("content") is not None:
-                payload["content"] = args["content"]
+                payload["code"] = args["content"]
             return self._exec("replace_selection", payload)
 
         if operation == "rename":
@@ -218,21 +218,21 @@ class PyniaToolDispatcher:
 
         if operation == "lines":
             payload = dict(block_args)
-            for key in (
-                "content",
-                "start_line",
-                "end_line",
-                "line_operation",
-            ):
-                if args.get(key) is not None:
-                    payload[key] = args[key]
+            if args.get("start_line") is not None:
+                payload["start_line"] = args["start_line"]
+            if args.get("end_line") is not None:
+                payload["end_line"] = args["end_line"]
+            if args.get("content") is not None:
+                payload["new_code"] = args["content"]
+            if args.get("line_operation") is not None:
+                payload["mode"] = args["line_operation"]
             return self._exec("edit_block_lines", payload)
 
         # replace
         if not args.get("content"):
             return {"error": "content is required for operation=replace"}
         payload = dict(block_args)
-        payload["content"] = args["content"]
+        payload["code"] = args["content"]
         return self._exec("edit_block", payload)
 
     def _blocks(self, args: Dict[str, Any]) -> Dict[str, Any]:

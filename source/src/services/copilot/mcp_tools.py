@@ -50,6 +50,24 @@ def _truncate_code_for_tool(code: str, max_lines: int = MAX_TOOL_CODE_LINES, max
     return code, "; ".join(notes)
 
 
+def _code_from_tool_args(args: Dict[str, Any]) -> str:
+    """Accept legacy ``code`` or Pynia ``content`` parameter names."""
+    if args.get("code") is not None:
+        return str(args.get("code") or "")
+    return str(args.get("content") or "")
+
+
+def _line_edit_from_tool_args(args: Dict[str, Any]) -> tuple[str, str]:
+    """Return (new_code, mode) for edit_block_lines from legacy or Pynia args."""
+    new_code = args.get("new_code")
+    if new_code is None:
+        new_code = args.get("content", "")
+    else:
+        new_code = new_code or ""
+    mode = (args.get("mode") or args.get("line_operation") or "replace").lower().strip()
+    return str(new_code), mode
+
+
 def _merge_line_ranges(ranges: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     if not ranges:
         return []
@@ -1246,7 +1264,7 @@ class MCPToolRegistry(QObject):
 
     def _edit_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Edit code in a block. Resolved by name, index, or focused block."""
-        code = args.get("code", "")
+        code = _code_from_tool_args(args)
 
         target_block, block_editor, idx, error = self._resolve_block(args)
         if error:
@@ -2313,7 +2331,7 @@ class MCPToolRegistry(QObject):
 
     def _replace_selection(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Replace the selected text with new code."""
-        code = args.get("code", "")
+        code = _code_from_tool_args(args)
         block, block_editor, error = self._get_focused_block()
         if error:
             return {"error": error}
@@ -2923,8 +2941,7 @@ class MCPToolRegistry(QObject):
         """Edit specific lines in a block (replace, insert, or delete)."""
         start_line = args.get("start_line")
         end_line = args.get("end_line")
-        new_code = args.get("new_code", "")
-        mode = args.get("mode", "replace")
+        new_code, mode = _line_edit_from_tool_args(args)
 
         if start_line is None:
             return {"error": "start_line is required."}

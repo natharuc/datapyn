@@ -128,6 +128,9 @@ class LayoutMixin:
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
         self.copilot_dock.setMinimumWidth(280)
         self.copilot_dock.setMinimumHeight(200)
+        self.copilot_dock.visibilityChanged.connect(
+            lambda _visible: QTimer.singleShot(0, self._reposition_tab_accessories)
+        )
 
         # Copilot Output Panel (shows tool calls, results, debug info)
         self._copilot_output_panel = CopilotOutputPanel(theme_manager=self.theme_manager)
@@ -366,6 +369,12 @@ class LayoutMixin:
                     tab_bar.setCurrentIndex(i)
                     return
 
+    def _reposition_tab_accessories(self) -> None:
+        """Keep session/results '+' and chart buttons aligned after dock layout changes."""
+        from src.design_system.tab_controls import reposition_tab_bar_accessories
+
+        reposition_tab_bar_accessories(self)
+
     def hide_panel(self, name: str):
         """Hides specific panel using QDockWidget"""
         if name == "results":
@@ -382,6 +391,7 @@ class LayoutMixin:
             self.object_explorer_dock.hide()
         elif name == "copilot" and hasattr(self, "copilot_dock"):
             self.copilot_dock.hide()
+            QTimer.singleShot(0, self._reposition_tab_accessories)
 
     def _refresh_connections_list(self):
         """Updates the saved connections list"""

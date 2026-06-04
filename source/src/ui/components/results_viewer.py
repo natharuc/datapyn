@@ -33,6 +33,11 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QAbstractItemView,
+    QSplitter,
+    QSizePolicy,
+    QListWidget,
+    QListWidgetItem,
+    QStackedWidget,
 )
 from PyQt6.QtCore import Qt, QObject, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer, QThread, pyqtSignal, QRect, QPoint, QSize, QSignalBlocker, QEvent
 from PyQt6.QtGui import QColor, QImage, QPixmap, QFont, QKeySequence, QShortcut, QAction, QDoubleValidator, QPainter, QPen
@@ -52,6 +57,8 @@ from src.core.theme_manager import ThemeManager
 from src.language import S
 from src.design_system.tokens import SCROLLBAR_STYLE
 from src.workers import FileExportWorker
+from src.ui.components.toggle_switch import LabeledToggleSwitch
+from src.ui.components.plotly_chart_view import PlotlyChartView
 
 GRID_ASYNC_ROW_THRESHOLD = 200
 GRID_COLUMN_RESIZE_SAMPLE_ROWS = 50
@@ -527,7 +534,7 @@ class GridPrepareWorker(QObject):
 
 
 class ChartRenderWorker(QObject):
-    """Renderiza graficos matplotlib fora da thread da UI."""
+    """Renderiza graficos Plotly (HTML) fora da thread da UI."""
 
     finished = pyqtSignal(object, int, object)  # page_key, generation, image bytes
     error = pyqtSignal(object, int, str)
@@ -968,12 +975,23 @@ class NumberFormatDialog(QDialog):
 
 
 class VisualizationEditorDialog(QDialog):
-    """Editor simples das configuracoes de graficos da sessao."""
+    """Editor das configuracoes de graficos da sessao com pre-visualizacao."""
 
-    def __init__(self, df: pd.DataFrame = None, config: dict = None, parent=None, theme_manager: ThemeManager = None):
+    def __init__(
+        self,
+        df: pd.DataFrame = None,
+        config: dict = None,
+        parent=None,
+        theme_manager: ThemeManager = None,
+        render_fn=None,
+    ):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
+        self._render_fn = render_fn
         self._df = df
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._refresh_preview)
         self._columns = [str(column) for column in df.columns] if df is not None else []
         self._numeric_columns = [
             str(column)
@@ -982,6 +1000,8 @@ class VisualizationEditorDialog(QDialog):
         ]
         self._config = dict(config or {})
         self._y_column_combos = []
+        self._preview_shutdown = False
+        self._preview_error_log = ""
         self.setObjectName("visualizationEditorDialog")
         self.setWindowTitle(S.visualization.editor_title)
         flags = self.windowFlags() | Qt.WindowType.CustomizeWindowHint
@@ -993,8 +1013,47 @@ class VisualizationEditorDialog(QDialog):
         flags &= ~Qt.WindowType.WindowMaximizeButtonHint
         flags &= ~Qt.WindowType.WindowMinMaxButtonsHint
         self.setWindowFlags(flags)
-        self.setMinimumSize(760, 620)
+        self.setMinimumSize(920, 640)
+        self.resize(1000, 700)
         self._setup_ui()
+
+    def _shutdown_preview(self) -> None:
+        if self._preview_shutdown:
+            return
+        self._preview_shutdown = True
+        self._preview_timer.stop()
+        try:
+            self._preview_timer.timeout.disconnect(self._refresh_preview)
+        except (TypeError, RuntimeError):
+            pass
+        preview = getattr(self, "preview_chart", None)
+        if preview is not None:
+            preview.cleanup()
+
+    def accept(self):
+        self._shutdown_preview()
+        super().accept()
+
+    def reject(self):
+        self._shutdown_preview()
+        super().reject()
+
+    def done(self, result: int):
+        self._shutdown_preview()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self._shutdown_preview()
+        super().closeEvent(event)
+
+    def _wrap_tab_scroll(self, tab: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(tab)
+        scroll.setStyleSheet(SCROLLBAR_STYLE)
+        return scroll
 
     def _tab_layout(self, tab: QWidget) -> QVBoxLayout:
         layout = QVBoxLayout(tab)
@@ -1057,12 +1116,19 @@ class VisualizationEditorDialog(QDialog):
         colors = get_colors()
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(26, 22, 26, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 20, 24, 18)
+        layout.setSpacing(14)
 
+        header = QVBoxLayout()
+        header.setSpacing(4)
         title = QLabel(S.visualization.editor_title)
         title.setObjectName("visualizationTitle")
-        layout.addWidget(title)
+        header.addWidget(title)
+        subtitle = QLabel(S.visualization.editor_subtitle)
+        subtitle.setObjectName("visualizationSubtitle")
+        subtitle.setWordWrap(True)
+        header.addWidget(subtitle)
+        layout.addLayout(header)
 
         type_form = self._form_layout()
         self.type_combo = QComboBox()
@@ -1075,16 +1141,106 @@ class VisualizationEditorDialog(QDialog):
         type_form.addRow(S.visualization.label_type, self.type_combo)
         layout.addLayout(type_form)
 
-        tabs = QTabWidget()
-        tabs.setObjectName("visualizationSettingsTabs")
-        tabs.addTab(self._create_general_tab(), S.visualization.tab_general)
-        tabs.addTab(self._create_x_axis_tab(), S.visualization.tab_x_axis)
-        tabs.addTab(self._create_y_axis_tab(), S.visualization.tab_y_axis)
-        tabs.addTab(self._create_series_tab(), S.visualization.tab_series)
-        tabs.addTab(self._create_colors_tab(), S.visualization.tab_colors)
-        tabs.addTab(self._create_style_tab(), S.visualization.tab_style)
-        tabs.addTab(self._create_data_labels_tab(), S.visualization.tab_data_labels)
-        layout.addWidget(tabs, 1)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setObjectName("visualizationSplitter")
+
+        settings_host = QWidget()
+        settings_layout = QVBoxLayout(settings_host)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(0)
+
+        nav = QListWidget()
+        nav.setObjectName("visualizationSectionNav")
+        nav.setFixedWidth(152)
+        nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        self.settings_stack = QStackedWidget()
+        self.settings_stack.setObjectName("visualizationSettingsStack")
+        sections = [
+            ("mdi.tune", S.visualization.tab_general, self._create_general_tab()),
+            ("mdi.axis-x-arrow", S.visualization.tab_x_axis, self._create_x_axis_tab()),
+            ("mdi.axis-y-arrow", S.visualization.tab_y_axis, self._create_y_axis_tab()),
+            ("mdi.chart-multiple", S.visualization.tab_series, self._create_series_tab()),
+            ("mdi.palette", S.visualization.tab_colors, self._create_colors_tab()),
+            ("mdi.brush", S.visualization.tab_style, self._create_style_tab()),
+            ("mdi.label", S.visualization.tab_data_labels, self._create_data_labels_tab()),
+        ]
+        for icon_name, label, tab in sections:
+            nav.addItem(QListWidgetItem(qta.icon(icon_name, color=colors.text_secondary), label))
+            self.settings_stack.addWidget(self._wrap_tab_scroll(tab))
+        nav.setCurrentRow(0)
+        nav.currentRowChanged.connect(self.settings_stack.setCurrentIndex)
+
+        settings_row = QHBoxLayout()
+        settings_row.setContentsMargins(0, 0, 0, 0)
+        settings_row.setSpacing(12)
+        settings_row.addWidget(nav)
+        settings_row.addWidget(self.settings_stack, 1)
+        settings_layout.addLayout(settings_row)
+        self._section_nav = nav
+        splitter.addWidget(settings_host)
+
+        preview_host = QFrame()
+        preview_host.setObjectName("visualizationPreviewPanel")
+        preview_layout = QVBoxLayout(preview_host)
+        preview_layout.setContentsMargins(16, 14, 16, 14)
+        preview_layout.setSpacing(10)
+
+        preview_heading = QLabel(S.visualization.preview_title)
+        preview_heading.setObjectName("visualizationPreviewTitle")
+        preview_layout.addWidget(preview_heading)
+
+        self.preview_chart = PlotlyChartView()
+        self.preview_chart.setObjectName("visualizationPreviewChart")
+        self.preview_chart.setMinimumSize(360, 300)
+        preview_layout.addWidget(self.preview_chart, 1)
+
+        self.preview_status = QLabel()
+        self.preview_status.setObjectName("visualizationPreviewStatus")
+        self.preview_status.setWordWrap(True)
+        self.preview_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_status.hide()
+        preview_layout.addWidget(self.preview_status)
+
+        self.preview_error_panel = QFrame()
+        self.preview_error_panel.setObjectName("visualizationPreviewErrorPanel")
+        error_layout = QVBoxLayout(self.preview_error_panel)
+        error_layout.setContentsMargins(0, 0, 0, 0)
+        error_layout.setSpacing(8)
+
+        error_header = QHBoxLayout()
+        error_header.setSpacing(8)
+        self.preview_error_summary = QLabel()
+        self.preview_error_summary.setObjectName("visualizationPreviewErrorSummary")
+        self.preview_error_summary.setWordWrap(True)
+        error_header.addWidget(self.preview_error_summary, 1)
+
+        self.preview_copy_error_btn = QToolButton()
+        self.preview_copy_error_btn.setObjectName("visualizationPreviewCopyErrorButton")
+        self.preview_copy_error_btn.setIcon(qta.icon("mdi.content-copy", color=colors.text_secondary, scale_factor=0.85))
+        self.preview_copy_error_btn.setToolTip(S.visualization.preview_copy_error)
+        self.preview_copy_error_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.preview_copy_error_btn.clicked.connect(self._copy_preview_error_log)
+        error_header.addWidget(self.preview_copy_error_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        error_layout.addLayout(error_header)
+
+        self.preview_error_text = QTextEdit()
+        self.preview_error_text.setObjectName("visualizationPreviewErrorText")
+        self.preview_error_text.setReadOnly(True)
+        self.preview_error_text.setMaximumHeight(140)
+        self.preview_error_text.setStyleSheet(
+            f"background-color: {colors.bg_primary}; color: {colors.text_secondary};"
+            f"border: 1px solid {colors.border_muted}; border-radius: 6px; font-size: 11px;"
+        )
+        error_layout.addWidget(self.preview_error_text)
+        self.preview_error_panel.hide()
+        preview_layout.addWidget(self.preview_error_panel)
+
+        splitter.addWidget(preview_host)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([480, 400])
+        layout.addWidget(splitter, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(self.accept)
@@ -1098,29 +1254,66 @@ class VisualizationEditorDialog(QDialog):
             }}
             QLabel#visualizationTitle {{
                 color: {colors.text_primary};
-                font-size: 22px;
+                font-size: 20px;
                 font-weight: 700;
+            }}
+            QLabel#visualizationSubtitle {{
+                color: {colors.text_secondary};
+                font-size: 12px;
+            }}
+            QLabel#visualizationPreviewTitle {{
+                color: {colors.text_primary};
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QLabel#visualizationPreviewStatus {{
+                color: {colors.text_secondary};
+                font-size: 11px;
+            }}
+            QLabel#visualizationPreviewErrorSummary {{
+                color: {colors.text_secondary};
+                font-size: 11px;
+            }}
+            QFrame#visualizationPreviewErrorPanel {{
+                background: transparent;
+            }}
+            QFrame#visualizationPreviewPanel {{
+                background-color: {colors.bg_secondary};
+                border: 1px solid {colors.border_muted};
+                border-radius: 8px;
             }}
             QLabel {{
                 color: {colors.text_primary};
                 font-size: 12px;
             }}
-            QTabWidget::pane {{
-                background-color: {colors.bg_primary};
+            QListWidget#visualizationSectionNav {{
+                background-color: {colors.bg_secondary};
                 border: 1px solid {colors.border_muted};
-                border-radius: 6px;
-                top: -1px;
+                border-radius: 8px;
+                padding: 6px 4px;
+                outline: none;
             }}
-            QTabBar::tab {{
-                background: transparent;
+            QListWidget#visualizationSectionNav::item {{
                 color: {colors.text_secondary};
-                padding: 10px 20px;
-                border-bottom: 2px solid transparent;
+                border-radius: 6px;
+                padding: 10px 12px;
+                margin: 2px 4px;
+                font-size: 12px;
                 font-weight: 600;
             }}
-            QTabBar::tab:selected {{
+            QListWidget#visualizationSectionNav::item:selected {{
+                background-color: {colors.bg_tertiary};
                 color: {colors.text_primary};
-                border-bottom-color: {colors.interactive_primary};
+                border: 1px solid {colors.border_default};
+            }}
+            QListWidget#visualizationSectionNav::item:hover:!selected {{
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+            }}
+            QStackedWidget#visualizationSettingsStack {{
+                background-color: {colors.bg_primary};
+                border: 1px solid {colors.border_muted};
+                border-radius: 8px;
             }}
             QComboBox, QLineEdit, QSpinBox {{
                 background-color: {colors.bg_secondary};
@@ -1148,7 +1341,128 @@ class VisualizationEditorDialog(QDialog):
                 color: {colors.text_primary};
                 spacing: 8px;
             }}
+            QDialogButtonBox QPushButton {{
+                min-width: 88px;
+            }}
         """)
+        self._connect_preview_signals()
+        if self._render_fn is not None and self._df is not None:
+            self._schedule_preview()
+        elif self._render_fn is None:
+            self.preview_status.setText(S.visualization.chart_pending)
+            self.preview_status.show()
+
+    def _connect_preview_signals(self):
+        if self._render_fn is None:
+            return
+
+        def bind(widget):
+            if isinstance(widget, QComboBox):
+                widget.currentIndexChanged.connect(self._schedule_preview)
+            elif isinstance(widget, (QLineEdit, QTextEdit)):
+                widget.textChanged.connect(self._schedule_preview)
+            elif isinstance(widget, QSpinBox):
+                widget.valueChanged.connect(self._schedule_preview)
+            elif isinstance(widget, QCheckBox):
+                widget.toggled.connect(self._schedule_preview)
+            elif isinstance(widget, LabeledToggleSwitch):
+                widget.toggled.connect(self._schedule_preview)
+
+        for widget in (
+            self.type_combo,
+            self.title_edit,
+            self.x_combo,
+            self.x_label_edit,
+            self.sort_combo,
+            self.y_label_edit,
+            self.aggregation_combo,
+            self.group_combo,
+            self.stacking_combo,
+            self.nulls_combo,
+            self.palette_combo,
+            self.custom_colors_edit,
+            self.text_color_edit,
+            self.label_color_edit,
+            self.background_color_edit,
+            self.grid_color_edit,
+            self.axis_color_edit,
+            self.line_style_combo,
+            self.line_width_spin,
+            self.marker_size_spin,
+            self.bar_opacity_spin,
+            self.area_opacity_spin,
+            self.label_decimals_spin,
+            self.horizontal_toggle,
+            self.normalize_check,
+            self.legend_check,
+            self.show_grid_check,
+            self.show_axis_line_check,
+            self.show_line_check,
+            self.show_markers_check,
+            self.data_labels_check,
+        ):
+            bind(widget)
+
+        for combo in self._y_column_combos:
+            combo.currentIndexChanged.connect(self._schedule_preview)
+
+    def _hide_preview_error(self) -> None:
+        self._preview_error_log = ""
+        self.preview_error_panel.hide()
+        self.preview_error_text.clear()
+
+    def _show_preview_error(self, error: BaseException) -> None:
+        import traceback
+
+        self._preview_error_log = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        ).strip() or str(error)
+        summary = str(error)
+        if len(summary) > 240:
+            summary = summary[:237] + "..."
+        self.preview_error_summary.setText(
+            S.visualization.preview_error.format(error=summary)
+        )
+        self.preview_error_text.setPlainText(self._preview_error_log)
+        self.preview_copy_error_btn.setToolTip(S.visualization.preview_copy_error)
+        self.preview_status.hide()
+        self.preview_error_panel.show()
+
+    def _copy_preview_error_log(self) -> None:
+        if not self._preview_error_log:
+            return
+        from PyQt6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self._preview_error_log)
+        self.preview_copy_error_btn.setToolTip(S.visualization.preview_error_copied)
+
+    def _schedule_preview(self):
+        if self._preview_shutdown or self._render_fn is None:
+            return
+        self._hide_preview_error()
+        self.preview_status.setText(S.visualization.preview_loading)
+        self.preview_status.show()
+        self._preview_timer.start(420)
+
+    def _refresh_preview(self):
+        if self._preview_shutdown or self._render_fn is None or self._df is None:
+            return
+        try:
+            result = self._render_fn(self._df, self.get_config())
+            if self._preview_shutdown:
+                return
+            if isinstance(result, bytes):
+                self._show_preview_error(RuntimeError("PNG preview is not supported in the interactive editor."))
+                self.preview_chart.clear()
+                return
+            self.preview_chart.set_html(result)
+            self.preview_status.hide()
+            self._hide_preview_error()
+        except Exception as error:
+            if self._preview_shutdown:
+                return
+            self.preview_chart.clear()
+            self._show_preview_error(error)
 
     def _create_general_tab(self) -> QWidget:
         tab = QWidget()
@@ -1162,10 +1476,12 @@ class VisualizationEditorDialog(QDialog):
         form.addRow(S.visualization.label_title, self.title_edit)
         layout.addLayout(form)
 
-        self.horizontal_check = QCheckBox(S.visualization.horizontal_chart)
-        self.horizontal_check.setObjectName("visualizationHorizontalCheck")
-        self.horizontal_check.setChecked(bool(self._config.get("horizontal", False)))
-        layout.addWidget(self.horizontal_check)
+        self.horizontal_toggle = LabeledToggleSwitch(
+            S.visualization.horizontal_chart,
+            checked=bool(self._config.get("horizontal", False)),
+        )
+        self.horizontal_toggle.setObjectName("visualizationHorizontalToggle")
+        layout.addWidget(self.horizontal_toggle)
 
         layout.addStretch(1)
         return tab
@@ -1288,6 +1604,7 @@ class VisualizationEditorDialog(QDialog):
         self.palette_combo.addItem(S.visualization.palette_categorical, "categorical")
         self.palette_combo.addItem(S.visualization.palette_teal, "teal")
         self.palette_combo.addItem(S.visualization.palette_warm, "warm")
+        self.palette_combo.addItem(S.visualization.palette_ocean, "ocean")
         self._set_combo_value(self.palette_combo, self._config.get("palette", "default"))
         form.addRow(S.visualization.label_palette, self.palette_combo)
 
@@ -1428,6 +1745,8 @@ class VisualizationEditorDialog(QDialog):
         row_layout.addWidget(remove_button)
         self.y_rows_layout.addWidget(row)
         self._y_column_combos.append(combo)
+        if self._render_fn is not None:
+            combo.currentIndexChanged.connect(self._schedule_preview)
 
     def _remove_y_column(self, row: QWidget, combo: QComboBox):
         if combo in self._y_column_combos:
@@ -1444,7 +1763,7 @@ class VisualizationEditorDialog(QDialog):
         return {
             "type": self.type_combo.currentData() or "bar",
             "title": self.title_edit.text().strip(),
-            "horizontal": self.horizontal_check.isChecked(),
+            "horizontal": self.horizontal_toggle.isChecked(),
             "x_column": self.x_combo.currentData() or "",
             "x_label": self.x_label_edit.text().strip(),
             "y_columns": y_columns,
@@ -1935,15 +2254,21 @@ class ResultsViewer(QWidget):
         self._result_tabs.currentChanged.connect(self._on_result_tab_changed)
         self.stack.currentChanged.connect(self._on_stack_page_changed)
 
-        self.btn_visualization = QToolButton(self._result_tabs)
-        self.btn_visualization.setObjectName("visualizationButton")
-        self.btn_visualization.setToolTip(S.visualization.open_editor)
-        self.btn_visualization.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_visualization.setAutoRaise(True)
-        self.btn_visualization.setFixedSize(24, 24)
-        self.btn_visualization.setIconSize(QSize(15, 15))
-        self.btn_visualization.clicked.connect(self._open_visualization_editor)
-        self._result_tabs.setCornerWidget(self.btn_visualization, Qt.Corner.TopRightCorner)
+        from src.design_system.tab_controls import TabBarAccessoryStrip
+
+        self._result_tab_accessory = TabBarAccessoryStrip(result_tab_bar, host=self._result_tabs)
+        self.btn_visualization = self._result_tab_accessory.add_button(
+            "mdi.chart-bar",
+            tooltip=S.visualization.open_editor,
+            callback=self._open_visualization_editor,
+            object_name="visualizationButton",
+        )
+        self._result_tab_accessory.add_button(
+            "mdi.plus",
+            tooltip=S.visualization.new_chart_tab,
+            callback=self._add_chart_tab_from_current_source,
+            object_name="visualizationNewChartButton",
+        )
         self._apply_result_tabs_style()
 
         # Secondary tab tracking. Preserve refs to primary table_view/
@@ -2474,9 +2799,11 @@ class ResultsViewer(QWidget):
             self._active_chart_index = getattr(page, "_chart_index", self._active_chart_index)
             self.current_df = None
             self._current_image_bytes = getattr(page, "_image_bytes", None)
+            if getattr(page, "_chart_html", None):
+                self._current_image_bytes = None
             self.info_label.setText(self._chart_tab_label(self._active_chart_index, getattr(page, "_config", {})))
             self._show_chart_toolbar_buttons()
-            if getattr(page, "_image_bytes", None) is None and not getattr(page, "_rendering", False):
+            if not self._chart_page_has_content(page) and not getattr(page, "_rendering", False):
                 self._render_visualization_page(page)
             self._schedule_summarize_refresh()
             return
@@ -2593,24 +2920,9 @@ class ResultsViewer(QWidget):
             """)
             for index in range(self._result_tabs.count()):
                 self._setup_result_tab_close_button(index)
-            if hasattr(self, "btn_visualization"):
-                self.btn_visualization.setIcon(qta.icon("mdi.chart-bar", color=colors.text_tertiary, scale_factor=0.72))
-                self.btn_visualization.setStyleSheet(f"""
-                    QToolButton#visualizationButton {{
-                        background: transparent;
-                        border: none;
-                        border-radius: 10px;
-                        padding: 0px;
-                        margin: 3px 8px 3px 2px;
-                    }}
-                    QToolButton#visualizationButton:hover {{
-                        background-color: {colors.bg_tertiary};
-                        color: {colors.text_primary};
-                    }}
-                    QToolButton#visualizationButton:pressed {{
-                        background-color: {colors.bg_primary};
-                    }}
-                """)
+            accessory = getattr(self, "_result_tab_accessory", None)
+            if accessory is not None:
+                accessory.reposition()
         except Exception:
             # Fallback silencioso (testes sem design_system disponivel)
             pass
@@ -2629,6 +2941,9 @@ class ResultsViewer(QWidget):
             return
         page._disposed = True
         page._render_pending = False
+        chart_view = getattr(page, "_chart_view", None)
+        if chart_view is not None:
+            chart_view.cleanup()
         self._chart_render_queue = [queued for queued in self._chart_render_queue if queued is not page]
         if page in self._chart_pages:
             self._chart_pages.remove(page)
@@ -2703,6 +3018,8 @@ class ResultsViewer(QWidget):
             page._source_df = source_df
             page._source_label = source_label
             page._image_bytes = None
+            page._chart_html = None
+            page._chart_ready = False
             self._render_visualization_page(page)
             tab_index = self._result_tabs.indexOf(page)
             if tab_index >= 0:
@@ -2742,20 +3059,34 @@ class ResultsViewer(QWidget):
             page = self._add_visualization_tab(self._chart_configs[chart_index], chart_index, make_current=False)
         if page is None:
             raise ValueError("visualization could not be opened")
+        chart_html = getattr(page, "_chart_html", None)
         image_bytes = getattr(page, "_image_bytes", None)
-        if not image_bytes:
+        if not chart_html and not image_bytes:
             self._render_visualization_page(page)
             raise ValueError("visualization is rendering; retry export after the chart appears")
 
         file_path = os.path.abspath(os.path.expanduser(str(file_path or "").strip()))
         if not file_path:
             raise ValueError("file_path is required")
-        if not os.path.splitext(file_path)[1]:
-            file_path += ".png"
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, "wb") as image_file:
-            image_file.write(image_bytes)
-        return {"path": file_path, "bytes": len(image_bytes), "visualization": self._visualization_payload(chart_index, self._chart_configs[chart_index])}
+        if chart_html:
+            if not os.path.splitext(file_path)[1]:
+                file_path += ".html"
+            os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as html_file:
+                html_file.write(chart_html)
+            payload_bytes = len(chart_html.encode("utf-8"))
+        else:
+            if not os.path.splitext(file_path)[1]:
+                file_path += ".png"
+            os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+            with open(file_path, "wb") as image_file:
+                image_file.write(image_bytes)
+            payload_bytes = len(image_bytes)
+        return {
+            "path": file_path,
+            "bytes": payload_bytes,
+            "visualization": self._visualization_payload(chart_index, self._chart_configs[chart_index]),
+        }
 
     def _visualization_payload(self, chart_index: int, config: dict) -> dict:
         config = dict(config or {})
@@ -2764,7 +3095,7 @@ class ResultsViewer(QWidget):
             "title": self._chart_tab_label(chart_index, config),
             "config": config,
             "rendered": any(
-                getattr(page, "_chart_index", -1) == chart_index and bool(getattr(page, "_image_bytes", None))
+                getattr(page, "_chart_index", -1) == chart_index and self._chart_page_has_content(page)
                 for page in self._chart_pages
             ),
         }
@@ -2874,6 +3205,10 @@ class ResultsViewer(QWidget):
         self._result_tabs.tabBar().setVisible(True)
         if make_current:
             self._result_tabs.setCurrentIndex(index)
+        self._render_visualization_page(page)
+        accessory = getattr(self, "_result_tab_accessory", None)
+        if accessory is not None:
+            accessory.reposition()
         return page
 
     def _create_visualization_page(self, config: dict, chart_index: int, source_df: pd.DataFrame, source_label: str):
@@ -2887,6 +3222,8 @@ class ResultsViewer(QWidget):
         page._source_df = source_df
         page._source_label = source_label
         page._image_bytes = None
+        page._chart_html = None
+        page._chart_ready = False
         page._rendering = False
         page._render_pending = False
         page._render_generation = 0
@@ -2931,22 +3268,14 @@ class ResultsViewer(QWidget):
         status.setText(S.visualization.chart_pending)
         status.setVisible(True)
 
-        image_label = QLabel(page)
-        image_label.setObjectName("chartImageLabel")
-        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        image_label.setMinimumSize(640, 360)
-
-        scroll = QScrollArea(page)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(image_label)
-        scroll.setStyleSheet("border: none;")
-        layout.addWidget(scroll, 1)
+        chart_view = PlotlyChartView(page)
+        chart_view.setMinimumSize(640, 360)
+        layout.addWidget(chart_view, 1)
         layout.addWidget(status)
 
         page._title_label = title
         page._status_label = status
-        page._image_label = image_label
-        page._scroll = scroll
+        page._chart_view = chart_view
 
         page.setStyleSheet(f"""
             QFrame#chartPageToolbar {{
@@ -2962,9 +3291,6 @@ class ResultsViewer(QWidget):
                 color: {colors.text_secondary};
                 padding: 12px;
             }}
-            QLabel#chartImageLabel {{
-                background-color: {colors.bg_primary};
-            }}
             QToolButton {{
                 background: transparent;
                 border: 1px solid transparent;
@@ -2978,6 +3304,10 @@ class ResultsViewer(QWidget):
         """)
 
         return page
+
+    @staticmethod
+    def _chart_page_has_content(page) -> bool:
+        return bool(getattr(page, "_chart_html", None) or getattr(page, "_image_bytes", None))
 
     def _edit_visualization_page(self, page):
         if not self._is_chart_page(page):
@@ -2997,7 +3327,7 @@ class ResultsViewer(QWidget):
         if getattr(page, "_rendering", False):
             page._render_generation = int(getattr(page, "_render_generation", 0) or 0) + 1
             page._render_pending = True
-            if getattr(page, "_image_bytes", None) is None:
+            if not self._chart_page_has_content(page):
                 page._status_label.setText(S.visualization.chart_rendering)
                 page._status_label.setVisible(True)
             return
@@ -3018,7 +3348,7 @@ class ResultsViewer(QWidget):
             page._render_pending = True
             if page not in self._chart_render_queue:
                 self._chart_render_queue.append(page)
-            if getattr(page, "_image_bytes", None) is None:
+            if not self._chart_page_has_content(page):
                 page._status_label.setText(S.visualization.chart_rendering)
                 page._status_label.setVisible(True)
             return
@@ -3030,7 +3360,7 @@ class ResultsViewer(QWidget):
         page._active_render_generation = generation
         page_key = id(page)
         page._status_label.setText(S.visualization.chart_rendering)
-        page._status_label.setVisible(getattr(page, "_image_bytes", None) is None)
+        page._status_label.setVisible(not self._chart_page_has_content(page))
 
         source_df = page._source_df.copy(deep=True) if page._source_df is not None else page._source_df
         thread = QThread(self)
@@ -3051,24 +3381,34 @@ class ResultsViewer(QWidget):
         thread.finished.connect(lambda job=job: self._chart_render_jobs.remove(job) if job in self._chart_render_jobs else None)
         thread.start()
 
-    def _on_chart_render_complete(self, page_key: int, generation: int, image_bytes):
+    def _on_chart_render_complete(self, page_key: int, generation: int, chart_payload):
         page = self._chart_page_by_key(page_key)
         if page is None or getattr(page, "_disposed", False):
             return
         if generation != getattr(page, "_render_generation", None):
             return
         try:
-            image = QImage()
-            if not image.loadFromData(image_bytes):
-                raise ValueError(S.visualization.chart_error_image)
-            pixmap = QPixmap.fromImage(image)
-            page._image_label.setPixmap(pixmap)
-            page._image_bytes = image_bytes
+            page._chart_ready = True
+            if isinstance(chart_payload, str):
+                page._chart_html = chart_payload
+                page._image_bytes = None
+                chart_view = getattr(page, "_chart_view", None)
+                if chart_view is not None and not getattr(chart_view, "_cleaned_up", False):
+                    chart_view.set_html(chart_payload)
+                if self._result_tabs.currentWidget() is page:
+                    self._current_image_bytes = None
+            else:
+                image = QImage()
+                if not image.loadFromData(chart_payload):
+                    raise ValueError(S.visualization.chart_error_image)
+                page._chart_html = None
+                page._image_bytes = chart_payload
+                page._chart_view.clear()
+                if self._result_tabs.currentWidget() is page:
+                    self._current_image_bytes = chart_payload
             page._status_label.clear()
             page._status_label.setVisible(False)
             page._title_label.setText(self._chart_tab_label(page._chart_index, page._config))
-            if self._result_tabs.currentWidget() is page:
-                self._current_image_bytes = image_bytes
         except Exception as exc:
             self._on_chart_render_error(page_key, generation, str(exc))
 
@@ -3079,7 +3419,11 @@ class ResultsViewer(QWidget):
         if generation != getattr(page, "_render_generation", None):
             return
         page._image_bytes = None
-        page._image_label.clear()
+        page._chart_html = None
+        page._chart_ready = False
+        chart_view = getattr(page, "_chart_view", None)
+        if chart_view is not None and not getattr(chart_view, "_cleaned_up", False):
+            chart_view.clear()
         page._status_label.setText(S.visualization.chart_error.format(error=error))
         page._status_label.setVisible(True)
 
@@ -3275,140 +3619,22 @@ class ResultsViewer(QWidget):
         try:
             from matplotlib.colors import is_color_like
         except Exception:
-            is_color_like = lambda color: isinstance(color, str) and bool(color.strip())
+            is_color_like = lambda color: isinstance(color, str) and bool(str(color).strip())
 
-        custom_colors = [
-            color
-            for color in config.get("custom_colors", []) or []
-            if isinstance(color, str) and is_color_like(color)
-        ]
-        if custom_colors:
-            base = custom_colors
-        else:
-            palettes = {
-                "teal": ["#14b8a6", "#22d3ee", "#38bdf8", "#60a5fa", "#818cf8"],
-                "warm": ["#f97316", "#f59e0b", "#ef4444", "#ec4899", "#a855f7"],
-                "categorical": ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"],
-                "default": ["#4f8cff", "#34d399", "#fbbf24", "#fb7185", "#a78bfa", "#2dd4bf"],
-            }
-            base = palettes.get(config.get("palette", "default"), palettes["default"])
-        return [base[index % len(base)] for index in range(max(1, count))]
+        from src.services.visualization import resolve_palette
 
-    def _render_chart_image(self, df: pd.DataFrame, config: dict) -> bytes:
-        if df is None or df.empty:
-            raise ValueError(S.visualization.chart_no_data)
+        return resolve_palette(config, count, is_color_like=is_color_like)
 
-        from matplotlib.backends.backend_agg import FigureCanvasAgg
-        from matplotlib.figure import Figure
-        from src.design_system.tokens import get_chart_colors
+    def _render_chart_image(self, df: pd.DataFrame, config: dict) -> str:
+        """Render interactive Plotly chart HTML (name kept for worker compatibility)."""
+        from src.services.visualization.plotly_charts import render_session_chart_html
 
-        chart_colors = get_chart_colors()
-        figure_bg = self._chart_color(config, "background_color", chart_colors.figure_bg)
-        axes_bg = self._chart_color(config, "background_color", chart_colors.axes_bg)
-        text_color = self._chart_color(config, "text_color", chart_colors.text)
-        figure = Figure(figsize=(12.0, 6.4), dpi=110, facecolor=figure_bg)
-        canvas = FigureCanvasAgg(figure)
-        axis = figure.add_subplot(111, facecolor=axes_bg)
-
-        plot_data, labels = self._prepare_chart_data(df, config)
-        if plot_data.empty:
-            raise ValueError(S.visualization.chart_no_data)
-
-        colors = self._chart_palette(config, len(plot_data.columns))
-        if config.get("type") == "pie":
-            self._plot_pie_chart(axis, plot_data, config, colors)
-        else:
-            self._plot_cartesian_chart(axis, plot_data, labels, config, colors)
-            self._style_cartesian_axis(axis, labels, config)
-
-        title = str(config.get("title", "") or "").strip()
-        if title:
-            axis.set_title(title, color=text_color, fontsize=15, fontweight="semibold", loc="left", pad=18)
-
-        if config.get("show_legend", True):
-            handles, legend_labels = axis.get_legend_handles_labels()
-            if handles:
-                legend = axis.legend(handles, legend_labels, frameon=False, labelspacing=0.8, handlelength=1.8)
-                for text in legend.get_texts():
-                    text.set_color(text_color)
-
-        figure.subplots_adjust(**self._chart_layout_margins(labels, config))
-        canvas.draw()
-        buffer = io.BytesIO()
-        figure.savefig(buffer, format="png", facecolor=figure.get_facecolor())
-        return buffer.getvalue()
+        return render_session_chart_html(df, config)
 
     def _prepare_chart_data(self, df: pd.DataFrame, config: dict):
-        x_column = self._resolve_df_column(df, config.get("x_column", ""))
-        y_columns = [
-            self._resolve_df_column(df, column)
-            for column in config.get("y_columns", []) or []
-        ]
-        y_columns = [column for column in y_columns if column is not None]
-        if not y_columns:
-            raise ValueError(S.visualization.chart_no_y_column)
+        from src.services.visualization.chart_data import prepare_chart_data
 
-        group_column = self._resolve_df_column(df, config.get("group_by", ""))
-        work = df.copy()
-        if x_column is None:
-            work["__datapyn_x__"] = [str(index) for index in work.index]
-            x_key = "__datapyn_x__"
-        else:
-            x_key = x_column
-
-        selected = [x_key] + y_columns
-        if group_column is not None:
-            selected.append(group_column)
-
-        nulls = config.get("nulls", "zero")
-        if nulls == "drop":
-            work = work.dropna(subset=selected)
-
-        aggregation = config.get("aggregation", "sum")
-        for column in y_columns:
-            if aggregation != "count":
-                work[column] = pd.to_numeric(work[column], errors="coerce")
-            if nulls == "zero":
-                work[column] = work[column].fillna(0)
-
-        if group_column is not None and len(y_columns) == 1:
-            plot_data = work.pivot_table(
-                index=x_key,
-                columns=group_column,
-                values=y_columns[0],
-                aggfunc=aggregation,
-                fill_value=0 if nulls == "zero" else None,
-                dropna=False,
-            )
-            plot_data.columns = [str(column) for column in plot_data.columns]
-        else:
-            plot_data = work.groupby(x_key, dropna=False)[y_columns].agg(aggregation)
-            plot_data.columns = [str(column) for column in plot_data.columns]
-
-        plot_data = plot_data.apply(pd.to_numeric, errors="coerce")
-        if nulls == "zero":
-            plot_data = plot_data.fillna(0)
-        else:
-            plot_data = plot_data.dropna(how="all")
-
-        if config.get("sort") == "x_asc":
-            try:
-                plot_data = plot_data.sort_index()
-            except TypeError:
-                plot_data = plot_data.sort_index(key=lambda index: index.astype(str))
-        elif config.get("sort") == "y_desc" and not plot_data.empty:
-            plot_data = plot_data.sort_values(by=plot_data.columns[0], ascending=False)
-
-        if config.get("normalize") or config.get("stacking") == "percent":
-            row_sums = plot_data.sum(axis=1).replace(0, pd.NA)
-            plot_data = plot_data.div(row_sums, axis=0).fillna(0) * 100
-
-        max_points = self._chart_max_points(config)
-        if len(plot_data) > max_points:
-            plot_data = plot_data.head(max_points)
-
-        labels = [self._safe_chart_label(value) for value in plot_data.index]
-        return plot_data, labels
+        return prepare_chart_data(df, config)
 
     def _plot_cartesian_chart(self, axis, plot_data: pd.DataFrame, labels: list, config: dict, colors: list):
         import numpy as np
@@ -3482,6 +3708,7 @@ class ResultsViewer(QWidget):
 
     def _plot_bar_chart(self, axis, plot_data: pd.DataFrame, positions, series_names: list, config: dict, colors: list, stacked: bool):
         import numpy as np
+        from src.services.visualization.chart_style import lighten_edge_color
 
         horizontal = bool(config.get("horizontal", False))
         bar_alpha = self._chart_alpha(config, "bar_opacity", 94)
@@ -3489,23 +3716,63 @@ class ResultsViewer(QWidget):
             base = np.zeros(len(positions))
             for index, name in enumerate(series_names):
                 values = plot_data[name].fillna(0).astype(float).to_numpy()
+                fill = colors[index % len(colors)]
+                edge = lighten_edge_color(fill, 0.1)
                 if horizontal:
-                    bars = axis.barh(positions, values, left=base, color=colors[index], edgecolor="none", linewidth=0, alpha=bar_alpha, label=str(name))
+                    bars = axis.barh(
+                        positions,
+                        values,
+                        left=base,
+                        color=fill,
+                        edgecolor=edge,
+                        linewidth=0.5,
+                        alpha=bar_alpha,
+                        label=str(name),
+                    )
                 else:
-                    bars = axis.bar(positions, values, bottom=base, color=colors[index], edgecolor="none", linewidth=0, alpha=bar_alpha, label=str(name))
+                    bars = axis.bar(
+                        positions,
+                        values,
+                        bottom=base,
+                        color=fill,
+                        edgecolor=edge,
+                        linewidth=0.5,
+                        alpha=bar_alpha,
+                        label=str(name),
+                    )
                 self._label_bar_container(axis, bars, values, config)
                 base = base + values
             return
 
-        width = min(0.78, 0.82 / max(1, len(series_names)))
+        width = min(0.72, 0.78 / max(1, len(series_names)))
         offset_start = -width * (len(series_names) - 1) / 2
         for index, name in enumerate(series_names):
             values = plot_data[name].fillna(0).astype(float).to_numpy()
             offsets = positions + offset_start + index * width
+            fill = colors[index % len(colors)]
+            edge = lighten_edge_color(fill, 0.1)
             if horizontal:
-                bars = axis.barh(offsets, values, height=width, color=colors[index], edgecolor="none", linewidth=0, alpha=bar_alpha, label=str(name))
+                bars = axis.barh(
+                    offsets,
+                    values,
+                    height=width,
+                    color=fill,
+                    edgecolor=edge,
+                    linewidth=0.5,
+                    alpha=bar_alpha,
+                    label=str(name),
+                )
             else:
-                bars = axis.bar(offsets, values, width=width, color=colors[index], edgecolor="none", linewidth=0, alpha=bar_alpha, label=str(name))
+                bars = axis.bar(
+                    offsets,
+                    values,
+                    width=width,
+                    color=fill,
+                    edgecolor=edge,
+                    linewidth=0.5,
+                    alpha=bar_alpha,
+                    label=str(name),
+                )
             self._label_bar_container(axis, bars, values, config)
 
     def _plot_pie_chart(self, axis, plot_data: pd.DataFrame, config: dict, colors: list):
@@ -3581,7 +3848,7 @@ class ResultsViewer(QWidget):
         axis.set_ylabel(y_label, color=text_color, labelpad=10)
         grid_axis = "x" if config.get("horizontal", False) and config.get("type") == "bar" else "y"
         if bool(config.get("show_grid", True)):
-            axis.grid(True, axis=grid_axis, color=grid_color, alpha=0.36, linewidth=0.8, linestyle="--")
+            axis.grid(True, axis=grid_axis, color=grid_color, alpha=0.42, linewidth=0.65, linestyle="--")
         else:
             axis.grid(False, axis=grid_axis)
         axis.set_axisbelow(True)
@@ -5376,6 +5643,22 @@ class ResultsViewer(QWidget):
         self._persist_view_state()
         self._schedule_summarize_refresh()
 
+    def _add_chart_tab_from_current_source(self):
+        """Cria uma nova aba de grafico a partir da fonte de dados ativa."""
+        source_df, source_label, _ = self._current_data_source_for_visualization()
+        if source_df is None:
+            return
+        config = self._normalize_visualization_config(
+            {"type": "bar", "source_label": source_label},
+            source_df,
+            source_label,
+        )
+        chart_index = len(self._chart_configs)
+        self._chart_configs.append(config)
+        self._add_visualization_tab(config, chart_index, make_current=True)
+        self._active_chart_index = chart_index
+        self._persist_view_state()
+
     def _open_visualization_editor(self):
         """Abre editor compacto de configuracoes de grafico."""
         source_df, source_label, chart_index = self._current_data_source_for_visualization()
@@ -5386,7 +5669,13 @@ class ResultsViewer(QWidget):
         if chart_index is not None and 0 <= chart_index < len(self._chart_configs):
             current_config = dict(self._chart_configs[chart_index])
         current_config["source_label"] = current_config.get("source_label") or source_label
-        dialog = VisualizationEditorDialog(source_df, current_config, parent=self, theme_manager=self.theme_manager)
+        dialog = VisualizationEditorDialog(
+            source_df,
+            current_config,
+            parent=self,
+            theme_manager=self.theme_manager,
+            render_fn=self._render_chart_image,
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._set_visualization_config(dialog.get_config())
 
@@ -5519,7 +5808,30 @@ class ResultsViewer(QWidget):
         super().keyPressEvent(event)
 
     def _save_image(self):
-        """Save displayed image to file"""
+        """Save displayed image or interactive chart HTML."""
+        page = self._result_tabs.currentWidget()
+        chart_html = getattr(page, "_chart_html", None) if self._is_chart_page(page) else None
+        if chart_html:
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                S.visualization.save_chart_html,
+                "",
+                S.visualization.filter_chart_html,
+            )
+            if filename:
+                if not filename.lower().endswith(".html"):
+                    filename += ".html"
+                try:
+                    with open(filename, "w", encoding="utf-8") as handle:
+                        handle.write(chart_html)
+                except Exception as error:
+                    QMessageBox.critical(
+                        self,
+                        S.results.error_title,
+                        S.results.error_save_image.format(error=str(error)),
+                    )
+            return
+
         if not self._current_image_bytes:
             return
 
@@ -5530,10 +5842,14 @@ class ResultsViewer(QWidget):
             if not any(filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg")):
                 filename += ".png"
             try:
-                with open(filename, "wb") as f:
-                    f.write(self._current_image_bytes)
-            except Exception as e:
-                QMessageBox.critical(self, S.results.error_title, S.results.error_save_image.format(error=str(e)))
+                with open(filename, "wb") as handle:
+                    handle.write(self._current_image_bytes)
+            except Exception as error:
+                QMessageBox.critical(
+                    self,
+                    S.results.error_title,
+                    S.results.error_save_image.format(error=str(error)),
+                )
 
     def _export_to_table(self):
         """Export current DataFrame to a database table"""
