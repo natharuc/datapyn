@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.39.0 (2026-06-04)
+
+### Features
+
+- Novo instalador e ajuste em splash scren
+  ([`d353185`](https://github.com/natharuc/datapyn/commit/d353185435138ca50654d08ddd9661983ce0c9eb))
+
+- Novo instalador e ajuste em splash scren
+  ([`56a4896`](https://github.com/natharuc/datapyn/commit/56a489609e6e1569732f6ba90d8207b2892883ca))
+
+### Heuristic
+
+- Merge pull request #120 from natharuc/cursor/pynia
+  ([`d353185`](https://github.com/natharuc/datapyn/commit/d353185435138ca50654d08ddd9661983ce0c9eb))
+
+
 ## v1.38.0 (2026-06-04)
 
 ### Features
