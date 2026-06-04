@@ -16,8 +16,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import winreg
 import zipfile
+
+if sys.platform == "win32":
+    import winreg
+else:
+    winreg = None  # type: ignore[misc, assignment]
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -151,15 +155,16 @@ def download_file(
 
 
 def get_install_dir() -> Optional[Path]:
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
-            value, _ = winreg.QueryValueEx(key, "InstallLocation")
-            if value:
-                path = Path(value)
-                if path.is_dir():
-                    return path
-    except OSError:
-        pass
+    if sys.platform == "win32" and winreg is not None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
+                value, _ = winreg.QueryValueEx(key, "InstallLocation")
+                if value:
+                    path = Path(value)
+                    if path.is_dir():
+                        return path
+        except OSError:
+            pass
 
     if DEFAULT_INSTALL_DIR.is_dir() and (DEFAULT_INSTALL_DIR / "DataPyn.exe").exists():
         return DEFAULT_INSTALL_DIR
@@ -177,12 +182,14 @@ def read_installed_version(install_dir: Optional[Path] = None) -> Optional[str]:
             return normalize_version(str(payload.get("version", "")))
         except (json.JSONDecodeError, OSError):
             pass
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
-            value, _ = winreg.QueryValueEx(key, "DisplayVersion")
-            return normalize_version(str(value))
-    except OSError:
-        return None
+    if sys.platform == "win32" and winreg is not None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
+                value, _ = winreg.QueryValueEx(key, "DisplayVersion")
+                return normalize_version(str(value))
+        except OSError:
+            pass
+    return None
 
 
 def write_installed_version(install_dir: Path, version: str) -> None:
@@ -281,6 +288,9 @@ def register_uninstall(install_dir: Path, version: str) -> None:
         encoding="utf-8",
     )
 
+    if sys.platform != "win32" or winreg is None:
+        return
+
     display_name = APP_NAME
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
         winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, display_name)
@@ -337,7 +347,8 @@ def uninstall(install_dir: Optional[Path] = None) -> bool:
         pass
     try:
         shutil.rmtree(root, ignore_errors=True)
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY)
+        if sys.platform == "win32" and winreg is not None:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY)
     except OSError as exc:
         logger.error("Uninstall failed: %s", exc)
         return False
