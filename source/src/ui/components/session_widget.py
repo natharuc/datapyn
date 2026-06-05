@@ -7,6 +7,9 @@ Contains all session components:
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QLabel
+import weakref
+
+from PyQt6 import sip
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QObject, pyqtSlot, QMetaObject
 from PyQt6.QtGui import QFont
 import pandas as pd
@@ -39,21 +42,68 @@ class SessionConnectionWorker(QObject):
 
     finished = pyqtSignal(bool, str)  # (success, message)
 
-    def __init__(self, session, connection_name, password):
+    def __init__(self, session, connection_name, password, widget=None):
         super().__init__()
-        self.session = session
+        self._session_ref = weakref.ref(session)
+        self._widget_ref = weakref.ref(widget) if widget is not None else None
         self.connection_name = connection_name
         self.password = password
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def _ignore_ui_result(self) -> bool:
+        """Tab closed or worker cancelled — do not surface connection errors."""
+        if self._cancelled:
+            return True
+        if self._widget_ref is None:
+            return False
+        widget = self._widget_ref()
+        if widget is None:
+            return True
+        try:
+            return bool(getattr(widget, "_is_closing", False))
+        except RuntimeError:
+            return True
+
+    def _emit_finished(self, success: bool, message: str = "") -> None:
+        if self._ignore_ui_result():
+            self.finished.emit(False, "")
+            return
+        self.finished.emit(success, message)
 
     def run(self):
+        if self._cancelled:
+            self.finished.emit(False, "")
+            return
+        session = self._session_ref()
+        if session is None:
+            self.finished.emit(False, "")
+            return
         try:
-            success = self.session.connect(self.connection_name, self.password)
+            success = session.connect(self.connection_name, self.password)
+            if self._ignore_ui_result():
+                self.finished.emit(False, "")
+                return
             if success:
-                self.finished.emit(True, f"{S.session_widget.connected_to.format(name=self.connection_name)}")
+                self._emit_finished(
+                    True,
+                    f"{S.session_widget.connected_to.format(name=self.connection_name)}",
+                )
             else:
-                self.finished.emit(False, f"{S.session_widget.connect_failed.format(name=self.connection_name)}")
+                self._emit_finished(
+                    False,
+                    f"{S.session_widget.connect_failed.format(name=self.connection_name)}",
+                )
         except Exception as e:
-            self.finished.emit(False, S.session_widget.connect_error.format(msg=str(e)))
+            if not self._ignore_ui_result():
+                self._emit_finished(
+                    False,
+                    S.session_widget.connect_error.format(msg=str(e)),
+                )
+            else:
+                self.finished.emit(False, "")
 
 
 class SessionSqlWorker(QObject):
@@ -1979,45 +2029,117 @@ class SessionWidget(QWidget):
         if config:
             self._connection_color = config.get("color", "#007ACC") or "#007ACC"
 
-        # Cancel previous connection if still running (async cleanup)
-        try:
-            if self._connection_thread and self._connection_thread.isRunning():
-                old_thread = self._connection_thread
-                self._connection_thread = None
-                old_thread.quit()
-                old_thread.deleteLater()
-        except RuntimeError:
-            pass  # Thread was already deleted
+        # Drop any in-flight connect without blocking the UI
+        self.detach_connection_thread()
 
         # Mostrar loading overlay
         self._show_loading(S.session_widget.loading_connecting.format(name=connection_name))
 
-        # Criar worker e thread
+        # Criar worker e thread (parented to MainWindow guard when adopted)
         self._connection_thread = QThread()
-        self._connection_worker = SessionConnectionWorker(self.session, connection_name, password)
+        self._connection_thread.setObjectName("SessionConnection")
+        self._connection_worker = SessionConnectionWorker(
+            self.session, connection_name, password, widget=self
+        )
         self._connection_worker.moveToThread(self._connection_thread)
 
         # Conectar sinais
         self._connection_thread.started.connect(self._connection_worker.run)
         self._connection_worker.finished.connect(self._on_connection_finished)
         self._connection_worker.finished.connect(self._connection_thread.quit)
-        self._connection_worker.finished.connect(self._connection_worker.deleteLater)
-        self._connection_thread.finished.connect(self._connection_thread.deleteLater)
+        self._connection_thread.finished.connect(self._on_connection_thread_finished)
 
         # Iniciar
         self._connection_thread.start()
 
+        main = self.window()
+        if main is not None and hasattr(main, "_register_session_connection_thread"):
+            main._register_session_connection_thread(
+                self, self._connection_thread, self._connection_worker
+            )
+
+        return True
+
+    def blocks_are_empty(self) -> bool:
+        """True when every block has no non-whitespace code."""
+        editor = getattr(self, "editor", None)
+        if editor is None or not hasattr(editor, "blocks"):
+            return True
+        try:
+            blocks = editor.blocks
+        except RuntimeError:
+            return True
+        if not blocks:
+            return True
+        for block in blocks:
+            try:
+                if block.get_code().strip():
+                    return False
+            except RuntimeError:
+                continue
         return True
 
     def is_connecting(self) -> bool:
-        """Check if connection is in progress"""
+        """True while this tab's connection worker thread is still running."""
         try:
-            return self._connection_thread is not None and self._connection_thread.isRunning()
+            thread = getattr(self, "_connection_thread", None)
+            return thread is not None and thread.isRunning()
         except RuntimeError:
-            return False  # Thread was deleted
+            return False
+
+    def detach_connection_thread(self) -> None:
+        """Drop UI ties to the connection worker; thread may finish in background."""
+        thread = getattr(self, "_connection_thread", None)
+        worker = getattr(self, "_connection_worker", None)
+        self._connection_thread = None
+        self._connection_worker = None
+        if worker is not None:
+            try:
+                worker.cancel()
+            except RuntimeError:
+                pass
+            try:
+                worker.finished.disconnect(self._on_connection_finished)
+            except (TypeError, RuntimeError):
+                pass
+        if thread is not None:
+            try:
+                thread.finished.disconnect(self._on_connection_thread_finished)
+            except (TypeError, RuntimeError):
+                pass
+        main = self.window()
+        if main is not None and hasattr(main, "_orphan_connection_thread"):
+            main._orphan_connection_thread(thread, worker)
+        self._hide_loading()
+
+    def _abort_connection_thread(self, wait_ms: int = 5000, *, force: bool = False) -> None:
+        """Blocking stop — app shutdown only; tab close uses detach_connection_thread."""
+        from src.utils.qt_threading import stop_qthread
+
+        thread = getattr(self, "_connection_thread", None)
+        worker = getattr(self, "_connection_worker", None)
+        if thread is None and worker is None:
+            return
+        self.detach_connection_thread()
+        stop_qthread(thread, worker, wait_ms=wait_ms, force_terminate=force)
+
+    def _on_connection_thread_finished(self) -> None:
+        """Clear thread refs after natural quit — never deleteLater on QThread."""
+        sender = self.sender()
+        from PyQt6.QtCore import QThread
+
+        if isinstance(sender, QThread):
+            main = self.window()
+            if main is not None and hasattr(main, "_unregister_session_connection_thread"):
+                main._unregister_session_connection_thread(sender)
+        if sender is getattr(self, "_connection_thread", None):
+            self._connection_thread = None
 
     def _on_connection_finished(self, success: bool, message: str):
         """Callback when connection finishes"""
+        if sip.isdeleted(self) or getattr(self, "_is_closing", False):
+            self._hide_loading()
+            return
         # Esconder loading
         self._hide_loading()
 
@@ -2135,7 +2257,8 @@ class SessionWidget(QWidget):
 
         self._stop_sql_execution()
         self._stop_python_execution()
-        for thread_attr in ("_sql_thread", "_python_thread", "_connection_thread"):
+        self.detach_connection_thread()
+        for thread_attr in ("_sql_thread", "_python_thread"):
             try:
                 thread = getattr(self, thread_attr, None)
                 if thread is None:
@@ -2143,7 +2266,6 @@ class SessionWidget(QWidget):
                 if thread.isRunning():
                     thread.requestInterruption()
                     thread.quit()
-                    thread.wait(2000)
             except RuntimeError:
                 pass
             setattr(self, thread_attr, None)

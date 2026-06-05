@@ -17,6 +17,7 @@ from PyQt6.QtGui import QFont, QColor
 
 from src.database.database_connector import get_connector_database_context
 from src.ui.components.session_widget import SessionWidget
+from src.design_system.frameless_dialog import widget_is_valid
 from src.design_system.tokens import get_colors
 from src.language import S
 
@@ -373,56 +374,293 @@ class SessionsMixin:
             # (the guard skipped _on_session_tab_changed during creation)
             self._sync_file_context_from_widget()
 
+    def _is_widget_connecting(self, widget) -> bool:
+        """True if the tab is connecting (widget thread or main-window background thread)."""
+        if not widget_is_valid(widget):
+            return False
+        try:
+            if widget.is_connecting():
+                return True
+        except RuntimeError:
+            return False
+        session = getattr(widget, "session", None)
+        session_id = getattr(session, "session_id", None) if session else None
+        for item in getattr(self, "_connection_threads", []):
+            thread = item[0]
+            bound = item[2] if len(item) >= 3 else None
+            if bound is widget and thread.isRunning():
+                return True
+            if session_id and len(item) >= 2:
+                worker = item[1]
+                worker_session = None
+                if hasattr(worker, "_session_ref"):
+                    worker_session = worker._session_ref()
+                else:
+                    worker_session = getattr(worker, "_session", None)
+                if (
+                    worker_session is not None
+                    and getattr(worker_session, "session_id", None) == session_id
+                    and thread.isRunning()
+                ):
+                    return True
+        return False
+
+    def _ensure_connection_thread_guard(self) -> None:
+        if getattr(self, "_connection_thread_guard", None) is None:
+            self._connection_thread_guard = QObject(self)
+
+    def _adopt_connection_thread(self, thread, worker) -> bool:
+        """Keep QThread alive under MainWindow until it finishes (prevents destroy-while-running)."""
+        if thread is None:
+            return False
+        self._ensure_connection_thread_guard()
+        adopted = getattr(self, "_adopted_connection_threads", None)
+        if adopted is None:
+            self._adopted_connection_threads = {}
+        tid = id(thread)
+        if tid in self._adopted_connection_threads:
+            if worker is not None:
+                self._adopted_connection_threads[tid] = (thread, worker)
+            return False
+        self._adopted_connection_threads[tid] = (thread, worker)
+        try:
+            thread.setParent(self._connection_thread_guard)
+        except RuntimeError:
+            pass
+
+        def _on_finished(finished_thread=thread) -> None:
+            self._release_adopted_connection_thread(finished_thread)
+
+        try:
+            thread.finished.connect(
+                _on_finished, Qt.ConnectionType.SingleShotConnection
+            )
+        except (TypeError, RuntimeError):
+            pass
+        return True
+
+    def _release_adopted_connection_thread(self, thread) -> None:
+        adopted = getattr(self, "_adopted_connection_threads", None)
+        if not adopted:
+            return
+        entry = adopted.pop(id(thread), None)
+        if entry is None:
+            return
+        thread_obj, worker = entry
+        if worker is not None:
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+        if thread_obj is not None:
+            try:
+                if not thread_obj.isRunning():
+                    thread_obj.deleteLater()
+            except RuntimeError:
+                pass
+
+    def _register_session_connection_thread(self, widget, thread, worker) -> None:
+        """Keep widget connection threads visible to MainWindow until fully stopped."""
+        self._adopt_connection_thread(thread, worker)
+        if not hasattr(self, "_connection_threads"):
+            self._connection_threads = []
+        self._connection_threads = [
+            item
+            for item in self._connection_threads
+            if item[0] is not thread
+        ]
+        self._connection_threads.append((thread, worker, widget))
+
+    def _unregister_session_connection_thread(self, thread) -> None:
+        if not hasattr(self, "_connection_threads"):
+            return
+        self._connection_threads = [
+            item for item in self._connection_threads if item[0] is not thread
+        ]
+
+    def _stop_connection_thread_item(
+        self, thread, worker, wait_ms: int, *, force: bool = False
+    ) -> None:
+        """Quit and wait on a background connection thread; terminate if needed."""
+        from src.utils.qt_threading import stop_qthread
+
+        stop_qthread(thread, worker, wait_ms=wait_ms, force_terminate=force)
+
+    def _detach_widget_connections(self, widget) -> None:
+        """Cancel connection work for a closing tab without blocking the UI."""
+        widget._is_closing = True
+        if hasattr(widget, "detach_connection_thread"):
+            widget.detach_connection_thread()
+        if not hasattr(self, "_connection_threads"):
+            return
+        orphan = []
+        kept = []
+        session = getattr(widget, "session", None)
+        session_id = getattr(session, "session_id", None) if session else None
+        for item in list(self._connection_threads):
+            thread, worker = item[0], item[1]
+            bound = item[2] if len(item) >= 3 else None
+            worker_session = None
+            if hasattr(worker, "_session_ref"):
+                worker_session = worker._session_ref()
+            else:
+                worker_session = getattr(worker, "_session", None)
+            same_tab = bound is widget
+            same_session = (
+                session_id
+                and worker_session is not None
+                and getattr(worker_session, "session_id", None) == session_id
+            )
+            if same_tab or same_session:
+                if hasattr(worker, "cancel"):
+                    try:
+                        worker.cancel()
+                    except RuntimeError:
+                        pass
+                orphan.append((thread, worker))
+                continue
+            kept.append(item)
+        self._connection_threads = kept
+        for thread, worker in orphan:
+            self._orphan_connection_thread(thread, worker)
+
+    def _orphan_connection_thread(self, thread, worker) -> None:
+        """Detach from tab UI; thread stays adopted on MainWindow until it stops."""
+        if thread is None:
+            return
+        self._adopt_connection_thread(thread, worker)
+        QTimer.singleShot(
+            0, lambda t=thread, w=worker: self._kick_connection_thread_stop(t, w)
+        )
+
+    def _kick_connection_thread_stop(self, thread, worker) -> None:
+        from src.utils.qt_threading import kick_qthread_stop
+
+        kick_qthread_stop(thread, worker)
+
+    def _stop_orphan_connection(self, thread, worker) -> None:
+        """Blocking stop — app shutdown only."""
+        from src.utils.qt_threading import stop_qthread
+
+        stop_qthread(thread, worker, wait_ms=3000, force_terminate=True)
+        self._release_adopted_connection_thread(thread)
+
+    def _abort_widget_background_connection(
+        self, widget, wait_ms: int = 3000, *, force: bool = False
+    ) -> None:
+        """Blocking abort — used on app exit only."""
+        self._detach_widget_connections(widget)
+        for item in list(getattr(self, "_connection_threads", [])):
+            self._stop_connection_thread_item(item[0], item[1], wait_ms, force=force)
+        if hasattr(self, "_connection_threads"):
+            self._connection_threads.clear()
+        for _tid, (thread, worker) in list(
+            getattr(self, "_adopted_connection_threads", {}).items()
+        ):
+            self._stop_orphan_connection(thread, worker)
+
+    def _abort_all_background_connections(self, wait_ms: int = 3000) -> None:
+        """Cancel every in-flight background connection before app shutdown."""
+        for widget in list(getattr(self, "_session_widgets", {}).values()):
+            if hasattr(widget, "_abort_connection_thread"):
+                widget._abort_connection_thread(wait_ms=wait_ms)
+        for item in list(getattr(self, "_connection_threads", [])):
+            self._stop_connection_thread_item(item[0], item[1], wait_ms, force=True)
+        if hasattr(self, "_connection_threads"):
+            self._connection_threads.clear()
+        for _tid, (thread, worker) in list(
+            getattr(self, "_adopted_connection_threads", {}).items()
+        ):
+            self._stop_orphan_connection(thread, worker)
+
     def _connect_session_background(self, widget, session, connection_name, color, database_context=""):
         """Connect session in a true background thread to avoid UI freeze."""
         from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
+        if getattr(self, "_is_closing", False) or not widget_is_valid(widget):
+            return
+
         class ConnectionWorker(QObject):
             finished = pyqtSignal(bool)
 
-            def __init__(self, session, connection_name, database_context):
+            def __init__(self, session, connection_name, database_context, widget=None):
                 super().__init__()
-                self._session = session
+                self._session_ref = weakref.ref(session)
+                self._widget_ref = weakref.ref(widget) if widget is not None else None
                 self._connection_name = connection_name
                 self._database_context = database_context
+                self._cancelled = False
+
+            def cancel(self):
+                self._cancelled = True
+
+            def _ignore_result(self) -> bool:
+                if self._cancelled:
+                    return True
+                if self._widget_ref is None:
+                    return False
+                w = self._widget_ref()
+                if w is None:
+                    return True
+                try:
+                    return bool(getattr(w, "_is_closing", False))
+                except RuntimeError:
+                    return True
 
             def run(self):
+                if self._cancelled:
+                    self.finished.emit(False)
+                    return
+                session = self._session_ref()
+                if session is None:
+                    self.finished.emit(False)
+                    return
                 try:
                     if self._database_context:
-                        self._session.database_context = self._database_context
-                    result = self._session.connect(self._connection_name)
+                        session.database_context = self._database_context
+                    result = session.connect(self._connection_name)
+                    if self._ignore_result():
+                        self.finished.emit(False)
+                        return
                     self.finished.emit(result)
                 except Exception as e:
-                    logger.warning(f"Background connection failed: {e}")
+                    if not self._ignore_result():
+                        logger.warning(f"Background connection failed: {e}")
                     self.finished.emit(False)
+
+        widget_ref = weakref.ref(widget)
 
         def on_connected(success):
             if getattr(self, "_is_closing", False):
                 return
-
+            w = widget_ref()
+            if not widget_is_valid(w):
+                return
+            if getattr(w, "_is_closing", False):
+                return
+            if not success:
+                return
             if success and color:
-                idx = self.session_tabs.indexOf(widget)
+                idx = self.session_tabs.indexOf(w)
                 if idx >= 0:
                     self.session_tabs.set_tab_connection_color(idx, color)
 
         # Create and start background thread
         thread = QThread()
-        worker = ConnectionWorker(session, connection_name, database_context)
+        thread.setObjectName("SessionBackgroundConnection")
+        worker = ConnectionWorker(session, connection_name, database_context, widget)
+        self._adopt_connection_thread(thread, worker)
 
         def cleanup_connection_thread(active_thread=thread, active_worker=worker):
             if not hasattr(self, "_connection_threads"):
                 return
             self._connection_threads = [
-                (stored_thread, stored_worker)
-                for stored_thread, stored_worker in self._connection_threads
-                if stored_thread is not active_thread
+                stored
+                for stored in self._connection_threads
+                if stored[0] is not active_thread
             ]
             try:
                 active_worker.deleteLater()
-            except RuntimeError:
-                pass
-            try:
-                active_thread.deleteLater()
             except RuntimeError:
                 pass
 
@@ -436,7 +674,7 @@ class SessionsMixin:
         # Store reference to prevent garbage collection
         if not hasattr(self, "_connection_threads"):
             self._connection_threads = []
-        self._connection_threads.append((thread, worker))
+        self._connection_threads.append((thread, worker, widget))
 
     def _handle_empty_state_drop(self, file_paths):
         """Handles file drop on empty state screen"""
@@ -581,64 +819,51 @@ class SessionsMixin:
         layout = QVBoxLayout(self._empty_state_widget)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Icone grande
+        from src.design_system.button import PrimaryButton
+        from src.design_system.font_manager import get_application_font
+        from src.design_system.tokens import TYPOGRAPHY
+
+        colors = get_colors()
         icon_label = QLabel()
         if hasattr(qta, "icon"):
-            icon_label.setPixmap(qta.icon("mdi.note-text", color="#64b5f6").pixmap(96, 96))
-        icon_label.setStyleSheet("font-size: 96px; background: transparent;")
+            icon_label.setPixmap(
+                qta.icon("mdi.file-document-outline", color=colors.interactive_primary).pixmap(72, 72)
+            )
+        icon_label.setStyleSheet("background: transparent;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon_label)
 
-        # Texto principal
         title_label = QLabel(S.empty_state.title)
-        title_label.setStyleSheet("""
-            font-size: 24px;
-            font-weight: bold;
-            color: #cccccc;
-            margin-top: 20px;
-            background: transparent;
-        """)
+        from PyQt6.QtGui import QFont
+
+        title_label.setFont(get_application_font(20, QFont.Weight.DemiBold))
+        title_label.setStyleSheet(
+            f"color: {colors.text_primary}; margin-top: 16px; background: transparent;"
+        )
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
-        # Subtitulo com dica de drag-and-drop
         subtitle_label = QLabel(S.empty_state.subtitle)
-        subtitle_label.setStyleSheet("""
-            font-size: 14px;
-            color: #888888;
-            margin-top: 10px;
-            background: transparent;
-        """)
+        subtitle_label.setStyleSheet(
+            f"color: {colors.text_tertiary}; font-size: {TYPOGRAPHY.text_sm}px;"
+            " margin-top: 8px; max-width: 420px; background: transparent;"
+        )
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle_label.setWordWrap(True)
         layout.addWidget(subtitle_label)
 
-        # Botao iniciar
-        colors = get_colors()
-        start_button = QPushButton(f"  {S.empty_state.start_button}  ")
-        start_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                color: white;
-                border: none;
-                padding: 12px 40px;
-                font-size: 16px;
-                font-weight: bold;
-                border-radius: 8px;
-                margin-top: 30px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors.interactive_primary_active};
-            }}
-        """)
+        layout.addSpacing(24)
+
+        start_button = PrimaryButton(S.empty_state.start_button, size="lg")
+        if hasattr(qta, "icon"):
+            start_button.setIcon(qta.icon("mdi.plus", color="white"))
         start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         start_button.clicked.connect(self._new_session)
         layout.addWidget(start_button, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # Adicionar como "aba" invisivel ou substituir conteudo
-        self._empty_state_widget.setStyleSheet("background-color: #1e1e1e;")
+        from src.design_system.tokens import CHROME_BG
+        self._empty_state_widget.setStyleSheet(f"background-color: {CHROME_BG};")
 
         # Adicionar aba do empty state
         index = self.session_tabs.addTab(self._empty_state_widget, "")
@@ -807,33 +1032,14 @@ class SessionsMixin:
         self._save_sessions()
 
     def _ask_save_before_close(self) -> str:
-        """Ask user whether to save, discard, or cancel when closing unsaved tab.
-        
-        Returns:
-            'save': User wants to save first
-            'discard': User wants to close without saving
-            'cancel': User wants to cancel and keep tab open
-        """
-        msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setWindowTitle(S.dialogs.close_tab_unsaved_title)
-        msg_box.setText(S.dialogs.close_tab_unsaved_msg)
-        
-        save_btn = msg_box.addButton(S.dialogs.save_btn, QMessageBox.ButtonRole.AcceptRole)
-        msg_box.addButton(S.dialogs.dont_save_btn, QMessageBox.ButtonRole.DestructiveRole)
-        msg_box.addButton(QMessageBox.StandardButton.Cancel)
-        msg_box.setDefaultButton(save_btn)
-        
-        msg_box.exec()
-        clicked = msg_box.clickedButton()
-        clicked_role = msg_box.buttonRole(clicked) if clicked else None
-        
-        if clicked_role == QMessageBox.ButtonRole.RejectRole:
-            return "cancel"
-        elif clicked_role == QMessageBox.ButtonRole.AcceptRole:
-            return "save"
-        else:
-            return "discard"
+        """Ask user whether to save, discard, or cancel when closing unsaved tab."""
+        from src.design_system.message_box import ask_save_discard_cancel
+
+        return ask_save_discard_cancel(
+            self,
+            S.dialogs.close_tab_unsaved_title,
+            S.dialogs.close_tab_unsaved_msg,
+        )
 
     def _close_session_tab(self, index: int):
         """Closes session tab"""
@@ -855,35 +1061,20 @@ class SessionsMixin:
             and widget.is_execution_busy()
         ) or getattr(widget, "_is_executing", False)
         if is_busy:
-            from PyQt6.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
+            from src.design_system.message_box import ask_yes_no
+
+            if not ask_yes_no(
                 self,
                 "Cancel Execution?",
                 "A script is running in this tab. Do you want to cancel it and close the tab?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+            ):
                 return
             widget._on_cancel_execution()
-            self._deferred_close_session_tab(index, widget, attempts=0)
-            return
 
         self._finalize_close_session_tab(index, widget)
 
-    def _deferred_close_session_tab(self, index: int, widget, *, attempts: int = 0) -> None:
-        """Wait for cancel to finish before cleanup — avoids QThread destroyed while running."""
-        if not widget.is_execution_busy():
-            self._finalize_close_session_tab(index, widget)
-            return
-        if attempts >= 80:
-            logger.warning("Close tab: execution still busy after timeout; forcing cleanup")
-            self._finalize_close_session_tab(index, widget)
-            return
-        QTimer.singleShot(100, lambda: self._deferred_close_session_tab(index, widget, attempts=attempts + 1))
-
     def _finalize_close_session_tab(self, index: int, widget) -> None:
-        """Remove session tab and release resources after workers have stopped."""
+        """Remove session tab immediately; workers finish detached in background."""
         if index < 0 or index >= self.session_tabs.count():
             return
         if self.session_tabs.widget(index) is not widget:
@@ -896,20 +1087,21 @@ class SessionsMixin:
 
         self._closing_session = True
         try:
+            self._detach_widget_connections(widget)
             closed_file_path = getattr(widget, "file_path", None)
             if closed_file_path and closed_file_path == self._original_file_path:
                 self._original_file_path = None
                 self._original_file_type = None
 
             session_id = widget.session.session_id
-            widget.cleanup()
-            self.session_manager.close_session(session_id)
-            self._remove_session_panels(session_id)
-
             if session_id in self._session_widgets:
                 del self._session_widgets[session_id]
 
             self.session_tabs.removeTab(index)
+
+            widget.cleanup()
+            self.session_manager.close_session(session_id)
+            self._remove_session_panels(session_id)
             widget.deleteLater()
             self._save_sessions()
 

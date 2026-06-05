@@ -1983,14 +1983,51 @@
         state.labels = Object.assign({}, state.labels, labels || {});
         renderStaticLabels();
     };
-    window.setWelcomeText = (title, message) => {
+    window.setWelcome = (payload = {}) => {
+        const data = payload || {};
+        const logo = $("welcomeLogo");
+        if (logo) {
+            if (data.logo) {
+                logo.src = data.logo;
+                logo.hidden = false;
+            } else {
+                logo.removeAttribute("src");
+                logo.hidden = true;
+            }
+        }
         const welcomeTitle = $("welcomeTitle");
-        const welcomeText = $("welcomeText");
-        if (welcomeTitle) welcomeTitle.textContent = title || "";
-        if (welcomeText) welcomeText.textContent = message || "";
+        if (welcomeTitle) welcomeTitle.textContent = data.title || "";
+        const welcomeTagline = $("welcomeTagline");
+        if (welcomeTagline) welcomeTagline.textContent = data.tagline || "";
+        const welcomeHint = $("welcomeHint");
+        if (welcomeHint) welcomeHint.textContent = data.hint || "";
+        const welcomeFeatures = $("welcomeFeatures");
+        if (welcomeFeatures) {
+            welcomeFeatures.replaceChildren();
+            (data.features || []).forEach((text) => {
+                if (!text) return;
+                const item = document.createElement("li");
+                const chip = document.createElement("span");
+                chip.className = "welcome-feature-chip";
+                chip.textContent = text;
+                item.appendChild(chip);
+                welcomeFeatures.appendChild(item);
+            });
+        }
+    };
+    window.setWelcomeText = (title, message) => {
+        window.setWelcome({ title, hint: message });
+    };
+    window.setWelcomeLogo = (dataUri) => {
+        window.setWelcome({ logo: dataUri });
     };
     window.setTheme = (theme) => {
         Object.entries(theme || {}).forEach(([key, value]) => {
+            if (key === "font_family" && value) {
+                document.documentElement.style.setProperty("--font-family", value);
+                document.body.style.fontFamily = value;
+                return;
+            }
             document.documentElement.style.setProperty(`--${key.replace(/_/g, "-")}`, value);
         });
     };

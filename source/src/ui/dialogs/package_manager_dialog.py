@@ -121,9 +121,11 @@ class _AddSourceDialog(QDialog):
         border = c.get("border", colors.border_default)
         accent = c.get("accent", colors.interactive_primary)
 
+        from src.design_system.frameless_dialog import install_frameless_shell
+
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {bg};
+                background-color: transparent;
                 color: {fg};
             }}
             QLabel {{
@@ -143,9 +145,13 @@ class _AddSourceDialog(QDialog):
             }}
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout = install_frameless_shell(
+            self,
+            S.package_manager.add_source_title,
+            min_width=500,
+            content_margins=(16, 12, 16, 16),
+            content_spacing=12,
+        )
 
         # URL field
         lbl_url = QLabel(S.package_manager.add_source_prompt)
@@ -241,19 +247,22 @@ class PackageManagerDialog(QDialog):
     def _setup_ui(self):
         """Sets up the UI"""
         self.setWindowTitle(S.package_manager.title)
-        self.setModal(True)
-        self.setMinimumSize(780, 560)
         self.resize(820, 600)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
 
-        c = self.theme_manager.get_app_colors()
+        from src.design_system.frameless_dialog import install_frameless_shell
         from src.design_system.tokens import get_colors
+        from src.design_system.button import PrimaryButton, SecondaryButton
+
         colors = get_colors()
-        dim_color = colors.text_tertiary  # secondary color for less important text
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(20, 20, 20, 20)
+        dim_color = colors.text_tertiary
+        layout = install_frameless_shell(
+            self,
+            S.package_manager.title,
+            min_width=780,
+            min_height=560,
+            content_margins=(20, 16, 20, 20),
+            content_spacing=12,
+        )
 
         # --- Header ---
         header_layout = QVBoxLayout()
@@ -287,62 +296,29 @@ class PackageManagerDialog(QDialog):
         self.txt_search.setPlaceholderText(S.package_manager.placeholder_search)
         self.txt_search.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                border: none;
                 padding: 10px 12px;
                 border-radius: 8px;
                 font-size: 12px;
             }}
             QLineEdit:focus {{
-                border-color: {c["accent"]};
+                background-color: {colors.bg_elevated};
             }}
         """)
         self.txt_search.returnPressed.connect(self._on_search)
         search_row.addWidget(self.txt_search)
 
-        self.btn_search = QPushButton(S.package_manager.btn_search)
+        self.btn_search = PrimaryButton(S.package_manager.btn_search, size="sm")
         if HAS_QTAWESOME:
             self.btn_search.setIcon(qta.icon("fa5s.search", color="white"))
-        self.btn_search.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {c["accent"]};
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {c["accent"]};
-                opacity: 0.85;
-            }}
-            QPushButton:disabled {{
-                background-color: {c["border"]};
-                color: {dim_color};
-            }}
-        """)
         self.btn_search.clicked.connect(self._on_search)
         search_row.addWidget(self.btn_search)
 
-        self.btn_show_installed = QPushButton(S.package_manager.btn_installed)
+        self.btn_show_installed = SecondaryButton(S.package_manager.btn_installed, size="sm")
         if HAS_QTAWESOME:
             self.btn_show_installed.setIcon(qta.icon("fa5s.list", color="white"))
-        self.btn_show_installed.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: none;
-                padding: 10px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.bg_tertiary};
-            }}
-        """)
         self.btn_show_installed.clicked.connect(self._load_installed)
         search_row.addWidget(self.btn_show_installed)
 
@@ -351,10 +327,11 @@ class PackageManagerDialog(QDialog):
         # --- Info label ---
         self.lbl_info = QLabel("")
         self.lbl_info.setStyleSheet(f"""
-            background-color: {c["border"]};
-            color: {c["foreground"]};
+            background-color: {colors.bg_secondary};
+            color: {colors.text_secondary};
             padding: 8px 12px;
-            border-radius: 4px;
+            border-radius: 6px;
+            border: none;
             border-left: 3px solid {colors.interactive_primary};
             font-size: 11px;
         """)
@@ -375,10 +352,10 @@ class PackageManagerDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setStyleSheet(f"""
             QTableWidget {{
-                gridline-color: {c["border"]};
+                gridline-color: {colors.border_muted};
                 font-size: 11px;
-                border: 1px solid {c["border"]};
-                background-color: {c["background"]};
+                border: none;
+                background-color: {colors.bg_secondary};
             }}
             QTableWidget::item {{
                 padding: 6px 8px;
@@ -387,11 +364,11 @@ class PackageManagerDialog(QDialog):
                 background-color: {colors.interactive_primary};
             }}
             QHeaderView::section {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
                 padding: 8px;
                 border: none;
-                border-right: 1px solid {c["background"]};
+                border-bottom: 1px solid {colors.border_muted};
                 font-weight: bold;
                 font-size: 11px;
             }}
@@ -405,12 +382,12 @@ class PackageManagerDialog(QDialog):
         self.progress.setFixedHeight(3)
         self.progress.setStyleSheet(f"""
             QProgressBar {{
-                background-color: {c["border"]};
+                background-color: {colors.bg_tertiary};
                 border: none;
                 border-radius: 4px;
             }}
             QProgressBar::chunk {{
-                background-color: {c["accent"]};
+                background-color: {colors.interactive_primary};
                 border-radius: 4px;
             }}
         """)
@@ -426,28 +403,14 @@ class PackageManagerDialog(QDialog):
         footer.addWidget(self.lbl_status)
         footer.addStretch()
 
-        self.btn_sources = QPushButton(S.package_manager.btn_sources)
+        self.btn_sources = SecondaryButton(S.package_manager.btn_sources, size="sm")
         if HAS_QTAWESOME:
-            self.btn_sources.setIcon(qta.icon("fa5s.cog", color=c["foreground"]))
-        self.btn_sources.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: none;
-                padding: 6px 14px;
-                border-radius: 8px;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background-color: #4a4a4a;
-            }}
-        """)
+            self.btn_sources.setIcon(qta.icon("fa5s.cog", color="white"))
         self.btn_sources.setCheckable(True)
         self.btn_sources.clicked.connect(self._toggle_sources_panel)
         footer.addWidget(self.btn_sources)
 
-        btn_close = QPushButton(S.package_manager.btn_close)
-        btn_close.setObjectName("btnCancel")
+        btn_close = PrimaryButton(S.package_manager.btn_close, size="sm")
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
 
@@ -455,10 +418,11 @@ class PackageManagerDialog(QDialog):
 
         # --- Sources panel (collapsible) ---
         self.sources_frame = QFrame()
+        self.sources_frame.setObjectName("sectionPanel")
         self.sources_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {c["border"]};
-                border: 1px solid {c["border"]};
+            QFrame#sectionPanel {{
+                background-color: {colors.bg_secondary};
+                border: none;
                 border-radius: 8px;
             }}
         """)
@@ -482,9 +446,9 @@ class PackageManagerDialog(QDialog):
         self.sources_list.setMaximumHeight(100)
         self.sources_list.setStyleSheet(f"""
             QListWidget {{
-                background-color: {c["background"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
+                background-color: {colors.bg_tertiary};
+                color: {colors.text_primary};
+                border: none;
                 border-radius: 4px;
                 font-size: 11px;
             }}
@@ -635,7 +599,9 @@ class PackageManagerDialog(QDialog):
 
     def _show_direct_install_option(self, package_name: str):
         """Shows option to install package directly when not found"""
-        c = self.theme_manager.get_app_colors()
+        from src.design_system.tokens import get_colors
+
+        colors = get_colors()
         self.table.setRowCount(1)
 
         name_item = QTableWidgetItem(package_name)
@@ -658,7 +624,7 @@ class PackageManagerDialog(QDialog):
             btn_install.setIcon(qta.icon("fa5s.download", color="white"))
         btn_install.setStyleSheet(f"""
             QPushButton {{
-                background-color: {c["accent"]};
+                background-color: {colors.interactive_primary};
                 color: white;
                 border: none;
                 padding: 4px 14px;
@@ -666,7 +632,7 @@ class PackageManagerDialog(QDialog):
                 font-size: 10px;
                 font-weight: bold;
             }}
-            QPushButton:hover {{ opacity: 0.85; }}
+            QPushButton:hover {{ background-color: {colors.interactive_primary_hover}; }}
         """)
         btn_install.clicked.connect(lambda _, n=package_name: self._do_operation("install", n))
         actions_layout.addWidget(btn_install)
@@ -696,8 +662,8 @@ class PackageManagerDialog(QDialog):
 
     def _populate_table(self, packages: list):
         """Populates the table with packages"""
-        c = self.theme_manager.get_app_colors()
         from src.design_system.tokens import get_colors
+
         colors = get_colors()
         dim_color = colors.text_tertiary
         self.table.setRowCount(len(packages))
@@ -751,7 +717,7 @@ class PackageManagerDialog(QDialog):
                         }}
                         QPushButton:hover {{ background-color: {colors.success}dd; }}
                         QPushButton:disabled {{
-                            background-color: {c["border"]};
+                            background-color: {colors.bg_tertiary};
                             color: {dim_color};
                         }}
                     """)
@@ -773,7 +739,7 @@ class PackageManagerDialog(QDialog):
                     }}
                     QPushButton:hover {{ background-color: {colors.danger}dd; }}
                     QPushButton:disabled {{
-                        background-color: {c["border"]};
+                        background-color: {colors.bg_tertiary};
                         color: {dim_color};
                     }}
                 """)
@@ -796,7 +762,7 @@ class PackageManagerDialog(QDialog):
                     }}
                     QPushButton:hover {{ opacity: 0.85; }}
                     QPushButton:disabled {{
-                        background-color: {c["border"]};
+                        background-color: {colors.bg_tertiary};
                         color: {dim_color};
                     }}
                 """)

@@ -243,6 +243,15 @@ class InlineCompletionService(QObject):
         self._req_id += 1
         self._release()
 
+    def cancel(self) -> None:
+        """Stop debounced and in-flight work (tab/editor teardown)."""
+        self.cancel_request()
+        self._cleanup_worker()
+        try:
+            self.close_document()
+        except Exception:
+            pass
+
     def _should_request(self, prefix: str) -> bool:
         lines = prefix.split("\n")
         last = lines[-1] if lines else prefix
@@ -331,14 +340,13 @@ class InlineCompletionService(QObject):
         worker.set_request(
             provider_id, req["language"], prompt, req["prefix"], req["suffix"], model=model
         )
-        thread = QThread(self)
+        thread = QThread()
+        thread.setObjectName("PyniaInlineCompletion")
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.inline_complete.connect(self._on_complete)
         worker.error.connect(self._on_error)
         worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         self._worker = worker
         self._thread = thread
         thread.start()
@@ -426,14 +434,15 @@ class InlineCompletionService(QObject):
             self._debounce.start()
 
     def _cleanup_worker(self) -> None:
+        from src.utils.qt_threading import stop_qthread
+
         worker, thread = self._worker, self._thread
         self._worker = None
         self._thread = None
-        if worker is not None and hasattr(worker, "cancel"):
+        if worker is not None:
             try:
-                worker.cancel()
-            except Exception:
+                worker.inline_complete.disconnect(self._on_complete)
+                worker.error.disconnect(self._on_error)
+            except (TypeError, RuntimeError):
                 pass
-        if thread is not None and thread.isRunning():
-            thread.quit()
-            thread.wait(1500)
+        stop_qthread(thread, worker, wait_ms=3000)

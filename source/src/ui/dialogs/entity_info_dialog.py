@@ -43,27 +43,27 @@ class EntityInfoDialog(QDialog):
 
     def _setup_ui(self):
         colors = get_colors()
+        from src.design_system.frameless_dialog import install_frameless_shell
+
         self.setWindowTitle(S.entity_info.dialog_title)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
         self.resize(860, 790)
-        self.setMinimumSize(680, 630)
         self.setStyleSheet(
             f"""
             QDialog {{
-                background-color: {colors.bg_primary};
+                background-color: transparent;
                 color: {colors.text_primary};
             }}
             """
         )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
+        layout = install_frameless_shell(
+            self,
+            S.entity_info.dialog_title,
+            min_width=680,
+            min_height=630,
+            content_margins=(18, 14, 18, 18),
+            content_spacing=14,
+        )
 
         header = QWidget()
         header_layout = QVBoxLayout(header)

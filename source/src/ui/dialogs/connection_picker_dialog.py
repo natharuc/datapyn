@@ -37,18 +37,22 @@ class ConnectionPickerDialog(QDialog):
 
         self.setWindowTitle(S.connection_picker.title)
         self.resize(380, 420)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
 
         self._setup_ui()
         self._load_connections()
 
     def _setup_ui(self):
         """Sets up the UI"""
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
+        from src.design_system.frameless_dialog import install_frameless_shell
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout = install_frameless_shell(
+            self,
+            S.connection_picker.title,
+            min_width=380,
+            min_height=420,
+            content_margins=(16, 12, 16, 16),
+            content_spacing=12,
+        )
 
         # Header
         from src.design_system.tokens import get_colors

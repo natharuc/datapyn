@@ -243,18 +243,23 @@ class ExportToTableDialog(QDialog):
         self._is_exporting = False
 
         self.setWindowTitle(S.export_to_table.title)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
-        self.setMinimumWidth(480)
-        self.setFixedHeight(380)
+        self.setFixedHeight(420)
 
         self._setup_ui()
         self._apply_style()
 
     def _setup_ui(self):
         """Sets up the UI"""
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 16, 16, 16)
+        from src.design_system.frameless_dialog import install_frameless_shell
+
+        layout = install_frameless_shell(
+            self,
+            S.export_to_table.title,
+            min_width=480,
+            min_height=380,
+            content_margins=(16, 12, 16, 16),
+            content_spacing=10,
+        )
 
         # DataFrame info
         info_label = QLabel(S.export_to_table.info_row_col.format(rows=f"{len(self.df):,}", cols=len(self.df.columns)))

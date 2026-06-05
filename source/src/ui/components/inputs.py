@@ -222,7 +222,9 @@ class StyledComboBox(QComboBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(_get_combobox_style())
+        from src.design_system.tokens import apply_combobox_style
+
+        apply_combobox_style(self)
 
 
 class StyledCheckBox(QCheckBox):

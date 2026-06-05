@@ -47,11 +47,18 @@ class ExecutionMixin:
             self.main_statusbar.action_label.setText("")
             return
 
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDialogButtonBox
+        from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QSpinBox, QDialogButtonBox
+        from src.design_system.frameless_dialog import install_frameless_shell
+
         dialog = QDialog(self)
         dialog.setWindowTitle(S.toolbar.run_timer_title)
-        dialog.setFixedWidth(320)
-        dlg_layout = QVBoxLayout(dialog)
+        dialog.setFixedWidth(360)
+        dlg_layout = install_frameless_shell(
+            dialog,
+            S.toolbar.run_timer_title,
+            content_margins=(20, 14, 20, 16),
+            content_spacing=10,
+        )
 
         lbl = QLabel(S.toolbar.run_timer_label)
         dlg_layout.addWidget(lbl)
@@ -63,11 +70,14 @@ class ExecutionMixin:
         dlg_layout.addWidget(spin)
 
         buttons = QDialogButtonBox()
-        start_btn = buttons.addButton(S.toolbar.run_timer_start, QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(S.toolbar.run_timer_start, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        dlg_layout.addWidget(buttons)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(buttons)
+        dlg_layout.addLayout(btn_row)
 
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return

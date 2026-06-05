@@ -137,33 +137,42 @@ class Shadow:
 
 
 # =============================================================================
-# DARK THEME (VS Code inspired)
+# DARK THEME (DataPyn blue — matches frameless installer chrome)
 # =============================================================================
 
+CHROME_BG = "#0c111b"
+CHROME_CARD = "#161f30"
+CHROME_ACCENT = "#3369ff"
+CHROME_ACCENT_HOVER = "#4d7dff"
+CHROME_ACCENT_ACTIVE = "#2857e6"
+CHROME_TEXT = "#eef2f7"
+CHROME_MUTED = "#8b9cb3"
+CHROME_BORDER = "rgba(148, 163, 184, 0.18)"
+
 DARK_COLORS = ColorPalette(
-    # Backgrounds - VS Code style with subtle blue undertone
-    bg_primary="#181a1f",
-    bg_secondary="#1f2228",
-    bg_tertiary="#282c34",
-    bg_elevated="#353a45",
-    bg_overlay="rgba(0, 0, 0, 0.65)",
-    # Borders - very subtle, almost invisible (shadow-friendly)
-    border_default="rgba(255, 255, 255, 0.06)",
-    border_muted="rgba(255, 255, 255, 0.03)",
-    border_strong="rgba(255, 255, 255, 0.10)",
-    # Text - high contrast for readability
-    text_primary="#dcdee4",
-    text_secondary="#a0a4b0",
-    text_tertiary="#70758a",
-    text_disabled="#50556b",
+    # Backgrounds — deep navy (installer / frameless shell)
+    bg_primary=CHROME_BG,
+    bg_secondary="#121a2b",
+    bg_tertiary=CHROME_CARD,
+    bg_elevated="#1e2a42",
+    bg_overlay="rgba(7, 11, 18, 0.72)",
+    # Borders — cool slate / blue tint
+    border_default=CHROME_BORDER,
+    border_muted="rgba(148, 163, 184, 0.10)",
+    border_strong="rgba(51, 105, 255, 0.35)",
+    # Text
+    text_primary=CHROME_TEXT,
+    text_secondary="#b8c5d9",
+    text_tertiary=CHROME_MUTED,
+    text_disabled="#5c6d85",
     text_inverse="#ffffff",
-    # Interactive - modern blue accent (VS Code/GitHub style)
-    interactive_primary="#3b82f6",
-    interactive_primary_hover="#60a5fa",
-    interactive_primary_active="#2563eb",
-    interactive_secondary="#353a45",
-    interactive_secondary_hover="#454b58",
-    interactive_secondary_active="#2a2e38",
+    # Interactive — brand blue
+    interactive_primary=CHROME_ACCENT,
+    interactive_primary_hover=CHROME_ACCENT_HOVER,
+    interactive_primary_active=CHROME_ACCENT_ACTIVE,
+    interactive_secondary="#1a2438",
+    interactive_secondary_hover="#243352",
+    interactive_secondary_active="#141c2e",
     # Semantic - vibrant but professional
     success="#22c55e",
     success_hover="#4ade80",
@@ -174,16 +183,16 @@ DARK_COLORS = ColorPalette(
     danger="#ef4444",
     danger_hover="#f87171",
     danger_active="#dc2626",
-    info="#3b82f6",
-    info_hover="#60a5fa",
-    info_active="#2563eb",
-    # Editor
-    editor_bg="#1e1e1e",
-    editor_fg="#d4d4d4",
-    editor_selection="#264f78",
-    editor_line_highlight="#2a2d2e",
-    editor_gutter_bg="#1e1e1e",
-    editor_gutter_fg="#858585",
+    info=CHROME_ACCENT,
+    info_hover=CHROME_ACCENT_HOVER,
+    info_active=CHROME_ACCENT_ACTIVE,
+    # Editor — same navy plane as session chrome (not VS Code gray)
+    editor_bg="#121a2b",
+    editor_fg="#eef2f7",
+    editor_selection="rgba(51, 105, 255, 0.35)",
+    editor_line_highlight="#161f30",
+    editor_gutter_bg="#121a2b",
+    editor_gutter_fg="#5c6d85",
 )
 
 
@@ -288,13 +297,13 @@ class StateColors:
 class ChartColors:
     """Colors for matplotlib and chart rendering"""
     
-    figure_bg: str = "#181a1f"
-    axes_bg: str = "#181a1f"
-    axes_edge: str = "#3b404d"
-    text: str = "#dcdee4"
-    grid: str = "#3b404d"
-    legend_bg: str = "#181a1f"
-    legend_edge: str = "#3b404d"
+    figure_bg: str = CHROME_BG
+    axes_bg: str = CHROME_BG
+    axes_edge: str = "#2a3a5c"
+    text: str = CHROME_TEXT
+    grid: str = "#2a3a5c"
+    legend_bg: str = CHROME_BG
+    legend_edge: str = "#2a3a5c"
 
 
 # Singleton instances (dark-only)
@@ -414,16 +423,77 @@ def get_input_stylesheet() -> str:
     """
 
 
-def get_combobox_stylesheet() -> str:
-    """Returns stylesheet for comboboxes"""
+def _combobox_popup_view_stylesheet(*, list_item_height: int | None = None) -> str:
+    """List popup only — applied on the QListView (avoids square window behind rounded menu)."""
     colors = get_colors()
-    
+    if list_item_height:
+        list_padding = f"{SPACING.space_2}px"
+        item_padding = "12px 16px"
+        item_margin = "margin: 2px 4px;"
+        item_min_height = f"min-height: {list_item_height}px;"
+    else:
+        list_padding = f"{SPACING.space_1}px"
+        item_padding = f"{SPACING.space_2}px {SPACING.space_3}px"
+        item_margin = ""
+        item_min_height = "min-height: 22px;"
+    return f"""
+        QListView {{
+            background-color: {colors.bg_primary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_default};
+            border-radius: {RADIUS.radius_md}px;
+            padding: {list_padding};
+            outline: none;
+        }}
+        QListView::item {{
+            padding: {item_padding};
+            border-radius: {RADIUS.radius_sm}px;
+            {item_margin}
+            {item_min_height}
+        }}
+        QListView::item:selected {{
+            background-color: {colors.interactive_primary};
+            color: {colors.text_inverse};
+        }}
+        QListView::item:hover {{
+            background-color: {colors.bg_tertiary};
+        }}
+    """
+
+
+def _combobox_down_arrow_stylesheet() -> str:
+    colors = get_colors()
+    return f"""
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+            width: 22px;
+            border: none;
+            background: transparent;
+        }}
+        QComboBox::down-arrow {{
+            image: none;
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid {colors.text_secondary};
+            margin-right: 6px;
+        }}
+    """
+
+
+def get_combobox_stylesheet() -> str:
+    """Returns stylesheet for comboboxes (pair with configure_combobox_popup)."""
+    colors = get_colors()
+
     return f"""
         QComboBox {{
             background-color: {colors.bg_secondary};
             color: {colors.text_primary};
             border: 1px solid {colors.border_default};
             padding: {SPACING.space_2}px {SPACING.space_3}px;
+            padding-right: 24px;
             border-radius: {RADIUS.radius_sm}px;
             font-size: {TYPOGRAPHY.text_sm}px;
             min-height: 24px;
@@ -435,41 +505,100 @@ def get_combobox_stylesheet() -> str:
             border-color: {colors.interactive_primary};
             border-width: 2px;
         }}
-        QComboBox::drop-down {{
-            border: none;
-            border-radius: {RADIUS.radius_sm}px;
-            width: 20px;
-        }}
-        QComboBox QAbstractItemView {{
-            background-color: {colors.bg_primary};
-            color: {colors.text_primary};
-            selection-background-color: {colors.interactive_primary};
-            selection-color: {colors.text_inverse};
-            border: 1px solid {colors.border_default};
-            border-radius: {RADIUS.radius_sm}px;
-            padding: {SPACING.space_1}px;
-        }}
-        QComboBox QAbstractItemView::item {{
-            padding: {SPACING.space_2}px;
-            border-radius: {RADIUS.radius_sm}px;
-        }}
-        QComboBox QAbstractItemView::item:hover {{
-            background-color: {colors.bg_tertiary};
-        }}
+        {_combobox_down_arrow_stylesheet()}
     """
+
+
+def get_combobox_stylesheet_toolbar() -> str:
+    """Compact combobox for the main toolbar (workspace selector)."""
+    colors = get_colors()
+
+    return f"""
+        QComboBox {{
+            background-color: {colors.bg_tertiary};
+            color: {colors.text_primary};
+            border: none;
+            border-radius: 6px;
+            padding: 4px 8px;
+            padding-right: 22px;
+            font-size: 11px;
+            min-height: 22px;
+        }}
+        QComboBox:hover {{
+            background-color: {colors.bg_elevated};
+        }}
+        {_combobox_down_arrow_stylesheet()}
+    """
+
+
+def configure_combobox_popup(combo, *, list_item_height: int | None = None) -> None:
+    """Frameless translucent popup so rounded list does not show a square behind it."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QFrame
+
+    view = combo.view()
+    if view is None:
+        return
+    view.setFrameShape(QFrame.Shape.NoFrame)
+    view.setStyleSheet(_combobox_popup_view_stylesheet(list_item_height=list_item_height))
+    view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    popup = view.window()
+    if popup is not None and popup is not combo:
+        popup.setWindowFlags(
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+        popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+
+def apply_combobox_style(
+    combo,
+    *,
+    variant: str = "default",
+    icon_size: int | None = None,
+    list_item_height: int | None = None,
+) -> None:
+    """Apply combobox QSS and fix popup rendering for one QComboBox instance."""
+    from PyQt6.QtCore import QSize
+
+    if variant == "toolbar":
+        combo.setStyleSheet(get_combobox_stylesheet_toolbar())
+    else:
+        combo.setStyleSheet(get_combobox_stylesheet())
+
+    if icon_size is not None:
+        combo.setIconSize(QSize(icon_size, icon_size))
+
+    configure_combobox_popup(combo, list_item_height=list_item_height)
+
+
+def polish_combobox_popups(root) -> None:
+    """Fix popup chrome for all comboboxes under *root* (keeps existing QSS)."""
+    from PyQt6.QtWidgets import QComboBox
+
+    for combo in root.findChildren(QComboBox):
+        configure_combobox_popup(combo)
 
 
 def get_panel_stylesheet() -> str:
-    """Returns stylesheet for panels/cards"""
+    """Returns stylesheet for panels/cards (borderless — tone only)."""
     colors = get_colors()
-    
+
     return f"""
-        QFrame[frameShape="StyledPanel"] {{
+        QFrame[frameShape="StyledPanel"],
+        QFrame#sectionPanel {{
             background-color: {colors.bg_secondary};
-            border: 1px solid {colors.border_muted};
+            border: none;
             border-radius: {RADIUS.radius_md}px;
         }}
     """
+
+
+def get_section_panel_stylesheet() -> str:
+    """Borderless section panels inside dialogs."""
+    return get_panel_stylesheet()
 
 
 def get_statusbar_connected_stylesheet(color: str = None) -> str:
@@ -559,16 +688,16 @@ SCROLLBAR_STYLE = """
         margin: 0px;
     }
     QScrollBar::handle:vertical {
-        background: rgba(128, 128, 128, 0.3);
+        background: rgba(51, 105, 255, 0.35);
         border-radius: 4px;
         min-height: 40px;
         margin: 2px;
     }
     QScrollBar::handle:vertical:hover {
-        background: rgba(128, 128, 128, 0.5);
+        background: rgba(51, 105, 255, 0.55);
     }
     QScrollBar::handle:vertical:pressed {
-        background: rgba(128, 128, 128, 0.7);
+        background: rgba(51, 105, 255, 0.75);
     }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         height: 0px;
@@ -582,16 +711,16 @@ SCROLLBAR_STYLE = """
         margin: 0px;
     }
     QScrollBar::handle:horizontal {
-        background: rgba(128, 128, 128, 0.3);
+        background: rgba(51, 105, 255, 0.35);
         border-radius: 4px;
         min-width: 40px;
         margin: 2px;
     }
     QScrollBar::handle:horizontal:hover {
-        background: rgba(128, 128, 128, 0.5);
+        background: rgba(51, 105, 255, 0.55);
     }
     QScrollBar::handle:horizontal:pressed {
-        background: rgba(128, 128, 128, 0.7);
+        background: rgba(51, 105, 255, 0.75);
     }
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
         width: 0px;

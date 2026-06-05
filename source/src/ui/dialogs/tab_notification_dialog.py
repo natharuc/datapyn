@@ -54,21 +54,25 @@ class TabNotificationDialog(QDialog):
 
     def _setup_ui(self):
         colors = get_colors()
-        title = S.tab_notification.dialog_title if hasattr(S, 'tab_notification') else "Tab Notification"
+        from src.design_system.frameless_dialog import install_frameless_shell
+
+        title = S.tab_notification.dialog_title if hasattr(S, "tab_notification") else "Tab Notification"
         self.setWindowTitle(title)
-        self.setMinimumWidth(860)
         self.setMaximumWidth(1040)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {colors.bg_primary};
+                background-color: transparent;
             }}
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout = install_frameless_shell(
+            self,
+            title,
+            min_width=860,
+            content_margins=(20, 16, 20, 20),
+            content_spacing=16,
+        )
 
         group_style = f"""
             QGroupBox {{

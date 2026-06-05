@@ -229,41 +229,66 @@ class SessionController(QObject):
     def _connect_session_background(self, widget, session, connection_name, color):
         """Connect session in background thread to avoid UI freeze"""
         
+        import weakref
+
         class ConnectionWorker(QObject):
             finished = pyqtSignal(bool)
-            
+
             def __init__(self, session, connection_name):
                 super().__init__()
-                self._session = session
+                self._session_ref = weakref.ref(session)
                 self._connection_name = connection_name
-            
+                self._cancelled = False
+
+            def cancel(self):
+                self._cancelled = True
+
             def run(self):
+                if self._cancelled:
+                    self.finished.emit(False)
+                    return
+                session_ref = self._session_ref()
+                if session_ref is None:
+                    self.finished.emit(False)
+                    return
                 try:
-                    result = self._session.connect(self._connection_name)
+                    result = session_ref.connect(self._connection_name)
+                    if self._cancelled:
+                        self.finished.emit(False)
+                        return
                     self.finished.emit(result)
                 except Exception as e:
                     logger.warning(f"Background connection failed: {e}")
                     self.finished.emit(False)
-        
+
+        thread = QThread()
+        worker = ConnectionWorker(session, connection_name)
+
         def on_connected(success):
             if success and color:
                 idx = self.session_tabs.indexOf(widget)
                 if idx >= 0:
                     self.session_tabs.set_tab_connection_color(idx, color)
-            # Cleanup
-            thread.quit()
-            thread.wait()
-            thread.deleteLater()
-            worker.deleteLater()
-        
-        thread = QThread()
-        worker = ConnectionWorker(session, connection_name)
+            if hasattr(self._main, "_connection_threads"):
+                self._main._connection_threads = [
+                    item
+                    for item in self._main._connection_threads
+                    if item[0] is not thread
+                ]
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(on_connected)
+        worker.finished.connect(thread.quit)
         thread.start()
-        
-        self._connection_threads.append(thread)
+
+        if not hasattr(self._main, "_connection_threads"):
+            self._main._connection_threads = []
+        self._main._connection_threads.append((thread, worker, widget))
     
     # =========================================================================
     # SESSION CLOSING

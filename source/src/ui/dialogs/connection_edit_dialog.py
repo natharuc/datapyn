@@ -17,8 +17,11 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QMessageBox,
     QProgressDialog,
+    QScrollArea,
+    QWidget,
+    QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QColor
 
 from src.database import DatabaseConnector
@@ -131,24 +134,80 @@ class ConnectionEditDialog(QDialog):
         self.is_new = connection_name is None or connection_name == ""
         self.connector = None  # For connection test
 
-        title = S.connection_edit.title_new if self.is_new else S.connection_edit.title_edit.format(name=connection_name)
-        self.setWindowTitle(title)
-        self.resize(500, 650)
+        self._frameless_title = (
+            S.connection_edit.title_new
+            if self.is_new
+            else S.connection_edit.title_edit.format(name=connection_name)
+        )
+        self.setWindowTitle(self._frameless_title)
+        self.resize(520, 720)
 
         self._setup_ui()
         if not self.is_new:
             self._load_config()
 
+    def _populate_db_type_combo(self) -> None:
+        """Fill database type combo with branded SVG icons and readable labels."""
+        from src.design_system.tokens import apply_combobox_style
+        from src.ui.components.connection_panel import get_db_icon
+
+        db_types = (
+            ("sqlserver", S.connection_edit.combo_sqlserver),
+            ("mysql", S.connection_edit.combo_mysql),
+            ("mariadb", S.connection_edit.combo_mariadb),
+            ("postgresql", S.connection_edit.combo_postgresql),
+            ("databricks", getattr(S.connection_edit, "combo_databricks", "Databricks")),
+        )
+        icon_size = 18
+        self.cmb_type.clear()
+        for db_id, label in db_types:
+            self.cmb_type.addItem(
+                get_db_icon(db_id, size=icon_size), label, db_id
+            )
+        apply_combobox_style(self.cmb_type, icon_size=icon_size, list_item_height=48)
+
+    def _current_db_type(self) -> str:
+        data = self.cmb_type.currentData()
+        if data:
+            return str(data)
+        return (self.cmb_type.currentText() or "sqlserver").strip().lower()
+
+    @staticmethod
+    def _configure_form(form: QFormLayout) -> None:
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+
     def _setup_ui(self):
         """Sets up the UI"""
-        layout = QVBoxLayout(self)
+        from src.design_system.frameless_dialog import install_frameless_shell
 
-        # Apply theme
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
+        layout = install_frameless_shell(
+            self,
+            self._frameless_title,
+            min_width=520,
+            min_height=480,
+            content_margins=(16, 12, 16, 12),
+            content_spacing=10,
+        )
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 4, 0)
+        scroll_layout.setSpacing(12)
 
         # Basic information group
         basic_group = QFrame()
-        basic_group.setFrameShape(QFrame.Shape.StyledPanel)
+        basic_group.setObjectName("sectionPanel")
+        basic_group.setFrameShape(QFrame.Shape.NoFrame)
         basic_group_layout = QVBoxLayout(basic_group)
         basic_group_layout.setContentsMargins(12, 12, 12, 12)
 
@@ -166,6 +225,7 @@ class ConnectionEditDialog(QDialog):
         basic_group_layout.addLayout(header)
 
         basic_layout = QFormLayout()
+        self._configure_form(basic_layout)
         basic_group_layout.addLayout(basic_layout)
 
         self.txt_name = QLineEdit()
@@ -173,8 +233,8 @@ class ConnectionEditDialog(QDialog):
         basic_layout.addRow(S.connection_edit.label_name, self.txt_name)
 
         self.cmb_type = QComboBox()
-        self.cmb_type.addItems(["sqlserver", "mysql", "mariadb", "postgresql", "databricks"])
-        self.cmb_type.currentTextChanged.connect(self._on_db_type_changed)
+        self._populate_db_type_combo()
+        self.cmb_type.currentIndexChanged.connect(self._on_db_type_changed)
         basic_layout.addRow(S.connection_edit.label_db_type, self.cmb_type)
 
         self.txt_host = QLineEdit()
@@ -196,11 +256,12 @@ class ConnectionEditDialog(QDialog):
         self.lbl_http_path = QLabel("HTTP Path:")
         basic_layout.addRow(self.lbl_http_path, self.txt_http_path)
 
-        layout.addWidget(basic_group)
+        scroll_layout.addWidget(basic_group)
 
         # Authentication group
         auth_group = QFrame()
-        auth_group.setFrameShape(QFrame.Shape.StyledPanel)
+        auth_group.setObjectName("sectionPanel")
+        auth_group.setFrameShape(QFrame.Shape.NoFrame)
         auth_group_layout = QVBoxLayout(auth_group)
         auth_group_layout.setContentsMargins(12, 12, 12, 12)
 
@@ -218,6 +279,7 @@ class ConnectionEditDialog(QDialog):
         auth_group_layout.addLayout(header)
 
         auth_layout = QFormLayout()
+        self._configure_form(auth_layout)
         auth_group_layout.addLayout(auth_layout)
 
         self.chk_windows_auth = QCheckBox(S.connection_edit.checkbox_windows_auth)
@@ -253,11 +315,12 @@ class ConnectionEditDialog(QDialog):
         self.chk_trust_cert.setToolTip(S.connection_edit.tooltip_trust_cert)
         auth_layout.addRow(self.chk_trust_cert)
 
-        layout.addWidget(auth_group)
+        scroll_layout.addWidget(auth_group)
 
         # Organization group
         org_group = QFrame()
-        org_group.setFrameShape(QFrame.Shape.StyledPanel)
+        org_group.setObjectName("sectionPanel")
+        org_group.setFrameShape(QFrame.Shape.NoFrame)
         org_group_layout = QVBoxLayout(org_group)
         org_group_layout.setContentsMargins(12, 12, 12, 12)
 
@@ -274,6 +337,7 @@ class ConnectionEditDialog(QDialog):
         org_group_layout.addLayout(header)
 
         org_layout = QFormLayout()
+        self._configure_form(org_layout)
         org_group_layout.addLayout(org_layout)
 
         self.cmb_group = QComboBox()
@@ -284,25 +348,43 @@ class ConnectionEditDialog(QDialog):
 
         # Color
         color_layout = QHBoxLayout()
+        color_layout.setSpacing(10)
+        color_layout.setContentsMargins(0, 0, 0, 0)
         self.lbl_color = QLabel(S.connection_edit.combo_none_color)
-        self.lbl_color.setMinimumWidth(100)
-        self.lbl_color.setStyleSheet("border: 1px solid #555; padding: 3px;")
-        btn_choose_color = QPushButton(S.connection_edit.btn_choose_color)
+        self.lbl_color.setMinimumWidth(72)
+        self.lbl_color.setMaximumWidth(120)
+        self.lbl_color.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.lbl_color.setStyleSheet(
+            f"border: 1px solid {colors.border_default}; padding: 6px 8px;"
+            f" border-radius: 4px; color: {colors.text_secondary};"
+        )
+        from src.design_system.button import SecondaryButton
+
+        btn_choose_color = SecondaryButton(S.connection_edit.btn_choose_color, size="sm")
+        if HAS_QTAWESOME:
+            btn_choose_color.setIcon(qta.icon("mdi.palette", color="white"))
         btn_choose_color.clicked.connect(self._choose_color)
-        btn_clear_color = QPushButton(S.connection_edit.btn_clear_color)
+        btn_clear_color = SecondaryButton(S.connection_edit.btn_clear_color, size="sm")
         btn_clear_color.clicked.connect(self._clear_color)
-        color_layout.addWidget(self.lbl_color)
-        color_layout.addWidget(btn_choose_color)
-        color_layout.addWidget(btn_clear_color)
+        color_layout.addWidget(self.lbl_color, 1)
+        color_layout.addWidget(btn_choose_color, 0)
+        color_layout.addWidget(btn_clear_color, 0)
         org_layout.addRow(S.connection_edit.label_color, color_layout)
 
-        layout.addWidget(org_group)
+        scroll_layout.addWidget(org_group)
+        scroll_layout.addStretch()
 
-        # Buttons
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll, 1)
+
+        from src.design_system.button import PrimaryButton, SecondaryButton
+
         buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(8)
 
-        btn_test = QPushButton(S.connection_edit.btn_test_connection)
-        btn_test.setObjectName("btnTest")
+        btn_test = SecondaryButton(S.connection_edit.btn_test_connection, size="sm")
         if HAS_QTAWESOME:
             btn_test.setIcon(qta.icon("mdi.lan-connect", color="white"))
         btn_test.clicked.connect(self._test_connection)
@@ -310,17 +392,21 @@ class ConnectionEditDialog(QDialog):
 
         buttons_layout.addStretch()
 
-        btn_save = QPushButton(S.connection_edit.btn_save)
+        btn_save = PrimaryButton(S.connection_edit.btn_save, size="sm")
         if HAS_QTAWESOME:
             btn_save.setIcon(qta.icon("mdi.content-save", color="white"))
         btn_save.clicked.connect(self._on_save)
         buttons_layout.addWidget(btn_save)
 
-        btn_cancel = QPushButton(S.connection_edit.btn_cancel)
+        btn_cancel = SecondaryButton(S.connection_edit.btn_cancel, size="sm")
         btn_cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(btn_cancel)
 
         layout.addLayout(buttons_layout)
+
+        from src.design_system.tokens import polish_combobox_popups
+
+        polish_combobox_popups(self)
 
         # Initial adjustments
         self._toggle_windows_auth_visibility()
@@ -330,7 +416,7 @@ class ConnectionEditDialog(QDialog):
         self.txt_name.setText(self.connection_name)
 
         db_type = self.config.get("db_type", "sqlserver")
-        index = self.cmb_type.findText(db_type)
+        index = self.cmb_type.findData(db_type)
         if index >= 0:
             self.cmb_type.setCurrentIndex(index)
 
@@ -370,7 +456,7 @@ class ConnectionEditDialog(QDialog):
 
     def _on_db_type_changed(self):
         """When database type changes"""
-        db_type = self.cmb_type.currentText()
+        db_type = self._current_db_type()
 
         # Adjust default port
         default_ports = {"sqlserver": 1433, "mysql": 3306, "mariadb": 3306, "postgresql": 5432, "databricks": 443}
@@ -400,7 +486,7 @@ class ConnectionEditDialog(QDialog):
 
     def _toggle_windows_auth(self):
         """Toggle authentication fields"""
-        db_type = self.cmb_type.currentText()
+        db_type = self._current_db_type()
         auth_mode = self._current_sqlserver_auth_mode()
         is_windows_auth = db_type == "sqlserver" and auth_mode == SQLSERVER_AUTH_WINDOWS
         is_mfa_auth = db_type == "sqlserver" and auth_mode == SQLSERVER_AUTH_ENTRA_MFA
@@ -414,7 +500,7 @@ class ConnectionEditDialog(QDialog):
 
     def _toggle_windows_auth_visibility(self):
         """Shows/hides Windows Auth and Trust Cert based on database type"""
-        db_type = self.cmb_type.currentText()
+        db_type = self._current_db_type()
         is_sqlserver = db_type == "sqlserver"
         is_databricks = db_type == "databricks"
         auth_mode = self._current_sqlserver_auth_mode()
@@ -467,7 +553,11 @@ class ConnectionEditDialog(QDialog):
         """Removes color"""
         self.selected_color = ""
         self.lbl_color.setText(S.connection_edit.combo_none_color)
-        self.lbl_color.setStyleSheet("border: 1px solid #555; padding: 3px;")
+        colors = get_colors()
+        self.lbl_color.setStyleSheet(
+            f"border: 1px solid {colors.border_default}; padding: 6px 8px;"
+            f" border-radius: 4px; color: {colors.text_secondary};"
+        )
 
     def _update_color_label(self):
         """Updates color label"""
@@ -499,9 +589,9 @@ class ConnectionEditDialog(QDialog):
 
         # Create and start worker
         self._test_cancelled = False
-        http_path = self.txt_http_path.text() if self.cmb_type.currentText() == "databricks" else ""
+        http_path = self.txt_http_path.text() if self._current_db_type() == "databricks" else ""
         self.test_worker = ConnectionTestWorker(
-            db_type=self.cmb_type.currentText(),
+            db_type=self._current_db_type(),
             host=self.txt_host.text(),
             port=self.spin_port.value(),
             database=self.txt_database.text(),
@@ -556,7 +646,7 @@ class ConnectionEditDialog(QDialog):
     def get_result(self):
         """Returns edited name and configuration"""
         name = self.txt_name.text().strip()
-        db_type = self.cmb_type.currentText()
+        db_type = self._current_db_type()
         sqlserver_auth_mode = self._current_sqlserver_auth_mode() if db_type == "sqlserver" else ""
         use_windows_auth = db_type == "sqlserver" and sqlserver_auth_mode == SQLSERVER_AUTH_WINDOWS
 

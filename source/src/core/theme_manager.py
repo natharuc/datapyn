@@ -13,14 +13,14 @@ THEMES = {
     "dark": {
         "name": "Dark (VS Code)",
         "editor": {
-            "background": "#1e1e1e",
-            "foreground": "#d4d4d4",
+            "background": "#121a2b",
+            "foreground": "#eef2f7",
             "caret": "#ffffff",
-            "caret_line": "#2a2a2a",
-            "selection": "#264f78",
-            "margin_bg": "#1e1e1e",
-            "margin_fg": "#858585",
-            "brace_match": "#3e3e42",
+            "caret_line": "#161f30",
+            "selection": "rgba(51, 105, 255, 0.35)",
+            "margin_bg": "#121a2b",
+            "margin_fg": "#5c6d85",
+            "brace_match": "#1e2a42",
         },
         "sql": {
             "keyword": "#569cd6",
@@ -39,10 +39,10 @@ THEMES = {
             "identifier": "#9cdcfe",
         },
         "app": {
-            "background": "#1e1e1e",
-            "foreground": "#cccccc",
-            "accent": "#3369FF",
-            "border": "#3e3e42",
+            "background": "#0c111b",
+            "foreground": "#eef2f7",
+            "accent": "#3369ff",
+            "border": "rgba(148, 163, 184, 0.18)",
         },
     },
     "monokai": {
@@ -266,299 +266,10 @@ class ThemeManager:
         return theme["app"]
 
     def get_dialog_stylesheet(self) -> str:
-        """Retorna stylesheet para dialogs"""
-        c = self.get_app_colors()
-        return f"""
-            QDialog {{
-                background-color: {c["background"]};
-                color: {c["foreground"]};
-            }}
-            QLabel {{
-                color: {c["foreground"]};
-            }}
-            QLineEdit {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
-                padding: 10px 12px;
-                border-radius: 8px;
-                min-height: 20px;
-            }}
-            QLineEdit:focus {{
-                border: 2px solid {c["accent"]};
-            }}
-            QLineEdit:hover {{
-                border-color: {c["accent"]};
-            }}
-            QTextEdit {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
-                border-radius: 8px;
-            }}
-            QComboBox {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
-                padding: 10px 12px;
-                border-radius: 8px;
-                min-height: 24px;
-            }}
-            QComboBox:hover {{
-                border-color: {c["accent"]};
-            }}
-            QComboBox:focus {{
-                border: 2px solid {c["accent"]};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                border-radius: 8px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {c["background"]};
-                color: {c["foreground"]};
-                selection-background-color: {c["accent"]};
-                border-radius: 8px;
-                padding: 4px;
-            }}
-            QComboBox QAbstractItemView::item {{
-                padding: 8px;
-                border-radius: 6px;
-            }}
-            QComboBox QAbstractItemView::item:hover {{
-                background-color: {c["border"]};
-            }}
-            QCheckBox {{
-                color: {c["foreground"]};
-                spacing: 8px;
-            }}
-            QCheckBox::indicator {{
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-            }}
-            QCheckBox::indicator:unchecked {{
-                border: 2px solid {c["border"]};
-                background-color: {c["background"]};
-                border-radius: 4px;
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {c["accent"]};
-                border: 2px solid {c["accent"]};
-                border-radius: 4px;
-            }}
-            QCheckBox::indicator:unchecked:hover {{
-                border-color: {c["accent"]};
-            }}
-            QSpinBox {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
-                padding: 8px 10px;
-                border-radius: 8px;
-                min-height: 20px;
-            }}
-            QSpinBox:hover {{
-                border-color: {c["accent"]};
-            }}
-            QSpinBox:focus {{
-                border: 2px solid {c["accent"]};
-            }}
-            QPushButton {{
-                background-color: {c["accent"]};
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 8px;
-                font-weight: 600;
-                min-height: 24px;
-            }}
-            QPushButton:hover {{
-                background-color: {c["accent"]};
-                opacity: 0.9;
-            }}
-            QPushButton:pressed {{
-                background-color: {c["accent"]};
-            }}
-            QPushButton#btnCancel {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-            }}
-            QPushButton#btnCancel:hover {{
-                background-color: {c["foreground"]};
-                color: {c["background"]};
-            }}
-            QPushButton#btnReset {{
-                background-color: #ef4444;
-            }}
-            QPushButton#btnReset:hover {{
-                background-color: #f87171;
-            }}
-            QTableWidget {{
-                background-color: {c["background"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
-                border-radius: 8px;
-                gridline-color: {c["border"]};
-            }}
-            QTableWidget::item {{
-                padding: 8px;
-                border-radius: 4px;
-            }}
-            QTableWidget::item:selected {{
-                background-color: {c["accent"]};
-            }}
-            QHeaderView::section {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                padding: 8px 10px;
-                border: none;
-                border-right: 1px solid {c["background"]};
-                border-bottom: 1px solid {c["background"]};
-                font-weight: 600;
-            }}
-            QTableView {{
-                background-color: {c["background"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
-                border-radius: 8px;
-                gridline-color: {c["border"]};
-            }}
-            QTableView::item {{
-                padding: 8px;
-                border-radius: 4px;
-            }}
-            QTableView::item:selected {{
-                background-color: {c["accent"]};
-            }}
-            QGroupBox {{
-                color: {c["foreground"]};
-                font-weight: 600;
-                border: 1px solid {c["border"]};
-                border-radius: 12px;
-                margin-top: 16px;
-                padding: 16px;
-                padding-top: 24px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 8px;
-            }}
-            QListWidget {{
-                background-color: {c["background"]};
-                border: 1px solid {c["border"]};
-                border-radius: 8px;
-                color: {c["foreground"]};
-                padding: 4px;
-            }}
-            QListWidget::item {{
-                padding: 10px 12px;
-                border-radius: 6px;
-                margin: 2px 0;
-            }}
-            QListWidget::item:hover {{
-                background-color: {c["border"]};
-            }}
-            QListWidget::item:selected {{
-                background-color: {c["accent"]};
-                color: white;
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 8px;
-                margin: 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(128, 128, 128, 0.3);
-                border-radius: 4px;
-                min-height: 40px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: rgba(128, 128, 128, 0.5);
-            }}
-            QScrollBar::handle:vertical:pressed {{
-                background: rgba(128, 128, 128, 0.7);
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
-            QScrollBar:horizontal {{
-                background: transparent;
-                height: 8px;
-                margin: 0px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: rgba(128, 128, 128, 0.3);
-                border-radius: 4px;
-                min-width: 40px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:horizontal:hover {{
-                background: rgba(128, 128, 128, 0.5);
-            }}
-            QScrollBar::handle:horizontal:pressed {{
-                background: rgba(128, 128, 128, 0.7);
-            }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0px;
-            }}
-            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
-                background: none;
-            }}
-            QScrollBar::corner {{
-                background: transparent;
-            }}
-            QTreeWidget {{
-                background-color: {c["background"]};
-                color: {c["foreground"]};
-                border: 1px solid {c["border"]};
-                border-radius: 8px;
-            }}
-            QTreeWidget::item {{
-                padding: 6px 8px;
-                border-radius: 4px;
-            }}
-            QTreeWidget::item:hover {{
-                background-color: {c["border"]};
-            }}
-            QTreeWidget::item:selected {{
-                background-color: {c["accent"]};
-            }}
-            QTreeWidget QLineEdit {{
-                background-color: {c["border"]};
-                color: {c["foreground"]};
-                border: 2px solid {c["accent"]};
-                border-radius: 6px;
-                padding: 4px 8px;
-                selection-background-color: {c["accent"]};
-                selection-color: white;
-            }}
-            QToolBar {{
-                background-color: {c["background"]};
-                border: none;
-                border-bottom: 1px solid {c["border"]};
-                spacing: 8px;
-                padding: 8px;
-            }}
-            QToolBar QToolButton {{
-                border-radius: 6px;
-                padding: 6px;
-            }}
-            QToolBar QToolButton:hover {{
-                background-color: {c["border"]};
-            }}
-            QFrame[frameShape="StyledPanel"] {{
-                background-color: {c["background"]};
-                border: 1px solid {c["border"]};
-                border-radius: 12px;
-                padding: 12px;
-            }}
-        """
+        """Dialog stylesheet — design-system blue dark (single source of truth)."""
+        from src.design_system.tokens import get_dialog_base_stylesheet
+
+        return get_dialog_base_stylesheet()
 
     def get_table_colors(self) -> Dict[str, str]:
         """Retorna cores para tabelas"""

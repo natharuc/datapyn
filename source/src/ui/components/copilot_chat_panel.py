@@ -1104,14 +1104,16 @@ class PyniaChatPanel(QWidget):
             logger.error(f"Chat template not found: {template_path}")
             # Fallback minimal HTML
             fallback_text = S.pynia.template_not_found
+            from src.design_system.font_manager import FONT_FAMILY_PRIMARY
+
             self._chat_webview.setHtml("""
                 <!DOCTYPE html>
                 <html>
-                <body style="background:%s;color:%s;font-family:sans-serif;padding:20px;">
+                <body style="background:%s;color:%s;font-family:%s;padding:20px;">
                     <p>%s</p>
                 </body>
                 </html>
-            """ % (colors.bg_primary, colors.text_secondary, fallback_text))
+            """ % (colors.bg_primary, colors.text_secondary, FONT_FAMILY_PRIMARY, fallback_text))
 
     def _apply_theme(self):
         """Apply current design-system colors to the native shell and WebView."""
@@ -1120,6 +1122,8 @@ class PyniaChatPanel(QWidget):
             from PyQt6.QtGui import QColor
             self._chat_webview.setStyleSheet(f"background-color: {colors.bg_primary};")
             self._chat_webview.page().setBackgroundColor(QColor(colors.bg_primary))
+        from src.design_system.font_manager import FONT_FAMILY_PRIMARY
+
         theme_payload = {
             "bg_primary": colors.bg_primary,
             "bg_secondary": colors.bg_secondary,
@@ -1132,6 +1136,7 @@ class PyniaChatPanel(QWidget):
             "interactive_primary_hover": colors.interactive_primary_hover,
             "interactive_secondary": colors.interactive_secondary,
             "interactive_secondary_hover": colors.interactive_secondary_hover,
+            "font_family": FONT_FAMILY_PRIMARY,
         }
         self._run_chat_js(f"setTheme({json.dumps(theme_payload)})")
     
@@ -2220,13 +2225,27 @@ class PyniaChatPanel(QWidget):
         """Called when the new chat WebView app is ready."""
         self._webview_ready = True
         self._run_chat_js(f"setLabels({json.dumps(self._labels_payload())})")
-        welcome_title = getattr(S.pynia, "welcome_title", S.pynia.title)
-        self._run_chat_js(
-            f"setWelcomeText({json.dumps(welcome_title)}, {json.dumps(S.pynia.welcome_message)})"
-        )
         from src.assets.pynia_branding import pynia_logo_data_uri
 
-        self._run_chat_js(f"setWelcomeLogo({json.dumps(pynia_logo_data_uri())})")
+        welcome_payload = {
+            "title": getattr(S.pynia, "welcome_title", S.pynia.title),
+            "tagline": getattr(S.pynia, "welcome_tagline", ""),
+            "hint": getattr(
+                S.pynia,
+                "welcome_hint",
+                getattr(S.pynia, "welcome_message", ""),
+            ),
+            "features": [
+                getattr(S.pynia, "welcome_feature_sql", ""),
+                getattr(S.pynia, "welcome_feature_python", ""),
+                getattr(S.pynia, "welcome_feature_tools", ""),
+            ],
+            "logo": pynia_logo_data_uri(),
+        }
+        welcome_payload["features"] = [
+            f for f in welcome_payload["features"] if f
+        ]
+        self._run_chat_js(f"setWelcome({json.dumps(welcome_payload)})")
         self._apply_theme()
         self._sync_all_web_state()
         self._try_begin_auto_auth_on_open()

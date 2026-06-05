@@ -12,8 +12,9 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QMenu,
+    QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QByteArray, QMimeData
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QByteArray, QMimeData, QRectF
 from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap, QPainter, QDrag
 from PyQt6.QtSvg import QSvgRenderer
 import qtawesome as qta
@@ -32,15 +33,18 @@ ICONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "asse
 
 # Icon and color mapping by database type (fallback to qtawesome)
 DB_TYPE_ICONS = {
-    "sqlserver": {"icon": "mdi.database", "color": "#CC2927"},  # SQL Server - vermelho Microsoft
-    "mssql": {"icon": "mdi.database", "color": "#CC2927"},  # Alias
-    "mysql": {"icon": "mdi.database-outline", "color": "#00758F"},  # MySQL - azul
-    "mariadb": {"icon": "mdi.database-marker", "color": "#C0765A"},  # MariaDB - marrom/coral
-    "postgresql": {"icon": "mdi.database-cog", "color": "#336791"},  # PostgreSQL - azul
-    "postgres": {"icon": "mdi.database-cog", "color": "#336791"},  # Alias
-    "sqlite": {"icon": "mdi.file-document-outline", "color": "#003B57"},  # SQLite - azul escuro
-    "databricks": {"icon": "mdi.cloud-braces", "color": "#FF3621"},  # Databricks - vermelho/laranja
+    "sqlserver": {"icon": "mdi.database", "color": "#CC2927"},
+    "mssql": {"icon": "mdi.database", "color": "#CC2927"},
+    "mysql": {"icon": "mdi.database-outline", "color": "#00758F"},
+    "mariadb": {"icon": "mdi.database-marker", "color": "#C0765A"},
+    "postgresql": {"icon": "mdi.database-cog", "color": "#336791"},
+    "postgres": {"icon": "mdi.database-cog", "color": "#336791"},
+    "sqlite": {"icon": "mdi.file-document-outline", "color": "#003B57"},
+    "databricks": {"icon": "mdi.cloud-braces", "color": "#FF3621"},
 }
+
+_CONNECTION_ROW_HEIGHT = 52
+_CONNECTION_ICON_SIZE = 28
 
 
 def _normalize_db_type(db_type: str) -> str:
@@ -63,84 +67,69 @@ def _normalize_db_type(db_type: str) -> str:
     return db_type_lower
 
 
-def _load_svg_with_color(svg_path: str, color: str, size: int = 32) -> QIcon:
-    """Load SVG and apply custom color
-
-    Args:
-        svg_path: Path to SVG file
-        color: Color in hex format (#RRGGBB)
-        size: Icon size in pixels
-
-    Returns:
-        QIcon with applied color
-    """
+def _load_svg_with_color(svg_path: str, color: str, size: int = 32) -> QIcon | None:
+    """Load SVG and apply custom color."""
     try:
         with open(svg_path, "r", encoding="utf-8") as f:
             svg_content = f.read()
 
-        # Replace colors in CSS (inside <style> or style attribute)
-        # Patterns: fill:#XXXXXX or fill: #XXXXXX or fill:rgb(...) etc
         svg_content = re.sub(r"fill\s*:\s*#[0-9a-fA-F]{3,6}", f"fill:{color}", svg_content)
         svg_content = re.sub(r"stroke\s*:\s*#[0-9a-fA-F]{3,6}", f"stroke:{color}", svg_content)
-
-        # Replace colors in attributes (fill="..." and stroke="...")
         svg_content = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg_content)
         svg_content = re.sub(r'stroke="[^"]*"', f'stroke="{color}"', svg_content)
 
-        # If no fill, add to first path/circle/rect element
         if "fill=" not in svg_content and "fill:" not in svg_content:
-            svg_content = re.sub(r"<(path|circle|rect|polygon)", f'<\\1 fill="{color}"', svg_content)
+            svg_content = re.sub(
+                r"<(path|circle|rect|polygon)", f'<\\1 fill="{color}"', svg_content
+            )
 
-        # Render SVG
-        svg_bytes = QByteArray(svg_content.encode("utf-8"))
-        renderer = QSvgRenderer(svg_bytes)
-
+        renderer = QSvgRenderer(QByteArray(svg_content.encode("utf-8")))
         if not renderer.isValid():
             return None
 
-        # Create pixmap and paint SVG
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
 
         painter = QPainter(pixmap)
-        renderer.render(painter)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        view_box = renderer.viewBoxF()
+        if view_box.width() > 0 and view_box.height() > 0:
+            inset = size * 0.1
+            target = size - (2 * inset)
+            scale = min(target / view_box.width(), target / view_box.height())
+            draw_w = view_box.width() * scale
+            draw_h = view_box.height() * scale
+            x = (size - draw_w) / 2
+            y = (size - draw_h) / 2
+            renderer.render(painter, QRectF(x, y, draw_w, draw_h))
+        else:
+            renderer.render(painter)
         painter.end()
-
         return QIcon(pixmap)
-
     except Exception as e:
         logger.warning(f"Error loading SVG {svg_path}: {e}")
         return None
 
 
-def get_db_icon(db_type: str, custom_color: str = None) -> QIcon:
-    """Return icon for database type
+def get_db_icon(db_type: str, custom_color: str = None, size: int = 32) -> QIcon:
+    """Return icon for database type.
 
     Priority:
     1. Custom SVG in assets/icons/db/{db_type}.svg
     2. Default qtawesome icon
-
-    Args:
-        db_type: Database type (sqlserver, mysql, etc)
-        custom_color: Custom color (optional, overrides default)
-
-    Returns:
-        QIcon with database icon
     """
     db_type_normalized = _normalize_db_type(db_type)
-
-    # Get default or custom color
     config = DB_TYPE_ICONS.get(db_type_normalized, {"icon": "mdi.database", "color": "#64b5f6"})
     color = custom_color if custom_color else config["color"]
 
-    # Try to load custom SVG
     svg_path = os.path.join(ICONS_DIR, f"{db_type_normalized}.svg")
     if os.path.exists(svg_path):
-        icon = _load_svg_with_color(svg_path, color)
-        if icon:
+        icon = _load_svg_with_color(svg_path, color, size=size)
+        if icon is not None:
             return icon
 
-    # Fallback to qtawesome
     return qta.icon(config["icon"], color=color)
 
 
@@ -149,38 +138,52 @@ class ConnectionItemWidget(QWidget):
 
     def __init__(self, name: str, group: str = "", icon: QIcon = None, parent=None):
         super().__init__(parent)
+        self.setFixedHeight(_CONNECTION_ROW_HEIGHT)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Icone
         if icon:
             icon_label = QLabel()
-            icon_label.setPixmap(icon.pixmap(24, 24))
-            icon_label.setFixedSize(28, 28)
-            layout.addWidget(icon_label)
+            icon_label.setPixmap(icon.pixmap(_CONNECTION_ICON_SIZE, _CONNECTION_ICON_SIZE))
+            icon_label.setFixedSize(_CONNECTION_ICON_SIZE, _CONNECTION_ICON_SIZE)
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # Container for texts
         text_container = QWidget()
+        text_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         text_layout = QVBoxLayout(text_container)
         text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(0)
+        text_layout.setSpacing(2)
+        text_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Connection name (main line)
         colors = get_colors()
         self.name_label = QLabel(name)
-        self.name_label.setStyleSheet(f"font-size: 13px; font-weight: 500; color: {colors.text_primary};")
-        text_layout.addWidget(self.name_label)
+        self.name_label.setStyleSheet(
+            f"font-size: 13px; font-weight: 500; color: {colors.text_primary};"
+        )
+        self.name_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
 
-        # Group (secondary line - smaller and gray)
+        text_layout.addStretch(1)
+        text_layout.addWidget(self.name_label, 0, Qt.AlignmentFlag.AlignLeft)
         if group:
             self.group_label = QLabel(group)
-            self.group_label.setStyleSheet(f"font-size: 10px; color: {colors.text_secondary};")
-            text_layout.addWidget(self.group_label)
+            self.group_label.setStyleSheet(
+                f"font-size: 10px; color: {colors.text_secondary};"
+            )
+            self.group_label.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+            )
+            text_layout.addWidget(self.group_label, 0, Qt.AlignmentFlag.AlignLeft)
+        text_layout.addStretch(1)
 
-        layout.addWidget(text_container)
-        layout.addStretch()
+        layout.addWidget(text_container, 1, Qt.AlignmentFlag.AlignVCenter)
 
 
 class DraggableConnectionList(QListWidget):
@@ -249,14 +252,17 @@ class ConnectionItem(QListWidgetItem):
         custom_color = config.get("color", "")
 
         # Database-specific icon (custom SVG or qtawesome)
-        self.icon = get_db_icon(db_type, custom_color if custom_color else None)
+        self.icon = get_db_icon(
+            db_type,
+            custom_color if custom_color else None,
+            size=_CONNECTION_ICON_SIZE,
+        )
         self.group = group
 
         # Complete tooltip
         self.setToolTip(f"{db_type}\n{host}\n{database}")
 
-        # Size to accommodate 2 lines if has group
-        self.setSizeHint(QSize(250, 48 if group else 36))
+        self.setSizeHint(QSize(250, _CONNECTION_ROW_HEIGHT))
 
 
 class ActiveConnectionWidget(QFrame):
@@ -362,19 +368,19 @@ class ConnectionsList(QFrame):
         # List (with drag enabled)
         self.list_widget = DraggableConnectionList()
         self.list_widget.setMinimumHeight(150)
-        self.list_widget.setIconSize(QSize(28, 28))  # Larger icons
+        self.list_widget.setIconSize(QSize(_CONNECTION_ICON_SIZE, _CONNECTION_ICON_SIZE))
         self.list_widget.setSpacing(4)  # Spacing between items
         self.list_widget.setWordWrap(True)  # Allow line break
         self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)  # Don't truncate with "..."
         self.list_widget.setStyleSheet(f"""
             QListWidget {{
                 background: {colors.bg_primary};
-                border: 1px solid {colors.border_muted};
+                border: none;
                 border-radius: 8px;
                 padding: 4px;
             }}
             QListWidget::item {{
-                padding: 6px 8px;
+                padding: 0px 6px;
                 border-radius: 6px;
                 margin: 2px 0px;
             }}

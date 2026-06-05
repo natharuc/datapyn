@@ -32,37 +32,39 @@ def get_icon_path():
 
 
 def _apply_dark_palette(app):
-    """Aplica paleta dark nativa via QPalette para visual consistente"""
+    """Native QPalette — DataPyn blue dark (matches design-system tokens)."""
+    from src.design_system.tokens import (
+        CHROME_ACCENT,
+        CHROME_BG,
+        CHROME_CARD,
+        CHROME_MUTED,
+        CHROME_TEXT,
+    )
+
     palette = QPalette()
 
-    # Backgrounds - with subtle blue undertone
-    palette.setColor(QPalette.ColorRole.Window, QColor("#181a1f"))
-    palette.setColor(QPalette.ColorRole.Base, QColor("#1f2228"))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#282c34"))
+    palette.setColor(QPalette.ColorRole.Window, QColor(CHROME_BG))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#121a2b"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(CHROME_CARD))
 
-    # Text
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#dcdee4"))
-    palette.setColor(QPalette.ColorRole.Text, QColor("#dcdee4"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(CHROME_TEXT))
+    palette.setColor(QPalette.ColorRole.Text, QColor(CHROME_TEXT))
     palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#70758a"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(CHROME_MUTED))
 
-    # Buttons
-    palette.setColor(QPalette.ColorRole.Button, QColor("#282c34"))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#dcdee4"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#1a2438"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(CHROME_TEXT))
 
-    # Highlights - modern blue
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#3b82f6"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(CHROME_ACCENT))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
 
-    # Misc
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#282c34"))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#dcdee4"))
-    palette.setColor(QPalette.ColorRole.Link, QColor("#3b82f6"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(CHROME_CARD))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(CHROME_TEXT))
+    palette.setColor(QPalette.ColorRole.Link, QColor(CHROME_ACCENT))
 
-    # Disabled
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#50556b"))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#50556b"))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#50556b"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#5c6d85"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#5c6d85"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#5c6d85"))
 
     app.setPalette(palette)
 
@@ -107,69 +109,10 @@ def main():
     app.setFont(global_font)
 
     splash.set_progress(18, "Aplicando tema…")
-    from src.design_system.font_manager import FONT_FAMILY_PRIMARY
-
-    app.setStyleSheet(f"""
-        * {{
-            font-family: {FONT_FAMILY_PRIMARY};
-        }}
-        QToolTip {{
-            font-size: 11px;
-            padding: 6px 10px;
-            border-radius: 6px;
-        }}
-        QScrollBar:vertical {{
-            background: transparent;
-            width: 8px;
-            margin: 0px;
-        }}
-        QScrollBar::handle:vertical {{
-            background: rgba(128, 128, 128, 0.3);
-            border-radius: 4px;
-            min-height: 40px;
-            margin: 2px;
-        }}
-        QScrollBar::handle:vertical:hover {{
-            background: rgba(128, 128, 128, 0.5);
-        }}
-        QScrollBar::handle:vertical:pressed {{
-            background: rgba(128, 128, 128, 0.7);
-        }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-            height: 0px;
-        }}
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-            background: none;
-        }}
-        QScrollBar:horizontal {{
-            background: transparent;
-            height: 8px;
-            margin: 0px;
-        }}
-        QScrollBar::handle:horizontal {{
-            background: rgba(128, 128, 128, 0.3);
-            border-radius: 4px;
-            min-width: 40px;
-            margin: 2px;
-        }}
-        QScrollBar::handle:horizontal:hover {{
-            background: rgba(128, 128, 128, 0.5);
-        }}
-        QScrollBar::handle:horizontal:pressed {{
-            background: rgba(128, 128, 128, 0.7);
-        }}
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-            width: 0px;
-        }}
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
-            background: none;
-        }}
-        QScrollBar::corner {{
-            background: transparent;
-        }}
-    """)
+    from src.design_system.stylesheet import get_application_stylesheet
 
     _apply_dark_palette(app)
+    app.setStyleSheet(get_application_stylesheet())
 
     splash.set_progress(28, "Carregando idioma…")
     from PyQt6.QtCore import QSettings

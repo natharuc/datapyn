@@ -7,6 +7,7 @@ from PyQt6.QtCore import QTimer, QElapsedTimer
 import qtawesome as qta
 
 from src.language import S
+from src.design_system.tokens import get_colors
 
 
 class MainStatusBar(QStatusBar):
@@ -22,17 +23,18 @@ class MainStatusBar(QStatusBar):
 
     def _setup_style(self):
         """Configure statusbar style"""
-        self.setStyleSheet("""
-            QStatusBar {
-                background-color: #252526;
-                border-top: 1px solid #3e3e42;
-                color: #999999;
+        colors = get_colors()
+        self.setStyleSheet(f"""
+            QStatusBar {{
+                background-color: {colors.bg_secondary};
+                border-top: 1px solid {colors.border_muted};
+                color: {colors.text_tertiary};
                 font-size: 12px;
-            }
-            QStatusBar QLabel {
-                color: #999999;
+            }}
+            QStatusBar QLabel {{
+                color: {colors.text_tertiary};
                 padding: 0px 6px;
-            }
+            }}
         """)
 
     def _update_connection_icon(self, connected: bool, text: str = ""):

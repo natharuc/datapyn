@@ -25,7 +25,6 @@ from PyQt6.QtWidgets import (
     QMenu,
     QToolBar,
     QStatusBar,
-    QMessageBox,
     QTextEdit,
     QDockWidget,
     QLabel,
@@ -481,39 +480,46 @@ class MainWindow(
 
     def closeEvent(self, event):
         """On window close"""
-        # Ask for confirmation only when there are unsaved changes
-        has_unsaved = any(
-            getattr(widget, "_is_modified", False) for widget in self._session_widgets.values()
+        from src.design_system.message_box import (
+            ask_quit_application,
+            ask_save_discard_cancel,
+            ask_yes_no,
         )
 
+        has_unsaved = any(
+            getattr(widget, "_is_modified", False)
+            for widget in self._session_widgets.values()
+        )
         if has_unsaved:
-            reply = QMessageBox.question(
+            action = ask_save_discard_cancel(
                 self,
-                S.dialogs.close_confirm_title,
-                S.dialogs.close_confirm_msg,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                getattr(S.dialogs, "quit_unsaved_title", S.dialogs.close_tab_unsaved_title),
+                getattr(
+                    S.dialogs, "quit_unsaved_message", S.dialogs.close_tab_unsaved_msg
+                ),
             )
-
-            if reply == QMessageBox.StandardButton.No:
+            if action == "cancel":
                 event.ignore()
                 return
+            if action == "save":
+                self._save_file()
+        elif not ask_quit_application(self):
+            event.ignore()
+            return
 
-        # Check if there is execution in progress
         has_running = any(
-            widget._is_executing for widget in self._session_widgets.values() if hasattr(widget, "_is_executing")
+            widget._is_executing
+            for widget in self._session_widgets.values()
+            if hasattr(widget, "_is_executing")
         )
 
         if has_running:
-            reply = QMessageBox.question(
+            if not ask_yes_no(
                 self,
                 S.dialogs.execution_in_progress_title,
                 S.dialogs.execution_in_progress_msg,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-
-            if reply == QMessageBox.StandardButton.No:
+                default_yes=False,
+            ):
                 event.ignore()
                 return
 
@@ -525,6 +531,9 @@ class MainWindow(
         self._is_closing = True
         if hasattr(self, "_sessions_to_load"):
             self._sessions_to_load.clear()
+
+        if hasattr(self, "_abort_all_background_connections"):
+            self._abort_all_background_connections(wait_ms=3000)
 
         # Save sessions before closing
         self._save_sessions()
@@ -542,9 +551,11 @@ class MainWindow(
 
         for thread_attr in ("_entity_info_threads", "_connection_threads"):
             active_threads = list(getattr(self, thread_attr, []))
-            for thread, worker in active_threads:
+            for item in active_threads:
+                thread = item[0]
+                worker = item[1] if len(item) > 1 else None
                 try:
-                    if hasattr(worker, "cancel"):
+                    if worker is not None and hasattr(worker, "cancel"):
                         worker.cancel()
                 except RuntimeError:
                     pass

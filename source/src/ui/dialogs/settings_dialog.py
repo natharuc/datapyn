@@ -114,46 +114,43 @@ class SettingsDialog(QDialog):
     def _setup_ui(self):
         """Sets up the UI with tabs"""
         self.setWindowTitle(S.settings.title)
-        self.setModal(True)
-        self.setMinimumSize(700, 500)
         self.resize(750, 550)
 
-        # Remove maximize/minimize buttons
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
+        from src.design_system.frameless_dialog import install_frameless_shell
 
-        # Apply theme
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
-
-        # Get design tokens
         colors = get_colors()
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout = install_frameless_shell(
+            self,
+            S.settings.title,
+            min_width=700,
+            min_height=500,
+            content_margins=(20, 16, 20, 20),
+            content_spacing=15,
+        )
 
         # Tab widget
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(f"""
             QTabWidget::pane {{
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS.radius_sm}px;
+                border: none;
+                border-top: 1px solid {colors.border_default};
                 background-color: {colors.bg_primary};
             }}
             QTabBar::tab {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                padding: 10px 24px;
-                border: 1px solid {colors.border_default};
-                border-bottom: none;
-                border-top-left-radius: {RADIUS.radius_sm}px;
-                border-top-right-radius: {RADIUS.radius_sm}px;
-                margin-right: 2px;
+                background: transparent;
+                color: {colors.text_secondary};
+                padding: 10px 22px;
+                border: none;
+                border-bottom: 2px solid transparent;
+                margin-right: 4px;
             }}
             QTabBar::tab:selected {{
-                background-color: {colors.bg_primary};
+                color: {colors.text_primary};
                 border-bottom: 2px solid {colors.interactive_primary};
             }}
             QTabBar::tab:hover:!selected {{
+                color: {colors.text_primary};
                 background-color: {colors.bg_elevated};
             }}
         """)
@@ -196,14 +193,15 @@ class SettingsDialog(QDialog):
         btn_reset.setFixedHeight(32)
         btn_reset.setStyleSheet(f"""
             QPushButton {{
-                background-color: {colors.bg_elevated};
-                color: white;
-                border: none;
+                background-color: {colors.interactive_secondary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
                 padding: 6px 16px;
                 border-radius: 4px;
             }}
             QPushButton:hover {{
-                background-color: {colors.bg_tertiary};
+                border-color: {colors.interactive_primary};
+                color: {colors.text_primary};
             }}
         """)
         btn_reset.clicked.connect(self._reset_defaults)
@@ -215,14 +213,14 @@ class SettingsDialog(QDialog):
         btn_cancel.setFixedHeight(32)
         btn_cancel.setStyleSheet(f"""
             QPushButton {{
-                background-color: {colors.bg_elevated};
-                color: white;
-                border: none;
+                background-color: {colors.interactive_secondary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
                 padding: 6px 20px;
                 border-radius: 4px;
             }}
             QPushButton:hover {{
-                background-color: {colors.bg_tertiary};
+                border-color: {colors.interactive_primary};
             }}
         """)
         btn_cancel.clicked.connect(self.reject)
@@ -240,7 +238,7 @@ class SettingsDialog(QDialog):
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: {colors.interactive_primary}dd;
+                background-color: {colors.interactive_primary_hover};
             }}
         """)
         btn_save.clicked.connect(self._save_all)
@@ -2255,13 +2253,12 @@ class SettingsDialog(QDialog):
 
     def _reset_defaults(self):
         """Restores default shortcuts"""
-        reply = QMessageBox.question(
+        from src.design_system.message_box import ask_yes_no
+
+        if ask_yes_no(
             self,
             S.settings.confirm_restore_title,
             S.settings.confirm_restore_msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
+        ):
             self.shortcut_manager.reset_to_defaults()
             self._load_shortcuts()
