@@ -9,6 +9,7 @@ import logging
 from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import QMessageBox
 
+from src.design_system.message_box import show_error, show_warning
 from src.database.database_connector import get_connector_database_context
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
@@ -435,22 +436,12 @@ class ConnectionsMixin:
             self.action_label.setText(S.status.connection_updated.format(name=name))
 
     def _show_warning(self, title: str, message: str):
-        """Shows warning with icon"""
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle(title)
-        msg.setText(message)
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg.exec()
+        """Shows warning using the frameless dialog style."""
+        show_warning(self, title, message)
 
     def _show_error(self, title: str, message: str):
-        """Shows error with icon"""
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Critical)
-        msg.setWindowTitle(title)
-        msg.setText(message)
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg.exec()
+        """Shows error using the frameless dialog style."""
+        show_error(self, title, message)
 
     def _show_info(self, title: str, message: str):
         """Shows information with icon"""

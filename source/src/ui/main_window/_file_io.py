@@ -16,6 +16,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
+from src.design_system.message_box import show_warning
 from src.database.database_connector import get_connector_database_context
 from src.ui.main_window._workers import _read_file_with_encoding_fallback
 from src.language import S
@@ -722,12 +723,12 @@ class FileIOMixin:
 
         current_widget = self._get_current_session_widget()
         if not current_widget:
-            QMessageBox.warning(self, S.dialogs.warning, S.dialogs.export_no_session)
+            show_warning(self, S.dialogs.warning, S.dialogs.export_no_session)
             return
 
         blocks = current_widget.editor.get_blocks()
         if not blocks:
-            QMessageBox.warning(self, S.dialogs.warning, S.dialogs.export_no_blocks)
+            show_warning(self, S.dialogs.warning, S.dialogs.export_no_blocks)
             return
 
         filename, _ = QFileDialog.getSaveFileName(

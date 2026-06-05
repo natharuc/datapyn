@@ -848,6 +848,11 @@ def launch_deferred_zip_update(
     return _launch_powershell_deferred_update(zip_path, ver, root)
 
 
+def _is_frozen_runtime() -> bool:
+    """True when running as a PyInstaller bundle (not ``python main.py``)."""
+    return bool(getattr(sys, "frozen", False))
+
+
 def _stage_updater_executable(source_exe: Path, version: str) -> Path:
     """Copy DataPyn.exe to TEMP so the updater can replace the install folder."""
     staging = Path(tempfile.gettempdir()) / f"DataPyn-Update-{normalize_version(version)}.exe"
@@ -874,7 +879,7 @@ def launch_setup_update(
         return False, f"{EXE_NAME} not found in {root}"
 
     try:
-        if getattr(sys, "frozen", False):
+        if _is_frozen_runtime():
             updater_exe = _stage_updater_executable(app_exe, ver)
             command = [
                 str(updater_exe),

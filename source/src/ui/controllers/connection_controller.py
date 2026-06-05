@@ -306,9 +306,6 @@ class ConnectionController(QObject):
     
     def _show_warning(self, title: str, message: str):
         """Shows warning dialog"""
-        msg = QMessageBox(self._main)
-        msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle(title)
-        msg.setText(message)
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg.exec()
+        from src.design_system.message_box import show_warning
+
+        show_warning(self._main, title, message)

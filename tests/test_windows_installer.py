@@ -181,8 +181,12 @@ class TestDeferredUpdate:
 
 
 class TestLaunchSetupUpdate:
-    def test_launch_setup_update_spawns_staged_exe_when_frozen(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(sys, "frozen", True, raising=False)
+    @patch("src.services.windows_installer._is_frozen_runtime", return_value=True)
+    @patch("src.services.windows_installer._spawn_detached")
+    @patch("src.services.windows_installer._stage_updater_executable")
+    def test_launch_setup_update_spawns_detached(
+        self, mock_stage, mock_spawn, _mock_frozen, tmp_path
+    ):
         zip_path = tmp_path / "DataPyn-1.2.0-windows.zip"
         zip_path.write_bytes(b"PK")
         install_dir = tmp_path / "DataPyn"
@@ -191,15 +195,9 @@ class TestLaunchSetupUpdate:
         app_exe.write_bytes(b"MZ")
         staged = tmp_path / "DataPyn-Update-1.2.0.exe"
         staged.write_bytes(b"MZ")
+        mock_stage.return_value = staged
 
-        with (
-            patch(
-                "src.services.windows_installer._stage_updater_executable",
-                return_value=staged,
-            ) as mock_stage,
-            patch("src.services.windows_installer._spawn_detached") as mock_spawn,
-        ):
-            ok, err = launch_setup_update(zip_path, "1.2.0", install_dir)
+        ok, err = launch_setup_update(zip_path, "1.2.0", install_dir)
 
         assert ok is True
         assert err == ""
@@ -211,16 +209,18 @@ class TestLaunchSetupUpdate:
         assert command[2] == str(zip_path)
         assert cwd == staged.parent
 
-    def test_launch_setup_update_uses_source_main_in_dev(self, monkeypatch, tmp_path):
-        monkeypatch.delattr(sys, "frozen", raising=False)
+    @patch("src.services.windows_installer._is_frozen_runtime", return_value=False)
+    @patch("src.services.windows_installer._spawn_detached")
+    def test_launch_setup_update_uses_source_main_in_dev(
+        self, mock_spawn, _mock_frozen, tmp_path
+    ):
         zip_path = tmp_path / "DataPyn-1.2.0-windows.zip"
         zip_path.write_bytes(b"PK")
         install_dir = tmp_path / "DataPyn"
         install_dir.mkdir()
         (install_dir / "DataPyn.exe").write_bytes(b"MZ")
 
-        with patch("src.services.windows_installer._spawn_detached") as mock_spawn:
-            ok, err = launch_setup_update(zip_path, "1.2.0", install_dir)
+        ok, err = launch_setup_update(zip_path, "1.2.0", install_dir)
 
         assert ok is True
         assert err == ""
