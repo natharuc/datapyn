@@ -156,6 +156,7 @@
     "cancel_btn": "Cancelar",
     "yes_btn": "Sim",
     "no_btn": "Nao",
+    "btn_ok": "OK",
     "confirm_reset_title": "Confirmar Reset",
     "confirm_reset_msg": "Isso ira resetar completamente o layout dos paineis para o padrao.\n\nTem certeza?",
     "layout_reset_title": "Layout Resetado",

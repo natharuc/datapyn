@@ -12,15 +12,15 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
-    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
-    QHeaderView,
 )
 
+from src.design_system.button import SecondaryButton
 from src.design_system.tokens import get_colors, RADIUS
 from src.language import S
 
@@ -46,7 +46,7 @@ class EntityInfoDialog(QDialog):
         from src.design_system.frameless_dialog import install_frameless_shell
 
         self.setWindowTitle(S.entity_info.dialog_title)
-        self.resize(860, 790)
+        self.resize(860, 720)
         self.setStyleSheet(
             f"""
             QDialog {{
@@ -60,37 +60,37 @@ class EntityInfoDialog(QDialog):
             self,
             S.entity_info.dialog_title,
             min_width=680,
-            min_height=630,
-            content_margins=(18, 14, 18, 18),
-            content_spacing=14,
+            min_height=600,
+            content_margins=(20, 16, 20, 18),
+            content_spacing=16,
         )
 
         header = QWidget()
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(4)
+        header_layout.setSpacing(6)
 
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
-        title_row.setSpacing(8)
-
-        self._title_label = QLabel(self._entity_name)
-        self._title_label.setStyleSheet(
-            f"color: {colors.text_primary}; font-size: 22px; font-weight: 700;"
-        )
-        title_row.addWidget(self._title_label)
+        title_row.setSpacing(10)
 
         if HAS_QTAWESOME:
             icon_label = QLabel()
-            icon_label.setPixmap(qta.icon("mdi.database-search", color=colors.interactive_primary).pixmap(20, 20))
-            title_row.insertWidget(0, icon_label)
+            icon_label.setPixmap(
+                qta.icon("mdi.database-search", color=colors.interactive_primary).pixmap(22, 22)
+            )
+            title_row.addWidget(icon_label)
 
-        title_row.addStretch()
+        self._title_label = QLabel(self._entity_name)
+        self._title_label.setStyleSheet(
+            f"color: {colors.text_primary}; font-size: 20px; font-weight: 700;"
+        )
+        title_row.addWidget(self._title_label, 1)
         header_layout.addLayout(title_row)
 
         self._path_label = QLabel()
         self._path_label.setStyleSheet(
-            f"color: {colors.text_secondary}; font-size: 12px; font-family: monospace;"
+            f"color: {colors.text_tertiary}; font-size: 11px; font-family: monospace;"
         )
         self._path_label.hide()
         header_layout.addWidget(self._path_label)
@@ -107,11 +107,21 @@ class EntityInfoDialog(QDialog):
         self._message_banner.hide()
         layout.addWidget(self._message_banner)
 
-        summary_widget = QWidget()
-        self._summary_layout = QGridLayout(summary_widget)
-        self._summary_layout.setContentsMargins(0, 0, 0, 0)
-        self._summary_layout.setHorizontalSpacing(12)
-        self._summary_layout.setVerticalSpacing(12)
+        summary_panel = QFrame()
+        summary_panel.setObjectName("entitySummaryPanel")
+        summary_panel.setStyleSheet(
+            f"""
+            QFrame#entitySummaryPanel {{
+                background-color: {colors.bg_secondary};
+                border-radius: {RADIUS.radius_md}px;
+                border: none;
+            }}
+            """
+        )
+        self._summary_layout = QGridLayout(summary_panel)
+        self._summary_layout.setContentsMargins(16, 14, 16, 14)
+        self._summary_layout.setHorizontalSpacing(20)
+        self._summary_layout.setVerticalSpacing(14)
 
         summary_fields = [
             ("entity_type", S.entity_info.field_type),
@@ -125,11 +135,12 @@ class EntityInfoDialog(QDialog):
             card = self._create_summary_card(label_text)
             self._summary_layout.addWidget(card, index // 3, index % 3)
             self._summary_cards[field_key] = card.findChild(QLabel, "value")
-        layout.addWidget(summary_widget)
+        layout.addWidget(summary_panel)
 
         self._columns_header = QLabel(S.entity_info.section_columns)
         self._columns_header.setStyleSheet(
-            f"color: {colors.text_secondary}; font-size: 12px; font-weight: 600;"
+            f"color: {colors.text_secondary}; font-size: 11px; font-weight: 600;"
+            f" letter-spacing: 0.4px; padding-top: 4px;"
         )
         layout.addWidget(self._columns_header)
 
@@ -145,7 +156,8 @@ class EntityInfoDialog(QDialog):
 
         self._indexes_header = QLabel(S.entity_info.section_indexes)
         self._indexes_header.setStyleSheet(
-            f"color: {colors.text_secondary}; font-size: 12px; font-weight: 600;"
+            f"color: {colors.text_secondary}; font-size: 11px; font-weight: 600;"
+            f" letter-spacing: 0.4px; padding-top: 4px;"
         )
         layout.addWidget(self._indexes_header)
 
@@ -160,47 +172,24 @@ class EntityInfoDialog(QDialog):
 
         button_row = QHBoxLayout()
         button_row.addStretch()
-
-        close_button = QPushButton(S.entity_info.button_close)
-        close_button.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: {colors.bg_elevated};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS.radius_sm}px;
-                padding: 7px 16px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.bg_secondary};
-            }}
-            """
-        )
+        close_button = SecondaryButton(S.entity_info.button_close, size="sm")
         close_button.clicked.connect(self.close)
         button_row.addWidget(close_button)
         layout.addLayout(button_row)
 
         self.set_loading()
 
-    def _create_summary_card(self, label_text: str) -> QFrame:
+    def _create_summary_card(self, label_text: str) -> QWidget:
         colors = get_colors()
-        card = QFrame()
-        card.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {colors.bg_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS.radius_sm}px;
-            }}
-            """
-        )
+        card = QWidget()
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 10, 12, 10)
-        card_layout.setSpacing(4)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(2)
 
-        label = QLabel(label_text)
+        label = QLabel(label_text.upper())
         label.setStyleSheet(
-            f"color: {colors.text_tertiary}; font-size: 11px; font-weight: 600;"
+            f"color: {colors.text_tertiary}; font-size: 10px; font-weight: 600;"
+            f" letter-spacing: 0.5px;"
         )
         card_layout.addWidget(label)
 
@@ -208,7 +197,7 @@ class EntityInfoDialog(QDialog):
         value.setObjectName("value")
         value.setWordWrap(True)
         value.setStyleSheet(
-            f"color: {colors.text_primary}; font-size: 13px; font-weight: 600;"
+            f"color: {colors.text_primary}; font-size: 14px; font-weight: 600;"
         )
         card_layout.addWidget(value)
         return card
@@ -222,6 +211,7 @@ class EntityInfoDialog(QDialog):
         table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
         table.horizontalHeader().setStretchLastSection(True)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -230,21 +220,27 @@ class EntityInfoDialog(QDialog):
             QTableWidget {{
                 background-color: {colors.bg_secondary};
                 color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS.radius_sm}px;
-                gridline-color: {colors.border_default};
+                border: none;
+                border-radius: {RADIUS.radius_md}px;
                 font-size: 11px;
+                outline: none;
             }}
             QHeaderView::section {{
-                background-color: {colors.bg_tertiary};
-                color: {colors.text_secondary};
+                background-color: transparent;
+                color: {colors.text_tertiary};
                 border: none;
-                border-bottom: 1px solid {colors.border_default};
-                padding: 8px;
+                border-bottom: 1px solid {colors.border_muted};
+                padding: 8px 10px;
                 font-weight: 600;
+                font-size: 10px;
+                text-transform: uppercase;
             }}
             QTableWidget::item {{
-                padding: 6px 8px;
+                padding: 8px 10px;
+                border-bottom: 1px solid {colors.border_muted};
+            }}
+            QTableWidget::item:alternate {{
+                background-color: {colors.bg_tertiary};
             }}
             """
         )
@@ -416,20 +412,20 @@ class EntityInfoDialog(QDialog):
     def _show_banner(self, message: str, variant: str):
         colors = get_colors()
         palette = {
-            "info": (colors.info, f"{colors.info}20"),
-            "success": (colors.success, f"{colors.success}20"),
-            "error": (colors.danger, f"{colors.danger}20"),
+            "info": (colors.text_secondary, colors.bg_tertiary),
+            "success": (colors.success, f"{colors.success}18"),
+            "error": (colors.danger, f"{colors.danger}18"),
         }
-        border_color, background_color = palette.get(variant, palette["info"])
+        text_color, background_color = palette.get(variant, palette["info"])
         self._message_banner.setText(message)
         self._message_banner.setStyleSheet(
             f"""
             QLabel {{
                 background-color: {background_color};
-                color: {border_color};
-                border: 1px solid {border_color};
+                color: {text_color};
+                border: none;
                 border-radius: {RADIUS.radius_sm}px;
-                padding: 8px 10px;
+                padding: 8px 12px;
                 font-size: 11px;
             }}
             """

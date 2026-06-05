@@ -209,7 +209,7 @@ def show_info(parent: Optional[QWidget], title: str, message: str) -> None:
         icon_name="mdi.information-outline",
         min_height=180,
     )
-    ok_btn = PrimaryButton(getattr(S.dialogs, "btn_ok", "OK"), size="sm")
+    ok_btn = PrimaryButton(S.dialogs.btn_ok, size="sm")
     ok_btn.clicked.connect(dlg.accept)
     dlg._add_footer_buttons(ok_btn)
     dlg.exec()
@@ -224,7 +224,7 @@ def show_warning(parent: Optional[QWidget], title: str, message: str) -> None:
         icon_name="mdi.alert-outline",
         min_height=180,
     )
-    ok_btn = PrimaryButton(getattr(S.dialogs, "btn_ok", "OK"), size="sm")
+    ok_btn = PrimaryButton(S.dialogs.btn_ok, size="sm")
     ok_btn.clicked.connect(dlg.accept)
     dlg._add_footer_buttons(ok_btn)
     dlg.exec()
@@ -239,7 +239,7 @@ def show_error(parent: Optional[QWidget], title: str, message: str) -> None:
         icon_name="mdi.alert-circle-outline",
         min_height=180,
     )
-    ok_btn = PrimaryButton(getattr(S.dialogs, "btn_ok", "OK"), size="sm")
+    ok_btn = PrimaryButton(S.dialogs.btn_ok, size="sm")
     ok_btn.clicked.connect(dlg.accept)
     dlg._add_footer_buttons(ok_btn)
     dlg.exec()

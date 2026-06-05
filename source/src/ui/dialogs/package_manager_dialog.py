@@ -344,7 +344,8 @@ class PackageManagerDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(3, 128)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -726,6 +727,7 @@ class PackageManagerDialog(QDialog):
 
                 # Uninstall button
                 btn_uninstall = QPushButton(S.package_manager.btn_remove)
+                btn_uninstall.setMinimumWidth(92)
                 if HAS_QTAWESOME:
                     btn_uninstall.setIcon(qta.icon("fa5s.trash-alt", color="white"))
                 btn_uninstall.setStyleSheet(f"""
@@ -733,9 +735,10 @@ class PackageManagerDialog(QDialog):
                         background-color: {colors.danger};
                         color: white;
                         border: none;
-                        padding: 4px 10px;
+                        padding: 4px 12px;
                         border-radius: 4px;
                         font-size: 10px;
+                        min-width: 88px;
                     }}
                     QPushButton:hover {{ background-color: {colors.danger}dd; }}
                     QPushButton:disabled {{
@@ -771,7 +774,7 @@ class PackageManagerDialog(QDialog):
 
             actions_layout.addStretch()
             self.table.setCellWidget(row, 3, actions_widget)
-            self.table.setRowHeight(row, 38)
+            self.table.setRowHeight(row, 40)
 
     def _confirm_uninstall(self, package_name: str):
         """Confirms package uninstall"""

@@ -156,6 +156,7 @@
     "cancel_btn": "Cancel",
     "yes_btn": "Yes",
     "no_btn": "No",
+    "btn_ok": "OK",
     "confirm_reset_title": "Confirm Reset",
     "confirm_reset_msg": "This will completely reset the panel layout to its default state.\n\nAre you sure?",
     "layout_reset_title": "Layout Reset",
