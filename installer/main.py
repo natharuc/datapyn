@@ -17,7 +17,7 @@ from _bootstrap import load_windows_installer
 
 wi = load_windows_installer()
 
-from PyQt6.QtCore import Qt, QPoint, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -183,6 +183,10 @@ class InstallWorker(QThread):
                 self.progress.emit(pct, msg)
 
             if self.mode == "update" and self.zip_path:
+                import os
+
+                on_progress(2, "Aguardando o DataPyn encerrar…")
+                wi.wait_for_datapyn_exit(exclude_pid=os.getpid())
                 exe = wi.install_from_zip(
                     self.zip_path, self.install_dir, self.version, on_progress=on_progress
                 )
@@ -493,6 +497,36 @@ class SetupWindow(QMainWindow):
         self.close()
 
 
+class UpdateWindow(SetupWindow):
+    """Frameless progress UI for ``DataPyn-Setup.exe --update``."""
+
+    def __init__(self, zip_path: Path, version: str, install_dir: Path):
+        super().__init__()
+        self.setWindowTitle("DataPyn — Atualizando")
+        self._update_zip = zip_path
+        self._update_version = version
+        self._install_dir = install_dir
+        self._stack.setCurrentIndex(1)
+        self._progress_status.setText(f"Preparando atualização para v{version}…")
+        QTimer.singleShot(200, self._start_update)
+
+    def _start_update(self):
+        self._worker = InstallWorker(
+            self._install_dir, "update", self._update_zip, self._update_version
+        )
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished_ok.connect(self._on_update_success)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.start()
+
+    def _on_update_success(self, exe_path: str, version: str):
+        self._exe_path = exe_path
+        self._done_label.setText(f"Atualizado para v{version}")
+        self._stack.setCurrentIndex(2)
+        wi.launch_application(Path(exe_path))
+        self.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     flags = wi.parse_cli_args(argv)
@@ -515,14 +549,13 @@ def main(argv: list[str] | None = None) -> int:
         zip_path = Path(flags["--update"])
         version = flags.get("--version", "0.0.0")
         install_dir = Path(flags.get("--dir", wi.DEFAULT_INSTALL_DIR))
-        try:
-            wi.wait_for_datapyn_exit()
-            exe = wi.install_from_zip(zip_path, install_dir, version)
-            wi.launch_application(exe)
-            return 0
-        except Exception as exc:
-            print(exc, file=sys.stderr)
-            return 1
+        app = QApplication(sys.argv)
+        app.setFont(QFont("Segoe UI", 10))
+        window = UpdateWindow(zip_path, version, install_dir)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return app.exec()
 
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 10))

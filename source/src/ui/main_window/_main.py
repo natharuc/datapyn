@@ -237,6 +237,9 @@ class MainWindow(
 
         # Restore dock layout AFTER toolbar exists (restoreState affects toolbars)
         self._restore_dock_layout()
+
+        if self.auto_update_service.has_pending_update():
+            self._show_pending_update_button(self.auto_update_service.get_pending_version())
         self._setup_auto_save_layout()
 
         # Connect signals do SessionManager
@@ -244,20 +247,20 @@ class MainWindow(
 
         _sp(90, "Aplicando tema…")
 
-        # Apply initial theme
-        self._apply_app_theme()
-
-        # Setup in-app toast notifications
+        # Setup in-app toast notifications (before theme so update toasts can show)
         ToastManager.setup(self)
+
+        # Apply initial theme (re-shows pending update button at the end)
+        self._apply_app_theme()
 
         # Timer to update status
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self._update_status)
         self.status_timer.start(1000)
 
-        # Check for updates on startup (after 5 seconds)
+        # Check for updates on startup (brief delay so UI finishes loading)
         if self.auto_update_service.is_auto_update_enabled():
-            QTimer.singleShot(5000, self._check_for_updates_silent)
+            QTimer.singleShot(2000, self._check_for_updates_silent)
 
         # Update initial window title
         self._update_window_title()

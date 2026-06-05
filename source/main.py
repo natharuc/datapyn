@@ -174,4 +174,7 @@ def main():
 
 
 if __name__ == "__main__":
+    from src.services.in_app_update import try_run_apply_update_from_argv
+
+    try_run_apply_update_from_argv(sys.argv)
     main()

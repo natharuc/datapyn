@@ -158,6 +158,28 @@ def download_file(
     return destination
 
 
+def resolve_update_install_dir() -> Path:
+    """Install folder for in-place updates (prefer the running frozen EXE directory)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    found = get_install_dir()
+    if found is not None:
+        return found
+    return DEFAULT_INSTALL_DIR
+
+
+def _append_update_log(message: str) -> None:
+    try:
+        from datetime import datetime
+
+        log_path = Path(tempfile.gettempdir()) / "datapyn-update.log"
+        line = f"{datetime.now().isoformat(timespec='seconds')} {message}\n"
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        pass
+
+
 def get_install_dir() -> Optional[Path]:
     if sys.platform == "win32" and winreg is not None:
         try:
@@ -233,24 +255,47 @@ def _resolve_zip_root(temp_dir: Path) -> Path:
     raise RuntimeError("ZIP does not contain DataPyn.exe")
 
 
-def wait_for_datapyn_exit(timeout_sec: int = 180) -> bool:
-    """Block until DataPyn.exe is not running (used by deferred update)."""
+def _datapyn_process_pids(exclude_pid: Optional[int] = None) -> list[int]:
+    """Return PIDs of running DataPyn.exe instances, optionally excluding one PID."""
+    if sys.platform != "win32":
+        return []
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {EXE_NAME}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            creationflags=_no_window_flags(),
+        )
+        pids: list[int] = []
+        for line in (result.stdout or "").splitlines():
+            line = line.strip()
+            if not line or "INFO:" in line.upper():
+                continue
+            parts = line.split(",")
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[1].strip().strip('"'))
+            except ValueError:
+                continue
+            if exclude_pid is None or pid != exclude_pid:
+                pids.append(pid)
+        return pids
+    except Exception:
+        return []
+
+
+def wait_for_datapyn_exit(timeout_sec: int = 180, exclude_pid: Optional[int] = None) -> bool:
+    """Block until no other DataPyn.exe instance is running (excludes updater PID)."""
+    import os
     import time
 
+    excluded = exclude_pid if exclude_pid is not None else os.getpid()
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
-        try:
-            result = subprocess.run(
-                ["tasklist", "/FI", f"IMAGENAME eq {EXE_NAME}", "/NH"],
-                capture_output=True,
-                text=True,
-                creationflags=_no_window_flags(),
-            )
-            if EXE_NAME.lower() not in (result.stdout or "").lower():
-                return True
-        except Exception:
+        if not _datapyn_process_pids(exclude_pid=excluded):
             return True
-        time.sleep(1)
+        time.sleep(0.5)
     return False
 
 
@@ -548,22 +593,234 @@ def apply_downloaded_update(zip_path: Path, version: str, install_dir: Optional[
     return install_from_zip(zip_path, root, version)
 
 
+def _find_local_setup_helper(install_dir: Path) -> Optional[Path]:
+    """Locate DataPyn-Setup.exe beside the installed application."""
+    root = Path(install_dir)
+    for candidate in (
+        root / "DataPyn-Setup.exe",
+        *sorted(root.glob("DataPyn-Setup*.exe")),
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _download_setup_helper() -> Optional[Path]:
+    cached = Path(tempfile.gettempdir()) / "DataPyn-Setup.exe"
+    if cached.is_file() and cached.stat().st_size > 0:
+        return cached
+
     try:
         release = fetch_latest_release()
         if not release.setup_asset:
             return None
-        dest = Path(tempfile.gettempdir()) / release.setup_asset.name
-        download_file(release.setup_asset.download_url, dest)
+        dest = cached
+        download_file(release.setup_asset.download_url, dest, timeout=180.0)
         return dest if dest.is_file() else None
     except Exception as exc:
         logger.warning("Could not download setup helper: %s", exc)
         return None
 
 
+def _cache_setup_in_install_dir(install_dir: Path, setup_exe: Path) -> Path:
+    """Keep DataPyn-Setup.exe beside the app so offline one-click updates work."""
+    install_dir = Path(install_dir)
+    setup_exe = Path(setup_exe)
+    if not setup_exe.is_file():
+        return setup_exe
+    dest = install_dir / "DataPyn-Setup.exe"
+    if dest.resolve() == setup_exe.resolve():
+        return dest
+    try:
+        if not dest.is_file() or dest.stat().st_size != setup_exe.stat().st_size:
+            shutil.copy2(setup_exe, dest)
+            logger.info("Cached setup helper at %s", dest)
+        return dest
+    except OSError as exc:
+        logger.warning("Could not cache setup helper in %s: %s", install_dir, exc)
+        return setup_exe
+
+
+def _resolve_setup_helper(install_dir: Path) -> Optional[Path]:
+    local = _find_local_setup_helper(install_dir)
+    if local is not None:
+        return local
+    downloaded = _download_setup_helper()
+    if downloaded is None:
+        return None
+    return _cache_setup_in_install_dir(install_dir, downloaded)
+
+
+def _spawn_detached(command: list[str], cwd: Path) -> None:
+    """Launch a GUI child that survives after DataPyn.exe exits."""
+    if sys.platform == "win32":
+        subprocess.Popen(
+            ["cmd.exe", "/c", "start", ""] + command,
+            cwd=str(cwd),
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
+def _powershell_wait_for_exit_block() -> str:
+    return """
+    Log 'Waiting for DataPyn to exit...'
+    while (Get-Process -Name 'DataPyn' -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }
+"""
+
+
+def _powershell_setup_update_script(
+    setup_exe: Path, zip_path: Path, version: str, install_dir: Path
+) -> str:
+    """Hidden deferred update via DataPyn-Setup.exe (no cmd.exe / find)."""
+    setup = str(setup_exe).replace("'", "''")
+    zp = str(zip_path).replace("'", "''")
+    idir = str(install_dir).replace("'", "''")
+    ver = normalize_version(version)
+    return f"""
+$ErrorActionPreference = 'Stop'
+$setup = '{setup}'
+$zip = '{zp}'
+$installDir = '{idir}'
+$version = '{ver}'
+$log = Join-Path $env:TEMP 'datapyn-update.log'
+function Log($msg) {{ Add-Content -Path $log -Value "$(Get-Date -Format o) $msg" }}
+try {{
+{_powershell_wait_for_exit_block()}
+    Log "Running setup update ($setup)"
+    $args = @('--update', $zip, '--version', $version, '--dir', $installDir)
+    $proc = Start-Process -FilePath $setup -ArgumentList $args -Wait -PassThru -WindowStyle Normal
+    if ($proc.ExitCode -ne 0) {{
+        throw "Setup exited with code $($proc.ExitCode)"
+    }}
+    Log 'Setup update complete'
+}} catch {{
+    Log "ERROR: $($_.Exception.Message)"
+    exit 1
+}}
+"""
+
+
+def _powershell_apply_update_script(zip_path: Path, version: str, install_dir: Path) -> str:
+    """PowerShell fallback — extract ZIP and swap install dir after app exits."""
+    zp = str(zip_path).replace("'", "''")
+    idir = str(install_dir).replace("'", "''")
+    ver = normalize_version(version)
+    return f"""
+$ErrorActionPreference = 'Stop'
+$zip = '{zp}'
+$installDir = '{idir}'
+$version = '{ver}'
+$exeName = '{EXE_NAME}'
+$log = Join-Path $env:TEMP 'datapyn-update.log'
+function Log($msg) {{ Add-Content -Path $log -Value "$(Get-Date -Format o) $msg" }}
+try {{
+{_powershell_wait_for_exit_block()}
+    $extractRoot = Join-Path $env:TEMP ("datapyn-update-extract-" + $version)
+    if (Test-Path $extractRoot) {{ Remove-Item -Recurse -Force $extractRoot }}
+    New-Item -ItemType Directory -Path $extractRoot | Out-Null
+    Log "Extracting $zip"
+    Expand-Archive -LiteralPath $zip -DestinationPath $extractRoot -Force
+    $sourceRoot = $extractRoot
+    $entries = @(Get-ChildItem -LiteralPath $extractRoot | Where-Object {{ $_.Name -ne '__MACOSX' }})
+    if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) {{
+        $inner = $entries[0].FullName
+        if (Test-Path (Join-Path $inner $exeName)) {{ $sourceRoot = $inner }}
+    }}
+    if (-not (Test-Path (Join-Path $sourceRoot $exeName))) {{
+        foreach ($c in $entries) {{
+            if ($c.PSIsContainer -and (Test-Path (Join-Path $c.FullName $exeName))) {{
+                $sourceRoot = $c.FullName
+                break
+            }}
+        }}
+    }}
+    if (-not (Test-Path (Join-Path $sourceRoot $exeName))) {{
+        throw 'ZIP does not contain DataPyn.exe'
+    }}
+    $staging = "$installDir.staging"
+    $backup = "$installDir.old"
+    if (Test-Path $staging) {{ Remove-Item -Recurse -Force $staging }}
+    Log 'Copying application files'
+    Copy-Item -LiteralPath $sourceRoot -Destination $staging -Recurse -Force
+    if (-not (Test-Path (Join-Path $staging $exeName))) {{
+        throw 'DataPyn.exe missing after extract'
+    }}
+    if (Test-Path $installDir) {{
+        if (Test-Path $backup) {{ Remove-Item -Recurse -Force $backup }}
+        Rename-Item -LiteralPath $installDir -NewName (Split-Path $backup -Leaf)
+    }}
+    Rename-Item -LiteralPath $staging -NewName (Split-Path $installDir -Leaf)
+    @{{ version = $version; app = '{APP_NAME}' }} | ConvertTo-Json | Set-Content -Path (Join-Path $installDir 'installed.json') -Encoding UTF8
+    $exePath = Join-Path $installDir $exeName
+    Log "Launching $exePath"
+    Start-Process -FilePath $exePath -WorkingDirectory $installDir
+    if (Test-Path $backup) {{ Remove-Item -Recurse -Force $backup -ErrorAction SilentlyContinue }}
+    Remove-Item -Recurse -Force $extractRoot -ErrorAction SilentlyContinue
+    Log 'Update complete'
+}} catch {{
+    Log "ERROR: $($_.Exception.Message)"
+    exit 1
+}}
+"""
+
+
+def _run_hidden_powershell_script(script_body: str, script_filename: str) -> tuple[bool, str]:
+    """Launch a .ps1 update helper without showing cmd.exe or Windows Terminal."""
+    if sys.platform != "win32":
+        return False, "Deferred ZIP update is only supported on Windows"
+
+    script_path = Path(tempfile.gettempdir()) / script_filename
+    try:
+        script_path.write_text(script_body, encoding="utf-8")
+    except OSError as exc:
+        return False, f"Could not write update script: {exc}"
+
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            str(script_path),
+        ],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | _no_window_flags(),
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    logger.info("Deferred update scheduled via PowerShell %s", script_path)
+    return True, ""
+
+
+def _launch_powershell_deferred_update(
+    zip_path: Path, version: str, install_dir: Path
+) -> tuple[bool, str]:
+    ver = normalize_version(version)
+    return _run_hidden_powershell_script(
+        _powershell_apply_update_script(zip_path, ver, install_dir),
+        f"datapyn-apply-update-{ver}.ps1",
+    )
+
+
 def launch_deferred_zip_update(
     zip_path: Path, version: str, install_dir: Optional[Path] = None
-) -> bool:
+) -> tuple[bool, str]:
     """
     Apply a ZIP update after DataPyn.exe exits.
 
@@ -571,47 +828,94 @@ def launch_deferred_zip_update(
     """
     zip_path = Path(zip_path).resolve()
     if not zip_path.is_file():
-        logger.error("Update ZIP not found: %s", zip_path)
-        return False
+        msg = f"Update ZIP not found: {zip_path}"
+        logger.error(msg)
+        return False, msg
 
     root = Path(install_dir or get_install_dir() or DEFAULT_INSTALL_DIR)
     ver = normalize_version(version)
-    setup_exe = _download_setup_helper()
-    if not setup_exe:
-        logger.error("DataPyn-Setup.exe not available for deferred update")
-        return False
+    if not ver:
+        return False, "Update version is required"
 
-    script = Path(tempfile.gettempdir()) / f"datapyn-apply-update-{ver}.cmd"
-    script.write_text(
-        "\r\n".join(
-            [
-                "@echo off",
-                "setlocal",
-                ":wait",
-                f'tasklist /FI "IMAGENAME eq {EXE_NAME}" 2>nul | find /I "{EXE_NAME}" >nul',
-                "if %errorlevel%==0 (",
-                "  timeout /t 1 /nobreak >nul",
-                "  goto wait",
-                ")",
-                f'"{setup_exe}" --update "{zip_path}" --version {ver} --dir "{root}"',
-                f'del /f /q "{script}" 2>nul',
+    setup_exe = _resolve_setup_helper(root)
+    if setup_exe is not None:
+        return _run_hidden_powershell_script(
+            _powershell_setup_update_script(setup_exe, zip_path, ver, root),
+            f"datapyn-setup-update-{ver}.ps1",
+        )
+
+    logger.warning("DataPyn-Setup.exe not found — using PowerShell ZIP apply")
+    return _launch_powershell_deferred_update(zip_path, ver, root)
+
+
+def _stage_updater_executable(source_exe: Path, version: str) -> Path:
+    """Copy DataPyn.exe to TEMP so the updater can replace the install folder."""
+    staging = Path(tempfile.gettempdir()) / f"DataPyn-Update-{normalize_version(version)}.exe"
+    shutil.copy2(source_exe, staging)
+    return staging
+
+
+def launch_setup_update(
+    zip_path: Path, version: str, install_dir: Optional[Path] = None
+) -> tuple[bool, str]:
+    """Launch a staged DataPyn.exe with ``--apply-update`` (progress UI, then reopen)."""
+    zip_path = Path(zip_path).resolve()
+    if not zip_path.is_file():
+        return False, f"Update ZIP not found: {zip_path}"
+
+    root = Path(install_dir or resolve_update_install_dir())
+    ver = normalize_version(version)
+    if not ver:
+        return False, "Update version is required"
+
+    app_exe = root / EXE_NAME
+    if not app_exe.is_file():
+        _append_update_log(f"ERROR: {EXE_NAME} not found in {root}")
+        return False, f"{EXE_NAME} not found in {root}"
+
+    try:
+        if getattr(sys, "frozen", False):
+            updater_exe = _stage_updater_executable(app_exe, ver)
+            command = [
+                str(updater_exe),
+                "--apply-update",
+                str(zip_path),
+                "--version",
+                ver,
+                "--dir",
+                str(root),
             ]
-        ),
-        encoding="utf-8",
-    )
+            cwd = updater_exe.parent
+            launcher = str(updater_exe)
+        else:
+            # Dev: run current source entrypoint (installed EXE may lack --apply-update).
+            source_main = Path(__file__).resolve().parents[2] / "main.py"
+            command = [
+                sys.executable,
+                str(source_main),
+                "--apply-update",
+                str(zip_path),
+                "--version",
+                ver,
+                "--dir",
+                str(root),
+            ]
+            cwd = source_main.parent
+            launcher = source_main
 
-    subprocess.Popen(
-        ["cmd.exe", "/c", str(script)],
-        creationflags=subprocess.DETACHED_PROCESS | _no_window_flags(),
-        close_fds=True,
-    )
-    logger.info("Deferred update scheduled via %s", script)
-    return True
+        _append_update_log(f"Launching in-app update v{ver} via {launcher}")
+        _spawn_detached(command, cwd)
+        logger.info("Launched in-app update (detached): %s -> v%s", zip_path, ver)
+        return True, ""
+    except OSError as exc:
+        _append_update_log(f"ERROR: Could not launch updater: {exc}")
+        return False, f"Could not launch updater: {exc}"
 
 
 def run_setup_for_update(zip_path: Path, version: str, install_dir: Optional[Path] = None) -> bool:
     """Schedule ZIP update after the application exits."""
-    return launch_deferred_zip_update(zip_path, version, install_dir)
+    ok, _msg = launch_deferred_zip_update(zip_path, version, install_dir)
+    return ok
 
 
 def parse_cli_args(argv: list[str]) -> dict[str, str]:

@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTextEdit,
     QProgressBar,
-    QMessageBox,
 )
 from PyQt6.QtCore import Qt, QSize, QTimer
 from PyQt6.QtGui import QFont
@@ -171,8 +170,12 @@ class UpdateDownloadDialog(QDialog):
         self.cancel_button.setEnabled(True)
         self.cancel_button.setText(S.update_dialog.btn_close)
 
-        QMessageBox.critical(
-            self, S.update_dialog.download_error_title, S.update_dialog.download_error_detail.format(msg=error_message)
+        from src.design_system.message_box import show_error
+
+        show_error(
+            self,
+            S.update_dialog.download_error_title,
+            S.update_dialog.download_error_detail.format(msg=error_message),
         )
 
 
