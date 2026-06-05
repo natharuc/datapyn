@@ -52,7 +52,9 @@
     "run_timer_running": "Repetindo {seconds}s apos cada execucao",
     "run_timer_title": "Execucao Periodica",
     "run_timer_label": "Aguardar X segundos apos o termino e executar novamente:",
-    "run_timer_start": "Iniciar"
+    "run_timer_start": "Iniciar",
+    "update_btn": "Atualizar",
+    "update_tooltip": "Instalar atualizacao ja baixada"
   },
   "dock": {
     "connections": "Conexoes",
@@ -91,6 +93,9 @@
     "auto_update_disabled": "Atualizacao automatica desativada",
     "new_version_available": "Nova versao disponivel: {version}",
     "latest_version": "Voce ja esta usando a versao mais recente!",
+    "update_ready": "Atualizacao v{version} pronta — clique em Atualizar na barra",
+    "downloading_update": "Baixando atualizacao v{version}…",
+    "applying_update": "Iniciando atualizador — o DataPyn vai fechar…",
     "error_checking_updates": "Erro ao verificar atualizacoes",
     "script_exported": "Script exportado: {filename}",
     "file_opened": "Arquivo aberto: {filename}",
@@ -178,8 +183,10 @@
     "verification_error_msg": "Nao foi possivel verificar atualizacoes:\n\n{error}",
     "download_complete_title": "Download Concluido",
     "download_complete_msg": "O instalador foi baixado com sucesso!\n\nDeseja instalar a atualizacao agora?\n\nNota: O DataPyn sera fechado e o instalador sera executado.",
+    "download_complete_ready_msg": "A atualizacao foi baixada.\n\nClique em Atualizar na barra quando quiser instalar.",
     "installation_error_title": "Erro na Instalacao",
     "installation_error_msg": "Nao foi possivel iniciar a instalacao da atualizacao.",
+    "installation_error_detail": "Nao foi possivel iniciar a instalacao da atualizacao.\n\n{error}",
     "export_no_session": "Nenhuma sessao ativa para exportar.",
     "export_no_blocks": "Nenhum bloco de codigo para exportar.",
     "export_complete_title": "Exportacao Concluida",

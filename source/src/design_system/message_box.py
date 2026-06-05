@@ -200,6 +200,51 @@ def ask_yes_no_cancel(
     return choice
 
 
+def show_info(parent: Optional[QWidget], title: str, message: str) -> None:
+    """Single OK — informational (replaces QMessageBox.information)."""
+    dlg = _BaseMessageDialog(
+        parent,
+        title,
+        message,
+        icon_name="mdi.information-outline",
+        min_height=180,
+    )
+    ok_btn = PrimaryButton(getattr(S.dialogs, "btn_ok", "OK"), size="sm")
+    ok_btn.clicked.connect(dlg.accept)
+    dlg._add_footer_buttons(ok_btn)
+    dlg.exec()
+
+
+def show_warning(parent: Optional[QWidget], title: str, message: str) -> None:
+    """Single OK — warning (replaces QMessageBox.warning)."""
+    dlg = _BaseMessageDialog(
+        parent,
+        title,
+        message,
+        icon_name="mdi.alert-outline",
+        min_height=180,
+    )
+    ok_btn = PrimaryButton(getattr(S.dialogs, "btn_ok", "OK"), size="sm")
+    ok_btn.clicked.connect(dlg.accept)
+    dlg._add_footer_buttons(ok_btn)
+    dlg.exec()
+
+
+def show_error(parent: Optional[QWidget], title: str, message: str) -> None:
+    """Single OK — error (replaces QMessageBox.critical)."""
+    dlg = _BaseMessageDialog(
+        parent,
+        title,
+        message,
+        icon_name="mdi.alert-circle-outline",
+        min_height=180,
+    )
+    ok_btn = PrimaryButton(getattr(S.dialogs, "btn_ok", "OK"), size="sm")
+    ok_btn.clicked.connect(dlg.accept)
+    dlg._add_footer_buttons(ok_btn)
+    dlg.exec()
+
+
 def ask_confirm(
     parent: Optional[QWidget],
     title: str,

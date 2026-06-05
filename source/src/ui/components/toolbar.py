@@ -2,8 +2,13 @@
 Toolbar principal da aplicacao
 """
 
-from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy, QComboBox
+import logging
+
+from PyQt6.QtWidgets import QToolBar, QWidget, QPushButton, QSizePolicy, QComboBox, QToolButton
 from PyQt6.QtCore import pyqtSignal, QSize, Qt
+from PyQt6.QtGui import QAction
+
+logger = logging.getLogger(__name__)
 import qtawesome as qta
 
 from src.assets.pynia_branding import load_pynia_logo
@@ -24,6 +29,7 @@ class MainToolbar(QToolBar):
     copilot_clicked = pyqtSignal()  # legacy alias — do not connect both to the same slot
     workspace_switch_requested = pyqtSignal(str)  # path
     workspace_settings_requested = pyqtSignal()  # open settings on workspace tab
+    update_clicked = pyqtSignal()
 
     def __init__(self, theme_manager=None, parent=None):
         super().__init__("Main", parent)
@@ -163,7 +169,7 @@ class MainToolbar(QToolBar):
         self._refresh_workspace_combo()
         self.workspace_combo.currentIndexChanged.connect(self._on_workspace_selected)
         self.addWidget(self.workspace_combo)
-        
+
         # Config button to open workspace settings
         self.workspace_config_btn = QPushButton()
         self.workspace_config_btn.setIcon(qta.icon("fa5s.cog", color=self._icon_color))
@@ -181,12 +187,52 @@ class MainToolbar(QToolBar):
         """)
         self.workspace_config_btn.clicked.connect(self.workspace_settings_requested.emit)
         self.addWidget(self.workspace_config_btn)
-        
+
+        # Update — QAction (QToolBar ignores addWidget buttons that start hidden)
+        self._setup_update_action()
+
         # Connect to workspace service signals for auto-refresh
         ws_service = get_workspace_service()
         ws_service.workspace_added.connect(self._refresh_workspace_combo)
         ws_service.workspace_removed.connect(self._refresh_workspace_combo)
-    
+
+    def _setup_update_action(self) -> None:
+        """One-click update next to workspace config (QAction shows/hides reliably)."""
+        self._update_action = QAction(
+            qta.icon("mdi.download-circle", color="#4ade80"),
+            "",
+            self,
+        )
+        self._update_action.setVisible(False)
+        self._update_action.triggered.connect(self.update_clicked.emit)
+        self.addAction(self._update_action)
+
+    def _update_action_button(self) -> QToolButton | None:
+        widget = self.widgetForAction(self._update_action)
+        return widget if isinstance(widget, QToolButton) else None
+
+    def _apply_update_button_style(self) -> None:
+        btn = self._update_action_button()
+        if btn is None:
+            return
+        btn.setObjectName("ToolbarUpdateBtn")
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        btn.setStyleSheet("""
+            QToolButton#ToolbarUpdateBtn {
+                background-color: rgba(74, 222, 128, 0.15);
+                color: #4ade80;
+                border: 1px solid rgba(74, 222, 128, 0.45);
+                padding: 4px 10px;
+                font-size: 11px;
+                font-weight: 600;
+                border-radius: 6px;
+            }
+            QToolButton#ToolbarUpdateBtn:hover {
+                background-color: rgba(74, 222, 128, 0.28);
+                color: #86efac;
+            }
+        """)
+
     def _refresh_workspace_combo(self, *args):
         """Refresh workspace combo box items."""
         ws_service = get_workspace_service()
@@ -212,6 +258,32 @@ class MainToolbar(QToolBar):
         path = self.workspace_combo.itemData(index)
         if path:
             self.workspace_switch_requested.emit(path)
+
+    def set_pending_update(self, version: str, visible: bool = True) -> None:
+        """Show or hide the one-click update button."""
+        if visible and version:
+            label = getattr(S.toolbar, "update_btn", "Update")
+            text = f"{label} v{version}"
+            tip = getattr(S.toolbar, "update_tooltip", "Install downloaded update")
+            self._update_action.setText(text)
+            self._update_action.setToolTip(f"{tip} (v{version})")
+            self._update_action.setVisible(True)
+            btn = self._update_action_button()
+            if btn is not None:
+                btn.setVisible(True)
+                btn.show()
+            self._apply_update_button_style()
+            logger.info(
+                "Toolbar update action shown (v%s, action_visible=%s, btn=%s)",
+                version,
+                self._update_action.isVisible(),
+                btn is not None,
+            )
+        else:
+            self._update_action.setVisible(False)
+            btn = self._update_action_button()
+            if btn is not None:
+                btn.setVisible(False)
 
     def set_timer_running(self, running: bool, interval_secs: int = 0):
         """Update the timer button appearance based on running state."""

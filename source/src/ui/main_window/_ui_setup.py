@@ -11,7 +11,7 @@ import logging
 from PyQt6.QtCore import Qt, QTimer, QElapsedTimer, QSettings
 from PyQt6.QtGui import QAction, QKeySequence, QFont, QIcon
 from PyQt6.QtWidgets import (
-    QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QApplication,
+    QWidget, QVBoxLayout, QHBoxLayout, QApplication,
     QDockWidget, QStackedWidget, QLabel,
 )
 
@@ -34,6 +34,12 @@ from src.design_system.stylesheet import (
     get_start_button_stylesheet,
 )
 from src.language import S
+from src.design_system.message_box import (
+    ask_yes_no,
+    show_error,
+    show_info,
+    show_warning,
+)
 
 DEFAULT_VERSION = "1.1.6"
 
@@ -564,6 +570,8 @@ class UISetupMixin:
         self.main_toolbar.pynia_clicked.connect(self._toggle_copilot_dock)
         self.main_toolbar.workspace_switch_requested.connect(self._on_workspace_switch)
         self.main_toolbar.workspace_settings_requested.connect(self._show_workspace_settings)
+        self.main_toolbar.update_clicked.connect(self._apply_pending_update)
+        self.auto_update_service.update_ready.connect(self._show_pending_update_button)
 
     def _toggle_copilot_dock(self):
         """Toggle Pynia chat dock visibility and focus."""
@@ -950,6 +958,19 @@ class UISetupMixin:
                 background-color: {colors["border"]};
                 color: #666666;
             }}
+            QToolButton#ToolbarUpdateBtn {{
+                background-color: rgba(74, 222, 128, 0.15);
+                color: #4ade80;
+                border: 1px solid rgba(74, 222, 128, 0.45);
+                padding: 4px 10px;
+                font-size: 11px;
+                font-weight: 600;
+                border-radius: 6px;
+            }}
+            QToolButton#ToolbarUpdateBtn:hover {{
+                background-color: rgba(74, 222, 128, 0.28);
+                color: #86efac;
+            }}
         """)
 
         # Atualizar paineis de todas as sessoes
@@ -966,6 +987,15 @@ class UISetupMixin:
             for widget in self._session_widgets.values():
                 if hasattr(widget, "apply_theme"):
                     widget.apply_theme()
+
+        self._refresh_pending_update_ui()
+
+    def _refresh_pending_update_ui(self) -> None:
+        """Re-apply update button after theme/layout passes that may reset toolbar widgets."""
+        if not hasattr(self, "auto_update_service") or not hasattr(self, "main_toolbar"):
+            return
+        if self.auto_update_service.has_pending_update():
+            self._show_pending_update_button(self.auto_update_service.get_pending_version())
 
     def _show_about(self):
         """Shows the about dialog"""
@@ -1073,13 +1103,11 @@ class UISetupMixin:
     def _check_for_updates(self):
         """Manually checks for updates"""
         if not self.auto_update_service.is_auto_update_enabled():
-            reply = QMessageBox.question(
+            if ask_yes_no(
                 self,
                 S.dialogs.auto_update_disabled_title,
                 S.dialogs.auto_update_disabled_msg,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
+            ):
                 self.auto_update_service.set_auto_update_enabled(True)
             else:
                 return
@@ -1111,31 +1139,109 @@ class UISetupMixin:
             self._on_no_update_available()
 
     def _check_for_updates_silent(self):
-        """Silently checks for updates on startup"""
+        """Silently check, download to TEMP, and show toolbar button when ready."""
         if getattr(self, "_is_closing", False):
             return
 
         if not self.auto_update_service.is_auto_update_enabled():
             return
 
-        self.auto_update_service.check_for_updates(
-            on_available=self._on_update_available,
-            on_no_update=lambda: None,  # Silencioso se nao houver atualizacao
-            on_error=lambda msg: logger.info(f"Update check failed: {msg}"),
+        if not getattr(self, "_auto_update_ui_wired", False):
+            self.auto_update_service.update_downloading.connect(self._on_background_update_downloading)
+            self._auto_update_ui_wired = True
+
+        self.auto_update_service.check_and_download_in_background(
+            on_ready=lambda _v: None,
+            on_no_update=lambda: None,
+            on_error=lambda msg: logger.warning("Background update failed: %s", msg),
         )
 
+    def _on_background_update_downloading(self, version: str) -> None:
+        """Feedback while the ZIP is downloading (~400 MB can take a while)."""
+        if hasattr(self, "statusbar"):
+            msg = getattr(S.status, "downloading_update", "Downloading update v{version}…")
+            self.statusbar.showMessage(msg.format(version=version), 0)
+
+    def _show_pending_update_button(self, version: str) -> None:
+        """Expose the one-click update affordance in the toolbar."""
+        version = (version or "").strip()
+        if not version:
+            return
+        logger.info("Showing toolbar update button for v%s", version)
+        if hasattr(self, "main_toolbar"):
+            self.main_toolbar.set_pending_update(version, True)
+        if hasattr(self, "statusbar"):
+            self.statusbar.showMessage(
+                getattr(S.status, "update_ready", "Update ready").format(version=version),
+                8000,
+            )
+        try:
+            from src.ui.components.toast_notification import ToastManager
+
+            ToastManager.notify(
+                getattr(S.toolbar, "update_btn", "Update"),
+                getattr(S.status, "update_ready", "Update ready").format(version=version),
+                success=True,
+                color="#4ade80",
+                on_click=self._apply_pending_update,
+            )
+        except Exception:
+            pass
+
+    def _apply_pending_update(self) -> None:
+        """Spawn detached Setup.exe, then quit so the updater can replace files."""
+        if getattr(self, "_update_apply_started", False):
+            return
+
+        ok, err = self.auto_update_service.apply_pending_update()
+        if ok:
+            self._update_apply_started = True
+            if hasattr(self, "main_toolbar"):
+                self.main_toolbar.set_pending_update("", False)
+            if hasattr(self, "statusbar"):
+                self.statusbar.showMessage(
+                    getattr(S.status, "applying_update", "Applying update…"),
+                    5000,
+                )
+            # Let the updater process start before this instance exits.
+            QTimer.singleShot(900, self._quit_for_update)
+        else:
+            detail = getattr(S.dialogs, "installation_error_detail", "{error}").format(
+                error=err or S.dialogs.installation_error_msg
+            )
+            show_error(self, S.dialogs.installation_error_title, detail)
+
+    def _quit_for_update(self) -> None:
+        """Exit the app so DataPyn-Setup.exe can replace the install folder."""
+        QApplication.quit()
+
     def _on_update_available(self, version: str, download_url: str, release_notes: str):
-        """Callback when an update is available"""
+        """Callback when an update is available (manual check)."""
         self.statusbar.showMessage(S.status.new_version_available.format(version=version), 5000)
 
         dialog = UpdateDialog(self._current_version, version, release_notes, self)
         if dialog.exec() == UpdateDialog.DialogCode.Accepted and dialog.should_download:
-            self._download_update(version, download_url)
+
+            def _on_manual_download_complete(path: str, ver: str = version) -> None:
+                self.auto_update_service.save_pending_update(ver, path)
+                self._show_pending_update_button(ver)
+
+            self.auto_update_service.download_update(
+                download_url,
+                version,
+                on_progress=lambda _pct: None,
+                on_complete=_on_manual_download_complete,
+                on_error=lambda msg: show_error(
+                    self,
+                    S.update_dialog.download_error_title,
+                    S.update_dialog.download_error_detail.format(msg=msg),
+                ),
+            )
 
     def _on_no_update_available(self):
         """Callback when no updates are available"""
         self.statusbar.showMessage(S.status.latest_version, 5000)
-        QMessageBox.information(
+        show_info(
             self,
             S.dialogs.no_updates_title,
             S.dialogs.no_updates_msg.format(version=self._current_version),
@@ -1148,8 +1254,10 @@ class UISetupMixin:
             self._update_checking_dialog.close()
         
         self.statusbar.showMessage(S.status.error_checking_updates, 5000)
-        QMessageBox.warning(
-            self, S.dialogs.verification_error_title, S.dialogs.verification_error_msg.format(error=error_message)
+        show_warning(
+            self,
+            S.dialogs.verification_error_title,
+            S.dialogs.verification_error_msg.format(error=error_message),
         )
 
     def _download_update(self, version: str, download_url: str):
@@ -1169,19 +1277,11 @@ class UISetupMixin:
     def _on_download_complete(self, installer_path: str, download_dialog):
         """Callback when the download is complete"""
         download_dialog.download_complete(installer_path)
-
-        reply = QMessageBox.question(
+        version = getattr(download_dialog, "version", "")
+        self.auto_update_service.save_pending_update(version, installer_path)
+        self._show_pending_update_button(version)
+        show_info(
             self,
             S.dialogs.download_complete_title,
-            S.dialogs.download_complete_msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            getattr(S.dialogs, "download_complete_ready_msg", S.dialogs.download_complete_msg),
         )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            version = getattr(download_dialog, "version", "")
-            if self.auto_update_service.install_update(installer_path, version):
-                QApplication.quit()
-            else:
-                QMessageBox.critical(
-                    self, S.dialogs.installation_error_title, S.dialogs.installation_error_msg
-                )

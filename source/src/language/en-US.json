@@ -52,7 +52,9 @@
     "run_timer_running": "Repeating {seconds}s after each execution",
     "run_timer_title": "Periodic Execution",
     "run_timer_label": "Wait X seconds after completion and run again:",
-    "run_timer_start": "Start"
+    "run_timer_start": "Start",
+    "update_btn": "Update",
+    "update_tooltip": "Install downloaded update"
   },
   "dock": {
     "connections": "Connections",
@@ -91,6 +93,9 @@
     "auto_update_disabled": "Auto-update disabled",
     "new_version_available": "New version available: {version}",
     "latest_version": "You are already using the latest version!",
+    "update_ready": "Update v{version} is ready — click Update in the toolbar",
+    "downloading_update": "Downloading update v{version}…",
+    "applying_update": "Starting updater — DataPyn will close…",
     "error_checking_updates": "Error checking for updates",
     "script_exported": "Script exported: {filename}",
     "file_opened": "File opened: {filename}",
@@ -178,8 +183,10 @@
     "verification_error_msg": "Could not check for updates:\n\n{error}",
     "download_complete_title": "Download Complete",
     "download_complete_msg": "The installer was downloaded successfully!\n\nDo you want to install the update now?\n\nNote: DataPyn will close and the installer will run.",
+    "download_complete_ready_msg": "The update was downloaded.\n\nClick Update in the toolbar when you are ready to install.",
     "installation_error_title": "Installation Error",
     "installation_error_msg": "Could not start the update installation.",
+    "installation_error_detail": "Could not start the update installation.\n\n{error}",
     "export_no_session": "No active session to export.",
     "export_no_blocks": "No code blocks to export.",
     "export_complete_title": "Export Complete",
