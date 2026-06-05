@@ -461,9 +461,30 @@ def _combobox_popup_view_stylesheet(*, list_item_height: int | None = None) -> s
     """
 
 
-def _combobox_down_arrow_stylesheet() -> str:
+def _svg_data_uri(svg: str) -> str:
+    import base64
+
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f'url("data:image/svg+xml;base64,{encoded}")'
+
+
+def _chevron_down_uri(color: str) -> str:
+    fill = color if color.startswith("#") else f"#{color}"
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">'
+        f'<path fill="{fill}" d="M2 3.5L5 6.5L8 3.5z"/></svg>'
+    )
+    return _svg_data_uri(svg)
+
+
+def _combobox_down_arrow_stylesheet(
+    *,
+    arrow_color: str | None = None,
+    hover_arrow_color: str | None = None,
+) -> str:
     colors = get_colors()
-    return f"""
+    normal = arrow_color or colors.text_secondary
+    block = f"""
         QComboBox::drop-down {{
             subcontrol-origin: padding;
             subcontrol-position: center right;
@@ -472,15 +493,19 @@ def _combobox_down_arrow_stylesheet() -> str:
             background: transparent;
         }}
         QComboBox::down-arrow {{
-            image: none;
-            width: 0;
-            height: 0;
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-top: 5px solid {colors.text_secondary};
+            image: {_chevron_down_uri(normal)};
+            width: 10px;
+            height: 10px;
             margin-right: 6px;
         }}
     """
+    if hover_arrow_color:
+        block += f"""
+        QComboBox:hover::down-arrow {{
+            image: {_chevron_down_uri(hover_arrow_color)};
+        }}
+        """
+    return block
 
 
 def get_combobox_stylesheet() -> str:
@@ -531,6 +556,36 @@ def get_combobox_stylesheet_toolbar() -> str:
     """
 
 
+def get_combobox_stylesheet_inline_toolbar() -> str:
+    """Bordered combobox aligned with toolbar action buttons (e.g. export destination)."""
+    colors = get_colors()
+
+    return f"""
+        QComboBox {{
+            background-color: transparent;
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_default};
+            border-radius: {RADIUS.radius_sm}px;
+            padding: 4px 8px;
+            padding-right: 26px;
+            font-size: 12px;
+            min-height: 28px;
+        }}
+        QComboBox:hover {{
+            background-color: {colors.interactive_primary};
+            color: {colors.text_inverse};
+            border-color: {colors.interactive_primary};
+        }}
+        QComboBox:focus {{
+            border-color: {colors.interactive_primary};
+        }}
+        {_combobox_down_arrow_stylesheet(
+            arrow_color=colors.text_secondary,
+            hover_arrow_color=colors.text_inverse,
+        )}
+    """
+
+
 def configure_combobox_popup(combo, *, list_item_height: int | None = None) -> None:
     """Frameless translucent popup so rounded list does not show a square behind it."""
     from PyQt6.QtCore import Qt
@@ -565,6 +620,8 @@ def apply_combobox_style(
 
     if variant == "toolbar":
         combo.setStyleSheet(get_combobox_stylesheet_toolbar())
+    elif variant == "inline_toolbar":
+        combo.setStyleSheet(get_combobox_stylesheet_inline_toolbar())
     else:
         combo.setStyleSheet(get_combobox_stylesheet())
 

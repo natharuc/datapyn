@@ -17,10 +17,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QComboBox,
     QSpinBox,
-    QDialogButtonBox,
     QProgressBar,
     QGroupBox,
-    QPushButton,
     QMessageBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
@@ -28,8 +26,6 @@ from PyQt6.QtGui import QFont
 import pandas as pd
 import polars as pl
 import logging
-import qtawesome as qta
-
 from src.core.theme_manager import ThemeManager
 from src.language import S
 
@@ -243,44 +239,70 @@ class ExportToTableDialog(QDialog):
         self._is_exporting = False
 
         self.setWindowTitle(S.export_to_table.title)
-        self.setFixedHeight(420)
 
         self._setup_ui()
-        self._apply_style()
 
     def _setup_ui(self):
         """Sets up the UI"""
         from src.design_system.frameless_dialog import install_frameless_shell
+        from src.design_system.button import PrimaryButton, SecondaryButton
+        from src.design_system.tokens import apply_combobox_style, get_colors, RADIUS
+
+        colors = get_colors()
+        body_extra = f"""
+            QProgressBar {{
+                background-color: {colors.bg_tertiary};
+                border: none;
+                border-radius: {RADIUS.radius_sm}px;
+                text-align: center;
+                color: {colors.text_primary};
+                min-height: 20px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {colors.interactive_primary};
+                border-radius: {RADIUS.radius_sm}px;
+            }}
+            QSpinBox {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 4px 8px;
+                min-height: 28px;
+            }}
+            QSpinBox:focus {{
+                border-color: {colors.interactive_primary};
+            }}
+        """
 
         layout = install_frameless_shell(
             self,
             S.export_to_table.title,
             min_width=480,
-            min_height=380,
+            min_height=360,
             content_margins=(16, 12, 16, 16),
-            content_spacing=10,
+            content_spacing=12,
+            body_stylesheet_extra=body_extra,
         )
 
-        # DataFrame info
         info_label = QLabel(S.export_to_table.info_row_col.format(rows=f"{len(self.df):,}", cols=len(self.df.columns)))
         info_label.setFont(QFont("Inter", 9))
-        info_label.setStyleSheet("color: #888; margin-bottom: 4px;")
+        info_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px;")
         layout.addWidget(info_label)
 
-        # Form
         form_layout = QFormLayout()
-        form_layout.setSpacing(8)
-        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form_layout.setHorizontalSpacing(12)
+        form_layout.setVerticalSpacing(10)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
-        # Table name
         self.table_name_edit = QLineEdit()
         self.table_name_edit.setPlaceholderText(S.export_to_table.placeholder_table)
         self.table_name_edit.setToolTip(S.export_to_table.tooltip_table)
         form_layout.addRow(S.export_to_table.label_table, self.table_name_edit)
 
-        # Destination connection
         self.connection_combo = QComboBox()
-        self.connection_combo.setMinimumWidth(250)
+        self.connection_combo.setMinimumWidth(280)
         for name in sorted(self.connections.keys()):
             connector = self.connections[name]
             if connector and connector.is_connected():
@@ -289,24 +311,23 @@ class ExportToTableDialog(QDialog):
                 label = S.export_to_table.combo_connection_format.format(name=name, db_type=db_type, db_name=db_name) if db_name else f"{name} ({db_type})"
                 self.connection_combo.addItem(label, name)
 
-        # Pre-select current connection
         if self.current_connection:
             for i in range(self.connection_combo.count()):
                 if self.connection_combo.itemData(i) == self.current_connection:
                     self.connection_combo.setCurrentIndex(i)
                     break
 
+        apply_combobox_style(self.connection_combo)
         form_layout.addRow(S.export_to_table.label_connection, self.connection_combo)
 
-        # If table exists
         self.if_exists_combo = QComboBox()
         self.if_exists_combo.addItem(S.export_to_table.option_replace, "replace")
         self.if_exists_combo.addItem(S.export_to_table.option_append, "append")
         self.if_exists_combo.addItem(S.export_to_table.option_fail, "fail")
         self.if_exists_combo.setCurrentIndex(0)
+        apply_combobox_style(self.if_exists_combo)
         form_layout.addRow(S.export_to_table.label_if_exists, self.if_exists_combo)
 
-        # Chunk size
         self.chunk_spin = QSpinBox()
         self.chunk_spin.setMinimum(100)
         self.chunk_spin.setMaximum(100000)
@@ -336,49 +357,23 @@ class ExportToTableDialog(QDialog):
         self.progress_group.setVisible(False)
         layout.addWidget(self.progress_group)
 
-        layout.addStretch()
-
-        # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self.btn_cancel = QPushButton(S.export_to_table.btn_cancel)
-        self.btn_cancel.setObjectName("btnCancel")
+        self.btn_cancel = SecondaryButton(S.export_to_table.btn_cancel, size="sm")
         self.btn_cancel.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_export = QPushButton(S.export_to_table.btn_export)
-        self.btn_export.setIcon(qta.icon("mdi.database-export", color="white"))
+        self.btn_export = PrimaryButton(
+            S.export_to_table.btn_export,
+            size="sm",
+            icon="mdi.database-export",
+        )
         self.btn_export.setDefault(True)
         self.btn_export.clicked.connect(self._on_export)
         btn_layout.addWidget(self.btn_export)
 
         layout.addLayout(btn_layout)
-
-    def _apply_style(self):
-        """Applies dark theme style consistent with other dialogs"""
-        base = self.theme_manager.get_dialog_stylesheet()
-        colors = self.theme_manager.get_app_colors()
-        # Complement with specific styles for progress bar and disabled
-        extra = f"""
-            QProgressBar {{
-                background-color: {colors["border"]};
-                border: 1px solid {colors["border"]};
-                border-radius: 4px;
-                text-align: center;
-                color: {colors["foreground"]};
-                min-height: 20px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {colors["accent"]};
-                border-radius: 4px;
-            }}
-            QPushButton:disabled {{
-                background-color: {colors["border"]};
-                color: #666;
-            }}
-        """
-        self.setStyleSheet(base + extra)
 
     def _validate(self) -> bool:
         """Validates fields before exporting"""

@@ -13,6 +13,8 @@ from src.services.windows_installer import (
     _build_uninstall_command,
     _display_icon_value,
     _find_local_setup_helper,
+    _replace_installation,
+    _updater_runs_from_install_dir,
     compare_versions,
     detect_existing_installation,
     find_windows_zip_asset,
@@ -230,6 +232,55 @@ class TestLaunchSetupUpdate:
         assert command[2] == "--apply-update"
         assert command[3] == str(zip_path)
         assert cwd.name == "source"
+
+
+class TestReplaceInstallation:
+    def test_updater_runs_from_install_dir(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        fake_exe = install_dir / "DataPyn-Setup.exe"
+        fake_exe.write_bytes(b"MZ")
+        monkeypatch.setattr(sys, "executable", str(fake_exe))
+        assert _updater_runs_from_install_dir(install_dir) is True
+
+    @patch("src.services.windows_installer.sys.platform", "win32")
+    @patch("src.services.windows_installer.wait_for_datapyn_exit", return_value=True)
+    @patch("src.services.windows_installer._robocopy_mirror")
+    @patch("src.services.windows_installer._updater_runs_from_install_dir", return_value=True)
+    def test_replace_uses_in_place_when_updater_inside_install_dir(
+        self, _mock_inside, mock_robocopy, _mock_wait, tmp_path
+    ):
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        (install_dir / "DataPyn.exe").write_bytes(b"OLD")
+        staging_dir = tmp_path / "DataPyn.staging"
+        staging_dir.mkdir()
+        (staging_dir / "DataPyn.exe").write_bytes(b"NEW")
+        backup_dir = tmp_path / "DataPyn.old"
+
+        _replace_installation(install_dir, staging_dir, backup_dir)
+
+        mock_robocopy.assert_called_once_with(staging_dir, install_dir)
+        assert not staging_dir.exists()
+        assert (install_dir / "DataPyn.exe").read_bytes() == b"OLD"
+
+    @patch("src.services.windows_installer.wait_for_datapyn_exit", return_value=True)
+    @patch("src.services.windows_installer._updater_runs_from_install_dir", return_value=False)
+    def test_replace_renames_when_possible(self, _mock_inside, _mock_wait, tmp_path):
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        (install_dir / "DataPyn.exe").write_bytes(b"OLD")
+        staging_dir = tmp_path / "DataPyn.staging"
+        staging_dir.mkdir()
+        (staging_dir / "DataPyn.exe").write_bytes(b"NEW")
+        backup_dir = tmp_path / "DataPyn.old"
+
+        _replace_installation(install_dir, staging_dir, backup_dir)
+
+        assert not backup_dir.exists()
+        assert install_dir.is_dir()
+        assert (install_dir / "DataPyn.exe").read_bytes() == b"NEW"
+        assert not staging_dir.exists()
 
 
 class TestWaitForDatapynExit:

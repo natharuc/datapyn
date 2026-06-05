@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QAbstractItemView,
+    QButtonGroup,
     QSplitter,
     QSizePolicy,
     QListWidget,
@@ -737,55 +738,64 @@ class CSVExportDialog(QDialog):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
         self.setWindowTitle(S.csv_export.dialog_title)
-        self.setMinimumWidth(400)
-
-        # Remove maximize/minimize buttons
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint)
-
         self._setup_ui()
         self._load_settings()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        from src.design_system.frameless_dialog import install_frameless_shell
+        from src.design_system.button import PrimaryButton, SecondaryButton
+        from src.design_system.tokens import apply_combobox_style
+
+        layout = install_frameless_shell(
+            self,
+            S.csv_export.dialog_title,
+            min_width=420,
+            min_height=260,
+            content_margins=(16, 12, 16, 14),
+            content_spacing=12,
+        )
 
         form = QFormLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
-        # Delimiter
         self.delimiter_combo = QComboBox()
         self.delimiter_combo.addItem(S.csv_export.delimiter_semicolon, ";")
         self.delimiter_combo.addItem(S.csv_export.delimiter_comma, ",")
         self.delimiter_combo.addItem(S.csv_export.delimiter_tab, "\t")
         self.delimiter_combo.addItem(S.csv_export.delimiter_pipe, "|")
+        apply_combobox_style(self.delimiter_combo)
         form.addRow(S.csv_export.label_delimiter, self.delimiter_combo)
 
-        # Encoding
         self.encoding_combo = QComboBox()
         self.encoding_combo.addItem(S.csv_export.encoding_utf8bom, "utf-8-sig")
         self.encoding_combo.addItem(S.csv_export.encoding_utf8, "utf-8")
         self.encoding_combo.addItem(S.csv_export.encoding_latin1, "latin-1")
         self.encoding_combo.addItem(S.csv_export.encoding_cp1252, "cp1252")
+        apply_combobox_style(self.encoding_combo)
         form.addRow(S.csv_export.label_encoding, self.encoding_combo)
 
-        # Include header
         self.header_check = QCheckBox()
         self.header_check.setChecked(True)
         form.addRow(S.csv_export.label_include_header, self.header_check)
 
-        # Open folder after export
         self.open_folder_check = QCheckBox()
         self.open_folder_check.setChecked(True)
         form.addRow(S.csv_export.label_open_folder, self.open_folder_check)
 
         layout.addLayout(form)
 
-        # Buttons (reversing order: Cancel, OK)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        # Apply theme
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
+        bar = QHBoxLayout()
+        bar.addStretch()
+        btn_ok = PrimaryButton(S.dialogs.btn_ok, size="sm")
+        btn_cancel = SecondaryButton(S.dialogs.btn_cancel, size="sm")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        bar.addWidget(btn_ok)
+        bar.addWidget(btn_cancel)
+        layout.addLayout(bar)
 
     def _load_settings(self):
         """Load saved settings"""
@@ -2040,19 +2050,40 @@ class ResultsViewer(QWidget):
         from src.design_system.tokens import get_colors
         colors_tk = get_colors()
         
-        from src.design_system.tokens import configure_combobox_popup
+        self.export_dest_widget = QWidget()
+        self.export_dest_widget.setObjectName("exportDestSegment")
+        export_dest_layout = QHBoxLayout(self.export_dest_widget)
+        export_dest_layout.setContentsMargins(0, 0, 0, 0)
+        export_dest_layout.setSpacing(0)
 
-        self.export_destination = QComboBox()
-        self.export_destination.addItem(S.results.dest_clipboard, "clipboard")
-        self.export_destination.setItemIcon(0, qta.icon("mdi.clipboard-text", color=colors_tk.interactive_primary))
-        self.export_destination.addItem(S.results.dest_file, "file")
-        self.export_destination.setItemIcon(1, qta.icon("mdi.file-export", color=colors_tk.interactive_primary))
-        self.export_destination.setToolTip(S.results.tooltip_export_dest)
-        self.export_destination.setFixedHeight(28)
-        self.export_destination.setMinimumWidth(100)
-        self.export_destination.setMaximumWidth(118)
-        configure_combobox_popup(self.export_destination)
-        self.toolbar.addWidget(self.export_destination)
+        self.btn_export_dest_clipboard = QToolButton()
+        self.btn_export_dest_clipboard.setObjectName("exportDestBtnLeft")
+        self.btn_export_dest_clipboard.setCheckable(True)
+        self.btn_export_dest_clipboard.setChecked(True)
+        self.btn_export_dest_clipboard.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.btn_export_dest_clipboard.setToolTip(S.results.dest_clipboard)
+        self.btn_export_dest_clipboard.setProperty("export_dest", "clipboard")
+        self.btn_export_dest_clipboard.setIconSize(QSize(16, 16))
+
+        self.btn_export_dest_file = QToolButton()
+        self.btn_export_dest_file.setObjectName("exportDestBtnRight")
+        self.btn_export_dest_file.setCheckable(True)
+        self.btn_export_dest_file.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.btn_export_dest_file.setToolTip(S.results.dest_file)
+        self.btn_export_dest_file.setProperty("export_dest", "file")
+        self.btn_export_dest_file.setIconSize(QSize(16, 16))
+
+        self._export_dest_group = QButtonGroup(self)
+        self._export_dest_group.setExclusive(True)
+        self._export_dest_group.addButton(self.btn_export_dest_clipboard)
+        self._export_dest_group.addButton(self.btn_export_dest_file)
+        self._export_dest_group.buttonClicked.connect(self._refresh_export_dest_icons)
+
+        export_dest_layout.addWidget(self.btn_export_dest_clipboard)
+        export_dest_layout.addWidget(self.btn_export_dest_file)
+        self._refresh_export_dest_icons()
+        self._apply_export_dest_style()
+        self.toolbar.addWidget(self.export_dest_widget)
         self.toolbar.addSeparator()
 
         # Toolbar buttons with icons
@@ -2409,6 +2440,8 @@ class ResultsViewer(QWidget):
         """Aplica estilo na toolbar baseado no tema - moderno e limpo"""
         colors = self.theme_manager.get_app_colors()
         from src.design_system.tokens import RADIUS
+        if hasattr(self, "export_dest_widget"):
+            self._apply_export_dest_style()
         self.toolbar.setStyleSheet(f"""
             QToolBar {{
                 background-color: {colors["background"]};
@@ -2434,41 +2467,6 @@ class ResultsViewer(QWidget):
                 color: {colors["foreground"]};
                 padding: 4px 8px;
                 font-size: 12px;
-            }}
-            QComboBox {{
-                background-color: transparent;
-                color: {colors["foreground"]};
-                border: 1px solid {colors["border"]};
-                border-radius: {RADIUS.radius_sm}px;
-                padding: 2px 8px;
-                padding-right: 18px;
-                font-size: 12px;
-                min-height: 0px;
-                max-height: 28px;
-            }}
-            QComboBox:hover {{
-                background-color: {colors["accent"]};
-                color: white;
-                border-color: {colors["accent"]};
-            }}
-            QComboBox::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: center right;
-                width: 16px;
-                border: none;
-                background: transparent;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                width: 0;
-                height: 0;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {colors["foreground"]};
-                margin-right: 4px;
-            }}
-            QComboBox:hover::down-arrow {{
-                border-top-color: white;
             }}
             QLineEdit {{
                 background-color: #2d2d2d;
@@ -4468,7 +4466,7 @@ class ResultsViewer(QWidget):
         self.btn_export_excel.setVisible(False)
         self.btn_export_json.setVisible(False)
         self.btn_copy.setVisible(False)
-        self.export_destination.setVisible(False)
+        self.export_dest_widget.setVisible(False)
         self.btn_save_image.setVisible(True)
 
     def display_images(self, images_bytes_list: list, label: str = None):
@@ -4553,7 +4551,7 @@ class ResultsViewer(QWidget):
         self.btn_export_excel.setVisible(False)
         self.btn_export_json.setVisible(False)
         self.btn_copy.setVisible(False)
-        self.export_destination.setVisible(False)
+        self.export_dest_widget.setVisible(False)
         self.btn_save_image.setVisible(True)
 
     def display_html(self, html_content: str, label: str = "HTML"):
@@ -4777,7 +4775,7 @@ class ResultsViewer(QWidget):
         self.btn_copy.setVisible(True)
         self.btn_export_table.setVisible(True)
         self.btn_export_sql.setVisible(True)
-        self.export_destination.setVisible(True)
+        self.export_dest_widget.setVisible(True)
         self._refresh_filter_chips()
         self.btn_save_image.setVisible(False)
 
@@ -4789,7 +4787,7 @@ class ResultsViewer(QWidget):
         self.btn_copy.setVisible(False)
         self.btn_export_table.setVisible(False)
         self.btn_export_sql.setVisible(False)
-        self.export_destination.setVisible(False)
+        self.export_dest_widget.setVisible(False)
         if hasattr(self, "filter_chip_bar"):
             self.filter_chip_bar.setVisible(False)
         self.btn_save_image.setVisible(False)
@@ -4818,7 +4816,62 @@ class ResultsViewer(QWidget):
 
     def _get_export_destination(self) -> str:
         """Return selected destination: 'clipboard' or 'file'"""
-        return self.export_destination.currentData()
+        btn = self._export_dest_group.checkedButton()
+        if btn is None:
+            return "clipboard"
+        return btn.property("export_dest") or "clipboard"
+
+    def _refresh_export_dest_icons(self, _button: QAbstractButton | None = None):
+        """Update segment icons for checked/unchecked state."""
+        from src.design_system.tokens import get_colors
+
+        colors = get_colors()
+        icons = (
+            (self.btn_export_dest_clipboard, "mdi.clipboard-arrow-down-outline"),
+            (self.btn_export_dest_file, "mdi.file-download-outline"),
+        )
+        for btn, icon_name in icons:
+            icon_color = "#ffffff" if btn.isChecked() else colors.text_tertiary
+            btn.setIcon(qta.icon(icon_name, color=icon_color))
+
+    def _apply_export_dest_style(self):
+        """Segmented toggle matching toolbar button height."""
+        colors = self.theme_manager.get_app_colors()
+        from src.design_system.tokens import RADIUS
+
+        self.export_dest_widget.setStyleSheet(f"""
+            QToolButton#exportDestBtnLeft,
+            QToolButton#exportDestBtnRight {{
+                background-color: transparent;
+                color: {colors["foreground"]};
+                border: 1px solid {colors["border"]};
+                padding: 6px 10px;
+                min-width: 34px;
+                max-width: 34px;
+                min-height: 0px;
+                max-height: 32px;
+            }}
+            QToolButton#exportDestBtnLeft {{
+                border-top-left-radius: {RADIUS.radius_sm}px;
+                border-bottom-left-radius: {RADIUS.radius_sm}px;
+                border-right: none;
+            }}
+            QToolButton#exportDestBtnRight {{
+                border-top-right-radius: {RADIUS.radius_sm}px;
+                border-bottom-right-radius: {RADIUS.radius_sm}px;
+            }}
+            QToolButton#exportDestBtnLeft:checked,
+            QToolButton#exportDestBtnRight:checked {{
+                background-color: {colors["accent"]};
+                border-color: {colors["accent"]};
+            }}
+            QToolButton#exportDestBtnLeft:hover:!checked,
+            QToolButton#exportDestBtnRight:hover:!checked {{
+                background-color: rgba(255, 255, 255, 0.06);
+                border-color: {colors["accent"]};
+            }}
+        """)
+        self._refresh_export_dest_icons()
 
     def _show_clipboard_success(self, format_name: str):
         """Show success feedback when copying to clipboard"""
