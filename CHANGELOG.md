@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.42.0 (2026-06-05)
+
+### Features
+
+- Padronizacoes de telas e janelas
+  ([`6a47731`](https://github.com/natharuc/datapyn/commit/6a47731068a247d9ed691046acb2055f27d19f80))
+
+### Heuristic
+
+- Merge branch 'main' of github-nac:natharuc/datapyn into cursor/pynia
+  ([`2064518`](https://github.com/natharuc/datapyn/commit/2064518fab94b75219daaf57846ab2b3e43ce3b2))
+
+- Merge pull request #123 from natharuc/cursor/pynia
+  ([`6a47731`](https://github.com/natharuc/datapyn/commit/6a47731068a247d9ed691046acb2055f27d19f80))
+
+### Testing
+
+- Ajuste em testes
+  ([`4e33fa7`](https://github.com/natharuc/datapyn/commit/4e33fa740f932d732c4259519c3a762e0e8a0563))
+
+
 ## v1.41.0 (2026-06-05)
 
 ### Features
