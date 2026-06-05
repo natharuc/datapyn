@@ -198,7 +198,9 @@ class MonacoEditor(QWidget):
         
         # Use custom page to capture JS console messages
         self._page = MonacoPage(self._web_view)
-        self._page.setBackgroundColor(QColor("#1e1e1e"))  # Evita flash branco
+        from src.design_system.tokens import get_colors
+        editor_bg = get_colors().editor_bg
+        self._page.setBackgroundColor(QColor(editor_bg))
         self._web_view.setPage(self._page)
         
         self._web_view.setContextMenuPolicy(
@@ -334,7 +336,7 @@ class MonacoEditor(QWidget):
         <!DOCTYPE html>
         <html>
         <head><title>Editor</title></head>
-        <body style="background:#1e1e1e;margin:0;">
+        <body style="background:#0a0f18;margin:0;">
         </body>
         </html>
         """
@@ -643,49 +645,54 @@ class MonacoEditor(QWidget):
     
     def apply_theme(self) -> None:
         """Applies the current ThemeManager theme."""
+        from src.design_system.tokens import get_colors
+
+        colors = get_colors()
+        bg = colors.editor_bg
+        self._page.setBackgroundColor(QColor(bg))
+        self._web_view.setStyleSheet(f"background-color: {bg};")
+
         if not self._is_ready:
             return
-        
+
         # Get theme colors
         theme_data = self._get_theme_data()
         if theme_data:
             theme_json = json.dumps(theme_data)
             theme_name = json.dumps(f"datapyn-{self._theme_name}")
             self._run_js(f"setCustomTheme({theme_name}, {theme_json})")
-            
-            # Set background color
-            bg = theme_data.get("background", "#1e1e1e")
+
+            bg = theme_data.get("background", bg)
             self._run_js(f"setBackgroundColor('{bg}')")
     
     def _get_theme_data(self) -> Optional[Dict[str, Any]]:
-        """Get theme data for Monaco from ThemeManager."""
-        if not self.theme_manager:
-            return None
-        
-        try:
-            theme = self.theme_manager.get_theme()
-            editor_colors = theme.get("editor", {})
-            
-            # Determine if dark theme
-            bg = editor_colors.get("background", "#1e1e1e")
-            is_dark = self._is_dark_color(bg)
-            
-            # Get syntax colors based on language
-            syntax_colors = theme.get(self._language, theme.get("python", {}))
-            
-            return {
-                "isDark": is_dark,
-                "background": editor_colors.get("background", "#1e1e1e"),
-                "foreground": editor_colors.get("foreground", "#d4d4d4"),
-                "caret": editor_colors.get("caret", "#ffffff"),
-                "caretLine": editor_colors.get("caret_line", "#2a2a2a"),
-                "selection": editor_colors.get("selection", "#264f78"),
-                "marginBg": editor_colors.get("margin_bg", "#1e1e1e"),
-                "marginFg": editor_colors.get("margin_fg", "#858585"),
-                "syntax": syntax_colors,
-            }
-        except Exception:
-            return None
+        """Get theme data for Monaco from ThemeManager / design tokens."""
+        from src.design_system.tokens import get_colors
+
+        ds = get_colors()
+        editor_colors: Dict[str, Any] = {}
+        syntax_colors: Dict[str, Any] = {}
+
+        if self.theme_manager:
+            try:
+                theme = self.theme_manager.get_theme()
+                editor_colors = theme.get("editor", {})
+                syntax_colors = theme.get(self._language, theme.get("python", {}))
+            except Exception:
+                pass
+
+        bg = editor_colors.get("background", ds.editor_bg)
+        return {
+            "isDark": True,
+            "background": bg,
+            "foreground": editor_colors.get("foreground", ds.editor_fg),
+            "caret": editor_colors.get("caret", "#ffffff"),
+            "caretLine": editor_colors.get("caret_line", ds.editor_line_highlight),
+            "selection": editor_colors.get("selection", ds.editor_selection),
+            "marginBg": editor_colors.get("margin_bg", ds.editor_gutter_bg),
+            "marginFg": editor_colors.get("margin_fg", ds.editor_gutter_fg),
+            "syntax": syntax_colors,
+        }
     
     def _is_dark_color(self, hex_color: str) -> bool:
         """Check if a hex color is dark."""

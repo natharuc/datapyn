@@ -1,13 +1,13 @@
 """
-Copilot Output Panel
+Pynia Output Panel
 
-Displays Copilot tool calls, responses, and debug information.
-Shows what Copilot is doing in real-time.
+Displays Pynia tool calls, responses, and debug information.
+Shows what Pynia is doing in real-time.
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QTextCursor, QColor
+from PyQt6.QtGui import QTextCursor
 from PyQt6 import sip
 from datetime import datetime
 import html as html_module
@@ -16,6 +16,8 @@ import json
 from .buttons import GhostButton
 
 from src.language import S
+from src.design_system.tokens import get_colors, SCROLLBAR_STYLE
+from src.design_system.font_manager import get_monospace_font
 
 try:
     import qtawesome as qta
@@ -26,7 +28,7 @@ except ImportError:
 
 
 class CopilotOutputPanel(QWidget):
-    """Panel showing Copilot activity and tool executions."""
+    """Panel showing Pynia activity and tool executions."""
 
     cleared = pyqtSignal()
 
@@ -43,8 +45,8 @@ class CopilotOutputPanel(QWidget):
         layout.setSpacing(0)
 
         # Toolbar
-        toolbar = QWidget()
-        toolbar_layout = QHBoxLayout(toolbar)
+        self._toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(self._toolbar)
         toolbar_layout.setContentsMargins(5, 3, 5, 3)
         toolbar_layout.setSpacing(5)
 
@@ -58,9 +60,8 @@ class CopilotOutputPanel(QWidget):
             self._logo_label.setToolTip("Pynia")
         toolbar_layout.addWidget(self._logo_label)
 
-        title = QLabel(getattr(S.dock, "copilot_output", "Pynia Output"))
-        title.setStyleSheet("color: #b0b0b0; font-size: 11px; font-weight: 600;")
-        toolbar_layout.addWidget(title)
+        self._title_label = QLabel(S.dock.pynia_output)
+        toolbar_layout.addWidget(self._title_label)
 
         toolbar_layout.addStretch()
 
@@ -71,33 +72,31 @@ class CopilotOutputPanel(QWidget):
         self.btn_clear.clicked.connect(self.clear)
         toolbar_layout.addWidget(self.btn_clear)
 
-        toolbar.setStyleSheet("""
-            QWidget {
-                background-color: #222225;
-                border: none;
-                border-bottom: 1px solid #28282c;
-            }
-        """)
-        layout.addWidget(toolbar)
+        layout.addWidget(self._toolbar)
 
         # Text area
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
-        self.text_edit.setFont(QFont("Consolas", 10))
+        self.text_edit.setFont(get_monospace_font(10))
         layout.addWidget(self.text_edit)
 
     def _apply_theme(self):
         """Apply theme."""
-        from src.design_system.tokens import SCROLLBAR_STYLE
-        if self.theme_manager:
-            colors = self.theme_manager.get_app_colors()
-        else:
-            colors = {"background": "#1a1a1c", "foreground": "#e0e0e4"}
-
+        colors = get_colors()
+        self._title_label.setStyleSheet(
+            f"color: {colors.text_secondary}; font-size: 11px; font-weight: 600;"
+        )
+        self._toolbar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors.bg_tertiary};
+                border: none;
+                border-bottom: 1px solid {colors.border_muted};
+            }}
+        """)
         self.text_edit.setStyleSheet(f"""
             QTextEdit {{
-                background-color: {colors["background"]};
-                color: {colors["foreground"]};
+                background-color: {colors.bg_primary};
+                color: {colors.text_primary};
                 border: none;
                 padding: 12px;
                 font-size: 12px;
@@ -141,7 +140,7 @@ class CopilotOutputPanel(QWidget):
         )
 
     def log_tool_call(self, tool_name: str, arguments: dict):
-        """Log a tool call from Copilot."""
+        """Log a tool call from Pynia."""
         ts = self._timestamp()
         args_str = json.dumps(arguments, indent=2, ensure_ascii=False) if arguments else "{}"
         escaped_args = html_module.escape(args_str)
@@ -168,15 +167,15 @@ class CopilotOutputPanel(QWidget):
         )
 
     def log_thinking(self):
-        """Log that Copilot is thinking."""
+        """Log that Pynia is thinking."""
         ts = self._timestamp()
         self._append_html(
             f'<span style="color:#888;">[{ts}]</span> '
-            f'<span style="color:#c586c0;">Copilot is thinking...</span>'
+            f'<span style="color:#c586c0;">Pynia is thinking...</span>'
         )
 
     def log_response_start(self):
-        """Log that Copilot started responding."""
+        """Log that Pynia started responding."""
         ts = self._timestamp()
         self._append_html(
             f'<span style="color:#888;">[{ts}]</span> '
@@ -184,7 +183,7 @@ class CopilotOutputPanel(QWidget):
         )
 
     def log_response_complete(self):
-        """Log that Copilot finished responding."""
+        """Log that Pynia finished responding."""
         ts = self._timestamp()
         self._append_html(
             f'<span style="color:#888;">[{ts}]</span> '

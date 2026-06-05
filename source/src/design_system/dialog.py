@@ -24,6 +24,7 @@ from src.design_system.tokens import get_colors, get_dialog_base_stylesheet, SPA
 from src.design_system.button import PrimaryButton, SecondaryButton
 from src.design_system.headers import DialogHeader, ButtonBar, Divider
 from src.design_system.effects import shadow_xl
+from src.design_system.frameless_dialog import install_frameless_shell
 
 try:
     from src.core.theme_manager import ThemeManager
@@ -124,20 +125,24 @@ class BaseDialog(QDialog):
         self._show_ok = show_ok
         self._show_cancel = show_cancel
         
-        # Window setup
+        # Window setup (frameless shell with custom title bar)
         self.setWindowTitle(title)
         self.resize(width, height)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
-        
-        # Apply styling
         self._apply_styling()
-        
-        # Main layout
-        self._main_layout = QVBoxLayout(self)
-        self._main_layout.setContentsMargins(
-            SPACING.space_4, SPACING.space_4, SPACING.space_4, SPACING.space_4
+        self._body_layout = install_frameless_shell(
+            self,
+            title or "Dialog",
+            min_width=width,
+            min_height=height,
+            outer_margins=(14, 14, 14, 14),
+            content_margins=(
+                SPACING.space_4,
+                SPACING.space_3,
+                SPACING.space_4,
+                SPACING.space_4,
+            ),
+            content_spacing=SPACING.space_3,
         )
-        self._main_layout.setSpacing(SPACING.space_3)
         
         # Header (optional)
         if show_header and title:
@@ -147,8 +152,8 @@ class BaseDialog(QDialog):
                 icon_name=icon_name,
                 parent=self,
             )
-            self._main_layout.addWidget(self._header)
-            self._main_layout.addWidget(Divider())
+            self._body_layout.addWidget(self._header)
+            self._body_layout.addWidget(Divider())
         else:
             self._header = None
         
@@ -157,11 +162,11 @@ class BaseDialog(QDialog):
         self._content_layout = QVBoxLayout(self._content_widget)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._content_layout.setSpacing(SPACING.space_3)
-        self._main_layout.addWidget(self._content_widget, 1)
+        self._body_layout.addWidget(self._content_widget, 1)
         
         # Button bar (optional)
         if show_buttons:
-            self._main_layout.addWidget(Divider())
+            self._body_layout.addWidget(Divider())
             self._setup_buttons()
         else:
             self._button_bar = None
@@ -195,7 +200,7 @@ class BaseDialog(QDialog):
         else:
             self._ok_button = None
         
-        self._main_layout.addWidget(self._button_bar)
+        self._body_layout.addWidget(self._button_bar)
     
     @property
     def content_layout(self) -> QVBoxLayout:

@@ -2098,6 +2098,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
             self._completion_worker.set_system_message(system_msg)
             
             self._completion_thread = QThread()
+            self._completion_thread.setObjectName("CopilotCompletion")
             self._completion_worker.moveToThread(self._completion_thread)
             
             # Connect signals - worker stays alive (no finished->quit)
@@ -2136,51 +2137,33 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
         # (prevent double cleanup race condition)
         pass  # Cleanup is handled by _cleanup_completion_worker
     
-    def _cleanup_completion_worker(self) -> None:
-        """Cancel and cleanup completion worker."""
+    def _cleanup_completion_worker(self, wait_ms: int = 5000) -> None:
+        """Cancel and stop completion worker thread (blocking ODBC/SDK safe)."""
+        from src.utils.qt_threading import stop_qthread
+
         worker = self._completion_worker
         thread = self._completion_thread
-        
-        # Clear references first to prevent recursion
         self._completion_worker = None
         self._completion_thread = None
-        
+
         if worker:
-            try:
-                worker.cancel()
-                # Disconnect signals to prevent callbacks
-                worker.complete.disconnect()
-                worker.inline_complete.disconnect()
-                worker.error.disconnect()
-                worker.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-        
+            for signal_name in ("complete", "inline_complete", "error", "finished"):
+                try:
+                    getattr(worker, signal_name).disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+
         if thread:
             try:
-                # Disconnect thread signals
                 thread.started.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            try:
                 thread.finished.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            
-            if thread.isRunning():
-                thread.quit()
-                if not thread.wait(2000):  # Wait up to 2 seconds
-                    logger.warning("Completion thread did not terminate, forcing...")
-                    thread.terminate()
-                    thread.wait(500)
-            
-            try:
-                thread.deleteLater()
-            except RuntimeError:
-                pass
-        
-        if worker:
-            try:
-                worker.deleteLater()
-            except RuntimeError:
-                pass
+
+        stop_qthread(thread, worker, wait_ms=wait_ms, force_terminate=True)
 
     def _clean_completion_response(self, response: str) -> str:
         """Clean completion response from chat artifacts."""
@@ -2237,6 +2220,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
             self._completion_worker.set_inline_prompt("")
             
             self._completion_thread = QThread()
+            self._completion_thread.setObjectName("CopilotCompletionPreinit")
             self._completion_worker.moveToThread(self._completion_thread)
             
             # Connect signals
@@ -2424,55 +2408,21 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
 
     def _cleanup_worker(self):
         """Clean up current worker and thread."""
-        if self._worker:
-            try:
-                self._worker.cancel()
-            except RuntimeError:
-                pass
-        
-        if self._worker_thread and self._worker_thread.isRunning():
-            self._worker_thread.quit()
-            self._worker_thread.wait(3000)
-        
-        if self._worker:
-            try:
-                self._worker.deleteLater()
-            except RuntimeError:
-                pass
-            self._worker = None
-        
-        if self._worker_thread:
-            try:
-                self._worker_thread.deleteLater()
-            except RuntimeError:
-                pass
-            self._worker_thread = None
+        from src.utils.qt_threading import stop_qthread
+
+        worker, thread = self._worker, self._worker_thread
+        self._worker = None
+        self._worker_thread = None
+        stop_qthread(thread, worker, wait_ms=3000)
 
     def _cleanup_session_worker(self):
         """Clean up persistent session worker and thread."""
-        if self._session_worker:
-            try:
-                self._session_worker.cancel()
-            except RuntimeError:
-                pass
-        
-        if self._session_thread and self._session_thread.isRunning():
-            self._session_thread.quit()
-            self._session_thread.wait(3000)
-        
-        if self._session_worker:
-            try:
-                self._session_worker.deleteLater()
-            except RuntimeError:
-                pass
-            self._session_worker = None
-        
-        if self._session_thread:
-            try:
-                self._session_thread.deleteLater()
-            except RuntimeError:
-                pass
-            self._session_thread = None
+        from src.utils.qt_threading import stop_qthread
+
+        worker, thread = self._session_worker, self._session_thread
+        self._session_worker = None
+        self._session_thread = None
+        stop_qthread(thread, worker, wait_ms=3000)
 
     def _on_session_ready(self):
         """Session worker is ready to accept chat requests."""

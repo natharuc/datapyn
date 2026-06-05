@@ -139,7 +139,6 @@ class ConnectionImportExportDialog(QDialog):
 
         self.setWindowTitle(S.connections_manager.import_export_title)
         self.resize(700, 520)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         self._setup_ui()
 
     @property
@@ -148,10 +147,16 @@ class ConnectionImportExportDialog(QDialog):
         return self._imported
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        from src.design_system.frameless_dialog import install_frameless_shell
 
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
+        layout = install_frameless_shell(
+            self,
+            S.connections_manager.import_export_title,
+            min_width=700,
+            min_height=520,
+            content_margins=(16, 12, 16, 16),
+            content_spacing=10,
+        )
 
         from src.design_system.tokens import get_colors
         colors = get_colors()

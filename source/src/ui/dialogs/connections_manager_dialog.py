@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QFrame,
     QAbstractItemView,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QAction
@@ -107,72 +108,60 @@ class ConnectionsManagerDialog(QDialog):
 
         self.setWindowTitle(S.connections_manager.title)
         self.resize(900, 600)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
 
         self._setup_ui()
         self._load_connections()
 
     def _setup_ui(self):
         """Sets up the UI"""
-        layout = QVBoxLayout(self)
+        from src.design_system.frameless_dialog import install_frameless_shell
+        from src.design_system.button import DangerButton, PrimaryButton, SecondaryButton
 
-        # Apply theme
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
+        layout = install_frameless_shell(
+            self,
+            S.connections_manager.title,
+            min_width=900,
+            min_height=580,
+            content_margins=(16, 12, 16, 20),
+            content_spacing=10,
+        )
 
-        # Splitter for tree and details
+        from src.design_system.tokens import get_colors, get_tree_stylesheet
+
+        colors = get_colors()
+
+        # Top toolbar (full width — not split with action buttons)
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setSpacing(8)
+
+        btn_new_group = PrimaryButton(S.connections_manager.btn_new_group, size="sm")
+        if HAS_QTAWESOME:
+            btn_new_group.setIcon(qta.icon("mdi.folder-plus", color="white"))
+        btn_new_group.clicked.connect(self._new_group)
+        toolbar_layout.addWidget(btn_new_group)
+
+        btn_new_conn = PrimaryButton(S.connections_manager.btn_new_connection, size="sm")
+        if HAS_QTAWESOME:
+            btn_new_conn.setIcon(qta.icon("mdi.database-plus", color="white"))
+        btn_new_conn.clicked.connect(self._new_connection)
+        toolbar_layout.addWidget(btn_new_conn)
+
+        btn_import_export = SecondaryButton(S.connections_manager.btn_import_export, size="sm")
+        if HAS_QTAWESOME:
+            btn_import_export.setIcon(qta.icon("mdi.code-json", color="white"))
+        btn_import_export.clicked.connect(self._open_import_export)
+        toolbar_layout.addWidget(btn_import_export)
+        toolbar_layout.addStretch()
+        layout.addLayout(toolbar_layout)
+
+        # Splitter: tree | details
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        # Left panel: connections tree
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Groups toolbar
-        from src.design_system.tokens import get_colors
-        colors = get_colors()
-        
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.setSpacing(8)
-        
-        # Compact toolbar button style (use object name for specificity)
-        toolbar_btn_style = """
-            QPushButton#toolbarBtn {
-                padding: 4px 10px;
-                font-size: 11px;
-                min-height: 22px;
-                max-height: 22px;
-                font-weight: 500;
-            }
-        """
-
-        btn_new_group = QPushButton(S.connections_manager.btn_new_group)
-        btn_new_group.setObjectName("toolbarBtn")
-        if HAS_QTAWESOME:
-            btn_new_group.setIcon(qta.icon("mdi.folder-plus", color="white"))
-        btn_new_group.setStyleSheet(toolbar_btn_style)
-        btn_new_group.clicked.connect(self._new_group)
-        toolbar_layout.addWidget(btn_new_group)
-
-        btn_new_conn = QPushButton(S.connections_manager.btn_new_connection)
-        btn_new_conn.setObjectName("toolbarBtn")
-        if HAS_QTAWESOME:
-            btn_new_conn.setIcon(qta.icon("mdi.database-plus", color="white"))
-        btn_new_conn.setStyleSheet(toolbar_btn_style)
-        btn_new_conn.clicked.connect(self._new_connection)
-        toolbar_layout.addWidget(btn_new_conn)
-
-        btn_import_export = QPushButton(S.connections_manager.btn_import_export)
-        btn_import_export.setObjectName("toolbarBtn")
-        if HAS_QTAWESOME:
-            btn_import_export.setIcon(qta.icon("mdi.code-json", color="white"))
-        btn_import_export.setStyleSheet(toolbar_btn_style)
-        btn_import_export.clicked.connect(self._open_import_export)
-        toolbar_layout.addWidget(btn_import_export)
-
-        toolbar_layout.addStretch()
-        left_layout.addLayout(toolbar_layout)
-
-        # Connections tree with drag-and-drop support
         self.tree = DraggableTreeWidget()
         self.tree.setHeaderLabels([S.connections_manager.header_connections])
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -185,19 +174,25 @@ class ConnectionsManagerDialog(QDialog):
 
         splitter.addWidget(left_panel)
 
-        # Right panel: connection details
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(12)
 
-        # Information group
         info_group = QFrame()
-        info_group.setFrameShape(QFrame.Shape.StyledPanel)
+        info_group.setObjectName("sectionPanel")
+        info_group.setFrameShape(QFrame.Shape.NoFrame)
+        info_group.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
         info_group_layout = QVBoxLayout(info_group)
-        info_group_layout.setContentsMargins(12, 12, 12, 12)
+        info_group_layout.setContentsMargins(12, 10, 12, 10)
+        info_group_layout.setSpacing(8)
+        info_group_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # Header
         header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
         icon_label = QLabel()
         if HAS_QTAWESOME:
             icon_label.setPixmap(qta.icon("mdi.information", color=colors.info).pixmap(20, 20))
@@ -209,8 +204,19 @@ class ConnectionsManagerDialog(QDialog):
         info_group_layout.addLayout(header)
 
         info_layout = QFormLayout()
-        info_group_layout.addLayout(info_layout)
+        info_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint
+        )
+        info_layout.setFormAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        info_layout.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        info_layout.setHorizontalSpacing(12)
+        info_layout.setVerticalSpacing(6)
 
+        value_style = f"color: {colors.text_primary};"
         self.lbl_name = QLabel("-")
         self.lbl_type = QLabel("-")
         self.lbl_host = QLabel("-")
@@ -219,6 +225,19 @@ class ConnectionsManagerDialog(QDialog):
         self.lbl_group = QLabel("-")
         self.lbl_created = QLabel("-")
         self.lbl_last_used = QLabel("-")
+        for lbl in (
+            self.lbl_name,
+            self.lbl_type,
+            self.lbl_host,
+            self.lbl_database,
+            self.lbl_username,
+            self.lbl_group,
+            self.lbl_created,
+            self.lbl_last_used,
+        ):
+            lbl.setStyleSheet(value_style)
+            lbl.setWordWrap(True)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
         info_layout.addRow(S.connections_manager.detail_name, self.lbl_name)
         info_layout.addRow(S.connections_manager.detail_type, self.lbl_type)
@@ -229,57 +248,73 @@ class ConnectionsManagerDialog(QDialog):
         info_layout.addRow(S.connections_manager.detail_created_at, self.lbl_created)
         info_layout.addRow(S.connections_manager.detail_last_used, self.lbl_last_used)
 
-        right_layout.addWidget(info_group)
+        self._hint_label = QLabel(S.connections_manager.select_connection_hint)
+        self._hint_label.setWordWrap(True)
+        self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint_label.setStyleSheet(
+            f"color: {colors.text_tertiary}; font-size: 12px; padding: 8px 12px;"
+        )
+        self._hint_container = QWidget()
+        hint_layout = QVBoxLayout(self._hint_container)
+        hint_layout.setContentsMargins(0, 0, 0, 0)
+        hint_layout.setSpacing(0)
+        hint_layout.addStretch(1)
+        hint_layout.addWidget(self._hint_label)
+        hint_layout.addStretch(1)
 
-        # Action buttons
-        actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(8)
+        self._details_form_host = QWidget()
+        self._details_form_host.setLayout(info_layout)
+        self._details_form_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
 
-        # Compact button style (use object name for specificity)
-        compact_btn_style = """
-            QPushButton#compactBtn {
-                padding: 4px 14px;
-                font-size: 11px;
-                min-height: 24px;
-                max-height: 24px;
-                font-weight: 500;
-            }
-        """
+        info_group_layout.addWidget(self._details_form_host, 0, Qt.AlignmentFlag.AlignTop)
+        info_group_layout.addWidget(self._hint_container, 1)
+        info_group_layout.addStretch(1)
+        self._set_details_panel_empty(True)
 
-        self.btn_connect = QPushButton(S.connections_manager.btn_connect)
-        self.btn_connect.setObjectName("compactBtn")
+        right_layout.addWidget(info_group, 1)
+
+        actions_host = QWidget()
+        actions_layout = QHBoxLayout(actions_host)
+        actions_layout.setContentsMargins(0, 0, 0, 2)
+        actions_layout.setSpacing(10)
+        actions_layout.addStretch()
+
+        self.btn_connect = PrimaryButton(S.connections_manager.btn_connect, size="sm")
         if HAS_QTAWESOME:
             self.btn_connect.setIcon(qta.icon("mdi.lan-connect", color="white"))
-        self.btn_connect.setStyleSheet(compact_btn_style)
         self.btn_connect.clicked.connect(self._connect_selected)
         self.btn_connect.setEnabled(False)
         actions_layout.addWidget(self.btn_connect)
 
-        self.btn_edit = QPushButton(S.connections_manager.btn_edit)
-        self.btn_edit.setObjectName("compactBtn")
+        self.btn_edit = SecondaryButton(S.connections_manager.btn_edit, size="sm")
         if HAS_QTAWESOME:
             self.btn_edit.setIcon(qta.icon("mdi.pencil", color="white"))
-        self.btn_edit.setStyleSheet(compact_btn_style)
         self.btn_edit.clicked.connect(self._edit_selected)
         self.btn_edit.setEnabled(False)
         actions_layout.addWidget(self.btn_edit)
 
-        self.btn_delete = QPushButton(S.connections_manager.btn_delete)
-        self.btn_delete.setObjectName("compactBtn")
+        self.btn_delete = DangerButton(S.connections_manager.btn_delete, size="sm")
         if HAS_QTAWESOME:
             self.btn_delete.setIcon(qta.icon("mdi.delete", color="white"))
-        self.btn_delete.setStyleSheet(compact_btn_style)
         self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_delete.setEnabled(False)
         actions_layout.addWidget(self.btn_delete)
 
-        right_layout.addLayout(actions_layout)
-        right_layout.addStretch()
+        right_layout.addWidget(actions_host, 0)
 
         splitter.addWidget(right_panel)
-        splitter.setSizes([400, 500])
+        splitter.setSizes([380, 520])
 
-        layout.addWidget(splitter)
+        self.tree.setStyleSheet(get_tree_stylesheet())
+
+        layout.addWidget(splitter, 1)
+
+    def _set_details_panel_empty(self, empty: bool) -> None:
+        """Toggle placeholder vs connection detail form."""
+        self._hint_container.setVisible(empty)
+        self._details_form_host.setVisible(not empty)
 
     def _load_connections(self):
         """Loads connections into the tree"""
@@ -317,22 +352,11 @@ class ConnectionsManagerDialog(QDialog):
             item = QTreeWidgetItem([conn_name])
             item.setData(0, Qt.ItemDataRole.UserRole, {"type": "connection", "name": conn_name})
 
-            if HAS_QTAWESOME:
-                db_type = conn_config.get("db_type", "")
-                icon_color = "#569cd6"
-                # Uses configured color or database type color
-                if conn_config.get("color"):
-                    icon_color = conn_config["color"]
-                elif db_type == "sqlserver":
-                    icon_color = "#cc3e44"
-                elif db_type == "mysql":
-                    icon_color = "#00758f"
-                elif db_type == "postgresql":
-                    icon_color = "#336791"
-                elif db_type == "databricks":
-                    icon_color = "#ff3621"
+            db_type = conn_config.get("db_type", "")
+            custom_color = conn_config.get("color") or None
+            from src.ui.components.connection_panel import get_db_icon
 
-                item.setIcon(0, qta.icon("mdi.database", color=icon_color))
+            item.setIcon(0, get_db_icon(db_type, custom_color=custom_color))
 
             # Apply color if set
             if conn_config.get("color"):
@@ -431,6 +455,8 @@ class ConnectionsManagerDialog(QDialog):
         if not config:
             return
 
+        self._set_details_panel_empty(False)
+
         self.lbl_name.setText(name)
         self.lbl_type.setText(config.get("db_type", "-").upper())
         self.lbl_host.setText(f"{config.get('host', '-')}:{config.get('port', '-')}")
@@ -455,6 +481,7 @@ class ConnectionsManagerDialog(QDialog):
 
     def _clear_connection_details(self):
         """Clears details"""
+        self._set_details_panel_empty(True)
         self.lbl_name.setText("-")
         self.lbl_type.setText("-")
         self.lbl_host.setText("-")

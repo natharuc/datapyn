@@ -63,13 +63,12 @@ class BlockConnectionPanel(QFrame):
         self.setLineWidth(0)
         self.setStyleSheet(f"""
             BlockConnectionPanel {{
-                background: {colors.bg_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
+                background: {colors.bg_tertiary};
+                border: none;
+                border-radius: 6px;
             }}
             BlockConnectionPanel:hover {{
-                border-color: {colors.interactive_primary};
-                background: {colors.bg_tertiary};
+                background: {colors.bg_elevated};
             }}
         """)
 
@@ -221,13 +220,12 @@ class BlockDatabasePanel(QFrame):
         self.setLineWidth(0)
         self.setStyleSheet(f"""
             BlockDatabasePanel {{
-                background: {colors.bg_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
+                background: {colors.bg_tertiary};
+                border: none;
+                border-radius: 6px;
             }}
             BlockDatabasePanel:hover {{
-                border-color: {colors.interactive_primary};
-                background: {colors.bg_tertiary};
+                background: {colors.bg_elevated};
             }}
         """)
 
@@ -508,6 +506,13 @@ class CodeBlock(QFrame):
             self._spinner_widget.hide()
         except RuntimeError:
             pass
+
+        if hasattr(self, "_completion_service") and self._completion_service is not None:
+            try:
+                self._completion_service.cancel()
+            except RuntimeError:
+                pass
+            self._completion_service = None
 
         editor = getattr(self, "editor", None)
         if editor is not None and hasattr(editor, "cleanup"):
@@ -1259,15 +1264,14 @@ class CodeBlock(QFrame):
         if self._is_copilot_editing:
             accent_left = "#b48ead"
         elif self._is_focused:
-            # Subtle left accent only — neutral frame on the other sides
-            accent_left = accent
+            accent_left = colors.interactive_primary
         else:
-            accent_left = colors.border_muted
+            accent_left = "transparent"
 
         self.setStyleSheet(f"""
             CodeBlock {{
                 background-color: {colors.bg_secondary};
-                border: 1px solid {colors.border_default};
+                border: none;
                 border-left: 3px solid {accent_left};
                 border-radius: {radius}px;
             }}
@@ -1286,7 +1290,7 @@ class CodeBlock(QFrame):
         bottom_r = radius
         self.editor_container.setStyleSheet(f"""
             QWidget#editorContainer {{
-                background: {colors.bg_primary};
+                background: {colors.editor_bg};
                 border: none;
                 border-bottom-left-radius: {bottom_r}px;
                 border-bottom-right-radius: {bottom_r}px;

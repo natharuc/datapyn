@@ -19,7 +19,7 @@ Estados:
 
 from PyQt6.QtWidgets import QPushButton
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
-from PyQt6.QtGui import QIcon, QFont, QCursor
+from PyQt6.QtGui import QIcon, QFont
 
 from ..design_system import get_colors, TYPOGRAPHY, SPACING, RADIUS
 
@@ -73,8 +73,7 @@ class Button(QPushButton):
             icon = qta.icon(self.icon_name, color=self._get_icon_color())
             self.setIcon(icon)
 
-        # Cursor via stylesheet
-        # self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))  # Removed - causes warning
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         # Font
         font = QFont(TYPOGRAPHY.font_family_primary)
@@ -175,11 +174,17 @@ class Button(QPushButton):
                 background-color: {colors.bg_tertiary};
                 color: {colors.text_disabled};
                 border-color: {colors.border_muted};
-                cursor: not-allowed;
             }}
         """
 
         self.setStyleSheet(stylesheet)
+
+    def setEnabled(self, enabled: bool) -> None:
+        super().setEnabled(enabled)
+        if enabled:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.unsetCursor()
 
     def set_loading(self, loading: bool):
         """Sets loading state"""

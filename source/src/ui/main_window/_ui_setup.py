@@ -593,7 +593,6 @@ class UISetupMixin:
     def _on_workspace_switch(self, path: str):
         """Handle workspace switch request from toolbar."""
         from pathlib import Path
-        from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
         from src.core.workspace_service import get_workspace_service
         
         ws_service = get_workspace_service()
@@ -609,91 +608,18 @@ class UISetupMixin:
         except Exception as e:
             logging.warning(f"Failed to save session before workspace switch: {e}")
         
-        # Create custom dialog with two options
-        dialog = QDialog(self)
-        dialog.setWindowTitle(
-            S.settings.workspace_switch_title if hasattr(S.settings, 'workspace_switch_title') 
-            else "Switch Workspace"
-        )
-        dialog.setModal(True)
-        dialog.setMinimumWidth(400)
-        
-        layout = QVBoxLayout(dialog)
-        layout.setSpacing(15)
-        layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Message
-        message = QLabel(
-            S.settings.workspace_switch_message if hasattr(S.settings, 'workspace_switch_message')
-            else "Choose how you want to open the selected workspace:"
-        )
-        message.setWordWrap(True)
-        layout.addWidget(message)
-        
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(10)
-        
-        # Restart current app button
-        restart_btn = QPushButton(
-            S.settings.workspace_switch_restart if hasattr(S.settings, 'workspace_switch_restart')
-            else "Restart Current App"
-        )
-        restart_btn.setToolTip(
-            S.settings.workspace_switch_restart_tooltip if hasattr(S.settings, 'workspace_switch_restart_tooltip')
-            else "Closes current DataPyn and reopens with the new workspace"
-        )
-        restart_btn.setMinimumHeight(35)
-        
-        # Open new instance button
-        new_instance_btn = QPushButton(
-            S.settings.workspace_switch_new_instance if hasattr(S.settings, 'workspace_switch_new_instance')
-            else "Open New Instance"
-        )
-        new_instance_btn.setToolTip(
-            S.settings.workspace_switch_new_instance_tooltip if hasattr(S.settings, 'workspace_switch_new_instance_tooltip')
-            else "Keeps current open and opens another DataPyn with the new workspace"
-        )
-        new_instance_btn.setMinimumHeight(35)
-        
-        # Cancel button
-        cancel_btn = QPushButton(S.general.cancel if hasattr(S.general, 'cancel') else "Cancel")
-        cancel_btn.setMinimumHeight(35)
-        
-        btn_layout.addWidget(restart_btn)
-        btn_layout.addWidget(new_instance_btn)
-        btn_layout.addWidget(cancel_btn)
-        layout.addLayout(btn_layout)
-        
-        # Store result
-        result = {"action": None}
-        
-        def on_restart():
-            result["action"] = "restart"
-            dialog.accept()
-        
-        def on_new_instance():
-            result["action"] = "new_instance"
-            dialog.accept()
-        
-        restart_btn.clicked.connect(on_restart)
-        new_instance_btn.clicked.connect(on_new_instance)
-        cancel_btn.clicked.connect(dialog.reject)
-        
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            if result["action"] == "restart":
-                # Set the new workspace and restart
-                ws_service.switch_workspace(target_path)
-                self._restart_application()
-            elif result["action"] == "new_instance":
-                # Open new instance with the new workspace
-                self._open_new_instance(target_path)
-                # Revert combo to current workspace (keep current app unchanged)
-                if hasattr(self, 'main_toolbar'):
-                    self.main_toolbar._refresh_workspace_combo()
+        from src.design_system.message_box import ask_workspace_switch
+
+        action = ask_workspace_switch(self)
+        if action == "restart":
+            ws_service.switch_workspace(target_path)
+            self._restart_application()
+        elif action == "new_instance":
+            self._open_new_instance(target_path)
+            if hasattr(self, "main_toolbar"):
+                self.main_toolbar._refresh_workspace_combo()
         else:
-            # User cancelled - revert combo box
-            if hasattr(self, 'main_toolbar'):
+            if hasattr(self, "main_toolbar"):
                 self.main_toolbar._refresh_workspace_combo()
 
     def _open_new_instance(self, workspace_path):
@@ -868,7 +794,15 @@ class UISetupMixin:
 
     def _apply_app_theme(self):
         """Applies theme to the application (not to editors)"""
-        colors = self.theme_manager.get_app_colors()
+        from src.design_system.tokens import get_colors as ds_colors
+
+        c = ds_colors()
+        colors = {
+            "background": c.bg_primary,
+            "foreground": c.text_primary,
+            "accent": c.interactive_primary,
+            "border": c.border_default,
+        }
 
         # Apply general style to window
         self.setStyleSheet(f"""
@@ -910,33 +844,36 @@ class UISetupMixin:
                 padding: 3px;
             }}
             QPushButton {{
-                background-color: {colors["border"]};
-                color: {colors["foreground"]};
+                background-color: {colors["accent"]};
+                color: white;
                 border: none;
                 padding: 6px 12px;
                 border-radius: 8px;
             }}
             QPushButton:hover {{
-                background-color: {colors["accent"]};
+                background-color: {c.interactive_primary_hover};
             }}
             QTabWidget::pane {{
                 border: 1px solid {colors["border"]};
                 background-color: {colors["background"]};
             }}
             QTabBar::tab {{
-                background-color: {colors["border"]};
-                color: {colors["foreground"]};
+                background: transparent;
+                color: {c.text_secondary};
                 padding: 8px 15px;
                 padding-right: 25px;
                 margin-right: 2px;
                 min-width: 80px;
+                border-bottom: 2px solid transparent;
             }}
             QTabBar::tab:selected {{
                 background-color: {colors["background"]};
                 color: {colors["accent"]};
+                border-bottom: 2px solid {colors["accent"]};
             }}
-            QTabBar::tab:hover {{
-                background-color: {colors["accent"]};
+            QTabBar::tab:hover:!selected {{
+                background-color: {c.bg_elevated};
+                color: {c.text_primary};
             }}
             QTabBar::tab:last {{
                 min-width: 30px;
@@ -983,7 +920,7 @@ class UISetupMixin:
                 border-bottom: 1px solid {colors["border"]};
             }}
             QListWidget::item:hover {{
-                background-color: {colors["border"]};
+                background-color: {c.bg_elevated};
             }}
             QListWidget::item:selected {{
                 background-color: {colors["accent"]};
@@ -994,7 +931,7 @@ class UISetupMixin:
                 color: {colors["foreground"]};
             }}
             QDockWidget::title {{
-                background-color: {colors["border"]};
+                background-color: {c.bg_tertiary};
                 padding: 8px;
                 font-weight: bold;
             }}
@@ -1032,40 +969,10 @@ class UISetupMixin:
 
     def _show_about(self):
         """Shows the about dialog"""
-        QMessageBox.about(
-            self,
-            S.about.title,
-            f"""<h2>{S.about.ide_name}</h2>
-            <p><b>{S.about.version.format(version=self._current_version)}</b></p>
-            <p>{S.about.description}</p>
-            
-            <p><b>{S.about.technologies}</b></p>
-            <ul>
-                <li>Python 3.12+</li>
-                <li>PyQt6 - Interface</li>
-                <li>Monaco Editor - Code editor (VS Code)</li>
-                <li>Pandas & Polars - Data analysis</li>
-                <li>SQLAlchemy - Database ORM</li>
-                <li>Matplotlib - Visualization</li>
-                <li>GitHub Copilot SDK - AI completions</li>
-            </ul>
-            
-            <p><b>{S.about.databases}</b></p>
-            <ul>
-                <li>Microsoft SQL Server</li>
-                <li>MySQL / MariaDB</li>
-                <li>PostgreSQL</li>
-                <li>SQLite</li>
-                <li>Databricks</li>
-            </ul>
-            
-            <p><b>{S.about.license}</b></p>
-            <p><b>Website:</b> <a href="http://datapyn.com">datapyn.com</a></p>
-            <p><b>Repository:</b> <a href="https://github.com/natharuc/datapyn">github.com/natharuc/datapyn</a></p>
-            
-            <p style="margin-top: 15px; color: #888;">{S.about.built_with}</p>
-            """,
-        )
+        from src.ui.dialogs.about_dialog import AboutDialog
+
+        dialog = AboutDialog(version=self._current_version, parent=self)
+        dialog.exec()
 
     def _show_package_manager(self):
         """Shows package manager dialog"""

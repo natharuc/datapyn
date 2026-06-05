@@ -329,6 +329,18 @@ class TestCopilotChatWebViewApp:
         assert "authStatusPill" not in html
         assert "settingsDrawer" not in html
 
+    def test_welcome_screen_has_logo_and_set_welcome(self, app_files):
+        html = app_files["html"]
+        js = app_files["js"]
+        css = app_files["css"]
+        assert "welcomeLogo" in html
+        assert "welcome-card" in html
+        assert "welcomeFeatures" in html
+        assert "window.setWelcome" in js
+        assert "window.setWelcomeLogo" in js
+        assert ".welcome-logo" in css
+        assert ".welcome-feature-chip" in css
+
     def test_app_exposes_python_bridge_methods(self, app_files):
         js = app_files["js"]
         assert 'callBridge("sendMessage"' in js

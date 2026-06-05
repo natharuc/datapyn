@@ -10,6 +10,7 @@ import pandas as pd
 import polars as pl
 from unittest.mock import MagicMock, patch, PropertyMock, call
 from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtWidgets import QPushButton
 
 from src.ui.dialogs.export_to_table_dialog import (
     ExportToTableDialog,
@@ -373,7 +374,9 @@ class TestExportToTableDialog:
         flags = dialog.windowFlags()
         assert not (flags & Qt.WindowType.WindowMaximizeButtonHint)
         assert not (flags & Qt.WindowType.WindowMinimizeButtonHint)
-        assert flags & Qt.WindowType.WindowCloseButtonHint
+        assert flags & Qt.WindowType.FramelessWindowHint
+        close_btn = dialog.findChild(QPushButton, "framelessClose")
+        assert close_btn is not None
 
     def test_dialog_cancel_button_has_object_name(self, qtbot):
         """Botao cancelar tem objectName para estilo diferenciado"""

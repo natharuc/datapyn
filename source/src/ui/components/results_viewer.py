@@ -846,49 +846,57 @@ class ExportSettingsDialog(QDialog):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
         self.setWindowTitle(S.export_settings.dialog_title)
-        self.setMinimumWidth(380)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
         self._setup_ui()
         self._load_settings()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
+        from src.design_system.frameless_dialog import install_frameless_shell
+        from src.design_system.button import PrimaryButton, SecondaryButton
+        from src.design_system.tokens import get_combobox_stylesheet, get_dialog_base_stylesheet
 
-        # Copy separator
+        layout = install_frameless_shell(
+            self,
+            S.export_settings.dialog_title,
+            min_width=400,
+            min_height=220,
+            content_margins=(16, 12, 16, 14),
+            content_spacing=12,
+            body_stylesheet_extra=get_dialog_base_stylesheet(),
+        )
+        form = QFormLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+        combo_style = get_combobox_stylesheet()
+
         self.copy_sep_combo = QComboBox()
+        self.copy_sep_combo.setStyleSheet(combo_style)
         self.copy_sep_combo.addItem(S.export_settings.copy_sep_tab, "\t")
         self.copy_sep_combo.addItem(S.export_settings.copy_sep_comma, ",")
         self.copy_sep_combo.addItem(S.export_settings.copy_sep_semicolon, ";")
         form.addRow(S.export_settings.label_copy_with_tab, self.copy_sep_combo)
 
-        # NULL display
         self.null_combo = QComboBox()
+        self.null_combo.setStyleSheet(combo_style)
         self.null_combo.addItem(S.export_settings.null_empty, "")
         self.null_combo.addItem(S.export_settings.null_text, "NULL")
         self.null_combo.addItem(S.export_settings.null_none, "None")
         form.addRow(S.export_settings.label_null_display, self.null_combo)
 
-        # Open folder after export
         self.open_folder_check = QCheckBox()
         self.open_folder_check.setChecked(True)
         form.addRow(S.export_settings.label_open_folder, self.open_folder_check)
 
         layout.addLayout(form)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Cancel
-            | QDialogButtonBox.StandardButton.Ok
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self.setStyleSheet(self.theme_manager.get_dialog_stylesheet())
+        bar = QHBoxLayout()
+        bar.addStretch()
+        btn_ok = PrimaryButton("OK", size="sm")
+        btn_cancel = SecondaryButton("Cancel", size="sm")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        bar.addWidget(btn_ok)
+        bar.addWidget(btn_cancel)
+        layout.addLayout(bar)
 
     def _load_settings(self):
         settings = QSettings("DataPyn", "ExportSettings")
@@ -2032,13 +2040,18 @@ class ResultsViewer(QWidget):
         from src.design_system.tokens import get_colors
         colors_tk = get_colors()
         
+        from src.design_system.tokens import configure_combobox_popup
+
         self.export_destination = QComboBox()
         self.export_destination.addItem(S.results.dest_clipboard, "clipboard")
-        self.export_destination.setItemIcon(0, qta.icon("mdi.clipboard-text", color=colors_tk.info))
+        self.export_destination.setItemIcon(0, qta.icon("mdi.clipboard-text", color=colors_tk.interactive_primary))
         self.export_destination.addItem(S.results.dest_file, "file")
-        self.export_destination.setItemIcon(1, qta.icon("mdi.file-export", color=colors_tk.info))
-        self.export_destination.setMinimumWidth(140)
+        self.export_destination.setItemIcon(1, qta.icon("mdi.file-export", color=colors_tk.interactive_primary))
         self.export_destination.setToolTip(S.results.tooltip_export_dest)
+        self.export_destination.setFixedHeight(28)
+        self.export_destination.setMinimumWidth(100)
+        self.export_destination.setMaximumWidth(118)
+        configure_combobox_popup(self.export_destination)
         self.toolbar.addWidget(self.export_destination)
         self.toolbar.addSeparator()
 
@@ -2423,48 +2436,39 @@ class ResultsViewer(QWidget):
                 font-size: 12px;
             }}
             QComboBox {{
-                background-color: #2d2d2d;
+                background-color: transparent;
                 color: {colors["foreground"]};
                 border: 1px solid {colors["border"]};
-                border-radius: 6px;
-                padding: 6px 12px;
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 2px 8px;
+                padding-right: 18px;
                 font-size: 12px;
-                min-width: 130px;
-                font-weight: 500;
+                min-height: 0px;
+                max-height: 28px;
             }}
             QComboBox:hover {{
+                background-color: {colors["accent"]};
+                color: white;
                 border-color: {colors["accent"]};
             }}
             QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 16px;
                 border: none;
-                width: 20px;
+                background: transparent;
             }}
             QComboBox::down-arrow {{
                 image: none;
+                width: 0;
+                height: 0;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
                 border-top: 5px solid {colors["foreground"]};
-                margin-right: 8px;
+                margin-right: 4px;
             }}
-            QComboBox QAbstractItemView {{
-                background-color: #2d2d2d;
-                color: {colors["foreground"]};
-                border: 1px solid {colors["border"]};
-                border-radius: 8px;
-                padding: 4px;
-                outline: none;
-            }}
-            QComboBox QAbstractItemView::item {{
-                padding: 6px 10px;
-                border-radius: 4px;
-                min-height: 24px;
-            }}
-            QComboBox QAbstractItemView::item:selected {{
-                background-color: rgba(59, 130, 246, 0.25);
-                color: white;
-            }}
-            QComboBox QAbstractItemView::item:hover {{
-                background-color: #3a3a3a;
+            QComboBox:hover::down-arrow {{
+                border-top-color: white;
             }}
             QLineEdit {{
                 background-color: #2d2d2d;

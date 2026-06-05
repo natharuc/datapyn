@@ -32,15 +32,22 @@ class UpdateDialog(QDialog):
         self.should_download = False
 
         self.setWindowTitle(S.update_dialog.title)
-        self.setMinimumSize(QSize(500, 400))
         self.setModal(True)
 
         self._init_ui()
 
     def _init_ui(self):
         """Initializes the UI"""
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
+        from src.design_system.frameless_dialog import install_frameless_shell
+
+        layout = install_frameless_shell(
+            self,
+            S.update_dialog.title,
+            min_width=500,
+            min_height=400,
+            content_margins=(20, 16, 20, 20),
+            content_spacing=15,
+        )
 
         # Title
         title_label = QLabel(S.update_dialog.new_version_label.format(version=self.new_version))
@@ -82,8 +89,6 @@ class UpdateDialog(QDialog):
 
         layout.addLayout(button_layout)
 
-        self.setLayout(layout)
-
     def _on_download(self):
         """User chose to download the update"""
         self.should_download = True
@@ -102,15 +107,21 @@ class UpdateDownloadDialog(QDialog):
         self.setMinimumSize(QSize(400, 150))
         self.setModal(True)
 
-        # Prevent closing during download
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
-
         self._init_ui()
 
     def _init_ui(self):
         """Initializes the UI"""
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
+        from src.design_system.frameless_dialog import install_frameless_shell
+
+        layout = install_frameless_shell(
+            self,
+            S.update_dialog.download_title,
+            min_width=400,
+            min_height=150,
+            content_margins=(20, 16, 20, 20),
+            content_spacing=15,
+            show_close=False,
+        )
 
         # Title
         title_label = QLabel(S.update_dialog.download_msg.format(version=self.version))
@@ -141,8 +152,6 @@ class UpdateDownloadDialog(QDialog):
         button_layout.addWidget(self.cancel_button)
 
         layout.addLayout(button_layout)
-
-        self.setLayout(layout)
 
     def update_progress(self, percentage: int):
         """Updates progress bar"""
@@ -175,7 +184,6 @@ class UpdateCheckingDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(S.update_dialog.checking_title)
-        self.setMinimumSize(QSize(350, 150))
         self.setModal(True)
 
         self._init_ui()
@@ -188,8 +196,16 @@ class UpdateCheckingDialog(QDialog):
 
     def _init_ui(self):
         """Initializes the UI"""
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
+        from src.design_system.frameless_dialog import install_frameless_shell
+
+        layout = install_frameless_shell(
+            self,
+            S.update_dialog.checking_title,
+            min_width=350,
+            min_height=150,
+            content_margins=(20, 16, 20, 20),
+            content_spacing=15,
+        )
 
         # Title
         title_label = QLabel(S.update_dialog.checking_msg)
@@ -219,8 +235,6 @@ class UpdateCheckingDialog(QDialog):
         button_layout.addWidget(self.cancel_button)
         button_layout.addStretch()
         layout.addLayout(button_layout)
-
-        self.setLayout(layout)
 
     def _on_timeout(self):
         """Timeout: closes dialog if the check takes too long"""

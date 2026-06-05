@@ -10,10 +10,7 @@ from src.assets.pynia_branding import load_pynia_logo
 
 from src.language import S
 from src.core.workspace_service import get_workspace_service
-
-# Default color for all toolbar icons (consistent)
-_ICON_COLOR = "#b0b0b0"
-_ICON_HOVER = "#ffffff"
+from src.design_system.tokens import get_colors
 
 
 class MainToolbar(QToolBar):
@@ -38,41 +35,55 @@ class MainToolbar(QToolBar):
 
     def _setup_style(self):
         """Configure toolbar style"""
+        colors = get_colors()
+        icon_color = colors.text_secondary
+        icon_hover = colors.text_primary
         self.setStyleSheet(f"""
             QToolBar {{
-                background-color: #252526;
+                background-color: {colors.bg_secondary};
                 border: none;
-                border-bottom: 1px solid #3e3e42;
+                border-bottom: 1px solid {colors.border_muted};
                 padding: 2px 6px;
                 spacing: 2px;
             }}
             QToolBar::separator {{
-                background-color: #3e3e42;
+                background-color: {colors.border_muted};
                 width: 1px;
                 margin: 6px 4px;
             }}
+            QToolButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QToolButton:hover {{
+                background-color: {colors.bg_elevated};
+            }}
             QPushButton {{
                 background-color: transparent;
-                color: {_ICON_COLOR};
+                color: {icon_color};
                 border: none;
                 padding: 5px 10px;
                 font-size: 12px;
                 border-radius: 8px;
             }}
             QPushButton:hover {{
-                background-color: #37373d;
-                color: {_ICON_HOVER};
+                background-color: {colors.bg_elevated};
+                color: {icon_hover};
             }}
             QPushButton:pressed {{
-                background-color: #2d2d30;
+                background-color: {colors.bg_tertiary};
             }}
         """)
+        self._icon_color = icon_color
+        self._icon_hover = icon_hover
 
     def _setup_buttons(self):
         """Buttons with uniform icons"""
         # New Tab
         self.btn_new_tab = QPushButton(S.toolbar.new_tab)
-        self.btn_new_tab.setIcon(qta.icon("mdi.tab-plus", color=_ICON_COLOR))
+        self.btn_new_tab.setIcon(qta.icon("mdi.tab-plus", color=self._icon_color))
         self.btn_new_tab.clicked.connect(self.new_tab_clicked.emit)
         self.addWidget(self.btn_new_tab)
 
@@ -80,7 +91,7 @@ class MainToolbar(QToolBar):
 
         # Connection
         self.btn_new_conn = QPushButton(S.toolbar.connection)
-        self.btn_new_conn.setIcon(qta.icon("mdi.database-plus", color=_ICON_COLOR))
+        self.btn_new_conn.setIcon(qta.icon("mdi.database-plus", color=self._icon_color))
         self.btn_new_conn.clicked.connect(self.new_connection_clicked.emit)
         self.addWidget(self.btn_new_conn)
 
@@ -88,13 +99,13 @@ class MainToolbar(QToolBar):
 
         # Run
         self.btn_run = QPushButton(S.toolbar.run)
-        self.btn_run.setIcon(qta.icon("mdi.play", color=_ICON_COLOR))
+        self.btn_run.setIcon(qta.icon("mdi.play", color=self._icon_color))
         self.btn_run.clicked.connect(self.run_clicked.emit)
         self.addWidget(self.btn_run)
 
         # Run Timer (repeat execution at interval)
         self.btn_run_timer = QPushButton()
-        self.btn_run_timer.setIcon(qta.icon("mdi.timer", color=_ICON_COLOR))
+        self.btn_run_timer.setIcon(qta.icon("mdi.timer", color=self._icon_color))
         self.btn_run_timer.setToolTip(S.toolbar.run_timer)
         self.btn_run_timer.clicked.connect(self.run_timer_clicked.emit)
         self.addWidget(self.btn_run_timer)
@@ -142,39 +153,12 @@ class MainToolbar(QToolBar):
 
     def _setup_workspace_selector(self):
         """Setup workspace dropdown selector."""
+        from src.design_system.tokens import apply_combobox_style
+
         self.workspace_combo = QComboBox()
         self.workspace_combo.setFixedWidth(140)
         self.workspace_combo.setToolTip("Workspace")
-        self.workspace_combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: #2d2d30;
-                color: {_ICON_COLOR};
-                border: 1px solid #3e3e42;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 11px;
-            }}
-            QComboBox:hover {{
-                border-color: #007acc;
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {_ICON_COLOR};
-                margin-right: 6px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: #2d2d30;
-                color: {_ICON_COLOR};
-                border: 1px solid #3e3e42;
-                selection-background-color: #007acc;
-            }}
-        """)
+        apply_combobox_style(self.workspace_combo, variant="toolbar")
         
         self._refresh_workspace_combo()
         self.workspace_combo.currentIndexChanged.connect(self._on_workspace_selected)
@@ -182,7 +166,7 @@ class MainToolbar(QToolBar):
         
         # Config button to open workspace settings
         self.workspace_config_btn = QPushButton()
-        self.workspace_config_btn.setIcon(qta.icon("fa5s.cog", color=_ICON_COLOR))
+        self.workspace_config_btn.setIcon(qta.icon("fa5s.cog", color=self._icon_color))
         self.workspace_config_btn.setToolTip("Workspace settings")
         self.workspace_config_btn.setFixedSize(24, 24)
         self.workspace_config_btn.setStyleSheet(f"""
@@ -246,7 +230,7 @@ class MainToolbar(QToolBar):
                 }
             """)
         else:
-            self.btn_run_timer.setIcon(qta.icon("mdi.timer", color=_ICON_COLOR))
+            self.btn_run_timer.setIcon(qta.icon("mdi.timer", color=self._icon_color))
             self.btn_run_timer.setToolTip(S.toolbar.run_timer)
             self.btn_run_timer.setStyleSheet("")
 

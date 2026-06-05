@@ -16,7 +16,7 @@ class TestConnectionEditDialog:
         dialog = ConnectionEditDialog(connection_name=None, config=None, groups={})
         qtbot.addWidget(dialog)
 
-        assert dialog.cmb_type.currentText() == "sqlserver"
+        assert dialog.cmb_type.currentData() == "sqlserver"
         assert dialog.cmb_sqlserver_auth.currentData() == SQLSERVER_AUTH_SQL_PASSWORD
         assert dialog.chk_save_password.isEnabled() is True
 

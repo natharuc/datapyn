@@ -6,12 +6,81 @@ This module provides the centralized stylesheet that was previously
 scattered across main_window.py and other files.
 """
 
+from src.design_system.font_manager import FONT_FAMILY_PRIMARY
 from src.design_system.tokens import (
+    get_button_stylesheet,
+    get_checkbox_stylesheet,
     get_colors,
+    get_combobox_stylesheet,
+    get_input_stylesheet,
+    get_scrollbar_stylesheet,
     SPACING,
     RADIUS,
     TYPOGRAPHY,
 )
+
+
+def get_application_stylesheet() -> str:
+    """
+    Global QApplication stylesheet — replaces default Fusion gray with DataPyn blue dark.
+    """
+    colors = get_colors()
+    dialog_btn = get_button_stylesheet("secondary").replace(
+        "QPushButton {", "QMessageBox QPushButton, QInputDialog QPushButton, QProgressDialog QPushButton, QDialogButtonBox QPushButton {"
+    )
+
+    return f"""
+        * {{
+            font-family: {FONT_FAMILY_PRIMARY};
+        }}
+        QMessageBox, QInputDialog, QProgressDialog, QFileDialog {{
+            background-color: {colors.bg_primary};
+            color: {colors.text_primary};
+        }}
+        QMessageBox QLabel, QInputDialog QLabel {{
+            color: {colors.text_primary};
+            background: transparent;
+        }}
+        {dialog_btn}
+        {get_input_stylesheet()}
+        {get_combobox_stylesheet()}
+        {get_checkbox_stylesheet()}
+        {get_scrollbar_stylesheet()}
+        QToolTip {{
+            background-color: {colors.bg_tertiary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_default};
+            font-size: 11px;
+            padding: 6px 10px;
+            border-radius: 6px;
+        }}
+        QSpinBox, QDoubleSpinBox {{
+            background-color: {colors.bg_secondary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_default};
+            border-radius: {RADIUS.radius_sm}px;
+            padding: 4px 8px;
+            min-height: 24px;
+        }}
+        QSpinBox:focus, QDoubleSpinBox:focus {{
+            border-color: {colors.interactive_primary};
+        }}
+        QListView, QTreeView, QTableView {{
+            background-color: {colors.bg_secondary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_default};
+            outline: none;
+            selection-background-color: {colors.interactive_primary};
+            selection-color: {colors.text_inverse};
+        }}
+        QHeaderView::section {{
+            background-color: {colors.bg_tertiary};
+            color: {colors.text_secondary};
+            border: none;
+            border-bottom: 1px solid {colors.border_default};
+            padding: 6px 8px;
+        }}
+    """
 
 
 def get_main_window_stylesheet() -> str:
@@ -30,9 +99,10 @@ def get_main_window_stylesheet() -> str:
             background-color: {colors.bg_primary};
         }}
         QMenuBar {{
-            background-color: {colors.bg_secondary};
+            background-color: {colors.bg_primary};
             color: {colors.text_primary};
             border: none;
+            border-bottom: 1px solid {colors.border_muted};
             padding: 4px 0;
             font-size: 13px;
         }}
@@ -73,6 +143,7 @@ def get_main_window_stylesheet() -> str:
         QToolBar {{
             background-color: {colors.bg_secondary};
             border: none;
+            border-bottom: 1px solid {colors.border_muted};
             spacing: 6px;
             padding: 6px;
         }}
@@ -127,16 +198,16 @@ def get_main_window_stylesheet() -> str:
             margin: 0px;
         }}
         QScrollBar::handle:vertical {{
-            background: rgba(128, 128, 128, 0.3);
+            background: rgba(51, 105, 255, 0.35);
             border-radius: 4px;
             min-height: 40px;
             margin: 2px;
         }}
         QScrollBar::handle:vertical:hover {{
-            background: rgba(128, 128, 128, 0.5);
+            background: rgba(51, 105, 255, 0.55);
         }}
         QScrollBar::handle:vertical:pressed {{
-            background: rgba(128, 128, 128, 0.7);
+            background: rgba(51, 105, 255, 0.75);
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
             height: 0;
@@ -150,16 +221,16 @@ def get_main_window_stylesheet() -> str:
             margin: 0px;
         }}
         QScrollBar::handle:horizontal {{
-            background: rgba(128, 128, 128, 0.3);
+            background: rgba(51, 105, 255, 0.35);
             border-radius: 4px;
             min-width: 40px;
             margin: 2px;
         }}
         QScrollBar::handle:horizontal:hover {{
-            background: rgba(128, 128, 128, 0.5);
+            background: rgba(51, 105, 255, 0.55);
         }}
         QScrollBar::handle:horizontal:pressed {{
-            background: rgba(128, 128, 128, 0.7);
+            background: rgba(51, 105, 255, 0.75);
         }}
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
             width: 0;
