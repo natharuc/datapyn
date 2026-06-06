@@ -361,6 +361,7 @@ class ExportToTableDialog(QDialog):
         btn_layout.addStretch()
 
         self.btn_cancel = SecondaryButton(S.export_to_table.btn_cancel, size="sm")
+        self.btn_cancel.setObjectName("btnCancel")
         self.btn_cancel.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self.btn_cancel)
 

@@ -1,0 +1,28 @@
+---
+description: Run pytest after code changes; update tests when UI/API changes
+alwaysApply: true
+---
+
+# Run tests after changes
+
+Before finishing any task that edits `source/`, `installer/`, or `tests/`:
+
+1. **Run pytest** for affected areas (or full suite when unsure):
+   ```bash
+   uv run pytest tests/test_export_to_table.py tests/test_results_viewer.py tests/test_sql_export.py -q
+   ```
+   Full CI-like run (see `AGENTS.md`):
+   ```bash
+   uv run pytest
+   ```
+
+2. **Fix failures you introduced** — do not leave broken tests for the user.
+
+3. **Update tests in the same change** when you rename/remove/replace UI widgets or public attributes (e.g. `export_destination` → `btn_export_dest_clipboard` / `_get_export_destination()`).
+
+4. **Search tests** before removing APIs:
+   ```bash
+   rg "old_name" tests/
+   ```
+
+5. If tests cannot run locally (missing display/deps), still grep tests for renamed symbols and note what was not executed.
