@@ -27,6 +27,15 @@ YesNoCancel = Literal["yes", "no", "cancel"]
 WorkspaceSwitchAction = Literal["restart", "new_instance", "cancel"]
 
 
+def _normalize_dialog_parent(parent: Optional[QWidget]) -> Optional[QWidget]:
+    """Accept only real QWidget parents (test harnesses may pass plain objects)."""
+    if parent is None:
+        return None
+    if isinstance(parent, QWidget):
+        return parent
+    return None
+
+
 def _flat_icon(name: str, size: int = 32) -> QLabel:
     """Monochrome icon — same tone as body text, no accent colors."""
     colors = get_colors()
@@ -50,7 +59,7 @@ class _BaseMessageDialog(QDialog):
         min_width: int = 420,
         min_height: int = 200,
     ):
-        super().__init__(parent)
+        super().__init__(_normalize_dialog_parent(parent))
         colors = get_colors()
         self._body_layout = install_frameless_shell(
             self,
