@@ -2081,8 +2081,6 @@ class ResultsViewer(QWidget):
 
         export_dest_layout.addWidget(self.btn_export_dest_clipboard)
         export_dest_layout.addWidget(self.btn_export_dest_file)
-        self._refresh_export_dest_icons()
-        self._apply_export_dest_style()
         self.toolbar.addWidget(self.export_dest_widget)
         self.toolbar.addSeparator()
 
@@ -2173,6 +2171,10 @@ class ResultsViewer(QWidget):
         """)
         self.btn_export_settings.clicked.connect(self._open_export_settings)
         self.toolbar.addWidget(self.btn_export_settings)
+
+        self._refresh_export_dest_icons()
+        self._apply_export_dest_style()
+        self._sync_export_dest_button_sizes()
 
         layout.addWidget(self.toolbar)
 
@@ -4834,6 +4836,20 @@ class ResultsViewer(QWidget):
             icon_color = "#ffffff" if btn.isChecked() else colors.text_tertiary
             btn.setIcon(qta.icon(icon_name, color=icon_color))
 
+    def _sync_export_dest_button_sizes(self):
+        """Keep Clipboard/File toggles the same height as CSV/Excel buttons."""
+        self.toolbar.ensurePolished()
+        self.btn_export_csv.ensurePolished()
+        height = self.btn_export_csv.sizeHint().height()
+        if height <= 0:
+            height = 28
+        width = max(28, height + 2)
+        icon = max(12, height - 12)
+        for btn in (self.btn_export_dest_clipboard, self.btn_export_dest_file):
+            btn.setFixedSize(width, height)
+            btn.setIconSize(QSize(icon, icon))
+        self.export_dest_widget.setFixedHeight(height)
+
     def _apply_export_dest_style(self):
         """Segmented toggle matching toolbar button height."""
         colors = self.theme_manager.get_app_colors()
@@ -4845,11 +4861,8 @@ class ResultsViewer(QWidget):
                 background-color: transparent;
                 color: {colors["foreground"]};
                 border: 1px solid {colors["border"]};
-                padding: 6px 10px;
-                min-width: 34px;
-                max-width: 34px;
-                min-height: 0px;
-                max-height: 32px;
+                padding: 0;
+                margin: 0;
             }}
             QToolButton#exportDestBtnLeft {{
                 border-top-left-radius: {RADIUS.radius_sm}px;
@@ -4872,6 +4885,8 @@ class ResultsViewer(QWidget):
             }}
         """)
         self._refresh_export_dest_icons()
+        if hasattr(self, "btn_export_csv"):
+            self._sync_export_dest_button_sizes()
 
     def _show_clipboard_success(self, format_name: str):
         """Show success feedback when copying to clipboard"""
