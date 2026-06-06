@@ -14,6 +14,7 @@ from src.services.windows_installer import (
     _display_icon_value,
     _find_local_setup_helper,
     _replace_installation,
+    _stage_updater_executable,
     _updater_runs_from_install_dir,
     compare_versions,
     detect_existing_installation,
@@ -182,6 +183,26 @@ class TestDeferredUpdate:
         mock_ps.assert_called_once()
 
 
+class TestStageUpdaterExecutable:
+    def test_stage_updater_copies_internal_folder(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "src.services.windows_installer.tempfile.gettempdir",
+            lambda: str(tmp_path),
+        )
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        internal = install_dir / "_internal"
+        internal.mkdir()
+        (internal / "python312.dll").write_bytes(b"PYDLL")
+        (install_dir / "DataPyn.exe").write_bytes(b"MZ")
+
+        staged_exe = _stage_updater_executable(install_dir / "DataPyn.exe", "1.2.0")
+
+        assert staged_exe.name == "DataPyn.exe"
+        assert staged_exe.parent.name == "DataPyn-Update-1.2.0"
+        assert (staged_exe.parent / "_internal" / "python312.dll").read_bytes() == b"PYDLL"
+
+
 class TestLaunchSetupUpdate:
     @patch("src.services.windows_installer._is_frozen_runtime", return_value=True)
     @patch("src.services.windows_installer._spawn_detached")
@@ -195,7 +216,8 @@ class TestLaunchSetupUpdate:
         install_dir.mkdir()
         app_exe = install_dir / "DataPyn.exe"
         app_exe.write_bytes(b"MZ")
-        staged = tmp_path / "DataPyn-Update-1.2.0.exe"
+        staged = tmp_path / "DataPyn-Update-1.2.0" / "DataPyn.exe"
+        staged.parent.mkdir(parents=True)
         staged.write_bytes(b"MZ")
         mock_stage.return_value = staged
 

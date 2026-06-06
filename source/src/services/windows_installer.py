@@ -983,10 +983,33 @@ def _is_frozen_runtime() -> bool:
 
 
 def _stage_updater_executable(source_exe: Path, version: str) -> Path:
-    """Copy DataPyn.exe to TEMP so the updater can replace the install folder."""
-    staging = Path(tempfile.gettempdir()) / f"DataPyn-Update-{normalize_version(version)}.exe"
-    shutil.copy2(source_exe, staging)
-    return staging
+    """Copy the PyInstaller onedir bundle (exe + ``_internal``) to TEMP for ``--apply-update``.
+
+    Copying only the EXE breaks at runtime: the frozen app looks for ``_internal/python*.dll``
+    next to the executable (e.g. ``%TEMP%\\_internal`` when only the exe was copied).
+    """
+    source_exe = Path(source_exe).resolve()
+    install_dir = source_exe.parent
+    ver = normalize_version(version)
+    staging_dir = Path(tempfile.gettempdir()) / f"DataPyn-Update-{ver}"
+
+    legacy_exe = staging_dir.with_suffix(".exe")
+    if legacy_exe.is_file():
+        legacy_exe.unlink(missing_ok=True)
+
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_exe = staging_dir / EXE_NAME
+    shutil.copy2(source_exe, dest_exe)
+
+    internal_src = install_dir / "_internal"
+    if internal_src.is_dir():
+        shutil.copytree(internal_src, staging_dir / "_internal")
+
+    _append_update_log(f"Staged updater at {dest_exe} (_internal={'yes' if internal_src.is_dir() else 'no'})")
+    return dest_exe
 
 
 def launch_setup_update(
