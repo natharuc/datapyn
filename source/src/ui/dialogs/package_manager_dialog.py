@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QProgressBar,
     QAbstractItemView,
+    QSizePolicy,
     QFrame,
     QApplication,
     QGroupBox,
@@ -244,6 +245,53 @@ class PackageManagerDialog(QDialog):
         self._setup_ui()
         self._load_installed()
 
+    def _make_icon_action_button(
+        self,
+        label: str,
+        icon_name: str,
+        bg: str,
+        hover_bg: str,
+        on_click,
+        *,
+        disabled_bg: str,
+        disabled_fg: str,
+    ) -> QPushButton:
+        """Compact icon-only button for table action cells."""
+        btn = QPushButton()
+        btn.setToolTip(label)
+        btn.setFixedSize(34, 30)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        if HAS_QTAWESOME:
+            btn.setIcon(qta.icon(icon_name, color="white"))
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {bg};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 0;
+            }}
+            QPushButton:hover {{ background-color: {hover_bg}; }}
+            QPushButton:disabled {{
+                background-color: {disabled_bg};
+                color: {disabled_fg};
+            }}
+        """)
+        btn.clicked.connect(on_click)
+        return btn
+
+    def _make_actions_cell(self, *buttons: QPushButton) -> QWidget:
+        """Build a fixed-size widget for the Actions column."""
+        actions_widget = QWidget()
+        actions_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        actions_layout = QHBoxLayout(actions_widget)
+        actions_layout.setContentsMargins(6, 0, 6, 0)
+        actions_layout.setSpacing(6)
+        actions_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        for btn in buttons:
+            actions_layout.addWidget(btn)
+        return actions_widget
+
     def _setup_ui(self):
         """Sets up the UI"""
         self.setWindowTitle(S.package_manager.title)
@@ -345,7 +393,8 @@ class PackageManagerDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(3, 128)
+        self.table.setColumnWidth(3, 88)
+        self.table.horizontalHeader().setMinimumSectionSize(88)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -359,7 +408,7 @@ class PackageManagerDialog(QDialog):
                 background-color: {colors.bg_secondary};
             }}
             QTableWidget::item {{
-                padding: 6px 8px;
+                padding: 4px 6px;
             }}
             QTableWidget::item:selected {{
                 background-color: {colors.interactive_primary};
@@ -615,32 +664,18 @@ class PackageManagerDialog(QDialog):
         self.table.setItem(0, 1, QTableWidgetItem("-"))
         self.table.setItem(0, 2, QTableWidgetItem("-"))
 
-        actions_widget = QWidget()
-        actions_layout = QHBoxLayout(actions_widget)
-        actions_layout.setContentsMargins(4, 2, 4, 2)
-        actions_layout.setSpacing(4)
+        btn_install = self._make_icon_action_button(
+            S.package_manager.btn_install_anyway,
+            "fa5s.download",
+            colors.interactive_primary,
+            colors.interactive_primary_hover,
+            lambda _, n=package_name: self._do_operation("install", n),
+            disabled_bg=colors.bg_tertiary,
+            disabled_fg=colors.text_tertiary,
+        )
 
-        btn_install = QPushButton(S.package_manager.btn_install_anyway)
-        if HAS_QTAWESOME:
-            btn_install.setIcon(qta.icon("fa5s.download", color="white"))
-        btn_install.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                color: white;
-                border: none;
-                padding: 4px 14px;
-                border-radius: 8px;
-                font-size: 10px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: {colors.interactive_primary_hover}; }}
-        """)
-        btn_install.clicked.connect(lambda _, n=package_name: self._do_operation("install", n))
-        actions_layout.addWidget(btn_install)
-        actions_layout.addStretch()
-
-        self.table.setCellWidget(0, 3, actions_widget)
-        self.table.setRowHeight(0, 38)
+        self.table.setCellWidget(0, 3, self._make_actions_cell(btn_install))
+        self.table.setRowHeight(0, 36)
 
     def _load_installed(self):
         """Loads list of installed packages"""
@@ -695,86 +730,53 @@ class PackageManagerDialog(QDialog):
                 latest_item.setForeground(QColor(colors.success))
             self.table.setItem(row, 2, latest_item)
 
-            # Action buttons
-            actions_widget = QWidget()
-            actions_layout = QHBoxLayout(actions_widget)
-            actions_layout.setContentsMargins(4, 2, 4, 2)
-            actions_layout.setSpacing(4)
+            # Action buttons (icon-only — avoids clipping in narrow table cells)
+            action_buttons: list[QPushButton] = []
 
             if pkg.installed:
-                # Update button
                 if pkg.has_update:
-                    btn_update = QPushButton(S.package_manager.btn_update)
-                    if HAS_QTAWESOME:
-                        btn_update.setIcon(qta.icon("fa5s.arrow-up", color="white"))
-                    btn_update.setStyleSheet(f"""
-                        QPushButton {{
-                            background-color: {colors.success};
-                            color: white;
-                            border: none;
-                            padding: 4px 10px;
-                            border-radius: 4px;
-                            font-size: 10px;
-                        }}
-                        QPushButton:hover {{ background-color: {colors.success}dd; }}
-                        QPushButton:disabled {{
-                            background-color: {colors.bg_tertiary};
-                            color: {dim_color};
-                        }}
-                    """)
-                    btn_update.clicked.connect(lambda _, n=pkg.name: self._do_operation("update", n))
-                    actions_layout.addWidget(btn_update)
-
-                # Uninstall button
-                btn_uninstall = QPushButton(S.package_manager.btn_remove)
-                btn_uninstall.setMinimumWidth(92)
-                if HAS_QTAWESOME:
-                    btn_uninstall.setIcon(qta.icon("fa5s.trash-alt", color="white"))
-                btn_uninstall.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {colors.danger};
-                        color: white;
-                        border: none;
-                        padding: 4px 12px;
-                        border-radius: 4px;
-                        font-size: 10px;
-                        min-width: 88px;
-                    }}
-                    QPushButton:hover {{ background-color: {colors.danger}dd; }}
-                    QPushButton:disabled {{
-                        background-color: {colors.bg_tertiary};
-                        color: {dim_color};
-                    }}
-                """)
-                btn_uninstall.clicked.connect(lambda _, n=pkg.name: self._confirm_uninstall(n))
-                actions_layout.addWidget(btn_uninstall)
+                    action_buttons.append(
+                        self._make_icon_action_button(
+                            S.package_manager.btn_update,
+                            "fa5s.arrow-up",
+                            colors.success,
+                            f"{colors.success}dd",
+                            lambda _, n=pkg.name: self._do_operation("update", n),
+                            disabled_bg=colors.bg_tertiary,
+                            disabled_fg=dim_color,
+                        )
+                    )
+                action_buttons.append(
+                    self._make_icon_action_button(
+                        S.package_manager.btn_remove,
+                        "fa5s.trash-alt",
+                        colors.danger,
+                        f"{colors.danger}dd",
+                        lambda _, n=pkg.name: self._confirm_uninstall(n),
+                        disabled_bg=colors.bg_tertiary,
+                        disabled_fg=dim_color,
+                    )
+                )
             else:
-                # Install button
-                btn_install = QPushButton(S.package_manager.btn_install)
-                if HAS_QTAWESOME:
-                    btn_install.setIcon(qta.icon("fa5s.download", color="white"))
-                btn_install.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {colors.interactive_primary};
-                        color: white;
-                        border: none;
-                        padding: 4px 14px;
-                        border-radius: 4px;
-                        font-size: 10px;
-                        font-weight: bold;
-                    }}
-                    QPushButton:hover {{ opacity: 0.85; }}
-                    QPushButton:disabled {{
-                        background-color: {colors.bg_tertiary};
-                        color: {dim_color};
-                    }}
-                """)
-                btn_install.clicked.connect(lambda _, n=pkg.name: self._do_operation("install", n))
-                actions_layout.addWidget(btn_install)
+                action_buttons.append(
+                    self._make_icon_action_button(
+                        S.package_manager.btn_install,
+                        "fa5s.download",
+                        colors.interactive_primary,
+                        colors.interactive_primary_hover,
+                        lambda _, n=pkg.name: self._do_operation("install", n),
+                        disabled_bg=colors.bg_tertiary,
+                        disabled_fg=dim_color,
+                    )
+                )
 
-            actions_layout.addStretch()
+            actions_widget = self._make_actions_cell(*action_buttons)
             self.table.setCellWidget(row, 3, actions_widget)
-            self.table.setRowHeight(row, 40)
+            self.table.setRowHeight(row, 36)
+
+        if packages:
+            max_buttons = max(2 if p.installed and p.has_update else 1 for p in packages)
+            self.table.setColumnWidth(3, min(140, 52 + 40 * max_buttons))
 
     def _confirm_uninstall(self, package_name: str):
         """Confirms package uninstall"""

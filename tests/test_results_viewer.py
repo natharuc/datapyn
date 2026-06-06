@@ -578,7 +578,7 @@ class TestGridContextMenu:
         from PyQt6.QtWidgets import QApplication
 
         viewer.display_dataframe(sample_df)
-        viewer.export_destination.setCurrentIndex(0)  # clipboard
+        viewer.btn_export_dest_clipboard.setChecked(True)
         viewer._export_excel()
 
         text = QApplication.instance().clipboard().text()

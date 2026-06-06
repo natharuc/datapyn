@@ -307,7 +307,7 @@ class TestResultsViewerSQLExport:
     def test_sql_export_clipboard(self, viewer, qtbot):
         df = pd.DataFrame({"id": [1, 2], "name": ["Alice", "Bob"]})
         viewer.display_dataframe(df, "test_table")
-        viewer.export_destination.setCurrentIndex(0)  # clipboard
+        viewer.btn_export_dest_clipboard.setChecked(True)
 
         from PyQt6.QtWidgets import QApplication
 
@@ -321,7 +321,7 @@ class TestResultsViewerSQLExport:
     def test_sql_export_uses_var_name_as_table(self, viewer, qtbot):
         df = pd.DataFrame({"x": [1]})
         viewer.display_dataframe(df, "sales_2024")
-        viewer.export_destination.setCurrentIndex(0)
+        viewer.btn_export_dest_clipboard.setChecked(True)
 
         from PyQt6.QtWidgets import QApplication
 

@@ -299,6 +299,141 @@ def wait_for_datapyn_exit(timeout_sec: int = 180, exclude_pid: Optional[int] = N
     return False
 
 
+def _install_locked_message(pids: list[int], *, extra: str = "") -> str:
+    """User-facing error when the install folder cannot be replaced."""
+    base = (
+        "Não foi possível substituir a instalação — arquivos do DataPyn ainda estão em uso. "
+        "Feche o DataPyn e tente novamente."
+    )
+    if pids:
+        base += f" Processos {EXE_NAME} (PID): {', '.join(str(pid) for pid in pids)}."
+    if extra:
+        base += f" {extra}"
+    return base
+
+
+def _updater_runs_from_install_dir(install_dir: Path) -> bool:
+    """True when this process runs from inside the install folder (locks files on rename)."""
+    try:
+        exe = Path(sys.executable).resolve()
+        root = Path(install_dir).resolve()
+        return root == exe.parent or root in exe.parents
+    except OSError:
+        return False
+
+
+def _robocopy_mirror(source: Path, dest: Path) -> None:
+    """Mirror *source* into *dest* on Windows (handles files in use more gracefully)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [
+            "robocopy",
+            str(source),
+            str(dest),
+            "/MIR",
+            "/R:3",
+            "/W:2",
+            "/NFL",
+            "/NDL",
+            "/NJH",
+            "/NJS",
+            "/nc",
+            "/ns",
+            "/np",
+        ],
+        capture_output=True,
+        text=True,
+        creationflags=_no_window_flags(),
+    )
+    if result.returncode >= 8:
+        detail = ((result.stdout or "") + (result.stderr or "")).strip()[-400:]
+        raise OSError(f"robocopy failed ({result.returncode}): {detail}")
+
+
+def _sync_dir_contents(source: Path, dest: Path) -> None:
+    """Copy new files over an existing install folder without renaming the root."""
+    source = Path(source)
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    for src_path in source.rglob("*"):
+        rel = src_path.relative_to(source)
+        dst_path = dest / rel
+        if src_path.is_dir():
+            dst_path.mkdir(parents=True, exist_ok=True)
+            continue
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dst_path)
+
+    for dst_path in sorted(dest.rglob("*"), reverse=True):
+        rel = dst_path.relative_to(dest)
+        if (source / rel).exists():
+            continue
+        if dst_path.is_dir():
+            try:
+                dst_path.rmdir()
+            except OSError:
+                pass
+        else:
+            dst_path.unlink(missing_ok=True)
+
+
+def _replace_installation(
+    install_dir: Path,
+    staging_dir: Path,
+    backup_dir: Path,
+    *,
+    on_progress: Optional[ProgressCallback] = None,
+) -> None:
+    """Swap an existing install tree for *staging_dir*, waiting for locks to clear."""
+    import os
+    import time
+
+    exclude = os.getpid()
+
+    if on_progress:
+        on_progress(68, "Aguardando o DataPyn encerrar…")
+    if not wait_for_datapyn_exit(timeout_sec=120, exclude_pid=exclude):
+        raise RuntimeError(_install_locked_message(_datapyn_process_pids(exclude_pid=exclude)))
+
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+    force_in_place = _updater_runs_from_install_dir(install_dir)
+    last_rename_error: Optional[OSError] = None
+
+    if not force_in_place:
+        for _attempt in range(30):
+            try:
+                install_dir.rename(backup_dir)
+                staging_dir.rename(install_dir)
+                shutil.rmtree(backup_dir, ignore_errors=True)
+                return
+            except OSError as exc:
+                last_rename_error = exc
+                time.sleep(1)
+        force_in_place = True
+
+    if on_progress:
+        on_progress(72, "Substituindo arquivos da instalação…")
+    try:
+        if sys.platform == "win32":
+            _robocopy_mirror(staging_dir, install_dir)
+        else:
+            _sync_dir_contents(staging_dir, install_dir)
+    except OSError as exc:
+        raise RuntimeError(
+            _install_locked_message(
+                _datapyn_process_pids(exclude_pid=exclude),
+                extra="Feche o instalador se ele estiver aberto na pasta do DataPyn.",
+            )
+        ) from (last_rename_error or exc)
+
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+
 def install_from_zip(
     zip_path: Path,
     install_dir: Path,
@@ -337,17 +472,11 @@ def install_from_zip(
         if install_dir.exists():
             if on_progress:
                 on_progress(70, "Updating existing installation…")
-            if backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
-            try:
-                install_dir.rename(backup_dir)
-            except OSError as exc:
-                raise RuntimeError(
-                    f"Cannot replace installation while {EXE_NAME} is in use. "
-                    "Close DataPyn and try again."
-                ) from exc
-
-        staging_dir.rename(install_dir)
+            _replace_installation(
+                install_dir, staging_dir, backup_dir, on_progress=on_progress
+            )
+        else:
+            staging_dir.rename(install_dir)
 
         write_installed_version(install_dir, version)
         register_uninstall(install_dir, version)
