@@ -10,11 +10,12 @@ from datetime import datetime
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QObject, QSettings
 from PyQt6.QtWidgets import (
-    QMessageBox, QWidget, QVBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QLabel, QPushButton,
     QHBoxLayout, QApplication,
 )
 from PyQt6.QtGui import QFont, QColor
 
+from src.design_system.app_dialogs import confirm_yes_no
 from src.database.database_connector import get_connector_database_context
 from src.ui.components.session_widget import SessionWidget
 from src.design_system.frameless_dialog import widget_is_valid
@@ -42,14 +43,11 @@ class SessionsMixin:
                 # Confirmar fechamento se houver codigo nao salvo
                 has_code = any(block.get_code().strip() for block in widget.editor.get_blocks())
                 if has_code:
-                    reply = QMessageBox.question(
+                    if not confirm_yes_no(
                         self,
                         S.dialogs.close_session_title,
                         S.dialogs.close_session_msg,
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.No,
-                    )
-                    if reply == QMessageBox.StandardButton.No:
+                    ):
                         return
 
                 # Delegar para _close_session_tab que faz cleanup completo
@@ -991,7 +989,7 @@ class SessionsMixin:
 
         # Atualizar autocomplete quando namespace muda (apos SQL ou Python via SessionWidget)
         session.variables_changed.connect(
-            lambda ns: self._push_python_namespace(ns)
+            lambda ns, w=widget: w.editor.refresh_completion_context()
         )
 
         # Guardar referencia
@@ -1142,6 +1140,9 @@ class SessionsMixin:
             self.session_manager.focus_session(widget.session.session_id)
             # Trocar paineis para a sessao ativa
             self._switch_session_panels(widget.session.session_id)
+
+            if hasattr(widget, "editor") and hasattr(widget.editor, "refresh_completion_context"):
+                widget.editor.refresh_completion_context()
 
             # Atualizar OE para mostrar a conexao efetiva desta aba (deferido)
             QTimer.singleShot(0, lambda w=widget: self._update_oe_for_session(w))

@@ -2,6 +2,13 @@
 Dialog for configuring application settings (language + keyboard shortcuts)
 """
 
+from src.design_system.app_dialogs import (
+    confirm_yes_no,
+    show_danger,
+    show_information,
+    show_success,
+    show_warning,
+)
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -13,7 +20,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QHeaderView,
     QKeySequenceEdit,
-    QMessageBox,
     QGroupBox,
     QTabWidget,
     QWidget,
@@ -1484,7 +1490,7 @@ class SettingsDialog(QDialog):
         self._refresh_notification_transport_status()
         transport = load_notification_transport_settings()
         if not transport["telegram"]["enabled"] or not transport["telegram"]["configured"]:
-            QMessageBox.warning(self, S.dialogs.warning, S.settings.notification_test_failure.format(channel=S.settings.notification_channel_telegram, error=S.settings.notification_telegram_status_missing))
+            show_warning(self, S.dialogs.warning, S.settings.notification_test_failure.format(channel=S.settings.notification_channel_telegram, error=S.settings.notification_telegram_status_missing))
             return
 
         self._pending_notification_test = "telegram"
@@ -1498,7 +1504,7 @@ class SettingsDialog(QDialog):
         self._refresh_notification_transport_status()
         transport = load_notification_transport_settings()
         if not transport["email"]["enabled"] or not transport["email"]["configured"]:
-            QMessageBox.warning(self, S.dialogs.warning, S.settings.notification_test_failure.format(channel=S.settings.notification_channel_email, error=S.settings.notification_email_status_missing))
+            show_warning(self, S.dialogs.warning, S.settings.notification_test_failure.format(channel=S.settings.notification_channel_email, error=S.settings.notification_email_status_missing))
             return
 
         self._pending_notification_test = "email"
@@ -1513,7 +1519,7 @@ class SettingsDialog(QDialog):
 
         self._pending_notification_test = None
         channel_label = S.settings.notification_channel_telegram if channel == "telegram" else S.settings.notification_channel_email
-        QMessageBox.information(
+        show_success(
             self,
             S.settings.success_title,
             S.settings.notification_test_success.format(channel=channel_label),
@@ -1525,7 +1531,7 @@ class SettingsDialog(QDialog):
 
         self._pending_notification_test = None
         channel_label = S.settings.notification_channel_telegram if channel == "telegram" else S.settings.notification_channel_email
-        QMessageBox.warning(
+        show_warning(
             self,
             S.dialogs.warning,
             S.settings.notification_test_failure.format(channel=channel_label, error=error_text),
@@ -1798,7 +1804,6 @@ class SettingsDialog(QDialog):
     def _on_remove_workspace(self):
         """Handle remove workspace button click - deletes the folder."""
         from pathlib import Path
-        from PyQt6.QtWidgets import QMessageBox
         import shutil
         
         current_item = self._workspace_list.currentItem()
@@ -1816,17 +1821,13 @@ class SettingsDialog(QDialog):
             return
         
         # Ask for confirmation
-        reply = QMessageBox.warning(
+        if not confirm_yes_no(
             self,
             S.settings.workspace_remove_title if hasattr(S.settings, 'workspace_remove_title')
             else "Remove Workspace",
             (S.settings.workspace_remove_confirm if hasattr(S.settings, 'workspace_remove_confirm')
              else f"Are you sure you want to permanently delete this workspace and all its files?\n\n{path}\n\nThis action cannot be undone."),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
         
         try:
@@ -1839,23 +1840,23 @@ class SettingsDialog(QDialog):
             
             self._refresh_workspace_list()
             
-            QMessageBox.information(
+            show_success(
                 self,
                 "Success",
                 S.settings.workspace_remove_success if hasattr(S.settings, 'workspace_remove_success')
-                else "Workspace removed successfully."
+                else "Workspace removed successfully.",
             )
         except Exception as e:
-            QMessageBox.critical(
+            show_danger(
                 self,
                 "Error",
                 (S.settings.workspace_remove_error if hasattr(S.settings, 'workspace_remove_error')
-                 else f"Failed to remove workspace:\n{str(e)}")
+                 else f"Failed to remove workspace:\n{str(e)}"),
             )
 
     def _on_duplicate_workspace(self):
         """Handle duplicate workspace button click."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
+        from PyQt6.QtWidgets import QFileDialog, QApplication
         from pathlib import Path
         import shutil
         
@@ -1887,24 +1888,22 @@ class SettingsDialog(QDialog):
         
         # Check if destination is not same as source
         if dest_path == source_path:
-            QMessageBox.warning(
+            show_warning(
                 self,
                 "Error",
                 S.settings.workspace_duplicate_same_folder if hasattr(S.settings, 'workspace_duplicate_same_folder')
-                else "Destination folder cannot be the same as source."
+                else "Destination folder cannot be the same as source.",
             )
             return
         
         # Check if destination already has files
         if any(dest_path.iterdir()) if dest_path.exists() else False:
-            reply = QMessageBox.question(
+            if not confirm_yes_no(
                 self,
                 "Confirm",
                 S.settings.workspace_duplicate_not_empty if hasattr(S.settings, 'workspace_duplicate_not_empty')
                 else "Destination folder is not empty. Files may be overwritten. Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+            ):
                 return
         
         # Copy files
@@ -1931,19 +1930,19 @@ class SettingsDialog(QDialog):
             # Add the new workspace
             if self._workspace_service.add_workspace(dest_path):
                 self._refresh_workspace_list()
-                QMessageBox.information(
+                show_success(
                     self,
                     "Success",
                     S.settings.workspace_duplicate_success if hasattr(S.settings, 'workspace_duplicate_success')
-                    else f"Workspace duplicated successfully to:\n{dest_path}"
+                    else f"Workspace duplicated successfully to:\n{dest_path}",
                 )
         except Exception as e:
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(
+            show_danger(
                 self,
                 "Error",
                 S.settings.workspace_duplicate_error if hasattr(S.settings, 'workspace_duplicate_error')
-                else f"Failed to duplicate workspace:\n{str(e)}"
+                else f"Failed to duplicate workspace:\n{str(e)}",
             )
 
     def _load_shortcuts(self):
@@ -2152,7 +2151,7 @@ class SettingsDialog(QDialog):
                 for r in range(self.table.rowCount()):
                     if r != row and self.table.item(r, 1).text() == new_sequence:
                         other_action_name = self.table.item(r, 0).text()
-                        QMessageBox.warning(
+                        show_warning(
                             self,
                             S.settings.conflict_title,
                             S.settings.conflict_msg.format(
@@ -2208,16 +2207,13 @@ class SettingsDialog(QDialog):
             details = "\n".join(
                 f"• {key} → {', '.join(actions)}" for key, actions in conflicts
             )
-            proceed = QMessageBox.question(
+            if not confirm_yes_no(
                 self,
                 S.settings.conflict_title,
                 f"{details}\n\n{S.settings.conflict_save_anyway}"
                 if hasattr(S.settings, "conflict_save_anyway")
                 else f"{details}\n\nSave anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if proceed != QMessageBox.StandardButton.Yes:
+            ):
                 return
 
         # Save shortcuts
@@ -2230,18 +2226,16 @@ class SettingsDialog(QDialog):
         # Emit signal for MainWindow to re-register shortcuts
         self.shortcuts_changed.emit()
 
-        QMessageBox.information(self, S.settings.success_title, S.settings.success_msg)
+        show_information(self, S.settings.success_title, S.settings.success_msg)
 
         # If language changed, prompt restart
         needs_restart = selected_lang != self._original_language
         if needs_restart:
-            reply = QMessageBox.question(
+            if confirm_yes_no(
                 self,
                 S.dialogs.language_restart_title,
                 S.dialogs.language_restart_msg,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
+            ):
                 import sys
                 import os
                 from PyQt6.QtWidgets import QApplication

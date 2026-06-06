@@ -7,7 +7,9 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import Qt, QTimer, QSettings
-from PyQt6.QtWidgets import QDockWidget, QMessageBox, QStackedWidget, QTabBar
+from PyQt6.QtWidgets import QDockWidget, QStackedWidget, QTabBar
+
+from src.design_system.app_dialogs import confirm_yes_no, show_information
 
 from src.ui.components.results_viewer import ResultsViewer
 from src.ui.components.output_panel import OutputPanel
@@ -623,19 +625,15 @@ class LayoutMixin:
 
     def _reset_layout_completely(self):
         """Resets layout completely (clears settings and applies default)."""
-        reply = QMessageBox.question(
+        if confirm_yes_no(
             self,
             S.dialogs.confirm_reset_title,
             S.dialogs.layout_reset_confirm_msg if hasattr(S.dialogs, 'layout_reset_confirm_msg') else "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
+        ):
             self._clear_saved_layout()
             self._setup_default_layout()
             self._sync_view_menu_checks()
-            QMessageBox.information(self, S.dialogs.layout_reset_title, S.dialogs.layout_reset_msg)
+            show_information(self, S.dialogs.layout_reset_title, S.dialogs.layout_reset_msg)
 
     def _sync_view_menu_checks(self):
         """Sync View menu check states with actual dock visibility."""

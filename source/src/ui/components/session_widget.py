@@ -715,6 +715,8 @@ class SessionWidget(QWidget):
 
         # Connect session signals
         self.session.variables_changed.connect(self._update_variables_view)
+        self.session.variables_changed.connect(self._on_session_variables_changed)
+        self.session.connection_changed.connect(self._on_session_connection_changed)
 
         # Chain periodic timer after execution finishes
         self.execution_finished.connect(
@@ -1867,63 +1869,30 @@ class SessionWidget(QWidget):
 
     # === VARIABLES ===
 
+    def _on_session_variables_changed(self, _namespace: dict):
+        """Refresh Monaco offline completions when session variables change."""
+        if hasattr(self.editor, "refresh_completion_context"):
+            self.editor.refresh_completion_context()
+
+    def _on_session_connection_changed(self, _connection_name: str = ""):
+        """Connection metadata (db_*) affects Python autocomplete."""
+        self._update_variables_view(self.session.namespace)
+        if hasattr(self.editor, "refresh_completion_context"):
+            self.editor.refresh_completion_context()
+
     def _update_variables_view(self, namespace: dict):
         """Update variables view, including database variables"""
-        # Filter internal variables
-        visible_vars = {k: v for k, v in namespace.items() if not k.startswith("_") and k not in ("pd", "np", "plt")}
+        visible_vars = {
+            k: v
+            for k, v in self.session.effective_namespace().items()
+            if not k.startswith("_") and k not in ("pd", "np", "plt")
+        }
 
-        # Injetar variaveis de banco de dados se houver conexao ativa
-        self._inject_db_variables(visible_vars)
-
-        # Usar o metodo do BottomTabs
         self._set_variables(visible_vars)
 
     def _inject_db_variables(self, variables: dict):
-        """Injeta variaveis de banco de dados no namespace visivel.
-
-        Expoe engine, connection_string, db_type, host, database, etc.
-        para o usuario poder usar diretamente em blocos Python.
-        """
-        connector = self.session.connector
-        conn_name = self.session.connection_name
-
-        if not connector or not conn_name:
-            return
-
-        try:
-            # Engine SQLAlchemy
-            if hasattr(connector, "engine") and connector.engine is not None:
-                variables["db_engine"] = connector.engine
-
-            # Tipo do banco (sqlserver, mysql, postgresql, etc.)
-            if hasattr(connector, "db_type") and connector.db_type:
-                variables["db_type"] = connector.db_type
-
-            # Nome da conexao
-            variables["db_connection_name"] = conn_name
-
-            # Connection string (URL do engine, mascarando senha)
-            if hasattr(connector, "engine") and connector.engine is not None:
-                try:
-                    url_str = str(connector.engine.url)
-                    # Mascarar senha na exibicao (seguranca)
-                    variables["db_connection_string"] = url_str
-                except Exception:
-                    pass
-
-            # Parametros de conexao (host, port, database, username)
-            if hasattr(connector, "connection_params") and connector.connection_params:
-                params = connector.connection_params
-                if "host" in params:
-                    variables["db_host"] = params["host"]
-                if "port" in params:
-                    variables["db_port"] = params["port"]
-                if "database" in params:
-                    variables["db_database"] = params["database"]
-                if "username" in params:
-                    variables["db_username"] = params["username"]
-        except Exception:
-            pass  # Silenciar erros ao coletar info de banco
+        """Injeta variaveis de banco de dados (delega para Session)."""
+        self.session.enrich_connection_variables(variables)
 
     # === TEMA ===
 

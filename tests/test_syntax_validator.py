@@ -16,6 +16,17 @@ def test_validate_python_syntax_error_line():
     assert "SyntaxError" in markers[0].message
 
 
+def test_validate_python_undefined_name():
+    markers = validate_python("print(block1)\n", namespace={"other": 1})
+    assert len(markers) == 1
+    assert "block1" in markers[0].message
+
+
+def test_validate_python_known_namespace_name():
+    markers = validate_python("print(block1)\n", namespace={"block1": []})
+    assert markers == []
+
+
 def test_validate_sql_ok():
     markers = validate_sql("SELECT 1", db_type="mssql")
     assert markers == []

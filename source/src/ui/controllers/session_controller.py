@@ -12,7 +12,9 @@ Handles:
 
 from typing import TYPE_CHECKING, Dict, Optional, Callable
 from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication
+
+from src.design_system.app_dialogs import confirm_yes_no
 
 from src.ui.components.session_widget import SessionWidget
 from src.language import S
@@ -223,7 +225,7 @@ class SessionController(QObject):
         
         # Namespace changes (for autocomplete)
         session.variables_changed.connect(
-            lambda ns: self._main._push_python_namespace(ns)
+            lambda ns, w=widget: w.editor.refresh_completion_context()
         )
     
     def _connect_session_background(self, widget, session, connection_name, color):
@@ -302,14 +304,11 @@ class SessionController(QObject):
         
         # Check if execution is running
         if getattr(widget, "_is_executing", False):
-            reply = QMessageBox.question(
+            if not confirm_yes_no(
                 self._main,
                 "Cancel Execution?",
                 "A script is running in this tab. Do you want to cancel it and close the tab?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+            ):
                 return False
             widget._on_cancel_execution()
         

@@ -254,34 +254,20 @@ class TestLogging:
             assert "Test message" in output
 
     def test_show_error_displays_message_box(self, main_window, qtbot):
-        """_show_error deve exibir QMessageBox.Critical"""
-        with patch("src.ui.main_window._connections.QMessageBox") as mock_msgbox:
-            mock_instance = Mock()
-            mock_msgbox.return_value = mock_instance
-
+        """_show_error deve usar o dialogo frameless do design system."""
+        with patch("src.ui.main_window._connections.show_error") as mock_show:
             main_window._show_error("Test Title", "Test error message")
-
-            # Verificar que QMessageBox foi criado e configurado corretamente
-            mock_msgbox.assert_called_once_with(main_window)
-            mock_instance.setIcon.assert_called_once_with(mock_msgbox.Icon.Critical)
-            mock_instance.setWindowTitle.assert_called_once_with("Test Title")
-            mock_instance.setText.assert_called_once_with("Test error message")
-            mock_instance.exec.assert_called_once()
+            mock_show.assert_called_once_with(
+                main_window, "Test Title", "Test error message"
+            )
 
     def test_show_info_displays_message_box(self, main_window, qtbot):
-        """_show_info deve exibir QMessageBox.Information"""
-        with patch("src.ui.main_window._connections.QMessageBox") as mock_msgbox:
-            mock_instance = Mock()
-            mock_msgbox.return_value = mock_instance
-
+        """_show_info deve usar o dialogo frameless do design system."""
+        with patch("src.ui.main_window._connections.show_info") as mock_show:
             main_window._show_info("Info Title", "Info message")
-
-            # Verificar que QMessageBox foi criado e configurado corretamente
-            mock_msgbox.assert_called_once_with(main_window)
-            mock_instance.setIcon.assert_called_once_with(mock_msgbox.Icon.Information)
-            mock_instance.setWindowTitle.assert_called_once_with("Info Title")
-            mock_instance.setText.assert_called_once_with("Info message")
-            mock_instance.exec.assert_called_once()
+            mock_show.assert_called_once_with(
+                main_window, "Info Title", "Info message"
+            )
 
 
 # === TESTES DE VARIÁVEIS ===

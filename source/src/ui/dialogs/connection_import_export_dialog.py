@@ -6,13 +6,13 @@ Passwords are stripped on export for security.
 import json
 from typing import Optional, Tuple
 
+from src.design_system.app_dialogs import confirm_yes_no, show_success
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
     QLabel,
-    QMessageBox,
     QPlainTextEdit,
     QApplication,
 )
@@ -243,22 +243,19 @@ class ConnectionImportExportDialog(QDialog):
         conn_count = len(data["connections"])
         group_count = len(data.get("groups", {}))
 
-        reply = QMessageBox.question(
+        if not confirm_yes_no(
             self,
             S.connections_manager.import_export_confirm_title,
             S.connections_manager.import_export_confirm_msg.format(
                 count=conn_count, groups=group_count
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
 
         count = apply_import(self.connection_manager, data)
         self._imported = True
 
-        QMessageBox.information(
+        show_success(
             self,
             S.connections_manager.import_export_title,
             S.connections_manager.import_export_success.format(count=count),

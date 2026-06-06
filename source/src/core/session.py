@@ -91,6 +91,46 @@ class Session(QObject):
     def namespace(self) -> Dict[str, Any]:
         return self._namespace
 
+    def effective_namespace(self) -> Dict[str, Any]:
+        """Runtime namespace plus active connection metadata (db_host, db_username, …)."""
+        variables = dict(self._namespace)
+        self.enrich_connection_variables(variables)
+        return variables
+
+    def enrich_connection_variables(self, variables: Dict[str, Any]) -> None:
+        """Add db_* entries from the active connector (same as the Variables panel)."""
+        connector = self._connector
+        conn_name = self._connection_name
+        if not connector or not conn_name:
+            return
+
+        try:
+            if getattr(connector, "engine", None) is not None:
+                variables["db_engine"] = connector.engine
+
+            if getattr(connector, "db_type", None):
+                variables["db_type"] = connector.db_type
+
+            variables["db_connection_name"] = conn_name
+
+            if getattr(connector, "engine", None) is not None:
+                try:
+                    variables["db_connection_string"] = str(connector.engine.url)
+                except Exception:
+                    pass
+
+            params = getattr(connector, "connection_params", None) or {}
+            if "host" in params:
+                variables["db_host"] = params["host"]
+            if "port" in params:
+                variables["db_port"] = params["port"]
+            if "database" in params:
+                variables["db_database"] = params["database"]
+            if "username" in params:
+                variables["db_username"] = params["username"]
+        except Exception:
+            pass
+
     @property
     def is_executing(self) -> bool:
         return self._is_executing

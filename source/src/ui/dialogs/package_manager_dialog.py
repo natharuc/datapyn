@@ -5,6 +5,12 @@ Allows the user to search, install, update and
 uninstall Python packages directly in DataPyn.
 """
 
+from src.design_system.app_dialogs import (
+    confirm_yes_no,
+    show_danger,
+    show_success,
+    show_warning,
+)
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -15,7 +21,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLabel,
     QHeaderView,
-    QMessageBox,
     QWidget,
     QProgressBar,
     QAbstractItemView,
@@ -210,9 +215,7 @@ class _AddSourceDialog(QDialog):
             return
         username = self.txt_username.text().strip()
         if username and ("://" in username or username.startswith("http")):
-            from PyQt6.QtWidgets import QMessageBox
-
-            QMessageBox.warning(
+            show_warning(
                 self,
                 S.package_manager.add_source_title,
                 S.package_manager.auth_username_invalid,
@@ -780,14 +783,11 @@ class PackageManagerDialog(QDialog):
 
     def _confirm_uninstall(self, package_name: str):
         """Confirms package uninstall"""
-        reply = QMessageBox.question(
+        if confirm_yes_no(
             self,
             S.package_manager.dialog_confirm_removal_title,
             S.package_manager.dialog_confirm_removal_msg.format(name=package_name),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        ):
             self._do_operation("uninstall", package_name)
 
     def _do_operation(self, operation: str, package_name: str, version: str = ""):
@@ -812,7 +812,7 @@ class PackageManagerDialog(QDialog):
         self._set_buttons_enabled(True)
 
         if result.success:
-            QMessageBox.information(self, S.package_manager.dialog_success_title, result.message)
+            show_success(self, S.package_manager.dialog_success_title, result.message)
             # Always reload installed list after operation
             # Use QTimer to avoid conflicts with still-active thread
             QTimer.singleShot(100, self._load_installed)
@@ -821,7 +821,7 @@ class PackageManagerDialog(QDialog):
             # Limit displayed error size
             if len(error_msg) > 500:
                 error_msg = error_msg[:500] + "\n..."
-            QMessageBox.critical(self, S.package_manager.dialog_error_title, S.package_manager.dialog_error_msg.format(operation=result.operation, name=result.package_name, error=error_msg))
+            show_danger(self, S.package_manager.dialog_error_title, S.package_manager.dialog_error_msg.format(operation=result.operation, name=result.package_name, error=error_msg))
 
     # === Helpers ===
 

@@ -7,9 +7,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import Qt, QThread
-from PyQt6.QtWidgets import QMessageBox
-
-from src.design_system.message_box import show_error, show_warning
+from src.design_system.message_box import show_error, show_info, show_warning
 from src.database.database_connector import get_connector_database_context
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
@@ -445,12 +443,7 @@ class ConnectionsMixin:
 
     def _show_info(self, title: str, message: str):
         """Shows information with icon"""
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.setWindowTitle(title)
-        msg.setText(message)
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg.exec()
+        show_info(self, title, message)
 
     def _disconnect(self):
         """Disconnects the current session"""

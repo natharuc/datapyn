@@ -8,7 +8,6 @@ Tests for notification configuration system:
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 from PyQt6.QtCore import QSettings
-from PyQt6.QtWidgets import QMessageBox
 
 
 # ==================== TEMPLATE RENDERING TESTS ====================
@@ -291,8 +290,8 @@ class TestNotificationSettingsDialog:
         dialog.notif_email_to.setText("to@example.com")
 
         with patch("src.ui.dialogs.settings_dialog.set_notification_secret") as set_secret, \
-                patch("src.ui.dialogs.settings_dialog.QMessageBox.information"), \
-                patch("src.ui.dialogs.settings_dialog.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+                patch("src.ui.dialogs.settings_dialog.show_information"), \
+                patch("src.ui.dialogs.settings_dialog.confirm_yes_no", return_value=False):
             dialog._save_all()
 
         settings = QSettings("DataPyn", "DataPyn")

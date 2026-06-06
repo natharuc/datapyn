@@ -664,6 +664,8 @@ class TestDPWNotificationPersistence:
                 self.session_manager = MagicMock()
                 self.main_statusbar = MagicMock()
                 self.recent_files_manager = MagicMock()
+                self.session_tabs = MagicMock()
+                self.session_tabs.indexOf.return_value = 0
 
             def _get_current_session_widget(self):
                 return None
@@ -688,8 +690,19 @@ class TestDPWNotificationPersistence:
             def _update_window_title(self):
                 return None
 
+            def _switch_session_panels(self, _session_id):
+                return None
+
+            def _update_recent_menu(self):
+                return None
+
         harness = _Harness()
-        session = SimpleNamespace(title="opened.dpw", notification_config=None)
+        session = SimpleNamespace(
+            title="opened.dpw",
+            notification_config=None,
+            session_id="test-session",
+            connection_name=None,
+        )
         harness.session_manager.create_session.return_value = session
 
         harness._open_code_file(str(dpw_file))

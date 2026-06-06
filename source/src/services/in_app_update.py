@@ -18,11 +18,11 @@ from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QLabel,
-    QMessageBox,
     QProgressBar,
     QVBoxLayout,
 )
 
+from src.design_system.app_dialogs import show_danger
 from src.services.windows_installer import (
     EXE_NAME,
     launch_application,
@@ -116,7 +116,7 @@ class InAppUpdateDialog(QDialog):
         self.accept()
 
     def _on_failed(self, message: str) -> None:
-        QMessageBox.critical(self, "Falha na atualização", message)
+        show_danger(self, "Falha na atualização", message)
         self.reject()
 
 

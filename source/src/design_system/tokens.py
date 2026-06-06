@@ -481,6 +481,7 @@ def _combobox_down_arrow_stylesheet(
     *,
     arrow_color: str | None = None,
     hover_arrow_color: str | None = None,
+    dropdown_width: int = 22,
 ) -> str:
     colors = get_colors()
     normal = arrow_color or colors.text_secondary
@@ -488,7 +489,7 @@ def _combobox_down_arrow_stylesheet(
         QComboBox::drop-down {{
             subcontrol-origin: padding;
             subcontrol-position: center right;
-            width: 22px;
+            width: {dropdown_width}px;
             border: none;
             background: transparent;
         }}
@@ -553,6 +554,32 @@ def get_combobox_stylesheet_toolbar() -> str:
             background-color: {colors.bg_elevated};
         }}
         {_combobox_down_arrow_stylesheet()}
+    """
+
+
+def get_combobox_stylesheet_block_header() -> str:
+    """Compact combobox for code-block language selector (icon + short label)."""
+    colors = get_colors()
+
+    return f"""
+        QComboBox {{
+            background-color: {colors.bg_tertiary};
+            color: {colors.text_primary};
+            border: 1px solid {colors.border_default};
+            border-radius: 6px;
+            padding: 2px 6px;
+            padding-right: 18px;
+            font-size: 12px;
+            font-weight: 500;
+            min-height: 22px;
+        }}
+        QComboBox:hover {{
+            border-color: {colors.interactive_primary};
+        }}
+        QComboBox:focus {{
+            border-color: {colors.interactive_primary};
+        }}
+        {_combobox_down_arrow_stylesheet(dropdown_width=18)}
     """
 
 
@@ -622,6 +649,8 @@ def apply_combobox_style(
         combo.setStyleSheet(get_combobox_stylesheet_toolbar())
     elif variant == "inline_toolbar":
         combo.setStyleSheet(get_combobox_stylesheet_inline_toolbar())
+    elif variant == "block_header":
+        combo.setStyleSheet(get_combobox_stylesheet_block_header())
     else:
         combo.setStyleSheet(get_combobox_stylesheet())
 

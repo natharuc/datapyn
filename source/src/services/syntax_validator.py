@@ -50,17 +50,120 @@ class SyntaxMarker:
         }
 
 
-def validate_python(code: str) -> List[SyntaxMarker]:
-    """Parse Python source; return syntax error markers (empty if valid)."""
+import builtins as _builtins_mod
+
+_PYTHON_BUILTINS = {
+    name for name in dir(_builtins_mod) if not name.startswith("_")
+}
+
+_PYTHON_EXTRA_GLOBALS = {
+    "pd",
+    "np",
+    "plt",
+    "sns",
+    "datetime",
+    "json",
+    "re",
+    "os",
+    "sys",
+    "math",
+    "random",
+}
+
+
+def _collect_python_scoped_names(tree: ast.AST) -> set[str]:
+    """Names assigned or imported in the snippet (module-level scope)."""
+    defined: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                defined.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    defined.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                defined.update(_names_from_assign_target(target))
+        elif isinstance(node, ast.AnnAssign) and node.target is not None:
+            defined.update(_names_from_assign_target(node.target))
+        elif isinstance(node, ast.For):
+            defined.update(_names_from_assign_target(node.target))
+        elif isinstance(node, ast.With):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    defined.update(_names_from_assign_target(item.optional_vars))
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            defined.add(node.name)
+    return defined
+
+
+def _names_from_assign_target(target: ast.AST) -> set[str]:
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for elt in target.elts:
+            names.update(_names_from_assign_target(elt))
+        return names
+    if isinstance(target, ast.Starred):
+        return _names_from_assign_target(target.value)
+    return set()
+
+
+def _undefined_python_names(
+    tree: ast.AST,
+    namespace: Optional[dict],
+) -> List[SyntaxMarker]:
+    known = set(namespace or {}) | _PYTHON_BUILTINS | _PYTHON_EXTRA_GLOBALS
+    known.update(_collect_python_scoped_names(tree))
+
+    markers: List[SyntaxMarker] = []
+    seen: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load):
+            continue
+        name = node.id
+        if name in known or name.startswith("_"):
+            continue
+        key = (node.lineno, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        col = getattr(node, "col_offset", 0) + 1
+        markers.append(
+            SyntaxMarker(
+                start_line=int(node.lineno or 1),
+                start_column=max(1, col),
+                end_line=int(node.lineno or 1),
+                end_column=max(1, col + len(name)),
+                message=f"Undefined name: {name}",
+                severity="error",
+            )
+        )
+    return markers
+
+
+def validate_python(
+    code: str,
+    *,
+    namespace: Optional[dict] = None,
+) -> List[SyntaxMarker]:
+    """Parse Python source; return syntax and undefined-name markers."""
     text = code or ""
     if not text.strip():
         return []
 
     try:
-        ast.parse(text)
-        return []
+        tree = ast.parse(text)
     except SyntaxError as exc:
         return [_marker_from_syntax_error(exc)]
+
+    if namespace is None:
+        return []
+    return _undefined_python_names(tree, namespace)
 
 
 def _marker_from_syntax_error(exc: SyntaxError) -> SyntaxMarker:
@@ -245,11 +348,12 @@ def validate_code(
     *,
     db_type: Optional[str] = None,
     schema: Optional[dict] = None,
+    namespace: Optional[dict] = None,
 ) -> List[SyntaxMarker]:
     """Validate by block language id (python, sql)."""
     lang = (language or "").lower()
     if lang == "python":
-        return validate_python(code)
+        return validate_python(code, namespace=namespace)
     if lang == "sql":
         return validate_sql(code, db_type=db_type, schema=schema)
     return []

@@ -594,7 +594,8 @@ class TestMonacoSqlAutocompleteIntegration:
         editor.set_sql_schema({})
 
         qtbot.waitUntil(lambda: editor._run_js_when_ready.call_count > 0, timeout=5000)
-        editor._run_js_when_ready.assert_called_once_with("registerCompletions([])")
+        emitted = [call.args[0] for call in editor._run_js_when_ready.call_args_list]
+        assert any(call == "registerCompletions([])" for call in emitted)
 
     def test_set_sql_schema_with_tables_registers_new_schema(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor
@@ -611,11 +612,25 @@ class TestMonacoSqlAutocompleteIntegration:
             }
         )
 
+        def _emitted_js():
+            return [call.args[0] for call in editor._run_js_when_ready.call_args_list]
+
         qtbot.waitUntil(lambda: editor._run_js_when_ready.call_count > 0, timeout=5000)
-        emitted = editor._run_js_when_ready.call_args[0][0]
-        assert '"label": "venda"' in emitted
-        assert '"label": "id"' in emitted
-        assert '"label": "SELECT"' in emitted
+        schema_calls = [c for c in _emitted_js() if c.startswith("registerSqlSchemaIndex(")]
+        assert schema_calls
+        assert "venda" in schema_calls[-1]
+        assert "id" in schema_calls[-1]
+
+        qtbot.waitUntil(
+            lambda: any(
+                c.startswith("registerCompletions(") and '"label": "SELECT"' in c
+                for c in _emitted_js()
+            ),
+            timeout=5000,
+        )
+        completion_calls = [c for c in _emitted_js() if c.startswith("registerCompletions(")]
+        assert completion_calls
+        assert '"label": "SELECT"' in completion_calls[-1]
 
     def test_sql_completion_uses_zero_based_service_coordinates(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor
@@ -666,7 +681,7 @@ class TestMonacoCompletionWorkers:
 
         editor = MonacoEditor()
         qtbot.addWidget(editor)
-        editor.register_completions = Mock()
+        editor._push_merged_completions = Mock()
 
         schema = {"tables": ["orders"], "columns": {"orders": ["id"]}}
         editor.update_sql_completions(schema)
@@ -675,14 +690,14 @@ class TestMonacoCompletionWorkers:
         editor.update_sql_completions(schema)
         qtbot.waitUntil(lambda: editor._sql_completion_worker is None, timeout=5000)
 
-        assert editor.register_completions.call_count >= 1
+        assert editor._push_merged_completions.call_count >= 1
 
     def test_update_python_completions_survives_finished_worker(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor
 
         editor = MonacoEditor()
         qtbot.addWidget(editor)
-        editor.register_completions = Mock()
+        editor._push_merged_completions = Mock()
 
         namespace = {"df": object()}
         editor.update_python_completions(namespace)
@@ -691,5 +706,5 @@ class TestMonacoCompletionWorkers:
         editor.update_python_completions(namespace)
         qtbot.waitUntil(lambda: editor._python_completion_worker is None, timeout=5000)
 
-        assert editor.register_completions.call_count >= 1
+        assert editor._push_merged_completions.call_count >= 1
 
