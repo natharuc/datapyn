@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.42.2 (2026-06-06)
+
+### Heuristic
+
+- Merge pull request #125 from natharuc/cursor/pynia
+  ([`126ebef`](https://github.com/natharuc/datapyn/commit/126ebef419eb88f1f644afe90903a5935fa2a18e))
+
+### Testing
+
+- Ajuste em testes
+  ([`250b14e`](https://github.com/natharuc/datapyn/commit/250b14e835d97cb1c9251901e021ed4a6ec5cab2))
+
+- Ajuste em testes
+  ([`addf8ab`](https://github.com/natharuc/datapyn/commit/addf8ab0810f7fbef5e6f5743960d2b4f1d39280))
+
+- Ajuste em testes
+  ([`1f87551`](https://github.com/natharuc/datapyn/commit/1f8755103dc7b6abea88608af52f78bab679e55c))
+
+
 ## v1.42.1 (2026-06-05)
 
 ### Heuristic
