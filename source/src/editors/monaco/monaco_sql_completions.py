@@ -141,6 +141,7 @@ def build_python_completions(variables: Optional[dict]) -> List[Dict[str, Any]]:
             "kind": "variable",
             "insertText": var_name,
             "detail": var_type,
+            "category": "variable",
         })
 
     completions.extend(build_dataframe_member_completions(variables or {}))

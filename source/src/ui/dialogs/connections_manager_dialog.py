@@ -2,6 +2,12 @@
 Dialog for managing saved connections
 """
 
+from src.design_system.app_dialogs import (
+    confirm_yes_no,
+    show_information,
+    show_success,
+    show_warning,
+)
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -11,7 +17,6 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QMenu,
     QInputDialog,
-    QMessageBox,
     QSplitter,
     QWidget,
     QLabel,
@@ -561,7 +566,7 @@ class ConnectionsManagerDialog(QDialog):
             name = dialog.textValue()
             if name:
                 if name in self.connection_manager.get_groups():
-                    QMessageBox.warning(self, S.dialogs.warning, S.connections_manager.dialog_group_exists)
+                    show_warning(self, S.dialogs.warning, S.connections_manager.dialog_group_exists)
                     return
 
                 self.connection_manager.create_group(name)
@@ -600,7 +605,7 @@ class ConnectionsManagerDialog(QDialog):
                 return
 
             if new_name in self.connection_manager.get_groups():
-                QMessageBox.warning(self, S.dialogs.warning, S.connections_manager.dialog_group_exists)
+                show_warning(self, S.dialogs.warning, S.connections_manager.dialog_group_exists)
                 changed_item.setText(0, old_name)
                 changed_item.setFlags(changed_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 return
@@ -658,14 +663,11 @@ class ConnectionsManagerDialog(QDialog):
             # Check if connection already exists and ask for confirmation
             existing_connections = self.connection_manager.saved_configs.get("connections", {})
             if name in existing_connections:
-                reply = QMessageBox.question(
+                if not confirm_yes_no(
                     self,
                     S.connections_manager.dialog_confirm_replace_title,
                     S.connections_manager.dialog_confirm_replace_msg.format(name=name),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
+                ):
                     return
 
             self.connection_manager.save_connection_config(
@@ -686,7 +688,7 @@ class ConnectionsManagerDialog(QDialog):
             )
 
             self._load_connections()
-            QMessageBox.information(self, S.dialogs.success, S.connections_manager.dialog_connection_saved.format(name=name))
+            show_success(self, S.dialogs.success, S.connections_manager.dialog_connection_saved.format(name=name))
 
     def _edit_selected(self):
         """Edits selected connection or group"""
@@ -737,7 +739,7 @@ class ConnectionsManagerDialog(QDialog):
 
             self.selected_connection = new_name
             self._load_connections()
-            QMessageBox.information(self, S.dialogs.success, S.connections_manager.dialog_connection_updated)
+            show_success(self, S.dialogs.success, S.connections_manager.dialog_connection_updated)
 
     def _duplicate_connection(self):
         """Duplicates selected connection"""
@@ -754,7 +756,7 @@ class ConnectionsManagerDialog(QDialog):
 
         if ok and new_name:
             if new_name in self.connection_manager.saved_configs.get("connections", {}):
-                QMessageBox.warning(self, S.dialogs.warning, S.connections_manager.dialog_duplicate_exists)
+                show_warning(self, S.dialogs.warning, S.connections_manager.dialog_duplicate_exists)
                 return
 
             self.connection_manager.save_connection_config(
@@ -775,19 +777,16 @@ class ConnectionsManagerDialog(QDialog):
             )
 
             self._load_connections()
-            QMessageBox.information(self, S.dialogs.success, S.connections_manager.dialog_connection_duplicated.format(name=new_name))
+            show_success(self, S.dialogs.success, S.connections_manager.dialog_connection_duplicated.format(name=new_name))
 
     def _delete_selected(self):
         """Deletes selected connection or group"""
         if self.selected_connection:
-            reply = QMessageBox.question(
+            if confirm_yes_no(
                 self,
                 S.connections_manager.dialog_confirm_delete_title,
                 S.connections_manager.dialog_confirm_delete_conn.format(name=self.selected_connection),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-
-            if reply == QMessageBox.StandardButton.Yes:
+            ):
                 self.connection_manager.delete_connection_config(self.selected_connection)
                 self.selected_connection = None
                 self._load_connections()
@@ -797,14 +796,11 @@ class ConnectionsManagerDialog(QDialog):
                 self.btn_delete.setEnabled(False)
 
         elif self.selected_group:
-            reply = QMessageBox.question(
+            if confirm_yes_no(
                 self,
                 S.connections_manager.dialog_confirm_delete_title,
                 S.connections_manager.dialog_confirm_delete_group.format(name=self.selected_group),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-
-            if reply == QMessageBox.StandardButton.Yes:
+            ):
                 self.connection_manager.delete_group(self.selected_group)
                 self.selected_group = None
                 self._load_connections()

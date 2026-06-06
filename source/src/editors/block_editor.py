@@ -551,10 +551,16 @@ class BlockEditor(QWidget):
     def bind_session(self, session) -> None:
         """Attach tab session so completions use executed DataFrames (not global state)."""
         self._session = session
+        for block in self._blocks:
+            block.set_block_editor(self)
+        self.refresh_completion_context()
 
     def _get_completion_namespace(self) -> dict:
-        if self._session is not None and hasattr(self._session, "namespace"):
-            return self._session.namespace
+        if self._session is not None:
+            if hasattr(self._session, "effective_namespace"):
+                return self._session.effective_namespace()
+            if hasattr(self._session, "namespace"):
+                return self._session.namespace
         return ApplicationState.instance().get_namespace()
 
     # === Autocomplete Management ===
@@ -686,6 +692,7 @@ class BlockEditor(QWidget):
                 language = "python"  # Second block onwards
 
         block = CodeBlock(theme_manager=self.theme_manager, default_language=language)
+        block.set_block_editor(self)
         if code:
             block.set_code(code)
         

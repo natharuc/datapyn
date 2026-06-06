@@ -448,6 +448,7 @@ class CodeBlock(QFrame):
         self._sql_parameters_enabled = True  # False = user chose to define variables manually in the query
         self._sql_schema = {}  # Cached SQL schema for parameter inference/autocomplete
         self._block_name = ""  # Block name (namespace prefix)
+        self._block_editor = None  # BlockEditor parent container
         self._is_copilot_editing = False  # Copilot is editing this block
         self._copilot_editing_timer = None  # Auto-dismiss timer
         self._copilot_animation = None
@@ -592,46 +593,14 @@ class CodeBlock(QFrame):
             self.lang_combo.setCurrentIndex(0)
         else:
             self.lang_combo.setCurrentIndex(1)
-        self.lang_combo.setFixedWidth(100)
         self.lang_combo.setFixedHeight(CTRL_H)
-        self.lang_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: {colors.bg_tertiary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: 6px;
-                padding: 2px 8px 2px 6px;
-                font-size: 12px;
-                font-weight: 500;
-            }}
-            QComboBox:hover {{
-                border-color: {colors.interactive_primary};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 18px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {colors.text_secondary};
-                margin-right: 6px;
-            }}
-            QComboBox QAbstractItemView {{
-                background: {colors.bg_elevated};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: 8px;
-                padding: 4px;
-                selection-background-color: {colors.interactive_primary};
-            }}
-            QComboBox QAbstractItemView::item {{
-                padding: 6px 10px;
-                border-radius: 4px;
-                min-height: 24px;
-            }}
-        """)
+        self.lang_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.lang_combo.setMinimumWidth(96)
+        from src.design_system.tokens import apply_combobox_style
+
+        apply_combobox_style(self.lang_combo, variant="block_header", icon_size=14)
         control_layout.addWidget(self.lang_combo)
 
         # Status with spinner - ao lado do dropdown de linguagem
@@ -966,11 +935,20 @@ class CodeBlock(QFrame):
         text = self.get_code()
         self._completion_service.open_document(uri, language, text)
     
+    def set_block_editor(self, editor) -> None:
+        """Attach parent BlockEditor for session-scoped completions."""
+        self._block_editor = editor
+
+    def _completion_namespace(self) -> dict:
+        if self._block_editor is not None and hasattr(
+            self._block_editor, "_get_completion_namespace"
+        ):
+            return self._block_editor._get_completion_namespace()
+        return ApplicationState.instance().get_namespace()
+
     def _update_python_completions(self):
-        """Update Python completions with current namespace."""
-        app_state = ApplicationState.instance()
-        namespace = app_state.get_namespace()
-        self.set_python_namespace(namespace)
+        """Update Python completions with current session namespace."""
+        self.set_python_namespace(self._completion_namespace())
     
     def _get_extension(self) -> str:
         """Get file extension for current language."""

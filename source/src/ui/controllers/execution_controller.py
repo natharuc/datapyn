@@ -11,7 +11,9 @@ Handles:
 
 from typing import TYPE_CHECKING, Optional, List, Tuple
 from PyQt6.QtCore import QObject, QTimer, QElapsedTimer, QThread, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication
+
+from src.design_system.app_dialogs import show_danger
 import pandas as pd
 import re
 import logging
@@ -298,7 +300,7 @@ class ExecutionController(QObject):
 
         def on_error(message: str):
             self.stop_execution_timer()
-            QMessageBox.critical(self._main, S.dialogs.error, S.dialogs.error_switching_db.format(error=message))
+            show_danger(self._main, S.dialogs.error, S.dialogs.error_switching_db.format(error=message))
             self._main.action_label.setText(S.status.sql_error_switching)
 
         self._main._start_database_switch_worker(connector, database_name, on_success=on_success, on_error=on_error)

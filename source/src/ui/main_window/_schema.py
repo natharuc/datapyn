@@ -9,8 +9,6 @@ import weakref
 
 import pandas as pd
 from PyQt6.QtCore import Qt, QThread, QTimer
-from PyQt6.QtWidgets import QMessageBox
-
 from src.language import S
 from src.services.cross_database_schema import (
     collect_sql_text_from_widget,
@@ -1109,9 +1107,15 @@ class SchemaMixin:
         """Inserts variable name in the focused editor of the active session"""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "editor"):
-            block = current_widget.editor.get_focused_block()
+            editor = current_widget.editor
+            block = (
+                editor.get_last_focused_block()
+                if hasattr(editor, "get_last_focused_block")
+                else editor.get_focused_block()
+            )
             if block and hasattr(block, "editor") and hasattr(block.editor, "insert_text_at_cursor"):
                 block.editor.insert_text_at_cursor(var_name)
+                block.editor.setFocus()
 
     def _on_delete_variable(self, var_name: str):
         """Removes variable from the active session namespace"""

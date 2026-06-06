@@ -138,6 +138,7 @@ class _CompletionWorker(QThread):
                 payload = _format_sql_context_completions(raw, self.prefix)
             elif self.kind == "python":
                 from src.services.jedi_completer import JediCompleter
+                from src.editors.monaco.monaco_sql_completions import build_python_completions
 
                 completer = JediCompleter()
                 completer.set_namespace(self.namespace)
@@ -148,6 +149,13 @@ class _CompletionWorker(QThread):
                     adjusted_line = self.line + self.global_imports.count("\n") + 1
                 raw = completer.complete_sync(code, adjusted_line, self.column, self.namespace)
                 payload = _format_python_completions(raw)
+                if self.namespace:
+                    static = build_python_completions(self.namespace)
+                    seen = {item["label"] for item in payload}
+                    for item in static:
+                        if item.get("kind") == "variable" and item["label"] not in seen:
+                            payload.append(item)
+                            seen.add(item["label"])
             else:
                 payload = []
         except Exception as exc:

@@ -11,7 +11,7 @@ from datetime import datetime
 
 import pandas as pd
 from PyQt6.QtCore import Qt, QThread, QTimer, QElapsedTimer
-from PyQt6.QtWidgets import QMessageBox
+from src.design_system.app_dialogs import confirm_yes_no, show_danger
 
 from src.database.database_connector import get_connector_database_context
 from src.ui.main_window._workers import SqlWorker, PythonWorker
@@ -47,42 +47,14 @@ class ExecutionMixin:
             self.main_statusbar.action_label.setText("")
             return
 
-        from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QSpinBox, QDialogButtonBox
-        from src.design_system.frameless_dialog import install_frameless_shell
+        from src.design_system.app_dialogs import show_periodic_execution_dialog
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle(S.toolbar.run_timer_title)
-        dialog.setFixedWidth(360)
-        dlg_layout = install_frameless_shell(
-            dialog,
-            S.toolbar.run_timer_title,
-            content_margins=(20, 14, 20, 16),
-            content_spacing=10,
+        interval = show_periodic_execution_dialog(
+            self,
+            default_seconds=widget.periodic_interval if widget.periodic_interval > 0 else 30,
         )
-
-        lbl = QLabel(S.toolbar.run_timer_label)
-        dlg_layout.addWidget(lbl)
-
-        spin = QSpinBox()
-        spin.setRange(1, 86400)
-        spin.setValue(widget.periodic_interval if widget.periodic_interval > 0 else 30)
-        spin.setSuffix("s")
-        dlg_layout.addWidget(spin)
-
-        buttons = QDialogButtonBox()
-        buttons.addButton(S.toolbar.run_timer_start, QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(buttons)
-        dlg_layout.addLayout(btn_row)
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if interval is None:
             return
-
-        interval = spin.value()
         widget.start_periodic(interval)
         self.main_toolbar.set_timer_running(True, interval)
         self.main_statusbar.action_label.setText(
@@ -296,7 +268,7 @@ class ExecutionMixin:
 
             def on_error(message: str):
                 self._stop_execution_timer()
-                QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_switching_db.format(error=message))
+                show_danger(self, S.dialogs.error, S.dialogs.error_switching_db.format(error=message))
                 self.action_label.setText(S.status.sql_error_switching)
 
             self._start_database_switch_worker(connector, database_name, on_success=on_success, on_error=on_error)
@@ -810,14 +782,11 @@ class ExecutionMixin:
 
     def _clear_results(self):
         """Clears all results"""
-        reply = QMessageBox.question(
+        if confirm_yes_no(
             self,
             S.dialogs.confirm_clear_title,
             S.dialogs.confirm_clear_msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
+        ):
             self.results_manager.clear_all()
             results = self.global_results_viewer
             if results:

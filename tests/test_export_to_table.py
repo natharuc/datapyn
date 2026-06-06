@@ -705,7 +705,10 @@ class TestExportIntegration:
         if chunksize is not None:
             dialog.chunk_spin.setValue(chunksize)
 
-        with patch("src.ui.dialogs.export_to_table_dialog.QMessageBox"):
+        with (
+            patch("src.ui.dialogs.export_to_table_dialog.show_success"),
+            patch("src.ui.dialogs.export_to_table_dialog.show_danger"),
+        ):
             dialog._on_export()
             qtbot.waitUntil(lambda: not dialog._is_exporting, timeout=5000)
 

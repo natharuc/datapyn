@@ -22,3 +22,17 @@ def test_build_python_completions_includes_namespace_and_keywords():
     assert "_hidden" not in labels
     assert "def" in labels
     assert "pd" in labels
+
+
+def test_build_python_completions_includes_session_connection_variables():
+    completions = build_python_completions(
+        {
+            "block1": object(),
+            "db_username": "root",
+            "db_host": "localhost",
+        }
+    )
+    labels = {item["label"] for item in completions}
+    assert "block1" in labels
+    assert "db_username" in labels
+    assert "db_host" in labels

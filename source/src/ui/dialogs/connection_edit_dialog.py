@@ -15,8 +15,6 @@ from PyQt6.QtWidgets import (
     QFrame,
     QLabel,
     QColorDialog,
-    QMessageBox,
-    QProgressDialog,
     QScrollArea,
     QWidget,
     QSizePolicy,
@@ -572,19 +570,16 @@ class ConnectionEditDialog(QDialog):
         if not self._validate_inputs(require_name=False):
             return
 
-        # Create loading dialog with cancel button
+        from src.design_system.app_dialogs import FramelessProgressDialog
+
         db_name = self.txt_database.text() or self.txt_host.text()
-        self.loading_dialog = QProgressDialog(self)
-        self.loading_dialog.setWindowTitle(S.connection_edit.dialog_testing_title)
-        self.loading_dialog.setLabelText(S.connection_edit.dialog_testing_msg.format(name=db_name))
-        self.loading_dialog.setCancelButtonText(S.connection_edit.btn_cancel)
-        self.loading_dialog.setRange(0, 0)  # Indeterminate progress
-        self.loading_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self.loading_dialog.setWindowFlags(
-            Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint
+        self.loading_dialog = FramelessProgressDialog(
+            self,
+            S.connection_edit.dialog_testing_title,
+            S.connection_edit.dialog_testing_msg.format(name=db_name),
+            cancel_text=S.connection_edit.btn_cancel,
+            on_cancel=self._cancel_test_connection,
         )
-        self.loading_dialog.setMinimumWidth(300)
-        self.loading_dialog.canceled.connect(self._cancel_test_connection)
         self.loading_dialog.show()
 
         # Create and start worker
@@ -619,10 +614,12 @@ class ConnectionEditDialog(QDialog):
 
         self.loading_dialog.close()
 
+        from src.design_system.app_dialogs import show_danger, show_success
+
         if success:
-            QMessageBox.information(self, S.dialogs.success, message)
+            show_success(self, S.dialogs.success, message)
         else:
-            QMessageBox.critical(self, S.dialogs.error, message)
+            show_danger(self, S.dialogs.error, message)
 
     def _on_save(self):
         """Validates and saves"""
@@ -633,12 +630,14 @@ class ConnectionEditDialog(QDialog):
 
     def _validate_inputs(self, require_name: bool) -> bool:
         """Validate connection fields before save/test."""
+        from src.design_system.app_dialogs import show_warning
+
         if require_name and not self.txt_name.text().strip():
-            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_name_required)
+            show_warning(self, S.dialogs.warning, S.connection_edit.validation_name_required)
             return False
 
         if not self.txt_host.text().strip():
-            QMessageBox.warning(self, S.dialogs.warning, S.connection_edit.validation_host_required)
+            show_warning(self, S.dialogs.warning, S.connection_edit.validation_host_required)
             return False
 
         return True

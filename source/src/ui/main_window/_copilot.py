@@ -220,7 +220,7 @@ class CopilotMixin:
 
     def _show_copilot_status(self):
         """Show Copilot status dialog with LSP and SDK info."""
-        from PyQt6.QtWidgets import QMessageBox
+        from src.design_system.app_dialogs import show_information
         from src.services.copilot import is_copilot_server_available, get_copilot_server_path
         
         # LSP status
@@ -265,11 +265,7 @@ class CopilotMixin:
             lines.append("Status: Not authenticated")
             lines.append("Action: Open Copilot Chat panel and authenticate")
         
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Copilot Status")
-        msg.setText("\n".join(lines))
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.exec()
+        show_information(self, "Copilot Status", "\n".join(lines))
 
     def _connect_copilot_to_output(self):
         """Connect Pynia agent signals to output panel."""

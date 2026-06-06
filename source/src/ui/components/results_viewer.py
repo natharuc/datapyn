@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QDialogButtonBox,
     QFileDialog,
-    QMessageBox,
     QStackedWidget,
     QScrollArea,
     QTextEdit,
@@ -54,6 +53,7 @@ import subprocess
 import os
 import qtawesome as qta
 
+from src.design_system.app_dialogs import show_danger, show_warning
 from src.core.theme_manager import ThemeManager
 from src.language import S
 from src.design_system.tokens import SCROLLBAR_STYLE
@@ -5043,7 +5043,7 @@ class ResultsViewer(QWidget):
                 self.info_label.setText(
                     S.results.export_failed if hasattr(S.results, "export_failed") else "Export failed"
                 )
-                QMessageBox.critical(self, S.results.error_title, str(e))
+                show_danger(self, S.results.error_title, str(e))
 
     def _get_active_db_type(self) -> str:
         """Determine the db_type from the active connection.
@@ -5131,7 +5131,7 @@ class ResultsViewer(QWidget):
     def _on_export_error(self, error_msg: str):
         """Callback when export fails"""
         self.info_label.setText(S.results.export_failed if hasattr(S.results, 'export_failed') else "Export failed")
-        QMessageBox.critical(self, S.results.error_title, error_msg)
+        show_danger(self, S.results.error_title, error_msg)
 
     def _cleanup_export_thread(self):
         """Cleanup export thread and worker"""
@@ -5897,7 +5897,7 @@ class ResultsViewer(QWidget):
                     with open(filename, "w", encoding="utf-8") as handle:
                         handle.write(chart_html)
                 except Exception as error:
-                    QMessageBox.critical(
+                    show_danger(
                         self,
                         S.results.error_title,
                         S.results.error_save_image.format(error=str(error)),
@@ -5917,7 +5917,7 @@ class ResultsViewer(QWidget):
                 with open(filename, "wb") as handle:
                     handle.write(self._current_image_bytes)
             except Exception as error:
-                QMessageBox.critical(
+                show_danger(
                     self,
                     S.results.error_title,
                     S.results.error_save_image.format(error=str(error)),
@@ -5926,13 +5926,13 @@ class ResultsViewer(QWidget):
     def _export_to_table(self):
         """Export current DataFrame to a database table"""
         if self.current_df is None or len(self.current_df) == 0:
-            QMessageBox.warning(self, S.results.error_title, S.results.export_table_no_data)
+            show_warning(self, S.results.error_title, S.results.export_table_no_data)
             return
 
         # Get active connections from MainWindow
         main_window = self._get_main_window()
         if not main_window:
-            QMessageBox.warning(self, S.results.error_title, S.results.export_table_no_window)
+            show_warning(self, S.results.error_title, S.results.export_table_no_window)
             return
 
         # Collect active connections from all sessions
@@ -5947,7 +5947,7 @@ class ResultsViewer(QWidget):
                         connections[conn_name] = connector
 
         if not connections:
-            QMessageBox.warning(
+            show_warning(
                 self,
                 S.results.error_title,
                 S.results.export_table_no_connection,

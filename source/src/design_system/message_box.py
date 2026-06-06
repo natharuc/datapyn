@@ -90,6 +90,12 @@ class _BaseMessageDialog(QDialog):
         for btn in buttons:
             self._footer_layout.addWidget(btn)
 
+    def _set_footer_actions(self, left_btn, right_btn) -> None:
+        """Cancel/secondary on the left, primary on the right."""
+        self._footer_layout.addWidget(left_btn)
+        self._footer_layout.addStretch()
+        self._footer_layout.addWidget(right_btn)
+
 
 def ask_save_discard_cancel(
     parent: Optional[QWidget],
@@ -160,7 +166,7 @@ def ask_yes_no(
     else:
         no_btn.setDefault(True)
 
-    dlg._add_footer_buttons(no_btn, yes_btn)
+    dlg._set_footer_actions(no_btn, yes_btn)
     dlg.exec()
     return accepted["value"]
 
@@ -202,47 +208,23 @@ def ask_yes_no_cancel(
 
 def show_info(parent: Optional[QWidget], title: str, message: str) -> None:
     """Single OK — informational (replaces QMessageBox.information)."""
-    dlg = _BaseMessageDialog(
-        parent,
-        title,
-        message,
-        icon_name="mdi.information-outline",
-        min_height=180,
-    )
-    ok_btn = PrimaryButton(S.dialogs.btn_ok, size="sm")
-    ok_btn.clicked.connect(dlg.accept)
-    dlg._add_footer_buttons(ok_btn)
-    dlg.exec()
+    from src.design_system.app_dialogs import show_information
+
+    show_information(parent, title, message)
 
 
 def show_warning(parent: Optional[QWidget], title: str, message: str) -> None:
     """Single OK — warning (replaces QMessageBox.warning)."""
-    dlg = _BaseMessageDialog(
-        parent,
-        title,
-        message,
-        icon_name="mdi.alert-outline",
-        min_height=180,
-    )
-    ok_btn = PrimaryButton(S.dialogs.btn_ok, size="sm")
-    ok_btn.clicked.connect(dlg.accept)
-    dlg._add_footer_buttons(ok_btn)
-    dlg.exec()
+    from src.design_system.app_dialogs import show_warning as _show_warning
+
+    _show_warning(parent, title, message)
 
 
 def show_error(parent: Optional[QWidget], title: str, message: str) -> None:
     """Single OK — error (replaces QMessageBox.critical)."""
-    dlg = _BaseMessageDialog(
-        parent,
-        title,
-        message,
-        icon_name="mdi.alert-circle-outline",
-        min_height=180,
-    )
-    ok_btn = PrimaryButton(S.dialogs.btn_ok, size="sm")
-    ok_btn.clicked.connect(dlg.accept)
-    dlg._add_footer_buttons(ok_btn)
-    dlg.exec()
+    from src.design_system.app_dialogs import show_danger
+
+    show_danger(parent, title, message)
 
 
 def ask_confirm(
@@ -268,7 +250,7 @@ def ask_confirm(
         confirm_label, size="sm"
     )
     ok_btn.clicked.connect(dlg.accept)
-    dlg._add_footer_buttons(cancel_btn, ok_btn)
+    dlg._set_footer_actions(cancel_btn, ok_btn)
     return dlg.exec() == QDialog.DialogCode.Accepted
 
 

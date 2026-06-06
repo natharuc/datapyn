@@ -14,9 +14,9 @@ from datetime import datetime
 import pandas as pd
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QFileDialog
 
-from src.design_system.message_box import show_warning
+from src.design_system.app_dialogs import show_danger, show_information, show_warning
 from src.database.database_connector import get_connector_database_context
 from src.ui.main_window._workers import _read_file_with_encoding_fallback
 from src.language import S
@@ -83,7 +83,7 @@ class FileIOMixin:
         """Open a file from the recent files list."""
         import os
         if not os.path.exists(filepath):
-            QMessageBox.warning(
+            show_warning(
                 self,
                 S.dialogs.error,
                 S.dialogs.error_opening_file.format(error=f"File not found: {filepath}"),
@@ -130,9 +130,7 @@ class FileIOMixin:
                     # Keep original content as JSON
                     content = _read_file_with_encoding_fallback(filename)
                 except ValueError as e:
-                    from PyQt6.QtWidgets import QMessageBox
-
-                    QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_opening_notebook.format(error=e))
+                    show_danger(self, S.dialogs.error, S.dialogs.error_opening_notebook.format(error=e))
                     return
             else:
                 content = _read_file_with_encoding_fallback(filename)
@@ -256,9 +254,7 @@ class FileIOMixin:
                 ))
 
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-
-            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_opening_file.format(error=e))
+            show_danger(self, S.dialogs.error, S.dialogs.error_opening_file.format(error=e))
 
     def _save_file(self):
         """Intelligent saving system"""
@@ -322,7 +318,7 @@ class FileIOMixin:
             import traceback
 
             traceback.print_exc()
-            QMessageBox.critical(self, S.dialogs.error_opening_workspace_title, S.dialogs.error_opening_workspace_msg.format(error=str(e)))
+            show_danger(self, S.dialogs.error_opening_workspace_title, S.dialogs.error_opening_workspace_msg.format(error=str(e)))
 
     def _save_workspace_to_file(self, filename: str):
         """Saves workspace to a specific file"""
@@ -619,8 +615,7 @@ class FileIOMixin:
             self._update_window_title()
 
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_saving_file.format(error=e))
+            show_danger(self, S.dialogs.error, S.dialogs.error_saving_file.format(error=e))
 
     def _save_tab_as_dpw_dialog(self):
         """Asks for path to save tab as .dpw"""
@@ -691,9 +686,7 @@ class FileIOMixin:
             self._update_window_title()
 
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-
-            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_saving_file.format(error=e))
+            show_danger(self, S.dialogs.error, S.dialogs.error_saving_file.format(error=e))
 
     def _save_single_file_as(self, file_type: str):
         """Asks for path to save single file"""
@@ -751,14 +744,14 @@ class FileIOMixin:
                 f.write(script_content)
 
             self.action_label.setText(S.status.script_exported.format(filename=filename))
-            QMessageBox.information(
+            show_information(
                 self,
                 S.dialogs.export_complete_title,
-                S.dialogs.export_complete_msg.format(filename=filename)
+                S.dialogs.export_complete_msg.format(filename=filename),
             )
 
         except Exception as e:
-            QMessageBox.critical(self, S.dialogs.error, S.dialogs.error_exporting_script.format(error=e))
+            show_danger(self, S.dialogs.error, S.dialogs.error_exporting_script.format(error=e))
 
     def _generate_script_from_blocks(self, blocks, session_widget) -> str:
         """Generates complete Python code from the blocks"""

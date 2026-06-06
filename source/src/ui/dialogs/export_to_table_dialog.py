@@ -19,8 +19,8 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QProgressBar,
     QGroupBox,
-    QMessageBox,
 )
+from src.design_system.app_dialogs import show_danger, show_success, show_warning
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 import pandas as pd
@@ -380,12 +380,12 @@ class ExportToTableDialog(QDialog):
         """Validates fields before exporting"""
         table_name = self.table_name_edit.text().strip()
         if not table_name:
-            QMessageBox.warning(self, S.dialogs.warning, S.export_to_table.validation_table_required)
+            show_warning(self, S.dialogs.warning, S.export_to_table.validation_table_required)
             self.table_name_edit.setFocus()
             return False
 
         if self.connection_combo.count() == 0:
-            QMessageBox.warning(self, S.dialogs.warning, S.export_to_table.validation_connection_required)
+            show_warning(self, S.dialogs.warning, S.export_to_table.validation_connection_required)
             return False
 
         return True
@@ -405,7 +405,7 @@ class ExportToTableDialog(QDialog):
 
         connector = self.connections.get(conn_name)
         if not connector or not connector.engine:
-            QMessageBox.critical(self, S.dialogs.error, f"Connection '{conn_name}' is not active")
+            show_danger(self, S.dialogs.error, f"Connection '{conn_name}' is not active")
             return
 
         # Separate schema.table if applicable
@@ -443,7 +443,7 @@ class ExportToTableDialog(QDialog):
                         df_clean[col] = df_clean[col].astype(object)
                 df_polars = pl.from_pandas(df_clean)
             except Exception as e:
-                QMessageBox.critical(self, S.dialogs.error, f"Error converting DataFrame: {e}")
+                show_danger(self, S.dialogs.error, f"Error converting DataFrame: {e}")
                 self._is_exporting = False
                 self.btn_export.setEnabled(True)
                 self.table_name_edit.setEnabled(True)
@@ -500,11 +500,11 @@ class ExportToTableDialog(QDialog):
         if success:
             self.progress_bar.setValue(100)
             self.status_label.setText(message)
-            QMessageBox.information(self, S.export_to_table.dialog_complete_title, message)
+            show_success(self, S.export_to_table.dialog_complete_title, message)
             self.accept()
         else:
             self.status_label.setText(f"Error: {message}")
-            QMessageBox.critical(self, S.export_to_table.dialog_error_title, message)
+            show_danger(self, S.export_to_table.dialog_error_title, message)
 
             # Re-enable fields
             self.btn_export.setEnabled(True)

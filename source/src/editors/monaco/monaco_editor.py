@@ -49,6 +49,7 @@ class _SyntaxValidateWorker(QThread):
         code: str,
         db_type: str = "",
         sql_schema: Optional[Dict[str, Any]] = None,
+        python_namespace: Optional[Dict[str, Any]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -57,6 +58,7 @@ class _SyntaxValidateWorker(QThread):
         self._code = code
         self._db_type = db_type
         self._sql_schema = sql_schema
+        self._python_namespace = python_namespace
 
     def run(self):
         if self.isInterruptionRequested():
@@ -70,6 +72,7 @@ class _SyntaxValidateWorker(QThread):
                 self._code,
                 db_type=self._db_type or None,
                 schema=self._sql_schema if self._language == "sql" else None,
+                namespace=self._python_namespace if self._language == "python" else None,
             )
         ]
         if not self.isInterruptionRequested():
@@ -472,6 +475,7 @@ class MonacoEditor(QWidget):
             self._text_cache,
             self._sql_db_type if lang == "sql" else "",
             self._sql_schema if lang == "sql" else None,
+            self._python_namespace if lang == "python" else None,
             self,
         )
         worker.result_ready.connect(self._on_syntax_validation_done)
@@ -827,9 +831,9 @@ class MonacoEditor(QWidget):
         """Set Python namespace for autocompletion."""
         self._python_namespace = namespace
         self._completion_service.set_python_context(namespace, self._global_imports)
-        # Register Python completions in Monaco
         self.update_python_completions(namespace)
-    
+        self._schedule_syntax_validation()
+
     def set_global_imports(self, imports_code: str) -> None:
         """Set global imports for Jedi completion."""
         self._global_imports = imports_code

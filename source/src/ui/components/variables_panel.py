@@ -6,7 +6,7 @@ Includes context menu and double-click to insert into editor.
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableView, QHeaderView,
-    QLabel, QAbstractItemView, QMenu, QApplication, QMessageBox, QPushButton,
+    QLabel, QAbstractItemView, QMenu, QApplication, QPushButton,
 )
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QAction
@@ -271,38 +271,37 @@ class VariablesPanel(QWidget):
 
         self.table_view.setStyleSheet(f"""
             QTableView {{
-                background-color: {colors["background"]};
-                color: {colors["foreground"]};
+                background-color: {colors_tk.bg_primary};
+                color: {colors_tk.text_primary};
                 border: none;
                 gridline-color: transparent;
-                selection-background-color: {colors.get("accent", colors_tk.interactive_primary)};
-                font-size: 13px;
+                selection-background-color: {colors_tk.interactive_primary};
+                alternate-background-color: {colors_tk.bg_secondary};
+                font-size: 12px;
             }}
             QTableView::item {{
-                padding: 8px 12px;
-                border-bottom: 1px solid {colors["border"]};
+                padding: 6px 10px;
+                border: none;
             }}
             QTableView::item:selected {{
-                background-color: {colors.get("accent", colors_tk.interactive_primary)};
-                color: white;
+                background-color: {colors_tk.interactive_primary};
+                color: {colors_tk.text_inverse};
             }}
-            QTableView::item:hover {{
-                background-color: {colors_tk.interactive_primary}26;
+            QTableView::item:hover:!selected {{
+                background-color: {colors_tk.bg_tertiary};
             }}
             QHeaderView::section {{
                 background-color: {colors_tk.bg_secondary};
                 color: {colors_tk.text_secondary};
-                padding: 10px 12px;
+                padding: 8px 10px;
                 border: none;
-                border-bottom: 2px solid {colors["border"]};
-                font-weight: 500;
-                font-size: 12px;
-            }}
-            QHeaderView::section:hover {{
-                background-color: {colors["border"]};
+                border-bottom: 1px solid {colors_tk.border_default};
+                font-weight: 600;
+                font-size: 11px;
             }}
             {SCROLLBAR_STYLE}
         """)
+        self.table_view.setAlternatingRowColors(True)
 
     def set_theme_manager(self, theme_manager):
         """Define theme manager"""
@@ -357,12 +356,17 @@ class VariablesPanel(QWidget):
         if name:
             self.variable_selected.emit(name, value)
 
+    def _insert_name(self, name: str) -> None:
+        """Emit insert signal for the variable name."""
+        if name:
+            self.insert_variable_name.emit(name)
+
     def _on_double_click(self, index: QModelIndex):
         """When variable is double-clicked - insert name in focused editor"""
         name = self.model.get_variable_name(index.row())
         value = self.model.get_variable(index.row())
         if name:
-            self.insert_variable_name.emit(name)
+            self._insert_name(name)
             self.variable_double_clicked.emit(name, value)
 
     def _on_context_menu(self, pos):
@@ -408,8 +412,14 @@ class VariablesPanel(QWidget):
         type_name = type(value).__name__
 
         # Insert name in editor
-        act_insert = menu.addAction(S.variables_panel.ctx_insert_in_editor)
-        act_insert.triggered.connect(lambda: self.insert_variable_name.emit(name))
+        if HAS_QTAWESOME:
+            act_insert = menu.addAction(
+                qta.icon("mdi.code-braces", color=colors_tk.interactive_primary),
+                S.variables_panel.ctx_insert_in_editor,
+            )
+        else:
+            act_insert = menu.addAction(S.variables_panel.ctx_insert_in_editor)
+        act_insert.triggered.connect(lambda _checked=False, n=name: self._insert_name(n))
 
         menu.addSeparator()
 

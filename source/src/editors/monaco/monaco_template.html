@@ -1506,13 +1506,10 @@
             });
             
             monaco.languages.registerCompletionItemProvider('python', {
-                triggerCharacters: [],
+                triggerCharacters: ['.', '_'],
                 provideCompletionItems: async function(model, position, context, token) {
                     const invokeSuggest = context
                         && context.triggerKind === monaco.languages.CompletionTriggerKind.Invoke;
-                    if (!invokeSuggest) {
-                        return { suggestions: [] };
-                    }
 
                     const replaceRange = getCompletionReplaceRange(model, position);
                     const range = {
@@ -1522,7 +1519,7 @@
                         endColumn: replaceRange.endColumn
                     };
                     const word = model.getWordUntilPosition(position);
-                    
+
                     const fullText = model.getValue();
                     const textBeforeCursor = model.getValueInRange({
                         startLineNumber: 1,
@@ -1530,13 +1527,22 @@
                         endLineNumber: position.lineNumber,
                         endColumn: position.column
                     });
+                    const wordPrefix = getCurrentWordPrefix(textBeforeCursor);
                     const localItems = filterPrefixMatches(
                         filterCompletionsByContext(textBeforeCursor, 'python'),
-                        getCurrentWordPrefix(textBeforeCursor),
+                        wordPrefix,
                         80,
                         invokeSuggest
                     );
                     const localSuggestions = toMonacoSuggestions(localItems, range);
+
+                    const wordLen = Math.max(
+                        (word.word || '').length,
+                        (wordPrefix || '').length
+                    );
+                    if (!invokeSuggest && wordLen < 1) {
+                        return { suggestions: [] };
+                    }
 
                     if (token.isCancellationRequested) {
                         return { suggestions: localSuggestions };
@@ -1546,21 +1552,20 @@
                     const currentLine = lines[lines.length - 1];
                     const dotMatch = currentLine.match(/(\w+)\.$/);
 
-                    if (pyBridge && (dotMatch || word.word.length >= 1 || invokeSuggest)) {
+                    if (pyBridge && (dotMatch || wordLen >= 1 || invokeSuggest)) {
                         const remote = await debouncedRemote('python', (requestId) => {
                             pyBridge.requestPythonCompletion(fullText, position.lineNumber, position.column, requestId);
                         }, token);
                         if (token.isCancellationRequested) {
                             return { suggestions: localSuggestions };
                         }
-                        if (remote && remote.length) {
-                            return {
-                                suggestions: toMonacoSuggestions(
-                                    mergeSuggestions(remote, localItems),
-                                    range
-                                )
-                            };
-                        }
+                        const merged = mergeSuggestions(remote || [], localItems);
+                        return {
+                            suggestions: toMonacoSuggestions(
+                                merged.length ? merged : localItems,
+                                range
+                            )
+                        };
                     }
 
                     return { suggestions: localSuggestions };

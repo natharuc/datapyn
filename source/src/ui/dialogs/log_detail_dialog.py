@@ -1,22 +1,32 @@
 """
-Log Detail Dialog - Rich view of a single log entry.
-
-Shows timestamp, duration, block info, code snippet, full error/traceback,
-and action buttons (Copy Error, Resolve with Copilot).
+Log Detail Dialog - Rich view of a single log entry (frameless design system).
 """
 
+from __future__ import annotations
+
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
-    QPushButton, QWidget, QApplication, QSizePolicy,
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
-from src.design_system.tokens import get_colors, RADIUS, SCROLLBAR_STYLE
+from src.design_system.button import GhostButton, PrimaryButton, SecondaryButton
+from src.design_system.frameless_dialog import (
+    frameless_body_stylesheet,
+    install_frameless_shell,
+)
+from src.design_system.tokens import RADIUS, SCROLLBAR_STYLE, TYPOGRAPHY, get_colors
 from src.language import S
 
 try:
     import qtawesome as qta
+
     HAS_QTAWESOME = True
 except ImportError:
     HAS_QTAWESOME = False
@@ -25,43 +35,33 @@ except ImportError:
 class LogDetailDialog(QDialog):
     """Full detail view for a single LogEntry."""
 
-    resolve_requested = pyqtSignal(dict)  # context dict for Copilot
+    resolve_requested = pyqtSignal(dict)
 
     def __init__(self, entry, parent=None):
         super().__init__(parent)
         self._entry = entry
+        self._detail_text = entry.detail or entry.message or ""
         self._setup_ui()
 
-    def _setup_ui(self):
-        from src.ui.components.output_panel import LogEntry
+    def _setup_ui(self) -> None:
         colors = get_colors()
         entry = self._entry
 
         self.setWindowTitle(S.output_panel.dialog_log_detail)
         self.resize(780, 520)
-        self.setMinimumSize(500, 300)
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {colors.bg_primary};
-                color: {colors.text_primary};
-            }}
-        """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        # --- Header info bar ---
-        header = QWidget()
-        header.setStyleSheet(f"""
-            QWidget {{
-                background-color: {colors.bg_secondary};
-                border-radius: {RADIUS}px;
-            }}
-        """)
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(12, 8, 12, 8)
-        h_layout.setSpacing(16)
+        layout = install_frameless_shell(
+            self,
+            S.output_panel.dialog_log_detail,
+            min_width=500,
+            min_height=300,
+            content_margins=(20, 14, 20, 16),
+            content_spacing=12,
+            resizable=True,
+        )
+        self.setStyleSheet(
+            self.styleSheet() + frameless_body_stylesheet()
+        )
 
         level_colors = {
             "info": colors.info,
@@ -72,7 +72,36 @@ class LogDetailDialog(QDialog):
         }
         lcolor = level_colors.get(entry.level, colors.info)
 
-        # Level badge
+        layout.addWidget(self._build_header(entry, lcolor, colors))
+
+        if entry.code_snippet:
+            layout.addWidget(self._section_label(S.output_panel.detail_code, colors))
+            layout.addWidget(self._code_area(entry.code_snippet, colors))
+
+        if self._detail_text:
+            header = (
+                S.output_panel.detail_error
+                if entry.level == "error"
+                else S.output_panel.detail_output
+            )
+            layout.addWidget(self._section_label(header, colors))
+            layout.addWidget(self._detail_area(self._detail_text, lcolor, colors), 1)
+
+        layout.addLayout(self._build_footer(entry, colors))
+
+    def _build_header(self, entry, lcolor: str, colors) -> QWidget:
+        header = QWidget()
+        header.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors.bg_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+            }}
+        """)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(12, 8, 12, 8)
+        h_layout.setSpacing(16)
+
         level_label = QLabel(entry.level.upper())
         level_label.setStyleSheet(f"""
             QLabel {{
@@ -86,12 +115,12 @@ class LogDetailDialog(QDialog):
         """)
         h_layout.addWidget(level_label)
 
-        # Timestamp
         ts_label = QLabel(entry.timestamp.strftime("%H:%M:%S"))
-        ts_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 12px; font-family: Consolas;")
+        ts_label.setStyleSheet(
+            f"color: {colors.text_tertiary}; font-size: 12px; font-family: Consolas;"
+        )
         h_layout.addWidget(ts_label)
 
-        # Block info
         if entry.block_index is not None:
             block_text = entry.block_name or f"Block {entry.block_index + 1}"
             if entry.line_number is not None:
@@ -100,10 +129,11 @@ class LogDetailDialog(QDialog):
                 else:
                     block_text += f" : L{entry.line_number}"
             block_label = QLabel(block_text)
-            block_label.setStyleSheet(f"color: {lcolor}; font-size: 12px; font-weight: bold; font-family: Consolas;")
+            block_label.setStyleSheet(
+                f"color: {lcolor}; font-size: 12px; font-weight: bold; font-family: Consolas;"
+            )
             h_layout.addWidget(block_label)
 
-        # Connection
         if entry.connection_name:
             conn_text = entry.connection_name
             if entry.database_name:
@@ -114,106 +144,102 @@ class LogDetailDialog(QDialog):
 
         h_layout.addStretch()
 
-        # Duration
         if entry.duration_ms is not None:
             from src.ui.components.output_panel import OutputPanel
-            dur_text = OutputPanel._format_duration(entry.duration_ms)
-            dur_label = QLabel(dur_text)
-            dur_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 12px; font-family: Consolas;")
+
+            dur_label = QLabel(OutputPanel._format_duration(entry.duration_ms))
+            dur_label.setStyleSheet(
+                f"color: {colors.text_tertiary}; font-size: 12px; font-family: Consolas;"
+            )
             h_layout.addWidget(dur_label)
 
-        layout.addWidget(header)
+        return header
 
-        # --- Code snippet (if present) ---
-        if entry.code_snippet:
-            code_header = QLabel(S.output_panel.detail_code)
-            code_header.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: bold;")
-            layout.addWidget(code_header)
+    @staticmethod
+    def _section_label(text: str, colors) -> QLabel:
+        label = QLabel(text)
+        label.setStyleSheet(
+            f"color: {colors.text_secondary};"
+            f" font-size: {TYPOGRAPHY.text_xs}px; font-weight: 600;"
+        )
+        return label
 
-            code_edit = QTextEdit()
-            code_edit.setReadOnly(True)
-            code_edit.setFont(QFont("Consolas", 10))
-            code_edit.setPlainText(entry.code_snippet)
-            code_edit.setMaximumHeight(150)
-            code_edit.setStyleSheet(f"""
-                QTextEdit {{
-                    background-color: {colors.bg_secondary};
-                    color: {colors.text_primary};
-                    border: 1px solid {colors.border_default};
-                    border-radius: {RADIUS}px;
-                    padding: 8px;
-                }}
-                {SCROLLBAR_STYLE}
-            """)
-            layout.addWidget(code_edit)
+    @staticmethod
+    def _text_area_style(colors, *, text_color: str | None = None) -> str:
+        fg = text_color or colors.text_primary
+        return f"""
+            QTextEdit {{
+                background-color: {colors.bg_secondary};
+                color: {fg};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 8px;
+            }}
+            {SCROLLBAR_STYLE}
+        """
 
-        # --- Error / detail text ---
-        detail_text = entry.detail or entry.message
-        if detail_text:
-            detail_header_text = (
-                S.output_panel.detail_error
-                if entry.level == "error"
-                else S.output_panel.detail_output
-            )
-            detail_header = QLabel(detail_header_text)
-            detail_header.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px; font-weight: bold;")
-            layout.addWidget(detail_header)
+    def _code_area(self, text: str, colors) -> QTextEdit:
+        edit = QTextEdit()
+        edit.setReadOnly(True)
+        edit.setFont(QFont("Consolas", 10))
+        edit.setPlainText(text)
+        edit.setMaximumHeight(150)
+        edit.setStyleSheet(self._text_area_style(colors))
+        return edit
 
-            detail_edit = QTextEdit()
-            detail_edit.setReadOnly(True)
-            detail_edit.setFont(QFont("Consolas", 10))
-            detail_edit.setPlainText(detail_text)
-            detail_edit.setStyleSheet(f"""
-                QTextEdit {{
-                    background-color: {colors.bg_secondary};
-                    color: {lcolor};
-                    border: 1px solid {colors.border_default};
-                    border-radius: {RADIUS}px;
-                    padding: 8px;
-                }}
-                {SCROLLBAR_STYLE}
-            """)
-            layout.addWidget(detail_edit, 1)
+    def _detail_area(self, text: str, lcolor: str, colors) -> QTextEdit:
+        edit = QTextEdit()
+        edit.setReadOnly(True)
+        edit.setFont(QFont("Consolas", 10))
+        edit.setPlainText(text)
+        edit.setStyleSheet(self._text_area_style(colors, text_color=lcolor))
+        return edit
 
-        # --- Buttons ---
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+    def _build_footer(self, entry, colors) -> QHBoxLayout:
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
 
-        # Copy button
-        copy_btn = QPushButton(S.output_panel.btn_copy_detail)
+        close_btn = GhostButton(S.output_panel.btn_close_detail, size="sm")
+        close_btn.clicked.connect(self.reject)
+        footer.addWidget(close_btn)
+
+        footer.addStretch()
+
+        copy_btn = SecondaryButton(S.output_panel.btn_copy_detail, size="sm")
         if HAS_QTAWESOME:
             copy_btn.setIcon(qta.icon("mdi.content-copy", color=colors.text_primary))
-        copy_btn.setStyleSheet(self._btn_style(colors))
-        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(detail_text))
-        btn_row.addWidget(copy_btn)
+        copy_btn.clicked.connect(self._copy_detail)
+        footer.addWidget(copy_btn)
 
-        # Resolve with Copilot (only for errors)
         if entry.level == "error":
-            label = getattr(S.output_panel, "btn_resolve_pynia", S.output_panel.btn_resolve_copilot)
-            copilot_btn = QPushButton(label)
+            label = getattr(
+                S.output_panel, "btn_resolve_pynia", S.output_panel.btn_resolve_copilot
+            )
+            resolve_btn = PrimaryButton(label, size="sm")
             try:
                 from src.ui.components.copilot_chat_panel import _load_pynia_icon
+
                 pynia_icon = _load_pynia_icon("#ffffff", size=16)
                 if pynia_icon:
-                    copilot_btn.setIcon(pynia_icon)
+                    resolve_btn.setIcon(pynia_icon)
             except Exception:
                 if HAS_QTAWESOME:
-                    copilot_btn.setIcon(qta.icon("mdi.creation", color="#ffffff"))
-            copilot_btn.setStyleSheet(self._btn_style(colors, accent=True))
-            copilot_btn.clicked.connect(self._on_resolve_copilot)
-            btn_row.addWidget(copilot_btn)
+                    resolve_btn.setIcon(qta.icon("mdi.creation", color="#ffffff"))
+            resolve_btn.clicked.connect(self._on_resolve_copilot)
+            footer.addWidget(resolve_btn)
 
-        btn_row.addStretch()
+        return footer
 
-        # Close
-        close_btn = QPushButton(S.output_panel.btn_close_detail)
-        close_btn.setStyleSheet(self._btn_style(colors))
-        close_btn.clicked.connect(self.accept)
-        btn_row.addWidget(close_btn)
+    def _copy_detail(self) -> None:
+        entry = self._entry
+        parts = []
+        if entry.code_snippet:
+            parts.append(entry.code_snippet)
+        if self._detail_text:
+            parts.append(self._detail_text)
+        QApplication.clipboard().setText("\n\n".join(parts) if parts else entry.message)
 
-        layout.addLayout(btn_row)
-
-    def _on_resolve_copilot(self):
+    def _on_resolve_copilot(self) -> None:
         entry = self._entry
         context = {
             "block_index": entry.block_index,
@@ -226,22 +252,3 @@ class LogDetailDialog(QDialog):
         }
         self.resolve_requested.emit(context)
         self.accept()
-
-    @staticmethod
-    def _btn_style(colors, accent=False):
-        bg = colors.interactive_primary if accent else colors.bg_elevated
-        fg = "#ffffff" if accent else colors.text_primary
-        hover = colors.interactive_primary_hover if accent else colors.bg_secondary
-        return f"""
-            QPushButton {{
-                background-color: {bg};
-                color: {fg};
-                border: 1px solid {colors.border_default};
-                border-radius: {RADIUS}px;
-                padding: 6px 14px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {hover};
-            }}
-        """
