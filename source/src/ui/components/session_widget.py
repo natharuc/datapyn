@@ -244,6 +244,7 @@ class SessionWidget(QWidget):
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based) - for statusbar
     block_focused = pyqtSignal(object)  # CodeBlock that gained focus (for OE tracking)
     periodic_changed = pyqtSignal(bool)  # True=started, False=stopped - for tab icon
+    _persisted_variables_loaded = pyqtSignal(object)  # dict loaded off-thread (internal)
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -317,6 +318,8 @@ class SessionWidget(QWidget):
 
         self._setup_ui()
         self._connect_signals()
+        # Queued from the loader thread back onto the UI thread
+        self._persisted_variables_loaded.connect(self._apply_restored_variables)
 
         # Restore blocks if they exist
         if session.blocks:
@@ -643,21 +646,53 @@ class SessionWidget(QWidget):
         return self._restore_variables_from_disk(require_enabled=False)
 
     def _restore_variables_from_disk(self, *, require_enabled: bool) -> bool:
-        from src.core.session_result_storage import SessionResultStorage
+        """Load snapshot in a background thread; apply on the UI thread via signal."""
+        import threading
 
-        variables = SessionResultStorage.load(
-            self.session.session_id,
-            require_enabled=require_enabled,
+        from src.core.session_result_storage import (
+            SessionResultStorage,
+            has_persisted_snapshot,
+            is_session_result_restore_enabled,
         )
-        if not variables:
+
+        if require_enabled and not is_session_result_restore_enabled():
             return False
+
+        session_id = self.session.session_id
+        if not has_persisted_snapshot(session_id):
+            return False
+
+        def _worker() -> None:
+            try:
+                variables = SessionResultStorage.load(
+                    session_id,
+                    require_enabled=require_enabled,
+                )
+            except Exception:
+                variables = None
+            if variables:
+                try:
+                    self._persisted_variables_loaded.emit(variables)
+                except RuntimeError:
+                    pass  # widget destroyed while loading
+
+        threading.Thread(
+            target=_worker,
+            name=f"restore-variables-{session_id}",
+            daemon=True,
+        ).start()
+        return True
+
+    def _apply_restored_variables(self, variables: object) -> None:
+        """Apply variables loaded off-thread to the session namespace (UI thread)."""
+        if self._is_closing or not isinstance(variables, dict) or not variables:
+            return
 
         self.session.restore_dataframe_variables(variables)
         self._update_variables_view(self.session.namespace)
         panel = self._get_variables_panel()
         if panel:
             panel.refresh_storage_column()
-        return True
 
     def refresh_variables_panel(self) -> None:
         self._update_variables_view(self.session.namespace)

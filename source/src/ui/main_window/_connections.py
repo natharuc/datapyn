@@ -283,8 +283,9 @@ class ConnectionsMixin:
         current_widget = self._get_current_session_widget()
 
         # If there is no tab or current tab is connecting, create a new one
+        # (without inheriting the previous connection - we connect explicitly below)
         if not current_widget or current_widget.is_connecting():
-            self._new_session()
+            self._new_session(inherit_connection=False)
             current_widget = self._get_current_session_widget()
 
         if not current_widget:
@@ -314,8 +315,10 @@ class ConnectionsMixin:
         Connects to a database ALWAYS creating a new tab.
         Used when CTRL+double-click or 'Connect in New Tab' in menu.
         """
-        # Always create new tab
-        self._new_session()
+        # Always create new tab WITHOUT inheriting the previous connection:
+        # the deferred inherited auto-connect would race with (and override)
+        # the explicit connection requested below.
+        self._new_session(inherit_connection=False)
         current_widget = self._get_current_session_widget()
 
         if not current_widget:

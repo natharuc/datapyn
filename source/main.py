@@ -72,7 +72,12 @@ def _apply_dark_palette(app):
 def main():
     """Funcao principal"""
     import argparse
-    
+
+    # Make CPython preempt CPU-bound worker threads more often (default 5ms).
+    # Keeps the UI thread responsive while background threads build large
+    # DataFrames or serialize Parquet (GIL-heavy work).
+    sys.setswitchinterval(0.001)
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="DataPyn - IDE moderna para consultas SQL com Python integrado")
     parser.add_argument("--workspace", type=str, help="Path to workspace folder to open")

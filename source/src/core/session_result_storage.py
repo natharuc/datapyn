@@ -378,6 +378,12 @@ class SessionResultStorage:
 
         session_path = _session_dir(session_id)
         storage_root = _storage_root()
+
+        # Drop stale temp dirs left behind by interrupted saves (app closed
+        # while a background snapshot was being written).
+        for stale in storage_root.glob(f".{session_id}.*.tmp"):
+            shutil.rmtree(stale, ignore_errors=True)
+
         temp_path = storage_root / f".{session_id}.{uuid.uuid4().hex}.tmp"
 
         try:
@@ -437,20 +443,30 @@ class SessionResultStorage:
         if not is_session_result_restore_enabled():
             return
 
-        items = extract_dataframe_variables(namespace)
-        if not items:
-            SessionResultStorage.delete(session_id)
-            return
-
-        payload: List[ResultItem] = []
-        for name, df in items:
-            try:
-                payload.append((name, df.copy()))
-            except Exception:
-                payload.append((name, df))
+        # Only a cheap shallow copy happens on the caller (UI) thread.
+        # DataFrame extraction, deep copies and Parquet writes all run in
+        # the worker thread to avoid freezing the UI with large frames.
+        snapshot = dict(namespace or {})
 
         def _worker() -> None:
-            SessionResultStorage.save(session_id, payload)
+            try:
+                items = extract_dataframe_variables(snapshot)
+                if not items:
+                    SessionResultStorage.delete(session_id)
+                    return
+
+                payload: List[ResultItem] = []
+                for name, df in items:
+                    try:
+                        payload.append((name, df.copy()))
+                    except Exception:
+                        payload.append((name, df))
+
+                SessionResultStorage.save(session_id, payload)
+            except Exception as exc:
+                logger.warning(
+                    "Async persist failed for session %s: %s", session_id, exc
+                )
 
         threading.Thread(
             target=_worker,

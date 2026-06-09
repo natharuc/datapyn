@@ -326,8 +326,15 @@ class SessionsMixin:
         if widget and widget.editor:
             widget.editor.add_block()
 
-    def _new_session(self):
-        """Creates a new session, inheriting the connection from the current tab (if any)"""
+    def _new_session(self, *, inherit_connection: bool = True):
+        """Creates a new session, inheriting the connection from the current tab (if any).
+
+        Args:
+            inherit_connection: when False, the new tab is created without the
+                deferred auto-connect to the previous tab's connection (used by
+                flows that immediately connect to an explicit target, e.g.
+                Ctrl+double-click on a connection).
+        """
         # Guard to prevent duplicate creation
         if hasattr(self, "_creating_session") and self._creating_session:
             return
@@ -338,7 +345,7 @@ class SessionsMixin:
             previous_connection = None
             previous_color = None
             previous_database_context = ""
-            current_widget = self._get_current_session_widget()
+            current_widget = self._get_current_session_widget() if inherit_connection else None
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
                 previous_database_context = getattr(current_widget.session, "database_context", "") or ""
