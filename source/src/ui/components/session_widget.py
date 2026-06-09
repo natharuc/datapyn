@@ -565,7 +565,7 @@ class SessionWidget(QWidget):
         if main_window:
             main_window.show_panel("output")
 
-    def _set_results(self, data, name="result"):
+    def _set_results(self, data, name="result", show_panel: bool = True):
         """Define resultados no painel DESTA sessao.
 
         `data` pode ser:
@@ -606,8 +606,173 @@ class SessionWidget(QWidget):
             viewer.display_dataframe(data, name)
 
         main_window = self._get_main_window()
-        if main_window:
+        if show_panel and main_window:
             main_window.show_panel("results")
+
+    def persist_session_variables(self) -> None:
+        """Snapshot DataFrame variables from the session namespace to disk (async)."""
+        from src.core.session_result_storage import SessionResultStorage
+
+        SessionResultStorage.save_from_namespace_async(
+            self.session.session_id,
+            self.session.namespace,
+        )
+        panel = self._get_variables_panel()
+        if panel:
+            QTimer.singleShot(800, panel.refresh_storage_column)
+
+    def persist_session_variables_sync(self) -> bool:
+        """Snapshot DataFrame variables to disk and refresh the variables panel status."""
+        from src.core.session_result_storage import SessionResultStorage
+
+        ok = SessionResultStorage.save_from_namespace(
+            self.session.session_id,
+            self.session.namespace,
+        )
+        panel = self._get_variables_panel()
+        if panel:
+            panel.refresh_storage_column()
+        return ok
+
+    def restore_persisted_variables(self) -> bool:
+        """Restore auto-saved DataFrame variables when the app starts."""
+        return self._restore_variables_from_disk(require_enabled=True)
+
+    def restore_snapshot_from_disk(self) -> bool:
+        """Restore DataFrame variables from the on-disk snapshot (manual action)."""
+        return self._restore_variables_from_disk(require_enabled=False)
+
+    def _restore_variables_from_disk(self, *, require_enabled: bool) -> bool:
+        from src.core.session_result_storage import SessionResultStorage
+
+        variables = SessionResultStorage.load(
+            self.session.session_id,
+            require_enabled=require_enabled,
+        )
+        if not variables:
+            return False
+
+        self.session.restore_dataframe_variables(variables)
+        self._update_variables_view(self.session.namespace)
+        panel = self._get_variables_panel()
+        if panel:
+            panel.refresh_storage_column()
+        return True
+
+    def refresh_variables_panel(self) -> None:
+        self._update_variables_view(self.session.namespace)
+
+    def _get_variables_panel(self):
+        info = self._get_own_panels()
+        panel = info.get("variables") if info else None
+        if not panel:
+            main_window = self._get_main_window()
+            panel = main_window.global_variables_panel if main_window else None
+        return panel
+
+    def _dataframe_variables(self) -> dict:
+        from src.core.session_result_storage import extract_dataframe_variables
+
+        return dict(extract_dataframe_variables(self.session.namespace))
+
+    def export_variable_parquet(self, name: str, value) -> None:
+        from pathlib import Path
+
+        from PyQt6.QtWidgets import QFileDialog
+
+        from src.core.session_result_storage import export_variables_to_path, _to_pandas_dataframe
+        from src.design_system.app_dialogs import show_warning
+
+        frame = _to_pandas_dataframe(value)
+        if frame is None:
+            show_warning(self, S.variables_panel.title_export, S.variables_panel.export_not_dataframe)
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            S.variables_panel.title_export,
+            f"{name}.parquet",
+            S.variables_panel.filter_parquet,
+        )
+        if not path:
+            return
+        export_variables_to_path(Path(path), {name: frame})
+
+    def export_variables_parquet(self) -> None:
+        from pathlib import Path
+
+        from PyQt6.QtWidgets import QFileDialog
+
+        from src.core.session_result_storage import export_variables_to_path
+        from src.design_system.app_dialogs import show_information, show_warning
+
+        panel = self._get_variables_panel()
+        selected = panel.get_selected_variable() if panel else None
+        if selected and selected[0]:
+            self.export_variable_parquet(selected[0], selected[1])
+            return
+
+        variables = self._dataframe_variables()
+        if not variables:
+            show_warning(self, S.variables_panel.title_export, S.variables_panel.export_none)
+            return
+
+        folder = QFileDialog.getExistingDirectory(self, S.variables_panel.title_export_folder)
+        if not folder:
+            return
+        count = export_variables_to_path(Path(folder), variables)
+        show_information(
+            self,
+            S.variables_panel.title_export,
+            S.variables_panel.export_success.format(count=count),
+        )
+
+    def import_variables_parquet(self) -> None:
+        from pathlib import Path
+
+        from PyQt6.QtWidgets import QFileDialog
+
+        from src.core.session_result_storage import import_variables_from_path
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            S.variables_panel.title_import,
+            "",
+            S.variables_panel.filter_parquet,
+        )
+        if not path:
+            return
+        self._import_variables_from_path(Path(path))
+
+    def import_variables_folder(self) -> None:
+        from pathlib import Path
+
+        from PyQt6.QtWidgets import QFileDialog
+
+        folder = QFileDialog.getExistingDirectory(self, S.variables_panel.title_import_folder)
+        if not folder:
+            return
+        self._import_variables_from_path(Path(folder))
+
+    def _import_variables_from_path(self, path) -> None:
+        from src.core.session_result_storage import import_variables_from_path
+        from src.design_system.app_dialogs import show_information, show_warning
+
+        loaded = import_variables_from_path(path)
+        if not loaded:
+            show_warning(self, S.variables_panel.title_import, S.variables_panel.import_none)
+            return
+
+        self.session.restore_dataframe_variables(loaded)
+        self._update_variables_view(self.session.namespace)
+        panel = self._get_variables_panel()
+        if panel:
+            panel.refresh_storage_column()
+        show_information(
+            self,
+            S.variables_panel.title_import,
+            S.variables_panel.import_success.format(count=len(loaded)),
+        )
 
     def _set_figures(self, figures: list, label: str = "Resultado"):
         """Exibe rich outputs (imagens, HTML, JSON) no painel DESTA sessao"""
@@ -1700,6 +1865,8 @@ class SessionWidget(QWidget):
             msg = _render(settings.value("notifications/success_message", default_msg))
             self._last_notification_delivery = delivery
             self.execution_finished.emit(title, msg, True)
+
+        self.persist_session_variables()
 
         # Reset counters
         self._queue_total_rows = 0

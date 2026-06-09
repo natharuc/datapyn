@@ -457,7 +457,8 @@ class SessionController(QObject):
         # Sync code from widgets to sessions
         for session_id, widget in self.session_widgets.items():
             widget.sync_to_session()
-        
+            widget.persist_session_variables()
+
         # Save via SessionManager
         self.session_manager.save_sessions()
         

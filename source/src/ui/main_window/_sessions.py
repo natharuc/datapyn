@@ -926,6 +926,9 @@ class SessionsMixin:
                 lambda ctx: self._resolve_with_copilot(ctx)
             )
 
+        if panels and panels.get("variables"):
+            panels["variables"].bind_session_widget(widget)
+
         # Definir file_path no widget se disponivel na sessao
         if hasattr(session, "file_path") and session.file_path:
             widget.file_path = session.file_path
@@ -1007,6 +1010,8 @@ class SessionsMixin:
 
         # Trocar paineis para a nova sessao (garante que paineis vazios aparecam)
         self._switch_session_panels(session.session_id)
+
+        QTimer.singleShot(0, widget.restore_persisted_variables)
 
         # If session already has an active connection (e.g., after restore), load schema
         if session.is_connected and session.connector and session.connection_name:
@@ -1371,6 +1376,7 @@ class SessionsMixin:
         # Synchronize code from widgets to sessions
         for session_id, widget in self._session_widgets.items():
             widget.sync_to_session()
+            widget.persist_session_variables()
 
         # Salvar via SessionManager
         self.session_manager.save_sessions()
