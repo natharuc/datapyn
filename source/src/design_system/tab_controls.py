@@ -164,6 +164,7 @@ class TabBarAccessoryStrip(QObject):
         self._tab_bar = tab_bar
         tab_bar._datapyn_tab_accessory_strip = self
         self._host = host or tab_bar
+        self._last_anchor: tuple | None = None
         self._strip = QWidget(self._host)
         self._strip.setObjectName("tabBarAccessoryStrip")
         layout = QHBoxLayout(self._strip)
@@ -216,8 +217,16 @@ class TabBarAccessoryStrip(QObject):
         self.reposition()
         return button
 
+    def _layout_anchor(self) -> tuple:
+        """Signature of the last tab's geometry (drift means we must move)."""
+        bar = self._tab_bar
+        count = bar.count()
+        rect = bar.tabRect(count - 1) if count > 0 else QRect()
+        return (count, rect.x(), rect.y(), rect.width(), rect.height())
+
     def reposition(self):
         bar = self._tab_bar
+        self._last_anchor = self._layout_anchor()
         if not bar.isVisible() or bar.count() <= 0:
             self._strip.hide()
             return
@@ -244,5 +253,12 @@ class TabBarAccessoryStrip(QObject):
             QEvent.Type.ParentChange,
         ):
             if watched in (self._tab_bar, self._host):
+                self.reposition()
+        elif event.type() == QEvent.Type.Paint and watched is self._tab_bar:
+            # QTabBar emits NO signal when tabs are inserted/removed (closing
+            # a non-current middle tab fires neither currentChanged nor
+            # Resize), but it always repaints — follow the last tab when its
+            # geometry drifts from the position we anchored to.
+            if self._last_anchor != self._layout_anchor():
                 self.reposition()
         return False

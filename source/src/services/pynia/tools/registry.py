@@ -21,6 +21,11 @@ from src.services.pynia.tools.types import PyniaTool
 
 logger = logging.getLogger(__name__)
 
+# Pure reads — safe to serve from the short dedupe cache. datapyn_query is
+# excluded: silent python mutates the session namespace, and "run this again"
+# must actually run again.
+_CACHEABLE_TOOLS = frozenset({"datapyn_snapshot", "datapyn_inspect", "datapyn_database"})
+
 
 class PyniaToolRegistry(QObject):
     """
@@ -101,12 +106,14 @@ class PyniaToolRegistry(QObject):
         if not tool:
             return {"error": f"Unknown tool: {tool_name}"}
 
+        cacheable = tool_name in _CACHEABLE_TOOLS
         cache_key = (tool_name, json.dumps(arguments, sort_keys=True, default=str))
         now = time.time()
-        cached = self._recent_tool_cache.get(cache_key)
-        if cached and now - cached[0] < 20:
-            logger.info("Pynia tool '%s' deduplicated (20s cache)", tool_name)
-            return cached[1]
+        if cacheable:
+            cached = self._recent_tool_cache.get(cache_key)
+            if cached and now - cached[0] < 20:
+                logger.info("Pynia tool '%s' deduplicated (20s cache)", tool_name)
+                return cached[1]
 
         try:
             start = time.perf_counter()
@@ -114,12 +121,17 @@ class PyniaToolRegistry(QObject):
             result = tool.handler(arguments)
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info("Pynia tool '%s' finished in %.0fms", tool_name, elapsed_ms)
-            self._recent_tool_cache[cache_key] = (now, result)
-            if len(self._recent_tool_cache) > 48:
-                cutoff = now - 20
-                self._recent_tool_cache = {
-                    k: v for k, v in self._recent_tool_cache.items() if v[0] >= cutoff
-                }
+            if cacheable:
+                self._recent_tool_cache[cache_key] = (now, result)
+                if len(self._recent_tool_cache) > 48:
+                    cutoff = now - 20
+                    self._recent_tool_cache = {
+                        k: v for k, v in self._recent_tool_cache.items() if v[0] >= cutoff
+                    }
+            else:
+                # A mutation (edit/run/query/...) may change what any cached
+                # read would return — drop the cache so re-reads see new state.
+                self._recent_tool_cache.clear()
             return result
         except Exception as e:
             logger.error("Pynia tool '%s' failed: %s", tool_name, e)

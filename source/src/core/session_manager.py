@@ -96,6 +96,10 @@ class SessionManager(QObject):
 
         session = self._sessions[session_id]
 
+        from src.core.session_result_storage import SessionResultStorage
+
+        SessionResultStorage.delete(session_id)
+
         # Cleanup the session
         session.cleanup()
 

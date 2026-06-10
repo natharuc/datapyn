@@ -37,7 +37,7 @@ PROVIDERS: dict[ProviderId, ProviderInfo] = {
         label_key="pynia.provider_anthropic",
         auth_kind="api_token",
         default_base_url="https://api.anthropic.com",
-        default_model="claude-sonnet-4-20250514",
+        default_model="claude-sonnet-4-6",
     ),
     "copilot": ProviderInfo(
         id="copilot",

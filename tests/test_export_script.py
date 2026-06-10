@@ -101,11 +101,11 @@ class TestExportScriptBasic:
         original_method = main_window._get_current_session_widget
         main_window._get_current_session_widget = Mock(return_value=None)
         
-        with patch.object(QMessageBox, "warning") as mock_warning:
+        with patch("src.ui.main_window._file_io.show_warning") as mock_warning:
             main_window._export_as_script()
             mock_warning.assert_called_once()
             assert "No active session" in str(mock_warning.call_args)
-        
+
         main_window._get_current_session_widget = original_method
 
     def test_export_without_blocks_shows_warning(self, main_window, qtbot):
@@ -115,7 +115,7 @@ class TestExportScriptBasic:
         # Mock get_blocks para retornar lista vazia (clear_blocks sempre deixa 1 bloco)
         with (
             patch.object(session_widget.editor, "get_blocks", return_value=[]),
-            patch.object(QMessageBox, "warning") as mock_warning,
+            patch("src.ui.main_window._file_io.show_warning") as mock_warning,
             patch.object(QFileDialog, "getSaveFileName", return_value=("", "")),
         ):
             main_window._export_as_script()
@@ -447,9 +447,9 @@ WHERE active = 1"""
         # Simular erro de escrita
         with (
             patch.object(QFileDialog, "getSaveFileName", return_value=("/invalid/path/test.py", "")),
-            patch.object(QMessageBox, "critical") as mock_critical,
+            patch("src.ui.main_window._file_io.show_danger") as mock_error,
         ):
             main_window._export_as_script()
             # Deve mostrar mensagem de erro
-            mock_critical.assert_called_once()
+            mock_error.assert_called_once()
 

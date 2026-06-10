@@ -171,6 +171,25 @@ def test_run_explore_parallel_cancels(qtbot, monkeypatch):
     assert results and results[0].summary == "Cancelled by user."
 
 
+def test_should_delegate_matches_portuguese():
+    from src.services.pynia.subagents.classifier import should_delegate_to_subagent
+
+    assert should_delegate_to_subagent(
+        "me dá uma visão geral de todos os blocos", block_count=10
+    )
+    assert should_delegate_to_subagent("quais tabelas existem no banco?", block_count=2)
+
+
+def test_suggest_explore_tasks_portuguese_keywords():
+    from src.services.pynia.subagents.classifier import suggest_explore_tasks
+
+    tasks = suggest_explore_tasks("resuma os blocos e as variáveis do banco")
+    ids = {t["task_id"] for t in tasks}
+    assert "blocks" in ids
+    assert "vars" in ids
+    assert "schema" in ids
+
+
 def test_orchestrator_format_subagent_results():
     from src.services.pynia.subagents.types import ExploreTaskResult
 

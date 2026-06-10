@@ -119,6 +119,57 @@ class TestPyniaToolDispatcher:
             },
         )
 
+    def test_edit_replace_with_line_range_routes_to_line_editor(self):
+        """replace + start/end_line means 'replace these lines' — never the whole block."""
+        legacy = self._legacy()
+        dispatcher = PyniaToolDispatcher(legacy)
+        dispatcher.dispatch(
+            "datapyn_edit",
+            {
+                "operation": "replace",
+                "block_name": "home_ui",
+                "content": "fixed lines",
+                "start_line": 1633,
+                "end_line": 1646,
+            },
+        )
+        legacy.execute.assert_called_with(
+            "edit_block_lines",
+            {
+                "block_name": "home_ui",
+                "start_line": 1633,
+                "end_line": 1646,
+                "new_code": "fixed lines",
+                "mode": "replace",
+            },
+        )
+
+    def test_edit_undo_routes_to_undo_block_edit(self):
+        legacy = self._legacy()
+        dispatcher = PyniaToolDispatcher(legacy)
+        dispatcher.dispatch(
+            "datapyn_edit",
+            {"operation": "undo", "block_name": "home_ui"},
+        )
+        legacy.execute.assert_called_with("undo_block_edit", {"block_name": "home_ui"})
+
+    def test_edit_replace_passes_force(self):
+        legacy = self._legacy()
+        dispatcher = PyniaToolDispatcher(legacy)
+        dispatcher.dispatch(
+            "datapyn_edit",
+            {
+                "operation": "replace",
+                "block_name": "b",
+                "content": "new code",
+                "force": True,
+            },
+        )
+        legacy.execute.assert_called_with(
+            "edit_block",
+            {"block_name": "b", "code": "new code", "force": True},
+        )
+
     def test_inspect_reference(self):
         legacy = self._legacy()
         dispatcher = PyniaToolDispatcher(legacy)
@@ -158,3 +209,38 @@ class TestPyniaToolRegistry:
         result = registry.execute("datapyn_notify", {"title": "t", "message": "m"})
         assert "error" in result
         assert "Main window" in result["error"]
+
+    def test_mutating_tools_are_not_cached(self):
+        """Repeating datapyn_run within 20s must execute again, not replay."""
+        legacy = MagicMock()
+        legacy._main_window = MagicMock()
+        legacy.execute = MagicMock(
+            return_value={"content": [{"type": "text", "text": "ran"}]}
+        )
+        registry = PyniaToolRegistry(parent=None, legacy_registry=legacy)
+        args = {"mode": "block", "block_name": "vendas"}
+        registry.execute("datapyn_run", dict(args))
+        registry.execute("datapyn_run", dict(args))
+        assert legacy.execute.call_count == 2
+
+    def test_read_cache_cleared_after_mutation(self):
+        """An edit must invalidate cached reads so re-inspect sees new state."""
+        legacy = MagicMock()
+        legacy._main_window = MagicMock()
+        legacy.execute = MagicMock(
+            return_value={"content": [{"type": "text", "text": "v"}]}
+        )
+        registry = PyniaToolRegistry(parent=None, legacy_registry=legacy)
+        inspect_args = {"kind": "block", "block_name": "vendas", "detail": "code"}
+
+        registry.execute("datapyn_inspect", dict(inspect_args))
+        registry.execute("datapyn_inspect", dict(inspect_args))  # cached
+        calls_after_reads = legacy.execute.call_count
+
+        registry.execute(
+            "datapyn_edit",
+            {"operation": "replace", "block_name": "vendas", "content": "x"},
+        )
+        registry.execute("datapyn_inspect", dict(inspect_args))  # must re-run
+
+        assert legacy.execute.call_count == calls_after_reads + 2

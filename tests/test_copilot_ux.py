@@ -1270,7 +1270,7 @@ class TestToolGuideInContext:
         assert "tool_guide" in context
 
     def test_tool_guide_has_categories(self, qapp):
-        """tool_guide should mention key workflow guidance."""
+        """tool_guide must reference the datapyn_* surface (the only callable names)."""
         registry = self._make_registry()
         result = registry._get_context({})
         context = json.loads(result["content"][0]["text"])
@@ -1278,10 +1278,14 @@ class TestToolGuideInContext:
 
         assert isinstance(guide, str)
         assert "block_map" in guide
-        assert "edit_block" in guide
+        assert "datapyn_edit" in guide
         assert "block_name" in guide
-        assert "write_and_run" in guide
-        assert "run_silent" in guide
+        assert "datapyn_run mode=write" in guide
+        assert "datapyn_query" in guide
+        # Legacy names must not leak into the guide — the agent cannot call them.
+        assert "edit_block" not in guide.replace("datapyn_edit", "")
+        assert "write_and_run" not in guide
+        assert "run_silent" not in guide
 
     def test_tool_guide_mentions_edit_vs_create(self, qapp):
         """tool_guide should emphasize editing existing blocks over creating new ones."""
@@ -1292,3 +1296,31 @@ class TestToolGuideInContext:
 
         assert "UPDATE" in guide or "edit_block" in guide
         assert "CREATE" in guide or "write_and_run" in guide
+
+
+class TestChatLabels:
+    """Chat i18n labels — no raw "[key]" placeholders may reach the webview."""
+
+    def test_label_text_falls_back_to_legacy_copilot_section(self, qapp):
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+
+        # These live in the legacy `copilot` i18n section (rename drift) and
+        # used to render literally as "[account_current]" in the UI.
+        for key in ("account_current", "account_ready", "account_ready_short",
+                    "stop_tooltip", "runtime_update_complete"):
+            value = PyniaChatPanel._label_text(key)
+            assert value != f"[{key}]"
+            assert value != key
+
+    def test_labels_payload_has_no_raw_placeholders(self, qtbot):
+        from src.ui.components.copilot_chat_panel import PyniaChatPanel
+
+        panel = PyniaChatPanel()
+        qtbot.addWidget(panel)
+        labels = panel._labels_payload()
+        raw = {
+            key: value
+            for key, value in labels.items()
+            if isinstance(value, str) and value.startswith("[") and value.endswith("]")
+        }
+        assert raw == {}

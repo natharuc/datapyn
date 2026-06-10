@@ -11,6 +11,7 @@ import pyodbc
 import json
 import os
 import struct
+import time
 from pathlib import Path
 
 from src.utils.sql_parameter_service import (
@@ -22,6 +23,52 @@ from src.language import S
 
 
 logger = logging.getLogger(__name__)
+
+# Fetch rows from DB cursors in bounded chunks. Long fetchall() calls hold
+# the GIL for the whole result set, starving the Qt UI thread even though the
+# query runs in a worker thread. Chunking adds explicit yield points so the
+# UI keeps painting while large results stream into memory.
+FETCH_CHUNK_ROWS = 5_000
+DATAFRAME_BUILD_CHUNK_ROWS = 25_000
+
+
+def _gil_yield() -> None:
+    """Give the UI thread a chance to run between CPU-heavy chunks."""
+    time.sleep(0.001)
+
+
+def fetch_rows_chunked(cursor, chunk_size: int = FETCH_CHUNK_ROWS) -> list:
+    """fetchall() replacement that yields the GIL between chunks."""
+    rows: list = []
+    while True:
+        chunk = cursor.fetchmany(chunk_size)
+        if not chunk:
+            break
+        rows.extend(chunk)
+        _gil_yield()
+    return rows
+
+
+def records_to_dataframe(rows: list, columns: list) -> pd.DataFrame:
+    """Build a DataFrame from DBAPI rows without monopolizing the GIL.
+
+    Large object-row conversions in a single from_records call freeze the UI
+    thread; building in slices keeps each GIL-held stretch short.
+    """
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
+    if len(rows) <= DATAFRAME_BUILD_CHUNK_ROWS:
+        return pd.DataFrame.from_records(rows, columns=columns)
+
+    parts: list = []
+    for start in range(0, len(rows), DATAFRAME_BUILD_CHUNK_ROWS):
+        part_rows = rows[start : start + DATAFRAME_BUILD_CHUNK_ROWS]
+        parts.append(pd.DataFrame.from_records(part_rows, columns=columns))
+        _gil_yield()
+
+    result = pd.concat(parts, ignore_index=True, copy=False)
+    return result
 
 
 def _safe_exception_text(error: BaseException) -> str:
@@ -900,9 +947,9 @@ class DatabaseConnector:
                     try:
                         if cursor.description:
                             columns = [col[0] for col in cursor.description]
-                            rows = cursor.fetchall()
+                            rows = fetch_rows_chunked(cursor)
                             if rows:
-                                df = pd.DataFrame.from_records(rows, columns=columns)
+                                df = records_to_dataframe(rows, columns)
                                 dataframes.append(df)
                     except pyodbc.Error as e:
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
@@ -1019,8 +1066,8 @@ class DatabaseConnector:
             try:
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 if columns:
-                    rows = cursor.fetchall()
-                    df = pd.DataFrame(rows, columns=columns)
+                    rows = fetch_rows_chunked(cursor)
+                    df = records_to_dataframe(rows, columns)
                     logger.info(f"Databricks query executed: {len(df)} rows returned")
                     return df
                 else:
@@ -1264,11 +1311,12 @@ class DatabaseConnector:
         """Build a DataFrame directly from the DBAPI/SQLAlchemy result rows.
 
         This avoids pandas SQL readers applying their own dtype inference on top
-        of the values already returned by the database driver.
+        of the values already returned by the database driver. Rows are fetched
+        in chunks so the UI thread is not starved while large results stream in.
         """
         columns = list(result.keys())
-        rows = result.fetchall()
-        return pd.DataFrame.from_records(rows, columns=columns)
+        rows = fetch_rows_chunked(result)
+        return records_to_dataframe(rows, columns)
 
     def _execute_generic_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> pd.DataFrame:
         """Execute generic query for non-MSSQL databases"""

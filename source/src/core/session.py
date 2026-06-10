@@ -298,6 +298,13 @@ class Session(QObject):
         self._namespace.update(variables)
         self.variables_changed.emit(self._namespace)
 
+    def restore_dataframe_variables(self, variables: Dict[str, Any]) -> None:
+        """Restore persisted DataFrame variables into the session namespace."""
+        if not variables:
+            return
+        self._namespace.update(variables)
+        self.variables_changed.emit(self._namespace)
+
     # === EXECUTION ===
 
     def start_execution(self, mode: str):

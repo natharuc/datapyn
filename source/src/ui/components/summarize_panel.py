@@ -806,6 +806,7 @@ class SummarizePanel(QWidget):
             numeric_indices = set(prepared.numeric_column_indices)
 
         self._cancel_summarize_worker()
+        self._show_summarizing()
         worker = _SummarizeBuildWorker(
             generation,
             viewer.current_df,
@@ -827,6 +828,14 @@ class SummarizePanel(QWidget):
         self._summarize_thread = thread
         self._summarize_worker = worker
         thread.start()
+
+    def _show_summarizing(self):
+        """Loading state while the background worker crunches the selection."""
+        text = getattr(S.summarize_panel, "summarizing", "Summarizing…")
+        self.subtitle_label.setText(text)
+        if not (self._payload or {}).get("columns"):
+            self.empty_label.setText(text)
+            self.aggregate_empty.setText(text)
 
     def _clear_summarize_worker(self, thread: QThread):
         if self._summarize_thread is thread:

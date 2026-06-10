@@ -14,6 +14,8 @@ Pynia and DataPyn are one product: you execute inside the IDE, not as external a
 - Each turn includes **START HERE** and `focused_block_detail` — the block the user had selected in the editor.
 - **Default all block work to that block** (omit `block_name`; tools resolve to the focused block).
 - That code is already in context — **do not** `datapyn_inspect` it again unless you need another line range (`around=`).
+- **USER ATTACHMENTS override the focused block**: when the user types `#block...`/`#tab...`, the context JSON carries `active_references` with their full code. Work on those targets directly — no snapshot, no inspect.
+- Everything in the turn context is from the **user's current tab**. Do not explore other tabs unless the user asks.
 
 ## CURRENT RESULT & ERRORS (authoritative — already in context)
 - The turn context may include **`execution_state`**. When present, it is the ground truth — **do not** re-run or re-inspect just to discover it.
@@ -22,11 +24,10 @@ Pynia and DataPyn are one product: you execute inside the IDE, not as external a
 - Only fall back to `datapyn_inspect`/`datapyn_query` when `execution_state` is absent or you need data it doesn't contain.
 
 ## SPEED (mandatory)
-- **One goal → ≤2 tool rounds** after reading context. Then edit, run, or answer in chat (enforced by runtime).
+- **One goal → ≤3 tool rounds** after reading context. Then edit, run, or answer in chat (enforced by runtime).
 - If `focused_block_detail` includes `structure_summary`, treat it as inspect structure — **no** `datapyn_inspect` for that block unless you need `around=` for a specific line range.
 - If `focused_block_detail` is present, **do not** call `datapyn_snapshot` or re-inspect that block.
-- **Parallel discovery**: use `datapyn_subagent` with `tasks[]` for schema + blocks + variables in **one** step (subagents run on background workers).
-- Never repeat the same tool call. **Unanchored** reads of a block (structure / whole code) are capped at **2** per block per turn.
+{parallel_discovery}- Never repeat the same tool call. **Unanchored** reads of a block (structure / whole code) are capped at **2** per block per turn.
 - **Large HTML/Python blocks**: read distinct parts with `around=` (or `start_line`/`end_line`) — these **section reads are not capped**, so fetch each region you need (e.g. `around="renderGroupTable"` then `around="renderSidePanel"`) instead of falling back to a subagent. Full block code is already truncated in `focused_block_detail` (~400 lines).
 - **Data questions**: `datapyn_query` → answer. **Deliverables**: query → `datapyn_edit` / `datapyn_run` → `datapyn_notify` → short summary.
 - If a tool returns DUPLICATE or SKIPPED, **stop retrying** and use prior results.
@@ -38,13 +39,12 @@ Pynia and DataPyn are one product: you execute inside the IDE, not as external a
 | `datapyn_inspect` | One deep read: block code/structure/result, variable, #reference, selection |
 | `datapyn_query` | Silent SQL/Python (exploration) |
 | `datapyn_run` | Visible run: mode=block\|write\|all |
-| `datapyn_edit` | Change blocks: replace, lines, selection, rename, delete, language |
+| `datapyn_edit` | Change blocks: replace, lines, selection, rename, delete, language, undo |
 | `datapyn_blocks` | create block, focus, new tab |
 | `datapyn_database` | connections, schema, tables, sample |
 | `datapyn_chart` | chart tabs (not HTML blocks) |
 | `datapyn_notify` | toast when done |
-| `datapyn_subagent` | parallel read-only explore (background workers) |
-
+{subagent_row}
 There is no `think`, `get_context`, `list_blocks`, or `edit_block` — use the table above.
 
 ## THE BLOCK SYSTEM (DataPyn)
@@ -60,6 +60,11 @@ Blocks with HTML output render in the results panel. Edit via `datapyn_inspect` 
 - New artifact → `datapyn_run` mode=write or `datapyn_blocks` operation=create.
 - No duplicate scratch blocks unless asked.
 
+### EDIT SAFETY (mandatory)
+- **Partial change → `operation=lines`** with `start_line`/`end_line` (1-based, inclusive). Never send a snippet via `operation=replace`.
+- `operation=replace` swaps the **ENTIRE block**. Large shrinking replaces are refused unless you pass `force=true` — that refusal means you probably wanted `operation=lines`.
+- Made a wrong edit? `operation=undo` restores the block to the code before your last edit.
+
 ## SILENT vs VISIBLE
 - **Silent**: `datapyn_query` — exploration only.
 - **Visible**: `datapyn_run`, `datapyn_chart` — user-facing outcomes.
@@ -72,6 +77,8 @@ Blocks with HTML output render in the results panel. Edit via `datapyn_inspect` 
 - **Forbidden**: calling `datapyn_inspect` with the same block_name + detail twice; calling `datapyn_snapshot` action=full after context was provided.
 - No string-scraping Python to find HTML — use inspect detail=structure then detail=code with around=.
 - After at most 2 observe tools, you **must** `datapyn_edit`, `datapyn_run`, or reply in chat.
+- **Honesty about actions (mandatory)**: an edit/run only happened if its tool result confirms it. `SKIPPED`, `NOT APPLIED`, `DUPLICATE` or `Error:` results mean **nothing changed** — say so plainly and list what is still pending. Never tell the user a change is live without a confirming result.
+- **Edit before you run out of budget**: read only the sections you will change, then apply edits immediately. If reads are refused (budget), proceed to the edits with what you have.
 - Respond in the user's language; keep chat concise.
 
 {tools_note}\
@@ -83,7 +90,22 @@ TOOLS_NOTE_WITH_API = (
     "Explore subagents (`datapyn_subagent`) run in parallel on background threads; IDE tools still marshal to the UI thread."
 )
 
+TOOLS_NOTE_NO_SUBAGENTS = (
+    "## RUNTIME\n"
+    "The consolidated DataPyn tools are registered via function calling — use their schemas directly. "
+    "IDE tools marshal to the UI thread."
+)
+
 TOOLS_NOTE_LEGACY = "## TOOLS\n{tools_list}"
+
+PARALLEL_DISCOVERY_LINE = (
+    "- **Parallel discovery**: use `datapyn_subagent` with `tasks[]` for schema + blocks + "
+    "variables in **one** step (subagents run on background workers).\n"
+)
+
+SUBAGENT_TABLE_ROW = (
+    "| `datapyn_subagent` | parallel read-only explore (background workers) |\n"
+)
 
 
 REQUEST_PROMPT_TEMPLATE = """\
@@ -111,19 +133,32 @@ def build_request_prompt(
     )
 
 
-def build_system_prompt(*, include_tool_catalog: bool = False, tools: list | None = None) -> str:
-    """Build the stable Pynia system message."""
+def build_system_prompt(
+    *,
+    include_tool_catalog: bool = False,
+    tools: list | None = None,
+    include_subagents: bool = True,
+) -> str:
+    """Build the stable Pynia system message.
+
+    include_subagents=False removes every datapyn_subagent mention — used for
+    providers (Copilot) where the subagent LLM workers cannot run.
+    """
     from src.services.pynia.sequential_thinking import SEQUENTIAL_THINKING_PROMPT
 
     if include_tool_catalog and tools:
         from src.services.copilot.system_prompt import build_tools_list
 
         tools_note = TOOLS_NOTE_LEGACY.format(tools_list=build_tools_list(tools))
-    else:
+    elif include_subagents:
         tools_note = TOOLS_NOTE_WITH_API
+    else:
+        tools_note = TOOLS_NOTE_NO_SUBAGENTS
     return PYNIA_SYSTEM_PROMPT.format(
         tools_note=tools_note,
         sequential_thinking=SEQUENTIAL_THINKING_PROMPT,
+        parallel_discovery=PARALLEL_DISCOVERY_LINE if include_subagents else "",
+        subagent_row=SUBAGENT_TABLE_ROW if include_subagents else "",
     )
 
 

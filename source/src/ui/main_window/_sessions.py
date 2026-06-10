@@ -153,6 +153,7 @@ class SessionsMixin:
             self._switch_session_panels(session.session_id)
         finally:
             self._creating_session = False
+            self._sync_chat_tab_context()
 
     def _find_in_editor(self):
         """Opens search in the focused block of the current editor."""
@@ -326,8 +327,15 @@ class SessionsMixin:
         if widget and widget.editor:
             widget.editor.add_block()
 
-    def _new_session(self):
-        """Creates a new session, inheriting the connection from the current tab (if any)"""
+    def _new_session(self, *, inherit_connection: bool = True):
+        """Creates a new session, inheriting the connection from the current tab (if any).
+
+        Args:
+            inherit_connection: when False, the new tab is created without the
+                deferred auto-connect to the previous tab's connection (used by
+                flows that immediately connect to an explicit target, e.g.
+                Ctrl+double-click on a connection).
+        """
         # Guard to prevent duplicate creation
         if hasattr(self, "_creating_session") and self._creating_session:
             return
@@ -338,7 +346,7 @@ class SessionsMixin:
             previous_connection = None
             previous_color = None
             previous_database_context = ""
-            current_widget = self._get_current_session_widget()
+            current_widget = self._get_current_session_widget() if inherit_connection else None
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
                 previous_database_context = getattr(current_widget.session, "database_context", "") or ""
@@ -371,6 +379,7 @@ class SessionsMixin:
             # Sync global file context from the now-active widget
             # (the guard skipped _on_session_tab_changed during creation)
             self._sync_file_context_from_widget()
+            self._sync_chat_tab_context()
 
     def _is_widget_connecting(self, widget) -> bool:
         """True if the tab is connecting (widget thread or main-window background thread)."""
@@ -926,6 +935,9 @@ class SessionsMixin:
                 lambda ctx: self._resolve_with_copilot(ctx)
             )
 
+        if panels and panels.get("variables"):
+            panels["variables"].bind_session_widget(widget)
+
         # Definir file_path no widget se disponivel na sessao
         if hasattr(session, "file_path") and session.file_path:
             widget.file_path = session.file_path
@@ -1007,6 +1019,8 @@ class SessionsMixin:
 
         # Trocar paineis para a nova sessao (garante que paineis vazios aparecam)
         self._switch_session_panels(session.session_id)
+
+        QTimer.singleShot(0, widget.restore_persisted_variables)
 
         # If session already has an active connection (e.g., after restore), load schema
         if session.is_connected and session.connector and session.connection_name:
@@ -1124,6 +1138,27 @@ class SessionsMixin:
         finally:
             self._closing_session = False
             self._sync_file_context_from_widget()
+            self._sync_chat_tab_context()
+
+    def _sync_chat_tab_context(self):
+        """Point the Pynia chat at the now-active tab.
+
+        Needed where the tab-change signal was suppressed (_creating_session /
+        _closing_session guards) — otherwise the chat keeps targeting the
+        previous tab and the agent works on the wrong session.
+        """
+        if not (hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel):
+            return
+        try:
+            index = self.session_tabs.currentIndex()
+            widget = self.session_tabs.widget(index) if index >= 0 else None
+            if isinstance(widget, SessionWidget):
+                self._copilot_chat_panel.switch_tab_context(
+                    widget.session.session_id,
+                    self.session_tabs.tabText(index).strip(),
+                )
+        except Exception as e:
+            logger.debug(f"Chat tab context sync skipped: {e}")
 
     def _on_session_tab_changed(self, index: int):
         """Event when session tab changes"""
@@ -1371,6 +1406,7 @@ class SessionsMixin:
         # Synchronize code from widgets to sessions
         for session_id, widget in self._session_widgets.items():
             widget.sync_to_session()
+            widget.persist_session_variables()
 
         # Salvar via SessionManager
         self.session_manager.save_sessions()

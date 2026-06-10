@@ -93,18 +93,50 @@ def build_api_messages(
     return api
 
 
+def _last_tool_round_start(conversation: List[Dict[str, Any]]) -> int:
+    """Index of the assistant message that issued the most recent tool round."""
+    for i in range(len(conversation) - 1, -1, -1):
+        msg = conversation[i]
+        if msg.get("role") != "assistant":
+            continue
+        if msg.get("tool_calls"):
+            return i
+        content = msg.get("content")
+        if isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            for block in content
+        ):
+            return i
+    return len(conversation)
+
+
+def _compact_text(text: str, max_tool_chars: int) -> str:
+    return _truncate(text, max_tool_chars) + "\n[truncated for session memory]"
+
+
 def compact_conversation_in_place(
     conversation: List[Dict[str, Any]],
     *,
     max_tool_chars: int = MAX_TOOL_RESULT_CHARS_IN_HISTORY,
 ) -> None:
-    """Shrink tool results in an in-flight agent loop to control token growth."""
-    for msg in conversation:
-        if msg.get("role") != "tool":
-            continue
+    """Shrink tool results from OLDER rounds to control token growth.
+
+    The most recent round is left intact: the model still has to act on what
+    it just read (e.g. block code fetched right before an edit). Handles both
+    OpenAI-style (role="tool") and Anthropic-style (user message with
+    tool_result blocks) conversations.
+    """
+    cutoff = _last_tool_round_start(conversation)
+    for msg in conversation[:cutoff]:
+        role = msg.get("role")
         content = msg.get("content")
-        if isinstance(content, str) and len(content) > max_tool_chars:
-            msg["content"] = _truncate(
-                content,
-                max_tool_chars,
-            ) + "\n[truncated for session memory]"
+        if role == "tool":
+            if isinstance(content, str) and len(content) > max_tool_chars:
+                msg["content"] = _compact_text(content, max_tool_chars)
+        elif role == "user" and isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                inner = block.get("content")
+                if isinstance(inner, str) and len(inner) > max_tool_chars:
+                    block["content"] = _compact_text(inner, max_tool_chars)

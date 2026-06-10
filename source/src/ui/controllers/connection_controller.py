@@ -66,8 +66,9 @@ class ConnectionController(QObject):
         current_widget = self._main._get_current_session_widget()
         
         # If no tab or current tab is connecting, create new one
+        # (without inheriting the previous connection - we connect explicitly below)
         if not current_widget or current_widget.is_connecting():
-            self._main._new_session()
+            self._main._new_session(inherit_connection=False)
             current_widget = self._main._get_current_session_widget()
         
         if not current_widget:
@@ -96,8 +97,10 @@ class ConnectionController(QObject):
         Connects to a database ALWAYS creating a new tab.
         Used for CTRL+double-click or 'Connect in New Tab' menu.
         """
-        # Always create new tab
-        self._main._new_session()
+        # Always create new tab WITHOUT inheriting the previous connection:
+        # the deferred inherited auto-connect would race with (and override)
+        # the explicit connection requested below.
+        self._main._new_session(inherit_connection=False)
         current_widget = self._main._get_current_session_widget()
         
         if not current_widget:

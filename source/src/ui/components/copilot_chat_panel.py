@@ -1226,7 +1226,14 @@ class PyniaChatPanel(QWidget):
         """Build Pynia system prompt (tools via API — not duplicated in text)."""
         from src.services.pynia.system_prompt import build_system_prompt
 
-        return build_system_prompt(include_tool_catalog=False)
+        return build_system_prompt(
+            include_tool_catalog=False,
+            include_subagents=not self._is_copilot_provider(),
+        )
+
+    def _is_copilot_provider(self) -> bool:
+        """Subagent LLM workers need an API token — unavailable on Copilot."""
+        return getattr(self._agent_client, "provider_id", "") == "copilot"
 
 
     def _build_context_snapshot(self) -> dict:
@@ -1332,12 +1339,35 @@ class PyniaChatPanel(QWidget):
         return getattr(self._mcp_server.tool_registry, "_main_window", None)
 
     def _resolve_current_tab_id(self):
-        if self._current_tab_id:
-            return self._current_tab_id
+        """Session id of the tab the user is looking at RIGHT NOW.
+
+        The stored _current_tab_id goes stale when tabs are created/closed
+        while tab-change signals are suppressed (_creating_session /
+        _closing_session guards in _sessions.py) — the agent then targets the
+        wrong tab. Prefer the live active tab and self-heal the stored state.
+        """
         mw = self._get_registry_main_window()
-        widget = self._get_context_session_widget(mw, "")
-        session = getattr(widget, "session", None) if widget else None
-        return getattr(session, "session_id", None)
+        live_id = ""
+        live_name = ""
+        try:
+            tabs = getattr(mw, "session_tabs", None) if mw else None
+            if tabs:
+                idx = tabs.currentIndex()
+                widget = tabs.widget(idx) if isinstance(idx, int) and idx >= 0 else None
+                session = getattr(widget, "session", None) if widget else None
+                raw_id = getattr(session, "session_id", "") if session else ""
+                live_id = raw_id if isinstance(raw_id, str) else ""
+                if live_id:
+                    raw_name = tabs.tabText(idx)
+                    live_name = raw_name.strip() if isinstance(raw_name, str) else ""
+        except Exception as e:
+            logger.debug(f"Live tab resolution failed: {e}")
+            live_id = ""
+        if live_id:
+            if live_id != self._current_tab_id:
+                self.switch_tab_context(live_id, live_name)
+            return live_id
+        return self._current_tab_id
 
     def _get_context_session_widget(self, mw, session_id: str):
         if not mw:
@@ -2216,10 +2246,26 @@ class PyniaChatPanel(QWidget):
             "usage_panel_credits", "usage_panel_plan_included", "usage_panel_plan_unknown",
             "connector_label", "title", "welcome_title",
         ]
-        labels = {key: getattr(S.pynia, key, key) for key in keys}
-        labels["copy"] = getattr(S.pynia, "copy_code", "Copy")
-        labels["insert"] = getattr(S.pynia, "insert_code", "Insert")
+        labels = {key: self._label_text(key) for key in keys}
+        labels["copy"] = self._label_text("copy_code")
+        labels["insert"] = self._label_text("insert_code")
         return labels
+
+    @staticmethod
+    def _label_text(key: str) -> str:
+        """Chat label with section fallback: pynia → copilot → key.
+
+        The product renamed copilot→Pynia but many chat strings still live in
+        the `copilot` i18n section; without the fallback the UI shows raw
+        "[key]" placeholders (e.g. the Switch-account popup).
+        """
+        value = getattr(S.pynia, key, None)
+        if isinstance(value, str) and value and value != f"[{key}]":
+            return value
+        legacy = getattr(S.copilot, key, None)
+        if isinstance(legacy, str) and legacy and legacy != f"[{key}]":
+            return legacy
+        return key
 
     def _on_webview_ready(self):
         """Called when the new chat WebView app is ready."""
@@ -2801,7 +2847,17 @@ class PyniaChatPanel(QWidget):
         self._run_chat_js(f"setActivity({json.dumps({'phase': S.pynia.activity_sending})})")
 
         system_prompt = self._build_system_prompt()
-        context_section, start_here = self._build_request_context_section()
+        # One snapshot per send — building it walks every block's code, so the
+        # request section, the subagent hint, and the workspace context below
+        # all reuse this copy instead of rebuilding it (was 3x per message).
+        context_snapshot = None
+        try:
+            context_snapshot = self._build_context_snapshot()
+            if self._active_references:
+                context_snapshot["active_references"] = self._active_references
+        except Exception as e:
+            logger.debug(f"Error building editor context snapshot: {e}")
+        context_section, start_here = self._build_request_context_section(context_snapshot)
         from src.services.pynia.system_prompt import build_request_prompt
         request_prompt = build_request_prompt(text, context_section, start_here)
         try:
@@ -2810,10 +2866,12 @@ class PyniaChatPanel(QWidget):
                 suggest_explore_tasks,
             )
 
-            snap = self._build_context_snapshot()
+            snap = context_snapshot or {}
             blocks = snap.get("blocks") or []
             conn = (snap.get("session") or {}).get("connection_name", "")
-            if should_delegate_to_subagent(text, block_count=len(blocks)):
+            if not self._is_copilot_provider() and should_delegate_to_subagent(
+                text, block_count=len(blocks)
+            ):
                 tasks = suggest_explore_tasks(text, connection_name=conn)
                 if tasks:
                     request_prompt += (
@@ -2848,11 +2906,8 @@ class PyniaChatPanel(QWidget):
         if self._agent_client:
             if self._mcp_server and hasattr(self._mcp_server, "tool_registry"):
                 try:
-                    snap = self._build_context_snapshot()
-                    if self._active_references:
-                        snap["active_references"] = self._active_references
                     self._mcp_server.tool_registry.set_workspace_context(
-                        json.dumps(snap, ensure_ascii=False)[:12_000]
+                        json.dumps(context_snapshot or {}, ensure_ascii=False)[:12_000]
                     )
                 except Exception as exc:
                     logger.debug("Workspace context for subagents: %s", exc)
@@ -2910,17 +2965,24 @@ class PyniaChatPanel(QWidget):
             include_history=True,
         )
 
-    def _build_request_context_section(self) -> tuple[str, str]:
+    def _build_request_context_section(self, snapshot: dict | None = None) -> tuple[str, str]:
         """Return (context_section, start_here_directive) for the user message."""
-        from src.services.pynia.focus_context import start_here_directive
+        from src.services.pynia.focus_context import (
+            attached_references_directive,
+            start_here_directive,
+        )
         from src.services.pynia.system_prompt import build_context_section
 
         try:
-            snapshot = self._build_context_snapshot()
-            if self._active_references:
-                snapshot["active_references"] = self._active_references
+            if snapshot is None:
+                snapshot = self._build_context_snapshot()
+                if self._active_references:
+                    snapshot["active_references"] = self._active_references
             focus_detail = snapshot.get("focused_block_detail")
             start_here = start_here_directive(focus_detail)
+            refs_line = attached_references_directive(snapshot.get("active_references"))
+            if refs_line:
+                start_here = f"{refs_line}\n\n{start_here}"
             context_json = json.dumps(snapshot, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.debug(f"Error building editor context snapshot: {e}")

@@ -72,7 +72,12 @@ def _apply_dark_palette(app):
 def main():
     """Funcao principal"""
     import argparse
-    
+
+    # Make CPython preempt CPU-bound worker threads more often (default 5ms).
+    # Keeps the UI thread responsive while background threads build large
+    # DataFrames or serialize Parquet (GIL-heavy work).
+    sys.setswitchinterval(0.001)
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="DataPyn - IDE moderna para consultas SQL com Python integrado")
     parser.add_argument("--workspace", type=str, help="Path to workspace folder to open")
@@ -107,6 +112,13 @@ def main():
 
     global_font = get_application_font(size=10)
     app.setFont(global_font)
+
+    # Warm up Qt's lazy font database for fonts measured later (results grid
+    # uses Consolas). The first QFontMetrics text measurement otherwise pays
+    # a ~200ms font-DB population stall on the UI thread mid-session.
+    from PyQt6.QtGui import QFontMetrics
+    for _warm_font in (global_font, QFont("Consolas", 10)):
+        QFontMetrics(_warm_font).horizontalAdvance("0")
 
     splash.set_progress(18, "Aplicando tema…")
     from src.design_system.stylesheet import get_application_stylesheet

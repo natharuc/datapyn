@@ -86,6 +86,10 @@ def apply_focused_block_defaults(
     }
     if tool_name not in block_tools:
         return out
+    # mode=write without a block_name means "create a new block" — defaulting
+    # to the focused block here would overwrite the user's code instead.
+    if tool_name == "datapyn_run" and (out.get("mode") or "").lower().strip() == "write":
+        return out
     if out.get("kind") not in (None, "", "block"):
         if tool_name == "datapyn_inspect" and out.get("kind") != "block":
             return out
@@ -132,6 +136,35 @@ def focused_block_chip_payload(
         "index": detail.get("index", 0),
         "is_primary_target": True,
     }
+
+
+def attached_references_directive(refs) -> str:
+    """Directive for #block/#tab references the user typed in the chat.
+
+    Explicit attachments outrank the focused block as the target.
+    """
+    if not refs:
+        return ""
+    labels = []
+    for ref in refs:
+        if not isinstance(ref, dict) or not ref.get("ok"):
+            continue
+        if ref.get("type") == "block":
+            labels.append(
+                f"block `{ref.get('name', '?')}` "
+                f"({ref.get('language', '?')}, {ref.get('lines', 0)} lines)"
+            )
+        elif ref.get("type") == "tab":
+            labels.append(f"tab `{ref.get('title', '?')}`")
+    if not labels:
+        return ""
+    return (
+        "**USER ATTACHMENTS (highest priority)**: the user explicitly referenced "
+        + ", ".join(labels)
+        + ". Their full content is in `active_references` in the context JSON — "
+        "treat them as the primary targets, above the focused block, and do not "
+        "re-inspect them."
+    )
 
 
 def start_here_directive(focus: Optional[Dict[str, Any]]) -> str:

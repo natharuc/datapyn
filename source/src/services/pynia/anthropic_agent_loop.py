@@ -44,12 +44,44 @@ def _split_system(messages: List[Dict[str, Any]]) -> tuple[str, List[Dict[str, A
     return "\n\n".join(system_parts), rest
 
 
+def _convert_user_content(content: Any) -> Any:
+    """Convert OpenAI-style user content parts (text/image_url) to Anthropic blocks."""
+    if not isinstance(content, list):
+        return content
+    out: List[Dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype == "text":
+            out.append({"type": "text", "text": part.get("text", "")})
+        elif ptype == "image_url":
+            url = ((part.get("image_url") or {}).get("url")) or ""
+            if url.startswith("data:"):
+                try:
+                    header, data = url.split(",", 1)
+                    media_type = header.split(";")[0][len("data:"):] or "image/png"
+                    out.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        },
+                    })
+                except ValueError:
+                    logger.warning("Skipping malformed image data URL for Anthropic")
+        else:
+            out.append(part)
+    return out or content
+
+
 def _to_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     converted = []
     for msg in messages:
         role = msg.get("role")
         if role == "user":
-            converted.append({"role": "user", "content": msg.get("content", "")})
+            converted.append({"role": "user", "content": _convert_user_content(msg.get("content", ""))})
         elif role == "assistant":
             content = []
             if msg.get("content"):
@@ -101,6 +133,7 @@ def run_anthropic_agent_turn(
     from src.services.pynia.agent_loop_policy import (
         FORCE_ANSWER_AFTER_ROUND,
         MAX_TOOL_ROUNDS,
+        invalidate_block_reads,
         prepare_tool_calls,
         should_offer_tools,
     )
@@ -198,6 +231,10 @@ def run_anthropic_agent_turn(
                     round_text += text
                     final_text += text
                     on_chunk(text)
+                elif delta.get("type") == "input_json_delta" and current_tool is not None:
+                    # Tool arguments stream as partial JSON — accumulating them
+                    # here is what gives tool calls their inputs at all.
+                    current_tool["input_json"] += delta.get("partial_json", "")
             elif etype == "content_block_start":
                 block = event.get("content_block") or {}
                 if block.get("type") == "tool_use":
@@ -206,9 +243,6 @@ def run_anthropic_agent_turn(
                         "name": block.get("name"),
                         "input_json": "",
                     }
-            elif etype == "content_block_delta" and (event.get("delta") or {}).get("type") == "input_json_delta":
-                if current_tool is not None:
-                    current_tool["input_json"] += event["delta"].get("partial_json", "")
             elif etype == "content_block_stop" and current_tool is not None:
                 try:
                     args = json.loads(current_tool.get("input_json") or "{}")
@@ -283,8 +317,47 @@ def run_anthropic_agent_turn(
         ]
         anthropic_messages.append({"role": "user", "content": tool_results})
         compact_conversation_in_place(anthropic_messages)
+        for name, args, _tc_id, should_execute in prepared:
+            if should_execute:
+                invalidate_block_reads(
+                    name,
+                    args,
+                    seen_keys=seen_tool_keys,
+                    block_inspect_counts=block_inspect_counts,
+                )
 
         if not offer_tools:
             continue
 
     return final_text
+
+
+def fetch_anthropic_models(api_key: str) -> List[Dict[str, Any]]:
+    """List models available to this Anthropic API key."""
+    import requests
+
+    try:
+        resp = requests.get(
+            "https://api.anthropic.com/v1/models",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": ANTHROPIC_VERSION,
+            },
+            params={"limit": 50},
+            timeout=30,
+        )
+    except Exception as exc:
+        logger.warning("Anthropic model list failed: %s", exc)
+        return []
+    if resp.status_code != 200:
+        return []
+    models = []
+    for item in resp.json().get("data", []):
+        mid = item.get("id", "")
+        if mid:
+            models.append({
+                "id": mid,
+                "name": item.get("display_name") or mid,
+                "multiplier": 1.0,
+            })
+    return models

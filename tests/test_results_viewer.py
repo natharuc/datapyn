@@ -1678,7 +1678,7 @@ class TestResultsViewerGridPrepare:
         result = prepare_grid_data(df, {}, {}, limit=120)
 
         assert result.prepared.filtered_row_count == 500
-        assert len(result.prepared.display_rows) == 120
+        assert result.prepared.row_count == 120
         assert result.prepared.limited is True
 
     def test_large_grid_prepares_off_ui_thread(self, qtbot):
@@ -1707,9 +1707,9 @@ class TestResultsViewerGridPrepare:
         )
         result = prepare_grid_data(df, {}, {}, limit=10)
 
-        assert "2026" in result.prepared.display_rows[0][0]
-        assert ":" in result.prepared.display_rows[0][0]
-        assert result.prepared.display_rows[0][1] == "0.0"
+        assert "2026" in result.prepared.display_value(0, 0)
+        assert ":" in result.prepared.display_value(0, 0)
+        assert result.prepared.display_value(0, 1) == "0.0"
 
     def test_prepare_grid_data_respects_explicit_datetime_format(self):
         from src.ui.components.results_viewer import prepare_grid_data
@@ -1718,8 +1718,8 @@ class TestResultsViewerGridPrepare:
         formats = {"created_at": {"type": "datetime"}}
         result = prepare_grid_data(df, {}, formats, limit=10)
 
-        assert "2026" in result.prepared.display_rows[0][0]
-        assert "1779799229610000000" not in result.prepared.display_rows[0][0]
+        assert "2026" in result.prepared.display_value(0, 0)
+        assert "1779799229610000000" not in result.prepared.display_value(0, 0)
 
 
 

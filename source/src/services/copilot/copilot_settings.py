@@ -40,16 +40,20 @@ class CopilotSettingsManager:
     @property
     def _settings(self):
         """Get workspace-scoped settings, refreshing cache if workspace changed."""
-        from src.core.workspace_service import get_workspace_service
+        from src.core.workspace_service import get_workspace_service, qsettings_alive
         ws = get_workspace_service()
         current_workspace = str(ws.current_workspace)
-        
-        # Refresh cache if workspace changed
-        if self._cached_workspace != current_workspace:
+
+        # Refresh when the workspace changed or the cached QSettings' C++ object
+        # was destroyed (QApplication recreated between tests → dead wrapper).
+        if (
+            self._cached_workspace != current_workspace
+            or not qsettings_alive(self._cached_settings)
+        ):
             self._cached_settings = ws.get_workspace_settings("CopilotSettings")
             self._cached_workspace = current_workspace
             logger.info(f"CopilotSettings reloaded for workspace: {current_workspace}")
-        
+
         return self._cached_settings
     
     # ========================

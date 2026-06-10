@@ -211,6 +211,88 @@ class TestMCPToolRegistry:
         mock_editor.add_block.assert_not_called()
         mock_block.set_code.assert_called_once_with("SELECT * FROM produtos")
 
+    def test_create_block_accepts_block_name_key(self):
+        """The datapyn_blocks dispatcher sends block_name — must not duplicate."""
+        mock_block = MagicMock()
+        mock_block.get_block_name.return_value = "produtos"
+        mock_editor = MagicMock(spec=["add_block", "blocks"])
+        mock_editor.blocks = [mock_block]
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("create_block", {
+            "language": "sql",
+            "code": "SELECT * FROM produtos",
+            "block_name": "produtos",
+        })
+
+        assert "content" in result
+        mock_editor.add_block.assert_not_called()
+        mock_block.set_code.assert_called_once_with("SELECT * FROM produtos")
+
+    def test_write_and_run_accepts_block_name_key(self):
+        """write_and_run with block_name must UPDATE the named block, not create one."""
+        mock_block = MagicMock()
+        mock_block.get_block_name.return_value = "vendas"
+        mock_editor = MagicMock(spec=["add_block", "blocks"])
+        mock_editor.blocks = [mock_block]
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        self.registry._execute_block_with_result = MagicMock(
+            return_value={"content": [{"type": "text", "text": "ran"}]}
+        )
+        result = self.registry.execute("write_and_run", {
+            "language": "sql",
+            "code": "SELECT 1",
+            "block_name": "vendas",
+        })
+
+        assert "content" in result
+        mock_editor.add_block.assert_not_called()
+        mock_block.set_code.assert_called_once_with("SELECT 1")
+        self.registry._execute_block_with_result.assert_called_once()
+
+    def test_write_and_run_accepts_block_index(self):
+        """write_and_run with block_index must target that block."""
+        mock_block = MagicMock()
+        mock_block.get_block_name.return_value = "block1"
+        mock_editor = MagicMock(spec=["add_block", "blocks"])
+        mock_editor.blocks = [mock_block]
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+
+        self.registry.set_main_window(mock_mw)
+        self.registry._execute_block_with_result = MagicMock(
+            return_value={"content": [{"type": "text", "text": "ran"}]}
+        )
+        result = self.registry.execute("write_and_run", {
+            "language": "python",
+            "code": "print(1)",
+            "block_index": 0,
+        })
+
+        assert "content" in result
+        mock_editor.add_block.assert_not_called()
+        mock_block.set_code.assert_called_once_with("print(1)")
+
     def test_edit_block_with_index(self):
         """edit_block should update the specified block's code."""
         mock_block = MagicMock()
@@ -229,6 +311,96 @@ class TestMCPToolRegistry:
 
         assert "content" in result
         mock_block.set_code.assert_called_once_with("print('hello')")
+
+    def _make_block_window(self, name: str, code: str):
+        mock_block = MagicMock()
+        mock_block.get_block_name.return_value = name
+        mock_block.get_code.return_value = code
+        mock_editor = MagicMock(spec=["add_block", "blocks"])
+        mock_editor.blocks = [mock_block]
+
+        mock_widget = MagicMock(spec=["editor"])
+        mock_widget.editor = mock_editor
+
+        mock_mw = MagicMock()
+        mock_mw.session_tabs.currentIndex.return_value = 0
+        mock_mw.session_tabs.widget.return_value = mock_widget
+        return mock_block, mock_mw
+
+    def test_edit_block_refuses_shrinking_replace_on_large_block(self):
+        """A small snippet sent as whole-block replace must be refused (data loss)."""
+        big_code = "\n".join(f"line {i}" for i in range(1, 101))
+        mock_block, mock_mw = self._make_block_window("home_ui", big_code)
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute(
+            "edit_block", {"block_name": "home_ui", "code": "tiny snippet"}
+        )
+
+        assert "error" in result
+        assert "SAFETY" in result["error"]
+        assert "force" in result["error"]
+        mock_block.set_code.assert_not_called()
+
+    def test_edit_block_shrinking_replace_allowed_with_force(self):
+        big_code = "\n".join(f"line {i}" for i in range(1, 101))
+        mock_block, mock_mw = self._make_block_window("home_ui", big_code)
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute(
+            "edit_block",
+            {"block_name": "home_ui", "code": "tiny snippet", "force": True},
+        )
+
+        assert "content" in result
+        mock_block.set_code.assert_called_once_with("tiny snippet")
+
+    def test_undo_block_edit_restores_previous_code(self):
+        original = "SELECT old FROM vendas"
+        mock_block, mock_mw = self._make_block_window("vendas", original)
+
+        self.registry.set_main_window(mock_mw)
+        edit = self.registry.execute(
+            "edit_block", {"block_name": "vendas", "code": "SELECT new FROM vendas"}
+        )
+        assert "content" in edit
+
+        result = self.registry.execute("undo_block_edit", {"block_name": "vendas"})
+
+        assert "content" in result
+        assert mock_block.set_code.call_args_list[-1].args == (original,)
+
+    def test_undo_block_edit_without_backup_returns_error(self):
+        mock_block, mock_mw = self._make_block_window("vendas", "SELECT 1")
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute("undo_block_edit", {"block_name": "vendas"})
+
+        assert "error" in result
+        assert "backup" in result["error"].lower()
+
+    def test_rename_block_accepts_new_name_key(self):
+        """datapyn_edit operation=rename sends new_name — must work."""
+        mock_block, mock_mw = self._make_block_window("vendas", "SELECT 1")
+
+        self.registry.set_main_window(mock_mw)
+        result = self.registry.execute(
+            "rename_block", {"block_name": "vendas", "new_name": "vendas_2024"}
+        )
+
+        assert "content" in result
+        mock_block.set_block_name.assert_called_once_with("vendas_2024")
+
+    def test_mutating_legacy_tools_are_not_cached(self):
+        """Identical edit_block calls within 30s must both apply (no replay)."""
+        mock_block, mock_mw = self._make_block_window("vendas", "SELECT 1\nFROM t")
+
+        self.registry.set_main_window(mock_mw)
+        args = {"block_name": "vendas", "code": "SELECT 2\nFROM t"}
+        self.registry.execute("edit_block", dict(args))
+        self.registry.execute("edit_block", dict(args))
+
+        assert mock_block.set_code.call_count == 2
 
     def test_edit_block_invalid_index(self):
         """edit_block with invalid index should return an error."""
@@ -1448,6 +1620,78 @@ class TestPyniaChatPanel:
 
         registry.pin_session.assert_called_once_with("tab_a")
         assert panel._active_tool_target_id == "tab_a"
+
+    def test_chat_follows_active_tab_when_stored_id_is_stale(self, qtbot):
+        """Tab created/closed while signals were suppressed → chat must self-heal
+        to the tab the user is actually looking at (wrong-tab agent bug)."""
+        panel, client, registry = self._make_panel_with_fake_client(qtbot)
+
+        active_widget = SimpleNamespace(
+            session=SimpleNamespace(
+                session_id="tab_script3", title="Script 3", connection_name=""
+            ),
+            editor=None,
+        )
+
+        class _Tabs:
+            def currentIndex(self):
+                return 0
+
+            def widget(self, idx):
+                return active_widget
+
+            def tabText(self, idx):
+                return "Script 3"
+
+        registry._main_window = SimpleNamespace(session_tabs=_Tabs())
+        panel._current_tab_id = "tab_gecon_stale"
+        panel._current_tab_name = "GECON x SUN.dpw"
+
+        panel._input.setPlainText("valida as comissoes duplicadas")
+        with patch.object(panel, "_run_chat_js"):
+            panel._on_send()
+
+        registry.pin_session.assert_called_once_with("tab_script3")
+        assert panel._active_tool_target_id == "tab_script3"
+        assert panel._current_tab_id == "tab_script3"
+        assert panel._current_tab_name == "Script 3"
+        assert '"target_session_id": "tab_script3"' in client.sent_messages[-1]["content"]
+
+    def test_block_reference_becomes_full_code_attachment(self, qtbot):
+        """#block:name in the chat must inject the block's full code as a
+        priority attachment, so the agent acts without exploring."""
+        panel, client, registry = self._make_panel_with_fake_client(qtbot)
+
+        block = MagicMock()
+        block.get_block_name.return_value = "gecon"
+        block.get_language.return_value = "sql"
+        block.get_code.return_value = "SELECT TCode0, DataEvento FROM gecon_eventos"
+        editor = SimpleNamespace(blocks=[block])
+        active_widget = SimpleNamespace(
+            session=SimpleNamespace(session_id="t1", title="T", connection_name=""),
+            editor=editor,
+        )
+
+        class _Tabs:
+            def currentIndex(self):
+                return 0
+
+            def widget(self, idx):
+                return active_widget
+
+            def tabText(self, idx):
+                return "T"
+
+        registry._main_window = SimpleNamespace(session_tabs=_Tabs())
+
+        panel._input.setPlainText("valida as comissoes em #block:gecon")
+        with patch.object(panel, "_run_chat_js"):
+            panel._on_send()
+
+        prompt = client.sent_messages[-1]["content"]
+        assert "USER ATTACHMENTS" in prompt
+        assert "highest priority" in prompt
+        assert "SELECT TCode0, DataEvento FROM gecon_eventos" in prompt
 
     def test_stop_cancels_client_and_unpins_target(self, qtbot):
         """Stop should cancel the client and clear the pinned tool target."""

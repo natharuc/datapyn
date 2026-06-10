@@ -173,6 +173,9 @@ class SettingsDialog(QDialog):
         # Notifications tab
         self._setup_notifications_tab()
 
+        # Session variables / Parquet storage tab
+        self._setup_variables_storage_tab()
+
         # Workspace tab
         self._setup_workspace_tab()
 
@@ -185,7 +188,9 @@ class SettingsDialog(QDialog):
                 "shortcuts": 1,
                 "pynia": 2,
                 "notifications": 3,
-                "workspace": 4,
+                "variables": 4,
+                "variables_storage": 4,
+                "workspace": 5,
                 "copilot": 2,
             }
             if self._initial_tab in tab_map:
@@ -480,6 +485,7 @@ class SettingsDialog(QDialog):
             else "Only affects display. Exports always include all data.",
             colors,
         ))
+
         general_layout.addWidget(display_card)
 
         editor_card, editor_layout = self._make_section_card(
@@ -1448,6 +1454,157 @@ class SettingsDialog(QDialog):
         tab_title = S.settings.tab_notifications if hasattr(S.settings, 'tab_notifications') else "Notifications"
         self.tabs.addTab(notif_scroll, tab_title)
 
+    def _setup_variables_storage_tab(self):
+        """Session DataFrame variables — auto-persist and disk usage."""
+        colors = get_colors()
+        input_style = self._get_input_style(colors)
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(14)
+        layout.setContentsMargins(4, 4, 4, 12)
+
+        from src.core.session_result_storage import (
+            DEFAULT_MAX_SIZE_MB,
+            format_storage_size,
+            get_session_result_max_size_mb,
+            is_session_result_restore_enabled,
+        )
+
+        policy_card, policy_layout = self._make_section_card(
+            S.settings.section_variables_storage if hasattr(S.settings, "section_variables_storage")
+            else "VARIABLE PERSISTENCE",
+            colors,
+        )
+
+        self.session_results_restore_cb = LabeledToggleSwitch(
+            S.settings.label_session_results_restore,
+            checked=is_session_result_restore_enabled(),
+        )
+        policy_layout.addWidget(self.session_results_restore_cb)
+        policy_layout.addWidget(self._make_hint(S.settings.session_results_restore_warning, colors))
+
+        self.session_results_max_mb_spin = QSpinBox()
+        self.session_results_max_mb_spin.setRange(1, 10000)
+        self.session_results_max_mb_spin.setSingleStep(10)
+        self.session_results_max_mb_spin.setValue(get_session_result_max_size_mb() or DEFAULT_MAX_SIZE_MB)
+        self.session_results_max_mb_spin.setMinimumWidth(120)
+        self.session_results_max_mb_spin.setStyleSheet(input_style)
+        self.session_results_max_mb_spin.setEnabled(self.session_results_restore_cb.isChecked())
+        policy_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_session_results_max_mb,
+                self.session_results_max_mb_spin,
+                colors,
+                label_width=220,
+            )
+        )
+        policy_layout.addWidget(self._make_hint(S.settings.session_results_max_mb_hint, colors))
+        self.session_results_restore_cb.toggled.connect(self.session_results_max_mb_spin.setEnabled)
+        layout.addWidget(policy_card)
+
+        usage_card, usage_layout = self._make_section_card(
+            S.settings.section_variables_disk_usage if hasattr(S.settings, "section_variables_disk_usage")
+            else "DISK USAGE",
+            colors,
+        )
+
+        self._vars_storage_total_label = QLabel()
+        self._vars_storage_total_label.setStyleSheet(
+            f"color: {colors.text_primary}; font-size: 12px; font-weight: 600;"
+        )
+        usage_layout.addWidget(self._vars_storage_total_label)
+
+        refresh_row = QHBoxLayout()
+        refresh_row.addStretch()
+        self._vars_storage_refresh_btn = QPushButton(
+            S.settings.btn_refresh_variables_storage if hasattr(S.settings, "btn_refresh_variables_storage")
+            else "Refresh"
+        )
+        self._vars_storage_refresh_btn.clicked.connect(self._refresh_variables_storage_inventory)
+        refresh_row.addWidget(self._vars_storage_refresh_btn)
+        usage_layout.addLayout(refresh_row)
+
+        self._vars_storage_table = QTableWidget()
+        self._vars_storage_table.setColumnCount(4)
+        header_ns = getattr(S.settings, "variables_storage_headers", None)
+        def _storage_header(key: str, default: str) -> str:
+            if header_ns is None:
+                return default
+            return getattr(header_ns, key, default)
+
+        self._vars_storage_table.setHorizontalHeaderLabels([
+            _storage_header("session", "Session"),
+            _storage_header("session_id", "ID"),
+            _storage_header("variables", "Variables"),
+            _storage_header("size", "Size"),
+        ])
+        self._vars_storage_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._vars_storage_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self._vars_storage_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self._vars_storage_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self._vars_storage_table.verticalHeader().setVisible(False)
+        self._vars_storage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._vars_storage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._vars_storage_table.setAlternatingRowColors(True)
+        usage_layout.addWidget(self._vars_storage_table)
+
+        from src.core.session_result_storage import get_session_snapshots_root
+
+        usage_layout.addWidget(
+            self._make_hint(
+                S.settings.variables_storage_disk_hint.format(
+                    path=str(get_session_snapshots_root()),
+                ),
+                colors,
+            )
+        )
+        layout.addWidget(usage_card)
+        layout.addStretch()
+
+        tab_title = (
+            S.settings.tab_variables_storage if hasattr(S.settings, "tab_variables_storage")
+            else "Variables"
+        )
+        self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
+        self._refresh_variables_storage_inventory()
+
+    def _refresh_variables_storage_inventory(self):
+        from src.core.session_result_storage import (
+            format_storage_size,
+            get_total_storage_bytes,
+            list_session_snapshots,
+        )
+
+        if not hasattr(self, "_vars_storage_table"):
+            return
+
+        entries = list_session_snapshots()
+        total_bytes = get_total_storage_bytes()
+        self._vars_storage_total_label.setText(
+            S.settings.variables_storage_total.format(size=format_storage_size(total_bytes))
+        )
+
+        session_titles: dict[str, str] = {}
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "session_manager"):
+            for session in parent.session_manager.sessions:
+                session_titles[session.session_id] = session.title
+
+        self._vars_storage_table.setRowCount(len(entries))
+        for row, entry in enumerate(entries):
+            session_id = str(entry.get("session_id", ""))
+            title = session_titles.get(session_id, session_id)
+            self._vars_storage_table.setItem(row, 0, QTableWidgetItem(title))
+            self._vars_storage_table.setItem(row, 1, QTableWidgetItem(session_id))
+            self._vars_storage_table.setItem(
+                row, 2, QTableWidgetItem(str(entry.get("variable_count", 0)))
+            )
+            self._vars_storage_table.setItem(
+                row, 3,
+                QTableWidgetItem(format_storage_size(int(entry.get("size_bytes", 0)))),
+            )
+
     def _persist_notification_transport_settings(self):
         settings = QSettings("DataPyn", "DataPyn")
         settings.setValue("notifications/telegram/enabled", self.notif_telegram_enabled_cb.isChecked())
@@ -2172,6 +2329,15 @@ class SettingsDialog(QDialog):
 
         # Save grid display row limit
         settings.setValue("grid/display_row_limit", self.grid_row_limit_spin.value())
+
+        if hasattr(self, "session_results_restore_cb"):
+            from src.core.session_result_storage import (
+                set_session_result_max_size_mb,
+                set_session_result_restore_enabled,
+            )
+
+            set_session_result_restore_enabled(self.session_results_restore_cb.isChecked())
+            set_session_result_max_size_mb(self.session_results_max_mb_spin.value())
 
         # Save notification settings
         settings.setValue("notifications/enabled", self.notif_enabled_cb.isChecked())
