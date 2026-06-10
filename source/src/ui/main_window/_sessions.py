@@ -153,6 +153,7 @@ class SessionsMixin:
             self._switch_session_panels(session.session_id)
         finally:
             self._creating_session = False
+            self._sync_chat_tab_context()
 
     def _find_in_editor(self):
         """Opens search in the focused block of the current editor."""
@@ -378,6 +379,7 @@ class SessionsMixin:
             # Sync global file context from the now-active widget
             # (the guard skipped _on_session_tab_changed during creation)
             self._sync_file_context_from_widget()
+            self._sync_chat_tab_context()
 
     def _is_widget_connecting(self, widget) -> bool:
         """True if the tab is connecting (widget thread or main-window background thread)."""
@@ -1136,6 +1138,27 @@ class SessionsMixin:
         finally:
             self._closing_session = False
             self._sync_file_context_from_widget()
+            self._sync_chat_tab_context()
+
+    def _sync_chat_tab_context(self):
+        """Point the Pynia chat at the now-active tab.
+
+        Needed where the tab-change signal was suppressed (_creating_session /
+        _closing_session guards) — otherwise the chat keeps targeting the
+        previous tab and the agent works on the wrong session.
+        """
+        if not (hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel):
+            return
+        try:
+            index = self.session_tabs.currentIndex()
+            widget = self.session_tabs.widget(index) if index >= 0 else None
+            if isinstance(widget, SessionWidget):
+                self._copilot_chat_panel.switch_tab_context(
+                    widget.session.session_id,
+                    self.session_tabs.tabText(index).strip(),
+                )
+        except Exception as e:
+            logger.debug(f"Chat tab context sync skipped: {e}")
 
     def _on_session_tab_changed(self, index: int):
         """Event when session tab changes"""

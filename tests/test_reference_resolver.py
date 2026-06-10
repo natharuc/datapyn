@@ -108,3 +108,48 @@ def test_resolve_block_by_name_uses_current_tab():
     assert resolved["type"] == "block"
     assert resolved["name"] == "orders"
     assert resolved["code_preview"] == "SELECT * FROM orders"
+
+
+def test_resolved_block_is_full_code_attachment():
+    """#block refs are user attachments — full (bounded) code, not a preview."""
+    from src.services.copilot.reference_resolver import ReferenceResolver
+
+    big_code = "\n".join(f"-- line {i}" for i in range(1, 501))
+    mw = SimpleNamespace(
+        session_tabs=FakeTabs(
+            [SimpleNamespace(
+                session=SimpleNamespace(title="T", session_id="t1", connection_name=""),
+                editor=FakeEditor([FakeBlock("gecon", "sql", big_code)]),
+            )],
+            ["T"],
+        )
+    )
+    resolved = ReferenceResolver(mw).resolve("#block:gecon")
+
+    assert resolved["ok"] is True
+    assert resolved["is_user_attachment"] is True
+    assert "-- line 400" in resolved["code"]          # well beyond the 800-char preview
+    assert "-- line 401" not in resolved["code"]      # bounded at 400 lines
+    assert "code_note" in resolved
+
+    small = ReferenceResolver(make_main_window()).resolve("#block1")
+    assert small["code"] == "SELECT * FROM orders"
+    assert "code_note" not in small
+
+
+def test_attached_references_directive_prioritizes_refs():
+    from src.services.pynia.focus_context import attached_references_directive
+
+    text = attached_references_directive([
+        {"ok": True, "type": "block", "name": "gecon", "language": "sql", "lines": 94},
+        {"ok": False, "type": "block", "reference": "#block9", "error": "Block not found."},
+        {"ok": True, "type": "tab", "title": "GECON x SUN.dpw"},
+    ])
+    assert "gecon" in text
+    assert "GECON x SUN.dpw" in text
+    assert "highest priority" in text
+    assert "#block9" not in text
+
+    assert attached_references_directive([]) == ""
+    assert attached_references_directive(None) == ""
+    assert attached_references_directive([{"ok": False, "type": "block"}]) == ""

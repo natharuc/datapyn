@@ -1,7 +1,11 @@
 """Tests for Pynia agent tool-loop guards."""
 
 from src.services.pynia.agent_loop_policy import (
+    MAX_SDK_MUTATING_TOOLS_PER_TURN,
+    MAX_SDK_READ_TOOLS_PER_TURN,
+    evaluate_sdk_budget,
     evaluate_tool_call,
+    invalidate_block_reads,
     prepare_tool_calls,
     skipped_tool_message,
     tool_call_key,
@@ -91,6 +95,104 @@ def test_evaluate_tool_call_guard():
     ok2, skip = evaluate_tool_call("datapyn_inspect", args, seen_keys=seen, block_inspect_counts=block_counts)
     assert ok2 is False
     assert "DUPLICATE" in skip
+
+
+def test_invalidate_block_reads_allows_reinspect_after_edit():
+    """Editing a block must clear the read-dedupe so the model can verify."""
+    seen: set[str] = set()
+    block_counts: dict[str, int] = {}
+    inspect_args = {"kind": "block", "block_name": "vendas", "detail": "code"}
+
+    ok, _ = evaluate_tool_call(
+        "datapyn_inspect", inspect_args, seen_keys=seen, block_inspect_counts=block_counts
+    )
+    assert ok is True
+
+    invalidate_block_reads(
+        "datapyn_edit",
+        {"operation": "replace", "block_name": "vendas", "content": "SELECT 2"},
+        seen_keys=seen,
+        block_inspect_counts=block_counts,
+    )
+
+    ok2, _ = evaluate_tool_call(
+        "datapyn_inspect", inspect_args, seen_keys=seen, block_inspect_counts=block_counts
+    )
+    assert ok2 is True
+
+
+def test_invalidate_block_reads_keeps_other_blocks_deduped():
+    seen: set[str] = set()
+    block_counts: dict[str, int] = {}
+    other_args = {"kind": "block", "block_name": "outro", "detail": "code"}
+    evaluate_tool_call(
+        "datapyn_inspect", other_args, seen_keys=seen, block_inspect_counts=block_counts
+    )
+
+    invalidate_block_reads(
+        "datapyn_edit",
+        {"operation": "replace", "block_name": "vendas", "content": "x"},
+        seen_keys=seen,
+        block_inspect_counts=block_counts,
+    )
+
+    ok, msg = evaluate_tool_call(
+        "datapyn_inspect", other_args, seen_keys=seen, block_inspect_counts=block_counts
+    )
+    assert ok is False
+    assert "DUPLICATE" in msg
+
+
+def test_invalidate_block_reads_ignores_non_mutating_tools():
+    seen: set[str] = set()
+    args = {"kind": "block", "block_name": "vendas"}
+    evaluate_tool_call("datapyn_inspect", args, seen_keys=seen, block_inspect_counts={})
+    invalidate_block_reads("datapyn_snapshot", {"action": "blocks"}, seen_keys=seen)
+    ok, _ = evaluate_tool_call("datapyn_inspect", args, seen_keys=seen, block_inspect_counts={})
+    assert ok is False
+
+
+def test_sdk_budget_reads_exhausted_still_allows_edits():
+    """The incident: mapping a 2412-line block burned the whole shared budget
+    on reads and the user's edits were silently skipped. Reads exhausting
+    their lane must NOT block mutations."""
+    reads = MAX_SDK_READ_TOOLS_PER_TURN
+
+    ok_read, msg_read = evaluate_sdk_budget(
+        "datapyn_inspect", read_executions=reads, mutating_executions=0
+    )
+    assert ok_read is False
+    assert "EDIT" in msg_read or "edit" in msg_read
+
+    ok_edit, _ = evaluate_sdk_budget(
+        "datapyn_edit", read_executions=reads, mutating_executions=0
+    )
+    assert ok_edit is True
+
+    ok_run, _ = evaluate_sdk_budget(
+        "datapyn_run", read_executions=reads, mutating_executions=0
+    )
+    assert ok_run is True
+
+
+def test_sdk_budget_blocked_mutation_is_unmistakable():
+    """A refused edit must scream NOT APPLIED so the model can't narrate it
+    as done."""
+    ok, msg = evaluate_sdk_budget(
+        "datapyn_edit",
+        read_executions=0,
+        mutating_executions=MAX_SDK_MUTATING_TOOLS_PER_TURN,
+    )
+    assert ok is False
+    assert "NOT APPLIED" in msg
+    assert "NOT modified" in msg
+
+
+def test_sdk_budget_within_limits_allows_everything():
+    for name in ("datapyn_inspect", "datapyn_snapshot", "datapyn_edit", "datapyn_run"):
+        ok, msg = evaluate_sdk_budget(name, read_executions=0, mutating_executions=0)
+        assert ok is True
+        assert msg == ""
 
 
 def test_truncate_tool_result():

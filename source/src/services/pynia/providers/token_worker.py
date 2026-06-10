@@ -29,11 +29,13 @@ FALLBACK_MODELS: dict[ProviderId, list] = {
     "openai": fallback_models(),
     "openrouter": [
         {"id": "openai/gpt-4o", "name": "GPT-4o (OpenRouter)", "multiplier": 1.0},
-        {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4", "multiplier": 1.0},
+        {"id": "anthropic/claude-sonnet-4.6", "name": "Claude Sonnet 4.6", "multiplier": 1.0},
     ],
     "anthropic": [
-        {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "multiplier": 1.0},
-        {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "multiplier": 1.0},
+        {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "multiplier": 1.0},
+        {"id": "claude-opus-4-8", "name": "Claude Opus 4.8", "multiplier": 1.0},
+        {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "multiplier": 1.0},
+        {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4 (legacy)", "multiplier": 1.0},
     ],
 }
 
@@ -114,6 +116,12 @@ class TokenAgentWorker(QObject):
             models = FALLBACK_MODELS.get(self._provider_id, fallback_models())
             if self._provider_id in ("openai", "openrouter"):
                 fetched = fetch_openai_models(base, token)
+                if fetched:
+                    models = normalize_models(fetched) or models
+            elif self._provider_id == "anthropic":
+                from src.services.pynia.anthropic_agent_loop import fetch_anthropic_models
+
+                fetched = fetch_anthropic_models(token)
                 if fetched:
                     models = normalize_models(fetched) or models
             self.models_ready.emit(models)

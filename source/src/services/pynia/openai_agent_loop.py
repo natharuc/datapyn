@@ -11,6 +11,7 @@ from src.services.pynia.agent_progress import ProgressCallback, emit_progress
 from src.services.pynia.agent_loop_policy import (
     FORCE_ANSWER_AFTER_ROUND,
     MAX_TOOL_ROUNDS,
+    invalidate_block_reads,
     prepare_tool_calls,
     should_offer_tools,
 )
@@ -221,6 +222,14 @@ def run_openai_agent_turn(
                 {"role": "tool", "tool_call_id": tc_id, "content": result}
             )
         compact_conversation_in_place(conversation)
+        for name, args, _tc_id, should_execute in prepared:
+            if should_execute:
+                invalidate_block_reads(
+                    name,
+                    args,
+                    seen_keys=seen_tool_keys,
+                    block_inspect_counts=block_inspect_counts,
+                )
 
         if not offer_tools:
             continue

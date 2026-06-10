@@ -58,6 +58,14 @@ button { cursor: pointer; }
     align-items: center;
     gap: 6px;
 }
+.header-actions { flex: 0 0 auto; }
+/* Narrow panel: keep the header on one line — Switch account stays reachable
+   inside the usage/quota panel. */
+@media (max-width: 460px) {
+    .switch-account-btn { display: none !important; }
+    .logout-btn { padding: 0 6px; }
+    .auth-btn.ready { padding: 2px 8px; font-size: 11px; }
+}
 .auth-cluster {
     display: flex;
     align-items: center;
@@ -201,7 +209,8 @@ button { cursor: pointer; }
     white-space: nowrap;
 }
 
-.title-cluster { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.title-cluster { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.title-cluster > div:last-child { min-width: 0; }
 .product-mark {
     width: 24px;
     height: 24px;
@@ -213,8 +222,8 @@ button { cursor: pointer; }
     font-size: 10px;
     font-weight: 700;
 }
-.chat-title { font-weight: 650; line-height: 1.1; }
-.chat-subtitle { color: var(--text-tertiary); font-size: 11px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-title { font-weight: 650; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-subtitle { color: var(--text-tertiary); font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .icon-command, .text-command {
     min-height: 28px;
@@ -1192,7 +1201,9 @@ select {
 .composer-footer {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; /* narrow panel: wrap controls instead of overlapping */
     gap: 6px;
+    row-gap: 4px;
     padding: 6px 8px 8px;
     min-width: 0;
     border-top: 1px solid var(--border-muted);
@@ -1408,14 +1419,21 @@ textarea::placeholder { color: var(--text-tertiary); }
 }
 .toolbar-select:hover, .toolbar-select:focus { border-color: var(--border-default); background: var(--bg-tertiary); color: var(--text-primary); }
 .effort-select { max-width: 118px; }
-.model-picker { position: relative; min-width: 0; }
+.model-picker { position: relative; min-width: 0; display: flex; overflow: hidden; }
 .model-picker-button {
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    min-width: 0;
     max-width: 210px;
     border-radius: 5px;
     cursor: pointer;
+}
+/* Narrow panel: tighten the composer controls so they fit on one line. */
+@media (max-width: 430px) {
+    .model-picker-button { max-width: 150px; }
+    .effort-select { max-width: 84px; }
+    .usage-status-label { max-width: 90px; }
 }
 #modelPickerLabel {
     min-width: 0;

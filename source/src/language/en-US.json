@@ -632,6 +632,7 @@
     "zoom_out": "Zoom out",
     "empty_hint": "Select cells in the results grid to see totals, averages, and counts.",
     "no_data": "No data to summarize.",
+    "summarizing": "Summarizing…",
     "selection_subtitle": "{rows:,} rows · {cols} columns · {cells:,} cells selected",
     "all_rows_subtitle": "All rows · {cols} columns ({rows:,} rows)",
     "headers": {

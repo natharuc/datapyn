@@ -113,6 +113,13 @@ def main():
     global_font = get_application_font(size=10)
     app.setFont(global_font)
 
+    # Warm up Qt's lazy font database for fonts measured later (results grid
+    # uses Consolas). The first QFontMetrics text measurement otherwise pays
+    # a ~200ms font-DB population stall on the UI thread mid-session.
+    from PyQt6.QtGui import QFontMetrics
+    for _warm_font in (global_font, QFont("Consolas", 10)):
+        QFontMetrics(_warm_font).horizontalAdvance("0")
+
     splash.set_progress(18, "Aplicando tema…")
     from src.design_system.stylesheet import get_application_stylesheet
 

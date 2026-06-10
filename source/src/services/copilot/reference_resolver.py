@@ -230,9 +230,41 @@ class ReferenceResolver:
                 return self._block_snapshot(index, block, widget)
         return {"ok": False, "reference": target["reference"], "error": "Block not found."}
 
+    _ATTACH_MAX_LINES = 400
+    _ATTACH_MAX_CHARS = 24_000
+
+    def _bounded_code(self, block: Any) -> Tuple[str, str]:
+        """Full block code bounded for prompt injection. Returns (code, note)."""
+        try:
+            code = block.get_code() if hasattr(block, "get_code") else ""
+        except Exception:
+            code = ""
+        if not code:
+            return "", ""
+        lines = code.splitlines()
+        note = ""
+        if len(lines) > self._ATTACH_MAX_LINES:
+            hidden = len(lines) - self._ATTACH_MAX_LINES
+            code = "\n".join(lines[: self._ATTACH_MAX_LINES])
+            note = (
+                f"Truncated: {hidden} more lines — use datapyn_inspect with "
+                "around=/start_line for the rest."
+            )
+        if len(code) > self._ATTACH_MAX_CHARS:
+            code = code[: self._ATTACH_MAX_CHARS]
+            note = note or "Truncated for size — use datapyn_inspect for the rest."
+        return code, note
+
     def _block_snapshot(self, index: int, block: Any, widget: Any) -> Dict[str, Any]:
         session = getattr(widget, "session", None) if widget else None
         snapshot = self._block_summary(block, index, include_code=True)
+        # Explicitly referenced blocks are user attachments — ship the full
+        # (bounded) code so the agent can act without an inspect round.
+        code, note = self._bounded_code(block)
+        if code:
+            snapshot["code"] = code
+            if note:
+                snapshot["code_note"] = note
         snapshot.update({
             "ok": True,
             "type": "block",
@@ -240,5 +272,6 @@ class ReferenceResolver:
             "block_index": index,
             "session_id": getattr(session, "session_id", ""),
             "tab_title": getattr(session, "title", ""),
+            "is_user_attachment": True,
         })
         return snapshot

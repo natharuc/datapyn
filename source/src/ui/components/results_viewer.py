@@ -41,9 +41,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QObject, QAbstractTableModel, QModelIndex, QVariant, QSettings, QTimer, QThread, pyqtSignal, QRect, QPoint, QSize, QSignalBlocker, QEvent
 from PyQt6.QtGui import QColor, QImage, QPixmap, QFont, QKeySequence, QShortcut, QAction, QDoubleValidator, QPainter, QPen
+import numpy as np
 import pandas as pd
 import io
 import json
+import time
+from PyQt6 import sip
 from dataclasses import dataclass
 from datetime import date, datetime
 from numbers import Integral, Real
@@ -65,19 +68,65 @@ GRID_ASYNC_ROW_THRESHOLD = 200
 GRID_COLUMN_RESIZE_SAMPLE_ROWS = 50
 GRID_COLUMN_MAX_WIDTH = 420
 SUMMARIZE_MAX_EXPLICIT_CELLS = 5000
+# Type detection on huge columns is sampled: converting 1M+ object values
+# with pd.to_numeric just to discover the column type freezes everything.
+GRID_TYPE_DETECTION_SAMPLE_ROWS = 10_000
 
 
-@dataclass
 class PreparedGridData:
-    """Display-ready grid payload built off the UI thread."""
+    """Lazy display payload for the grid.
 
-    columns: list[str]
-    display_rows: list[list[str]]
-    null_mask: list[list[bool]]
-    numeric_column_indices: frozenset[int]
-    filtered_row_count: int
-    total_row_count: int
-    limited: bool
+    Holds per-column Series/arrays and resolved format configs; cell text is
+    produced on demand in display_value(). Qt only requests visible cells, so
+    a 1M-row result costs no string materialization upfront (the old design
+    pre-built len(df) x n_cols Python strings and froze the app).
+    """
+
+    __slots__ = (
+        "columns",
+        "column_values",
+        "column_nulls",
+        "column_format_configs",
+        "numeric_column_indices",
+        "row_count",
+        "filtered_row_count",
+        "total_row_count",
+        "limited",
+    )
+
+    def __init__(
+        self,
+        columns: list[str],
+        column_values: list,
+        column_nulls: list,
+        column_format_configs: list[dict],
+        numeric_column_indices: frozenset[int],
+        row_count: int,
+        filtered_row_count: int,
+        total_row_count: int,
+        limited: bool,
+    ):
+        self.columns = columns
+        self.column_values = column_values
+        self.column_nulls = column_nulls
+        self.column_format_configs = column_format_configs
+        self.numeric_column_indices = numeric_column_indices
+        self.row_count = row_count
+        self.filtered_row_count = filtered_row_count
+        self.total_row_count = total_row_count
+        self.limited = limited
+
+    def is_null(self, row: int, col: int) -> bool:
+        nulls = self.column_nulls[col]
+        if nulls is None:
+            return False
+        return bool(nulls[row])
+
+    def display_value(self, row: int, col: int) -> str:
+        if self.is_null(row, col):
+            return "NULL"
+        value = self.column_values[col].iat[row]
+        return _grid_format_display_value(value, self.column_format_configs[col])
 
 
 @dataclass
@@ -137,7 +186,15 @@ def _grid_column_is_numeric(series: pd.Series) -> bool:
     if pd.api.types.is_bool_dtype(series):
         return False
 
-    non_null = series.dropna()
+    # Sample BEFORE dropna: a full dropna() on millions of object values is
+    # itself a 100ms+ GIL-held pass per column.
+    if len(series) > GRID_TYPE_DETECTION_SAMPLE_ROWS:
+        non_null = series.head(GRID_TYPE_DETECTION_SAMPLE_ROWS).dropna()
+        if non_null.empty:
+            # Head was all-null; fall back to scanning for real values.
+            non_null = series.dropna().head(GRID_TYPE_DETECTION_SAMPLE_ROWS)
+    else:
+        non_null = series.dropna()
     if non_null.empty:
         return False
 
@@ -148,8 +205,27 @@ def _grid_column_is_numeric(series: pd.Series) -> bool:
 
 def _grid_coerce_numeric_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
-        return pd.to_numeric(series, errors="coerce")
+        return series
     return pd.to_numeric(series, errors="coerce")
+
+
+GRID_NULLMASK_CHUNK_ROWS = 200_000
+
+
+def _grid_isna_chunked(series: pd.Series) -> "np.ndarray":
+    """isna() in bounded slices with GIL yields.
+
+    A single isna() over millions of object cells is one long C call that
+    never releases the GIL and visibly stalls the UI thread.
+    """
+    n = len(series)
+    if n <= GRID_NULLMASK_CHUNK_ROWS:
+        return series.isna().to_numpy()
+    parts = []
+    for start in range(0, n, GRID_NULLMASK_CHUNK_ROWS):
+        parts.append(series.iloc[start : start + GRID_NULLMASK_CHUNK_ROWS].isna().to_numpy())
+        time.sleep(0.0005)
+    return np.concatenate(parts)
 
 
 def _grid_normalize_format_config(format_config) -> dict:
@@ -423,10 +499,15 @@ def prepare_grid_data(
     column_formats: dict,
     limit: int,
 ) -> GridPrepareResult:
-    """Build display-ready grid data. Safe to run off the UI thread."""
+    """Build the lazy grid payload. Safe to run off the UI thread.
+
+    Only vectorized per-column work happens here (filter, numeric coercion,
+    null masks). Cell text is NOT materialized — PreparedGridData formats
+    visible cells on demand, so 1M+ rows stay cheap in time and memory.
+    """
     if source_df is None:
         empty = pd.DataFrame()
-        prepared = PreparedGridData([], [], [], frozenset(), 0, 0, False)
+        prepared = PreparedGridData([], [], [], [], frozenset(), 0, 0, 0, False)
         return GridPrepareResult(prepared, empty)
 
     total_rows = len(source_df)
@@ -439,24 +520,12 @@ def prepare_grid_data(
     display_df = filtered_df.head(limit) if limited else filtered_df
 
     columns = [str(column) for column in display_df.columns]
-    row_count = len(display_df)
-    col_count = len(columns)
     format_map = dict(column_formats or {})
-    numeric_indices = frozenset(
-        index
-        for index, column in enumerate(columns)
-        if column in display_df.columns
-        and _grid_column_is_numeric(display_df[column])
-        and _grid_resolve_display_format(
-            column,
-            display_df[column],
-            format_map.get(column, format_map.get(str(column), "default")),
-        ).get("type")
-        not in {"date", "datetime"}
-    )
 
-    display_rows: list[list[str]] = [[""] * col_count for _ in range(row_count)]
-    null_mask: list[list[bool]] = [[False] * col_count for _ in range(row_count)]
+    column_values: list = []
+    column_nulls: list = []
+    column_format_configs: list[dict] = []
+    numeric_indices: set[int] = set()
 
     for col_index, column in enumerate(columns):
         series = display_df[column]
@@ -467,32 +536,36 @@ def prepare_grid_data(
         )
         format_type = format_config.get("type", "default")
         use_raw_values = format_type in {"date", "datetime"} or pd.api.types.is_datetime64_any_dtype(series)
+        is_numeric = _grid_column_is_numeric(series)
 
-        if _grid_column_is_numeric(series) and not use_raw_values:
-            numeric_series = _grid_coerce_numeric_series(series)
-            nulls = numeric_series.isna().to_numpy()
-            values = numeric_series.to_numpy()
-            for row_index, value in enumerate(values):
-                is_null = bool(nulls[row_index])
-                null_mask[row_index][col_index] = is_null
-                display_rows[row_index][col_index] = (
-                    "NULL" if is_null else _grid_format_display_value(value, format_config)
-                )
-            continue
+        if is_numeric and not use_raw_values:
+            values = _grid_coerce_numeric_series(series)
+        else:
+            values = series
 
-        values = series.to_list()
-        for row_index, value in enumerate(values):
-            is_null = _grid_is_null_scalar(value)
-            null_mask[row_index][col_index] = is_null
-            display_rows[row_index][col_index] = (
-                "NULL" if is_null else _grid_format_display_value(value, format_config)
-            )
+        column_values.append(values)
+        try:
+            column_nulls.append(_grid_isna_chunked(values))
+        except (TypeError, ValueError):
+            column_nulls.append(None)
+        column_format_configs.append(format_config)
+
+        if is_numeric and format_type not in {"date", "datetime"}:
+            numeric_indices.add(col_index)
+
+        # Yield the GIL between columns: isna()/to_numeric on 1M-row object
+        # columns are single C calls that would otherwise stack into one
+        # long UI-starving stretch.
+        if len(display_df) > GRID_TYPE_DETECTION_SAMPLE_ROWS:
+            time.sleep(0.001)
 
     prepared = PreparedGridData(
         columns=columns,
-        display_rows=display_rows,
-        null_mask=null_mask,
-        numeric_column_indices=numeric_indices,
+        column_values=column_values,
+        column_nulls=column_nulls,
+        column_format_configs=column_format_configs,
+        numeric_column_indices=frozenset(numeric_indices),
+        row_count=len(display_df),
         filtered_row_count=filtered_count,
         total_row_count=total_rows,
         limited=limited,
@@ -1850,7 +1923,7 @@ class PandasModel(QAbstractTableModel):
 
     def rowCount(self, parent=QModelIndex()):
         if self._prepared is not None:
-            return len(self._prepared.display_rows)
+            return self._prepared.row_count
         return len(self._df)
 
     def columnCount(self, parent=QModelIndex()):
@@ -1866,13 +1939,16 @@ class PandasModel(QAbstractTableModel):
             row = index.row()
             col = index.column()
             if role == Qt.ItemDataRole.DisplayRole:
-                return self._prepared.display_rows[row][col]
+                try:
+                    return self._prepared.display_value(row, col)
+                except (IndexError, KeyError):
+                    return QVariant()
             if role == Qt.ItemDataRole.BackgroundRole:
-                if self._prepared.null_mask[row][col]:
+                if self._prepared.is_null(row, col):
                     return self._null_bg
                 return self._row_even if row % 2 == 0 else self._row_odd
             if role == Qt.ItemDataRole.ForegroundRole:
-                if self._prepared.null_mask[row][col]:
+                if self._prepared.is_null(row, col):
                     return self._null_text
                 return self._text_color
             if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -2578,6 +2654,12 @@ class ResultsViewer(QWidget):
             }}
             {SCROLLBAR_STYLE}
         """)
+        # Warm the font engine for the QSS-resolved font (Consolas at pixel
+        # size). The FIRST text measurement/paint on a cold font config costs
+        # ~200ms on Windows; pay it here (style time, behind splash/startup)
+        # instead of mid-render of the first big result grid.
+        table_view.ensurePolished()
+        table_view.fontMetrics().horizontalAdvance("0")
 
     def _install_result_zoom_filter(self, table_view: QTableView):
         """Instala Ctrl+scroll no grid e no viewport do grid."""
@@ -4230,27 +4312,28 @@ class ResultsViewer(QWidget):
             if view is None:
                 return False
             try:
-                from shiboken6 import isValid
-
-                return isValid(view)
-            except ImportError:
+                # PyQt6: deleted C++ wrapper check. (Never import shiboken6
+                # here — it's PySide's lib, the failed import re-scans
+                # sys.path on EVERY grid render and stalls the UI ~200ms.)
+                return not sip.isdeleted(view)
+            except (RuntimeError, TypeError):
                 return True
 
         def resize_columns():
             if not _table_view_is_valid(table_view):
                 return
             try:
-                if len(prepared.display_rows) <= GRID_ASYNC_ROW_THRESHOLD:
+                if prepared.row_count <= GRID_ASYNC_ROW_THRESHOLD:
                     table_view.resizeColumnsToContents()
                     return
 
                 header = table_view.horizontalHeader()
                 metrics = table_view.fontMetrics()
-                sample_rows = min(GRID_COLUMN_RESIZE_SAMPLE_ROWS, len(prepared.display_rows))
+                sample_rows = min(GRID_COLUMN_RESIZE_SAMPLE_ROWS, prepared.row_count)
                 for col_index, column_name in enumerate(prepared.columns):
                     max_width = metrics.horizontalAdvance(str(column_name)) + 24
                     for row_index in range(sample_rows):
-                        cell_text = prepared.display_rows[row_index][col_index]
+                        cell_text = prepared.display_value(row_index, col_index)
                         max_width = max(max_width, metrics.horizontalAdvance(cell_text) + 24)
                     header.resizeSection(col_index, min(max_width, GRID_COLUMN_MAX_WIDTH))
             except RuntimeError:
@@ -5333,6 +5416,16 @@ class ResultsViewer(QWidget):
             self._copy_to_clipboard(include_headers=include_headers)
             return
 
+        # Huge selections (e.g. select-all on 1M rows) must NOT materialize
+        # per-cell QModelIndex lists — that's millions of objects and a hard
+        # freeze. Copy from the underlying DataFrame via vectorized to_csv.
+        scope = self.get_summarize_selection_scope()
+        if scope.get("row_ranges") and scope.get("bound_cols") is not None:
+            if self._copy_selection_ranges_to_clipboard(
+                scope["row_ranges"], scope["bound_cols"], include_headers
+            ):
+                return
+
         indexes = selection.selectedIndexes()
         if not indexes:
             self._copy_to_clipboard(include_headers=include_headers)
@@ -5372,6 +5465,40 @@ class ResultsViewer(QWidget):
         n_rows = len(rows)
         n_cols = len(cols)
         self._show_clipboard_success(f"{n_rows} x {n_cols}")
+
+    def _copy_selection_ranges_to_clipboard(
+        self, row_ranges: list, bound_cols: list, include_headers: bool
+    ) -> bool:
+        """Vectorized copy for large range selections; returns True on success."""
+        from PyQt6.QtWidgets import QApplication
+
+        df = self.current_df
+        if df is None or df.empty:
+            return False
+
+        cols = [c for c in sorted(set(bound_cols)) if 0 <= c < len(df.columns)]
+        if not cols:
+            return False
+
+        parts = []
+        total_rows = 0
+        for start, end in row_ranges:
+            start = max(0, int(start))
+            end = min(len(df) - 1, int(end))
+            if start > end:
+                continue
+            parts.append(df.iloc[start : end + 1, cols])
+            total_rows += end - start + 1
+        if not parts:
+            return False
+
+        selection_df = parts[0] if len(parts) == 1 else pd.concat(parts)
+        es = self._get_export_settings()
+        sep = es["copy_separator"]
+        text = selection_df.to_csv(sep=sep, index=False, header=bool(include_headers))
+        QApplication.instance().clipboard().setText(text)
+        self._show_clipboard_success(f"{total_rows} x {len(cols)}")
+        return True
 
     def _show_header_context_menu(self, pos):
         """Show context menu when right-clicking on column/row headers."""

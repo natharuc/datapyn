@@ -119,6 +119,14 @@ def _dir_size(path: Path) -> int:
     return total
 
 
+def _estimate_frame_bytes(df: pd.DataFrame) -> int:
+    """Cheap in-memory size estimate (no deep object scan)."""
+    try:
+        return int(df.memory_usage(deep=False).sum())
+    except Exception:
+        return 0
+
+
 def _to_pandas_dataframe(value: Any) -> Optional[pd.DataFrame]:
     if isinstance(value, pd.DataFrame):
         return value
@@ -379,6 +387,22 @@ class SessionResultStorage:
         session_path = _session_dir(session_id)
         storage_root = _storage_root()
 
+        # Early skip for obviously oversized snapshots: don't burn seconds of
+        # GIL-heavy Arrow conversion writing Parquet files we'd discard anyway.
+        # Parquet compresses well, so allow a generous 10x margin over the limit.
+        max_bytes = get_session_result_max_size_bytes()
+        estimated = sum(
+            _estimate_frame_bytes(df) for _, df in items if isinstance(df, pd.DataFrame)
+        )
+        if estimated > max_bytes * 10:
+            logger.info(
+                "Session %s variables (~%d bytes in memory) far exceed limit (%d bytes); skipping persist",
+                session_id,
+                estimated,
+                max_bytes,
+            )
+            return False
+
         # Drop stale temp dirs left behind by interrupted saves (app closed
         # while a background snapshot was being written).
         for stale in storage_root.glob(f".{session_id}.*.tmp"):
@@ -402,6 +426,8 @@ class SessionResultStorage:
                     compression=PARQUET_COMPRESSION,
                 )
                 manifest_items.append({"name": var_name, "file": file_name})
+                # Yield the GIL between frames so the UI keeps painting.
+                threading.Event().wait(0.001)
 
             manifest = {
                 "version": 2,
@@ -455,14 +481,11 @@ class SessionResultStorage:
                     SessionResultStorage.delete(session_id)
                     return
 
-                payload: List[ResultItem] = []
-                for name, df in items:
-                    try:
-                        payload.append((name, df.copy()))
-                    except Exception:
-                        payload.append((name, df))
-
-                SessionResultStorage.save(session_id, payload)
+                # No df.copy(): copying 1M-row frames holds the GIL for
+                # seconds and starves the UI thread. to_parquet does not
+                # mutate the frame; a concurrent user mutation mid-write is
+                # caught by save()'s try/except and just skips the snapshot.
+                SessionResultStorage.save(session_id, items)
             except Exception as exc:
                 logger.warning(
                     "Async persist failed for session %s: %s", session_id, exc

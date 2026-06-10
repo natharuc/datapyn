@@ -220,6 +220,9 @@ class MCPToolRegistry(QObject):
         self._main_window = None
         self._pinned_session_id: Optional[str] = None  # Per-tab tool isolation
         self._recent_tool_cache: Dict[tuple, tuple] = {}
+        # Code snapshots taken before each agent edit, keyed by block identity,
+        # so undo_block_edit can recover from a destructive replace.
+        self._block_code_backups: Dict[int, str] = {}
         self._register_tools()
 
     def set_main_window(self, main_window) -> None:
@@ -762,6 +765,27 @@ class MCPToolRegistry(QObject):
         ))
 
         self._register(MCPTool(
+            name="undo_block_edit",
+            description=(
+                "Restore a block's code to before Pynia's last edit (edit_block, "
+                "edit_block_lines or write_and_run). Use after a wrong/destructive edit."
+            ),
+            parameters={
+                "block_name": {
+                    "type": "string",
+                    "description": "Block name. Preferred over block_index.",
+                    "optional": True,
+                },
+                "block_index": {
+                    "type": "integer",
+                    "description": "Block index (0-based). Omit to use focused block.",
+                    "optional": True,
+                },
+            },
+            handler=self._undo_block_edit,
+        ))
+
+        self._register(MCPTool(
             name="replace_selection",
             description="Replace selected text with new code. If nothing selected, inserts at cursor.",
             parameters={
@@ -1088,18 +1112,50 @@ class MCPToolRegistry(QObject):
         # For GUI-safe execution, tools should use QMetaObject.invokeMethod internally
         return self._execute_directly(tool_name, arguments or {})
 
+    # Pure reads — safe to dedupe from the short cache. Anything else mutates
+    # editor/DB/namespace state: it must always execute, and it invalidates
+    # cached reads (their content may have just changed).
+    _CACHEABLE_TOOLS = frozenset({
+        "think",
+        "get_context",
+        "list_blocks",
+        "resolve_reference",
+        "get_tab_context",
+        "get_block_result",
+        "get_block_code",
+        "inspect_block",
+        "get_execution_results",
+        "list_visualizations",
+        "get_visualization_config",
+        "get_variables",
+        "inspect_variable",
+        "get_dataframe_info",
+        "get_selection",
+        "search_in_code",
+        "read_schema",
+        "get_database_schema",
+        "list_tables",
+        "describe_table",
+        "sample_data",
+        "list_connections",
+        "get_all_code",
+        "read_output",
+    })
+
     def _execute_directly(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute tool directly."""
         tool = self._tools.get(tool_name)
         if not tool:
             return {"error": f"Unknown tool: {tool_name}"}
 
+        cacheable = tool_name in self._CACHEABLE_TOOLS
         cache_key = (tool_name, json.dumps(arguments or {}, sort_keys=True, default=str))
         now = time.time()
-        cached = self._recent_tool_cache.get(cache_key)
-        if cached and now - cached[0] < 30:
-            logger.info("Tool '%s' deduplicated (identical call within 30s)", tool_name)
-            return cached[1]
+        if cacheable:
+            cached = self._recent_tool_cache.get(cache_key)
+            if cached and now - cached[0] < 30:
+                logger.info("Tool '%s' deduplicated (identical call within 30s)", tool_name)
+                return cached[1]
 
         try:
             start = time.perf_counter()
@@ -1107,13 +1163,16 @@ class MCPToolRegistry(QObject):
             result = tool.handler(arguments)
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info("Tool '%s' finished in %.0fms", tool_name, elapsed_ms)
-            self._recent_tool_cache[cache_key] = (now, result)
-            if len(self._recent_tool_cache) > 64:
-                cutoff = now - 30
-                self._recent_tool_cache = {
-                    key: value for key, value in self._recent_tool_cache.items()
-                    if value[0] >= cutoff
-                }
+            if cacheable:
+                self._recent_tool_cache[cache_key] = (now, result)
+                if len(self._recent_tool_cache) > 64:
+                    cutoff = now - 30
+                    self._recent_tool_cache = {
+                        key: value for key, value in self._recent_tool_cache.items()
+                        if value[0] >= cutoff
+                    }
+            else:
+                self._recent_tool_cache.clear()
             return result
         except Exception as e:
             logger.error("Error executing tool '%s': %s", tool_name, e)
@@ -1216,7 +1275,8 @@ class MCPToolRegistry(QObject):
         """Create a new code block in the current session."""
         language = args.get("language", "python")
         code = args.get("code", "")
-        name = args.get("name", "")
+        # datapyn_blocks sends block_name; accept both keys.
+        name = args.get("name", "") or args.get("block_name", "")
         mw = self._main_window
         
         logger.info(f"create_block called: language={language}, code_len={len(code)}, name={name}")
@@ -1270,18 +1330,39 @@ class MCPToolRegistry(QObject):
         if error:
             return {"error": error}
 
+        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{idx}"
+
+        # Safety: edit_block replaces the WHOLE block. A replacement much
+        # smaller than a large existing block is almost always a partial edit
+        # sent to the wrong operation — refusing it prevents wiping the rest.
+        current_code = self._current_block_code(target_block)
+        cur_lines = len(current_code.splitlines())
+        new_lines = len(code.splitlines())
+        if not args.get("force") and cur_lines >= 60 and new_lines < cur_lines * 0.5:
+            return {"error": (
+                f"SAFETY: block '{name}' has {cur_lines} lines but the replacement has only "
+                f"{new_lines}. edit_block replaces the ENTIRE block — the other "
+                f"{cur_lines - new_lines} lines would be lost. For a partial change use "
+                "edit_block_lines (datapyn_edit operation=lines with start_line/end_line). "
+                "To really replace the whole block, repeat with force=true."
+            )}
+
+        self._backup_block_code(target_block, current_code)
         self._signal_pynia_editing(target_block, block_editor)
         target_block.set_code(code)
         # Move cursor to top of block
         editor = getattr(target_block, "editor", None)
         if editor and hasattr(editor, "go_to_line"):
             editor.go_to_line(0)
-        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{idx}"
-        return {"content": [{"type": "text", "text": f"Block {idx} ('{name}') updated with {len(code)} characters."}]}
+        return {"content": [{"type": "text", "text": (
+            f"Block {idx} ('{name}') updated with {len(code)} characters. "
+            "Wrong change? undo_block_edit restores the previous code."
+        )}]}
 
     def _rename_block(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Rename a block. The name determines the DataFrame variable name for SQL blocks."""
-        name = args.get("name", "")
+        # datapyn_edit operation=rename sends new_name; accept both keys.
+        name = args.get("name", "") or args.get("new_name", "")
         if not name:
             return {"error": "name is required."}
 
@@ -1536,15 +1617,16 @@ class MCPToolRegistry(QObject):
             except Exception as e:
                 logger.debug(f"Error getting schema from ObjectExplorer: {e}")
 
-        # Add tool usage guide for smart tool selection
+        # Add tool usage guide for smart tool selection (datapyn_* surface —
+        # these are the only tool names the agent can call).
         context["tool_guide"] = (
             "WORKFLOW: (1) Read blocks/html_blocks/focused_block/block_map above. "
-            "(2) For large HTML blocks: inspect_block → get_block_code(around=...) → edit_block_lines. "
-            "(3) If target is clear, call get_block_code(block_name=...) then edit_block or edit_block_lines to UPDATE it. "
-            "(4) Use list_blocks or ONE specific search_in_code only when the target block is unknown. "
-            "(5) Only use write_and_run to CREATE a new block when none exists. "
-            "(6) Use run_silent_query/run_silent_python for DATA checks only — never to grep block source. "
-            "(7) Python blocks with generates_html render HTML in the results panel — edit them with edit_block, not create_visualization."
+            "(2) For large HTML blocks: datapyn_inspect detail=structure → datapyn_inspect detail=code around=... → datapyn_edit operation=lines. "
+            "(3) If the target block is clear, use datapyn_edit to UPDATE it (operation=lines for small diffs, replace for rewrites). "
+            "(4) Use datapyn_snapshot action=blocks only when the target block is unknown. "
+            "(5) Only use datapyn_run mode=write to CREATE a new block when none exists; pass block_name to update an existing one. "
+            "(6) Use datapyn_query for DATA checks only — never to grep block source. "
+            "(7) Python blocks with generates_html render HTML in the results panel — edit them with datapyn_edit, not datapyn_chart."
         )
 
         # Add namespace variables summary
@@ -1775,9 +1857,51 @@ class MCPToolRegistry(QObject):
         idx = blocks.index(target) if target in blocks else -1
         return target, block_editor, idx, None
 
+    @staticmethod
+    def _current_block_code(block) -> str:
+        """Best-effort read of a block's current code (always a str)."""
+        try:
+            code = block.get_code() if hasattr(block, "get_code") else getattr(block, "code", "")
+        except Exception:
+            return ""
+        return code if isinstance(code, str) else ""
+
+    def _backup_block_code(self, block, current_code: Optional[str] = None) -> None:
+        """Snapshot a block's code before an agent edit (for undo_block_edit)."""
+        code = current_code if current_code is not None else self._current_block_code(block)
+        if not isinstance(code, str):
+            return
+        self._block_code_backups[id(block)] = code
+        while len(self._block_code_backups) > 16:
+            self._block_code_backups.pop(next(iter(self._block_code_backups)))
+
+    def _undo_block_edit(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Restore a block to the code it had before the agent's last edit."""
+        target_block, block_editor, idx, error = self._resolve_block(args)
+        if error:
+            return {"error": error}
+
+        backup = self._block_code_backups.get(id(target_block))
+        if backup is None:
+            return {"error": (
+                "No edit backup for this block — only blocks edited by Pynia "
+                "this session can be restored. The user can still press Ctrl+Z "
+                "in the editor."
+            )}
+
+        name = target_block.get_block_name() if hasattr(target_block, "get_block_name") else f"block{idx}"
+        # Swap: keep the rejected code so calling undo again re-applies it.
+        self._block_code_backups[id(target_block)] = self._current_block_code(target_block)
+        self._signal_pynia_editing(target_block, block_editor)
+        target_block.set_code(backup)
+        return {"content": [{"type": "text", "text": (
+            f"Block '{name}' restored to the code before the last edit "
+            f"({len(backup.splitlines())} lines). Calling undo again re-applies the edit."
+        )}]}
+
     def _signal_pynia_editing(self, block, block_editor=None):
         """Show Copilot editing indicator on a block and scroll it into view.
-        
+
         Sets the purple sparkle indicator on the block, and ensures
         the block is visible to the user by scrolling to it.
         """
@@ -2159,8 +2283,11 @@ class MCPToolRegistry(QObject):
         """Create a block, write code, and execute it - all in one step."""
         language = args.get("language", "python")
         code = args.get("code", "")
-        name = args.get("name", "")
-        
+        # The consolidated datapyn_run tool sends block_name; honor it so
+        # "update this block" never silently creates a duplicate.
+        name = args.get("name", "") or args.get("block_name", "")
+        block_index = args.get("block_index")
+
         logger.info(f"write_and_run called: language={language}, code_len={len(code)}, name={name}")
 
         if not code:
@@ -2177,8 +2304,13 @@ class MCPToolRegistry(QObject):
             return {"error": "Block editor not available."}
 
         block = self._find_block_by_name(block_editor, name) if name else None
+        if block is None and block_index is not None:
+            blocks = getattr(block_editor, "blocks", [])
+            if isinstance(block_index, int) and 0 <= block_index < len(blocks):
+                block = blocks[block_index]
         if block:
             logger.info(f"write_and_run: Updating existing block '{name}'")
+            self._backup_block_code(block)
             if hasattr(block, "set_language"):
                 try:
                     block.set_language(language)
@@ -2495,11 +2627,14 @@ class MCPToolRegistry(QObject):
 
     # === Database Intelligence Tool Implementations ===
 
-    def _get_connector(self):
-        """Get the database connector for the current session."""
-        session = self._get_active_session()
-        if not session or not session.connection_name:
-            return None, "No database connection in current session."
+    def _get_connector(self, connection_name: str = ""):
+        """Get a database connector — a named one, or the current session's."""
+        name = (connection_name or "").strip()
+        if not name:
+            session = self._get_active_session()
+            if not session or not session.connection_name:
+                return None, "No database connection in current session."
+            name = session.connection_name
 
         mw = self._main_window
         conn_manager = getattr(mw, "_connection_manager", None)
@@ -2511,12 +2646,12 @@ class MCPToolRegistry(QObject):
             except Exception as e:
                 return None, f"Cannot access connection manager: {e}"
 
-        connector = conn_manager.get_connection(session.connection_name)
+        connector = conn_manager.get_connection(name)
         if not connector:
-            return None, f"Connection '{session.connection_name}' not found."
+            return None, f"Connection '{name}' not found."
 
         if not connector.is_connected:
-            return None, f"Connection '{session.connection_name}' is not connected."
+            return None, f"Connection '{name}' is not connected."
 
         return connector, None
 
@@ -2652,7 +2787,7 @@ class MCPToolRegistry(QObject):
         if not query:
             return {"error": "query is required."}
 
-        connector, error = self._get_connector()
+        connector, error = self._get_connector(args.get("connection_name", ""))
         if error:
             return {"error": error}
 
@@ -2805,7 +2940,7 @@ class MCPToolRegistry(QObject):
         except (TypeError, ValueError):
             limit = 5
 
-        connector, error = self._get_connector()
+        connector, error = self._get_connector(args.get("connection_name", ""))
         if error:
             return {"error": error}
 
@@ -2993,6 +3128,7 @@ class MCPToolRegistry(QObject):
 
         result_code = "\n".join(lines)
         # Show copilot editing indicator and scroll into view
+        self._backup_block_code(target_block, current_code)
         self._signal_pynia_editing(target_block, block_editor)
         target_block.set_code(result_code)
         # Highlight the edited region and move cursor there
@@ -3051,7 +3187,9 @@ class MCPToolRegistry(QObject):
                         "type": "text",
                         "text": (
                             f"No anchor '{around}' in block '{name}' ({total_lines} lines). "
-                            "Call inspect_block(block_name=...) for ids/functions/classes, then retry."
+                            "Use datapyn_inspect detail=structure on this block to list its "
+                            "ids/functions/classes, then retry with a real anchor or use "
+                            "start_line/end_line."
                         ),
                     }]
                 }

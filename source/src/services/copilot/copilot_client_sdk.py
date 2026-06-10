@@ -547,6 +547,8 @@ class CopilotWorker(QObject):
         self._block_inspect_counts: Dict[str, int] = {}
         self._ui_tool_call_ids: set[str] = set()
         self._turn_tool_executions: int = 0
+        self._turn_read_executions: int = 0
+        self._turn_mutating_executions: int = 0
         self._chat_busy = False
 
     def invalidate_sdk_tools(self) -> None:
@@ -1091,6 +1093,8 @@ class CopilotWorker(QObject):
         self._block_inspect_counts = {}
         self._ui_tool_call_ids = set()
         self._turn_tool_executions = 0
+        self._turn_read_executions = 0
+        self._turn_mutating_executions = 0
 
         SDKClient, SDKTool, EventType, import_err = _try_import_sdk()
         if SDKClient is None:
@@ -1362,6 +1366,11 @@ class CopilotWorker(QObject):
 
         for tool_schema in registry.list_tools():
             tool_name = tool_schema.get("name", "")
+            # Subagent workers need an API connector token; on the Copilot
+            # backend they always fail ("API token not configured"), so don't
+            # offer the tool at all.
+            if tool_name == "datapyn_subagent":
+                continue
             tool_desc = tool_schema.get("description", "")
             input_schema = tool_schema.get("inputSchema", {})
 
@@ -1394,18 +1403,22 @@ class CopilotWorker(QObject):
                         arguments = {}
 
                     from src.services.pynia.agent_loop_policy import (
-                        MAX_SDK_TOOLS_PER_TURN,
+                        evaluate_sdk_budget,
                         evaluate_tool_call,
                     )
+                    from src.services.pynia.subagents.classifier import is_mutating_tool
 
                     call_id = worker._resolve_tool_call_id(name, invocation)
                     worker._emit_tool_call_once(name, arguments, call_id)
-                    if worker._turn_tool_executions >= MAX_SDK_TOOLS_PER_TURN:
-                        allowed, skip_msg = False, (
-                            f"SKIPPED: max {MAX_SDK_TOOLS_PER_TURN} tools per turn. "
-                            "Answer from context or make one edit/run."
-                        )
-                    else:
+                    # Reads and mutations have separate budgets: exhausting
+                    # reads while mapping a big block must never block the
+                    # edits the user actually asked for.
+                    allowed, skip_msg = evaluate_sdk_budget(
+                        name,
+                        read_executions=worker._turn_read_executions,
+                        mutating_executions=worker._turn_mutating_executions,
+                    )
+                    if allowed:
                         allowed, skip_msg = evaluate_tool_call(
                             name,
                             arguments,
@@ -1414,12 +1427,26 @@ class CopilotWorker(QObject):
                         )
                     if allowed:
                         worker._turn_tool_executions += 1
+                        if is_mutating_tool(name):
+                            worker._turn_mutating_executions += 1
+                        else:
+                            worker._turn_read_executions += 1
                     logger.info("SDK calling tool: %s with %s", name, _safe_log_preview(arguments, 120))
                     if not allowed:
                         result = skip_msg
                     else:
                         try:
                             result = worker._tool_executor.execute(name, arguments)
+                            from src.services.pynia.agent_loop_policy import (
+                                invalidate_block_reads,
+                            )
+
+                            invalidate_block_reads(
+                                name,
+                                arguments,
+                                seen_keys=worker._tool_guard_seen,
+                                block_inspect_counts=worker._block_inspect_counts,
+                            )
                         except Exception as exc:
                             logger.exception("SDK tool %s failed", name)
                             result = f"Error: {exc}"

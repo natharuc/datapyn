@@ -53,11 +53,17 @@ def filter_openai_tools(
 def should_delegate_to_subagent(user_text: str, *, block_count: int = 0) -> bool:
     """Heuristic: broad discovery questions benefit from parallel explore."""
     text = (user_text or "").lower()
-    if block_count > 8 and any(w in text for w in ("all blocks", "every block", "overview", "scan")):
+    broad_words = (
+        "all blocks", "every block", "overview", "scan",
+        # pt-BR
+        "todos os blocos", "todo bloco", "todos blocos", "visão geral", "visao geral",
+    )
+    if block_count > 8 and any(w in text for w in broad_words):
         return True
-    if sum(1 for w in ("schema", "tables", "database") if w in text) >= 2:
+    db_words = ("schema", "tables", "database", "esquema", "tabelas", "banco")
+    if sum(1 for w in db_words if w in text) >= 2:
         return True
-    if "compare" in text and block_count > 4:
+    if ("compare" in text or "comparar" in text or "compara" in text) and block_count > 4:
         return True
     return False
 
@@ -71,17 +77,20 @@ def suggest_explore_tasks(
     text = (user_text or "").strip()
     tasks: List[Dict[str, str]] = []
     lower = text.lower()
-    if connection_name or any(w in lower for w in ("schema", "table", "database", "sql")):
+    schema_words = ("schema", "table", "database", "sql", "esquema", "tabela", "banco")
+    if connection_name or any(w in lower for w in schema_words):
         tasks.append({
             "task_id": "schema",
             "instruction": "datapyn_snapshot action=schema — list tables and key columns.",
         })
-    if any(w in lower for w in ("block", "code", "html", "python", "script")):
+    block_words = ("block", "code", "html", "python", "script", "bloco", "código", "codigo")
+    if any(w in lower for w in block_words):
         tasks.append({
             "task_id": "blocks",
             "instruction": "datapyn_snapshot action=blocks — summarize each block name, language, and purpose.",
         })
-    if any(w in lower for w in ("variable", "dataframe", "df ", "data ")):
+    var_words = ("variable", "dataframe", "df ", "data ", "variável", "variavel", "variáveis", "variaveis")
+    if any(w in lower for w in var_words):
         tasks.append({
             "task_id": "vars",
             "instruction": "datapyn_snapshot action=variables — list namespace variables and types.",

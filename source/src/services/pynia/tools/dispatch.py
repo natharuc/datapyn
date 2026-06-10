@@ -127,10 +127,14 @@ class PyniaToolDispatcher:
         if not block_args and not args.get("block_name") and args.get("block_index") is None:
             return {"error": "block_name or block_index required for kind=block"}
 
-        if detail in ("structure", "outline", ""):
-            if detail == "" and args.get("around") or args.get("start_line"):
+        if detail == "outline":
+            detail = "structure"
+        elif detail == "":
+            # An anchor or line range implies a code read; otherwise default
+            # to the cheap structure outline.
+            if args.get("around") or args.get("start_line") is not None:
                 detail = "code"
-            elif detail == "":
+            else:
                 detail = "structure"
 
         if detail == "structure":
@@ -209,6 +213,9 @@ class PyniaToolDispatcher:
         if operation == "delete":
             return self._exec("delete_block", block_args)
 
+        if operation in ("undo", "restore"):
+            return self._exec("undo_block_edit", block_args)
+
         if operation == "language":
             if not args.get("language"):
                 return {"error": "language is required for operation=language"}
@@ -231,8 +238,21 @@ class PyniaToolDispatcher:
         # replace
         if not args.get("content"):
             return {"error": "content is required for operation=replace"}
+        # replace + line range means "replace these lines", NOT the whole
+        # block — route to the line editor. Sending the snippet to edit_block
+        # would wipe everything outside the range.
+        if args.get("start_line") is not None or args.get("end_line") is not None:
+            payload = dict(block_args)
+            payload["start_line"] = args.get("start_line") or 1
+            if args.get("end_line") is not None:
+                payload["end_line"] = args["end_line"]
+            payload["new_code"] = args["content"]
+            payload["mode"] = "replace"
+            return self._exec("edit_block_lines", payload)
         payload = dict(block_args)
         payload["code"] = args["content"]
+        if args.get("force") is not None:
+            payload["force"] = args["force"]
         return self._exec("edit_block", payload)
 
     def _blocks(self, args: Dict[str, Any]) -> Dict[str, Any]:

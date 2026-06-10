@@ -83,8 +83,16 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
                     "description": "Anchor for partial code (id, class, symbol).",
                     "optional": True,
                 },
-                "start_line": {"type": "integer", "optional": True},
-                "end_line": {"type": "integer", "optional": True},
+                "start_line": {
+                    "type": "integer",
+                    "description": "First line to read (1-based).",
+                    "optional": True,
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Last line to read (1-based, inclusive).",
+                    "optional": True,
+                },
                 "max_rows": {
                     "type": "integer",
                     "description": "Max preview rows for result/dataframe.",
@@ -117,8 +125,10 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_run",
             "description": (
-                "Execute blocks visibly. mode=block: run existing; "
-                "write: create/update block and run; all: run every block in tab."
+                "Execute blocks visibly. mode=block: run existing (defaults to focused); "
+                "write: with block_name updates that block (or names a new one), "
+                "without block_name creates a new block — then runs it; "
+                "all: run every block in tab."
             ),
             "parameters": {
                 "mode": {
@@ -142,21 +152,42 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
             "name": "datapyn_edit",
             "description": (
                 "Modify blocks. Defaults to focused block if block_name omitted. "
-                "operation=replace|lines|selection|rename|delete|language."
+                "operation=lines: edit ONLY start_line..end_line (use for partial changes); "
+                "replace: swap the ENTIRE block code; undo: restore the block to before "
+                "the last Pynia edit; also selection|rename|delete|language."
             ),
             "parameters": {
                 "operation": {
                     "type": "string",
-                    "description": "replace | lines | selection | rename | delete | language.",
+                    "description": (
+                        "lines (partial edit) | replace (whole block) | undo | "
+                        "selection | rename | delete | language."
+                    ),
                 },
                 **_BLOCK_REF,
                 "content": {
                     "type": "string",
-                    "description": "New code for replace/selection.",
+                    "description": "New code for replace/lines/selection.",
                     "optional": True,
                 },
-                "start_line": {"type": "integer", "optional": True},
-                "end_line": {"type": "integer", "optional": True},
+                "start_line": {
+                    "type": "integer",
+                    "description": "First line to edit (1-based).",
+                    "optional": True,
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Last line to edit (1-based, inclusive).",
+                    "optional": True,
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": (
+                        "Confirm a whole-block replace that shrinks a large block "
+                        "(safety guard refuses it otherwise)."
+                    ),
+                    "optional": True,
+                },
                 "new_name": {
                     "type": "string",
                     "description": "New block name for rename.",
@@ -233,7 +264,14 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
                 "chart_index": {"type": "integer", "optional": True},
                 "config": {
                     "type": "object",
-                    "description": "Chart config for create/edit.",
+                    "description": (
+                        "Chart config for create/edit. Main keys: "
+                        "type (bar|line|scatter|area|pie), x_column, "
+                        "y_columns (list of numeric columns), "
+                        "aggregation (sum|mean|count|min|max), group_by, "
+                        "stacking (none|stacked|percent), title, "
+                        "source_label (result tab label from chart_sources)."
+                    ),
                     "optional": True,
                 },
                 "format": {

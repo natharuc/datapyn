@@ -632,6 +632,7 @@
     "zoom_out": "Diminuir zoom",
     "empty_hint": "Selecione celulas no grid de resultados para ver totais, medias e contagens.",
     "no_data": "Nenhum dado para resumir.",
+    "summarizing": "Sumarizando…",
     "selection_subtitle": "{rows:,} linhas · {cols} colunas · {cells:,} celulas selecionadas",
     "all_rows_subtitle": "Todas as linhas · {cols} colunas ({rows:,} linhas)",
     "headers": {
