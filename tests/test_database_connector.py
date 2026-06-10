@@ -14,6 +14,20 @@ import types
 _MOCK_ODBC_DRIVERS = ["ODBC Driver 18 for SQL Server"]
 
 
+def _set_result_rows(mock, rows):
+    """Configure a mock cursor/result for the production fetch contract.
+
+    Production fetches rows via ``fetch_rows_chunked`` (cursor.fetchmany in a
+    loop until empty), not ``fetchall``. A MagicMock only given ``fetchall``
+    returns a truthy MagicMock from ``fetchmany`` forever → infinite loop.
+    Configure ``fetchmany`` to yield the rows once then drain.
+    """
+    rows = list(rows)
+    mock.fetchall.return_value = rows
+    chunks = iter([rows])
+    mock.fetchmany.side_effect = lambda *_a, **_k: next(chunks, [])
+
+
 class TestDatabaseConnectorConnectionString:
     """Testes de construção de string de conexão"""
 
@@ -512,7 +526,7 @@ class TestDatabaseConnectorConnectionString:
         mock_cursor.description = [(
             "col1",
         )]
-        mock_cursor.fetchall.return_value = [(1,)]
+        _set_result_rows(mock_cursor, [(1,)])
         mock_cursor.nextset.return_value = False
 
         mock_raw_conn = MagicMock()
@@ -613,7 +627,7 @@ class TestDatabaseConnectorMocked:
 
         mock_result = MagicMock()
         mock_result.keys.return_value = ["col"]
-        mock_result.fetchall.return_value = [("001",), ("002",), ("003",)]
+        _set_result_rows(mock_result, [("001",), ("002",), ("003",)])
         mock_connection.execute.return_value = mock_result
 
         result = connector.execute_query("SELECT * FROM test")
@@ -638,7 +652,7 @@ class TestDatabaseConnectorMocked:
 
         mock_result = MagicMock()
         mock_result.keys.return_value = ["external_id"]
-        mock_result.fetchall.return_value = [("123",), (None,), ("045",)]
+        _set_result_rows(mock_result, [("123",), (None,), ("045",)])
         mock_connection.execute.return_value = mock_result
 
         result = connector.execute_query("SELECT external_id FROM customer")
@@ -663,11 +677,11 @@ class TestDatabaseConnectorMocked:
 
         first_result = MagicMock()
         first_result.keys.return_value = ["code"]
-        first_result.fetchall.return_value = [("0007",)]
+        _set_result_rows(first_result, [("0007",)])
 
         second_result = MagicMock()
         second_result.keys.return_value = ["reference"]
-        second_result.fetchall.return_value = [("9001",)]
+        _set_result_rows(second_result, [("9001",)])
 
         mock_connection.execute.side_effect = [first_result, second_result]
 
@@ -829,7 +843,7 @@ class TestUseDatabasePersistence:
         # Criar mocks
         mock_cursor = MagicMock()
         mock_cursor.description = [("col1",), ("col2",)]
-        mock_cursor.fetchall.return_value = [(1, "a")]
+        _set_result_rows(mock_cursor, [(1, "a")])
         mock_cursor.nextset.return_value = False
 
         mock_init_cursor = MagicMock()
@@ -995,7 +1009,7 @@ class TestMssqlBatchesExecution:
 
         mock_cursor2 = MagicMock()
         mock_cursor2.description = [("col1",)]
-        mock_cursor2.fetchall.return_value = [(42,)]
+        _set_result_rows(mock_cursor2, [(42,)])
         mock_cursor2.nextset.return_value = False
 
         mock_raw_conn = MagicMock()
@@ -1270,7 +1284,7 @@ class TestMssqlBatchErrorHandling:
 
         mock_cursor_ok = MagicMock()
         mock_cursor_ok.description = [("col1",)]
-        mock_cursor_ok.fetchall.return_value = [(1,)]
+        _set_result_rows(mock_cursor_ok, [(1,)])
         mock_cursor_ok.nextset.return_value = False
 
         mock_raw_conn = MagicMock()

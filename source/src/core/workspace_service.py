@@ -236,17 +236,35 @@ class WorkspaceService(QObject):
     def get_workspace_settings(self, app_name: str) -> QSettings:
         """
         Get QSettings scoped to the current workspace.
-        
+
         Uses INI file format stored in workspace folder for isolation.
-        
+
         Args:
             app_name: Settings category name (e.g., "CopilotSettings", "MainWindow")
-        
+
         Returns:
             QSettings instance for this workspace
         """
         ini_path = self.get_config_path(f"{app_name}.ini")
         return QSettings(str(ini_path), QSettings.Format.IniFormat)
+
+
+def qsettings_alive(obj: Optional[QSettings]) -> bool:
+    """True when a cached QSettings' underlying C++ instance is still usable.
+
+    Settings singletons cache a QSettings for the whole process. When the
+    QApplication is torn down and recreated (e.g. between test files) the C++
+    object is destroyed while the Python wrapper survives — any access then
+    raises ``RuntimeError: wrapped C/C++ object ... has been deleted``. A
+    functional probe catches this (sip.isdeleted does not always flag it).
+    """
+    if obj is None:
+        return False
+    try:
+        obj.value("__alive_probe__")
+        return True
+    except RuntimeError:
+        return False
 
 
 def get_workspace_service() -> WorkspaceService:

@@ -64,8 +64,9 @@ class TestDbVariablesInPanel:
         captured_vars = {}
         widget._set_variables = lambda v: captured_vars.update(v)
 
-        # Simular update de namespace
+        # Simular update de namespace (a view le de session.effective_namespace())
         namespace = {"x": 42, "df": pd.DataFrame({"a": [1]})}
+        session.update_namespace(namespace)
         widget._update_variables_view(namespace)
 
         # Deve ter as variaveis originais
@@ -100,6 +101,7 @@ class TestDbVariablesInPanel:
         widget._set_variables = lambda v: captured_vars.update(v)
 
         namespace = {"y": 10}
+        session.update_namespace(namespace)
         widget._update_variables_view(namespace)
 
         assert "y" in captured_vars
@@ -421,16 +423,18 @@ class TestVariablesPanelContextMenu:
         """Painel deve ter sinal delete_variable"""
         assert hasattr(panel_with_vars, "delete_variable")
 
-    def test_double_click_emits_insert_signal(self, panel_with_vars, qtbot):
-        """Double-click deve emitir insert_variable_name"""
+    def test_insert_name_emits_insert_signal(self, panel_with_vars, qtbot):
+        """A acao de inserir (menu de contexto) deve emitir insert_variable_name.
+
+        Double-click agora abre o dialogo de detalhes e emite
+        variable_double_clicked; a insercao do nome migrou para _insert_name.
+        """
         panel = panel_with_vars
 
         with qtbot.waitSignal(panel.insert_variable_name, timeout=1000) as blocker:
-            # Simular double-click na primeira linha
-            index = panel.model.index(0, 0)
-            panel._on_double_click(index)
+            panel._insert_name("df")
 
-        assert blocker.args[0] in ("df", "minha_lista", "nome", "x")
+        assert blocker.args[0] == "df"
 
     def test_double_click_also_emits_variable_double_clicked(self, panel_with_vars, qtbot):
         """Double-click deve emitir variable_double_clicked tambem"""

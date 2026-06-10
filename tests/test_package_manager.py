@@ -1146,7 +1146,9 @@ class TestDialogWorkerCleanup:
 
             buttons = widget.findChildren(QPushButton)
             assert len(buttons) == 1
-            assert "Install" in buttons[0].text()
+            # The action button is icon-only; the label lives in the tooltip.
+            from src.language import S
+            assert buttons[0].toolTip() == S.package_manager.btn_install_anyway
 
     def test_operation_done_reloads_installed(self, qtbot):
         """Apos operacao bem sucedida, recarrega lista de instalados"""

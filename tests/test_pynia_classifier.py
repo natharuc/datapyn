@@ -1,6 +1,9 @@
 """Explore subagent routing heuristics."""
 
-from src.services.pynia.agent_loop_policy import should_offer_tools
+from src.services.pynia.agent_loop_policy import (
+    FORCE_ANSWER_AFTER_ROUND,
+    should_offer_tools,
+)
 from src.services.pynia.subagents.classifier import (
     suggest_explore_tasks,
     try_parse_single_tool_call,
@@ -28,6 +31,8 @@ def test_suggest_explore_tasks():
 
 
 def test_should_offer_tools_stops_after_force_round():
+    # Tools are offered up to (but not including) the force-answer round, so
+    # the model gets read → act → verify before being made to answer.
+    assert should_offer_tools(FORCE_ANSWER_AFTER_ROUND - 1) is True
+    assert should_offer_tools(FORCE_ANSWER_AFTER_ROUND) is False
     assert should_offer_tools(0) is True
-    assert should_offer_tools(1) is True
-    assert should_offer_tools(2) is False

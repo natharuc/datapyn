@@ -13,7 +13,18 @@ from .types import DEFAULT_PROVIDER, PROVIDERS, ProviderId
 logger = logging.getLogger(__name__)
 
 PYNIA_KEYRING_SERVICE = "DataPyn.pynia"
-_FALLBACK_SETTINGS = QSettings("DataPyn", "PyniaSecrets")
+_FALLBACK_SETTINGS: Optional[QSettings] = None
+
+
+def _fallback_settings() -> QSettings:
+    """Process-wide QSettings for the keyring fallback, rebuilt if its C++
+    object was destroyed (QApplication torn down/recreated between tests)."""
+    global _FALLBACK_SETTINGS
+    from src.core.workspace_service import qsettings_alive
+
+    if not qsettings_alive(_FALLBACK_SETTINGS):
+        _FALLBACK_SETTINGS = QSettings("DataPyn", "PyniaSecrets")
+    return _FALLBACK_SETTINGS
 
 
 def _secret_key(provider_id: ProviderId) -> str:
@@ -21,15 +32,16 @@ def _secret_key(provider_id: ProviderId) -> str:
 
 
 def _fallback_get(provider_id: ProviderId) -> str:
-    return _FALLBACK_SETTINGS.value(_secret_key(provider_id), "") or ""
+    return _fallback_settings().value(_secret_key(provider_id), "") or ""
 
 
 def _fallback_set(provider_id: ProviderId, value: str) -> None:
     key = _secret_key(provider_id)
+    settings = _fallback_settings()
     if value:
-        _FALLBACK_SETTINGS.setValue(key, value)
+        settings.setValue(key, value)
     else:
-        _FALLBACK_SETTINGS.remove(key)
+        settings.remove(key)
 
 
 def get_provider_secret(provider_id: ProviderId) -> str:
@@ -74,11 +86,17 @@ class PyniaSettingsManager:
 
     @property
     def _settings(self) -> QSettings:
-        from src.core.workspace_service import get_workspace_service
+        from src.core.workspace_service import get_workspace_service, qsettings_alive
 
         ws = get_workspace_service()
         current_workspace = str(ws.current_workspace)
-        if self._cached_workspace != current_workspace:
+        # Rebuild when the workspace changed or the cached QSettings' C++ object
+        # was destroyed (QApplication torn down/recreated between tests leaves a
+        # dead wrapper on this long-lived singleton).
+        if (
+            self._cached_workspace != current_workspace
+            or not qsettings_alive(self._cached_settings)
+        ):
             self._cached_settings = ws.get_workspace_settings("PyniaSettings")
             self._cached_workspace = current_workspace
         return self._cached_settings
