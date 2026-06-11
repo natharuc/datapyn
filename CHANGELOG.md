@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v1.43.0 (2026-06-10)
+
+### Bug Fixes
+
+- Melhoria em travamento do UI e otimização de cargas
+  ([`9a6bad5`](https://github.com/natharuc/datapyn/commit/9a6bad571a68f73c75656de04b00458f8a91da98))
+
+### Features
+
+- Ajuste em testes
+  ([`a46d71c`](https://github.com/natharuc/datapyn/commit/a46d71cb3f8fb2314b9036a5bfaf37cc7f2dafdb))
+
+- Melhoria copilot e performance
+  ([`5b0a70f`](https://github.com/natharuc/datapyn/commit/5b0a70f22ca4f92a91b6724dd75c82b9953e56a4))
+
+- Salvar e restaurar variaveis de sessoes em parquet
+  ([`6dbafe7`](https://github.com/natharuc/datapyn/commit/6dbafe7bcb561099c5481e7eb6e267886b85f34e))
+
+### Heuristic
+
+- Merge pull request #128 from natharuc/feat/keep-last-result
+  ([`9a18d5f`](https://github.com/natharuc/datapyn/commit/9a18d5fc17a8b35c8a88d62b58b38d02ef9561e3))
+
+
 ## v1.42.4 (2026-06-06)
 
 ### Heuristic
