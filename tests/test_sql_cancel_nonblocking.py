@@ -6,7 +6,9 @@ import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
-from src.database.database_connector import DatabaseConnector
+from PyQt6.QtCore import QThread
+
+from src.database.database_connector import DatabaseConnector, QueryBusyError
 from src.ui.components.session_widget import SessionSqlWorker, SessionWidget
 
 
@@ -140,4 +142,78 @@ def test_on_cancel_execution_does_not_call_cancel_query_on_main_thread(qtbot, mo
         widget._on_cancel_execution()
 
     request_cancel.assert_called_once()
-    widget._sql_worker.connector.cancel_query.assert_not_called()
+    assert widget._sql_worker is None
+
+
+def test_query_busy_raises_when_lock_held():
+    connector = DatabaseConnector()
+    connector.engine = MagicMock()
+    connector.db_type = "postgresql"
+    connector._query_lock.acquire()
+
+    try:
+        with pytest.raises(QueryBusyError):
+            connector.execute_query("SELECT 1")
+    finally:
+        connector._query_lock.release()
+
+
+def test_sql_thread_terminated_does_not_clear_new_worker(qtbot, monkeypatch):
+    """Stale thread finished after re-run must not wipe the active worker."""
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+    session.unregister_thread = MagicMock()
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+
+    old_thread = QThread()
+    new_thread = QThread()
+    new_worker = SessionSqlWorker(MagicMock(), "SELECT 2")
+
+    widget._sql_thread = new_thread
+    widget._sql_worker = new_worker
+
+    with patch.object(widget, "sender", return_value=old_thread):
+        widget._on_sql_thread_terminated()
+
+    assert widget._sql_thread is new_thread
+    assert widget._sql_worker is new_worker
+
+
+def test_cancel_clears_sql_slot_refs(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+    session.finish_execution = MagicMock()
+    session.register_thread = MagicMock()
+    session.unregister_thread = MagicMock()
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+    widget.editor = MagicMock()
+    widget.append_output = MagicMock()
+    widget._show_output = MagicMock()
+
+    thread = MagicMock()
+    thread.isRunning.return_value = True
+    worker = SessionSqlWorker(MagicMock(), "SELECT 1")
+    widget._sql_thread = thread
+    widget._sql_worker = worker
+
+    with patch.object(widget, "_orphan_background_thread") as orphan:
+        with patch.object(widget, "_request_sql_cancel_interrupt"):
+            widget._on_cancel_execution()
+
+    assert widget._sql_thread is None
+    assert widget._sql_worker is None
+    orphan.assert_called_once_with(thread, worker)

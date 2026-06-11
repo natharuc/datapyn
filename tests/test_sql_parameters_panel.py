@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch
 from PyQt6.QtCore import QDate, Qt
-from PyQt6.QtWidgets import QComboBox, QDateEdit, QDialog, QSpinBox
+from PyQt6.QtWidgets import QComboBox, QDateEdit, QDialog, QPushButton, QSpinBox
 
 import src.editors.sql_parameters_panel as sql_parameters_panel_module
 from src.editors.sql_parameters_panel import MultiSelectMenuButton, SqlParameterRow, SqlParameterSettingsDialog
@@ -136,25 +136,28 @@ class TestSqlParameterRow:
 
 
 class TestSqlParameterSettingsDialog:
-    def test_settings_dialog_removes_minmax_buttons(self, qtbot):
+    def test_settings_dialog_is_frameless_design_system_shell(self, qtbot):
+        """The dialog uses the DataPyn frameless shell (no native title bar)."""
         dialog = SqlParameterSettingsDialog(_param("status"))
         qtbot.addWidget(dialog)
 
+        assert bool(dialog.windowFlags() & Qt.WindowType.FramelessWindowHint)
+        # No native min/max buttons.
         assert not bool(dialog.windowFlags() & Qt.WindowType.WindowMinMaxButtonsHint)
+        # The custom frameless shell + title bar are installed.
+        assert hasattr(dialog, "_frameless_shell")
 
-    def test_settings_dialog_clears_individual_minimize_and_maximize_hints(self, qtbot):
+    def test_settings_dialog_has_custom_close_button(self, qtbot):
+        """A custom close button (DialogTitleBar) replaces the native one."""
+        from src.design_system.frameless_dialog import DialogTitleBar
+
         dialog = SqlParameterSettingsDialog(_param("status"))
         qtbot.addWidget(dialog)
 
-        assert not bool(dialog.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint)
-        assert not bool(dialog.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint)
-
-    def test_settings_dialog_keeps_close_button_when_customizing_title_bar(self, qtbot):
-        dialog = SqlParameterSettingsDialog(_param("status"))
-        qtbot.addWidget(dialog)
-
-        assert bool(dialog.windowFlags() & Qt.WindowType.CustomizeWindowHint)
-        assert bool(dialog.windowFlags() & Qt.WindowType.WindowCloseButtonHint)
+        title_bars = dialog.findChildren(DialogTitleBar)
+        assert title_bars, "frameless title bar not installed"
+        close_buttons = title_bars[0].findChildren(QPushButton)
+        assert any(b.objectName() == "framelessClose" for b in close_buttons)
 
     def test_settings_dialog_text_defaults_support_custom_and_presets(self, qtbot):
         dialog = SqlParameterSettingsDialog(_param("status", sql_type="text"))

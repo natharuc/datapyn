@@ -186,6 +186,11 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        from src.services.copilot.copilot_process import install_hidden_subprocess_patch
+
+        install_hidden_subprocess_patch()
+
     from src.services.in_app_update import try_run_apply_update_from_argv
 
     try_run_apply_update_from_argv(sys.argv)

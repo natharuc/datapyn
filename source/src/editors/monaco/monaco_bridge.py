@@ -5,7 +5,7 @@ Uses QWebChannel to enable bidirectional communication between
 PyQt6 and the embedded Monaco Editor.
 """
 
-from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QTimer
 
 
 class MonacoBridge(QObject):
@@ -40,6 +40,18 @@ class MonacoBridge(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._completion_callback = None
+
+    @staticmethod
+    def _defer_emit(signal, *args) -> None:
+        """Queue signal delivery so QWebChannel slots return before heavy Python work."""
+
+        def _fire() -> None:
+            try:
+                signal.emit(*args)
+            except RuntimeError:
+                pass
+
+        QTimer.singleShot(0, _fire)
     
     # === Slots called from JavaScript ===
     
@@ -98,7 +110,7 @@ class MonacoBridge(QObject):
             line: Current line number (1-indexed)
             column: Current column (1-indexed)
         """
-        self.completion_requested.emit(prefix, suffix, line, column)
+        self._defer_emit(self.completion_requested, prefix, suffix, line, column)
     
     @pyqtSlot(str, str, int, int)
     def forceRequestCompletion(self, prefix: str, suffix: str, line: int, column: int):
@@ -113,7 +125,7 @@ class MonacoBridge(QObject):
             line: Current line number (1-indexed)
             column: Current column (1-indexed)
         """
-        self.force_completion_requested.emit(prefix, suffix, line, column)
+        self._defer_emit(self.force_completion_requested, prefix, suffix, line, column)
 
     @pyqtSlot(str, str, int, int, int)
     def requestSqlContext(self, full_text: str, prefix: str, line: int, column: int, request_id: int):
@@ -122,14 +134,16 @@ class MonacoBridge(QObject):
         
         Used for "table." or "alias." completion to get specific columns.
         """
-        self.sql_context_requested.emit(full_text, prefix, line, column, int(request_id))
+        self._defer_emit(
+            self.sql_context_requested, full_text, prefix, line, column, int(request_id)
+        )
 
     @pyqtSlot(str, int, int, int)
     def requestSqlCompletion(self, full_text: str, line: int, column: int, request_id: int):
         """Called when SQL completion is requested (SSMS-style full context)."""
-        self.sql_completion_requested.emit(full_text, line, column, int(request_id))
+        self._defer_emit(self.sql_completion_requested, full_text, line, column, int(request_id))
 
     @pyqtSlot(str, int, int, int)
     def requestPythonCompletion(self, full_text: str, line: int, column: int, request_id: int):
         """Called when Python Jedi completion is requested."""
-        self.python_completion_requested.emit(full_text, line, column, int(request_id))
+        self._defer_emit(self.python_completion_requested, full_text, line, column, int(request_id))

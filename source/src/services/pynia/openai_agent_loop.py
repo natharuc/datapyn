@@ -277,21 +277,29 @@ def _inject_attachments(
     return result
 
 
-def fetch_openai_models(base_url: str, api_key: str) -> List[Dict[str, Any]]:
+def fetch_openai_models(
+    base_url: str,
+    api_key: str,
+    *,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
     import requests
 
     url = f"{base_url.rstrip('/')}/models"
-    resp = requests.get(
-        url,
-        headers={"Authorization": f"Bearer {api_key}"},
-        timeout=30,
-    )
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if extra_headers:
+        headers.update(extra_headers)
+    resp = requests.get(url, headers=headers, timeout=60)
     if resp.status_code != 200:
         return []
     data = resp.json()
     models = []
     for item in data.get("data", []):
-        mid = item.get("id", "")
-        if mid:
-            models.append({"id": mid, "name": mid, "multiplier": 1.0})
+        if not isinstance(item, dict):
+            continue
+        mid = str(item.get("id") or "").strip()
+        if not mid:
+            continue
+        name = str(item.get("name") or mid).strip() or mid
+        models.append({"id": mid, "name": name, "multiplier": 1.0})
     return models

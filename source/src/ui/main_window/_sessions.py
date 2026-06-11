@@ -416,6 +416,14 @@ class SessionsMixin:
         if getattr(self, "_connection_thread_guard", None) is None:
             self._connection_thread_guard = QObject(self)
 
+    def _adopt_background_thread(self, thread, worker=None) -> bool:
+        """Keep any background QThread alive under MainWindow until it finishes."""
+        return self._adopt_connection_thread(thread, worker)
+
+    def _orphan_background_thread(self, thread, worker=None) -> None:
+        """Detach worker from UI; thread stays adopted until it stops."""
+        self._orphan_connection_thread(thread, worker)
+
     def _adopt_connection_thread(self, thread, worker) -> bool:
         """Keep QThread alive under MainWindow until it finishes (prevents destroy-while-running)."""
         if thread is None:
@@ -1100,6 +1108,8 @@ class SessionsMixin:
         self._closing_session = True
         try:
             self._detach_widget_connections(widget)
+            if hasattr(widget, "_orphan_running_threads"):
+                widget._orphan_running_threads()
             closed_file_path = getattr(widget, "file_path", None)
             if closed_file_path and closed_file_path == self._original_file_path:
                 self._original_file_path = None

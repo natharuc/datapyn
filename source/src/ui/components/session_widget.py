@@ -23,7 +23,13 @@ import time
 
 from src.core.session import Session
 from src.core.theme_manager import ThemeManager
-from src.database.database_connector import _format_sql_error_for_user, _safe_exception_text, get_connector_database_context
+from src.database.block_connector_pool import BlockConnectorPool, connect_connector_from_config
+from src.database.database_connector import (
+    _format_sql_error_for_user,
+    _safe_exception_text,
+    get_connector_database_context,
+    QueryBusyError,
+)
 from src.editors.block_editor import BlockEditor
 from src.language import S
 from src.utils.sql_parameter_service import validate_and_convert_parameters
@@ -121,6 +127,8 @@ class SessionSqlWorker(QObject):
         try:
             df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.finished.emit(df, "")
+        except QueryBusyError as e:
+            self.finished.emit(None, str(e))
         except Exception as e:
             raw_error_msg = _safe_exception_text(e)
             # Detect if it was cancellation
@@ -147,53 +155,50 @@ class SessionSqlWorker(QObject):
 
 
 class BlockAutoConnectWorker(QObject):
-    """Worker to auto-connect a per-block connection in background.
-
-    Prevents UI freeze when a block needs to connect before executing SQL.
-    """
+    """Open an isolated connector for a SQL block (never the shared connection pool)."""
 
     finished = pyqtSignal(object, str)  # (connector or None, error_msg)
 
-    def __init__(self, connection_name: str, connection_manager=None):
+    def __init__(
+        self,
+        connection_name: str,
+        connection_manager=None,
+        *,
+        database_name: str | None = None,
+    ):
         super().__init__()
         self.connection_name = connection_name
         self._manager = connection_manager
+        self._database_name = database_name
 
     def run(self):
         try:
-            from src.database.database_connector import DatabaseConnector
-
             manager = self._manager
             if not manager:
                 from src.database.connection_manager import ConnectionManager
                 manager = ConnectionManager()
-
-            connector = manager.get_connection(self.connection_name)
-            if connector and connector.is_connected():
-                self.finished.emit(connector, "")
-                return
 
             config = manager.get_connection_config(self.connection_name)
             if not config:
                 self.finished.emit(None, f"Connection config not found: {self.connection_name}")
                 return
 
-            connector = DatabaseConnector()
-            connector.connect(
-                db_type=config["db_type"],
-                host=config["host"],
-                port=config["port"],
-                database=config["database"],
-                username=config.get("username", ""),
-                password=config.get("password", ""),
-                use_windows_auth=config.get("use_windows_auth", False),
-                sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
-                trust_server_certificate=config.get("trust_server_certificate", False),
-                http_path=config.get("http_path", ""),
-            )
+            db_type = str(config.get("db_type", "")).lower()
+            target_db = self._database_name
+            connect_database = config.get("database", "")
+            database_context = None
+            if db_type == "databricks" and target_db:
+                database_context = target_db
+            elif target_db:
+                connect_database = target_db
 
-            if connector.is_connected:
-                manager.connections[self.connection_name] = connector
+            connector = connect_connector_from_config(
+                config,
+                password=config.get("password", ""),
+                database=connect_database,
+                database_context=database_context,
+            )
+            if connector.is_connected():
                 self.finished.emit(connector, "")
             else:
                 self.finished.emit(None, f"Failed to connect: {self.connection_name}")
@@ -292,6 +297,8 @@ class SessionWidget(QWidget):
         self._db_switch_token: int = 0
         self._db_switch_threads: list = []
         self._is_closing: bool = False
+        self._block_connector_pool = BlockConnectorPool()
+        self._current_execution_block = None
 
         # Overlay de loading
         self._loading_overlay: Optional[QLabel] = None
@@ -893,7 +900,8 @@ class SessionWidget(QWidget):
         self.editor.select_connection_for_block.connect(self._on_block_select_connection)
 
         # Block connection change (to reload autocomplete)
-        self.editor.block_connection_changed.connect(self.block_connection_changed.emit)
+        self.editor.block_connection_changed.connect(self._on_editor_block_connection_changed)
+        self.editor.block_removed.connect(self._on_block_removed)
 
         # Connection drop on editor area (connect session + Object Explorer)
         self.editor.connection_drop_requested.connect(self.connection_drop_requested.emit)
@@ -932,6 +940,65 @@ class SessionWidget(QWidget):
 
     # === SQL EXECUTION ===
 
+    def _on_editor_block_connection_changed(self, block, connection_name: str) -> None:
+        if block is not None and hasattr(block, "get_block_key"):
+            self._block_connector_pool.release(block.get_block_key())
+        self.block_connection_changed.emit(block, connection_name)
+
+    def _on_block_removed(self, block) -> None:
+        if block is not None and hasattr(block, "get_block_key"):
+            self._block_connector_pool.release(block.get_block_key())
+
+    def _resolve_block_database_targets(
+        self, config: dict, database_name: str | None, block
+    ) -> tuple[str | None, str | None]:
+        """Return (connect_database, database_context) for a block."""
+        target = database_name or (block.get_database_name() if block is not None else None)
+        db_type = str(config.get("db_type", "")).lower()
+        if db_type == "databricks":
+            return config.get("database", ""), target or None
+        return target or config.get("database", ""), None
+
+    def _get_sql_connector_for_block(
+        self,
+        block,
+        connection_name: str | None,
+        database_name: str | None,
+    ):
+        """Return an isolated connector for this SQL block."""
+        if block is None or not hasattr(block, "get_block_key"):
+            return self.session.connector if self.session.is_connected else None
+
+        conn_name = connection_name or self.session.connection_name
+        if not conn_name:
+            return None
+
+        manager = self._get_connection_manager()
+        config = manager.get_connection_config(conn_name)
+        if not config:
+            return None
+
+        connect_db, db_context = self._resolve_block_database_targets(
+            config, database_name, block
+        )
+        return self._block_connector_pool.get(
+            block.get_block_key(),
+            conn_name,
+            config,
+            password=config.get("password", ""),
+            database=connect_db,
+            database_context=db_context,
+        )
+
+    def _update_block_database_ui(self, block, database_name: str) -> None:
+        """Update only the executing block's database context (not other blocks)."""
+        if block is None or not database_name:
+            return
+        block.set_database_name(database_name)
+        if hasattr(block, "db_panel"):
+            block.db_panel.set_database(database_name)
+        self.block_database_changed.emit(block, database_name)
+
     def _get_connection_manager(self):
         """Get the shared ConnectionManager instance from MainWindow.
 
@@ -960,54 +1027,54 @@ class SessionWidget(QWidget):
             connection_name: Custom connection name (None = use session default)
             database_name: Custom database name (None = use connection default)
         """
-        # Determine which connection to use
-        if connection_name:
-            # Fetch specific connection - auto-connect in background if needed
+        block = self.editor.get_current_executing_block()
+        conn_name = connection_name or self.session.connection_name
+        if not conn_name:
+            self.append_output(S.session_widget.no_active_connection, error=True)
+            self.status_changed.emit(S.session_widget.status_no_connection)
+            self._process_next_in_queue()
+            return
+
+        try:
+            connector = self._get_sql_connector_for_block(block, connection_name, database_name)
+        except Exception as exc:
+            self.append_output(self._format_log("SQL", f"ERROR: {exc}"), error=True)
+            self._finish_block_after_switch(has_error=True)
+            return
+
+        if connector is None or not connector.is_connected():
             manager = self._get_connection_manager()
-            connector = manager.get_connection(connection_name)
-            if connector and connector.is_connected():
-                # Already connected, proceed directly
-                self._execute_sql_with_connector(
-                    connector, query, block_name, connection_name, database_name, sql_parameters
-                )
-            else:
-                # Need auto-connect in background (never block UI)
-                self._set_block_busy_status(S.block.status_reconnecting)
-                self.append_output(S.session_widget.connecting_block.format(name=connection_name))
-                self.status_changed.emit(S.session_widget.connecting_block.format(name=connection_name))
+            self._set_block_busy_status(S.block.status_reconnecting)
+            self.append_output(S.session_widget.connecting_block.format(name=conn_name))
+            self.status_changed.emit(S.session_widget.connecting_block.format(name=conn_name))
 
-                thread = QThread()
-                worker = BlockAutoConnectWorker(connection_name, connection_manager=manager)
-                worker.moveToThread(thread)
-
-                thread.started.connect(worker.run)
-                worker.finished.connect(
-                    lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name, sp=sql_parameters:
-                        self._on_auto_connect_finished(conn, err, q, bn, cn, dn, sp)
-                )
-                worker.finished.connect(thread.quit)
-                thread.finished.connect(worker.deleteLater)
-                thread.finished.connect(thread.deleteLater)
-
-                # Keep reference to prevent GC
-                if not hasattr(self, "_auto_connect_threads"):
-                    self._auto_connect_threads = []
-                self._auto_connect_threads.append((thread, worker))
-                thread.finished.connect(lambda t=thread: self._cleanup_auto_connect_thread(t))
-
-                thread.start()
-                return
-        else:
-            # Use session default connection
-            if not self.session.is_connected:
-                self.append_output(S.session_widget.no_active_connection, error=True)
-                self.status_changed.emit(S.session_widget.status_no_connection)
-                self._process_next_in_queue()
-                return
-            connector = self.session.connector
-            self._execute_sql_with_connector(
-                connector, query, block_name, connection_name, database_name, sql_parameters
+            thread = QThread()
+            worker = BlockAutoConnectWorker(
+                conn_name,
+                connection_manager=manager,
+                database_name=database_name or (block.get_database_name() if block else None),
             )
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(
+                lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name, sp=sql_parameters, b=block:
+                    self._on_auto_connect_finished(conn, err, q, bn, cn, dn, sp, b)
+            )
+            worker.finished.connect(thread.quit)
+            thread.finished.connect(lambda t=thread: self._cleanup_auto_connect_thread(t))
+
+            if not hasattr(self, "_auto_connect_threads"):
+                self._auto_connect_threads = []
+            self._auto_connect_threads.append((thread, worker))
+            self._register_background_thread(thread, worker)
+
+            thread.start()
+            return
+
+        self._execute_sql_with_connector(
+            connector, query, block_name, connection_name, database_name, sql_parameters
+        )
 
     def _cleanup_auto_connect_thread(self, thread):
         """Remove finished auto-connect thread from tracking list."""
@@ -1016,7 +1083,17 @@ class SessionWidget(QWidget):
                 (t, w) for t, w in self._auto_connect_threads if t is not thread
             ]
 
-    def _on_auto_connect_finished(self, connector, error_msg, query, block_name, connection_name, database_name, sql_parameters=None):
+    def _on_auto_connect_finished(
+        self,
+        connector,
+        error_msg,
+        query,
+        block_name,
+        connection_name,
+        database_name,
+        sql_parameters=None,
+        block=None,
+    ):
         """Callback when auto-connect finishes. Proceeds with SQL execution if successful."""
         if not connector or error_msg:
             self.append_output(
@@ -1026,6 +1103,10 @@ class SessionWidget(QWidget):
             self.status_changed.emit(S.session_widget.status_conn_failed)
             self._finish_block_after_switch(has_error=True)
             return
+
+        conn_name = connection_name or self.session.connection_name
+        if block is not None and conn_name and hasattr(block, "get_block_key"):
+            self._block_connector_pool.register(block.get_block_key(), conn_name, connector)
 
         self._execute_sql_with_connector(connector, query, block_name, connection_name, database_name, sql_parameters)
 
@@ -1075,6 +1156,50 @@ class SessionWidget(QWidget):
         """Detach SQL worker signals before starting a new run (e.g. after DB switch)."""
         self._detach_sql_worker_handler()
 
+    def _register_background_thread(self, thread, worker=None) -> None:
+        """Parent thread on MainWindow so it cannot be destroyed while running."""
+        main = self.window()
+        if main is not None and hasattr(main, "_adopt_background_thread"):
+            main._adopt_background_thread(thread, worker)
+
+    def _orphan_background_thread(self, thread, worker=None) -> None:
+        """Detach from tab; MainWindow keeps thread alive until it stops."""
+        if thread is None:
+            return
+        main = self.window()
+        if (
+            main is not None
+            and main is not self
+            and hasattr(main, "_orphan_background_thread")
+        ):
+            main._orphan_background_thread(thread, worker)
+            return
+        from src.utils.qt_threading import kick_qthread_stop
+
+        kick_qthread_stop(thread, worker)
+
+    def _orphan_running_threads(self) -> None:
+        """Orphan all in-flight workers when the tab closes or cleans up."""
+        for thread_attr, worker_attr in (
+            ("_sql_thread", "_sql_worker"),
+            ("_python_thread", "_python_worker"),
+        ):
+            thread = getattr(self, thread_attr, None)
+            worker = getattr(self, worker_attr, None)
+            setattr(self, thread_attr, None)
+            setattr(self, worker_attr, None)
+            if thread is not None:
+                self._orphan_background_thread(thread, worker)
+
+        for thread, worker in list(getattr(self, "_auto_connect_threads", []) or []):
+            self._orphan_background_thread(thread, worker)
+        self._auto_connect_threads = []
+
+        pending = list(getattr(self, "_db_switch_threads", []) or [])
+        self._db_switch_threads = []
+        for thread, worker in pending:
+            self._orphan_background_thread(thread, worker)
+
     def _detach_sql_worker_handler(self) -> None:
         worker = getattr(self, "_sql_worker", None)
         handler = getattr(self, "_sql_finished_handler", None)
@@ -1101,38 +1226,74 @@ class SessionWidget(QWidget):
 
     def _on_sql_thread_terminated(self) -> None:
         thread = self.sender()
-        if isinstance(thread, QThread) and thread is getattr(self, "_sql_thread", None):
+        if not isinstance(thread, QThread):
+            return
+        if thread is getattr(self, "_sql_thread", None):
             self._sql_thread = None
-        self._sql_worker = None
-        self._sql_finished_handler = None
-        if isinstance(thread, QThread):
-            try:
-                self.session.unregister_thread(thread)
-            except Exception:
-                pass
+            self._sql_worker = None
+            self._sql_finished_handler = None
+        try:
+            self.session.unregister_thread(thread)
+        except Exception:
+            pass
         if not self._is_executing and not self._is_closing:
             QTimer.singleShot(0, self._process_next_in_queue)
         self._maybe_emit_execution_idle()
 
     def _on_python_thread_terminated(self) -> None:
         thread = self.sender()
-        if isinstance(thread, QThread) and thread is getattr(self, "_python_thread", None):
+        if not isinstance(thread, QThread):
+            return
+        if thread is getattr(self, "_python_thread", None):
             self._python_thread = None
-        self._python_worker = None
-        self._python_finished_handler = None
-        if isinstance(thread, QThread):
-            try:
-                self.session.unregister_thread(thread)
-            except Exception:
-                pass
+            self._python_worker = None
+            self._python_finished_handler = None
+        try:
+            self.session.unregister_thread(thread)
+        except Exception:
+            pass
         if not self._is_executing and not self._is_closing:
             QTimer.singleShot(0, self._process_next_in_queue)
         self._maybe_emit_execution_idle()
 
+    def _release_sql_slot(self) -> None:
+        """Drop widget refs to the SQL worker; thread may finish in background."""
+        thread = getattr(self, "_sql_thread", None)
+        worker = getattr(self, "_sql_worker", None)
+        self._sql_thread = None
+        self._sql_worker = None
+        self._sql_finished_handler = None
+        if thread is not None:
+            self._orphan_background_thread(thread, worker)
+
+    def _detach_stale_sql_thread(self) -> None:
+        """Orphan a cancelled SQL thread that is still stopping."""
+        thread = getattr(self, "_sql_thread", None)
+        if thread is None:
+            return
+        try:
+            if not thread.isRunning():
+                self._sql_thread = None
+                self._sql_worker = None
+                self._sql_finished_handler = None
+                return
+        except RuntimeError:
+            self._sql_thread = None
+            self._sql_worker = None
+            self._sql_finished_handler = None
+            return
+        worker = getattr(self, "_sql_worker", None)
+        self._release_sql_slot()
+        connector = getattr(worker, "connector", None) if worker is not None else None
+        if connector is not None and hasattr(connector, "request_cancel"):
+            try:
+                connector.request_cancel()
+            except Exception:
+                pass
+
     def _stop_sql_execution(self) -> None:
         """Cancel the in-flight SQL worker without destroying a running QThread."""
         self._sql_execution_token += 1
-        self._detach_sql_worker_handler()
         self._request_sql_cancel_interrupt()
 
     def _stop_python_execution(self) -> None:
@@ -1195,13 +1356,8 @@ class SessionWidget(QWidget):
         self._db_switch_token += 1
         pending = list(getattr(self, "_db_switch_threads", []) or [])
         self._db_switch_threads = []
-        for thread, _worker in pending:
-            try:
-                if thread.isRunning():
-                    thread.requestInterruption()
-                    thread.quit()
-            except RuntimeError:
-                pass
+        for thread, worker in pending:
+            self._orphan_background_thread(thread, worker)
 
     def is_execution_busy(self) -> bool:
         """True while SQL/Python runs or a database switch is still pending."""
@@ -1261,13 +1417,12 @@ class SessionWidget(QWidget):
         if on_error:
             worker.error.connect(_guarded_error)
         worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._cleanup_db_switch_thread(t))
 
         if not hasattr(self, "_db_switch_threads"):
             self._db_switch_threads = []
         self._db_switch_threads.append((thread, worker))
-        thread.finished.connect(lambda t=thread: self._cleanup_db_switch_thread(t))
+        self._register_background_thread(thread, worker)
 
         thread.start()
 
@@ -1284,6 +1439,7 @@ class SessionWidget(QWidget):
     ):
         """Execute SQL query using the given connector (called after connection is ready)."""
         import re
+        self._current_execution_block = self._get_active_execution_block()
         conn_label = connection_name or S.session_widget.default_connection_label
 
         if database_name and not skip_database_prep:
@@ -1333,10 +1489,7 @@ class SessionWidget(QWidget):
             def on_use_success(_db_name: str):
                 try:
                     resolved = get_connector_database_context(connector) or _db_name
-                    self.session.database_context = resolved if getattr(connector, "db_type", "") == "databricks" else ""
-                    conn_name = connection_name or self.session.connection_name
-                    if conn_name:
-                        self.connection_changed.emit(conn_name, resolved)
+                    self._update_block_database_ui(self._current_execution_block, resolved)
                     self.append_output(self._format_log("SQL", f"Database changed to: {resolved}"))
                     self.status_changed.emit(f"Database: {resolved}")
                 finally:
@@ -1353,8 +1506,19 @@ class SessionWidget(QWidget):
             return
 
         if self._sql_thread_is_active():
-            self._execution_queue.append(("sql", query, None, block_name, connection_name, database_name, sql_parameters))
+            if self._is_executing:
+                self._execution_queue.append(
+                    ("sql", query, None, block_name, connection_name, database_name, sql_parameters)
+                )
+                return
+            self._detach_stale_sql_thread()
+
+        if getattr(connector, "is_query_busy", lambda: False)():
+            self.append_output(self._format_log("SQL", S.session_widget.sql_previous_still_running), error=True)
+            self.status_changed.emit(S.session_widget.status_sql_previous_still_running)
+            self._finish_block_after_switch(has_error=True)
             return
+
         if self._is_executing:
             self._execution_queue.append(("sql", query, None, block_name, connection_name, database_name, sql_parameters))
             return
@@ -1435,11 +1599,10 @@ class SessionWidget(QWidget):
         thread.started.connect(worker.run)
         worker.finished.connect(_sql_finished_handler)
         worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._on_sql_thread_terminated)
 
         self.session.register_thread(thread)
+        self._register_background_thread(thread, worker)
         thread.start()
 
     def _on_database_switch_failed(self, error_msg: str):
@@ -1573,22 +1736,12 @@ class SessionWidget(QWidget):
                     db_after = ""
                 db_before = getattr(self, "_db_before_execution", "")
                 conn_name = getattr(self, "_current_connection_name", "") or self.session.connection_name
-                if db_after and db_before and db_after != db_before and conn_name:
-                    self.session.database_context = (
-                        db_after if getattr(self._current_connector, "db_type", "") == "databricks" else ""
-                    )
-                    self.connection_changed.emit(conn_name, db_after)
-                    # Update block db_panel if not from a per-block connection
-                    current_block = self.editor.get_focused_block()
-                    if not current_block:
-                        current_block = self.editor.get_last_focused_block()
-                    if current_block and hasattr(current_block, "db_panel"):
-                        current_block._database_name = db_after
-                        current_block.db_panel.set_database(db_after)
-                # Note: Do NOT emit connection_changed if database didn't change
-                # This avoids unnecessary schema reloads which cause performance issues
+                if db_after and db_before and db_after != db_before:
+                    target_block = self._current_execution_block or self.editor.get_current_executing_block()
+                    self._update_block_database_ui(target_block, db_after)
 
         self._is_executing = False
+        self._current_execution_block = None
 
     # === PYTHON EXECUTION ===
 
@@ -1654,11 +1807,10 @@ class SessionWidget(QWidget):
         thread.started.connect(worker.run)
         worker.finished.connect(_python_finished_handler)
         worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._on_python_thread_terminated)
 
         self.session.register_thread(thread)
+        self._register_background_thread(thread, worker)
         thread.start()
 
     def _on_python_finished_adapted(self, result, output: str, error: str, namespace: dict, figures: list = None):
@@ -1956,6 +2108,7 @@ class SessionWidget(QWidget):
 
         # Cancel SQL on the worker thread (never call driver cancel() on the UI thread).
         self._stop_sql_execution()
+        self._release_sql_slot()
         self._stop_python_execution()
 
         # CRITICO: Resetar estado de execucao e UI do bloco imediatamente
@@ -2041,6 +2194,9 @@ class SessionWidget(QWidget):
             self._queue_last_connection = self.session.connection_name
         if database_name:
             self._queue_last_database = database_name
+
+        if block is not None:
+            self.editor._current_executing_block = block
 
         if language == "sql":
             self._on_execute_sql(
@@ -2429,16 +2585,7 @@ class SessionWidget(QWidget):
         self._stop_sql_execution()
         self._stop_python_execution()
         self.detach_connection_thread()
-        for thread_attr in ("_sql_thread", "_python_thread"):
-            try:
-                thread = getattr(self, thread_attr, None)
-                if thread is None:
-                    continue
-                if thread.isRunning():
-                    thread.requestInterruption()
-                    thread.quit()
-            except RuntimeError:
-                pass
-            setattr(self, thread_attr, None)
+        self._orphan_running_threads()
+        self._block_connector_pool.release_all()
         self._sql_finished_handler = None
         self._python_finished_handler = None

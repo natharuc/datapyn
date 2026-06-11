@@ -538,6 +538,17 @@ class MainWindow(
         if hasattr(self, "_abort_all_background_connections"):
             self._abort_all_background_connections(wait_ms=3000)
 
+        from src.utils.qt_threading import stop_qthread
+
+        for thread, worker in list(getattr(self, "_worker_threads", [])):
+            stop_qthread(thread, worker, wait_ms=3000, force_terminate=True)
+        if hasattr(self, "_worker_threads"):
+            self._worker_threads.clear()
+
+        for widget in list(getattr(self, "_session_widgets", {}).values()):
+            if hasattr(widget, "_orphan_running_threads"):
+                widget._orphan_running_threads()
+
         # Save sessions before closing
         self._save_sessions()
 

@@ -11,6 +11,7 @@ import pyodbc
 import json
 import os
 import struct
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,11 @@ from src.language import S
 
 
 logger = logging.getLogger(__name__)
+
+
+class QueryBusyError(ConnectionError):
+    """Raised when a second query starts while another is still running."""
+
 
 # Fetch rows from DB cursors in bounded chunks. Long fetchall() calls hold
 # the GIL for the whole result set, starving the Qt UI thread even though the
@@ -378,6 +384,7 @@ class DatabaseConnector:
         self._active_raw_conn = None  # Reference for cancellation
         self._active_cursor = None  # Cursor reference for cancellation
         self._cancelled = False  # Cancellation flag
+        self._query_lock = threading.Lock()
         self._connection_config: Dict[str, Any] = {}
         self._sqlserver_mfa_credential = None
 
@@ -766,6 +773,10 @@ class DatabaseConnector:
         # Strip whitespace and filter empty batches
         return [b.strip() for b in batches if b.strip()]
 
+    def is_query_busy(self) -> bool:
+        """True while a worker thread holds the per-connection query lock."""
+        return self._query_lock.locked()
+
     def execute_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """
         Execute SQL query and return DataFrame or list of DataFrames
@@ -784,36 +795,45 @@ class DatabaseConnector:
         if not self.engine:
             raise ConnectionError("No active database connection")
 
+        if not self._query_lock.acquire(blocking=False):
+            raise QueryBusyError("A query is still running on this connection")
+
         try:
-            # Detect USE command to update current database
-            import re
-
-            use_match = self._match_use_only_command(query)
-            if use_match:
-                new_db = use_match.group(1)
-                logger.info(f"Detected USE command {new_db}")
-                if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
-                    self.change_database(new_db)
-                    return pd.DataFrame({"Result": [f"Database changed to: {new_db}"]})
-                self.connection_params["database"] = new_db
-
-            # For SQL Server, split on GO and execute each batch separately
-            if self.db_type == "sqlserver":
-                batches = self._split_sql_batches(query)
-                if not batches:
-                    return pd.DataFrame({"Result": ["No SQL commands to execute."]})
-                return self._execute_mssql_batches(batches, parameters=parameters)
-
-            # For Databricks, use specific method with cursor access for cancellation
-            if self.db_type == "databricks":
-                return self._execute_databricks_query(query, parameters=parameters)
-
-            # For other databases, use legacy logic
-            return self._execute_generic_query(query, parameters=parameters)
-
+            return self._execute_query_unlocked(query, parameters=parameters)
         except Exception as e:
             logger.error(f"Error executing query: {str(e)}")
             raise
+        finally:
+            self._query_lock.release()
+
+    def _execute_query_unlocked(
+        self, query: str, parameters: Optional[List[Dict[str, Any]]] = None
+    ) -> Union[pd.DataFrame, List[pd.DataFrame]]:
+        # Detect USE command to update current database
+        import re
+
+        use_match = self._match_use_only_command(query)
+        if use_match:
+            new_db = use_match.group(1)
+            logger.info(f"Detected USE command {new_db}")
+            if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
+                self.change_database(new_db)
+                return pd.DataFrame({"Result": [f"Database changed to: {new_db}"]})
+            self.connection_params["database"] = new_db
+
+        # For SQL Server, split on GO and execute each batch separately
+        if self.db_type == "sqlserver":
+            batches = self._split_sql_batches(query)
+            if not batches:
+                return pd.DataFrame({"Result": ["No SQL commands to execute."]})
+            return self._execute_mssql_batches(batches, parameters=parameters)
+
+        # For Databricks, use specific method with cursor access for cancellation
+        if self.db_type == "databricks":
+            return self._execute_databricks_query(query, parameters=parameters)
+
+        # For other databases, use legacy logic
+        return self._execute_generic_query(query, parameters=parameters)
 
     def request_cancel(self) -> None:
         """Set cancellation flag (safe from any thread; does not call the driver)."""

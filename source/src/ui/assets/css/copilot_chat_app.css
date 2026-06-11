@@ -461,38 +461,78 @@ select {
     position: absolute;
     right: 0;
     top: calc(100% + 8px);
-    width: min(300px, calc(100vw - 24px));
+    width: min(360px, calc(100vw - 24px));
+    max-height: min(420px, calc(100vh - 96px));
+    display: flex;
+    flex-direction: column;
     border: 1px solid var(--border-default);
     border-radius: 10px;
     background: var(--bg-secondary);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
-    padding: 8px 0;
+    padding: 0;
     z-index: 40;
+    overflow: hidden;
 }
 .account-picker-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 10px 8px;
+    flex-shrink: 0;
+    padding: 10px 10px 8px;
     border-bottom: 1px solid var(--border-default);
+    background: var(--bg-secondary);
+}
+.account-picker-heading {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
 }
 .account-picker-title {
     font-size: 12px;
     font-weight: 600;
     color: var(--text-primary);
+    line-height: 1.3;
+}
+.account-picker-active {
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 600;
+    line-height: 1.3;
 }
 .account-picker-close {
     width: 24px;
     height: 24px;
     padding: 0;
+    flex-shrink: 0;
 }
 .account-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+.account-picker-section {
     display: grid;
-    gap: 2px;
-    padding: 6px;
-    max-height: 220px;
-    overflow: auto;
+    gap: 4px;
+}
+.account-picker-section + .account-picker-section {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-default);
+}
+.account-picker-section-title {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    padding: 0 4px 2px;
 }
 .account-picker-item {
     display: flex;
@@ -535,14 +575,20 @@ select {
 .account-picker-item-badge {
     flex-shrink: 0;
     font-size: 10px;
-    color: var(--accent);
+    color: var(--text-secondary);
     border: 1px solid var(--border-default);
     border-radius: 999px;
     padding: 2px 6px;
 }
+.account-picker-item-badge.current-badge {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(51, 194, 255, 0.12);
+}
 .account-picker-add {
-    width: calc(100% - 12px);
-    margin: 6px 6px 2px;
+    width: calc(100% - 16px);
+    margin: 6px 8px 8px;
+    flex-shrink: 0;
     min-height: 30px;
     border: 1px dashed var(--border-default);
     border-radius: 6px;

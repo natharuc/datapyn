@@ -632,6 +632,38 @@ class TestMonacoSqlAutocompleteIntegration:
         assert completion_calls
         assert '"label": "SELECT"' in completion_calls[-1]
 
+    def test_set_sql_schema_is_idempotent_for_same_schema(self, qtbot):
+        """Re-applying the SAME schema (every block focus did this) must NOT
+        re-register completions in Monaco — that froze the editor."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+
+        schema = {
+            "database": "controleproducao",
+            "tables": [{"name": "venda", "schema": "dbo", "type": "TABLE"}],
+            "columns": {"dbo.venda": [{"name": "id", "type": "int"}]},
+        }
+        editor.set_sql_schema(schema)
+
+        editor._run_js_when_ready = Mock()
+        # Same object re-applied (the focus path): no JS work.
+        editor.set_sql_schema(schema)
+        assert editor._run_js_when_ready.call_count == 0
+
+        # A genuinely different schema DOES re-register.
+        editor.set_sql_schema(
+            {
+                "database": "controleproducao",
+                "tables": [{"name": "cliente", "schema": "dbo", "type": "TABLE"}],
+                "columns": {"dbo.cliente": [{"name": "nome", "type": "varchar"}]},
+            }
+        )
+        qtbot.waitUntil(lambda: editor._run_js_when_ready.call_count > 0, timeout=5000)
+        emitted = [c.args[0] for c in editor._run_js_when_ready.call_args_list]
+        assert any(c.startswith("registerSqlSchemaIndex(") for c in emitted)
+
     def test_sql_completion_uses_zero_based_service_coordinates(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor
 

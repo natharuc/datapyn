@@ -797,6 +797,13 @@ class MonacoEditor(QWidget):
         schema = schema or {}
         tables = len(schema.get("tables", []))
         columns = sum(len(v) for v in (schema.get("columns") or {}).values())
+        # Idempotent: registering the full schema in Monaco (often 10k+
+        # completions) is expensive and was re-run on EVERY block focus,
+        # freezing the editor. Skip when the schema is unchanged.
+        fingerprint = (id(schema), tables, columns, schema.get("db_type", ""))
+        if fingerprint == getattr(self, "_sql_schema_fingerprint", None):
+            return
+        self._sql_schema_fingerprint = fingerprint
         logger.debug(
             "[MONACO] set_sql_schema: %s tables, %s column groups",
             tables,

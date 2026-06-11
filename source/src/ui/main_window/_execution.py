@@ -22,11 +22,32 @@ from src.services.notification_delivery_service import get_notification_delivery
 logger = logging.getLogger(__name__)
 
 
+# Ignore execution triggers that arrive within this window of the previous one.
+# Key auto-repeat fires ~30x/s; this collapses a held/bounced run shortcut into
+# a single execution while staying short enough not to block intentional re-runs.
+_RUN_TRIGGER_DEBOUNCE_MS = 250
+
+
 class ExecutionMixin:
     """Handles code execution (SQL/Python), timer, tab indicators, logging."""
 
+    def _run_trigger_allowed(self) -> bool:
+        """Debounce execution entry points so a held run shortcut runs only once."""
+        timer = getattr(self, "_last_run_trigger_timer", None)
+        if timer is None:
+            timer = QElapsedTimer()
+            timer.start()
+            self._last_run_trigger_timer = timer
+            return True
+        if timer.isValid() and timer.elapsed() < _RUN_TRIGGER_DEBOUNCE_MS:
+            return False
+        timer.restart()
+        return True
+
     def _execute_from_toolbar(self):
         """Executes code from the current editor via toolbar button"""
+        if not self._run_trigger_allowed():
+            return
         editor = self._get_current_editor()
         if not editor:
             return
@@ -137,6 +158,8 @@ class ExecutionMixin:
 
     def _execute_current_block(self):
         """Executes the currently focused block with its language"""
+        if not self._run_trigger_allowed():
+            return
         editor = self._get_current_editor()
         if not editor:
             return
@@ -154,6 +177,8 @@ class ExecutionMixin:
 
     def _execute_all_blocks(self):
         """Executes all blocks in sequence"""
+        if not self._run_trigger_allowed():
+            return
         editor = self._get_current_editor()
         if not editor:
             return
@@ -170,6 +195,8 @@ class ExecutionMixin:
 
     def _execute_and_advance(self):
         """Executes focused block and advances to next"""
+        if not self._run_trigger_allowed():
+            return
         editor = self._get_current_editor()
         if not editor:
             return
@@ -298,15 +325,11 @@ class ExecutionMixin:
             lambda df, err: self._on_sql_finished(df, err, thread, running_tab_index, current_db_before)
         )
 
-        # Safe cleanup: only delete when thread actually stops
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._remove_worker_thread(thread))
 
-        # Keep reference
         self._worker_threads.append((thread, worker))
+        self._adopt_background_thread(thread, worker)
 
-        # Start
         thread.start()
 
     def _display_figures_in_results(self, figures: list, label: str = "Result"):
@@ -539,15 +562,11 @@ class ExecutionMixin:
             )
         )
 
-        # Safe cleanup: only delete when thread actually stops
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._remove_worker_thread(thread))
 
-        # Keep reference
         self._worker_threads.append((thread, worker))
+        self._adopt_background_thread(thread, worker)
 
-        # Start
         thread.start()
 
     def _on_python_finished(self, result_value, output, error, updated_namespace, figures, thread, tab_index):

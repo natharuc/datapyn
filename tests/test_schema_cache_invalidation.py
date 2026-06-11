@@ -33,10 +33,17 @@ class _DummyConnectionManager:
 
 class _DummyEditor:
     def __init__(self):
-        self.set_sql_schema = MagicMock()
-        self.set_database_context = MagicMock()
         self._sql_schema = {"database": "old"}
+        self._database_context = ""
         self._blocks = []
+        self.set_sql_schema = MagicMock(side_effect=self._store_sql_schema)
+        self.set_database_context = MagicMock(side_effect=self._store_database_context)
+
+    def _store_sql_schema(self, schema):
+        self._sql_schema = schema or {}
+
+    def _store_database_context(self, context):
+        self._database_context = context or ""
 
     def get_blocks(self):
         return list(self._blocks)
@@ -46,7 +53,9 @@ class _DummyBlock:
     def __init__(self, connection_name=None, language="sql"):
         self._connection_name = connection_name
         self._language = language
+        self._sql_schema = {}
         self.set_sql_schema = MagicMock()
+        self.set_database_context = MagicMock()
         self.db_panel = MagicMock()
         self._database_name = ""
 
@@ -55,6 +64,9 @@ class _DummyBlock:
 
     def get_language(self):
         return self._language
+
+    def get_sql_schema(self):
+        return dict(self._sql_schema)
 
 
 class _DummyWidget:
@@ -455,3 +467,38 @@ def test_object_explorer_schema_changed_keeps_lazy_loaded_cross_database_tables(
     cached_schema = main_window._schema_service.update_cached_schema.call_args.args[1]
     assert {table["name"] for table in cached_schema["tables"]} == {"current_users", "legacy_orders"}
     widget.editor.set_sql_schema.assert_called_once_with(cached_schema)
+
+
+def test_apply_loaded_schema_skips_blocks_on_other_databases(qapp):
+    schema = {"database": "GECON", "tables": [{"name": "t1"}], "columns": {}}
+    widget = _DummyWidget("sid-1", "Conn")
+    main_window = _DummyMainWindow(widget, MagicMock())
+    gecon_block = _DummyBlock()
+    gecon_block._sql_schema = {"database": "GECON", "tables": []}
+    esim_block = _DummyBlock()
+    esim_block._sql_schema = {"database": "ESIM", "tables": [{"name": "esim_t"}]}
+    widget.editor._blocks = [gecon_block, esim_block]
+
+    main_window._apply_loaded_schema_to_blocks(
+        schema, "Conn", db_type="sqlserver", requesting_sid="sid-1"
+    )
+
+    gecon_block.set_sql_schema.assert_called_once_with(schema)
+    gecon_block.set_database_context.assert_called_once_with("Conn:GECON")
+    esim_block.set_sql_schema.assert_not_called()
+    esim_block.set_database_context.assert_not_called()
+
+
+def test_apply_loaded_schema_applies_to_blocks_without_schema(qapp):
+    schema = {"database": "GECON", "tables": [{"name": "t1"}], "columns": {}}
+    widget = _DummyWidget("sid-1", "Conn")
+    main_window = _DummyMainWindow(widget, MagicMock())
+    empty_block = _DummyBlock()
+    widget.editor._blocks = [empty_block]
+
+    main_window._apply_loaded_schema_to_blocks(
+        schema, "Conn", db_type="sqlserver", requesting_sid="sid-1"
+    )
+
+    empty_block.set_sql_schema.assert_called_once_with(schema)
+    empty_block.set_database_context.assert_called_once_with("Conn:GECON")

@@ -772,6 +772,21 @@ class TestSchemaQualifiedAutocomplete:
         assert "name" in n
         assert "email" in n
 
+    def test_from_context_only_suggests_dbo_tables_on_sql_server(self, qualified_service):
+        sql = "SELECT * FROM "
+        result = qualified_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "users" in n
+        assert "audit_log" in n
+        assert "orders" not in n
+
+    def test_schema_dot_suggests_tables_in_that_schema(self, qualified_service):
+        sql = "SELECT * FROM sales."
+        result = qualified_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "orders" in n
+        assert "users" not in n
+
 
 class TestDatabricksAutocomplete:
     """Coverage for Databricks catalog.schema.table autocomplete."""

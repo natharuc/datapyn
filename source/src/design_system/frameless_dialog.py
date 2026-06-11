@@ -8,8 +8,8 @@ uses design-system tokens (get_colors) for forms, inputs, and panels.
 from __future__ import annotations
 
 from PyQt6 import sip
-from PyQt6.QtCore import Qt, QPoint
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtCore import QEvent, QObject, Qt, QPoint, QRectF
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
@@ -34,6 +34,8 @@ from src.design_system.tokens import (
 )
 
 CHROME_CYAN = "#33c2ff"
+_SHELL_SHADOW_PAD = 20
+_SHELL_CORNER_RADIUS = float(RADIUS.radius_md)
 
 
 def frameless_shell_stylesheet() -> str:
@@ -82,6 +84,138 @@ def frameless_body_stylesheet(extra: str = "") -> str:
     from src.design_system.tokens import get_section_panel_stylesheet
 
     return get_dialog_base_stylesheet() + get_section_panel_stylesheet() + extra
+
+
+class _FramelessShadowHost(QWidget):
+    """Paints a soft rounded shadow; child shell stays inside the padded area."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        inner = QRectF(self.rect()).adjusted(
+            _SHELL_SHADOW_PAD,
+            _SHELL_SHADOW_PAD,
+            -_SHELL_SHADOW_PAD,
+            -_SHELL_SHADOW_PAD,
+        )
+        radius = _SHELL_CORNER_RADIUS
+        for spread, alpha in ((16, 22), (11, 18), (7, 14), (4, 10)):
+            shadow_rect = inner.adjusted(-spread, -spread + 2, spread, spread + 4)
+            path = QPainterPath()
+            path.addRoundedRect(shadow_rect, radius + spread * 0.35, radius + spread * 0.35)
+            painter.fillPath(path, QColor(0, 0, 0, alpha))
+        painter.end()
+
+
+class _ModalBackdrop(QWidget):
+    """Dim the parent window while a modal dialog is open."""
+
+    def __init__(self, host: QWidget):
+        super().__init__(host)
+        colors = get_colors()
+        self.setObjectName("modalBackdrop")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background-color: {colors.bg_overlay};")
+        self.setAutoFillBackground(True)
+        self._sync_geometry()
+
+    def _sync_geometry(self) -> None:
+        host = self.parentWidget()
+        if host is not None:
+            self.setGeometry(host.rect())
+
+    def showEvent(self, event):
+        self._sync_geometry()
+        super().showEvent(event)
+
+
+class _ModalBackdropController(QObject):
+    """Show/hide a dim overlay on the dialog host window."""
+
+    def __init__(self, dialog: QDialog):
+        super().__init__(dialog)
+        self._dialog = dialog
+        self._backdrop: _ModalBackdrop | None = None
+        self._host: QWidget | None = None
+
+    def _resolve_host(self) -> QWidget | None:
+        host = self._dialog.parentWidget()
+        while host is not None and not host.isWindow():
+            host = host.parentWidget()
+        if host is None or host is self._dialog:
+            host = self._dialog.window()
+        if host is self._dialog:
+            from PyQt6.QtWidgets import QApplication
+
+            active = QApplication.activeWindow()
+            if active is not None and active is not self._dialog:
+                host = active
+            else:
+                return None
+        return host
+
+    def show(self) -> None:
+        host = self._resolve_host()
+        if host is None:
+            return
+        self._host = host
+        if self._backdrop is None:
+            self._backdrop = _ModalBackdrop(host)
+            host.installEventFilter(self)
+        self._backdrop._sync_geometry()
+        self._backdrop.show()
+        self._backdrop.raise_()
+        for child in host.children():
+            if isinstance(child, QWidget) and child is not self._backdrop and child.isVisible():
+                child.stackUnder(self._backdrop)
+        self._backdrop.raise_()
+        self._dialog.raise_()
+        self._dialog.activateWindow()
+
+    def hide(self) -> None:
+        if self._host is not None:
+            self._host.removeEventFilter(self)
+            self._host = None
+        if self._backdrop is not None:
+            self._backdrop.hide()
+            self._backdrop.deleteLater()
+            self._backdrop = None
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj is self._host and event.type() == QEvent.Type.Resize:
+            if self._backdrop is not None:
+                self._backdrop._sync_geometry()
+        return False
+
+
+class _DialogBackdropFilter(QObject):
+    """Event filter that toggles the dim overlay when the dialog opens/closes."""
+
+    def __init__(self, dialog: QDialog):
+        super().__init__(dialog)
+        self._controller = _ModalBackdropController(dialog)
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj is self.parent():
+            if event.type() == QEvent.Type.Show:
+                from PyQt6.QtCore import QTimer
+
+                QTimer.singleShot(0, self._controller.show)
+            elif event.type() in (QEvent.Type.Hide, QEvent.Type.Close):
+                self._controller.hide()
+        return False
+
+
+def attach_modal_backdrop(dialog: QDialog) -> _DialogBackdropFilter:
+    """Dim the parent window while ``dialog`` is visible."""
+    filt = _DialogBackdropFilter(dialog)
+    dialog.installEventFilter(filt)
+    dialog._modal_backdrop_filter = filt  # type: ignore[attr-defined]
+    return filt
 
 
 class DialogTitleBar(QWidget):
@@ -141,7 +275,10 @@ def install_frameless_shell(
     Sets ``dialog._frameless_body`` to the content host widget for optional tweaks.
     """
     dialog.setWindowFlags(
-        Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
+        Qt.WindowType.Dialog
+        | Qt.WindowType.FramelessWindowHint
+        | Qt.WindowType.Window
+        | Qt.WindowType.NoDropShadowWindowHint
     )
     dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
     dialog.setModal(True)
@@ -156,9 +293,16 @@ def install_frameless_shell(
 
     dialog.setStyleSheet(frameless_shell_stylesheet())
 
+    shadow_pad = _SHELL_SHADOW_PAD
     outer = QVBoxLayout(dialog)
-    outer.setContentsMargins(*outer_margins)
+    outer.setContentsMargins(0, 0, 0, 0)
     outer.setSpacing(0)
+
+    shadow_host = _FramelessShadowHost()
+    shadow_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    shadow_layout = QVBoxLayout(shadow_host)
+    shadow_layout.setContentsMargins(shadow_pad, shadow_pad, shadow_pad, shadow_pad)
+    shadow_layout.setSpacing(0)
 
     shell = QFrame()
     shell.setObjectName("framelessShell")
@@ -195,10 +339,13 @@ def install_frameless_shell(
         grip_row.addWidget(grip)
         shell_layout.addLayout(grip_row)
 
-    outer.addWidget(shell, 1)
+    shadow_layout.addWidget(shell, 1)
+    outer.addWidget(shadow_host, 1)
 
     dialog._frameless_body = body  # type: ignore[attr-defined]
     dialog._frameless_shell = shell  # type: ignore[attr-defined]
+    dialog._frameless_shadow_host = shadow_host  # type: ignore[attr-defined]
+    attach_modal_backdrop(dialog)
     return content_layout
 
 

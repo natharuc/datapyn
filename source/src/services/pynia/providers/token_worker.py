@@ -115,7 +115,8 @@ class TokenAgentWorker(QObject):
             base = settings.base_url(self._provider_id)
             models = FALLBACK_MODELS.get(self._provider_id, fallback_models())
             if self._provider_id in ("openai", "openrouter"):
-                fetched = fetch_openai_models(base, token)
+                extra = OPENROUTER_HEADERS if self._provider_id == "openrouter" else None
+                fetched = fetch_openai_models(base, token, extra_headers=extra)
                 if fetched:
                     models = normalize_models(fetched) or models
             elif self._provider_id == "anthropic":

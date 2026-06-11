@@ -73,8 +73,12 @@ class _PyniaModelFetchWorker(QObject):
             models = list(FALLBACK_MODELS.get(pid, []))
             if token and pid in ("openai", "openrouter"):
                 from src.services.pynia.openai_agent_loop import fetch_openai_models
+                from src.services.pynia.providers.token_worker import OPENROUTER_HEADERS
 
-                fetched = fetch_openai_models(settings.base_url(pid), token)
+                extra = OPENROUTER_HEADERS if pid == "openrouter" else None
+                fetched = fetch_openai_models(
+                    settings.base_url(pid), token, extra_headers=extra
+                )
                 if fetched:
                     models = normalize_models(fetched) or models
             ids = [m.get("id") for m in models if isinstance(m, dict) and m.get("id")]
@@ -1043,13 +1047,29 @@ class SettingsDialog(QDialog):
         client.set_provider(pid)
 
         def _ok(username: str):
+            _ = username
             template = S.pynia.verify_ok if hasattr(S, "pynia") else "OK"
             self._pynia_status_label.setText(template)
+            title = (
+                getattr(S.pynia, "verify_ok_title", None)
+                or getattr(S.pynia, "verify_ok", "Connection verified")
+            )
+            detail = getattr(
+                S.pynia,
+                "verify_ok_detail",
+                "Your API token is valid and the connector is ready to use.",
+            )
+            show_success(self, title, detail)
             client.deleteLater()
 
         def _fail(msg: str):
             template = S.pynia.verify_failed if hasattr(S, "pynia") else "Failed: {error}"
             self._pynia_status_label.setText(template.format(error=msg))
+            show_danger(
+                self,
+                getattr(S.pynia, "verify_failed_title", "Verification failed"),
+                template.format(error=msg),
+            )
             client.deleteLater()
 
         client.authenticated.connect(_ok)

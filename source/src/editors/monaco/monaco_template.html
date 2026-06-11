@@ -451,12 +451,47 @@
             );
         }
 
+        function isKnownSchemaName(name) {
+            const key = normalizeSchemaKey(name);
+            return key && sqlSchemaIndex.schemaNames && sqlSchemaIndex.schemaNames.has(key);
+        }
+
+        function collectSchemaTableItems(schemaName, tablePrefix) {
+            const schemaKey = normalizeSchemaKey(schemaName);
+            const prefix = (tablePrefix || '').toLowerCase();
+            return (sqlSchemaIndex.tableItems || []).filter(function(item) {
+                if (normalizeSchemaKey(item.schemaName || '') !== schemaKey) {
+                    return false;
+                }
+                if (!prefix) {
+                    return true;
+                }
+                return String(item.label || '').toLowerCase().startsWith(prefix);
+            });
+        }
+
+        function isSqlServerSchema() {
+            const t = String(sqlSchemaDbType || '').toLowerCase();
+            return t === 'sqlserver' || t === 'mssql';
+        }
+
+        function filterDefaultSchemaTables(items) {
+            if (!isSqlServerSchema()) {
+                return items || [];
+            }
+            return (items || []).filter(function(item) {
+                const schema = normalizeSchemaKey(item.schemaName || '');
+                return !schema || schema === 'dbo';
+            });
+        }
+
         function collectSqlLocalItems(textBefore, dotCtx, crossDbCtx, fullText) {
             if (crossDbCtx) {
                 return collectCrossDatabaseTableItems(crossDbCtx);
             }
-            // Main: filterSqlCompletions already expands WHERE/SELECT to columnCompletions.
-            // With dotCtx we merge alias-scoped columns on top (same UX as main + smarter p.*).
+            if (dotCtx && isKnownSchemaName(dotCtx.qualifier)) {
+                return collectSchemaTableItems(dotCtx.qualifier, dotCtx.columnPrefix);
+            }
             const contextual = filterSqlCompletions(textBefore, null);
             if (!dotCtx) {
                 return contextual;
@@ -750,6 +785,7 @@
                             return { items: [] };
                         }
 
+                        // Never await AI here — ghost text is delivered via receiveCompletion.
                         const textBeforeCursor = model.getValueInRange({
                             startLineNumber: 1,
                             startColumn: 1,
@@ -768,42 +804,13 @@
                             return { items: [] };
                         }
 
-                        try {
-                            const completionText = await requestCompletion(
-                                textBeforeCursor,
-                                textAfterCursor,
-                                position.lineNumber,
-                                position.column
-                            );
-
-                            if (token.isCancellationRequested || !completionText) {
-                                return { items: [] };
-                            }
-
-                            const insertText = normalizeInlineInsertAtCursor(
-                                completionText,
-                                model,
-                                position
-                            );
-                            if (!insertText) {
-                                return { items: [] };
-                            }
-                            cachedInlineCompletion = insertText;
-                            cachedInlinePosition = {
-                                lineNumber: position.lineNumber,
-                                column: position.column
-                            };
-                            const item = {
-                                insertText: insertText,
-                                range: getInlineGhostRange(model, position)
-                            };
-                            if (completionText.indexOf('\n') >= 0) {
-                                item.filterText = completionText.split('\n')[0];
-                            }
-                            return { items: [item] };
-                        } catch (e) {
-                            return { items: [] };
-                        }
+                        requestCompletion(
+                            textBeforeCursor,
+                            textAfterCursor,
+                            position.lineNumber,
+                            position.column
+                        ).catch(function() {});
+                        return { items: [] };
                     },
                     
                     freeInlineCompletions: function(completions) {
@@ -1449,8 +1456,8 @@
                         return { suggestions: buildSuggestions(localItems) };
                     }
 
-                    // Dot after alias/table: offline cache first, Python refines (sqlglot scope).
-                    if (dotCtx) {
+                    // Local suggestions first — Python enrichment only on Ctrl+Space.
+                    if (dotCtx && invokeSuggest) {
                         const remote = await createCompletionRequest('sql_context', (requestId) => {
                             pyBridge.requestSqlContext(
                                 fullText,
@@ -1475,10 +1482,7 @@
                         };
                     }
 
-                    const wordLen = crossDbCtx
-                        ? (crossDbCtx.tablePrefix || '').length
-                        : (word.word || '').length;
-                    if (invokeSuggest || wordLen >= 1 || crossDbCtx) {
+                    if (invokeSuggest || crossDbCtx) {
                         const remote = await debouncedRemote('sql', (requestId) => {
                             pyBridge.requestSqlCompletion(
                                 fullText,
@@ -1577,11 +1581,15 @@
             return String(key || '').toLowerCase().replace(/[\[\]`"]/g, '');
         }
 
+        let sqlSchemaDbType = '';
+
         function registerSqlSchemaIndex(schema) {
             schema = schema || {};
+            sqlSchemaDbType = String(schema.db_type || '').toLowerCase();
             sqlSchemaIndex = {
                 columnsByKey: {},
                 tableItems: [],
+                schemaNames: new Set(),
                 currentDatabase: schema.database || ''
             };
             const columnsMap = schema.columns || {};
@@ -1593,6 +1601,9 @@
                     return;
                 }
                 const schemaName = typeof table === 'object' ? (table.schema || '') : '';
+                if (schemaName) {
+                    sqlSchemaIndex.schemaNames.add(normalizeSchemaKey(schemaName));
+                }
                 const catalog = typeof table === 'object' ? (table.catalog || '') : '';
                 const tableKey = typeof table === 'object' ? (table.key || '') : '';
                 const fallbackKey = schemaName ? (schemaName + '.' + name) : name;
@@ -1638,6 +1649,7 @@
                     category: 'table',
                     database: tableDatabase || tableCatalog,
                     catalog: tableCatalog,
+                    schemaName: schemaName,
                     filterText: filterText
                 });
             });
@@ -1693,7 +1705,7 @@
                 }
             });
             if (lastTableKwPos > lastColumnKwPos && lastTableKwPos > upperText.length - 120) {
-                return sqlSchemaIndex.tableItems.slice(0, 80);
+                return filterDefaultSchemaTables(sqlSchemaIndex.tableItems).slice(0, 80);
             }
             if (lastColumnKwPos > lastTableKwPos && lastColumnKwPos > upperText.length - 120) {
                 const allCols = [];
@@ -1873,7 +1885,7 @@
             
             // After FROM/JOIN/etc -> suggest tables only
             if (lastTableKwPos > lastColumnKwPos && lastTableKwPos > cleaned.length - 100) {
-                return tableCompletions;
+                return filterDefaultSchemaTables(tableCompletions);
             }
             
             // After SELECT/WHERE/etc -> suggest columns + keywords

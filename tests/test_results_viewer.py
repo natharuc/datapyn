@@ -2,10 +2,51 @@
 import sys
 import os
 import pytest
+import numpy as np
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "source"))
+
+
+class TestGridNumberDisplay:
+    """Integer-valued floats (columns upcast to float by a NULL) must not show
+    the trailing '.0' in the grid; real decimals stay intact."""
+
+    def test_integer_valued_float_drops_dot_zero(self):
+        from src.ui.components.results_viewer import _grid_format_display_value
+
+        assert _grid_format_display_value(1569845.0, "default") == "1569845"
+        assert _grid_format_display_value(np.float64(1569845.0), "default") == "1569845"
+
+    def test_real_decimal_is_preserved(self):
+        from src.ui.components.results_viewer import _grid_format_display_value
+
+        assert _grid_format_display_value(8.58, "default") == "8.58"
+
+    def test_huge_float_not_fabricated_as_exact_int(self):
+        from src.ui.components.results_viewer import _grid_format_display_value
+
+        big = 1e20  # beyond 2**53 — floats can't represent ints exactly here
+        assert _grid_format_display_value(big, "default") == str(big)
+
+    def test_bool_is_not_treated_as_number(self):
+        from src.ui.components.results_viewer import _grid_format_display_value
+
+        assert _grid_format_display_value(True, "default") == "True"
+
+    def test_prepared_grid_cleans_id_column_keeps_decimals(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame(
+            {"IdExterno": [1569845.0, float("nan")], "Valor": [8.58, 199.0]}
+        )
+        prepared = prepare_grid_data(df, {}, {}, 1000).prepared
+
+        assert prepared.display_value(0, 0) == "1569845"   # id float → clean int
+        assert prepared.display_value(0, 1) == "8.58"       # real decimal kept
+        assert prepared.display_value(1, 0) == "NULL"       # NaN id → NULL
+        assert prepared.display_value(1, 1) == "199"        # 199.0 → clean int
 
 
 def _chart_page_ready(page) -> bool:
@@ -1709,7 +1750,9 @@ class TestResultsViewerGridPrepare:
 
         assert "2026" in result.prepared.display_value(0, 0)
         assert ":" in result.prepared.display_value(0, 0)
-        assert result.prepared.display_value(0, 1) == "0.0"
+        # Integer-valued floats display without the trailing ".0"; real decimals stay.
+        assert result.prepared.display_value(0, 1) == "0"
+        assert result.prepared.display_value(1, 1) == "31.28"
 
     def test_prepare_grid_data_respects_explicit_datetime_format(self):
         from src.ui.components.results_viewer import prepare_grid_data
