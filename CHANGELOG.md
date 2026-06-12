@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.44.0 (2026-06-12)
+
+### Features
+
+- Ajuste em testes
+  ([`03772ff`](https://github.com/natharuc/datapyn/commit/03772ffd4c24569011ca67760b9ce1b7edf7853f))
+
+- Ajuste em testes
+  ([`9d20f22`](https://github.com/natharuc/datapyn/commit/9d20f2275d25a3f7375956c56f347a0b9d04904d))
+
+- Estabilização de usabilidade e fluidez
+  ([`3d38347`](https://github.com/natharuc/datapyn/commit/3d38347af175a52794f463d72e10adb92bb3e419))
+
+### Heuristic
+
+- Merge branch 'main' of github-nac:natharuc/datapyn into feat/keep-last-result
+  ([`8352f6a`](https://github.com/natharuc/datapyn/commit/8352f6abccf6aaac73edcead2ce6877c57084244))
+
+- Merge pull request #129 from natharuc/feat/keep-last-result
+  ([`1538325`](https://github.com/natharuc/datapyn/commit/1538325f412058e9711839491bf3c4805b7f423b))
+
 ## v1.43.0 (2026-06-10)
 
 ### Bug Fixes
