@@ -17,14 +17,14 @@ class TestBuildConnectionSearchText:
             "PROD",
             {
                 "group": "",
-                "host": "sql.example.com",
+                "host": "prod-sql-host-01",
                 "database": "Gecon",
                 "db_type": "sqlserver",
                 "username": "admin@corp.com",
                 "port": 1433,
             },
         )
-        assert "sql.example.com" in blob
+        assert "prod-sql-host-01" in blob
         assert "gecon" in blob
         assert "sqlserver" in blob
         assert "admin@corp.com" in blob
