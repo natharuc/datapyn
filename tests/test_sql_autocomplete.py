@@ -787,6 +787,74 @@ class TestSchemaQualifiedAutocomplete:
         assert "orders" in n
         assert "users" not in n
 
+    def test_from_context_excludes_cdc_key_without_schema_field(self, qualified_service):
+        qualified_service.set_schema({
+            **qualified_service.get_schema(),
+            "tables": qualified_service.get_schema()["tables"] + [
+                {
+                    "name": "ITEMCERTIFICADOAPOLICE_CT",
+                    "key": "cdc.ITEMCERTIFICADOAPOLICE_CT",
+                    "type": "TABLE",
+                },
+            ],
+            "columns": {
+                **qualified_service.get_schema()["columns"],
+                "cdc.ITEMCERTIFICADOAPOLICE_CT": [
+                    {"name": "id", "type": "bigint", "display_type": "bigint"},
+                ],
+            },
+        })
+        sql = "SELECT * FROM ITEM"
+        result = qualified_service.get_completions(sql, 0, len(sql))
+        assert "ITEMCERTIFICADOAPOLICE_CT" not in names(result)
+
+    def test_from_context_excludes_cdc_schema_tables(self, qualified_service):
+        qualified_service.set_schema({
+            **qualified_service.get_schema(),
+            "tables": qualified_service.get_schema()["tables"] + [
+                {"name": "ITEMCERTIFICADOAPOLICE_CT", "schema": "cdc", "type": "TABLE"},
+            ],
+            "columns": {
+                **qualified_service.get_schema()["columns"],
+                "cdc.ITEMCERTIFICADOAPOLICE_CT": [
+                    {"name": "id", "type": "bigint", "display_type": "bigint"},
+                ],
+            },
+        })
+        sql = "SELECT * FROM ITEM"
+        result = qualified_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "ITEMCERTIFICADOAPOLICE_CT" not in n
+
+    def test_bare_table_name_defaults_to_dbo_on_sql_server(self, qualified_service):
+        qualified_service.set_schema({
+            "db_type": "sqlserver",
+            "tables": [{"name": "ITEMCERTI", "type": "TABLE"}],
+            "columns": {"ITEMCERTI": [{"name": "id", "type": "bigint"}]},
+        })
+        sql = "SELECT * FROM ITEM"
+        result = qualified_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "ITEMCERTI" in n
+
+    def test_cdc_schema_dot_shows_cdc_tables(self, qualified_service):
+        qualified_service.set_schema({
+            **qualified_service.get_schema(),
+            "tables": qualified_service.get_schema()["tables"] + [
+                {"name": "ITEMCERTIFICADOAPOLICE_CT", "schema": "cdc", "type": "TABLE"},
+            ],
+            "columns": {
+                **qualified_service.get_schema()["columns"],
+                "cdc.ITEMCERTIFICADOAPOLICE_CT": [
+                    {"name": "id", "type": "bigint", "display_type": "bigint"},
+                ],
+            },
+        })
+        sql = "SELECT * FROM cdc."
+        result = qualified_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "ITEMCERTIFICADOAPOLICE_CT" in n
+
 
 class TestDatabricksAutocomplete:
     """Coverage for Databricks catalog.schema.table autocomplete."""

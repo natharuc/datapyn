@@ -8,6 +8,8 @@ Provides fast inline completions (<500ms) via the official LSP protocol.
 import json
 import logging
 import os
+import queue
+import re
 import subprocess
 import sys
 import threading
@@ -21,6 +23,12 @@ from src.services.copilot.copilot_settings import get_copilot_settings
 logger = logging.getLogger(__name__)
 
 from src.services.copilot.copilot_process import popen_hidden, run_hidden
+
+_NETWORK_FAILURE_RE = re.compile(
+    r"ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|FetchError|"
+    r"network|timed?\s*out|quota|credit|billing|rate\s*limit",
+    re.IGNORECASE,
+)
 
 
 def spawn_lsp_process(server_path: str) -> subprocess.Popen:
@@ -64,8 +72,12 @@ class CopilotLSPClient(QObject):
         self._server_path = server_path
         self._process: Optional[subprocess.Popen] = None
         self._reader_thread: Optional[threading.Thread] = None
+        self._writer_thread: Optional[threading.Thread] = None
+        self._write_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._stopping = False
+        self._degraded = False
+        self._degraded_reason = ""
         
         # Request tracking
         self._request_id = 0
@@ -103,10 +115,65 @@ class CopilotLSPClient(QObject):
         """Check if the user is authenticated."""
         return self._is_authenticated
 
+    @property
+    def is_degraded(self) -> bool:
+        """Inline completion disabled after network/timeouts (editor must not wait on LSP)."""
+        return self._degraded
+
+    @property
+    def completions_enabled(self) -> bool:
+        """True when Copilot inline completion is safe to request."""
+        return (
+            not self._degraded
+            and self._initialized
+            and self._is_authenticated
+        )
+
+    @staticmethod
+    def _looks_like_network_failure(message: str) -> bool:
+        return bool(message and _NETWORK_FAILURE_RE.search(str(message)))
+
+    def mark_degraded(self, reason: str) -> None:
+        """Stop inline LSP requests until a later health check succeeds."""
+        reason = str(reason or "").strip()
+        if self._degraded and reason == self._degraded_reason:
+            return
+        try:
+            from src.services.ai_autocomplete_circuit_breaker import (
+                get_ai_autocomplete_circuit_breaker,
+            )
+
+            get_ai_autocomplete_circuit_breaker().record_failure(
+                reason or "Copilot LSP inline completion failed"
+            )
+        except Exception:
+            pass
+        self._degraded = True
+        self._degraded_reason = reason
+        self._pending_completion_id = None
+        self._log(
+            "Copilot inline completion paused (network/server issue). "
+            "SQL/Python autocomplete and API providers still work.",
+            "warning",
+        )
+        if reason:
+            self._log(reason[:300], "debug")
+
+    def _clear_degraded(self) -> None:
+        if not self._degraded:
+            return
+        self._degraded = False
+        self._degraded_reason = ""
+        self._log("Copilot inline completion restored", "info")
+
     def _queue_completion(self, text: str, uri: str = "") -> None:
-        """Deliver the completion result to the block that requested it."""
+        """Deliver the completion result on the Qt main thread."""
         target_uri = uri or self._pending_completion_uri or ""
-        self.completion_ready.emit(target_uri, text or "")
+        payload_text = text or ""
+        QTimer.singleShot(
+            0,
+            lambda u=target_uri, t=payload_text: self.completion_ready.emit(u, t),
+        )
     
     def _set_authenticated(self, value: bool, source: str = "unknown") -> None:
         """Set authentication state with logging."""
@@ -168,6 +235,12 @@ class CopilotLSPClient(QObject):
             name="CopilotLSP-Reader",
         )
         self._reader_thread.start()
+        self._writer_thread = threading.Thread(
+            target=self._write_loop,
+            daemon=True,
+            name="CopilotLSP-Writer",
+        )
+        self._writer_thread.start()
         logger.info("[LSP] Server process attached")
         return True
     
@@ -176,8 +249,14 @@ class CopilotLSPClient(QObject):
         self._stopping = True
         process = self._process
         reader_thread = self._reader_thread
+        writer_thread = self._writer_thread
         self._process = None
         self._reader_thread = None
+        self._writer_thread = None
+        try:
+            self._write_queue.put(None)
+        except Exception:
+            pass
 
         if process:
             try:
@@ -208,10 +287,13 @@ class CopilotLSPClient(QObject):
 
         if reader_thread and reader_thread.is_alive() and reader_thread is not threading.current_thread():
             reader_thread.join(timeout=0.2)
-        
+        if writer_thread and writer_thread.is_alive() and writer_thread is not threading.current_thread():
+            writer_thread.join(timeout=0.2)
+
         self._initialized = False
         self._opened_uris.clear()
         self._set_authenticated(False, "stop")
+        self._clear_degraded()
         logger.info("[LSP] Server stopped")
     
     def cleanup(self) -> None:
@@ -288,16 +370,19 @@ class CopilotLSPClient(QObject):
         def on_status(result, error):
             if error:
                 self._log(f"checkStatus error: {error}", "error")
+                if self._looks_like_network_failure(str(error)):
+                    self.mark_degraded(str(error))
                 return
-            
+
             status = result.get("status", "Unknown") if result else "Unknown"
             self._log(f"Auth status: {status}", "info")
-            
+
             # LSP returns "OK" or "SignedIn" when authenticated
             self._set_authenticated(status in ("SignedIn", "OK"), f"on_status({status})")
-            self.status_changed.emit(status)
-            
+            QTimer.singleShot(0, lambda s=status: self.status_changed.emit(s))
+
             if self._is_authenticated:
+                self._clear_degraded()
                 user = result.get("user", "GitHub User")
                 self._log(f"Authenticated as {user}", "info")
                 self._emit_authenticated(user)
@@ -616,8 +701,13 @@ class CopilotLSPClient(QObject):
         """
         logger.info(f"[LSP] request_completion: uri={uri}, version={version}, line={line}, char={character}")
 
-        if not self._initialized or not self._is_authenticated:
-            logger.warning(f"[LSP] request_completion blocked: init={self._initialized}, auth={self._is_authenticated}")
+        if not self.completions_enabled:
+            logger.warning(
+                "[LSP] request_completion blocked: init=%s, auth=%s, degraded=%s",
+                self._initialized,
+                self._is_authenticated,
+                self._degraded,
+            )
             self._queue_completion("", uri)
             return
 
@@ -645,6 +735,8 @@ class CopilotLSPClient(QObject):
 
             if error:
                 logger.warning(f"[LSP] getCompletionsCycling error after {elapsed:.0f}ms: {error}")
+                if self._looks_like_network_failure(str(error)):
+                    self.mark_degraded(str(error))
                 self._queue_completion("", uri)
                 return
 
@@ -690,9 +782,10 @@ class CopilotLSPClient(QObject):
                 logger.warning(f"[LSP] getCompletionsCycling timed out (id={rid}) — emitting empty")
                 self._pending_completion_id = None
                 self._pending_requests.pop(rid, None)
+                self.mark_degraded("Copilot completion timed out")
                 self._queue_completion("", uri)
 
-        QTimer.singleShot(6000, _timeout)
+        QTimer.singleShot(3000, _timeout)
 
     @staticmethod
     def _extract_inline_completion(result) -> str:
@@ -763,20 +856,47 @@ class CopilotLSPClient(QObject):
         self._write_message(message)
     
     def _write_message(self, message: Dict[str, Any]) -> None:
-        """Write a message to the server stdin."""
-        if not self._process or self._process.poll() is not None:
+        """Queue a message for the writer thread (never blocks the UI thread)."""
+        if self._stopping:
             return
-        
+        try:
+            self._write_queue.put(message)
+        except Exception as e:
+            logger.error(f"[LSP] Write queue error: {e}")
+
+    def _write_loop(self) -> None:
+        """Drain outbound LSP messages without blocking Qt."""
+        while not self._stopping:
+            try:
+                message = self._write_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if message is None:
+                break
+            self._write_message_direct(message)
+
+    def _write_message_direct(self, message: Dict[str, Any]) -> None:
+        """Write a single message to the server stdin (writer thread only)."""
+        process = self._process
+        if not process or process.poll() is not None:
+            return
+
         try:
             content = json.dumps(message)
             content_bytes = content.encode("utf-8")
             header = f"Content-Length: {len(content_bytes)}\r\n\r\n"
-            
-            self._process.stdin.write(header.encode("utf-8"))
-            self._process.stdin.write(content_bytes)
-            self._process.stdin.flush()
+
+            stdin = process.stdin
+            if stdin is None:
+                return
+            stdin.write(header.encode("utf-8"))
+            stdin.write(content_bytes)
+            stdin.flush()
         except Exception as e:
-            logger.error(f"[LSP] Write error: {e}")
+            if not self._stopping:
+                logger.error(f"[LSP] Write error: {e}")
+                if self._looks_like_network_failure(str(e)):
+                    self.mark_degraded(str(e))
     
     def _read_loop(self) -> None:
         """Background thread loop for reading server responses."""
@@ -882,6 +1002,8 @@ class CopilotLSPClient(QObject):
                 logger.warning(f"[LSP] Server: {msg}")
             else:
                 logger.debug(f"[LSP] Server: {msg}")
+            if self._looks_like_network_failure(str(msg)):
+                self.mark_degraded(str(msg))
         
         elif method == "window/showMessage":
             msg = params.get("message", "")

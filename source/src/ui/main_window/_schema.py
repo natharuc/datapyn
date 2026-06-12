@@ -946,6 +946,8 @@ class SchemaMixin:
         """
         if not block:
             return
+        if db_type and isinstance(schema, dict):
+            schema = {**schema, "db_type": db_type or schema.get("db_type", "")}
         if hasattr(block, "set_sql_schema"):
             block.set_sql_schema(schema)
         elif hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):

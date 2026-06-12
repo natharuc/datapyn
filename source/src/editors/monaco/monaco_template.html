@@ -363,7 +363,11 @@
 
         function filterRemoteCompletionItems(items, textBefore, dotCtx) {
             const prefix = dotCtx ? dotCtx.columnPrefix : getCurrentWordPrefix(textBefore);
-            return filterPrefixMatches(items || [], prefix, 80, false);
+            let filtered = filterPrefixMatches(items || [], prefix, 80, false);
+            if (!dotCtx) {
+                filtered = filterSqlServerDefaultSchema(filtered, textBefore);
+            }
+            return filtered;
         }
 
         function normalizeInlineInsertText(text, model, position) {
@@ -475,14 +479,64 @@
             return t === 'sqlserver' || t === 'mssql';
         }
 
+        function inferSqlServerTableSchemaName(table, name, tableKey, fallbackKey) {
+            const explicit = typeof table === 'object' ? String(table.schema || '').trim() : '';
+            if (explicit) {
+                return explicit;
+            }
+            const key = String(tableKey || fallbackKey || '').trim();
+            const parts = key.split('.').filter(function(part) { return part; });
+            const dbType = String(sqlSchemaDbType || '').toLowerCase();
+            const isSs = dbType === 'sqlserver' || dbType === 'mssql';
+            if (parts.length >= 3) {
+                return parts[parts.length - 2];
+            }
+            if (parts.length === 2) {
+                return parts[0];
+            }
+            if (isSs) {
+                return 'dbo';
+            }
+            return '';
+        }
+
         function filterDefaultSchemaTables(items) {
             if (!isSqlServerSchema()) {
                 return items || [];
             }
             return (items || []).filter(function(item) {
                 const schema = normalizeSchemaKey(item.schemaName || '');
-                return !schema || schema === 'dbo';
+                if (!schema) {
+                    return true;
+                }
+                return schema === 'dbo';
             });
+        }
+
+        function shouldUseSqlServerDefaultSchemaOnly(textBefore) {
+            if (!isSqlServerSchema()) {
+                return false;
+            }
+            if (parseSqlCrossDatabaseTableContext(textBefore)) {
+                return false;
+            }
+            const dotCtx = parseSqlDotContext(textBefore);
+            if (dotCtx && isKnownSchemaName(dotCtx.qualifier)) {
+                return false;
+            }
+            const currentLine = (textBefore.split('\n').pop() || '').replace(/\s+$/, '');
+            const explicitSchema = currentLine.match(/(?:^|[\s,(])([\w@#]+)\.\s*[\w$]*$/);
+            if (explicitSchema && isKnownSchemaName(explicitSchema[1])) {
+                return false;
+            }
+            return true;
+        }
+
+        function filterSqlServerDefaultSchema(items, textBefore) {
+            if (!shouldUseSqlServerDefaultSchemaOnly(textBefore)) {
+                return items || [];
+            }
+            return filterDefaultSchemaTables(items || []);
         }
 
         function collectSqlLocalItems(textBefore, dotCtx, crossDbCtx, fullText) {
@@ -492,14 +546,16 @@
             if (dotCtx && isKnownSchemaName(dotCtx.qualifier)) {
                 return collectSchemaTableItems(dotCtx.qualifier, dotCtx.columnPrefix);
             }
-            const contextual = filterSqlCompletions(textBefore, null);
+            let contextual = filterSqlCompletions(textBefore, null);
+            contextual = filterSqlServerDefaultSchema(contextual, textBefore);
             if (!dotCtx) {
                 return contextual;
             }
-            return mergeCompletionItems(
+            const dotItems = filterSqlServerDefaultSchema(
                 collectDotColumnItems(dotCtx.qualifier, fullText),
-                contextual
+                textBefore
             );
+            return mergeCompletionItems(dotItems, contextual);
         }
 
         function buildCopilotSuggestItems(range) {
@@ -1600,18 +1656,19 @@
                 if (!name) {
                     return;
                 }
-                const schemaName = typeof table === 'object' ? (table.schema || '') : '';
+                const catalog = typeof table === 'object' ? (table.catalog || '') : '';
+                const tableKey = typeof table === 'object' ? (table.key || '') : '';
+                const rawSchemaName = typeof table === 'object' ? (table.schema || '') : '';
+                const fallbackKey = rawSchemaName ? (rawSchemaName + '.' + name) : name;
+                const fullKey = tableKey || (
+                    catalog && rawSchemaName
+                        ? (catalog + '.' + rawSchemaName + '.' + name)
+                        : fallbackKey
+                );
+                const schemaName = inferSqlServerTableSchemaName(table, name, tableKey, fallbackKey);
                 if (schemaName) {
                     sqlSchemaIndex.schemaNames.add(normalizeSchemaKey(schemaName));
                 }
-                const catalog = typeof table === 'object' ? (table.catalog || '') : '';
-                const tableKey = typeof table === 'object' ? (table.key || '') : '';
-                const fallbackKey = schemaName ? (schemaName + '.' + name) : name;
-                const fullKey = tableKey || (
-                    catalog && schemaName
-                        ? (catalog + '.' + schemaName + '.' + name)
-                        : fallbackKey
-                );
                 const cols = columnsMap[fullKey]
                     || columnsMap[fallbackKey]
                     || columnsMap[name]
@@ -1862,39 +1919,41 @@
                     return columns;
                 }
             }
-            
+
+            const hasSchemaIndex = sqlSchemaIndex
+                && (sqlSchemaIndex.tableItems || []).length > 0;
+            if (hasSchemaIndex) {
+                return getLocalSqlSuggestions(textBefore, dotCtx, editor ? editor.getValue() : textBefore);
+            }
+
             // Remove comments and strings for cleaner analysis
             let cleaned = upperText.replace(/--[^\n]*/g, ' ').replace(/'[^']*'/g, "''");
-            
-            // Find last keyword to determine context
+
             const tableKeywords = ['FROM', 'JOIN', 'INTO', 'UPDATE', 'TABLE'];
             const columnKeywords = ['SELECT', 'WHERE', 'ON', 'ORDER BY', 'GROUP BY', 'HAVING', 'SET'];
-            
+
             let lastTableKwPos = -1;
             let lastColumnKwPos = -1;
-            
+
             tableKeywords.forEach(kw => {
                 const pos = cleaned.lastIndexOf(kw);
                 if (pos > lastTableKwPos) lastTableKwPos = pos;
             });
-            
+
             columnKeywords.forEach(kw => {
                 const pos = cleaned.lastIndexOf(kw);
                 if (pos > lastColumnKwPos) lastColumnKwPos = pos;
             });
-            
-            // After FROM/JOIN/etc -> suggest tables only
+
             if (lastTableKwPos > lastColumnKwPos && lastTableKwPos > cleaned.length - 100) {
-                return filterDefaultSchemaTables(tableCompletions);
+                return filterDefaultSchemaTables(tableCompletions).slice(0, 80);
             }
-            
-            // After SELECT/WHERE/etc -> suggest columns + keywords
+
             if (lastColumnKwPos > lastTableKwPos && lastColumnKwPos > cleaned.length - 100) {
-                return [...columnCompletions, ...keywordCompletions];
+                return [...columnCompletions.slice(0, 80), ...keywordCompletions];
             }
-            
-            // Default: suggest keywords + tables
-            return [...keywordCompletions, ...tableCompletions];
+
+            return [...keywordCompletions, ...tableCompletions.slice(0, 80)];
         }
         
         function getCompletionKind(kind) {

@@ -19,10 +19,7 @@ from src.services.copilot.copilot_models import (
     normalize_reasoning_effort,
     usage_snapshot_for_model,
 )
-from src.services.pynia.completion import (
-    build_inline_prompt,
-    clean_completion_text,
-)
+from src.services.pynia.completion import clean_completion_text
 from src.services.pynia.providers.copilot_adapter import CopilotProviderAdapter
 from src.services.pynia.providers.token_worker import FALLBACK_MODELS, TokenAgentWorker
 from src.services.pynia.settings import get_pynia_settings, get_provider_secret, set_provider_secret
@@ -326,17 +323,11 @@ class PyniaAgentClient(QObject):
             self.inline_completion_ready.emit("")
             return
 
-        prompt = build_inline_prompt(
+        self._start_inline_completion_worker(
             language=language,
             prefix=prefix,
             suffix=suffix,
             context=context,
-        )
-        self._start_inline_completion_worker(
-            language=language,
-            prompt=prompt,
-            prefix=prefix,
-            suffix=suffix,
         )
 
     def setup_lsp_client(self, server_path: str) -> bool:
@@ -358,9 +349,9 @@ class PyniaAgentClient(QObject):
         self,
         *,
         language: str,
-        prompt: str,
         prefix: str,
         suffix: str,
+        context: str = "",
     ) -> None:
         from src.services.pynia.completion import PyniaInlineCompletionWorker
 
@@ -370,9 +361,9 @@ class PyniaAgentClient(QObject):
         worker.set_request(
             self._provider_id,
             language,
-            prompt,
             prefix,
             suffix,
+            context=context,
             model=get_pynia_settings().completion_model(self._provider_id),
         )
 

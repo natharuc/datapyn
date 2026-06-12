@@ -990,6 +990,18 @@ class SessionWidget(QWidget):
             database_context=db_context,
         )
 
+    def _apply_restored_block_databases(self) -> None:
+        """After reconnect, load schema for blocks that keep an explicit database override."""
+        editor = getattr(self, "editor", None)
+        if editor is None or not hasattr(editor, "get_blocks"):
+            return
+        for block in editor.get_blocks():
+            if not hasattr(block, "get_database_name"):
+                continue
+            db = block.get_database_name()
+            if db:
+                self.block_database_changed.emit(block, db)
+
     def _update_block_database_ui(self, block, database_name: str) -> None:
         """Update only the executing block's database context (not other blocks)."""
         if block is None or not database_name:
@@ -2273,6 +2285,10 @@ class SessionWidget(QWidget):
         """Sync widget state to session"""
         self.session.code = self.get_code()  # Compatibilidade
         self.session.blocks = self.editor.to_list()  # Novo: blocos
+        if self.session.is_connected:
+            db = get_connector_database_context(self.session.connector)
+            if db:
+                self.session.database_context = db
         self.session.notification_config = self.get_tab_notification_config()
         self.session.result_view_state = self.get_result_view_state()
         # Sync file_path and file type
@@ -2477,10 +2493,10 @@ class SessionWidget(QWidget):
             # Emit connection change signal
             if self.session.connection_name and self.session.connector:
                 db = get_connector_database_context(self.session.connector)
-                self.session.database_context = (
-                    db if getattr(self.session.connector, "db_type", "") == "databricks" else ""
-                )
+                if db:
+                    self.session.database_context = db
                 self.connection_changed.emit(self.session.connection_name, db)
+                self._apply_restored_block_databases()
         else:
             self.append_output(message, error=True)
             self.status_changed.emit(S.session_widget.status_conn_error)

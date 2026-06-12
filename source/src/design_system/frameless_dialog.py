@@ -8,7 +8,7 @@ uses design-system tokens (get_colors) for forms, inputs, and panels.
 from __future__ import annotations
 
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent, QObject, Qt, QPoint, QRectF
+from PyQt6.QtCore import QEvent, QObject, Qt, QPoint, QRectF, QTimer
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QDialog,
@@ -94,7 +94,11 @@ class _FramelessShadowHost(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
     def paintEvent(self, event):  # noqa: N802
+        if self.width() < 4 or self.height() < 4:
+            return
         painter = QPainter(self)
+        if not painter.isActive():
+            return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         inner = QRectF(self.rect()).adjusted(
             _SHELL_SHADOW_PAD,
@@ -159,19 +163,19 @@ class _ModalBackdropController(QObject):
         return host
 
     def show(self) -> None:
+        if not widget_is_valid(self._dialog) or not self._dialog.isVisible():
+            return
         host = self._resolve_host()
-        if host is None:
+        if host is None or not widget_is_valid(host):
             return
         self._host = host
         if self._backdrop is None:
             self._backdrop = _ModalBackdrop(host)
             host.installEventFilter(self)
+        if not widget_is_valid(self._backdrop):
+            self._backdrop = _ModalBackdrop(host)
         self._backdrop._sync_geometry()
         self._backdrop.show()
-        self._backdrop.raise_()
-        for child in host.children():
-            if isinstance(child, QWidget) and child is not self._backdrop and child.isVisible():
-                child.stackUnder(self._backdrop)
         self._backdrop.raise_()
         self._dialog.raise_()
         self._dialog.activateWindow()
@@ -198,14 +202,16 @@ class _DialogBackdropFilter(QObject):
     def __init__(self, dialog: QDialog):
         super().__init__(dialog)
         self._controller = _ModalBackdropController(dialog)
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.timeout.connect(self._controller.show)
 
     def eventFilter(self, obj, event):  # noqa: N802
         if obj is self.parent():
             if event.type() == QEvent.Type.Show:
-                from PyQt6.QtCore import QTimer
-
-                QTimer.singleShot(0, self._controller.show)
+                self._show_timer.start(0)
             elif event.type() in (QEvent.Type.Hide, QEvent.Type.Close):
+                self._show_timer.stop()
                 self._controller.hide()
         return False
 

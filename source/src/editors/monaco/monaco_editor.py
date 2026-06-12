@@ -412,8 +412,7 @@ class MonacoEditor(QWidget):
 
         if self._sql_schema:
             self._run_js(f"registerSqlSchemaIndex({json.dumps(self._sql_schema)})")
-            self._push_merged_completions()
-        elif self._static_completions or self._sibling_block_completions:
+        if self._static_completions or self._sibling_block_completions:
             self._push_merged_completions()
 
         self._schedule_syntax_validation()
@@ -819,10 +818,10 @@ class MonacoEditor(QWidget):
             f"registerSqlSchemaIndex({payload})",
             replace_key="editor:sqlSchemaIndex",
         )
-        if schema:
-            self.update_sql_completions(schema)
-            return
-        self.clear_sql_completions()
+        # Schema tables/columns are resolved in JS via registerSqlSchemaIndex only.
+        # Building 10k+ static completion items blocks the WebEngine main thread.
+        if not schema:
+            self.clear_sql_completions()
 
     def clear_sql_completions(self) -> None:
         """Clear Monaco SQL completions so a new schema can be loaded cleanly."""
@@ -925,51 +924,25 @@ class MonacoEditor(QWidget):
         self._push_merged_completions()
 
     def _push_merged_completions(self) -> None:
-        # Schema/Jedi items first; sibling block snippets after (offline autocomplete).
+        # Python Jedi/static items + sibling block snippets (small lists only).
         merged = (self._static_completions or []) + (self._sibling_block_completions or [])
         payload = json.dumps(merged)
         self._run_js_when_ready(f"registerCompletions({payload})")
     
     def update_sql_completions(self, schema: Optional[dict]) -> None:
-        """Update SQL autocomplete with database schema (built off the UI thread)."""
+        """Refresh SQL schema index in Monaco (no bulk static completion list)."""
         if not schema:
             return
-
-        self._sql_completion_generation += 1
-        generation = self._sql_completion_generation
-
-        _qthread_request_stop(self._sql_completion_worker)
-
-        worker = SqlCompletionBuildWorker(generation, schema, self)
-        worker.completions_ready.connect(self._on_sql_completions_built)
-        worker.finished.connect(lambda w=worker: self._release_sql_completion_worker(w))
-        worker.finished.connect(worker.deleteLater)
-        self._sql_completion_worker = worker
-        worker.start()
+        self.set_sql_schema(schema)
 
     def _release_sql_completion_worker(self, worker: SqlCompletionBuildWorker) -> None:
         if self._sql_completion_worker is worker:
             self._sql_completion_worker = None
 
     def _on_sql_completions_built(self, generation: int, completions: list) -> None:
+        # Legacy path — schema completions are served from sqlSchemaIndex in JS.
         if generation != self._sql_completion_generation:
             return
-        tables = len(self._sql_schema.get("tables", [])) if self._sql_schema else 0
-        columns = sum(len(cols) for cols in (self._sql_schema.get("columns") or {}).values())
-        logger.info(
-            "[MONACO] Registering %s SQL completions (%s tables, %s column groups)",
-            len(completions),
-            tables,
-            columns,
-        )
-        self._static_completions = completions
-        self._push_merged_completions()
-        if self._sql_schema:
-            payload = json.dumps(self._sql_schema)
-            self._run_js_when_ready(
-                f"registerSqlSchemaIndex({payload})",
-                replace_key="editor:sqlSchemaIndex",
-            )
     
     def update_python_completions(self, variables: Optional[dict]) -> None:
         """Update Python autocomplete with namespace variables (built off the UI thread)."""

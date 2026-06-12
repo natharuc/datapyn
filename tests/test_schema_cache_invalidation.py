@@ -483,7 +483,8 @@ def test_apply_loaded_schema_skips_blocks_on_other_databases(qapp):
         schema, "Conn", db_type="sqlserver", requesting_sid="sid-1"
     )
 
-    gecon_block.set_sql_schema.assert_called_once_with(schema)
+    expected_schema = {**schema, "db_type": "sqlserver"}
+    gecon_block.set_sql_schema.assert_called_once_with(expected_schema)
     gecon_block.set_database_context.assert_called_once_with("Conn:GECON")
     esim_block.set_sql_schema.assert_not_called()
     esim_block.set_database_context.assert_not_called()
@@ -500,5 +501,6 @@ def test_apply_loaded_schema_applies_to_blocks_without_schema(qapp):
         schema, "Conn", db_type="sqlserver", requesting_sid="sid-1"
     )
 
-    empty_block.set_sql_schema.assert_called_once_with(schema)
+    expected_schema = {**schema, "db_type": "sqlserver"}
+    empty_block.set_sql_schema.assert_called_once_with(expected_schema)
     empty_block.set_database_context.assert_called_once_with("Conn:GECON")

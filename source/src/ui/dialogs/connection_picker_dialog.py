@@ -1,20 +1,11 @@
 """
 Simple dialog for selecting a saved connection.
 
-Reuses the connection list (DraggableConnectionList + ConnectionItem)
-from the sidebar panel. The user double-clicks to select.
+Uses the shared SavedConnectionsListView (search + same row layout as the sidebar).
+Double-click to select.
 """
 
-from PyQt6.QtWidgets import (
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QListWidgetItem,
-    QFrame,
-)
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 
 from src.core.theme_manager import ThemeManager
 from src.language import S
@@ -36,7 +27,7 @@ class ConnectionPickerDialog(QDialog):
         self._selected_config = None
 
         self.setWindowTitle(S.connection_picker.title)
-        self.resize(380, 420)
+        self.resize(420, 480)
 
         self._setup_ui()
         self._load_connections()
@@ -44,20 +35,20 @@ class ConnectionPickerDialog(QDialog):
     def _setup_ui(self):
         """Sets up the UI"""
         from src.design_system.frameless_dialog import install_frameless_shell
+        from src.design_system.tokens import get_colors
+        from src.ui.components.saved_connections_list import SavedConnectionsListView
+
+        colors = get_colors()
 
         layout = install_frameless_shell(
             self,
             S.connection_picker.title,
-            min_width=380,
-            min_height=420,
+            min_width=400,
+            min_height=460,
             content_margins=(16, 12, 16, 16),
             content_spacing=12,
         )
 
-        # Header
-        from src.design_system.tokens import get_colors
-        colors = get_colors()
-        
         header = QHBoxLayout()
         if qta:
             icon_label = QLabel()
@@ -69,83 +60,39 @@ class ConnectionPickerDialog(QDialog):
         header.addStretch()
         layout.addLayout(header)
 
-        # Instruction
         hint = QLabel(S.connection_picker.hint)
         hint.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px; font-style: italic;")
         layout.addWidget(hint)
 
-        # Connection list - reuses components from connection_panel
-        from src.ui.components.connection_panel import (
-            DraggableConnectionList,
-            ConnectionItem,
-            ConnectionItemWidget,
+        self._connections_list = SavedConnectionsListView(
+            show_search=True,
+            drag_enabled=False,
+            list_min_height=280,
+            bordered=True,
         )
+        self._connections_list.connection_activated.connect(self._on_connection_selected)
+        layout.addWidget(self._connections_list, 1)
 
-        self.list_widget = DraggableConnectionList()
-        self.list_widget.setDragEnabled(False)  # No drag in this context
-        self.list_widget.setMinimumHeight(250)
-        self.list_widget.setIconSize(QSize(28, 28))
-        self.list_widget.setSpacing(2)
-        self.list_widget.setWordWrap(True)
-        self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)
-        # Estilo com selecao suave
-        self.list_widget.setStyleSheet(f"""
-            QListWidget {{
-                background: {colors.bg_primary};
-                border: 1px solid {colors.border_muted};
-                border-radius: 8px;
-                padding: 4px;
-            }}
-            QListWidget::item {{
-                padding: 6px 8px;
-                border-radius: 6px;
-                margin: 2px 0px;
-            }}
-            QListWidget::item:selected {{
-                background: rgba(59, 130, 246, 0.2);
-            }}
-            QListWidget::item:hover {{
-                background: {colors.bg_elevated};
-            }}
-        """)
-        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        layout.addWidget(self.list_widget, 1)
-
-        # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-
         cancel_btn = QPushButton(S.connection_picker.btn_cancel)
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
-
         layout.addLayout(btn_layout)
 
     def _load_connections(self):
-        """Loads saved connections into the list"""
-        from src.ui.components.connection_panel import ConnectionItem, ConnectionItemWidget
-
-        self.list_widget.clear()
-
+        """Loads saved connections into the shared list widget."""
+        connections = []
         for conn_name in self.connection_manager.get_saved_connections():
             config = self.connection_manager.get_connection_config(conn_name)
-            if not config:
-                continue
+            if config:
+                connections.append((conn_name, config))
+        self._connections_list.refresh(connections)
 
-            item = ConnectionItem(conn_name, config)
-            item.setData(Qt.ItemDataRole.UserRole, conn_name)
-            self.list_widget.addItem(item)
-
-            widget = ConnectionItemWidget(conn_name, item.group, item.icon)
-            self.list_widget.setItemWidget(item, widget)
-
-    def _on_item_double_clicked(self, item: QListWidgetItem):
-        """Double click selects the connection and closes the dialog"""
-        conn_name = item.data(Qt.ItemDataRole.UserRole)
-        if conn_name:
-            self.selected_connection = conn_name
-            self._selected_config = self.connection_manager.get_connection_config(conn_name)
-            self.accept()
+    def _on_connection_selected(self, conn_name: str):
+        self.selected_connection = conn_name
+        self._selected_config = self.connection_manager.get_connection_config(conn_name)
+        self.accept()
 
     def get_result(self):
         """Returns (connection_name, config) or (None, None)"""

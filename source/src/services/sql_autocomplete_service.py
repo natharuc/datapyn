@@ -551,6 +551,19 @@ class SqlAutoCompleteService:
             cloned["lookup_names"].update(extra_lookup_names)
         return cloned
 
+    def _infer_sqlserver_schema_name(self, schema_name: str, table_key: str) -> str:
+        """SQL Server: unqualified table keys default to dbo; schema.table uses the prefix."""
+        if schema_name:
+            return schema_name
+        if self._schema_db_type not in ("mssql", "sqlserver"):
+            return ""
+        parts = self._split_identifier_parts(table_key)
+        if len(parts) >= 3:
+            return parts[-2]
+        if len(parts) == 2:
+            return parts[0]
+        return "dbo"
+
     def _rebuild_schema_index(self) -> None:
         self._table_entries = []
         self._table_lookup = {}
@@ -562,7 +575,11 @@ class SqlAutoCompleteService:
         for table in self._schema.get("tables", []) or []:
             if isinstance(table, dict):
                 table_name = str(table.get("name", "") or "")
-                schema_name = str(table.get("schema", "") or "")
+                table_key_hint = str(table.get("key", "") or "")
+                schema_name = self._infer_sqlserver_schema_name(
+                    str(table.get("schema", "") or ""),
+                    table_key_hint or table_name,
+                )
                 catalog_name = str(table.get("catalog", "") or "")
                 table_database = str(table.get("database", "") or "")
                 if (
@@ -616,7 +633,10 @@ class SqlAutoCompleteService:
                 continue
             parts = self._split_identifier_parts(table_key)
             table_name = parts[-1] if parts else str(table_key)
-            schema_name = parts[-2] if len(parts) >= 2 else ""
+            schema_name = self._infer_sqlserver_schema_name(
+                parts[-2] if len(parts) >= 2 else "",
+                str(table_key),
+            )
             catalog_name = parts[-3] if len(parts) >= 3 else ""
             self._register_table_entry(
                 name=table_name,
@@ -1695,7 +1715,7 @@ class SqlAutoCompleteService:
             return True
         entry_schema = self._normalize_name(entry.get("schema", "") or "")
         if not entry_schema:
-            return True
+            return self._normalize_name(default_schema) == "dbo"
         return entry_schema == self._normalize_name(default_schema)
 
     def _table_completions(
