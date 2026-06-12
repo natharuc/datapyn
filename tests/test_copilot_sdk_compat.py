@@ -58,6 +58,6 @@ class TestCopilotSdkCompat:
             "protocolVersion": 2,
         })
         assert response.message == "pong: datapyn"
-        assert response.protocolVersion == 2
+        assert response.protocol_version == 2
         assert isinstance(response.timestamp, int)
         assert response.timestamp > 0

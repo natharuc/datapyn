@@ -45,6 +45,7 @@ from .statusbar import MainStatusBar
 
 # Connection Panel
 from .connection_panel import ConnectionPanel, ConnectionItem, ActiveConnectionWidget, ConnectionsList
+from .saved_connections_list import SavedConnectionsListView, build_connection_search_text
 
 # Session Tabs
 from .session_tabs import SessionTabs, SessionTabBar
@@ -91,6 +92,8 @@ __all__ = [
     "ConnectionItem",
     "ActiveConnectionWidget",
     "ConnectionsList",
+    "SavedConnectionsListView",
+    "build_connection_search_text",
     "SessionTabs",
     "SessionTabBar",
     "EditorHeader",

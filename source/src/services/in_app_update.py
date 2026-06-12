@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -23,6 +22,8 @@ from PyQt6.QtWidgets import (
 )
 
 from src.design_system.app_dialogs import show_danger
+from src.design_system.frameless_dialog import install_frameless_shell
+from src.design_system.tokens import get_colors
 from src.services.windows_installer import (
     EXE_NAME,
     launch_application,
@@ -74,25 +75,47 @@ class InAppUpdateDialog(QDialog):
         self._worker: ZipUpdateWorker | None = None
 
         self.setWindowTitle("DataPyn — Atualizando")
-        self.setMinimumWidth(440)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(12)
+        colors = get_colors()
+        layout = install_frameless_shell(
+            self,
+            "DataPyn — Atualizando",
+            min_width=440,
+            min_height=160,
+            content_margins=(24, 20, 24, 20),
+            content_spacing=12,
+            resizable=False,
+        )
 
         title = QLabel(f"Atualizando para v{self._version}")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
+        title.setStyleSheet(f"color: {colors.text_primary};")
         layout.addWidget(title)
 
         self._status = QLabel("Preparando…")
         self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color: {colors.text_secondary};")
         layout.addWidget(self._status)
 
         self._bar = QProgressBar()
         self._bar.setRange(0, 100)
         self._bar.setValue(0)
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(6)
+        self._bar.setStyleSheet(
+            f"""
+            QProgressBar {{
+                border: none;
+                border-radius: 4px;
+                background: {colors.bg_tertiary};
+            }}
+            QProgressBar::chunk {{
+                border-radius: 4px;
+                background: {colors.interactive_primary};
+            }}
+            """
+        )
         layout.addWidget(self._bar)
 
     def start(self) -> None:

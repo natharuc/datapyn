@@ -102,12 +102,15 @@ def isolate_workspace_for_tests(tmp_path_factory):
     # Restaurar valores originais apos todos os testes
     workspace_service.DEFAULT_WORKSPACE_PATH = original_default_path
     workspace_service._workspace_service_instance = None  # Reset para proximo uso
-    
-    # Restaurar QSettings
+
+    # Restaurar QSettings. Recriar o objeto: o `test_settings` da abertura da
+    # sessao pode ter tido seu objeto C++ destruido se algum teste recriou o
+    # QApplication, e usa-lo levantaria "QSettings has been deleted".
+    restore_settings = QSettings("DataPyn", "Workspaces")
     if original_current:
-        test_settings.setValue("current_workspace", original_current)
+        restore_settings.setValue("current_workspace", original_current)
     if original_list:
-        test_settings.setValue("workspace_list", original_list)
+        restore_settings.setValue("workspace_list", original_list)
 
 
 # ==================== CONFIGURAÇÃO MATPLOTLIB PARA TESTES ====================

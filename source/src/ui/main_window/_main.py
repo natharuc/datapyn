@@ -538,8 +538,20 @@ class MainWindow(
         if hasattr(self, "_abort_all_background_connections"):
             self._abort_all_background_connections(wait_ms=3000)
 
-        # Save sessions before closing
-        self._save_sessions()
+        from src.utils.qt_threading import stop_qthread
+
+        for thread, worker in list(getattr(self, "_worker_threads", [])):
+            stop_qthread(thread, worker, wait_ms=3000, force_terminate=True)
+        if hasattr(self, "_worker_threads"):
+            self._worker_threads.clear()
+
+        for widget in list(getattr(self, "_session_widgets", {}).values()):
+            if hasattr(widget, "_orphan_running_threads"):
+                widget._orphan_running_threads()
+
+        # Sessions are saved live while editing; only cancel pending debounce.
+        if hasattr(self, "_session_autosave"):
+            self._session_autosave.cancel_pending()
 
         # Stop all timers to prevent resource leaks
         if hasattr(self, 'status_timer') and self.status_timer:

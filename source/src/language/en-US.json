@@ -239,7 +239,8 @@
     "ctx_connect": "Connect",
     "ctx_connect_new_tab": "Connect in New Tab",
     "ctx_edit": "Edit",
-    "error_loading_svg": "Error loading SVG: {error}"
+    "error_loading_svg": "Error loading SVG: {error}",
+    "search_placeholder": "Search name, group, host, database, type…"
   },
   "session_widget": {
     "connected_to": "Connected to {name}",
@@ -274,7 +275,9 @@
     "loading_connecting": "Connecting to {name}...",
     "file_import_error": "[ERROR] Failed to import file: {error}",
     "conn_dialog_error": "Error opening connection dialog: {error}",
-    "connecting_block": "Connecting to {name}..."
+    "connecting_block": "Connecting to {name}...",
+    "sql_previous_still_running": "Previous query is still stopping. Wait a moment and run again.",
+    "status_sql_previous_still_running": "Previous query still stopping"
   },
   "results": {
     "btn_csv": "CSV",
@@ -1604,7 +1607,10 @@
     "btn_save_token": "Save token",
     "btn_verify": "Verify connection",
     "verify_ok": "Connection verified.",
+    "verify_ok_title": "Connection verified",
+    "verify_ok_detail": "Your API token is valid and models were loaded successfully.",
     "verify_failed": "Verification failed: {error}",
+    "verify_failed_title": "Verification failed",
     "section_autocomplete": "INLINE AUTOCOMPLETE",
     "autocomplete_enable": "Enable AI inline autocomplete in code blocks (ghost text while typing)",
     "autocomplete_hint": "Uses the connector token above. Works in SQL and Python blocks.",
@@ -1635,9 +1641,17 @@
     "gh_cli_installed": "GitHub CLI installed. Click **Sign In** to connect GitHub Copilot.",
     "gh_cli_install_failed": "Failed to install GitHub CLI: {error}",
     "runtime_update_required": "Copilot runtime is out of date.\n\n{error}\n\nUpdate CLI/SDK from the limits panel when using GitHub Copilot.",
-    "switch_account": "Switch account",
-    "account_picker_title": "Switch Copilot account",
+    "switch_account": "Switch connector",
+    "account_picker_title": "Switch connector",
     "account_picker_close": "Close",
+    "account_ready": "Ready to switch",
+    "account_ready_short": "Ready",
+    "account_needs_login": "Sign in required",
+    "account_current": "Current",
+    "account_picker_empty": "No saved accounts yet.",
+    "connector_picker_active": "Active: {provider}",
+    "connector_picker_section_connectors": "AI connectors",
+    "connector_picker_section_github": "GitHub Copilot accounts",
     "add_account": "Add GitHub account",
     "thinking": "Thinking",
     "thinking_complete": "Thought for {seconds}s",

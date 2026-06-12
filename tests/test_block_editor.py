@@ -399,6 +399,44 @@ class TestBlockEditor:
         block = editor.add_block(code="SELECT 1")
         assert block.get_code() == "SELECT 1"
 
+    def test_focus_refreshes_only_focused_block(self, editor):
+        """Focar um bloco NAO deve reconstruir o contexto de todos os blocos.
+
+        Regressao de performance: o full-rebuild O(N^2) no foco causava
+        lentidao ao clicar no editor. O foco deve refrescar so o bloco focado.
+        """
+        editor.add_block(language="python", code="x = 1")
+        editor.add_block(language="python", code="y = 2")
+        blocks = editor.get_blocks()
+
+        with patch.object(editor, "_apply_block_completion_context") as mock_apply:
+            editor._on_block_focus_changed(blocks[1], True)
+
+        # Exatamente um bloco refrescado (o focado), nao todos.
+        assert mock_apply.call_count == 1
+        assert mock_apply.call_args.args[0] is blocks[1]
+
+    def test_refocus_same_block_is_noop(self, editor):
+        """Re-foco no bloco ja focado nao deve refazer trabalho."""
+        block = editor.add_block(language="python", code="x = 1")
+        editor._on_block_focus_changed(block, True)
+
+        with patch.object(editor, "refresh_focused_block_context") as mock_refresh:
+            editor._on_block_focus_changed(block, True)
+
+        mock_refresh.assert_not_called()
+
+    def test_full_refresh_still_covers_all_blocks(self, editor):
+        """refresh_completion_context (add/exec/schema) ainda cobre todos os blocos."""
+        editor.add_block(language="python", code="x = 1")
+        editor.add_block(language="python", code="y = 2")
+        n_blocks = editor.get_block_count()
+
+        with patch.object(editor, "_apply_block_completion_context") as mock_apply:
+            editor.refresh_completion_context()
+
+        assert mock_apply.call_count == n_blocks
+
     def test_remove_block(self, editor):
         """Deve remover blocos"""
         editor.add_block()
@@ -967,6 +1005,26 @@ class TestRealWorldScenarios:
         restored = Session.deserialize(session_data)
 
         assert restored.database_context == "mag_bronze.esim"
+
+    def test_session_serialization_preserves_sql_server_database_context(self):
+        session = Session(session_id="test-session", title="Test")
+        session.database_context = "GEON"
+
+        session_data = session.serialize()
+        restored = Session.deserialize(session_data)
+
+        assert restored.database_context == "GEON"
+
+    def test_apply_saved_database_context_restores_sql_server_db(self):
+        session = Session(session_id="test-session", title="Test")
+        session.database_context = "GEON"
+        connector = MagicMock()
+        connector.get_current_database.return_value = "defaultdb"
+        connector.change_database = MagicMock()
+
+        session._apply_saved_database_context(connector)
+
+        connector.change_database.assert_called_once_with("GEON")
 
 
 class TestEdgeCases:

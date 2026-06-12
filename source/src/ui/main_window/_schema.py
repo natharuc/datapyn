@@ -340,6 +340,26 @@ class SchemaMixin:
                 table_name,
             )
 
+    def _block_schema_database(self, block) -> str:
+        """Current database label on a block's autocomplete schema, if any."""
+        if hasattr(block, "get_sql_schema"):
+            schema = block.get_sql_schema()
+        else:
+            schema = getattr(block, "_sql_schema", None) or {}
+        if not isinstance(schema, dict):
+            return ""
+        return schema.get("database", "") or ""
+
+    def _should_apply_session_schema_to_block(self, block, editor_schema: dict) -> bool:
+        """Skip session-wide schema when the block already targets another database."""
+        if not block or not isinstance(editor_schema, dict):
+            return False
+        incoming_db = editor_schema.get("database", "") or ""
+        block_db = self._block_schema_database(block)
+        if block_db and incoming_db and block_db != incoming_db:
+            return False
+        return True
+
     def _clear_sql_autocomplete_for_connection(self, widget, connection_name: str):
         """Clear Monaco SQL autocomplete for blocks affected by a database switch."""
         if not widget or not connection_name or not hasattr(widget, "editor") or not widget.editor:
@@ -351,7 +371,9 @@ class SchemaMixin:
             session_conn = getattr(widget.session, "connection_name", "") or ""
 
         if session_conn == connection_name:
-            if hasattr(editor, "_sql_schema"):
+            if hasattr(editor, "set_sql_schema"):
+                editor.set_sql_schema({})
+            elif hasattr(editor, "_sql_schema"):
                 editor._sql_schema = {}
             if hasattr(editor, "set_database_context"):
                 editor.set_database_context("")
@@ -424,8 +446,12 @@ class SchemaMixin:
             referenced_mode=referenced_mode,
         )
 
-        if session_conn == connection_name and hasattr(widget.editor, "set_sql_schema"):
-            widget.editor.set_sql_schema(editor_schema)
+        schema_context = self._build_schema_context(editor_schema, connection_name)
+        if session_conn == connection_name:
+            if hasattr(widget.editor, "set_sql_schema"):
+                widget.editor.set_sql_schema(editor_schema)
+            if hasattr(widget.editor, "set_database_context"):
+                widget.editor.set_database_context(schema_context)
 
         for block in widget.editor.get_blocks():
             block_lang = block.get_language() if hasattr(block, "get_language") else ""
@@ -436,14 +462,15 @@ class SchemaMixin:
             uses_connection = (block_conn == connection_name) or (not block_conn and session_conn == connection_name)
             if not uses_connection:
                 continue
+            if not self._should_apply_session_schema_to_block(block, editor_schema):
+                continue
 
-            if hasattr(block.editor, "set_sql_schema"):
-                block.editor.set_sql_schema(editor_schema)
-            if hasattr(block, "set_available_databases"):
-                block.set_available_databases(available_databases)
-
-        schema_context = self._build_schema_context(editor_schema, connection_name)
-        widget.editor.set_database_context(schema_context)
+            self._apply_schema_to_block(
+                block,
+                editor_schema,
+                db_type=db_type,
+                connection_name=connection_name,
+            )
 
     def _load_schema_with_loading(self, connector, connection_name: str, session_id: str = ""):
         """Load schema and show loading indicator in Object Explorer.
@@ -525,7 +552,13 @@ class SchemaMixin:
             else:
                 self.statusBar().showMessage(S.status.connection_not_active.format(name=connection_name), 3000)
 
-    def _on_schema_loaded(self, schema: dict, connection_name: str, session_id: str = ""):
+    def _on_schema_loaded(
+        self,
+        schema: dict,
+        connection_name: str,
+        session_id: str = "",
+        block_key: str = "",
+    ):
         """Callback when database schema is loaded by SchemaService.
 
         Distribui o schema para os blocos SQL que usam
@@ -537,22 +570,28 @@ class SchemaMixin:
             schema: Loaded schema dict
             connection_name: Connection name
             session_id: Session ID that requested the schema (for isolation)
+            block_key: Isolated SQL block id (per-block database context)
         """
         # Guard against invalid data (e.g., Mock objects in tests)
         if not isinstance(schema, dict) or not isinstance(connection_name, str):
             return
-        
-        tables_total = len(schema.get('tables', []))
-        cols_total = sum(len(v) for v in schema.get('columns', {}).values())
+
+        schema_label = (
+            schema.get("database")
+            or schema.get("current_context")
+            or connection_name
+        )
+        tables_total = len(schema.get("tables", []))
+        cols_total = sum(len(v) for v in schema.get("columns", {}).values())
         self._log_info(
-            S.log.schema_loaded.format(name=connection_name, tables=tables_total, cols=cols_total)
+            S.log.schema_loaded.format(name=schema_label, tables=tables_total, cols=cols_total)
         )
 
-        # Feedback na statusbar
         tables_count = len(schema.get("tables", []))
         cols_count = sum(len(v) for v in schema.get("columns", {}).values())
         self.statusBar().showMessage(
-            S.status.schema_loaded.format(name=connection_name, tables=tables_count, cols=cols_count), 5000
+            S.status.schema_loaded.format(name=schema_label, tables=tables_count, cols=cols_count),
+            5000,
         )
 
         db_type = ""
@@ -566,6 +605,18 @@ class SchemaMixin:
 
         requesting_sid = session_id or pending_sid
         self._clear_pending_object_explorer_requests(requesting_sid)
+
+        if block_key:
+            target_block = self._find_block_by_key(block_key, requesting_sid)
+            if target_block is not None:
+                self._apply_schema_to_block(
+                    target_block,
+                    schema,
+                    db_type=db_type,
+                    connection_name=connection_name,
+                )
+                self._update_oe_for_block_connection(target_block, connection_name, schema)
+            return
 
         # Defer heavy Monaco/schema propagation to the next event-loop tick
         QTimer.singleShot(
@@ -609,7 +660,12 @@ class SchemaMixin:
                 # Dereference weakref; skip if block was garbage-collected
                 pending_block = ref() if callable(ref) else ref
                 if pending_block:
-                    self._apply_schema_to_block(pending_block, schema, db_type=db_type)
+                    self._apply_schema_to_block(
+                        pending_block,
+                        schema,
+                        db_type=db_type,
+                        connection_name=connection_name,
+                    )
                     # Also update OE if this block is focused
                     self._update_oe_for_block_connection(pending_block, connection_name, schema)
 
@@ -644,8 +700,9 @@ class SchemaMixin:
             )
             schema_context = self._build_schema_context(editor_schema, connection_name)
 
-            if session_conn == connection_name and hasattr(widget.editor, "set_sql_schema"):
-                widget.editor.set_sql_schema(editor_schema)
+            if session_conn == connection_name:
+                if hasattr(widget.editor, "set_sql_schema"):
+                    widget.editor.set_sql_schema(editor_schema)
                 if hasattr(widget.editor, "set_database_context"):
                     widget.editor.set_database_context(schema_context)
 
@@ -661,10 +718,15 @@ class SchemaMixin:
                 )
                 if not uses_connection:
                     continue
-                if hasattr(block.editor, "set_sql_schema"):
-                    block.editor.set_sql_schema(editor_schema)
-                if hasattr(block, "set_available_databases"):
-                    block.set_available_databases(all_databases)
+                if not self._should_apply_session_schema_to_block(block, editor_schema):
+                    continue
+
+                self._apply_schema_to_block(
+                    block,
+                    editor_schema,
+                    db_type=db_type,
+                    connection_name=connection_name,
+                )
 
         if requesting_sid and hasattr(self.connection_manager, "get_connection"):
             widget = self._session_widgets.get(requesting_sid)
@@ -854,7 +916,12 @@ class SchemaMixin:
             config = self.connection_manager.get_connection_config(connection_name)
             if config:
                 db_type = config.get("db_type", "")
-            self._apply_schema_to_block(block, cached, db_type=db_type)
+            self._apply_schema_to_block(
+                block,
+                cached,
+                db_type=db_type,
+                connection_name=connection_name,
+            )
             # Update OE if this is the focused block
             self._update_oe_for_block_connection(block, connection_name, cached)
             return
@@ -862,18 +929,31 @@ class SchemaMixin:
         # Need to load schema in background
         self._load_schema_for_block(block, connection_name)
 
-    def _apply_schema_to_block(self, block, schema: dict, db_type: str = ""):
-        """Apply schema to a specific block's editor.
-        
+    def _apply_schema_to_block(
+        self,
+        block,
+        schema: dict,
+        db_type: str = "",
+        connection_name: str = "",
+    ):
+        """Apply schema to a single block's Monaco autocomplete (isolated per block).
+
         Args:
             block: The CodeBlock to update
             schema: Schema dict with tables, columns, databases
             db_type: Database type (e.g., 'databricks') for special handling
+            connection_name: Connection name for inline-completion context text
         """
         if not block:
             return
-        if hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
+        if db_type and isinstance(schema, dict):
+            schema = {**schema, "db_type": db_type or schema.get("db_type", "")}
+        if hasattr(block, "set_sql_schema"):
+            block.set_sql_schema(schema)
+        elif hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
             block.editor.set_sql_schema(schema)
+        if connection_name and hasattr(block, "set_database_context"):
+            block.set_database_context(self._build_schema_context(schema, connection_name))
         if hasattr(block, "set_available_databases"):
             all_databases = self._available_databases_from_schema(schema, db_type)
             block.set_available_databases(all_databases)
@@ -968,14 +1048,61 @@ class SchemaMixin:
                 lambda msg: self._log_info(f"Error connecting for block schema ({connection_name}): {msg}")
             )
             worker.finished.connect(thread.quit)
-            thread.finished.connect(worker.deleteLater)
-            thread.finished.connect(thread.deleteLater)
             thread.finished.connect(lambda: self._remove_worker_thread(thread))
 
             self._worker_threads.append((thread, worker))
+            self._adopt_background_thread(thread, worker)
             thread.start()
         except Exception as e:
             self._log_info(f"Error loading schema for block ({connection_name}): {e}")
+
+    def _find_block_by_key(self, block_key: str, session_id: str = "") -> object | None:
+        if not block_key:
+            return None
+        widgets = []
+        if session_id and session_id in getattr(self, "_session_widgets", {}):
+            widgets = [self._session_widgets[session_id]]
+        else:
+            widgets = list(getattr(self, "_session_widgets", {}).values())
+        for widget in widgets:
+            editor = getattr(widget, "editor", None)
+            if editor is None:
+                continue
+            for candidate in editor.get_blocks():
+                if getattr(candidate, "get_block_key", lambda: "")() == block_key:
+                    return candidate
+        return None
+
+    def _load_schema_for_block_connector(
+        self,
+        block,
+        connector,
+        connection_name: str,
+        session_id: str = "",
+    ) -> None:
+        """Reload IntelliSense schema from a block's isolated connector."""
+        if not block or not connector or not connection_name:
+            return
+        block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
+        sid = session_id or self._get_active_session_id() or ""
+
+        if sid:
+            explorer = self._get_session_explorer(sid)
+            explorer.set_loading(True, S.object_explorer.loading)
+            self._switch_session_explorer(sid)
+            if not hasattr(self, "_pending_schema_sessions"):
+                self._pending_schema_sessions = {}
+            self._pending_schema_sessions[connection_name] = sid
+
+        self._schema_service.invalidate_cache(
+            connection_name, session_id=sid, block_key=block_key
+        )
+        self._schema_service.load_schema(
+            connector,
+            connection_name,
+            session_id=sid,
+            block_key=block_key,
+        )
 
     def _on_block_database_changed(self, block, database_name: str):
         """Callback when a block's database is changed.
@@ -983,34 +1110,38 @@ class SchemaMixin:
         Switches the database of the block's connection (or session connection)
         and reloads schema for the new database to update IntelliSense.
         """
-        if not database_name:
+        if not database_name or block is None:
             return
 
         current_widget = self._get_current_session_widget()
         session = current_widget.session if current_widget and hasattr(current_widget, "session") else None
 
-        # Determine which connector to use (block-specific or session)
         block_conn_name = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-
-        if block_conn_name:
-            # Block has its own connection - need to switch database and reload schema
-            # Do this in background to avoid blocking UI
-            self._switch_block_database_background(block, block_conn_name, database_name)
-            return
-
-        # Block uses session connection
-        if not session:
+        connection_name = block_conn_name or (
+            getattr(session, "connection_name", "") if session else ""
+        )
+        if not connection_name:
             self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
 
-        connector = getattr(session, "connector", None)
+        if block_conn_name:
+            self._switch_block_database_background(block, block_conn_name, database_name)
+            return
+
+        if not current_widget:
+            return
+
+        connector = None
+        if hasattr(current_widget, "_get_sql_connector_for_block"):
+            connector = current_widget._get_sql_connector_for_block(
+                block, block_conn_name, database_name
+            )
         if not connector or not self._connector_is_connected(connector):
             self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
 
-        # Switch database in background (uses Object Explorer method which handles
-        # schema reload, UI updates, etc.)
-        self._on_object_explorer_database_switch(database_name)
+        sid = session.session_id if session else ""
+        self._load_schema_for_block_connector(block, connector, connection_name, session_id=sid)
 
     def _on_completion_log(self, message: str, level: str):
         """Handle autocomplete/completion log messages.
@@ -1096,11 +1227,10 @@ class SchemaMixin:
             lambda msg: self.statusBar().showMessage(f"Error: {msg[:50]}", 5000)
         )
         worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._remove_worker_thread(thread))
 
         self._worker_threads.append((thread, worker))
+        self._adopt_background_thread(thread, worker)
         thread.start()
 
     def _on_insert_variable_in_editor(self, var_name: str):

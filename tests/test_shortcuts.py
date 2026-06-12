@@ -213,6 +213,25 @@ def test_all_shortcuts_registered(main_window):
         assert shortcut_key != "", f"Atalho '{shortcut_name}' está vazio"
 
 
+def test_shortcuts_have_autorepeat_disabled(main_window):
+    """Segurar um atalho (ex. F5) NAO pode disparar varias vezes via auto-repeat."""
+    assert main_window._shortcuts, "nenhum atalho registrado"
+    repeating = [s for s in main_window._shortcuts if s.autoRepeat()]
+    assert repeating == [], "atalhos com auto-repeat ligado (execucao duplicada ao segurar)"
+
+
+def test_run_trigger_debounce_collapses_held_key(main_window):
+    """A guarda de execucao colapsa disparos repetidos (tecla segurada) em 1."""
+    main_window._last_run_trigger_timer = None  # estado limpo
+
+    assert main_window._run_trigger_allowed() is True   # 1o disparo: executa
+    assert main_window._run_trigger_allowed() is False  # repeticao imediata: bloqueada
+    assert main_window._run_trigger_allowed() is False
+
+    QTest.qWait(300)  # alem da janela de debounce
+    assert main_window._run_trigger_allowed() is True   # novo disparo intencional: ok
+
+
 def test_no_ambiguous_shortcuts(main_window):
     """Verifica que nao ha atalhos duplicados/ambiguos"""
     shortcut_manager = main_window.shortcut_manager

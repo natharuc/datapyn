@@ -273,6 +273,16 @@ def _gh_executable() -> str:
     return shutil.which("gh") or ""
 
 
+def _thread_alive(thread) -> bool:
+    """True when a QThread's C++ object is still valid and running."""
+    if thread is None:
+        return False
+    try:
+        return bool(thread.isRunning())
+    except RuntimeError:
+        return False
+
+
 def _is_gh_logged_in(gh_path: str = "") -> bool:
     """Return True when GitHub CLI reports an active github.com session."""
     gh_path = gh_path or _gh_executable()
@@ -540,6 +550,7 @@ class CopilotWorker(QObject):
         self._loop = None  # Persistent event loop
         self._inline_prompt = ""  # For inline completions
         self._login_process = None
+        self._dying_threads: List[QThread] = []  # cancelled auth threads exiting on their own
         self._attachments: List[Dict[str, Any]] = []
         self._pending_tool_ids: List[tuple] = []  # (tool_call_id, tool_name)
         self._finished_tool_keys: set[str] = set()
@@ -1909,8 +1920,11 @@ class CopilotClient(QObject):
     def start_auth(self) -> None:
         """Start authentication check with SDK. Creates persistent session worker."""
         self._cleanup_worker()
-        self._cleanup_session_worker()
-        
+        # Detach (non-blocking) instead of stop_qthread+terminate: a previous
+        # auth/init worker may be stuck in network/readline, and blocking here
+        # would freeze the UI on every Sign In / retry.
+        self._detach_session_worker()
+
         # Create persistent session worker
         self._session_worker = CopilotWorker(self._tool_executor)
         self._session_worker.set_model(self._model)
@@ -2030,13 +2044,63 @@ class CopilotClient(QObject):
         if self._worker:
             self._worker.cancel()
 
+    def _detach_session_worker(self) -> None:
+        """Non-blocking teardown of the session worker/thread (never terminates).
+
+        The login worker blocks in ``process.stdout.readline()`` and only checks
+        the cancel flag between lines, so a blocking ``stop_qthread`` would time
+        out and ``terminate()`` the thread — terminating a thread stuck in native
+        code corrupts Qt state and crashes (and blocks the UI up to ~3.8s).
+        Instead: kill the login subprocess (which unblocks the readline so the
+        worker exits on its own), drop its signals, and let the thread
+        self-destruct when it finishes.
+        """
+        worker = self._session_worker
+        thread = self._session_thread
+        self._session_worker = None
+        self._session_thread = None
+
+        if worker is not None:
+            try:
+                worker.cancel()  # kills the gh login subprocess → unblocks readline
+            except Exception:
+                pass
+            # Stop late signals (error/auth_needed/...) from re-driving the UI.
+            try:
+                worker.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+
+        if thread is not None:
+            self._dying_threads = [t for t in self._dying_threads if _thread_alive(t)]
+            try:
+                if thread.isRunning():
+                    if worker is not None:
+                        thread.finished.connect(worker.deleteLater)
+                    thread.finished.connect(thread.deleteLater)
+                    thread.finished.connect(lambda t=thread: self._reap_dying_thread(t))
+                    self._dying_threads.append(thread)
+                    thread.quit()  # non-blocking; thread exits once readline returns
+                else:
+                    thread.deleteLater()
+                    if worker is not None:
+                        worker.deleteLater()
+            except RuntimeError:
+                pass
+
     def cancel_pending_auth(self) -> None:
-        """Cancel an in-progress GitHub login/auth verification."""
+        """Cancel an in-progress GitHub login/auth verification (non-blocking)."""
         self._is_authenticated = False
-        if self._session_worker:
-            self._session_worker.cancel()
-        self._cleanup_session_worker()
+        self._detach_session_worker()
         self.auth_failed.emit("Authentication cancelled")
+
+    def _reap_dying_thread(self, thread) -> None:
+        try:
+            self._dying_threads = [
+                t for t in getattr(self, "_dying_threads", []) if t is not thread and _thread_alive(t)
+            ]
+        except Exception:
+            pass
 
     def reset_chat_session(self) -> None:
         """Reset the persistent Copilot SDK session (new chat thread)."""
@@ -2339,8 +2403,10 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
     def do_login(self) -> None:
         """Start automatic GitHub login process. Creates persistent session on success."""
         self._cleanup_worker()
-        self._cleanup_session_worker()
-        
+        # Non-blocking detach (see start_auth) so the device-login flow never
+        # freezes the UI while tearing down a previous stuck worker.
+        self._detach_session_worker()
+
         # Create as session worker - it will become persistent on success
         self._session_worker = CopilotWorker(self._tool_executor)
         self._session_worker.set_model(self._model)

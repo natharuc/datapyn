@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Optional, TYPE_CHECKING
 
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
 
 from src.services.pynia.settings import get_pynia_settings
 from src.services.pynia.types import ProviderId
@@ -22,6 +22,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _auth_service: Optional["PyniaAuthService"] = None
+
+
+class _GhLoginCheckWorker(QThread):
+    """Runs the blocking ``gh auth status`` subprocess off the UI thread.
+
+    ``_is_gh_logged_in`` shells out to ``gh`` with a 12s timeout; calling it on
+    the UI thread froze startup. This worker emits the result so the auth flow
+    can continue without blocking.
+    """
+
+    result = pyqtSignal(bool)
+
+    def run(self) -> None:  # pragma: no cover - thread body
+        logged_in = False
+        try:
+            from src.services.copilot.copilot_client_sdk import (
+                _gh_executable,
+                _is_gh_logged_in,
+            )
+
+            logged_in = _is_gh_logged_in(_gh_executable())
+        except Exception:
+            logged_in = False
+        self.result.emit(logged_in)
 
 
 class PyniaAuthService(QObject):
@@ -48,6 +72,22 @@ class PyniaAuthService(QObject):
         self._auth_in_progress = False
         self._agent_connected = False
         self._lsp_connected = False
+        self._gh_workers: list = []  # in-flight async gh-status checks
+
+    def _run_gh_check(self, on_result) -> None:
+        """Run `gh auth status` off the UI thread, then call on_result(bool)."""
+        worker = _GhLoginCheckWorker()
+        self._gh_workers.append(worker)
+
+        def _handle(logged_in: bool, w=worker) -> None:
+            try:
+                on_result(bool(logged_in))
+            finally:
+                self._gh_workers = [x for x in self._gh_workers if x is not w]
+
+        worker.result.connect(_handle)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
     def set_agent_client(self, client: "PyniaAgentClient") -> None:
         if self._agent_client and self._agent_connected:
@@ -139,16 +179,14 @@ class PyniaAuthService(QObject):
                     self._auth_in_progress = False
                     self.chat_auth_failed.emit("Copilot connector not available.")
                     return False
-                from src.services.copilot.copilot_client_sdk import _gh_executable, _is_gh_logged_in
-
-                if _is_gh_logged_in(_gh_executable()):
-                    logger.info("[PyniaAuth] GitHub CLI session found — verifying Copilot")
-                    client.start_auth()
-                elif hasattr(backend, "do_login"):
-                    logger.info("[PyniaAuth] Starting GitHub login for Copilot")
-                    backend.do_login()
-                else:
-                    client.start_auth()
+                # Deciding between verify (start_auth) and device-login (do_login)
+                # needs `gh auth status`, a blocking subprocess. Run it OFF the UI
+                # thread so clicking Sign In never freezes the app. Give instant
+                # feedback now; dispatch when the check returns.
+                self.chat_auth_started.emit("Verifying GitHub authentication…")
+                self._run_gh_check(
+                    lambda logged_in: self._dispatch_copilot_login(client, backend, logged_in)
+                )
             else:
                 client.start_auth()
             return True
@@ -157,6 +195,24 @@ class PyniaAuthService(QObject):
             self._auth_in_progress = False
             self.chat_auth_failed.emit(str(exc))
             return False
+
+    def _dispatch_copilot_login(self, client, backend, logged_in: bool) -> None:
+        """Continue Copilot login on the UI thread after the async gh check."""
+        if not self._auth_in_progress or self._agent_client is not client:
+            return
+        try:
+            if logged_in:
+                logger.info("[PyniaAuth] GitHub CLI session found — verifying Copilot")
+                client.start_auth()
+            elif hasattr(backend, "do_login"):
+                logger.info("[PyniaAuth] Starting GitHub login for Copilot")
+                backend.do_login()
+            else:
+                client.start_auth()
+        except Exception as exc:
+            logger.exception("[PyniaAuth] Failed to dispatch Copilot login")
+            self._auth_in_progress = False
+            self.chat_auth_failed.emit(str(exc))
 
     def logout_chat(self) -> None:
         if not self._agent_client:
@@ -204,19 +260,42 @@ class PyniaAuthService(QObject):
         return True
 
     def trigger_auto_auth_on_open(self, delay_ms: int = 400) -> bool:
-        """Verify Copilot when gh is already logged in, even before first successful chat."""
+        """Verify Copilot when gh is already logged in, even before first successful chat.
+
+        Never blocks the UI thread: returning users go straight to the async
+        verify (start_auth checks the gh session on its own worker thread);
+        first-run users get the blocking ``gh auth status`` check off-thread.
+
+        Returns True only when auth is definitely starting now (caller can show
+        the signing-in state). When the gh check runs async, returns False and
+        the auth_started signal drives the UI if it ends up authenticating.
+        """
         if not self._agent_client or self._agent_client.is_authenticated:
             return False
         if self._auth_in_progress:
             return False
         if self._agent_client.provider_id != "copilot":
             return self.trigger_auto_auth(delay_ms)
-        from src.services.copilot.copilot_client_sdk import _gh_executable, _is_gh_logged_in
 
-        if not _is_gh_logged_in(_gh_executable()):
-            return self.trigger_auto_auth(delay_ms)
+        if self.should_auto_auth("copilot"):
+            # start_auth verifies the gh session on its own thread — no block.
+            QTimer.singleShot(delay_ms, self._auto_verify_copilot)
+            return True
+
+        # First run: only auto-start if a gh session already exists. That
+        # check is a blocking subprocess, so run it off the UI thread.
+        self._run_gh_check(lambda ok: self._on_gh_login_check(ok, delay_ms))
+        return False
+
+    def _on_gh_login_check(self, logged_in: bool, delay_ms: int) -> None:
+        if (
+            not logged_in
+            or self._auth_in_progress
+            or not self._agent_client
+            or self._agent_client.is_authenticated
+        ):
+            return
         QTimer.singleShot(delay_ms, self._auto_verify_copilot)
-        return True
 
     def _auto_verify_copilot(self) -> None:
         if self._auth_in_progress or not self._agent_client or self._agent_client.is_authenticated:

@@ -368,12 +368,29 @@ def _grid_format_datetime_value(value, format_name: str) -> str:
     return parsed.strftime(pattern)
 
 
+def _grid_default_number_str(value) -> Optional[str]:
+    """Clean display for an integer-valued float (e.g. a column upcast to float
+    by a NULL): show ``1569845`` instead of ``1569845.0``. Real decimals and
+    out-of-safe-range values fall through to the caller's ``str()``.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (float, np.floating)):
+        f = float(value)
+        if f.is_integer() and abs(f) < 9_007_199_254_740_992:  # 2**53: exact ints
+            return str(int(f))
+    return None
+
+
 def _grid_format_display_value(value, format_config) -> str:
     config = _grid_normalize_format_config(format_config)
     format_name = config.get("type", "default")
     if format_name == "default":
         if isinstance(value, (pd.Timestamp, datetime, date)):
             return _grid_format_datetime_value(value, "datetime")
+        clean_number = _grid_default_number_str(value)
+        if clean_number is not None:
+            return clean_number
         return str(value)
     if format_name in {"number", "currency"}:
         number = pd.to_numeric(value, errors="coerce")
@@ -2048,7 +2065,8 @@ class PandasModel(QAbstractTableModel):
         config = self._normalize_format_config(format_config)
         format_name = config.get("type", "default")
         if format_name == "default":
-            return str(value)
+            clean_number = _grid_default_number_str(value)
+            return clean_number if clean_number is not None else str(value)
         if format_name in {"number", "currency"}:
             number = pd.to_numeric(value, errors="coerce")
             if pd.isna(number):

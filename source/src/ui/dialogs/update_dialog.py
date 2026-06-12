@@ -20,6 +20,29 @@ from src.language import S
 logger = logging.getLogger(__name__)
 
 
+def _style_progress_bar(bar: QProgressBar) -> None:
+    """Design-system progress bar (blue accent chunk) — without this the bare
+    QProgressBar falls back to the OS default, which can render red."""
+    from src.design_system.tokens import get_colors
+
+    colors = get_colors()
+    bar.setTextVisible(False)
+    bar.setFixedHeight(6)
+    bar.setStyleSheet(
+        f"""
+        QProgressBar {{
+            border: none;
+            border-radius: 4px;
+            background: {colors.bg_tertiary};
+        }}
+        QProgressBar::chunk {{
+            border-radius: 4px;
+            background: {colors.interactive_primary};
+        }}
+        """
+    )
+
+
 class UpdateDialog(QDialog):
     """Dialog for informing about available updates"""
 
@@ -135,6 +158,7 @@ class UpdateDownloadDialog(QDialog):
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
+        _style_progress_bar(self.progress_bar)
         layout.addWidget(self.progress_bar)
 
         # Status label
@@ -223,6 +247,7 @@ class UpdateCheckingDialog(QDialog):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(0)  # Indeterminate mode
+        _style_progress_bar(self.progress_bar)
         layout.addWidget(self.progress_bar)
 
         # Status label

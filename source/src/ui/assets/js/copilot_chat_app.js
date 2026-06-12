@@ -893,13 +893,113 @@
         if (panel) panel.hidden = !state.accountPickerOpen;
     }
 
+    function accountPickerIsCurrent(account, data) {
+        const kind = account.kind || "";
+        const providerId = account.provider_id || "";
+        const activeProvider = data.active_provider || data.current || "";
+        const username = account.username || "";
+        if (kind === "provider") {
+            return String(providerId) === String(activeProvider);
+        }
+        if (kind === "copilot_account" && String(activeProvider) === "copilot") {
+            return String(username) === String(data.current || "");
+        }
+        return String(username) === String(data.current || "");
+    }
+
+    function appendAccountPickerItem(list, account, data) {
+        const username = account.username || "";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "account-picker-item";
+        if (accountPickerIsCurrent(account, data)) btn.classList.add("current");
+        const ready = !!account.ready;
+        const displayName = account.display_name || account.provider_label || username;
+        const meta = account.subtitle || (
+            ready
+                ? label("account_ready", "Ready to switch")
+                : label("account_needs_login", "Sign in required")
+        );
+        let badge = "";
+        if (accountPickerIsCurrent(account, data)) {
+            badge = `<span class="account-picker-item-badge current-badge">${escapeHtml(label("account_current", "Current"))}</span>`;
+        } else if (ready) {
+            badge = `<span class="account-picker-item-badge">${escapeHtml(label("account_ready_short", "Ready"))}</span>`;
+        }
+        btn.innerHTML = `<div class="account-picker-item-main"><div class="account-picker-item-name">${escapeHtml(displayName)}</div><div class="account-picker-item-meta">${escapeHtml(meta)}</div></div>${badge}`;
+        btn.addEventListener("click", () => {
+            setAccountPickerOpen(false);
+            if (account.kind === "provider") {
+                callBridge("selectAccount", {
+                    username,
+                    provider_id: account.provider_id || username,
+                    kind: "provider",
+                });
+                return;
+            }
+            setAccountSwitchBusy({
+                visible: true,
+                username,
+                kind: "switch",
+            });
+            callBridge("selectAccount", {
+                username,
+                provider_id: account.provider_id || "copilot",
+                kind: account.kind || "copilot_account",
+            });
+        });
+        list.appendChild(btn);
+    }
+
     function renderAccountPicker() {
         const list = $("accountPickerList");
         if (!list) return;
         const data = state.accountPicker || {};
-        const current = data.current || "";
         list.innerHTML = "";
+        const titleEl = $("accountPickerTitle");
+        const activeEl = $("accountPickerActive");
+        const addBtn = $("accountPickerAdd");
+        if (titleEl) {
+            titleEl.textContent = label("account_picker_title", "Switch connector");
+        }
+        if (activeEl) {
+            const activeLabel = data.active_provider_label || "";
+            activeEl.textContent = activeLabel
+                ? label("connector_picker_active", "Active: {provider}").replace("{provider}", activeLabel)
+                : "";
+        }
+        const sections = Array.isArray(data.sections) ? data.sections : [];
         const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+        const hasGithubSection = sections.some((section) => section.id === "github" && (section.accounts || []).length);
+        if (addBtn) addBtn.hidden = !hasGithubSection;
+
+        if (sections.length) {
+            let rendered = 0;
+            sections.forEach((section) => {
+                const sectionAccounts = Array.isArray(section.accounts) ? section.accounts : [];
+                if (!sectionAccounts.length) return;
+                const wrap = document.createElement("div");
+                wrap.className = "account-picker-section";
+                if (section.title) {
+                    const heading = document.createElement("div");
+                    heading.className = "account-picker-section-title";
+                    heading.textContent = section.title;
+                    wrap.appendChild(heading);
+                }
+                sectionAccounts.forEach((account) => appendAccountPickerItem(wrap, account, data));
+                list.appendChild(wrap);
+                rendered += sectionAccounts.length;
+            });
+            if (!rendered) {
+                const empty = document.createElement("div");
+                empty.className = "account-picker-item-meta";
+                empty.style.padding = "8px 10px";
+                empty.textContent = label("account_picker_empty", "No saved accounts yet.");
+                list.appendChild(empty);
+            }
+            return;
+        }
+
         if (!accounts.length) {
             const empty = document.createElement("div");
             empty.className = "account-picker-item-meta";
@@ -908,34 +1008,7 @@
             list.appendChild(empty);
             return;
         }
-        accounts.forEach((account) => {
-            const username = account.username || "";
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "account-picker-item";
-            if (username === current) btn.classList.add("current");
-            const ready = !!account.ready;
-            const meta = ready
-                ? label("account_ready", "Ready to switch")
-                : label("account_needs_login", "Sign in required");
-            let badge = "";
-            if (username === current) {
-                badge = `<span class="account-picker-item-badge">${escapeHtml(label("account_current", "Current"))}</span>`;
-            } else if (ready) {
-                badge = `<span class="account-picker-item-badge">${escapeHtml(label("account_ready_short", "Ready"))}</span>`;
-            }
-            btn.innerHTML = `<div class="account-picker-item-main"><div class="account-picker-item-name">@${escapeHtml(username)}</div><div class="account-picker-item-meta">${escapeHtml(meta)}</div></div>${badge}`;
-            btn.addEventListener("click", () => {
-                setAccountPickerOpen(false);
-                setAccountSwitchBusy({
-                    visible: true,
-                    username,
-                    kind: "switch",
-                });
-                callBridge("selectAccount", { username });
-            });
-            list.appendChild(btn);
-        });
+        accounts.forEach((account) => appendAccountPickerItem(list, account, data));
     }
 
     function openAccountPicker(payload) {

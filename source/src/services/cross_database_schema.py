@@ -250,6 +250,7 @@ def prepare_editor_sql_schema(
 
     return {
         **schema,
+        "db_type": normalized_db_type or str(schema.get("db_type", "") or ""),
         "tables": filtered_tables,
         "columns": filtered_columns,
     }

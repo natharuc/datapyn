@@ -305,15 +305,22 @@ class ChatBridge(QObject):
     @pyqtSlot(str)
     def selectAccount(self, payload_json: str = ""):
         panel = self.parent()
-        if panel is None or not hasattr(panel, "_activate_copilot_account"):
+        if panel is None:
             return
         username = ""
+        kind = ""
+        provider_id = ""
         try:
             payload = json.loads(payload_json) if payload_json else {}
             username = str(payload.get("username") or "").strip()
+            kind = str(payload.get("kind") or "").strip()
+            provider_id = str(payload.get("provider_id") or "").strip()
         except Exception:
             pass
-        if username:
+        if kind == "provider" and hasattr(panel, "_switch_connector"):
+            panel._switch_connector(provider_id or username)
+            return
+        if username and hasattr(panel, "_activate_copilot_account"):
             panel._activate_copilot_account(username)
 
     @pyqtSlot(str)
@@ -324,9 +331,9 @@ class ChatBridge(QObject):
 
     @pyqtSlot(result=str)
     def listAccountsJson(self) -> str:
-        from src.services.copilot import get_copilot_auth_service
+        from src.services.pynia.connector_picker import build_connector_picker_payload
 
-        payload = get_copilot_auth_service().build_account_picker_payload()
+        payload = build_connector_picker_payload()
         return json.dumps(payload, default=str)
 
 
@@ -2221,6 +2228,8 @@ class PyniaChatPanel(QWidget):
             "account_picker_title", "account_picker_close", "add_account",
             "account_current", "account_ready", "account_ready_short",
             "account_needs_login", "account_picker_empty",
+            "connector_picker_active", "connector_picker_section_connectors",
+            "connector_picker_section_github",
             "account_switch_title", "account_switch_message",
             "account_switch_add_title", "account_switch_add_message",
             "runtime_update_checking", "runtime_update_downloading_cli", "runtime_update_installing_cli",
@@ -2300,29 +2309,28 @@ class PyniaChatPanel(QWidget):
         self._pending_webview_ops.clear()
 
     def _try_begin_auto_auth_on_open(self) -> None:
-        """Start Copilot/API verification without requiring a manual Sign in click."""
+        """Start Copilot/API verification without requiring a manual Sign in click.
+
+        Must never block: the gh session check runs off the UI thread inside the
+        auth service. The signing-in state is set optimistically here, or driven
+        by the auth_started signal when the async gh check decides to start.
+        """
         if not self._agent_client or self._agent_client.is_authenticated:
             return
         if self._auth_signing_in:
             return
         auth = self._get_chat_auth_service()
         pid = getattr(self._agent_client, "provider_id", "copilot")
-        should_start = False
-        if pid == "copilot":
-            from src.services.copilot.copilot_client_sdk import _gh_executable, _is_gh_logged_in
-
-            should_start = _is_gh_logged_in(_gh_executable()) or auth.should_auto_auth("copilot")
-        else:
-            should_start = auth.should_auto_auth(pid)
-        if not should_start:
-            return
-
         self._auth_error_message = None
         started = False
-        if pid == "copilot" and hasattr(auth, "trigger_auto_auth_on_open"):
-            started = bool(auth.trigger_auto_auth_on_open(delay_ms=0))
-        else:
-            started = auth.login_chat()
+        try:
+            if pid == "copilot" and hasattr(auth, "trigger_auto_auth_on_open"):
+                started = bool(auth.trigger_auto_auth_on_open(delay_ms=0))
+            elif auth.should_auto_auth(pid):
+                started = auth.login_chat()
+        except Exception as exc:
+            logger.warning("Auto-auth on open skipped: %s", exc)
+            return
         if started:
             self._auth_signing_in = True
             self._refresh_auth_gate()
@@ -2413,10 +2421,37 @@ class PyniaChatPanel(QWidget):
         self._sync_usage_to_webview(updating=True)
 
     def _open_account_picker(self):
-        from src.services.copilot import get_copilot_auth_service
+        from src.services.pynia.connector_picker import build_connector_picker_payload
 
-        payload = get_copilot_auth_service().build_account_picker_payload()
+        payload = build_connector_picker_payload()
         self._run_chat_js(f"openAccountPicker({json.dumps(payload, default=str)})")
+
+    def _switch_connector(self, provider_id: str) -> None:
+        """Switch the active Pynia connector (OpenAI, OpenRouter, Anthropic, Copilot)."""
+        provider_id = str(provider_id or "").strip()
+        if not provider_id:
+            return
+        if self._agent_client and hasattr(self._agent_client, "set_provider"):
+            self._agent_client.set_provider(provider_id)
+        self._auth_error_message = None
+        self._auth_gh_required = False
+        if provider_id != "copilot" and hasattr(self, "_gh_install_widget"):
+            self._gh_install_widget.setVisible(False)
+        self._update_auth_state()
+        if self._agent_client and hasattr(self._agent_client, "available_models"):
+            self._populate_model_combo(self._agent_client.available_models())
+        self._refresh_usage_panel()
+        self._sync_app_state()
+        if provider_id == "copilot" and self._agent_client and not self._agent_client.is_authenticated:
+            auth_service = self._get_chat_auth_service()
+            if auth_service.login_chat():
+                self._auth_signing_in = True
+                self._refresh_auth_gate()
+        elif provider_id != "copilot":
+            from src.services.pynia.settings import get_provider_secret
+
+            if not get_provider_secret(provider_id):
+                self._open_pynia_settings()
 
     def _activate_copilot_account(self, username: str):
         from src.services.copilot import get_copilot_auth_service

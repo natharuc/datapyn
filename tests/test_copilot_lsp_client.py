@@ -108,3 +108,23 @@ class TestInlineCompletion:
         notif_methods = [c[0][0] for c in client._send_notification.call_args_list]
         assert "textDocument/didOpen" in notif_methods
         assert "file:///new.py" in client._opened_uris
+
+    def test_mark_degraded_blocks_inline_completion(self):
+        client = _make_client()
+        client._initialized = True
+        client._is_authenticated = True
+        client.mark_degraded("ETIMEDOUT")
+
+        assert client.is_degraded
+        assert not client.completions_enabled
+
+        client.request_completion("file:///x.py", 1, 0, 0)
+        client._send_request.assert_not_called()
+
+    def test_network_log_message_marks_degraded(self):
+        client = _make_client()
+        client._handle_notification(
+            "window/logMessage",
+            {"message": "FetchError: connect ETIMEDOUT", "type": 2},
+        )
+        assert client.is_degraded

@@ -6,6 +6,7 @@ Uses Monaco Editor for code editing with Copilot inline completions.
 """
 
 import time
+import uuid
 from typing import Optional
 
 from PyQt6.QtWidgets import (
@@ -448,6 +449,7 @@ class CodeBlock(QFrame):
         self._sql_parameters_enabled = True  # False = user chose to define variables manually in the query
         self._sql_schema = {}  # Cached SQL schema for parameter inference/autocomplete
         self._block_name = ""  # Block name (namespace prefix)
+        self._block_key = uuid.uuid4().hex  # Stable id for per-block DB sessions
         self._block_editor = None  # BlockEditor parent container
         self._is_copilot_editing = False  # Copilot is editing this block
         self._copilot_editing_timer = None  # Auto-dismiss timer
@@ -995,6 +997,10 @@ class CodeBlock(QFrame):
         if hasattr(self, '_completion_service'):
             self._completion_service.set_database_context(context)
 
+    def get_sql_schema(self) -> dict:
+        """Return this block's SQL schema (tables/columns for autocomplete)."""
+        return dict(self._sql_schema) if self._sql_schema else {}
+
     def set_sql_schema(self, schema: dict):
         """Set SQL schema for completions and parameter type inference."""
         self._sql_schema = schema or {}
@@ -1052,9 +1058,6 @@ class CodeBlock(QFrame):
             self._completion_request_column = column
             language = self.get_language()
 
-            full_text = prefix + suffix
-            self._completion_service.notify_document_changed(full_text)
-
             self._completion_service.request_completion(
                 prefix, suffix, language, line, column
             )
@@ -1065,9 +1068,6 @@ class CodeBlock(QFrame):
             self._completion_request_line = line
             self._completion_request_column = column
             language = self.get_language()
-
-            full_text = prefix + suffix
-            self._completion_service.notify_document_changed(full_text)
 
             self._completion_service.force_completion(
                 prefix, suffix, language, line, column
@@ -1361,6 +1361,10 @@ class CodeBlock(QFrame):
     def has_selection(self) -> bool:
         return self.editor.has_selection()
 
+    def get_block_key(self) -> str:
+        """Unique id for this block's isolated database session."""
+        return self._block_key
+
     def get_block_name(self) -> str:
         """Return block name (used as namespace prefix)"""
         return self.name_input.text().strip()
@@ -1422,6 +1426,10 @@ class CodeBlock(QFrame):
     def get_database_name(self) -> str:
         """Return custom database name or None (uses connection default)"""
         return self._database_name
+
+    def uses_tab_default_database(self) -> bool:
+        """True when this block follows the session tab database (not a per-block override)."""
+        return not self._database_name
 
     def set_database_name(self, database_name: str):
         """Set custom database for this block"""
@@ -1692,6 +1700,7 @@ class CodeBlock(QFrame):
             "code": self.get_code(),
             "height": self.editor_container.height(),
             "block_name": self.get_block_name(),
+            "block_key": self._block_key,
             "is_active": self._is_active,
         }
         if self._connection_name:
@@ -1721,6 +1730,8 @@ class CodeBlock(QFrame):
         # Restore block name
         if "block_name" in data and data["block_name"]:
             block.set_block_name(data["block_name"])
+        if data.get("block_key"):
+            block._block_key = str(data["block_key"])
         # Restore custom connection (with visual panel)
         if "connection_name" in data:
             db_type = data.get("db_type")

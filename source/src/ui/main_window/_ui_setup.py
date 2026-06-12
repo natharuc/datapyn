@@ -105,6 +105,7 @@ class UISetupMixin:
 
         # Restore sessions
         self._restore_sessions()
+        self._setup_session_autosave()
 
         # Dock for connections (left side)
         self._create_connections_dock()
@@ -739,6 +740,9 @@ class UISetupMixin:
             if key_sequence:
                 shortcut = QShortcut(QKeySequence(key_sequence), self)
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                # Holding a shortcut (e.g. F5) must fire once, not repeatedly via
+                # key auto-repeat — otherwise the user gets duplicate executions.
+                shortcut.setAutoRepeat(False)
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
                 app_keys.add(key_sequence)
@@ -794,6 +798,9 @@ class UISetupMixin:
             if key_sequence:
                 shortcut = QShortcut(QKeySequence(key_sequence), self)
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                # Holding a shortcut (e.g. F5) must fire once, not repeatedly via
+                # key auto-repeat — otherwise the user gets duplicate executions.
+                shortcut.setAutoRepeat(False)
                 shortcut.activated.connect(callback)
                 self._shortcuts.append(shortcut)
                 app_keys.add(key_sequence)
@@ -1014,6 +1021,7 @@ class UISetupMixin:
         dialog = SettingsDialog(
             self.shortcut_manager,
             theme_manager=self.theme_manager,
+            parent=self,
             initial_tab=initial_tab,
         )
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
@@ -1052,7 +1060,12 @@ class UISetupMixin:
 
     def _show_workspace_settings(self):
         """Shows the settings dialog on the Workspace tab."""
-        dialog = SettingsDialog(self.shortcut_manager, theme_manager=self.theme_manager, initial_tab="workspace")
+        dialog = SettingsDialog(
+            self.shortcut_manager,
+            theme_manager=self.theme_manager,
+            parent=self,
+            initial_tab="workspace",
+        )
         dialog.shortcuts_changed.connect(self._reload_shortcuts)
         dialog.pynia_connector_changed.connect(self._on_pynia_connector_changed)
 

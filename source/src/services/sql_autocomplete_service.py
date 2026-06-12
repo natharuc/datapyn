@@ -369,6 +369,8 @@ class SqlAutoCompleteService:
         cleaned_before = self._strip_noise(statement_context.statement_before_cursor)
         context, context_arg = self._detect_context(cleaned_before)
         analysis = self._analyze_context(statement_context, context)
+        if context == CTX_DOT:
+            analysis["dot_table_prefix"] = self._partial_token_after_final_dot(cleaned_before)
         return self._build_completions(context, context_arg, analysis)
 
     @staticmethod
@@ -549,6 +551,19 @@ class SqlAutoCompleteService:
             cloned["lookup_names"].update(extra_lookup_names)
         return cloned
 
+    def _infer_sqlserver_schema_name(self, schema_name: str, table_key: str) -> str:
+        """SQL Server: unqualified table keys default to dbo; schema.table uses the prefix."""
+        if schema_name:
+            return schema_name
+        if self._schema_db_type not in ("mssql", "sqlserver"):
+            return ""
+        parts = self._split_identifier_parts(table_key)
+        if len(parts) >= 3:
+            return parts[-2]
+        if len(parts) == 2:
+            return parts[0]
+        return "dbo"
+
     def _rebuild_schema_index(self) -> None:
         self._table_entries = []
         self._table_lookup = {}
@@ -560,7 +575,11 @@ class SqlAutoCompleteService:
         for table in self._schema.get("tables", []) or []:
             if isinstance(table, dict):
                 table_name = str(table.get("name", "") or "")
-                schema_name = str(table.get("schema", "") or "")
+                table_key_hint = str(table.get("key", "") or "")
+                schema_name = self._infer_sqlserver_schema_name(
+                    str(table.get("schema", "") or ""),
+                    table_key_hint or table_name,
+                )
                 catalog_name = str(table.get("catalog", "") or "")
                 table_database = str(table.get("database", "") or "")
                 if (
@@ -614,7 +633,10 @@ class SqlAutoCompleteService:
                 continue
             parts = self._split_identifier_parts(table_key)
             table_name = parts[-1] if parts else str(table_key)
-            schema_name = parts[-2] if len(parts) >= 2 else ""
+            schema_name = self._infer_sqlserver_schema_name(
+                parts[-2] if len(parts) >= 2 else "",
+                str(table_key),
+            )
             catalog_name = parts[-3] if len(parts) >= 3 else ""
             self._register_table_entry(
                 name=table_name,
@@ -1633,6 +1655,69 @@ class SqlAutoCompleteService:
                 result.append((upper.lower(), category, ""))
         return result
 
+    def _sqlserver_default_schema(self) -> str:
+        if self._schema_db_type in ("mssql", "sqlserver"):
+            return "dbo"
+        return ""
+
+    def _partial_token_after_final_dot(self, text: str) -> str:
+        """Partial identifier after the last dot (schema.table prefix while typing)."""
+        stripped = text.rstrip()
+        dot_index = stripped.rfind(".")
+        if dot_index < 0:
+            return ""
+        return stripped[dot_index + 1 :].strip()
+
+    def _known_schema_names(self) -> Set[str]:
+        schemas: Set[str] = set()
+        for entry in self._table_entries:
+            schema_name = self._normalize_name(entry.get("schema", "") or "")
+            if schema_name:
+                schemas.add(schema_name)
+        return schemas
+
+    def _is_known_schema(self, name: str) -> bool:
+        norm = self._normalize_name(name)
+        return bool(norm) and norm in self._known_schema_names()
+
+    def _schema_table_completions(
+        self,
+        schema_name: str,
+        table_prefix: str = "",
+    ) -> List[Tuple[str, str, str]]:
+        """Tables inside a schema when the user typed schema. (SQL Server)."""
+        norm_schema = self._normalize_name(schema_name)
+        prefix_norm = self._normalize_name(table_prefix) if table_prefix else ""
+        result: List[Tuple[str, str, str]] = []
+        seen: Set[str] = set()
+        for entry in self._table_entries:
+            if self._normalize_name(entry.get("schema", "") or "") != norm_schema:
+                continue
+            label = str(entry.get("name", "") or "")
+            norm_label = self._normalize_name(label)
+            if not norm_label or norm_label in seen:
+                continue
+            if prefix_norm and not norm_label.startswith(prefix_norm):
+                continue
+            seen.add(norm_label)
+            detail = f'{entry["type"]} - {entry["detail"]}'
+            result.append((label, CAT_TABLE, detail))
+        return result
+
+    def _table_entry_allowed_for_default_context(
+        self,
+        entry: dict[str, Any],
+        *,
+        default_schema: str,
+    ) -> bool:
+        """SQL Server: unqualified table suggestions default to dbo only."""
+        if not default_schema:
+            return True
+        entry_schema = self._normalize_name(entry.get("schema", "") or "")
+        if not entry_schema:
+            return self._normalize_name(default_schema) == "dbo"
+        return entry_schema == self._normalize_name(default_schema)
+
     def _table_completions(
         self,
         analysis: Optional[dict[str, Any]] = None,
@@ -1647,6 +1732,8 @@ class SqlAutoCompleteService:
         if cross_db:
             database_filter = self._normalize_name(cross_db.get("cross_database", ""))
             table_prefix = self._normalize_name(cross_db.get("table_prefix", ""))
+
+        default_schema = "" if cross_db else self._sqlserver_default_schema()
 
         def append_table(label: str, detail: str) -> None:
             normalized_label = self._normalize_name(label)
@@ -1676,6 +1763,10 @@ class SqlAutoCompleteService:
                 entry_db = self._normalize_name(entry.get("catalog", "") or "")
                 if entry_db and entry_db != database_filter:
                     continue
+            if not self._table_entry_allowed_for_default_context(
+                entry, default_schema=default_schema
+            ):
+                continue
             detail = f'{entry["type"]} - {entry["detail"]}'
             if self._schema_db_type == "databricks":
                 append_table(self._databricks_table_label(entry), detail)
@@ -1721,6 +1812,13 @@ class SqlAutoCompleteService:
 
     def _dot_completions(self, prefix: str, analysis: dict[str, Any]) -> List[Tuple[str, str, str]]:
         """Return columns for the table, alias, CTE, subquery or temp relation before the dot."""
+        parts = self._split_identifier_parts(prefix)
+        if len(parts) == 1 and self._is_known_schema(parts[0]):
+            return self._schema_table_completions(
+                parts[0],
+                str(analysis.get("dot_table_prefix", "") or ""),
+            )
+
         normalized_prefix = self._normalize_relation_key(prefix)
 
         relation = analysis.get("scope_lookup", {}).get(normalized_prefix)

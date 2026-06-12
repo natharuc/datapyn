@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QDateEdit,
     QDateTimeEdit,
     QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
@@ -259,21 +258,16 @@ class SqlParameterSettingsDialog(QDialog):
         self._load_parameter()
 
     def _setup_ui(self):
-        self.setWindowTitle(S.sql_parameters.settings_title)
-        flags = self.windowFlags() | Qt.WindowType.CustomizeWindowHint
-        flags |= Qt.WindowType.WindowTitleHint
-        flags |= Qt.WindowType.WindowSystemMenuHint
-        flags |= Qt.WindowType.WindowCloseButtonHint
-        flags &= ~Qt.WindowType.WindowMinimizeButtonHint
-        flags &= ~Qt.WindowType.WindowMaximizeButtonHint
-        flags &= ~Qt.WindowType.WindowMinMaxButtonsHint
-        self.setWindowFlags(flags)
-        self.setModal(True)
-        self.resize(360, 0)
+        from src.design_system.frameless_dialog import install_frameless_shell
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root = install_frameless_shell(
+            self,
+            S.sql_parameters.settings_title,
+            min_width=380,
+            content_margins=(16, 12, 16, 14),
+            content_spacing=8,
+            resizable=False,
+        )
 
         self.token_value = QLabel()
         root.addWidget(self._labeled(S.sql_parameters.label_token, self.token_value))
@@ -336,10 +330,26 @@ class SqlParameterSettingsDialog(QDialog):
         default_value_layout.addWidget(self.default_options_widget)
         root.addWidget(self._labeled(S.sql_parameters.label_default_value, self.default_value_container))
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        from src.design_system.button import PrimaryButton, SecondaryButton
+
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(8)
+        buttons_layout.addStretch(1)
+
+        btn_cancel = SecondaryButton(S.dialogs.cancel_btn, size="sm")
+        btn_cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(btn_cancel)
+
+        btn_ok = PrimaryButton(S.dialogs.btn_ok, size="sm")
+        btn_ok.clicked.connect(self.accept)
+        buttons_layout.addWidget(btn_ok)
+
+        root.addSpacing(4)
+        root.addLayout(buttons_layout)
+
+        from src.design_system.tokens import polish_combobox_popups
+
+        polish_combobox_popups(self)
 
     def _labeled(self, label: str, widget: QWidget) -> QWidget:
         container = QWidget(self)

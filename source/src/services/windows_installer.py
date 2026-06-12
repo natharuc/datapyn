@@ -780,13 +780,40 @@ def _resolve_setup_helper(install_dir: Path) -> Optional[Path]:
     return _cache_setup_in_install_dir(install_dir, downloaded)
 
 
+def _hidden_startupinfo() -> Optional[subprocess.STARTUPINFO]:
+    if sys.platform != "win32":
+        return None
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = subprocess.SW_HIDE
+    return info
+
+
+def _gui_subprocess_executable(executable: str) -> str:
+    """Prefer pythonw.exe on Windows so dev updates never flash a console."""
+    if sys.platform != "win32":
+        return executable
+    exe = Path(executable)
+    if exe.name.lower() == "python.exe":
+        pythonw = exe.with_name("pythonw.exe")
+        if pythonw.is_file():
+            return str(pythonw)
+    return executable
+
+
 def _spawn_detached(command: list[str], cwd: Path) -> None:
     """Launch a GUI child that survives after DataPyn.exe exits."""
     if sys.platform == "win32":
+        launch_cmd = list(command)
+        launch_cmd[0] = _gui_subprocess_executable(launch_cmd[0])
+        creationflags = _no_window_flags()
+        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
         subprocess.Popen(
-            ["cmd.exe", "/c", "start", ""] + command,
+            launch_cmd,
             cwd=str(cwd),
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=creationflags,
+            startupinfo=_hidden_startupinfo(),
             close_fds=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

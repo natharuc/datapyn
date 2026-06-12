@@ -239,7 +239,8 @@
     "ctx_connect": "Conectar",
     "ctx_connect_new_tab": "Conectar em Nova Aba",
     "ctx_edit": "Editar",
-    "error_loading_svg": "Erro ao carregar SVG: {error}"
+    "error_loading_svg": "Erro ao carregar SVG: {error}",
+    "search_placeholder": "Buscar nome, grupo, host, banco, tipo…"
   },
   "session_widget": {
     "connected_to": "Conectado a {name}",
@@ -274,7 +275,9 @@
     "loading_connecting": "Conectando a {name}...",
     "file_import_error": "[ERRO] Falha ao importar arquivo: {error}",
     "conn_dialog_error": "Erro ao abrir dialogo de conexao: {error}",
-    "connecting_block": "Conectando a {name}..."
+    "connecting_block": "Conectando a {name}...",
+    "sql_previous_still_running": "A consulta anterior ainda esta sendo cancelada. Aguarde um momento e execute novamente.",
+    "status_sql_previous_still_running": "Consulta anterior ainda cancelando"
   },
   "results": {
     "btn_csv": "CSV",
@@ -1604,7 +1607,10 @@
     "btn_save_token": "Salvar token",
     "btn_verify": "Verificar conexao",
     "verify_ok": "Conexao verificada.",
+    "verify_ok_title": "Conexao verificada",
+    "verify_ok_detail": "O token de API e valido e os modelos foram carregados com sucesso.",
     "verify_failed": "Falha na verificacao: {error}",
+    "verify_failed_title": "Falha na verificacao",
     "section_autocomplete": "AUTOCOMPLETE INLINE",
     "autocomplete_enable": "Ativar autocomplete com IA nos blocos de codigo (texto fantasma ao digitar)",
     "autocomplete_hint": "Usa o token do conector acima. Funciona em blocos SQL e Python.",
@@ -1635,9 +1641,17 @@
     "gh_cli_installed": "GitHub CLI instalado. Clique em **Entrar** para conectar o Copilot.",
     "gh_cli_install_failed": "Falha ao instalar GitHub CLI: {error}",
     "runtime_update_required": "Runtime Copilot desatualizado.\n\n{error}\n\nAtualize CLI/SDK no painel de limites ao usar GitHub Copilot.",
-    "switch_account": "Trocar conta",
-    "account_picker_title": "Trocar conta Copilot",
+    "switch_account": "Trocar conector",
+    "account_picker_title": "Trocar conector",
     "account_picker_close": "Fechar",
+    "account_ready": "Pronta para trocar",
+    "account_ready_short": "Pronta",
+    "account_needs_login": "Entrar necessario",
+    "account_current": "Atual",
+    "account_picker_empty": "Nenhuma conta salva ainda.",
+    "connector_picker_active": "Ativo: {provider}",
+    "connector_picker_section_connectors": "Conectores de IA",
+    "connector_picker_section_github": "Contas GitHub Copilot",
     "add_account": "Adicionar conta GitHub",
     "thinking": "Pensando",
     "thinking_complete": "Pensou por {seconds}s",

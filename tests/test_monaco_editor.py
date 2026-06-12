@@ -350,6 +350,9 @@ class TestInlineCompletionService:
         assert service._busy is False
 
     def test_fire_with_provider_starts_worker(self, monkeypatch):
+        from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
+
+        reset_ai_autocomplete_circuit_breaker()
         self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
         service = self._service()
         started = []
@@ -359,6 +362,29 @@ class TestInlineCompletionService:
         assert service._busy is True
         assert started and started[0][0] == "openrouter"
         assert started[0][1] == "openai/gpt-4.1-mini"
+
+    def test_circuit_breaker_blocks_ai_fire(self, monkeypatch):
+        from src.services.ai_autocomplete_circuit_breaker import get_ai_autocomplete_circuit_breaker
+
+        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+        breaker = get_ai_autocomplete_circuit_breaker()
+        breaker.reset()
+        breaker.record_failure("e1")
+        breaker.record_failure("e2")
+        breaker.record_failure("e3")
+        service = self._service()
+        started = []
+        service._start_worker = lambda *a: started.append(a)
+        results = []
+        service.completion_ready.connect(results.append)
+        service._pending = {
+            "id": 1, "prefix": "x =", "suffix": "", "language": "python", "line": 1, "column": 3,
+        }
+        service._fire()
+        assert started == []
+        assert results == [""]
+        assert service._busy is False
+        breaker.reset()
 
     def test_lsp_preferred_when_authenticated(self):
         """When the Copilot LSP is signed in, it serves completions (0-indexed)."""
@@ -402,16 +428,20 @@ class TestInlineCompletionService:
         results = []
         service.completion_ready.connect(results.append)
         service._busy = True
-        service._on_complete("df.head()")
+        service._deliver_completion("df.head()")
         assert results == ["df.head()"]
         assert service._busy is False
 
-    def test_on_error_emits_empty(self):
+    def test_on_worker_error_emits_empty(self):
+        from PyQt6.QtCore import QObject
+
         service = self._service()
+        worker = QObject()
+        service._worker = worker
         results = []
         service.completion_ready.connect(results.append)
         service._busy = True
-        service._on_error("HTTP 401")
+        service._on_worker_error(worker, "HTTP 401")
         assert results == [""]
         assert service._busy is False
 
@@ -632,6 +662,38 @@ class TestMonacoSqlAutocompleteIntegration:
         assert completion_calls
         assert '"label": "SELECT"' in completion_calls[-1]
 
+    def test_set_sql_schema_is_idempotent_for_same_schema(self, qtbot):
+        """Re-applying the SAME schema (every block focus did this) must NOT
+        re-register completions in Monaco — that froze the editor."""
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = MonacoEditor()
+        qtbot.addWidget(editor)
+
+        schema = {
+            "database": "controleproducao",
+            "tables": [{"name": "venda", "schema": "dbo", "type": "TABLE"}],
+            "columns": {"dbo.venda": [{"name": "id", "type": "int"}]},
+        }
+        editor.set_sql_schema(schema)
+
+        editor._run_js_when_ready = Mock()
+        # Same object re-applied (the focus path): no JS work.
+        editor.set_sql_schema(schema)
+        assert editor._run_js_when_ready.call_count == 0
+
+        # A genuinely different schema DOES re-register.
+        editor.set_sql_schema(
+            {
+                "database": "controleproducao",
+                "tables": [{"name": "cliente", "schema": "dbo", "type": "TABLE"}],
+                "columns": {"dbo.cliente": [{"name": "nome", "type": "varchar"}]},
+            }
+        )
+        qtbot.waitUntil(lambda: editor._run_js_when_ready.call_count > 0, timeout=5000)
+        emitted = [c.args[0] for c in editor._run_js_when_ready.call_args_list]
+        assert any(c.startswith("registerSqlSchemaIndex(") for c in emitted)
+
     def test_sql_completion_uses_zero_based_service_coordinates(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor
 
@@ -676,21 +738,23 @@ class TestMonacoSqlAutocompleteIntegration:
 class TestMonacoCompletionWorkers:
     """Regression tests for async SQL/Python completion worker lifecycle."""
 
-    def test_update_sql_completions_survives_finished_worker(self, qtbot):
+    def test_update_sql_completions_registers_schema_index_not_bulk_list(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor
 
         editor = MonacoEditor()
         qtbot.addWidget(editor)
         editor._push_merged_completions = Mock()
+        editor._run_js_when_ready = Mock()
 
         schema = {"tables": ["orders"], "columns": {"orders": ["id"]}}
         editor.update_sql_completions(schema)
-        qtbot.waitUntil(lambda: editor._sql_completion_worker is None, timeout=5000)
-
         editor.update_sql_completions(schema)
-        qtbot.waitUntil(lambda: editor._sql_completion_worker is None, timeout=5000)
 
-        assert editor._push_merged_completions.call_count >= 1
+        editor._push_merged_completions.assert_not_called()
+        assert editor._run_js_when_ready.call_count >= 1
+        emitted = editor._run_js_when_ready.call_args_list[-1][0][0]
+        assert "registerSqlSchemaIndex" in emitted
+        assert "registerCompletions" not in emitted
 
     def test_update_python_completions_survives_finished_worker(self, qtbot):
         from src.editors.monaco.monaco_editor import MonacoEditor

@@ -117,13 +117,34 @@ def focused_block_chip_payload(
 ) -> Optional[Dict[str, Any]]:
     """
     Compact display payload for the composer / message attachment chip.
+
+    The chip only needs name/language/line-count, so it reads those directly
+    from the block — it does NOT build the full focused_block_payload (code
+    truncation + AST structure parse), which ran on every focus change and was
+    a real source of editor lag.
     """
-    detail = focused_block_payload(block_editor, max_lines=max_lines, max_chars=max_chars)
-    if not detail:
+    if not block_editor:
         return None
-    name = str(detail.get("name") or "block")
-    language = str(detail.get("language") or "unknown")
-    lines = int(detail.get("lines") or 0)
+
+    block = None
+    if hasattr(block_editor, "get_last_focused_block"):
+        block = block_editor.get_last_focused_block()
+    elif hasattr(block_editor, "focused_block"):
+        block = block_editor.focused_block
+    if not block:
+        return None
+
+    try:
+        name = block.get_block_name() if hasattr(block, "get_block_name") else ""
+        language = block.get_language() if hasattr(block, "get_language") else "unknown"
+        code = block.get_code() if hasattr(block, "get_code") else ""
+        index = block_editor.blocks.index(block) if block in getattr(block_editor, "blocks", []) else 0
+    except (ValueError, RuntimeError):
+        return None
+
+    name = str(name or f"block{index + 1}")
+    language = str(language or "unknown")
+    lines = len((code or "").splitlines())
     line_range = f"1-{lines}" if lines > 1 else ("1" if lines == 1 else "")
     label = f"{name}:{line_range}" if line_range else name
     return {
@@ -133,7 +154,7 @@ def focused_block_chip_payload(
         "lines": lines,
         "line_range": line_range,
         "label": label,
-        "index": detail.get("index", 0),
+        "index": index,
         "is_primary_target": True,
     }
 
