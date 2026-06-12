@@ -959,13 +959,13 @@ class SessionWidget(QWidget):
             return config.get("database", ""), target or None
         return target or config.get("database", ""), None
 
-    def _get_sql_connector_for_block(
+    def _peek_sql_connector_for_block(
         self,
         block,
         connection_name: str | None,
         database_name: str | None,
     ):
-        """Return an isolated connector for this SQL block."""
+        """Return a connected block connector if one is already in the pool (never connects)."""
         if block is None or not hasattr(block, "get_block_key"):
             return self.session.connector if self.session.is_connected else None
 
@@ -981,24 +981,12 @@ class SessionWidget(QWidget):
         connect_db, db_context = self._resolve_block_database_targets(
             config, database_name, block
         )
-        try:
-            return self._block_connector_pool.get(
-                block.get_block_key(),
-                conn_name,
-                config,
-                password=config.get("password", ""),
-                database=connect_db,
-                database_context=db_context,
-            )
-        except Exception as exc:
-            logger.warning("SQL connector for block failed: %s", exc)
-            self.append_output(
-                S.session_widget.block_connect_error.format(
-                    name=conn_name, error=str(exc)
-                ),
-                error=True,
-            )
-            return None
+        return self._block_connector_pool.peek_connected(
+            block.get_block_key(),
+            conn_name,
+            database=connect_db,
+            database_context=db_context,
+        )
 
     def _apply_restored_block_databases(self) -> None:
         """After reconnect, load schema for blocks that keep an explicit database override."""
@@ -1057,12 +1045,7 @@ class SessionWidget(QWidget):
             self._process_next_in_queue()
             return
 
-        try:
-            connector = self._get_sql_connector_for_block(block, connection_name, database_name)
-        except Exception as exc:
-            self.append_output(self._format_log("SQL", f"ERROR: {exc}"), error=True)
-            self._finish_block_after_switch(has_error=True)
-            return
+        connector = self._peek_sql_connector_for_block(block, connection_name, database_name)
 
         if connector is None or not connector.is_connected():
             manager = self._get_connection_manager()

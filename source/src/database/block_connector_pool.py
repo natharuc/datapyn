@@ -64,6 +64,24 @@ class BlockConnectorPool:
     def __init__(self) -> None:
         self._entries: Dict[str, dict] = {}
 
+    def peek_connected(
+        self,
+        block_key: str,
+        connection_name: str,
+        *,
+        database: Optional[str] = None,
+        database_context: Optional[str] = None,
+    ) -> Optional[DatabaseConnector]:
+        """Return an existing live connector without opening a new connection."""
+        entry = self._entries.get(block_key)
+        if not entry or entry.get("connection_name") != connection_name:
+            return None
+        connector = entry.get("connector")
+        if connector is None or not connector.is_connected():
+            return None
+        self._apply_database(connector, database, database_context)
+        return connector
+
     def get(
         self,
         block_key: str,

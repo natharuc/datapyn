@@ -340,8 +340,8 @@ class TestConnectionResolution:
         # Deve ter emitido erro porque sessao nao esta conectada
         assert any("Nenhuma" in o or "ERRO" in o for o in outputs)
 
-    def test_on_execute_sql_with_connection_auto_connects(self, qapp):
-        """_on_execute_sql com connection_name deve auto-conectar via background worker"""
+    def test_on_execute_sql_with_pooled_connector_runs_immediately(self, qapp):
+        """_on_execute_sql usa connector do pool sem abrir conexao na UI thread"""
         from src.core.session import Session
 
         session = Session("test")
@@ -350,23 +350,34 @@ class TestConnectionResolution:
         mock_connector = MagicMock()
         mock_connector.is_connected.return_value = True
 
-        with patch("src.database.connection_manager.ConnectionManager") as MockMgr:
-            mock_manager = MockMgr.return_value
-            mock_manager.get_connection.return_value = mock_connector
+        block = MagicMock()
+        block.get_block_key.return_value = "block-key"
+        block.get_database_name.return_value = None
 
-            # Mock _execute_sql_with_connector para nao executar SQL real
-            with patch.object(widget, "_execute_sql_with_connector") as mock_exec:
-                widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")
+        with patch.object(widget.editor, "get_current_executing_block", return_value=block):
+            with patch("src.database.connection_manager.ConnectionManager") as MockMgr:
+                mock_manager = MockMgr.return_value
+                mock_manager.get_connection_config.return_value = {
+                    "db_type": "postgresql",
+                    "host": "localhost",
+                    "port": 5432,
+                    "database": "db1",
+                    "username": "u",
+                    "password": "",
+                }
+                widget._block_connector_pool.register("block-key", "BlockConn", mock_connector)
 
-                # Quando connector ja esta conectado, deve chamar direto
-                mock_exec.assert_called_once()
-                call_args = mock_exec.call_args
-                assert call_args[0][0] == mock_connector  # connector
-                assert call_args[0][1] == "SELECT 1"  # query
-                assert call_args[0][2] == "bloco1"  # block_name
-                assert call_args[0][3] == "BlockConn"  # connection_name
-                assert call_args[0][4] is None  # database_name
-                assert call_args[0][5] is None  # sql_parameters
+                with patch.object(widget, "_execute_sql_with_connector") as mock_exec:
+                    widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")
+
+                    mock_exec.assert_called_once()
+                    call_args = mock_exec.call_args
+                    assert call_args[0][0] == mock_connector
+                    assert call_args[0][1] == "SELECT 1"
+                    assert call_args[0][2] == "bloco1"
+                    assert call_args[0][3] == "BlockConn"
+                    assert call_args[0][4] is None
+                    assert call_args[0][5] is None
 
     def test_on_execute_sql_with_connection_not_connected_starts_thread(self, qapp):
         """_on_execute_sql sem connector conectado deve iniciar thread de auto-connect"""
@@ -375,12 +386,23 @@ class TestConnectionResolution:
         session = Session("test")
         widget = SessionWidget(session)
 
-        with patch("src.database.connection_manager.ConnectionManager") as MockMgr:
-            mock_manager = MockMgr.return_value
-            mock_manager.get_connection.return_value = None  # Nao conectado ainda
+        block = MagicMock()
+        block.get_block_key.return_value = "block-key"
+        block.get_database_name.return_value = None
 
-            # Capturar criacao de thread verificando se _auto_connect_threads foi populado
-            widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")
+        with patch.object(widget.editor, "get_current_executing_block", return_value=block):
+            with patch("src.database.connection_manager.ConnectionManager") as MockMgr:
+                mock_manager = MockMgr.return_value
+                mock_manager.get_connection_config.return_value = {
+                    "db_type": "postgresql",
+                    "host": "localhost",
+                    "port": 5432,
+                    "database": "db1",
+                    "username": "u",
+                    "password": "",
+                }
+
+                widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")
 
             # Deve ter criado thread de auto-connect
             assert hasattr(widget, "_auto_connect_threads")
