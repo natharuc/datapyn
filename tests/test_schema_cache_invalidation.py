@@ -68,6 +68,12 @@ class _DummyBlock:
     def get_sql_schema(self):
         return dict(self._sql_schema)
 
+    def uses_tab_default_database(self) -> bool:
+        return not self._database_name
+
+    def get_database_name(self):
+        return self._database_name or None
+
 
 class _DummyWidget:
     def __init__(self, session_id: str, connection_name: str):
