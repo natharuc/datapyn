@@ -981,14 +981,24 @@ class SessionWidget(QWidget):
         connect_db, db_context = self._resolve_block_database_targets(
             config, database_name, block
         )
-        return self._block_connector_pool.get(
-            block.get_block_key(),
-            conn_name,
-            config,
-            password=config.get("password", ""),
-            database=connect_db,
-            database_context=db_context,
-        )
+        try:
+            return self._block_connector_pool.get(
+                block.get_block_key(),
+                conn_name,
+                config,
+                password=config.get("password", ""),
+                database=connect_db,
+                database_context=db_context,
+            )
+        except Exception as exc:
+            logger.warning("SQL connector for block failed: %s", exc)
+            self.append_output(
+                S.session_widget.block_connect_error.format(
+                    name=conn_name, error=str(exc)
+                ),
+                error=True,
+            )
+            return None
 
     def _apply_restored_block_databases(self) -> None:
         """After reconnect, load schema for blocks that keep an explicit database override."""
