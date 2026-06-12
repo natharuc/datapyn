@@ -1006,6 +1006,26 @@ class TestRealWorldScenarios:
 
         assert restored.database_context == "mag_bronze.esim"
 
+    def test_session_serialization_preserves_sql_server_database_context(self):
+        session = Session(session_id="test-session", title="Test")
+        session.database_context = "GEON"
+
+        session_data = session.serialize()
+        restored = Session.deserialize(session_data)
+
+        assert restored.database_context == "GEON"
+
+    def test_apply_saved_database_context_restores_sql_server_db(self):
+        session = Session(session_id="test-session", title="Test")
+        session.database_context = "GEON"
+        connector = MagicMock()
+        connector.get_current_database.return_value = "defaultdb"
+        connector.change_database = MagicMock()
+
+        session._apply_saved_database_context(connector)
+
+        connector.change_database.assert_called_once_with("GEON")
+
 
 class TestEdgeCases:
     """Testes de casos extremos"""

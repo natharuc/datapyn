@@ -172,10 +172,10 @@ class Session(QObject):
         return ""
 
     def _apply_saved_database_context(self, connector):
-        if not connector or str(getattr(connector, "db_type", "") or "").lower() != "databricks":
+        if not connector:
             return
 
-        target_context = str(self._database_context or "")
+        target_context = str(self._database_context or "").strip()
         if not target_context:
             return
 
@@ -186,16 +186,17 @@ class Session(QObject):
         try:
             connector.change_database(target_context)
         except Exception as exc:
-            logger.warning("Failed to restore Databricks context '%s': %s", target_context, exc)
+            logger.warning(
+                "Failed to restore database context '%s': %s",
+                target_context,
+                exc,
+            )
 
     def set_connection(self, connection_name: str, connector):
         """Sets the connection for this session"""
         self._connection_name = connection_name
         self._connector = connector
-        if str(getattr(connector, "db_type", "") or "").lower() == "databricks":
-            self._database_context = self._connector_database_context(connector)
-        else:
-            self._database_context = ""
+        self._database_context = self._connector_database_context(connector)
         self.connection_changed.emit(connection_name)
         self.status_changed.emit(S.session.status_connected_to.format(name=connection_name))
 

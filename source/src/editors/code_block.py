@@ -1427,6 +1427,10 @@ class CodeBlock(QFrame):
         """Return custom database name or None (uses connection default)"""
         return self._database_name
 
+    def uses_tab_default_database(self) -> bool:
+        """True when this block follows the session tab database (not a per-block override)."""
+        return not self._database_name
+
     def set_database_name(self, database_name: str):
         """Set custom database for this block"""
         self._database_name = database_name

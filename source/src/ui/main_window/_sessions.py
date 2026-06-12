@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import weakref
 from datetime import datetime
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QObject, QSettings
 from PyQt6.QtWidgets import (
@@ -1006,6 +1007,7 @@ class SessionsMixin:
         # Conectar sinal de modificacao do editor para rastreamento por hash
         widget.editor.content_changed.connect(lambda w=widget: self._on_editor_modified(w))
         widget.editor.content_changed.connect(lambda w=widget: self._schedule_cross_database_schema_sync(w))
+        widget.editor.content_changed.connect(lambda: self._schedule_session_autosave())
 
         # Atualizar autocomplete quando namespace muda (apos SQL ou Python via SessionWidget)
         session.variables_changed.connect(
@@ -1049,7 +1051,7 @@ class SessionsMixin:
             return
 
         widget.session.title = new_name.strip()
-        self._save_sessions()
+        self._schedule_session_autosave()
 
     def _ask_save_before_close(self) -> str:
         """Ask user whether to save, discard, or cancel when closing unsaved tab."""
@@ -1125,7 +1127,7 @@ class SessionsMixin:
             self.session_manager.close_session(session_id)
             self._remove_session_panels(session_id)
             widget.deleteLater()
-            self._save_sessions()
+            self._flush_session_autosave()
 
             session_count = sum(
                 1 for i in range(self.session_tabs.count()) if isinstance(self.session_tabs.widget(i), SessionWidget)
@@ -1280,7 +1282,7 @@ class SessionsMixin:
             if current_widget and getattr(current_widget, "session", None) == session and hasattr(current_widget, "editor"):
                 for block in current_widget.editor.get_blocks():
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-                    if not block_conn:
+                    if not block_conn and block.uses_tab_default_database():
                         block._database_name = current_db or None
                         block.db_panel.set_database(current_db or None)
 
@@ -1344,7 +1346,8 @@ class SessionsMixin:
 
         # Usar o banco retornado (pode ter mudado via USE)
         current_db = database or get_connector_database_context(getattr(session, "connector", None)) or config.get("database", "")
-        session.database_context = current_db if db_type == "databricks" else ""
+        if current_db:
+            session.database_context = current_db
         current_widget = self._get_current_session_widget()
         if current_widget and getattr(current_widget, "session", None) == session:
             self._clear_sql_autocomplete_for_connection(current_widget, connection_name)
@@ -1388,12 +1391,12 @@ class SessionsMixin:
             self._schema_service.invalidate_cache(connection_name, session_id=session.session_id)
             self._load_schema_with_loading(session.connector, connection_name, session_id=session.session_id)
 
-        # === ATUALIZAR TODOS OS BLOCOS (sem conexao customizada) ===
+        # === ATUALIZAR BLOCOS NO PADRAO DA ABA (sem override de banco) ===
         if current_widget and hasattr(current_widget, "editor"):
             for block in current_widget.editor.get_blocks():
                 if hasattr(block, "db_panel"):
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-                    if not block_conn:
+                    if not block_conn and block.uses_tab_default_database():
                         block._database_name = current_db
                         block.db_panel.set_database(current_db)
 
@@ -1411,37 +1414,76 @@ class SessionsMixin:
             return widget.editor
         return None
 
-    def _save_sessions(self):
-        """Saves all sessions"""
-        # Synchronize code from widgets to sessions
-        for session_id, widget in self._session_widgets.items():
+    def _setup_session_autosave(self) -> None:
+        """Live session persistence (debounced background writes)."""
+        from src.services.session_autosave_service import SessionAutosaveService
+
+        self._session_autosave = SessionAutosaveService(self)
+        self._session_autosave.configure(self._collect_session_autosave_payload)
+
+    def _schedule_session_autosave(self) -> None:
+        if getattr(self, "_is_closing", False):
+            return
+        autosave = getattr(self, "_session_autosave", None)
+        if autosave is not None:
+            autosave.schedule()
+
+    def _flush_session_autosave(self) -> None:
+        autosave = getattr(self, "_session_autosave", None)
+        if autosave is not None:
+            autosave.flush_now()
+
+    def _collect_session_autosave_payload(self):
+        """Build a disk snapshot on the UI thread (widgets -> session models)."""
+        from src.services.session_autosave_service import SessionAutosavePayload
+
+        if not hasattr(self, "session_manager"):
+            return None
+
+        for widget in self._session_widgets.values():
             widget.sync_to_session()
             widget.persist_session_variables()
 
-        # Salvar via SessionManager
-        self.session_manager.save_sessions()
-
-        # Also save window geometry in workspace
-        window_geometry = {
-            "x": self.geometry().x(),
-            "y": self.geometry().y(),
-            "width": self.geometry().width(),
-            "height": self.geometry().height(),
-            "maximized": self.isMaximized(),
+        focused = self.session_manager.focused_session
+        sessions_data = {
+            "version": 1,
+            "focused_session": focused.session_id if focused else None,
+            "session_order": list(self.session_manager._session_order),
+            "sessions": {
+                sid: session.serialize()
+                for sid, session in self.session_manager._sessions.items()
+            },
         }
 
-        dock_visible = self.connections_dock.isVisible() if hasattr(self, "connections_dock") else True
-
-        # Salvar no workspace manager (para geometria)
-        # Note: active_connection is now per session, saved with each session
-        self.workspace_manager.save_workspace(
-            tabs=[],  # No longer used for tabs
-            active_tab=0,
-            active_connection=None,  # Connection is now per session
-            window_geometry=window_geometry,
-            splitter_sizes=[],
-            dock_visible=dock_visible,
+        workspace_path = Path(self.workspace_manager.config_path)
+        dock_visible = (
+            self.connections_dock.isVisible() if hasattr(self, "connections_dock") else True
         )
+        workspace_data = {
+            "tabs": [],
+            "active_tab": 0,
+            "active_connection": None,
+            "window_geometry": {
+                "x": self.geometry().x(),
+                "y": self.geometry().y(),
+                "width": self.geometry().width(),
+                "height": self.geometry().height(),
+                "maximized": self.isMaximized(),
+            },
+            "splitter_sizes": [],
+            "dock_visible": dock_visible,
+        }
+
+        return SessionAutosavePayload(
+            sessions_path=Path(self.session_manager._sessions_file),
+            sessions_data=sessions_data,
+            workspace_path=workspace_path,
+            workspace_data=workspace_data,
+        )
+
+    def _save_sessions(self):
+        """Flush pending session autosave (sync paths: workspace switch, tests)."""
+        self._flush_session_autosave()
 
     def _restore_sessions(self):
         """Restores saved sessions - loads incrementally"""

@@ -38,6 +38,9 @@ from PyQt6.QtGui import QKeySequence, QColor, QBrush
 from src.core import ShortcutManager
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
+import weakref
+
+from src.design_system.frameless_dialog import widget_is_valid
 from src.design_system.tokens import get_colors, RADIUS
 from src.services.copilot.copilot_settings import get_copilot_settings
 from src.ui.components.toggle_switch import LabeledToggleSwitch
@@ -983,27 +986,56 @@ class SettingsDialog(QDialog):
         if self._pynia_model_thread is not None:
             return  # one fetch at a time is enough for a settings dialog
 
-        thread = QThread(self)
+        dialog_ref = weakref.ref(self)
+        thread = QThread()
+        thread.setObjectName("PyniaModelFetch")
         worker = _PyniaModelFetchWorker(pid)
         worker.moveToThread(thread)
+
+        def _on_models_fetched(provider_id: str, model_ids: list) -> None:
+            dialog = dialog_ref()
+            if dialog is not None and widget_is_valid(dialog):
+                dialog._on_pynia_models_fetched(provider_id, model_ids)
+
+        def _clear_thread_ref() -> None:
+            dialog = dialog_ref()
+            if dialog is not None and widget_is_valid(dialog):
+                dialog._clear_pynia_model_thread()
+
         thread.started.connect(worker.run)
-        worker.done.connect(self._on_pynia_models_fetched)
+        worker.done.connect(_on_models_fetched)
         worker.done.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._clear_pynia_model_thread)
+        thread.finished.connect(_clear_thread_ref)
         self._pynia_model_thread = thread
         thread.start()
 
     def _clear_pynia_model_thread(self):
         self._pynia_model_thread = None
 
-    def closeEvent(self, event):
-        # Don't let an in-flight model fetch outlive the dialog.
+    def _stop_pynia_model_thread(self) -> None:
         thread = self._pynia_model_thread
-        if thread is not None and thread.isRunning():
+        if thread is None:
+            return
+        self._pynia_model_thread = None
+        try:
             thread.quit()
-            thread.wait(1500)
+            thread.wait(2500)
+        except RuntimeError:
+            pass
+
+    def closeEvent(self, event):
+        self._stop_pynia_model_thread()
+        try:
+            self._notification_delivery_service.delivery_succeeded.disconnect(
+                self._on_notification_delivery_success
+            )
+            self._notification_delivery_service.delivery_failed.disconnect(
+                self._on_notification_delivery_failure
+            )
+        except (TypeError, RuntimeError):
+            pass
         super().closeEvent(event)
 
     def _on_pynia_models_fetched(self, pid: str, model_ids: list):
@@ -1034,6 +1066,9 @@ class SettingsDialog(QDialog):
             # so the chat authenticates immediately (no restart needed).
             self._pynia_settings.set_active_provider(pid)
             self.pynia_connector_changed.emit(pid)
+        from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
+
+        reset_ai_autocomplete_circuit_breaker()
         self._pynia_status_label.setText(S.pynia.verify_ok if hasattr(S, "pynia") else "Saved.")
         self._refresh_pynia_autocomplete_status()
 
@@ -2376,6 +2411,9 @@ class SettingsDialog(QDialog):
                 self._pynia_autocomplete_cb.isChecked()
             )
             self._save_pynia_completion_model()
+            from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
+
+            reset_ai_autocomplete_circuit_breaker()
             # If Copilot is the chosen connector, make it active so the chat
             # switches to it (the actual GitHub login is the Sign in button).
             if (

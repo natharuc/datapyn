@@ -218,13 +218,12 @@ class ConnectionsMixin:
         # --- Status bar ---
         self.action_label.setText(S.status.connected_to.format(name=connection_name, db=display_name))
 
-        # --- Update ALL blocks' database panel (not just focused) ---
+        # --- Update tab-default blocks' database panel (not per-block overrides) ---
         if hasattr(widget, "editor"):
             for block in widget.editor.get_blocks():
                 if hasattr(block, "db_panel"):
-                    # Only update blocks using the session connection (no custom connection)
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-                    if not block_conn:
+                    if not block_conn and block.uses_tab_default_database():
                         block._database_name = display_name
                         block.db_panel.set_database(display_name)
 

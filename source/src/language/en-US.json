@@ -239,7 +239,8 @@
     "ctx_connect": "Connect",
     "ctx_connect_new_tab": "Connect in New Tab",
     "ctx_edit": "Edit",
-    "error_loading_svg": "Error loading SVG: {error}"
+    "error_loading_svg": "Error loading SVG: {error}",
+    "search_placeholder": "Search name, group, host, database, type…"
   },
   "session_widget": {
     "connected_to": "Connected to {name}",

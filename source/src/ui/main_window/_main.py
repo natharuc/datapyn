@@ -549,8 +549,9 @@ class MainWindow(
             if hasattr(widget, "_orphan_running_threads"):
                 widget._orphan_running_threads()
 
-        # Save sessions before closing
-        self._save_sessions()
+        # Sessions are saved live while editing; only cancel pending debounce.
+        if hasattr(self, "_session_autosave"):
+            self._session_autosave.cancel_pending()
 
         # Stop all timers to prevent resource leaks
         if hasattr(self, 'status_timer') and self.status_timer:

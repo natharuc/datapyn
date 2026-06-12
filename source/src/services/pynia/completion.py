@@ -219,7 +219,7 @@ class PyniaInlineCompletionWorker(QObject):
         self._provider_id: ProviderId = "openai"
         self._model = COMPLETION_MODELS["openai"]
         self._language = "python"
-        self._prompt = ""
+        self._context = ""
         self._prefix = ""
         self._suffix = ""
         self._cancelled = False
@@ -228,16 +228,16 @@ class PyniaInlineCompletionWorker(QObject):
         self,
         provider_id: ProviderId,
         language: str,
-        prompt: str,
         prefix: str,
         suffix: str,
+        context: str = "",
         model: Optional[str] = None,
     ) -> None:
         self._provider_id = provider_id
         self._language = language
-        self._prompt = prompt
         self._prefix = prefix
         self._suffix = suffix
+        self._context = context or ""
         self._model = model or COMPLETION_MODELS.get(provider_id, COMPLETION_MODELS["openai"])
         self._cancelled = False
 
@@ -250,11 +250,20 @@ class PyniaInlineCompletionWorker(QObject):
             if self._cancelled:
                 self.inline_complete.emit("")
                 return
+            prompt = build_inline_prompt(
+                language=self._language,
+                prefix=self._prefix,
+                suffix=self._suffix,
+                context=self._context,
+            )
+            if self._cancelled:
+                self.inline_complete.emit("")
+                return
             raw = fetch_inline_completion(
                 self._provider_id,
                 model=self._model,
                 language=self._language,
-                prompt=self._prompt,
+                prompt=prompt,
             )
             if self._cancelled:
                 self.inline_complete.emit("")
@@ -262,8 +271,17 @@ class PyniaInlineCompletionWorker(QObject):
             cleaned = clean_completion_text(raw, self._prefix, self._suffix)
             self.inline_complete.emit(cleaned)
         except Exception as exc:
-            logger.warning("Pynia autocomplete failed: %s", exc)
-            self.error.emit(str(exc))
-            self.inline_complete.emit("")
+            logger.debug("Pynia inline completion failed (ignored): %s", exc)
+            try:
+                self.error.emit(str(exc))
+            except RuntimeError:
+                pass
+            try:
+                self.inline_complete.emit("")
+            except RuntimeError:
+                pass
         finally:
-            self.finished.emit()
+            try:
+                self.finished.emit()
+            except RuntimeError:
+                pass

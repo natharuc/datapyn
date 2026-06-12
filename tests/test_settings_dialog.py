@@ -186,6 +186,54 @@ def test_pynia_model_picker_lists_fetched_models(qapp, mock_shortcut_manager):
         dialog.close()
 
 
+def test_settings_dialog_exec_twice_with_parent_window(qapp):
+    """Opening Settings twice on the main window must not crash (backdrop/shadow)."""
+    from PyQt6.QtWidgets import QMainWindow, QWidget
+
+    manager = ShortcutManager()
+    window = QMainWindow()
+    window.setCentralWidget(QWidget())
+    window.resize(900, 700)
+    window.show()
+    qapp.processEvents()
+
+    for _ in range(2):
+        dialog = SettingsDialog(manager, parent=window)
+        dialog.exec()
+        qapp.processEvents()
+        assert window.findChild(QWidget, "modalBackdrop") is None
+
+    window.close()
+
+
+def test_settings_with_nested_confirm_then_reopen(qapp):
+    """Child confirm over Settings must not break a second Settings open."""
+    from PyQt6.QtWidgets import QMainWindow, QWidget
+    from src.design_system.app_dialogs import confirm_yes_no
+
+    manager = ShortcutManager()
+    window = QMainWindow()
+    window.setCentralWidget(QWidget())
+    window.resize(900, 700)
+    window.show()
+    qapp.processEvents()
+
+    first = SettingsDialog(manager, parent=window)
+    first.show()
+    qapp.processEvents()
+    confirm_yes_no(first, "Confirm", "Nested test?", default_yes=False)
+    qapp.processEvents()
+    first.reject()
+    qapp.processEvents()
+
+    second = SettingsDialog(manager, parent=window)
+    second.exec()
+    qapp.processEvents()
+    assert window.findChild(QWidget, "modalBackdrop") is None
+
+    window.close()
+
+
 def test_no_false_shortcut_conflict(qapp):
     """Distinct shortcuts produce no conflict."""
     manager = MagicMock(spec=ShortcutManager)

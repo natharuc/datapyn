@@ -281,13 +281,24 @@ class ExecutionMixin:
             def on_success(db_name: str):
                 try:
                     database_name_resolved = get_connector_database_context(connector) or db_name
-                    session.database_context = database_name_resolved if connector.db_type == "databricks" else ""
+                    session.database_context = database_name_resolved
                     self._update_connection_status()
                     sid = session.session_id
                     self._clear_sql_autocomplete_for_connection(current_widget, connection_name)
                     self._schema_service.invalidate_cache(connection_name, session_id=sid)
                     if current_widget and hasattr(current_widget, "connection_changed"):
                         current_widget.connection_changed.emit(connection_name, database_name_resolved)
+                        block = None
+                        editor = getattr(current_widget, "editor", None)
+                        if editor is not None:
+                            get_executing = getattr(editor, "get_current_executing_block", None)
+                            get_focused = getattr(editor, "get_focused_block", None)
+                            if callable(get_executing):
+                                block = get_executing()
+                            if block is None and callable(get_focused):
+                                block = get_focused()
+                        if block is not None and hasattr(current_widget, "_update_block_database_ui"):
+                            current_widget._update_block_database_ui(block, database_name_resolved)
                     self._log_info(S.status.database_changed.format(name=database_name_resolved))
                     self.action_label.setText(S.status.sql_database.format(name=database_name_resolved))
                 finally:
@@ -509,6 +520,8 @@ class ExecutionMixin:
         if db_after.lower() == db_before.lower():
             return
 
+        session.database_context = db_after
+
         # Database actually changed - reload schema
         connection_name = getattr(session, "connection_name", "") or ""
         if connection_name:
@@ -525,6 +538,17 @@ class ExecutionMixin:
             # - Status bar update
             if current_widget and hasattr(current_widget, "connection_changed"):
                 current_widget.connection_changed.emit(connection_name, db_after)
+                block = None
+                editor = getattr(current_widget, "editor", None)
+                if editor is not None:
+                    get_executing = getattr(editor, "get_current_executing_block", None)
+                    get_focused = getattr(editor, "get_focused_block", None)
+                    if callable(get_executing):
+                        block = get_executing()
+                    if block is None and callable(get_focused):
+                        block = get_focused()
+                if block is not None and hasattr(current_widget, "_update_block_database_ui"):
+                    current_widget._update_block_database_ui(block, db_after)
 
     def _execute_python(self, code: str):
         """Executes Python code in background"""

@@ -443,6 +443,8 @@ class LayoutMixin:
             settings.sync()
         except Exception:
             pass
+        if hasattr(self, "_schedule_session_autosave"):
+            self._schedule_session_autosave()
 
     def _restore_dock_layout(self):
         """Restores dock widget layout from QSettings."""

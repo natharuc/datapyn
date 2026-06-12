@@ -105,6 +105,7 @@ class UISetupMixin:
 
         # Restore sessions
         self._restore_sessions()
+        self._setup_session_autosave()
 
         # Dock for connections (left side)
         self._create_connections_dock()

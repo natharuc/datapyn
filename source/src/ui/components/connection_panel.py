@@ -365,60 +365,19 @@ class ConnectionsList(QFrame):
         header.addStretch()
         layout.addLayout(header)
 
-        # List (with drag enabled)
-        self.list_widget = DraggableConnectionList()
-        self.list_widget.setMinimumHeight(150)
-        self.list_widget.setIconSize(QSize(_CONNECTION_ICON_SIZE, _CONNECTION_ICON_SIZE))
-        self.list_widget.setSpacing(4)  # Spacing between items
-        self.list_widget.setWordWrap(True)  # Allow line break
-        self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)  # Don't truncate with "..."
-        self.list_widget.setStyleSheet(f"""
-            QListWidget {{
-                background: {colors.bg_primary};
-                border: none;
-                border-radius: 8px;
-                padding: 4px;
-            }}
-            QListWidget::item {{
-                padding: 0px 6px;
-                border-radius: 6px;
-                margin: 2px 0px;
-            }}
-            QListWidget::item:selected {{
-                background: rgba(59, 130, 246, 0.25);
-            }}
-            QListWidget::item:hover {{
-                background: {colors.bg_elevated};
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 8px;
-                margin: 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(128, 128, 128, 0.3);
-                border-radius: 4px;
-                min-height: 40px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: rgba(128, 128, 128, 0.5);
-            }}
-            QScrollBar::handle:vertical:pressed {{
-                background: rgba(128, 128, 128, 0.7);
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
-        """)
+        from src.ui.components.saved_connections_list import SavedConnectionsListView
+
+        self._saved_list = SavedConnectionsListView(
+            self,
+            show_search=True,
+            drag_enabled=True,
+            list_min_height=150,
+        )
+        self.list_widget = self._saved_list.list_widget
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        # Context menu
         self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
-        layout.addWidget(self.list_widget)
+        layout.addWidget(self._saved_list, 1)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -495,16 +454,7 @@ class ConnectionsList(QFrame):
         Args:
             connections: List of tuples (name, config)
         """
-        self.list_widget.clear()
-
-        for name, config in connections:
-            item = ConnectionItem(name, config)
-            item.setData(Qt.ItemDataRole.UserRole, name)
-            self.list_widget.addItem(item)
-
-            # Custom widget with name and group separated
-            widget = ConnectionItemWidget(name, item.group, item.icon)
-            self.list_widget.setItemWidget(item, widget)
+        self._saved_list.refresh(connections)
 
 
 class ConnectionPanel(QWidget):
