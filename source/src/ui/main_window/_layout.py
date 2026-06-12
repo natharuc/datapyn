@@ -22,6 +22,10 @@ from src.language import S
 
 logger = logging.getLogger(__name__)
 
+# Bottom tab strip (Results / Output / Pynia Output / Summarize). Panels scroll internally;
+# high minimums (140–180px) blocked shrinking the area below the code editor.
+_BOTTOM_DOCK_MIN_HEIGHT = 80
+
 
 class LayoutMixin:
     """Handles dockable panels, dock layout save/restore, panel visibility."""
@@ -33,13 +37,21 @@ class LayoutMixin:
         paineis (ResultsViewer, OutputPanel, VariablesPanel) ao stack.
         Ao trocar de aba, troca-se a pagina visivel no stack.
         """
-        from PyQt6.QtWidgets import QStackedWidget
+        from PyQt6.QtWidgets import QStackedWidget, QSizePolicy
 
         # Stacks - each session will have its page
         self._results_stack = QStackedWidget()
         self._output_stack = QStackedWidget()
         self._variables_stack = QStackedWidget()
         self._summarize_stack = QStackedWidget()
+        _stack_vp = QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored
+        for stack in (
+            self._results_stack,
+            self._output_stack,
+            self._variables_stack,
+            self._summarize_stack,
+        ):
+            stack.setSizePolicy(*_stack_vp)
 
         # Mapeamento session_id -> indice no stack
         self._session_panel_indices: dict = {}
@@ -104,12 +116,12 @@ class LayoutMixin:
         self.variables_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
 
-        # Configure minimum sizes to ensure visibility
-        self.results_dock.setMinimumHeight(180)
-        self.summarize_dock.setMinimumHeight(140)
-        self.output_dock.setMinimumHeight(180)
+        # Minimum sizes — keep bottom docks shrinkable; content scrolls inside panels.
+        self.results_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
+        self.summarize_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
+        self.output_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
         self.variables_dock.setMinimumWidth(200)
-        self.variables_dock.setMinimumHeight(180)
+        self.variables_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
 
         # Copilot Chat Panel
         agent_client = getattr(self, "_pynia_agent", None) or self._copilot_client
@@ -129,7 +141,8 @@ class LayoutMixin:
         self.copilot_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
         self.copilot_dock.setMinimumWidth(280)
-        self.copilot_dock.setMinimumHeight(200)
+        # Chat WebView needs a modest minimum height when the dock is horizontal.
+        self.copilot_dock.setMinimumHeight(160)
         from src.assets.pynia_branding import load_pynia_logo
 
         pynia_dock_icon = load_pynia_logo(16)
@@ -148,7 +161,7 @@ class LayoutMixin:
         self.copilot_output_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.copilot_output_dock)
         self.copilot_output_dock.setMinimumWidth(200)
-        self.copilot_output_dock.setMinimumHeight(150)
+        self.copilot_output_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
         if pynia_dock_icon:
             self.copilot_output_dock.setWindowIcon(pynia_dock_icon)
 

@@ -94,15 +94,22 @@ def test_pynia_completion_model_picker_round_trips(qapp, mock_shortcut_manager):
         dialog.close()
 
 
-def test_pynia_save_token_activates_and_emits(qapp, mock_shortcut_manager):
+def test_pynia_save_token_activates_and_emits(qapp, mock_shortcut_manager, monkeypatch):
     """Saving a connector token makes it active and signals the live agent."""
+    from unittest.mock import MagicMock
     from src.services.pynia.settings import (
         get_pynia_settings,
         get_provider_secret,
         set_provider_secret,
     )
 
+    monkeypatch.setattr(
+        "src.services.pynia.settings.threading.Thread",
+        lambda *args, **kwargs: MagicMock(start=lambda: None),
+    )
+
     dialog = SettingsDialog(mock_shortcut_manager)
+    dialog._fetch_pynia_models = lambda _pid: None
     emitted = []
     dialog.pynia_connector_changed.connect(lambda pid: emitted.append(pid))
     try:
@@ -113,6 +120,7 @@ def test_pynia_save_token_activates_and_emits(qapp, mock_shortcut_manager):
 
         assert get_pynia_settings().active_provider == "openrouter"
         assert get_provider_secret("openrouter") == "sk-or-test"
+        qapp.processEvents()
         assert emitted == ["openrouter"]
     finally:
         set_provider_secret("openrouter", "")

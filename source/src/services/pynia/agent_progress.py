@@ -16,6 +16,7 @@ def emit_progress(
     step_state: str = "active",
     reasoning: str = "",
     thinking_step: bool = False,
+    reasoning_delta: bool = False,
 ) -> None:
     if not callback:
         return
@@ -29,6 +30,8 @@ def emit_progress(
         payload["reasoning"] = reasoning
     if thinking_step:
         payload["thinking_step"] = True
+    if reasoning_delta:
+        payload["reasoning_delta"] = True
     try:
         callback(payload)
     except Exception:

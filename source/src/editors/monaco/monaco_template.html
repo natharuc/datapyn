@@ -1274,55 +1274,24 @@
             }
         }
         
-        function setCustomTheme(themeName, colors) {
-            // Define custom theme based on DataPyn theme colors
-            const themeData = {
-                base: colors.isDark ? 'vs-dark' : 'vs',
+        /** Match app editor chrome to design tokens; syntax colors = Monaco vs-dark defaults. */
+        function applyEditorSurface(surface) {
+            monaco.editor.defineTheme('datapyn-editor', {
+                base: 'vs-dark',
                 inherit: true,
                 rules: [],
                 colors: {
-                    'editor.background': colors.background,
-                    'editor.foreground': colors.foreground,
-                    'editorCursor.foreground': colors.caret,
-                    'editor.lineHighlightBackground': colors.caretLine,
-                    'editor.selectionBackground': colors.selection,
-                    'editorLineNumber.foreground': colors.marginFg,
-                    'editorLineNumber.activeForeground': colors.foreground,
-                    'editorGutter.background': colors.marginBg
+                    'editor.background': surface.background,
+                    'editor.lineHighlightBackground': surface.caretLine,
+                    'editor.selectionBackground': surface.selection,
+                    'editorGutter.background': surface.marginBg,
+                    'editorLineNumber.foreground': surface.marginFg,
                 }
-            };
-            
-            // Add syntax highlighting rules based on language
-            if (colors.syntax) {
-                const syntax = colors.syntax;
-                themeData.rules = [
-                    { token: 'keyword', foreground: hex(syntax.keyword) },
-                    { token: 'string', foreground: hex(syntax.string) },
-                    { token: 'number', foreground: hex(syntax.number) },
-                    { token: 'comment', foreground: hex(syntax.comment), fontStyle: 'italic' },
-                ];
-                
-                if (syntax.classname) {
-                    themeData.rules.push({ token: 'type', foreground: hex(syntax.classname) });
-                }
-                if (syntax.function) {
-                    themeData.rules.push({ token: 'function', foreground: hex(syntax.function) });
-                }
-                if (syntax.identifier) {
-                    themeData.rules.push({ token: 'variable', foreground: hex(syntax.identifier) });
-                }
-                if (syntax.operator) {
-                    themeData.rules.push({ token: 'operator', foreground: hex(syntax.operator) });
-                }
+            });
+            currentTheme = 'datapyn-editor';
+            if (editor) {
+                monaco.editor.setTheme('datapyn-editor');
             }
-            
-            monaco.editor.defineTheme(themeName, themeData);
-            monaco.editor.setTheme(themeName);
-        }
-        
-        function hex(color) {
-            // Remove # prefix if present
-            return color.replace('#', '');
         }
         
         function setFontSize(size) {
@@ -1670,6 +1639,8 @@
                 if (schemaName) {
                     sqlSchemaIndex.schemaNames.add(normalizeSchemaKey(schemaName));
                 }
+                const tableDatabase = typeof table === 'object' ? (table.database || '') : '';
+                const tableCatalog = typeof table === 'object' ? (table.catalog || '') : '';
                 const cols = columnsMap[fullKey]
                     || columnsMap[fallbackKey]
                     || columnsMap[name]
@@ -1698,8 +1669,6 @@
                         sqlSchemaIndex.columnsByKey[k] = columnItems;
                     }
                 });
-                const tableDatabase = typeof table === 'object' ? (table.database || '') : '';
-                const tableCatalog = typeof table === 'object' ? (table.catalog || '') : '';
                 const filterText = tableDatabase ? (tableDatabase + '..' + name) : name;
                 sqlSchemaIndex.tableItems.push({
                     label: name,

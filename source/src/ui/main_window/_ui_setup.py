@@ -1035,24 +1035,47 @@ class UISetupMixin:
     def _on_pynia_connector_changed(self, provider_id: str):
         """A Pynia connector was saved in Settings — switch the live agent and
         authenticate immediately so the chat reflects it without a restart."""
+        import logging
+
         agent = getattr(self, "_pynia_agent", None)
         if not agent:
             return
+        pid = str(provider_id or "").strip()
+        if not pid:
+            return
         try:
-            from src.services.pynia.settings import get_provider_secret
+            from src.services.pynia.settings import get_pynia_settings, get_provider_secret
 
-            if getattr(agent, "provider_id", None) != provider_id and hasattr(agent, "set_provider"):
-                agent.set_provider(provider_id)
-            if provider_id == "copilot":
-                # GitHub device-flow login is driven by the auth service; just
-                # make sure the live agent is on the Copilot connector.
-                return
-            token = get_provider_secret(provider_id)
-            if token and hasattr(agent, "set_api_token"):
-                # Emits `authenticated`, which refreshes the chat auth gate.
-                agent.set_api_token(token, provider_id)
-        except Exception:
-            pass
+            settings = get_pynia_settings()
+            settings.set_active_provider(pid)
+
+            if hasattr(agent, "apply_connector_from_settings"):
+                agent.apply_connector_from_settings(pid)
+            elif getattr(agent, "provider_id", None) != pid and hasattr(agent, "set_provider"):
+                agent.set_provider(pid)
+
+            if pid != "copilot":
+                token = get_provider_secret(pid)
+                if token and hasattr(agent, "set_api_token"):
+                    label = settings.username(pid) or pid
+                    agent.set_api_token(token, label)
+
+            panel = getattr(self, "_copilot_chat_panel", None)
+            if panel is not None:
+                if hasattr(panel, "_on_provider_changed"):
+                    panel._on_provider_changed(pid)
+                if hasattr(agent, "available_models"):
+                    panel._populate_model_combo(agent.available_models())
+                panel._update_auth_state()
+
+            if pid != "copilot" and hasattr(agent, "refresh_metadata"):
+                from PyQt6.QtCore import QTimer
+
+                QTimer.singleShot(0, agent.refresh_metadata)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Failed to apply Pynia connector %s from settings: %s", pid, exc
+            )
 
     def _show_settings(self):
         """Shows the settings dialog"""

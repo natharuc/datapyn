@@ -527,17 +527,15 @@ class TestIntegration:
         assert hasattr(widget, "splitter"), "Falta splitter"
         assert hasattr(widget, "bottom_tabs"), "Falta bottom_tabs"
 
-    def test_close_window_saves_sessions(self, main_window, qtbot):
-        """Fechar janela deve salvar sessões"""
-        # Mock para verificar se save foi chamado
-        with patch.object(main_window, "_save_sessions") as mock_save:
-            # Simular evento de fechar
+    def test_close_window_cancels_pending_autosave(self, main_window, qtbot):
+        """Fechar janela deve cancelar autosave pendente"""
+        with patch.object(main_window._session_autosave, "cancel_pending") as mock_cancel:
             from PyQt6.QtGui import QCloseEvent
 
             event = QCloseEvent()
             main_window.closeEvent(event)
 
-            mock_save.assert_called_once()
+            mock_cancel.assert_called_once()
 
 
 # === TESTES DE ATRIBUTOS CRÍTICOS ===

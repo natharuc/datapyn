@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Optional
+import threading
+from typing import Any, List, Optional
 
 import keyring
 from PyQt6.QtCore import QSettings
@@ -45,31 +47,42 @@ def _fallback_set(provider_id: ProviderId, value: str) -> None:
 
 
 def get_provider_secret(provider_id: ProviderId) -> str:
+    """Read API token — prefer fast local fallback, then keyring."""
+    fallback = _fallback_get(provider_id)
+    if fallback:
+        return fallback
     try:
         stored = keyring.get_password(PYNIA_KEYRING_SERVICE, _secret_key(provider_id))
         if stored:
             return stored
     except Exception as exc:
         logger.warning("Failed to load Pynia secret for %s: %s", provider_id, exc)
-    return _fallback_get(provider_id)
+    return ""
 
 
-def set_provider_secret(provider_id: ProviderId, value: str) -> None:
+def _keyring_persist(provider_id: ProviderId, value: str) -> None:
     key = _secret_key(provider_id)
     try:
         if value:
             keyring.set_password(PYNIA_KEYRING_SERVICE, key, value)
-            _fallback_set(provider_id, value)
             return
         try:
             keyring.delete_password(PYNIA_KEYRING_SERVICE, key)
         except keyring.errors.PasswordDeleteError:
             pass
-        _fallback_set(provider_id, "")
-        return
     except Exception as exc:
         logger.warning("Failed to persist Pynia secret for %s: %s", provider_id, exc)
-    _fallback_set(provider_id, value)
+
+
+def set_provider_secret(provider_id: ProviderId, value: str) -> None:
+    """Persist token instantly to QSettings; keyring write runs in the background."""
+    _fallback_set(provider_id, value or "")
+    threading.Thread(
+        target=_keyring_persist,
+        args=(provider_id, value or ""),
+        daemon=True,
+        name=f"PyniaKeyring-{provider_id}",
+    ).start()
 
 
 class PyniaSettingsManager:
@@ -227,6 +240,33 @@ class PyniaSettingsManager:
 
     def set_completion_model(self, provider_id: ProviderId, model_id: str) -> None:
         self._settings.setValue(f"{provider_id}/completion_model", model_id or "")
+
+    def cached_models(self, provider_id: ProviderId) -> List[dict[str, Any]]:
+        """Last fetched model list for a token connector (restored on startup)."""
+        from src.services.copilot.copilot_models import normalize_models
+
+        raw = self._settings.value(f"{provider_id}/cached_models", "") or ""
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(data, list):
+                return normalize_models(data)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            logger.warning("Invalid cached models for %s: %s", provider_id, exc)
+        return []
+
+    def set_cached_models(self, provider_id: ProviderId, models: List[dict[str, Any]]) -> None:
+        from src.services.copilot.copilot_models import normalize_models
+
+        if not models:
+            self._settings.removeValue(f"{provider_id}/cached_models")
+            return
+        normalized = normalize_models(models)
+        if not normalized:
+            self._settings.removeValue(f"{provider_id}/cached_models")
+            return
+        self._settings.setValue(f"{provider_id}/cached_models", json.dumps(normalized))
 
 
 def get_pynia_settings() -> PyniaSettingsManager:

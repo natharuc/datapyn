@@ -697,7 +697,13 @@ class BlockEditor(QWidget):
 
     # === Block Management ===
 
-    def add_block(self, language: str = None, code: str = "", after_block: CodeBlock = None) -> CodeBlock:
+    def add_block(
+        self,
+        language: str = None,
+        code: str = "",
+        after_block: CodeBlock = None,
+        isolate_sql_context: bool = False,
+    ) -> CodeBlock:
         """
         Add a new block.
 
@@ -731,15 +737,14 @@ class BlockEditor(QWidget):
         if hasattr(self, "_lsp_client") and self._lsp_client:
             block.set_lsp_client(self._lsp_client)
         
-        # Pass database context for SQL completions (Monaco)
-        if self._database_context:
-            block.set_database_context(self._database_context)
-        
-        # Pass SQL schema for completions (Monaco)
-        if self._sql_schema and language == "sql" and hasattr(block, "set_sql_schema"):
-            block.set_sql_schema(self._sql_schema)
-
-        self.refresh_completion_context(focus_block=block)
+        # Pass database context / SQL schema for completions (Monaco).
+        # Skipped when the block will get its own connection (e.g. drag-drop).
+        if not isolate_sql_context:
+            if self._database_context:
+                block.set_database_context(self._database_context)
+            if self._sql_schema and language == "sql" and hasattr(block, "set_sql_schema"):
+                block.set_sql_schema(self._sql_schema)
+            self.refresh_completion_context(focus_block=block)
 
         # Connect signals
         # execute_requested runs only that block
@@ -1318,7 +1323,7 @@ class BlockEditor(QWidget):
         if mime_data.hasFormat("application/x-database-name"):
             db_name = bytes(mime_data.data("application/x-database-name")).decode("utf-8")
 
-        block = self.add_block(language="sql")
+        block = self.add_block(language="sql", isolate_sql_context=True)
 
         if conn_name:
             block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
@@ -1326,6 +1331,7 @@ class BlockEditor(QWidget):
         if db_name:
             block.set_database_name(db_name)
 
+        self.refresh_completion_context(focus_block=block)
         block.editor.setFocus()
         self.content_changed.emit()
 

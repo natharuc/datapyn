@@ -1017,7 +1017,13 @@ class MCPToolRegistry(QObject):
         if not schema_service:
             return set()
 
-        cached = schema_service.get_cached_schema(session.connection_name)
+        sid = getattr(session, "session_id", "") or ""
+        cached = schema_service.get_cached_schema(
+            session.connection_name,
+            session_id=sid,
+        )
+        if not cached:
+            cached = self._get_cached_schema(session.connection_name, ensure_loaded=True)
         if not cached:
             return set()
 
@@ -1485,7 +1491,7 @@ class MCPToolRegistry(QObject):
         if not connection_name:
             return {"error": "No connection specified and no active connection found."}
 
-        cached = schema_service.get_cached_schema(connection_name)
+        cached = self._get_cached_schema(connection_name, ensure_loaded=True)
         if cached:
             tables_info = []
             for table in cached.get("tables", []):
@@ -1500,7 +1506,15 @@ class MCPToolRegistry(QObject):
 
             return {"content": [{"type": "text", "text": schema_text}]}
 
-        return {"content": [{"type": "text", "text": f"No schema cached for '{connection_name}'. Connect first."}]}
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"No schema available for '{connection_name}'. "
+                    "Connect to the database and wait for schema load, then retry."
+                ),
+            }]
+        }
 
     def _get_context(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Get the current editor context."""
@@ -1723,11 +1737,96 @@ class MCPToolRegistry(QObject):
     # === Helper methods ===
 
     def _get_active_session(self) -> Optional[Any]:
-        """Get the active session object."""
+        """Get the active session (pinned chat tab when set)."""
+        widget = self._get_active_session_widget()
+        if widget and hasattr(widget, "session"):
+            return widget.session
         mw = self._main_window
         if hasattr(mw, "session_manager") and mw.session_manager:
             return mw.session_manager.focused_session
         return None
+
+    def _schema_session_scope(
+        self,
+        connection_name: str = "",
+    ) -> tuple[str, str, Optional[Any]]:
+        """Resolve connection name and session_id for per-session schema cache."""
+        session = self._get_active_session()
+        sid = getattr(session, "session_id", "") or ""
+        conn = (connection_name or "").strip()
+        if not conn and session:
+            conn = (getattr(session, "connection_name", "") or "").strip()
+        return conn, sid, session
+
+    def _get_cached_schema(
+        self,
+        connection_name: str = "",
+        *,
+        ensure_loaded: bool = False,
+        wait_timeout_ms: int = 25000,
+    ) -> Optional[dict]:
+        """Return schema cache for the active (or pinned) session."""
+        conn, sid, session = self._schema_session_scope(connection_name)
+        if not conn:
+            return None
+
+        mw = self._main_window
+        schema_service = getattr(mw, "_schema_service", None)
+        if not schema_service:
+            return None
+
+        cached = schema_service.get_cached_schema(conn, session_id=sid)
+        if cached:
+            return cached
+
+        if not ensure_loaded:
+            return None
+
+        connector = getattr(session, "connector", None) if session else None
+        if not connector or not getattr(connector, "is_connected", lambda: False)():
+            connector, _ = self._get_connector(conn)
+        if not connector or not connector.is_connected():
+            return None
+
+        if hasattr(mw, "_load_schema_with_loading"):
+            mw._load_schema_with_loading(connector, conn, session_id=sid)
+            self._wait_for_schema_load(schema_service, conn, sid, wait_timeout_ms)
+
+        return schema_service.get_cached_schema(conn, session_id=sid)
+
+    def _wait_for_schema_load(
+        self,
+        schema_service: Any,
+        connection_name: str,
+        session_id: str,
+        timeout_ms: int,
+    ) -> None:
+        """Block until schema loads or times out (tool calls run on UI thread)."""
+        loop = QEventLoop()
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(loop.quit)
+
+        def on_loaded(_schema, cn: str, sid: str, _bk: str = "") -> None:
+            if cn == connection_name and sid == session_id:
+                loop.quit()
+
+        def on_error(_message: str) -> None:
+            loop.quit()
+
+        schema_service.schema_loaded.connect(on_loaded)
+        schema_service.schema_error.connect(on_error)
+        timer.start(timeout_ms)
+        loop.exec()
+        timer.stop()
+        try:
+            schema_service.schema_loaded.disconnect(on_loaded)
+        except TypeError:
+            pass
+        try:
+            schema_service.schema_error.disconnect(on_error)
+        except TypeError:
+            pass
 
     def _get_active_session_widget(self) -> Optional[Any]:
         """Get the active session widget.
@@ -1747,7 +1846,10 @@ class MCPToolRegistry(QObject):
 
         # Fallback: use current tab
         if hasattr(mw, "session_tabs") and mw.session_tabs:
-            idx = mw.session_tabs.currentIndex()
+            try:
+                idx = int(mw.session_tabs.currentIndex())
+            except (TypeError, ValueError):
+                idx = -1
             widget = mw.session_tabs.widget(idx) if idx >= 0 else None
             logger.info(f"_get_active_session_widget: idx={idx}, widget={widget}, type={type(widget)}")
             return widget
@@ -2665,45 +2767,42 @@ class MCPToolRegistry(QObject):
 
         connection_name = session.connection_name
 
-        # Try to get from schema service (cached)
-        schema_service = getattr(mw, "_schema_service", None)
-        if schema_service:
-            cached = schema_service.get_cached_schema(connection_name)
-            if cached:
-                schema_info = []
-                schema_info.append(f"Database: {cached.get('database', 'unknown')}")
-                schema_info.append(f"Connection: {connection_name}")
+        cached = self._get_cached_schema(connection_name, ensure_loaded=True)
+        if cached:
+            schema_info = []
+            schema_info.append(f"Database: {cached.get('database', 'unknown')}")
+            schema_info.append(f"Connection: {connection_name}")
+            schema_info.append("")
+
+            tables = cached.get("tables", [])
+            columns_map = cached.get("columns", {})
+
+            for table in tables:
+                table_name = table.get("name", "")
+                schema_name = table.get("schema", "")
+                full_name = f"{schema_name}.{table_name}" if schema_name else table_name
+
+                cols = columns_map.get(table_name, [])
+                col_info = []
+                for col in cols:
+                    col_name = col.get("name", "")
+                    col_type = col.get("type", "")
+                    nullable = "NULL" if col.get("nullable", True) else "NOT NULL"
+                    col_info.append(f"    - {col_name}: {col_type} {nullable}")
+
+                schema_info.append(f"TABLE {full_name}:")
+                if col_info:
+                    schema_info.extend(col_info)
+                else:
+                    schema_info.append("    (no columns loaded)")
                 schema_info.append("")
 
-                tables = cached.get("tables", [])
-                columns_map = cached.get("columns", {})
-
-                for table in tables:
-                    table_name = table.get("name", "")
-                    schema_name = table.get("schema", "")
-                    full_name = f"{schema_name}.{table_name}" if schema_name else table_name
-
-                    cols = columns_map.get(table_name, [])
-                    col_info = []
-                    for col in cols:
-                        col_name = col.get("name", "")
-                        col_type = col.get("type", "")
-                        nullable = "NULL" if col.get("nullable", True) else "NOT NULL"
-                        col_info.append(f"    - {col_name}: {col_type} {nullable}")
-
-                    schema_info.append(f"TABLE {full_name}:")
-                    if col_info:
-                        schema_info.extend(col_info)
-                    else:
-                        schema_info.append("    (no columns loaded)")
-                    schema_info.append("")
-
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "\n".join(schema_info)
-                    }]
-                }
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "\n".join(schema_info)
+                }]
+            }
 
         return {"error": f"No schema loaded for '{connection_name}'. Wait for schema to load after connecting."}
 
@@ -2716,20 +2815,18 @@ class MCPToolRegistry(QObject):
             return {"error": "No database connection."}
 
         connection_name = session.connection_name
-        schema_service = getattr(mw, "_schema_service", None)
 
-        if schema_service:
-            cached = schema_service.get_cached_schema(connection_name)
-            if cached:
-                tables = cached.get("tables", [])
-                table_names = [t.get("name", "") for t in tables]
+        cached = self._get_cached_schema(connection_name, ensure_loaded=True)
+        if cached:
+            tables = cached.get("tables", [])
+            table_names = [t.get("name", "") for t in tables]
 
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Tables ({len(table_names)}):\n" + "\n".join(f"  - {t}" for t in table_names)
-                    }]
-                }
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Tables ({len(table_names)}):\n" + "\n".join(f"  - {t}" for t in table_names)
+                }]
+            }
 
         return {"error": "No schema loaded. Connect to database first."}
 
@@ -2746,40 +2843,36 @@ class MCPToolRegistry(QObject):
             return {"error": "No database connection."}
 
         connection_name = session.connection_name
-        schema_service = getattr(mw, "_schema_service", None)
 
-        if schema_service:
-            cached = schema_service.get_cached_schema(connection_name)
-            if cached:
-                columns_map = cached.get("columns", {})
-                cols = columns_map.get(table_name, [])
+        cached = self._get_cached_schema(connection_name, ensure_loaded=True)
+        if cached:
+            columns_map = cached.get("columns", {})
+            cols = columns_map.get(table_name, [])
 
-                if not cols:
-                    # Try case-insensitive match
-                    for key in columns_map.keys():
-                        if key.lower() == table_name.lower():
-                            cols = columns_map[key]
-                            table_name = key
-                            break
+            if not cols:
+                for key in columns_map.keys():
+                    if key.lower() == table_name.lower():
+                        cols = columns_map[key]
+                        table_name = key
+                        break
 
-                if cols:
-                    col_info = []
-                    for col in cols:
-                        col_name = col.get("name", "")
-                        col_type = col.get("type", "")
-                        nullable = "NULL" if col.get("nullable", True) else "NOT NULL"
-                        col_info.append(f"  {col_name}: {col_type} {nullable}")
+            if cols:
+                col_info = []
+                for col in cols:
+                    col_name = col.get("name", "")
+                    col_type = col.get("type", "")
+                    nullable = "NULL" if col.get("nullable", True) else "NOT NULL"
+                    col_info.append(f"  {col_name}: {col_type} {nullable}")
 
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Table: {table_name}\nColumns:\n" + "\n".join(col_info)
-                        }]
-                    }
-                else:
-                    return {"error": f"Table '{table_name}' not found in schema."}
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Table: {table_name}\nColumns:\n" + "\n".join(col_info)
+                    }]
+                }
+            return {"error": f"Table '{table_name}' not found in schema."}
 
-        return {"error": "No schema loaded."}
+        return {"error": "No schema loaded. Connect to database first."}
 
     def _run_silent_query(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Run a SQL query without creating a visible block."""

@@ -261,15 +261,15 @@ class TestTabSwitchUpdatesPanel:
 
 
 class TestPanelMinimumSizes:
-    """Bug #4: Paineis devem ter tamanho minimo visivel"""
+    """Bottom docks keep a small minimum so the editor area can grow."""
 
     def test_results_dock_min_height(self, main_window):
-        """Results dock deve ter altura minima"""
-        assert main_window.results_dock.minimumHeight() >= 150
+        """Results dock allows shrinking below legacy 180px cap."""
+        assert 40 <= main_window.results_dock.minimumHeight() <= 100
 
     def test_output_dock_min_height(self, main_window):
-        """Output dock deve ter altura minima"""
-        assert main_window.output_dock.minimumHeight() >= 150
+        """Output dock allows shrinking below legacy 180px cap."""
+        assert 40 <= main_window.output_dock.minimumHeight() <= 100
 
     def test_variables_dock_min_width(self, main_window):
         """Variables dock deve ter largura minima"""

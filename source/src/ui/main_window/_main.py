@@ -148,7 +148,6 @@ class MainWindow(
         from src.core.recent_files_manager import RecentFilesManager
         self.recent_files_manager = RecentFilesManager()
         self.theme_manager = ThemeManager()
-        self.theme_manager.set_editor_theme("monokai")  # Specific theme for code editors
         self.session_manager = SessionManager()  # New: Session manager
 
         # Auto-update service
@@ -483,32 +482,7 @@ class MainWindow(
 
     def closeEvent(self, event):
         """On window close"""
-        from src.design_system.message_box import (
-            ask_quit_application,
-            ask_save_discard_cancel,
-            ask_yes_no,
-        )
-
-        has_unsaved = any(
-            getattr(widget, "_is_modified", False)
-            for widget in self._session_widgets.values()
-        )
-        if has_unsaved:
-            action = ask_save_discard_cancel(
-                self,
-                getattr(S.dialogs, "quit_unsaved_title", S.dialogs.close_tab_unsaved_title),
-                getattr(
-                    S.dialogs, "quit_unsaved_message", S.dialogs.close_tab_unsaved_msg
-                ),
-            )
-            if action == "cancel":
-                event.ignore()
-                return
-            if action == "save":
-                self._save_file()
-        elif not ask_quit_application(self):
-            event.ignore()
-            return
+        from src.design_system.message_box import ask_yes_no
 
         has_running = any(
             widget._is_executing

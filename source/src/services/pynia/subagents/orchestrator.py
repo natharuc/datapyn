@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, QThread, QEventLoop, QTimer
+
+from src.utils.qt_threading import qthread_is_running
 
 from src.services.pynia.subagents.explore_worker import ExploreSubagentWorker
 from src.services.pynia.subagents.types import ExploreTask, ExploreTaskResult
@@ -44,6 +47,9 @@ class SubagentOrchestrator(QObject):
         self._model = model
         self._openai_tools = openai_tools
         self._tool_executor = tool_executor
+        self._parallel_lock = threading.Lock()
+        self._active_workers: List[ExploreSubagentWorker] = []
+        self._active_threads: List[QThread] = []
 
     def set_model(self, model: str) -> None:
         self._model = model
@@ -56,6 +62,40 @@ class SubagentOrchestrator(QObject):
 
     def set_tool_executor(self, tool_executor: "ThreadSafeToolExecutor") -> None:
         self._tool_executor = tool_executor
+
+    def cancel_active_explore(self) -> None:
+        """Stop in-flight explore workers (e.g. user cancelled the chat turn)."""
+        for worker in self._active_workers:
+            try:
+                worker.cancel()
+            except RuntimeError:
+                pass
+        for thread in self._active_threads:
+            try:
+                if qthread_is_running(thread):
+                    thread.quit()
+                    if not thread.wait(300):
+                        thread.terminate()
+                        thread.wait(300)
+            except RuntimeError:
+                pass
+        self._active_workers.clear()
+        self._active_threads.clear()
+
+    def _stop_threads(self, threads: List[QThread]) -> None:
+        for thread in threads:
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    if not thread.wait(500):
+                        thread.terminate()
+                        thread.wait(500)
+            except RuntimeError:
+                pass
+            try:
+                thread.deleteLater()
+            except RuntimeError:
+                pass
 
     def run_explore_parallel_blocking(
         self,
@@ -70,6 +110,19 @@ class SubagentOrchestrator(QObject):
         """
         if not tasks:
             return []
+        with self._parallel_lock:
+            return self._run_explore_parallel_blocking_locked(
+                tasks,
+                is_cancelled=is_cancelled,
+                timeout_ms=timeout_ms,
+            )
+
+    def _run_explore_parallel_blocking_locked(
+        self,
+        tasks: List[ExploreTask],
+        is_cancelled: Optional[Callable[[], bool]] = None,
+        timeout_ms: int = EXPLORE_PARALLEL_TIMEOUT_MS,
+    ) -> List[ExploreTaskResult]:
         if not self._tool_executor:
             return [
                 ExploreTaskResult(
@@ -103,8 +156,11 @@ class SubagentOrchestrator(QObject):
                 loop.quit()
 
         threads: List[QThread] = []
+        self.cancel_active_explore()
         for task in capped:
-            thread = QThread(self)
+            # Parentless thread — this runs on the token worker thread, not the UI thread.
+            thread = QThread()
+            thread.setObjectName(f"PyniaExplore-{task.task_id}")
             worker = ExploreSubagentWorker(
                 task,
                 provider_id=self._provider_id,
@@ -117,10 +173,12 @@ class SubagentOrchestrator(QObject):
             worker.finished.connect(on_one_done)
             worker.finished.connect(thread.quit)
             thread.finished.connect(worker.deleteLater)
-            thread.finished.connect(thread.deleteLater)
             workers.append(worker)
             threads.append(thread)
             thread.start()
+
+        self._active_workers = workers
+        self._active_threads = threads
 
         # Safety timeout: a stalled subagent must not block the turn forever.
         safety_timer = QTimer()
@@ -156,14 +214,14 @@ class SubagentOrchestrator(QObject):
         cancel_timer.stop()
 
         # Wind down any worker that didn't finish on its own (timeout/cancel).
-        # quit() only unblocks threads idling in their event loop; a worker
-        # still inside a blocking call cleans up when that call returns.
         for w in workers:
-            w.cancel()
-        for thread in threads:
-            if thread.isRunning():
-                thread.quit()
-                thread.wait(100)
+            try:
+                w.cancel()
+            except RuntimeError:
+                pass
+        self._stop_threads(threads)
+        self._active_workers.clear()
+        self._active_threads.clear()
 
         if timed_out:
             fallback = "Error: subagent timed out before returning."

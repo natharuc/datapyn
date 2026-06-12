@@ -228,6 +228,11 @@ class ThemeManager:
         """Returns current theme configuration"""
         return THEMES.get(self.current_theme, THEMES["dark"])
 
+    def get_theme(self) -> Dict[str, Any]:
+        """Full theme dict for editors (respects editor_theme override)."""
+        theme_name = self.editor_theme or self.current_theme
+        return THEMES.get(theme_name, THEMES["dark"])
+
     def get_theme_name(self) -> str:
         """Retorna nome do tema atual"""
         return self.current_theme

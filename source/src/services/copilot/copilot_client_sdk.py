@@ -1919,7 +1919,7 @@ class CopilotClient(QObject):
 
     def start_auth(self) -> None:
         """Start authentication check with SDK. Creates persistent session worker."""
-        self._cleanup_worker()
+        self._kick_worker()
         # Detach (non-blocking) instead of stop_qthread+terminate: a previous
         # auth/init worker may be stuck in network/readline, and blocking here
         # would freeze the UI on every Sign In / retry.
@@ -2402,7 +2402,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
 
     def do_login(self) -> None:
         """Start automatic GitHub login process. Creates persistent session on success."""
-        self._cleanup_worker()
+        self._kick_worker()
         # Non-blocking detach (see start_auth) so the device-login flow never
         # freezes the UI while tearing down a previous stuck worker.
         self._detach_session_worker()
@@ -2432,7 +2432,7 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
 
     def do_add_account_login(self) -> None:
         """Start GitHub login to add another account without logging everyone out."""
-        self._cleanup_worker()
+        self._kick_worker()
         self._cleanup_session_worker()
 
         self._session_worker = CopilotWorker(self._tool_executor)
@@ -2498,6 +2498,15 @@ Output ONLY the completion text (what should replace <CURSOR>):"""
     def _on_worker_finished(self):
         """Cleanup after worker finishes."""
         pass
+
+    def _kick_worker(self) -> None:
+        """Request chat worker stop without blocking or terminating (safe during auth)."""
+        from src.utils.qt_threading import kick_qthread_stop
+
+        worker, thread = self._worker, self._worker_thread
+        self._worker = None
+        self._worker_thread = None
+        kick_qthread_stop(thread, worker)
 
     def _cleanup_worker(self):
         """Clean up current worker and thread."""

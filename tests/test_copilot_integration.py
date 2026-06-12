@@ -455,10 +455,12 @@ class TestMCPToolRegistry:
 
         mock_session = MagicMock()
         mock_session.connection_name = "my_conn"
+        mock_session.session_id = "sess1"
 
         mock_mw = MagicMock()
         mock_mw._schema_service = mock_schema_service
         mock_mw.session_manager.focused_session = mock_session
+        mock_mw.session_tabs = None
 
         self.registry.set_main_window(mock_mw)
         result = self.registry.execute("read_schema", {})
@@ -467,6 +469,9 @@ class TestMCPToolRegistry:
         text = result["content"][0]["text"]
         assert "testdb" in text
         assert "users" in text
+        mock_schema_service.get_cached_schema.assert_called_with(
+            "my_conn", session_id="sess1"
+        )
 
     def test_read_schema_no_cache(self):
         """read_schema without cache should inform the user."""
@@ -475,16 +480,19 @@ class TestMCPToolRegistry:
 
         mock_session = MagicMock()
         mock_session.connection_name = "my_conn"
+        mock_session.session_id = "sess1"
+        mock_session.connector = None
 
         mock_mw = MagicMock()
         mock_mw._schema_service = mock_schema_service
         mock_mw.session_manager.focused_session = mock_session
+        mock_mw.session_tabs = None
 
         self.registry.set_main_window(mock_mw)
         result = self.registry.execute("read_schema", {})
 
         assert "content" in result
-        assert "No schema cached" in result["content"][0]["text"]
+        assert "No schema available" in result["content"][0]["text"]
 
     def test_get_context_returns_session_info(self):
         """get_context should return current session and block information."""

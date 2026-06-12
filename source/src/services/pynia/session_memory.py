@@ -14,9 +14,10 @@ MAX_TOOL_RESULT_CHARS_IN_HISTORY = 800
 
 
 FORCE_ANSWER_NUDGE = (
-    "**Pynia**: You have enough context from tools and focused_block_detail. "
-    "Do not call more tools. Reply in chat with a concise answer, a short plan, "
-    "or perform one `datapyn_edit` / `datapyn_run` if the user asked for a change."
+    "**Pynia**: Tool budget is almost exhausted. Reply in chat now with what you "
+    "already learned from tools — results, errors, and next step. If the task is "
+    "not finished, say clearly what is still missing. Do not call more tools unless "
+    "one `datapyn_edit` or `datapyn_run` is strictly required to deliver the answer."
 )
 
 

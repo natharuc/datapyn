@@ -145,8 +145,9 @@ def normalize_model(raw_model: Any, *, fallback: bool = False) -> Dict[str, Any]
         or ""
     ).strip()
     name = str(_get_attr_or_key(raw_model, "name") or model_id).strip() or model_id
+    price_label = str(_get_attr_or_key(raw_model, "price_label") or "").strip()
     multiplier = _billing_multiplier(raw_model)
-    if multiplier is None:
+    if multiplier is None and not price_label:
         multiplier = 1.0
 
     supports_streaming = _capability_value(raw_model, "supports_streaming")
@@ -176,7 +177,7 @@ def normalize_model(raw_model: Any, *, fallback: bool = False) -> Dict[str, Any]
     supported_reasoning_efforts = _model_supported_reasoning_efforts(raw_model, supports_reasoning)
     default_reasoning_effort = normalize_reasoning_effort(_get_attr_or_key(raw_model, "default_reasoning_effort"))
 
-    return {
+    result = {
         "id": model_id,
         "name": name,
         "multiplier": multiplier,
@@ -190,6 +191,9 @@ def normalize_model(raw_model: Any, *, fallback: bool = False) -> Dict[str, Any]
         "max_prompt_image_size": max_prompt_image_size,
         "fallback": bool(fallback),
     }
+    if price_label:
+        result["price_label"] = price_label
+    return result
 
 
 def normalize_models(models: Iterable[Any], *, fallback: bool = False) -> List[Dict[str, Any]]:
