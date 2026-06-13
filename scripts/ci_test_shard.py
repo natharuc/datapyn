@@ -62,7 +62,8 @@ def main() -> None:
     if not picked:
         raise SystemExit(f"shard {args.shard}/{args.shards} has no test files")
 
-    print(" ".join(str(p) for p in picked))
+    # One path per line so ci_pytest.sh mapfile splits into separate pytest args.
+    print("\n".join(str(p) for p in picked))
 
 
 if __name__ == "__main__":
