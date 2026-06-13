@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v1.45.0 (2026-06-13)
+
+### Bug Fixes
+
+- **ci**: Emit one test path per line for shard mapfile
+  ([`f69cf31`](https://github.com/natharuc/datapyn/commit/f69cf314f18f9e4f822176553ad253ca58e0e804))
+
+- **tests**: Silent python namespace and get_context JSON on CI
+  ([`06ee7e4`](https://github.com/natharuc/datapyn/commit/06ee7e4b68973c3c92bc55c971996cd7539c34e1))
+
+### Features
+
+- Correção de bugs
+  ([`9133ad2`](https://github.com/natharuc/datapyn/commit/9133ad24a38801a5a8cfe57318f04006684eb2bf))
+
+- Melhoria em execução de testes
+  ([`2cbde4a`](https://github.com/natharuc/datapyn/commit/2cbde4ada8160b296dbf7fed5c3985caf752396b))
+
+### Heuristic
+
+- Merge pull request #130 from natharuc/feat/keep-last-result
+  ([`db89de5`](https://github.com/natharuc/datapyn/commit/db89de554fd6cd8142ff3d7ff971e401e45348dc))
+
+- Merge(main): resolve version and changelog conflicts
+  ([`4bf7d6e`](https://github.com/natharuc/datapyn/commit/4bf7d6ec45d2e526e5ab6402f4434f638e48c889))
+
+
 ## v1.44.0 (2026-06-12)
 
 ### Features
