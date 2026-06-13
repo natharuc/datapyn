@@ -1666,7 +1666,7 @@ class MCPToolRegistry(QObject):
                 if variables:
                     context["variables"] = variables
 
-        return {"content": [{"type": "text", "text": json.dumps(context, indent=2)}]}
+        return {"content": [{"type": "text", "text": json.dumps(context, indent=2, default=str)}]}
 
     def _get_results_viewer(self) -> Optional[Any]:
         """Return the active/global ResultsViewer used by DataPyn."""
@@ -2941,11 +2941,18 @@ class MCPToolRegistry(QObject):
         if not session_widget:
             return {"error": "No active session."}
 
-        # Get session namespace
+        # Get session namespace (must be a real dict for eval/exec on Python 3.12+).
         session = self._get_active_session()
-        namespace = {}
+        namespace: dict = {}
         if session and hasattr(session, "namespace"):
-            namespace = session.namespace.copy()
+            raw = session.namespace
+            if isinstance(raw, dict):
+                namespace = raw.copy()
+            else:
+                try:
+                    namespace = dict(raw)
+                except (TypeError, ValueError):
+                    namespace = {}
 
         # Inject standard libraries
         try:
@@ -2974,11 +2981,11 @@ class MCPToolRegistry(QObject):
             # Try as expression first (returns a value)
             try:
                 compiled = compile(code, "<silent>", "eval")
-                result_value = eval(compiled, namespace)
+                result_value = eval(compiled, namespace, namespace)
             except SyntaxError:
                 # Execute as statements
                 compiled = compile(code, "<silent>", "exec")
-                exec(compiled, namespace)
+                exec(compiled, namespace, namespace)
 
             # Update session namespace with new variables
             if session and hasattr(session, "update_namespace"):

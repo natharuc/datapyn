@@ -824,13 +824,14 @@ class TestMCPToolRegistry:
 
     def test_run_silent_python_basic(self):
         """run_silent_python should execute code and return output."""
-        mock_widget = MagicMock()
-        mock_widget.namespace = {"x": 10}
-        mock_widget.editor = MagicMock()
-
         mock_session = MagicMock()
         mock_session.namespace = {"x": 10}
         mock_session.update_namespace = MagicMock()
+
+        mock_widget = MagicMock()
+        mock_widget.namespace = {"x": 10}
+        mock_widget.editor = MagicMock()
+        mock_widget.session = mock_session
 
         mock_mw = MagicMock()
         mock_mw.session_manager.focused_session = mock_session
@@ -846,12 +847,13 @@ class TestMCPToolRegistry:
 
     def test_run_silent_python_error(self):
         """run_silent_python should capture errors."""
+        mock_session = MagicMock()
+        mock_session.namespace = {}
+
         mock_widget = MagicMock()
         mock_widget.namespace = {}
         mock_widget.editor = MagicMock()
-
-        mock_session = MagicMock()
-        mock_session.namespace = {}
+        mock_widget.session = mock_session
 
         mock_mw = MagicMock()
         mock_mw.session_manager.focused_session = mock_session
