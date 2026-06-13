@@ -20,18 +20,32 @@ def connect_connector_from_config(
     """Open a new connector from saved connection settings."""
     connector = DatabaseConnector()
     initial_db = database or config.get("database", "")
-    connector.connect(
-        db_type=config["db_type"],
-        host=config["host"],
-        port=config["port"],
-        database=initial_db,
-        username=config.get("username", ""),
-        password=password or config.get("password", ""),
-        use_windows_auth=config.get("use_windows_auth", False),
-        sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
-        trust_server_certificate=config.get("trust_server_certificate", False),
-        http_path=config.get("http_path", ""),
-    )
+    try:
+        connector.connect(
+            db_type=config["db_type"],
+            host=config["host"],
+            port=config["port"],
+            database=initial_db,
+            username=config.get("username", ""),
+            password=password or config.get("password", ""),
+            use_windows_auth=config.get("use_windows_auth", False),
+            sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
+            trust_server_certificate=config.get("trust_server_certificate", False),
+            http_path=config.get("http_path", ""),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Connector connect failed (%s on %s): %s",
+            initial_db,
+            config.get("host", ""),
+            exc,
+        )
+        try:
+            connector.disconnect()
+        except Exception:
+            pass
+        return connector
+
     target_context = database_context
     if not target_context and database and database != config.get("database", ""):
         if str(config.get("db_type", "")).lower() != "databricks":
@@ -49,6 +63,24 @@ class BlockConnectorPool:
 
     def __init__(self) -> None:
         self._entries: Dict[str, dict] = {}
+
+    def peek_connected(
+        self,
+        block_key: str,
+        connection_name: str,
+        *,
+        database: Optional[str] = None,
+        database_context: Optional[str] = None,
+    ) -> Optional[DatabaseConnector]:
+        """Return an existing live connector without opening a new connection."""
+        entry = self._entries.get(block_key)
+        if not entry or entry.get("connection_name") != connection_name:
+            return None
+        connector = entry.get("connector")
+        if connector is None or not connector.is_connected():
+            return None
+        self._apply_database(connector, database, database_context)
+        return connector
 
     def get(
         self,
@@ -68,12 +100,20 @@ class BlockConnectorPool:
                 return connector
             self.release(block_key)
 
-        connector = connect_connector_from_config(
-            config,
-            password=password,
-            database=database,
-            database_context=database_context,
-        )
+        try:
+            connector = connect_connector_from_config(
+                config,
+                password=password,
+                database=database,
+                database_context=database_context,
+            )
+        except Exception as exc:
+            logger.warning("Block connector connect failed: %s", exc)
+            return DatabaseConnector()
+
+        if not connector.is_connected():
+            return connector
+
         self._entries[block_key] = {
             "connector": connector,
             "connection_name": connection_name,

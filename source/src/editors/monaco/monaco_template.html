@@ -178,7 +178,7 @@
                         showVariables: true,
                         showClasses: true,
                         showKeywords: true,
-                        maxVisibleSuggestions: 12,
+                        maxVisibleSuggestions: 18,
                         showStatusBar: true,
                         preview: true,
                         previewMode: 'subwordSmart',
@@ -1274,55 +1274,24 @@
             }
         }
         
-        function setCustomTheme(themeName, colors) {
-            // Define custom theme based on DataPyn theme colors
-            const themeData = {
-                base: colors.isDark ? 'vs-dark' : 'vs',
+        /** Match app editor chrome to design tokens; syntax colors = Monaco vs-dark defaults. */
+        function applyEditorSurface(surface) {
+            monaco.editor.defineTheme('datapyn-editor', {
+                base: 'vs-dark',
                 inherit: true,
                 rules: [],
                 colors: {
-                    'editor.background': colors.background,
-                    'editor.foreground': colors.foreground,
-                    'editorCursor.foreground': colors.caret,
-                    'editor.lineHighlightBackground': colors.caretLine,
-                    'editor.selectionBackground': colors.selection,
-                    'editorLineNumber.foreground': colors.marginFg,
-                    'editorLineNumber.activeForeground': colors.foreground,
-                    'editorGutter.background': colors.marginBg
+                    'editor.background': surface.background,
+                    'editor.lineHighlightBackground': surface.caretLine,
+                    'editor.selectionBackground': surface.selection,
+                    'editorGutter.background': surface.marginBg,
+                    'editorLineNumber.foreground': surface.marginFg,
                 }
-            };
-            
-            // Add syntax highlighting rules based on language
-            if (colors.syntax) {
-                const syntax = colors.syntax;
-                themeData.rules = [
-                    { token: 'keyword', foreground: hex(syntax.keyword) },
-                    { token: 'string', foreground: hex(syntax.string) },
-                    { token: 'number', foreground: hex(syntax.number) },
-                    { token: 'comment', foreground: hex(syntax.comment), fontStyle: 'italic' },
-                ];
-                
-                if (syntax.classname) {
-                    themeData.rules.push({ token: 'type', foreground: hex(syntax.classname) });
-                }
-                if (syntax.function) {
-                    themeData.rules.push({ token: 'function', foreground: hex(syntax.function) });
-                }
-                if (syntax.identifier) {
-                    themeData.rules.push({ token: 'variable', foreground: hex(syntax.identifier) });
-                }
-                if (syntax.operator) {
-                    themeData.rules.push({ token: 'operator', foreground: hex(syntax.operator) });
-                }
+            });
+            currentTheme = 'datapyn-editor';
+            if (editor) {
+                monaco.editor.setTheme('datapyn-editor');
             }
-            
-            monaco.editor.defineTheme(themeName, themeData);
-            monaco.editor.setTheme(themeName);
-        }
-        
-        function hex(color) {
-            // Remove # prefix if present
-            return color.replace('#', '');
         }
         
         function setFontSize(size) {
@@ -1490,10 +1459,11 @@
                         };
                     const prefixFilter = getSqlCompletionPrefix(textBeforeCursor, dotCtx, crossDbCtx);
                     const localRaw = collectSqlLocalItems(textBeforeCursor, dotCtx, crossDbCtx, fullText);
+                    const wantsRemote = invokeSuggest || crossDbCtx || dotCtx || sqlContextWantsRemote(textBeforeCursor);
                     const localItems = filterPrefixMatches(
                         localRaw,
                         prefixFilter,
-                        dotCtx ? 200 : 80,
+                        dotCtx ? 200 : (wantsRemote ? 120 : 80),
                         invokeSuggest
                     );
                     const copilotItems = invokeSuggest ? buildCopilotSuggestItems(range) : [];
@@ -1538,7 +1508,7 @@
                         };
                     }
 
-                    if (invokeSuggest || crossDbCtx) {
+                    if (wantsRemote) {
                         const remote = await debouncedRemote('sql', (requestId) => {
                             pyBridge.requestSqlCompletion(
                                 fullText,
@@ -1669,6 +1639,8 @@
                 if (schemaName) {
                     sqlSchemaIndex.schemaNames.add(normalizeSchemaKey(schemaName));
                 }
+                const tableDatabase = typeof table === 'object' ? (table.database || '') : '';
+                const tableCatalog = typeof table === 'object' ? (table.catalog || '') : '';
                 const cols = columnsMap[fullKey]
                     || columnsMap[fallbackKey]
                     || columnsMap[name]
@@ -1676,11 +1648,13 @@
                 const columnItems = cols.map(function(col) {
                     const colName = col.name || col;
                     const colType = col.display_type || col.type || '';
+                    const tableLabel = tableDatabase ? (tableDatabase + '..' + name) : (fallbackKey || name);
                     return {
                         label: colName,
                         kind: 'field',
                         insertText: colName,
-                        detail: colType,
+                        detail: colType ? (tableLabel + ' · ' + colType) : tableLabel,
+                        filterText: colName + ' ' + tableLabel,
                         category: 'column',
                         table: name
                     };
@@ -1695,8 +1669,6 @@
                         sqlSchemaIndex.columnsByKey[k] = columnItems;
                     }
                 });
-                const tableDatabase = typeof table === 'object' ? (table.database || '') : '';
-                const tableCatalog = typeof table === 'object' ? (table.catalog || '') : '';
                 const filterText = tableDatabase ? (tableDatabase + '..' + name) : name;
                 sqlSchemaIndex.tableItems.push({
                     label: name,
@@ -1766,12 +1738,21 @@
             }
             if (lastColumnKwPos > lastTableKwPos && lastColumnKwPos > upperText.length - 120) {
                 const allCols = [];
+                const seenCol = new Set();
                 Object.keys(sqlSchemaIndex.columnsByKey).forEach(function(k) {
                     (sqlSchemaIndex.columnsByKey[k] || []).forEach(function(c) {
+                        const label = String(c.label || '');
+                        const detail = String(c.detail || c.table || k || '');
+                        const dedupe = label + '|' + detail;
+                        if (!label || seenCol.has(dedupe)) {
+                            return;
+                        }
+                        seenCol.add(dedupe);
+                        c.filterText = c.filterText || (label + ' ' + detail);
                         allCols.push(c);
                     });
                 });
-                return allCols.slice(0, 80);
+                return allCols.slice(0, 200);
             }
             const fallback = keywordCompletions.length
                 ? keywordCompletions
@@ -1837,6 +1818,29 @@
             return match ? match[0] : '';
         }
 
+        function completionItemMatchesPrefix(item, lower) {
+            if (!lower) {
+                return true;
+            }
+            if (item.category === 'block') {
+                const name = String(item.blockName || item.filterText || '').toLowerCase();
+                const label = String(item.label || '').toLowerCase();
+                return name.startsWith(lower) || label.includes(lower);
+            }
+            const label = String(item.label || '').toLowerCase();
+            const filterText = String(item.filterText || item.detail || '').toLowerCase();
+            if (label.startsWith(lower)) {
+                return true;
+            }
+            if (filterText && (filterText.startsWith(lower) || filterText.includes(lower))) {
+                return true;
+            }
+            if (lower.length >= 2 && label.includes(lower)) {
+                return true;
+            }
+            return false;
+        }
+
         function filterPrefixMatches(items, prefix, limit, includeBlocksWithoutPrefix) {
             const maxItems = limit || 80;
             const list = items || [];
@@ -1849,19 +1853,46 @@
                 return list.filter(i => i.category !== 'block').slice(0, maxItems);
             }
             const lower = prefix.toLowerCase().replace(/^@+/, '');
-            return list.filter(item => {
-                if (item.category === 'block') {
-                    const name = String(item.blockName || item.filterText || '').toLowerCase();
-                    const label = String(item.label || '').toLowerCase();
-                    return !lower || name.startsWith(lower) || label.includes(lower);
+            const starts = [];
+            const contains = [];
+            list.forEach(function(item) {
+                if (!completionItemMatchesPrefix(item, lower)) {
+                    return;
                 }
                 const label = String(item.label || '').toLowerCase();
-                const filterText = String(item.filterText || '').toLowerCase();
-                if (filterText && (filterText.startsWith(lower) || lower.startsWith(filterText))) {
-                    return true;
+                if (label.startsWith(lower)) {
+                    starts.push(item);
+                } else {
+                    contains.push(item);
                 }
-                return label.startsWith(lower);
-            }).slice(0, maxItems);
+            });
+            return starts.concat(contains).slice(0, maxItems);
+        }
+
+        function sqlContextWantsRemote(textBefore) {
+            const upper = String(textBefore || '').toUpperCase();
+            const cleaned = upper.replace(/--[^\n]*/g, ' ').replace(/'[^']*'/g, "''");
+            const tableKeywords = ['FROM', 'JOIN', 'INTO', 'UPDATE', 'TABLE'];
+            const columnKeywords = ['SELECT', 'WHERE', 'ON', 'ORDER BY', 'GROUP BY', 'HAVING', 'SET', 'BY'];
+            let lastTableKwPos = -1;
+            let lastColumnKwPos = -1;
+            tableKeywords.forEach(function(kw) {
+                const pos = cleaned.lastIndexOf(kw);
+                if (pos > lastTableKwPos) {
+                    lastTableKwPos = pos;
+                }
+            });
+            columnKeywords.forEach(function(kw) {
+                const pos = cleaned.lastIndexOf(kw);
+                if (pos > lastColumnKwPos) {
+                    lastColumnKwPos = pos;
+                }
+            });
+            const nearCursor = cleaned.length - Math.max(lastTableKwPos, lastColumnKwPos) < 200;
+            if (!nearCursor) {
+                return false;
+            }
+            return lastColumnKwPos >= lastTableKwPos || lastTableKwPos >= 0;
         }
 
         function parsePythonDotContext(textBefore) {

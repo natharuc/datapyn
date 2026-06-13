@@ -510,11 +510,29 @@ def filter_dataframe_with_specs(df: pd.DataFrame, column_filters: dict) -> pd.Da
     return df.loc[mask]
 
 
+def sort_dataframe_for_grid(
+    df: pd.DataFrame,
+    sort_column: Optional[str],
+    sort_ascending: bool = True,
+) -> pd.DataFrame:
+    """Sort grid rows by one column when a sort is active."""
+    if df is None or not sort_column or sort_column not in df.columns:
+        return df
+    return df.sort_values(
+        by=sort_column,
+        ascending=sort_ascending,
+        kind="mergesort",
+        na_position="last",
+    )
+
+
 def prepare_grid_data(
     source_df: pd.DataFrame,
     column_filters: dict,
     column_formats: dict,
     limit: int,
+    sort_column: Optional[str] = None,
+    sort_ascending: bool = True,
 ) -> GridPrepareResult:
     """Build the lazy grid payload. Safe to run off the UI thread.
 
@@ -529,6 +547,7 @@ def prepare_grid_data(
 
     total_rows = len(source_df)
     filtered_df = filter_dataframe_with_specs(source_df, column_filters)
+    filtered_df = sort_dataframe_for_grid(filtered_df, sort_column, sort_ascending)
     # Make column names unique so name-based access returns Series, not a
     # DataFrame (two columns with the same name otherwise crashes the grid).
     filtered_df = _dedupe_grid_columns(filtered_df)
@@ -603,6 +622,8 @@ class GridPrepareWorker(QObject):
         column_filters: dict,
         column_formats: dict,
         limit: int,
+        sort_column: Optional[str] = None,
+        sort_ascending: bool = True,
     ):
         super().__init__()
         self._job_id = job_id
@@ -610,6 +631,8 @@ class GridPrepareWorker(QObject):
         self._column_filters = dict(column_filters or {})
         self._column_formats = dict(column_formats or {})
         self._limit = int(limit)
+        self._sort_column = sort_column
+        self._sort_ascending = sort_ascending
 
     def run(self):
         try:
@@ -618,6 +641,8 @@ class GridPrepareWorker(QObject):
                 self._column_filters,
                 self._column_formats,
                 self._limit,
+                self._sort_column,
+                self._sort_ascending,
             )
             self.finished.emit(self._job_id, result)
         except Exception as exc:
@@ -653,16 +678,39 @@ class ResultGridHeader(QHeaderView):
     """Header com alvo visual de menu por coluna."""
 
     menuRequested = pyqtSignal(int, object)
+    sortRequested = pyqtSignal(int, object)
 
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self._hovered_section = -1
+        self._sort_column: Optional[str] = None
+        self._sort_ascending = True
         self.setSectionsClickable(True)
         self.setMouseTracking(True)
 
+    def set_grid_sort(self, column: Optional[str], ascending: bool = True):
+        self._sort_column = column or None
+        self._sort_ascending = ascending
+        self.viewport().update()
+
+    def _section_column_name(self, section: int) -> str:
+        model = self.model()
+        if model is None:
+            return ""
+        value = model.headerData(
+            section,
+            Qt.Orientation.Horizontal,
+            Qt.ItemDataRole.DisplayRole,
+        )
+        return str(value) if value is not None else ""
+
+    def _sort_rect(self, section: int):
+        x = self.sectionViewportPosition(section) + self.sectionSize(section) - 44
+        return QRect(x, 0, 20, self.height())
+
     def _menu_rect(self, section: int):
-        x = self.sectionViewportPosition(section) + self.sectionSize(section) - 24
-        return QRect(x, 0, 24, self.height())
+        x = self.sectionViewportPosition(section) + self.sectionSize(section) - 22
+        return QRect(x, 0, 22, self.height())
 
     def _set_hovered_section(self, section: int):
         if self._hovered_section == section:
@@ -673,10 +721,41 @@ class ResultGridHeader(QHeaderView):
     def is_menu_button_visible(self, section: int) -> bool:
         return self._hovered_section == section
 
+    def _section_shows_sort_button(self, section: int) -> bool:
+        if self._hovered_section == section:
+            return True
+        column_name = self._section_column_name(section)
+        return self._sort_column and column_name == self._sort_column
+
+    def _paint_sort_glyph(self, painter, rect: QRect, ascending: bool):
+        center_x = rect.center().x()
+        top_y = rect.center().y() - 5
+        bottom_y = rect.center().y() + 5
+        painter.save()
+        painter.setPen(QColor("#858585"))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if ascending:
+            painter.drawLine(center_x, top_y, center_x - 4, top_y + 4)
+            painter.drawLine(center_x, top_y, center_x + 4, top_y + 4)
+            painter.drawLine(center_x, top_y + 2, center_x, bottom_y)
+        else:
+            painter.drawLine(center_x, bottom_y, center_x - 4, bottom_y - 4)
+            painter.drawLine(center_x, bottom_y, center_x + 4, bottom_y - 4)
+            painter.drawLine(center_x, top_y, center_x, bottom_y - 2)
+        painter.restore()
+
     def paintSection(self, painter, rect, logicalIndex):
         super().paintSection(painter, rect, logicalIndex)
         if self.orientation() != Qt.Orientation.Horizontal or logicalIndex < 0:
             return
+
+        if self._section_shows_sort_button(logicalIndex):
+            sort_rect = rect.adjusted(rect.width() - 42, 0, -26, 0)
+            ascending = self._sort_ascending
+            if self._sort_column and self._section_column_name(logicalIndex) == self._sort_column:
+                ascending = self._sort_ascending
+            self._paint_sort_glyph(painter, sort_rect, ascending)
+
         if not self.is_menu_button_visible(logicalIndex):
             return
 
@@ -693,16 +772,22 @@ class ResultGridHeader(QHeaderView):
     def mousePressEvent(self, event):
         if self.orientation() == Qt.Orientation.Horizontal:
             section = self.logicalIndexAt(event.position().toPoint())
-            if section >= 0 and self._menu_rect(section).contains(event.position().toPoint()):
-                self.menuRequested.emit(section, self.mapToGlobal(event.position().toPoint()))
-                return
+            pos = event.position().toPoint()
+            if section >= 0:
+                if self._sort_rect(section).contains(pos):
+                    self.sortRequested.emit(section, self.mapToGlobal(pos))
+                    return
+                if self._menu_rect(section).contains(pos):
+                    self.menuRequested.emit(section, self.mapToGlobal(pos))
+                    return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         section = self.logicalIndexAt(event.position().toPoint())
+        pos = event.position().toPoint()
         if section >= 0:
             self._set_hovered_section(section)
-            if self._menu_rect(section).contains(event.position().toPoint()):
+            if self._sort_rect(section).contains(pos) or self._menu_rect(section).contains(pos):
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
             else:
                 self.unsetCursor()
@@ -2100,6 +2185,8 @@ class ResultsViewer(QWidget):
         self._session = None
         self._column_filters: dict = {}
         self._column_formats: dict = {}
+        self._sort_column: Optional[str] = None
+        self._sort_ascending: bool = True
         self._chart_configs: list = []
         self._chart_pages: list = []
         self._chart_render_jobs: list = []
@@ -2605,7 +2692,31 @@ class ResultsViewer(QWidget):
         """Instala cabecalho com menu visual por coluna."""
         header = ResultGridHeader(Qt.Orientation.Horizontal, table_view)
         header.menuRequested.connect(self._show_column_header_menu)
+        header.sortRequested.connect(self._toggle_column_sort_from_header)
+        header.set_grid_sort(self._sort_column, self._sort_ascending)
         table_view.setHorizontalHeader(header)
+
+    def _sync_header_sort_state(self):
+        """Push active sort state to every result grid header."""
+        views: list[QTableView] = []
+        seen: set[int] = set()
+        for attr in ("table_view", "_primary_table_view"):
+            tv = getattr(self, attr, None)
+            if tv is not None and id(tv) not in seen:
+                seen.add(id(tv))
+                views.append(tv)
+        tabs = getattr(self, "_result_tabs", None)
+        if tabs is not None:
+            for index in range(tabs.count()):
+                page = tabs.widget(index)
+                tv = getattr(page, "_table_view", None)
+                if tv is not None and id(tv) not in seen:
+                    seen.add(id(tv))
+                    views.append(tv)
+        for tv in views:
+            header = tv.horizontalHeader()
+            if isinstance(header, ResultGridHeader):
+                header.set_grid_sort(self._sort_column, self._sort_ascending)
 
     def _apply_table_style(self):
         """Aplica estilo compacto na tabela principal."""
@@ -2734,6 +2845,9 @@ class ResultsViewer(QWidget):
         Armazena o DataFrame completo para exportacao, mas exibe apenas
         ate o limite de linhas configurado para manter a interface fluida.
         """
+        # Drop in-flight grid jobs from the previous result so a slow prepare
+        # cannot overwrite a newer (including empty) dataframe.
+        self._cancel_all_grid_prepare()
         tab_label = str(var_name or S.results.tab_label.format(n=1))
         # Collapse any secondary tabs from a previous multi-result execution
         self._collapse_to_primary()
@@ -4047,6 +4161,8 @@ class ResultsViewer(QWidget):
             filter_items,
             format_items,
             int(self.row_limit_spin.value()),
+            self._sort_column,
+            self._sort_ascending,
         )
 
     def _can_use_cached_grid_view(self, source_df: pd.DataFrame, model, page=None) -> bool:
@@ -4106,10 +4222,13 @@ class ResultsViewer(QWidget):
                 for column, value in self._column_filters.items()
                 if column in valid_columns
             }
+            if self._sort_column and self._sort_column not in valid_columns:
+                self._sort_column = None
 
     def _filter_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Filtra DataFrame pelos filtros de coluna ativos."""
-        return filter_dataframe_with_specs(df, self._column_filters)
+        """Filtra e ordena DataFrame pelos estados ativos do grid."""
+        filtered = filter_dataframe_with_specs(df, self._column_filters)
+        return sort_dataframe_for_grid(filtered, self._sort_column, self._sort_ascending)
 
     def _show_grid_preparing(self, total_rows: int):
         preparing = getattr(S.results, "grid_preparing", "Preparing grid...")
@@ -4173,6 +4292,8 @@ class ResultsViewer(QWidget):
             self._column_filters,
             self._column_formats,
             limit,
+            self._sort_column,
+            self._sort_ascending,
         )
         worker.moveToThread(thread)
 
@@ -4290,7 +4411,14 @@ class ResultsViewer(QWidget):
         page=None,
     ):
         limit = self.row_limit_spin.value()
-        result = prepare_grid_data(source_df, self._column_filters, self._column_formats, limit)
+        result = prepare_grid_data(
+            source_df,
+            self._column_filters,
+            self._column_formats,
+            limit,
+            self._sort_column,
+            self._sort_ascending,
+        )
         self._apply_grid_prepare_result(
             result,
             var_name=var_name,
@@ -4311,6 +4439,7 @@ class ResultsViewer(QWidget):
         var_name = var_name or self._current_result_label()
         model = model or self.model
         table_view = table_view or self.table_view
+        self._cancel_grid_prepare_for_model(model)
         limit = self.row_limit_spin.value()
         rows_to_prepare = min(len(source_df), limit)
         use_async = (
@@ -4902,6 +5031,9 @@ class ResultsViewer(QWidget):
         self._grid_prepare_job_meta.clear()
         self._collapse_to_primary()
         self._column_filters.clear()
+        self._sort_column = None
+        self._sort_ascending = True
+        self._sync_header_sort_state()
         self._refresh_filter_chips()
         self.current_df = None
         self._primary_df = None
@@ -5532,6 +5664,36 @@ class ResultsViewer(QWidget):
             return
         self._create_column_menu(source_df.columns[section], global_pos=global_pos).exec(global_pos)
 
+    def _toggle_column_sort_from_header(self, section: int, _global_pos=None):
+        """Sort arrow: first click ascending, second descending, then toggles."""
+        source_df = self._get_active_source_df()
+        if source_df is None or section < 0 or section >= len(source_df.columns):
+            return
+        column = source_df.columns[section]
+        column_key = str(column)
+        if self._sort_column != column_key:
+            self._set_column_sort(column, ascending=True)
+        elif self._sort_ascending:
+            self._set_column_sort(column, ascending=False)
+        else:
+            self._set_column_sort(column, ascending=True)
+
+    def _set_column_sort(self, column, ascending: bool = True):
+        """Apply ascending or descending sort on one column."""
+        self._sort_column = str(column)
+        self._sort_ascending = ascending
+        self._sync_header_sort_state()
+        if self._get_active_source_df() is not None:
+            self._apply_active_dataframe_view(self._current_result_label())
+
+    def _clear_column_sort(self):
+        """Remove active grid sort."""
+        self._sort_column = None
+        self._sort_ascending = True
+        self._sync_header_sort_state()
+        if self._get_active_source_df() is not None:
+            self._apply_active_dataframe_view(self._current_result_label())
+
     def _create_column_menu(self, column, global_pos=None) -> QMenu:
         """Cria menu simples e separado para a coluna."""
         from src.design_system.tokens import get_colors
@@ -5549,6 +5711,16 @@ class ResultsViewer(QWidget):
             )
         )
         menu.addAction(act_filter_column)
+
+        column_key = str(column)
+        if self._sort_column == column_key:
+            act_clear_sort = QAction(
+                qta.icon("mdi.sort-variant-remove", color=colors_tk.text_secondary),
+                S.results.ctx_clear_column_sort,
+                menu,
+            )
+            act_clear_sort.triggered.connect(self._clear_column_sort)
+            menu.addAction(act_clear_sort)
 
         format_menu = QMenu(S.results.ctx_format_column, menu)
         format_menu.setIcon(qta.icon("mdi.format-list-text", color=colors_tk.text_primary))

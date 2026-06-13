@@ -1332,11 +1332,6 @@ class SessionsMixin:
             connection_name: Connection name
             database: Nome do banco de dados atual
         """
-        # Only updates if it is the focused session
-        if self.session_manager.focused_session != session:
-            return
-
-        # Get connection config
         config = self.connection_manager.get_connection_config(connection_name)
         if not config:
             return
@@ -1348,6 +1343,28 @@ class SessionsMixin:
         current_db = database or get_connector_database_context(getattr(session, "connector", None)) or config.get("database", "")
         if current_db:
             session.database_context = current_db
+
+        # Always refresh schema cache for the session that connected (not only focused tab).
+        from src.database.database_connector import DatabaseConnector
+        if (
+            session.connector
+            and isinstance(session.connector, DatabaseConnector)
+            and session.connector.is_connected()
+        ):
+            if not hasattr(self, "_oe_current_connection"):
+                self._oe_current_connection = {}
+            self._oe_current_connection[session.session_id] = connection_name
+            self._schema_service.invalidate_cache(connection_name, session_id=session.session_id)
+            self._load_schema_with_loading(
+                session.connector,
+                connection_name,
+                session_id=session.session_id,
+            )
+
+        # UI updates only for the focused session tab.
+        if self.session_manager.focused_session != session:
+            return
+
         current_widget = self._get_current_session_widget()
         if current_widget and getattr(current_widget, "session", None) == session:
             self._clear_sql_autocomplete_for_connection(current_widget, connection_name)
@@ -1373,23 +1390,6 @@ class SessionsMixin:
             if isinstance(widget, SessionWidget) and widget.session == session:
                 self.session_tabs.set_tab_connection_color(i, color)
                 break
-
-        # === CARREGAR SCHEMA ===
-        # Always invalidate cache when this handler fires, because
-        # connection_changed can mean a database switch (USE {db}).
-        # Without invalidation, load_schema returns stale cached data.
-        from src.database.database_connector import DatabaseConnector
-        if (session.connector 
-            and isinstance(session.connector, DatabaseConnector)
-            and session.connector.is_connected()):
-            # Update OE tracking - the session's OE should show this connection now
-            if not hasattr(self, "_oe_current_connection"):
-                self._oe_current_connection = {}
-            self._oe_current_connection[session.session_id] = connection_name
-
-            # Invalidate so load_schema fetches fresh data for the new database
-            self._schema_service.invalidate_cache(connection_name, session_id=session.session_id)
-            self._load_schema_with_loading(session.connector, connection_name, session_id=session.session_id)
 
         # === ATUALIZAR BLOCOS NO PADRAO DA ABA (sem override de banco) ===
         if current_widget and hasattr(current_widget, "editor"):

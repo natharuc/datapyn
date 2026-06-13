@@ -1722,6 +1722,23 @@ class TestResultsViewerGridPrepare:
         assert result.prepared.row_count == 120
         assert result.prepared.limited is True
 
+    def test_prepare_grid_data_sorts_before_limit(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame({"name": ["b", "a", "c"], "value": [2, 1, 3]})
+        result = prepare_grid_data(
+            df,
+            {},
+            {},
+            limit=2,
+            sort_column="name",
+            sort_ascending=True,
+        )
+
+        assert result.prepared.row_count == 2
+        assert result.prepared.columns == ["name", "value"]
+        assert result.prepared.column_values[0].tolist()[:2] == ["a", "b"]
+
     def test_large_grid_prepares_off_ui_thread(self, qtbot):
         from src.ui.components.results_viewer import ResultsViewer
 
@@ -1736,6 +1753,32 @@ class TestResultsViewerGridPrepare:
         assert viewer.current_df is not None
         assert len(viewer.current_df) == 1800
         assert viewer.model.data(viewer.model.index(0, 0)) == "row-0"
+
+    def test_empty_result_replaces_large_async_prepare(self, qtbot):
+        from src.ui.components.results_viewer import ResultsViewer
+
+        viewer = ResultsViewer()
+        qtbot.addWidget(viewer)
+        viewer.row_limit_spin.setValue(1500)
+
+        large_df = pd.DataFrame(
+            {"name": [f"row-{index}" for index in range(1800)], "value": range(1800)}
+        )
+        viewer.display_dataframe(large_df, "large_df")
+
+        empty_df = pd.DataFrame({"name": [], "value": []})
+        viewer.display_dataframe(empty_df, "empty_df")
+
+        qtbot.waitUntil(lambda: viewer.model.rowCount() == 0, timeout=3000)
+        assert viewer.current_df is not None
+        assert len(viewer.current_df) == 0
+        assert viewer._primary_df is not None
+        assert len(viewer._primary_df) == 0
+
+        # Stale async job from the large result must not repopulate the grid.
+        qtbot.wait(200)
+        assert viewer.model.rowCount() == 0
+        assert len(viewer.current_df) == 0
 
     def test_prepare_grid_data_formats_epoch_nanoseconds_as_datetime(self):
         from src.ui.components.results_viewer import prepare_grid_data

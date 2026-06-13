@@ -577,6 +577,23 @@ class TestMonacoThemeIntegration:
         
         assert editor.theme_manager is theme_manager
 
+    def test_get_theme_returns_syntax_colors(self):
+        from src.core.theme_manager import ThemeManager
+
+        theme_manager = ThemeManager(initial_theme="dark")
+        theme = theme_manager.get_theme()
+        assert theme["sql"]["keyword"] == "#569cd6"
+        assert theme["python"]["keyword"] == "#569cd6"
+
+    def test_monaco_surface_colors_from_theme(self):
+        from src.editors.monaco.monaco_editor import MonacoEditor
+        from src.core.theme_manager import ThemeManager
+
+        editor = MonacoEditor(theme_manager=ThemeManager(initial_theme="dark"))
+        surface = editor._get_editor_surface_colors()
+        assert surface["background"] == "#121a2b"
+        assert "syntax" not in surface
+
 
 class TestMonacoCompletionIntegration:
     """Tests for Monaco inline completion integration."""

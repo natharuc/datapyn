@@ -7,6 +7,27 @@ from typing import Optional
 from PyQt6.QtCore import QThread
 
 
+def qthread_is_alive(thread: Optional[QThread]) -> bool:
+    """Return True if the QThread C++ object still exists."""
+    if thread is None:
+        return False
+    try:
+        thread.objectName()
+        return True
+    except RuntimeError:
+        return False
+
+
+def qthread_is_running(thread: Optional[QThread]) -> bool:
+    """Return True if the thread exists and is running; never raises on deleted wrappers."""
+    if not qthread_is_alive(thread):
+        return False
+    try:
+        return thread.isRunning()
+    except RuntimeError:
+        return False
+
+
 def stop_qthread(
     thread: Optional[QThread],
     worker=None,
@@ -20,14 +41,14 @@ def stop_qthread(
             worker.cancel()
         except RuntimeError:
             pass
-    if thread is None:
+    if not qthread_is_alive(thread):
         return True
     try:
         thread.setParent(None)
     except RuntimeError:
         pass
     try:
-        if not thread.isRunning():
+        if not qthread_is_running(thread):
             return True
         if force_terminate:
             thread.terminate()
@@ -50,13 +71,15 @@ def kick_qthread_stop(
             worker.cancel()
         except RuntimeError:
             pass
-    if thread is None:
+    if not qthread_is_alive(thread):
         return
     try:
-        if not thread.isRunning():
+        if not qthread_is_running(thread):
             return
         thread.quit()
-        if not thread.wait(0):
-            thread.terminate()
+        if thread.wait(300):
+            return
+        thread.terminate()
+        thread.wait(500)
     except RuntimeError:
         pass

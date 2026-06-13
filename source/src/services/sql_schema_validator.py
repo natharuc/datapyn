@@ -255,6 +255,7 @@ def _validate_statement(
                 col,
                 f"Unknown table '{table_name}'",
                 end_col=end_col,
+                severity="warning",
             )
         )
 
@@ -295,6 +296,7 @@ def _validate_statement(
                             col,
                             f"Unknown table or alias '{qualifier}'",
                             end_col=end_col,
+                            severity="warning",
                         )
                     )
                 continue
@@ -310,6 +312,7 @@ def _validate_statement(
                             col,
                             f"Unknown column '{qualifier}.{name}'",
                             end_col=end_col,
+                            severity="warning",
                         )
                     )
             continue
@@ -327,6 +330,7 @@ def _validate_statement(
                         col,
                         f"Unknown column '{name}'",
                         end_col=end_col,
+                        severity="warning",
                     )
                 )
             continue

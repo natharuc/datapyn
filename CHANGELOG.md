@@ -23,7 +23,6 @@
 - Merge pull request #129 from natharuc/feat/keep-last-result
   ([`1538325`](https://github.com/natharuc/datapyn/commit/1538325f412058e9711839491bf3c4805b7f423b))
 
-
 ## v1.43.0 (2026-06-10)
 
 ### Bug Fixes

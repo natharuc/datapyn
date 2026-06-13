@@ -1782,8 +1782,7 @@ class SqlAutoCompleteService:
             return self._all_columns_flat() + self._variable_completions(analysis)
 
         result: List[Tuple[str, str, str]] = []
-        seen_names: Set[str] = set()
-        seen_qualified: Set[str] = set()
+        seen_entries: Set[str] = set()
 
         for relation in scope_sources:
             qualifier = relation.get("preferred_qualifier") or relation.get("display_name")
@@ -1791,22 +1790,23 @@ class SqlAutoCompleteService:
                 column_name = str(column.get("name", "") or "")
                 if not column_name:
                     continue
-                detail_name = relation.get("display_name", qualifier)
+                detail_name = relation.get("display_name", qualifier) or qualifier or ""
                 display_type = str(column.get("display_type") or column.get("type") or "")
-                unqualified_key = self._normalize_name(column_name)
                 qualified_label = f"{qualifier}.{column_name}" if qualifier else column_name
-                qualified_key = self._normalize_relation_key(qualified_label)
 
-                if unqualified_key and unqualified_key not in seen_names:
-                    seen_names.add(unqualified_key)
-                    detail = f"{detail_name}.{column_name}"
-                    if display_type:
-                        detail = f"{detail} ({display_type})"
+                detail = f"{detail_name}.{column_name}" if detail_name else column_name
+                if display_type:
+                    detail = f"{detail} ({display_type})"
+                unqualified_key = f"{detail_name}|{column_name}|{display_type}"
+                if unqualified_key not in seen_entries:
+                    seen_entries.add(unqualified_key)
                     result.append((column_name, CAT_COLUMN, detail))
 
-                if qualifier and qualified_key not in seen_qualified:
-                    seen_qualified.add(qualified_key)
-                    result.append((qualified_label, CAT_COLUMN, display_type))
+                if qualifier:
+                    qualified_key = f"{qualified_label}|{display_type}"
+                    if qualified_key not in seen_entries:
+                        seen_entries.add(qualified_key)
+                        result.append((qualified_label, CAT_COLUMN, display_type))
 
         return result + self._variable_completions(analysis)
 

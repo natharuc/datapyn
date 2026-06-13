@@ -1124,24 +1124,18 @@ class SchemaMixin:
             self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
 
-        if block_conn_name:
-            self._switch_block_database_background(block, block_conn_name, database_name)
-            return
-
-        if not current_widget:
-            return
-
-        connector = None
-        if hasattr(current_widget, "_get_sql_connector_for_block"):
-            connector = current_widget._get_sql_connector_for_block(
-                block, block_conn_name, database_name
+        try:
+            self._switch_block_database_background(
+                block,
+                connection_name,
+                database_name,
+                session_widget=current_widget,
             )
-        if not connector or not self._connector_is_connected(connector):
-            self.statusBar().showMessage(S.status.no_active_connection, 3000)
-            return
-
-        sid = session.session_id if session else ""
-        self._load_schema_for_block_connector(block, connector, connection_name, session_id=sid)
+        except Exception as exc:
+            logger.warning("Block database change failed: %s", exc)
+            self.statusBar().showMessage(str(exc)[:80], 5000)
+            if current_widget is not None and hasattr(current_widget, "append_output"):
+                current_widget.append_output(f"[Connection] {exc}", error=True)
 
     def _on_completion_log(self, message: str, level: str):
         """Handle autocomplete/completion log messages.
@@ -1166,8 +1160,14 @@ class SchemaMixin:
         if hasattr(self, "main_statusbar"):
             self.main_statusbar.set_cursor_position(line, column)
 
-    def _switch_block_database_background(self, block, connection_name: str, database_name: str):
-        """Switch database for a block with custom connection (in background)."""
+    def _switch_block_database_background(
+        self,
+        block,
+        connection_name: str,
+        database_name: str,
+        session_widget=None,
+    ):
+        """Switch database for a block connection in background (never blocks UI)."""
         from src.database.connection_manager import ConnectionManager
         from src.workers import BlockConnectionWorker
 
@@ -1223,9 +1223,13 @@ class SchemaMixin:
 
         thread.started.connect(worker.run)
         worker.connection_ready.connect(on_connection_ready)
-        worker.error.connect(
-            lambda msg: self.statusBar().showMessage(f"Error: {msg[:50]}", 5000)
-        )
+        def _on_block_db_error(msg: str, widget=session_widget):
+            short = (msg or "Connection failed")[:120]
+            self.statusBar().showMessage(f"Error: {short[:50]}", 5000)
+            if widget is not None and hasattr(widget, "append_output"):
+                widget.append_output(short, error=True)
+
+        worker.error.connect(_on_block_db_error)
         worker.finished.connect(thread.quit)
         thread.finished.connect(lambda: self._remove_worker_thread(thread))
 

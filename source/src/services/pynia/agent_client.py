@@ -73,9 +73,7 @@ class PyniaAgentClient(QObject):
         self._is_authenticated = False
         self._username = ""
         self._system_message = ""
-        self._available_models = [
-            dict(m) for m in FALLBACK_MODELS.get(self._provider_id, fallback_models())
-        ]
+        self._available_models = self._initial_models_for_provider(self._provider_id)
         self._model = self._settings.selected_model(self._provider_id)
         self._reasoning_effort = self._settings.reasoning_effort
         self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
@@ -97,6 +95,35 @@ class PyniaAgentClient(QObject):
     def provider_label_key(self) -> str:
         return PROVIDERS[self._provider_id].label_key
 
+    def apply_connector_from_settings(self, provider_id: ProviderId) -> None:
+        """Reload credentials/models after Settings saved without switching connector."""
+        if provider_id not in PROVIDERS:
+            return
+        if provider_id != self._provider_id:
+            self.set_provider(provider_id)
+            return
+
+        if provider_id == "copilot":
+            if self._copilot_backend:
+                self._is_authenticated = self._copilot_backend.is_authenticated
+                self._username = getattr(self._copilot_backend, "_username", "") or ""
+                if self._copilot_backend.is_authenticated:
+                    self._available_models = self._copilot_backend.available_models()
+                    self._model = self._copilot_backend.model
+        else:
+            had_token = self._is_authenticated
+            self._is_authenticated = bool(get_provider_secret(provider_id))
+            self._username = self._settings.username(provider_id) or provider_id
+            if self._is_authenticated and not had_token:
+                self.authenticated.emit(self._username)
+            if self._is_authenticated:
+                self._available_models = self._initial_models_for_provider(provider_id)
+
+        self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
+        self.models_changed.emit(self.available_models())
+        self.usage_changed.emit(self._usage_snapshot)
+        self.provider_changed.emit(provider_id)
+
     def set_provider(self, provider_id: ProviderId) -> None:
         if provider_id not in PROVIDERS:
             return
@@ -111,14 +138,22 @@ class PyniaAgentClient(QObject):
         self._is_authenticated = self._settings.is_authenticated(provider_id)
         self._username = self._settings.username(provider_id)
         self._model = self._settings.selected_model(provider_id)
-        self._available_models = [
-            dict(m) for m in FALLBACK_MODELS.get(provider_id, fallback_models())
-        ]
+        self._available_models = self._initial_models_for_provider(provider_id)
         self._usage_snapshot = usage_snapshot_for_model(self._available_models, self._model)
         self._connect_active_provider()
         self.provider_changed.emit(provider_id)
         self.models_changed.emit(self._available_models)
         self.usage_changed.emit(self._usage_snapshot)
+
+    def _initial_models_for_provider(self, provider_id: ProviderId) -> List[Dict[str, Any]]:
+        cached = self._settings.cached_models(provider_id)
+        if cached:
+            return cached
+        return [dict(m) for m in FALLBACK_MODELS.get(provider_id, fallback_models())]
+
+    def _should_persist_models(self, provider_id: ProviderId, models: list) -> bool:
+        fallback = FALLBACK_MODELS.get(provider_id, fallback_models())
+        return len(models) > len(fallback)
 
     def _connect_active_provider(self) -> None:
         if self._provider_id == "copilot" and self._copilot_backend:
@@ -224,8 +259,10 @@ class PyniaAgentClient(QObject):
     def set_api_token(self, token: str, label: str = "") -> None:
         if self._provider_id == "copilot":
             return
-        set_provider_secret(self._provider_id, token.strip())
-        if token.strip():
+        token = token.strip()
+        if token != get_provider_secret(self._provider_id):
+            set_provider_secret(self._provider_id, token)
+        if token:
             self._settings.on_token_authenticated(self._provider_id, label or self._provider_id)
             self._is_authenticated = True
             self._username = label or self._provider_id
@@ -245,8 +282,14 @@ class PyniaAgentClient(QObject):
     def refresh_metadata(self) -> None:
         if self._provider_id == "copilot" and self._copilot_adapter:
             self._copilot_adapter.refresh_metadata()
-        else:
-            self.start_auth()
+            return
+        if not get_provider_secret(self._provider_id):
+            return
+        from src.utils.qt_threading import qthread_is_running
+
+        if qthread_is_running(self._token_thread):
+            return
+        self._start_token_worker("verify")
 
     def send_chat(
         self,
@@ -281,8 +324,11 @@ class PyniaAgentClient(QObject):
                 self._copilot_adapter.cancel()
             elif self._copilot_backend:
                 self._copilot_backend.cancel()
-        if self._token_worker:
-            self._token_worker.cancel()
+        if self._subagent_orchestrator and hasattr(
+            self._subagent_orchestrator, "cancel_active_explore"
+        ):
+            self._subagent_orchestrator.cancel_active_explore()
+        self._cleanup_token_worker(blocking=True)
 
     def cancel_pending_auth(self) -> None:
         if self._provider_id == "copilot" and self._copilot_adapter:
@@ -340,6 +386,7 @@ class PyniaAgentClient(QObject):
 
     def cleanup(self) -> None:
         self.cancel()
+        self._cleanup_token_worker(blocking=True)
         self._cleanup_inline_completion_worker()
         self._disconnect_active_provider()
         if self._copilot_backend and hasattr(self._copilot_backend, "cleanup"):
@@ -385,16 +432,35 @@ class PyniaAgentClient(QObject):
         self._completion_thread = thread
         thread.start()
 
-    def _cleanup_inline_completion_worker(self) -> None:
+    def _cleanup_inline_completion_worker(self, *, blocking: bool = False) -> None:
+        from src.utils.qt_threading import kick_qthread_stop, stop_qthread
+
         worker = self._completion_worker
         thread = self._completion_thread
-        if worker and hasattr(worker, "cancel"):
-            worker.cancel()
-        if thread and thread.isRunning():
-            thread.quit()
-            thread.wait(2000)
         self._completion_worker = None
         self._completion_thread = None
+        if blocking:
+            stop_qthread(thread, worker, wait_ms=2000)
+        else:
+            kick_qthread_stop(thread, worker)
+
+    def _disconnect_token_worker_signals(self, worker: TokenAgentWorker) -> None:
+        for name in (
+            "chunk",
+            "complete",
+            "error",
+            "auth_ok",
+            "models_ready",
+            "usage_ready",
+            "tool_call",
+            "tool_result",
+            "agent_progress",
+            "finished",
+        ):
+            try:
+                getattr(worker, name).disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     def _start_token_worker(
         self,
@@ -404,13 +470,15 @@ class PyniaAgentClient(QObject):
         attachments: Optional[List[Dict[str, Any]]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        self._cleanup_token_worker()
+        # Never block the UI thread while starting chat (context build already ran).
+        self._cleanup_token_worker(blocking=mode != "chat")
         self._token_worker_mode = mode
+        # Worker must have no QObject parent so moveToThread succeeds (parented
+        # objects cannot be moved and would run network I/O on the UI thread).
         self._token_worker = TokenAgentWorker(
             self._provider_id,
             self._tool_executor,
             self._subagent_orchestrator,
-            self,
         )
         self._token_worker.set_model(self._model)
         if messages is not None:
@@ -430,24 +498,43 @@ class PyniaAgentClient(QObject):
         self._token_worker.tool_result.connect(self.tool_result.emit)
         self._token_worker.agent_progress.connect(self.agent_progress.emit)
 
-        self._token_thread = QThread()
+        self._token_thread = QThread(self)
+        self._token_thread.setObjectName(
+            "PyniaTokenVerify" if mode == "verify" else "PyniaTokenChat"
+        )
         self._token_worker.moveToThread(self._token_thread)
         if mode == "verify":
             self._token_thread.started.connect(self._token_worker.run_verify)
         else:
             self._token_thread.started.connect(self._token_worker.run_chat)
         self._token_worker.finished.connect(self._token_thread.quit)
+        self._token_thread.finished.connect(self._on_token_thread_finished)
+        self._token_thread.finished.connect(self._token_worker.deleteLater)
         self._token_thread.start()
 
-    def _cleanup_token_worker(self) -> None:
-        if self._token_worker:
-            self._token_worker.cancel()
-        if self._token_thread and self._token_thread.isRunning():
-            self._token_thread.quit()
-            self._token_thread.wait(3000)
+    def _on_token_thread_finished(self) -> None:
+        """Drop refs when a token worker thread ends (avoid deleted QThread wrappers)."""
+        finished_thread = self.sender()
+        if finished_thread is not self._token_thread:
+            return
         self._token_worker = None
         self._token_thread = None
         self._token_worker_mode = ""
+
+    def _cleanup_token_worker(self, *, blocking: bool = False) -> None:
+        from src.utils.qt_threading import kick_qthread_stop, stop_qthread
+
+        worker, thread = self._token_worker, self._token_thread
+        self._token_worker = None
+        self._token_thread = None
+        self._token_worker_mode = ""
+        if worker is not None:
+            self._disconnect_token_worker_signals(worker)
+            worker.cancel()
+        if blocking:
+            stop_qthread(thread, worker, wait_ms=3000)
+        else:
+            kick_qthread_stop(thread, worker)
 
     def _on_token_auth_ok(self) -> None:
         self._is_authenticated = True
@@ -455,6 +542,8 @@ class PyniaAgentClient(QObject):
         self.authenticated.emit(self._username)
 
     def _on_token_error(self, message: str) -> None:
+        if self.sender() is not self._token_worker:
+            return
         if self._token_worker_mode == "chat":
             self.chat_error.emit(message)
             if "token" in message.lower() or "401" in message:
@@ -467,6 +556,8 @@ class PyniaAgentClient(QObject):
 
     def _on_models_loaded(self, models: list) -> None:
         self._available_models = models
+        if self._should_persist_models(self._provider_id, models):
+            self._settings.set_cached_models(self._provider_id, models)
         self.models_changed.emit(models)
 
     def _on_usage_loaded(self, usage: dict) -> None:

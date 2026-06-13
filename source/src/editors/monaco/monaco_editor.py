@@ -92,6 +92,25 @@ def _qthread_is_running(worker) -> bool:
         return False
 
 
+def _color_for_monaco(value: str, fallback: str) -> str:
+    """Normalize theme colors to #hex — Monaco does not accept rgba in theme defs."""
+    if not value:
+        return fallback
+    raw = value.strip()
+    if raw.startswith("#"):
+        return raw
+    if raw.lower().startswith("rgba(") or raw.lower().startswith("rgb("):
+        inner = raw[raw.index("(") + 1 : raw.rindex(")")]
+        parts = [p.strip() for p in inner.split(",")]
+        if len(parts) >= 3:
+            try:
+                r, g, b = int(float(parts[0])), int(float(parts[1])), int(float(parts[2]))
+                return f"#{r:02x}{g:02x}{b:02x}"
+            except (TypeError, ValueError):
+                return fallback
+    return raw if raw.startswith("#") else fallback
+
+
 def _qthread_request_stop(worker) -> None:
     if not _qthread_alive(worker):
         return
@@ -658,43 +677,42 @@ class MonacoEditor(QWidget):
         if not self._is_ready:
             return
 
-        # Get theme colors
-        theme_data = self._get_theme_data()
-        if theme_data:
-            theme_json = json.dumps(theme_data)
-            theme_name = json.dumps(f"datapyn-{self._theme_name}")
-            self._run_js(f"setCustomTheme({theme_name}, {theme_json})")
+        surface = self._get_editor_surface_colors()
+        self._run_js(f"applyEditorSurface({json.dumps(surface)})")
+        self._run_js(f"setBackgroundColor('{surface['background']}')")
 
-            bg = theme_data.get("background", bg)
-            self._run_js(f"setBackgroundColor('{bg}')")
-    
-    def _get_theme_data(self) -> Optional[Dict[str, Any]]:
-        """Get theme data for Monaco from ThemeManager / design tokens."""
+    def _get_editor_surface_colors(self) -> Dict[str, str]:
+        """Editor chrome colors only — syntax highlighting stays on Monaco vs-dark."""
         from src.design_system.tokens import get_colors
 
         ds = get_colors()
         editor_colors: Dict[str, Any] = {}
-        syntax_colors: Dict[str, Any] = {}
-
         if self.theme_manager:
             try:
-                theme = self.theme_manager.get_theme()
-                editor_colors = theme.get("editor", {})
-                syntax_colors = theme.get(self._language, theme.get("python", {}))
+                editor_colors = self.theme_manager.get_theme().get("editor", {})
             except Exception:
                 pass
 
-        bg = editor_colors.get("background", ds.editor_bg)
         return {
-            "isDark": True,
-            "background": bg,
-            "foreground": editor_colors.get("foreground", ds.editor_fg),
-            "caret": editor_colors.get("caret", "#ffffff"),
-            "caretLine": editor_colors.get("caret_line", ds.editor_line_highlight),
-            "selection": editor_colors.get("selection", ds.editor_selection),
-            "marginBg": editor_colors.get("margin_bg", ds.editor_gutter_bg),
-            "marginFg": editor_colors.get("margin_fg", ds.editor_gutter_fg),
-            "syntax": syntax_colors,
+            "background": _color_for_monaco(
+                editor_colors.get("background", ds.editor_bg), ds.editor_bg
+            ),
+            "caretLine": _color_for_monaco(
+                editor_colors.get("caret_line", ds.editor_line_highlight),
+                ds.editor_line_highlight,
+            ),
+            "selection": _color_for_monaco(
+                editor_colors.get("selection", ds.editor_selection),
+                ds.editor_selection,
+            ),
+            "marginBg": _color_for_monaco(
+                editor_colors.get("margin_bg", ds.editor_gutter_bg),
+                ds.editor_gutter_bg,
+            ),
+            "marginFg": _color_for_monaco(
+                editor_colors.get("margin_fg", ds.editor_gutter_fg),
+                ds.editor_gutter_fg,
+            ),
         }
     
     def _is_dark_color(self, hex_color: str) -> bool:

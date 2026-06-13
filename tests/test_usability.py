@@ -423,54 +423,41 @@ class TestShortcuts:
 class TestWindowEvents:
     """Testa eventos de janela"""
 
-    def test_close_event_saves_sessions(self, main_window, qtbot):
-        """Fechar janela deve salvar sessões"""
-        with patch.object(main_window, "_save_sessions") as mock_save:
+    def test_close_event_cancels_pending_autosave(self, main_window, qtbot):
+        """Fechar janela deve cancelar autosave pendente (sessoes ja sao salvas ao editar)"""
+        with patch.object(main_window._session_autosave, "cancel_pending") as mock_cancel:
             from PyQt6.QtGui import QCloseEvent
 
             event = QCloseEvent()
             main_window.closeEvent(event)
-            mock_save.assert_called()
+            mock_cancel.assert_called()
 
-    def test_close_event_asks_confirmation_when_unsaved(self, main_window, qtbot):
-        """Fechar janela deve exibir diálogo de confirmacao quando ha alteracoes nao salvas"""
+    def test_close_event_skips_prompts_when_idle(self, main_window, qtbot):
+        """Fechar janela sem execucao nao deve exibir dialogos de confirmacao"""
         from PyQt6.QtGui import QCloseEvent
 
-        # Mark a session widget as modified
         for widget in main_window._session_widgets.values():
             widget._is_modified = True
-            break
+            widget._is_executing = False
 
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as mock_question:
-            event = QCloseEvent()
-            with patch.object(main_window, "_save_sessions"):
-                main_window.closeEvent(event)
-            mock_question.assert_called()
+        with patch("src.design_system.message_box.ask_save_discard_cancel") as mock_save_dialog:
+            with patch("src.design_system.message_box.ask_quit_application") as mock_quit_dialog:
+                with patch("src.design_system.message_box.ask_yes_no") as mock_yes_no:
+                    event = QCloseEvent()
+                    main_window.closeEvent(event)
+                    mock_save_dialog.assert_not_called()
+                    mock_quit_dialog.assert_not_called()
+                    mock_yes_no.assert_not_called()
 
-    def test_close_event_no_confirmation_when_all_saved(self, main_window, qtbot):
-        """Fechar janela nao deve exibir dialogo quando nao ha alteracoes nao salvas"""
+    def test_close_event_cancel_keeps_window_open_when_executing(self, main_window, qtbot):
+        """Cancelar confirmacao durante execucao deve manter janela aberta"""
         from PyQt6.QtGui import QCloseEvent
 
-        # Ensure no session widget is modified
         for widget in main_window._session_widgets.values():
-            widget._is_modified = False
-
-        with patch.object(QMessageBox, "question") as mock_question:
-            event = QCloseEvent()
-            with patch.object(main_window, "_save_sessions"):
-                main_window.closeEvent(event)
-            mock_question.assert_not_called()
-
-    def test_close_event_cancel_keeps_window_open(self, main_window, qtbot):
-        """Cancelar confirmacao de fechamento deve manter janela aberta"""
-        from PyQt6.QtGui import QCloseEvent
-
-        # Mark a session widget as modified so the dialog is shown
-        for widget in main_window._session_widgets.values():
-            widget._is_modified = True
+            widget._is_executing = True
             break
 
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+        with patch("src.design_system.message_box.ask_yes_no", return_value=False):
             event = QCloseEvent()
             main_window.closeEvent(event)
             assert not event.isAccepted()

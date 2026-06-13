@@ -1078,6 +1078,7 @@ class PyniaChatPanel(QWidget):
         
         # Enable JavaScript
         settings = self._chat_webview.page().settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         if hasattr(QWebEngineSettings.WebAttribute, "JavascriptCanAccessClipboard"):
@@ -1135,10 +1136,14 @@ class PyniaChatPanel(QWidget):
             "bg_primary": colors.bg_primary,
             "bg_secondary": colors.bg_secondary,
             "bg_tertiary": colors.bg_tertiary,
+            "bg_elevated": colors.bg_elevated,
             "text_primary": colors.text_primary,
             "text_secondary": colors.text_secondary,
             "text_tertiary": colors.text_tertiary,
             "border_default": colors.border_default,
+            "border_muted": colors.border_muted,
+            "accent": colors.interactive_primary,
+            "accent_hover": colors.interactive_primary_hover,
             "interactive_primary": colors.interactive_primary,
             "interactive_primary_hover": colors.interactive_primary_hover,
             "interactive_secondary": colors.interactive_secondary,
@@ -1150,6 +1155,8 @@ class PyniaChatPanel(QWidget):
     
     def _run_chat_js(self, code: str):
         """Run JavaScript in the chat WebView."""
+        if not code:
+            return
         if not self._webview_ready:
             self._pending_webview_ops.append(code)
             return
@@ -1508,12 +1515,9 @@ class PyniaChatPanel(QWidget):
         self._current_stream_id = None
         if self._is_thinking:
             self._is_thinking = False
-        self._set_loading(False)
         self._hide_thinking_indicator()
-        self._run_chat_js(
-            "completeAllRunningTools(); endThinkingBlock(); endStreaming(); "
-            "endToolGroup(); endAgentTurn(); stopActivityTimer();"
-        )
+        turn_id = self._chat_runtime.last_turn.get("turn_id", "")
+        self._run_chat_js(f"releaseTurnUi({json.dumps(turn_id)})")
 
     def _recover_stuck_turn(self, error: str = "", *, cancelled: bool = False) -> None:
         """Force-release a wedged turn so the user can send again."""
@@ -1595,10 +1599,8 @@ class PyniaChatPanel(QWidget):
 
 
     def _show_thinking_indicator(self):
-        """Compact status only — no extra thinking rows in the message list."""
-        self._run_chat_js(
-            f"setActivity({json.dumps({'phase': getattr(S.pynia, 'activity_working', 'Working…'), 'detail': ''})})"
-        )
+        """Open the collapsible thinking block for the active turn."""
+        self._run_chat_js("startThinkingBlock()")
 
     def _hide_thinking_indicator(self):
         """Hide the thinking indicator via WebView."""
@@ -1612,11 +1614,16 @@ class PyniaChatPanel(QWidget):
         self._populate_model_combo(models)
 
 
-    def _format_multiplier(self, multiplier) -> str:
+    def _format_multiplier(self, multiplier, price_label: str = "") -> str:
+        label = str(price_label or "").strip()
+        if label:
+            return label
         try:
             value = float(multiplier)
         except (TypeError, ValueError):
-            value = 1.0
+            return ""
+        if value <= 0 or value == 1.0:
+            return ""
         if value == int(value):
             return f"{int(value)}x"
         return f"{value:.2g}x"
@@ -2303,6 +2310,7 @@ class PyniaChatPanel(QWidget):
         self._run_chat_js(f"setWelcome({json.dumps(welcome_payload)})")
         self._apply_theme()
         self._sync_all_web_state()
+        self._run_chat_js("setAccountSwitchBusy({visible:false})")
         self._try_begin_auto_auth_on_open()
         for op in self._pending_webview_ops:
             self._chat_webview.page().runJavaScript(op)
@@ -2315,12 +2323,19 @@ class PyniaChatPanel(QWidget):
         auth service. The signing-in state is set optimistically here, or driven
         by the auth_started signal when the async gh check decides to start.
         """
-        if not self._agent_client or self._agent_client.is_authenticated:
+        if not self._agent_client:
+            return
+        pid = getattr(self._agent_client, "provider_id", "copilot")
+        if self._agent_client.is_authenticated:
+            if pid != "copilot" and hasattr(self._agent_client, "refresh_metadata"):
+                from src.services.pynia.settings import get_provider_secret
+
+                if get_provider_secret(pid):
+                    self._agent_client.refresh_metadata()
             return
         if self._auth_signing_in:
             return
         auth = self._get_chat_auth_service()
-        pid = getattr(self._agent_client, "provider_id", "copilot")
         self._auth_error_message = None
         started = False
         try:
@@ -2878,10 +2893,19 @@ class PyniaChatPanel(QWidget):
                 attachments=stored_attachments,
                 focused_block=chip_payload,
             )
-        self._set_loading(True)
-        self._run_chat_js(f"setActivity({json.dumps({'phase': S.pynia.activity_sending})})")
+        # Show thinking UI immediately — context assembly can take several seconds.
+        turn_id = self._chat_runtime.active_turn_id
+        sending = S.pynia.activity_sending
+        self._run_chat_js(
+            f"beginAgentTurnUI({json.dumps(turn_id)}, {json.dumps(sending)});"
+            f"setAppState({json.dumps({'loading': True})})"
+        )
+        self._is_thinking = True
 
         system_prompt = self._build_system_prompt()
+        self._append_thinking_step(
+            getattr(S.pynia, "activity_analyzing", "Analyzing workspace…")
+        )
         # One snapshot per send — building it walks every block's code, so the
         # request section, the subagent hint, and the workspace context below
         # all reuse this copy instead of rebuilding it (was 3x per message).
@@ -2932,9 +2956,7 @@ class PyniaChatPanel(QWidget):
             phase = S.pynia.activity_focused_block.format(block=focus_name) if hasattr(
                 S.pynia, "activity_focused_block"
             ) else f"Focused block: {focus_name}"
-            self._run_chat_js(f"setActivity({json.dumps({'phase': phase, 'detail': ''})})")
-
-        self._run_chat_js("startAgentTurn()")
+            self._append_thinking_step(phase)
 
         api_messages = self._build_api_messages_for_agent(system_prompt, request_prompt)
 
@@ -2954,7 +2976,7 @@ class PyniaChatPanel(QWidget):
                     self._active_tool_target_id = tab_id
                     self._mcp_server.tool_registry.pin_session(tab_id)
             self._current_assistant_widget = None
-            self._show_thinking_indicator()
+            self._append_thinking_step(S.pynia.activity_connecting)
             self.thinking_started.emit()
             self._agent_client.send_chat(api_messages, attachments=stored_attachments)
         else:
@@ -3059,9 +3081,11 @@ class PyniaChatPanel(QWidget):
         self._chat_runtime.touch_activity()
         self._chat_runtime.mark_streaming()
         self._hide_thinking_indicator()
-        if self._is_thinking:
+        if self._is_thinking and not self._active_tool_calls:
             self._is_thinking = False
-            self._run_chat_js("endThinkingBlock()")
+            self._run_chat_js(
+                f"endThinkingBlock({json.dumps(self._chat_runtime.active_turn_id)})"
+            )
         if self._current_stream_id:
             self._run_chat_js(f"streamChunk({json.dumps(chunk)})")
         else:
@@ -3146,42 +3170,46 @@ class PyniaChatPanel(QWidget):
         phase_key = str(payload.get("phase_key") or "")
         detail = str(payload.get("detail") or "")
         step_id = str(payload.get("step_id") or "")
-        reasoning = str(payload.get("reasoning") or "").strip()
+        reasoning_raw = str(payload.get("reasoning") or "")
+        reasoning = reasoning_raw.strip()
 
-        if reasoning or payload.get("thinking_step"):
-            self._append_visible_thinking(reasoning or self._resolve_progress_phase(phase_key, detail))
+        if payload.get("reasoning_delta"):
+            self._append_thinking_stream(reasoning_raw)
+        elif reasoning or payload.get("thinking_step"):
+            self._append_thinking_step(
+                reasoning_raw if payload.get("thinking_step") and reasoning_raw
+                else reasoning or self._resolve_progress_phase(phase_key, detail)
+            )
 
         if phase_key in ("activity_tool_done",):
             return
 
         phase = self._resolve_progress_phase(phase_key, detail)
-        if phase_key == "activity_running_tool":
-            self._run_chat_js(
-                f"setActivity({json.dumps({'phase': detail or phase, 'detail': ''})})"
-            )
-        elif phase_key in (
+        if phase_key in (
             "activity_planning",
             "activity_analyzing",
             "activity_synthesizing",
             "activity_waiting_model",
             "activity_connecting",
             "activity_subagent_parallel",
-        ):
-            self._run_chat_js(
-                f"setActivity({json.dumps({'phase': phase, 'detail': ''})})"
-            )
+            "activity_running_tool",
+        ) and not payload.get("reasoning_delta") and not reasoning and not payload.get("thinking_step"):
+            self._append_thinking_step(phase)
 
         provider = getattr(self._agent_client, "provider_id", "copilot") if self._agent_client else "copilot"
-        reasoning = str(payload.get("reasoning") or "").strip()
         step_state = str(payload.get("step_state") or "active")
-        if provider != "copilot" and step_id and step_state == "active" and step_id != self._last_progress_step:
+        if (
+            provider != "copilot"
+            and step_id
+            and step_state == "active"
+            and step_id != self._last_progress_step
+            and not payload.get("reasoning_delta")
+            and not payload.get("thinking_step")
+        ):
             self._last_progress_step = step_id
             line = reasoning or phase
             if line:
-                if not self._is_thinking:
-                    self._is_thinking = True
-                    self._run_chat_js("startThinkingBlock()")
-                self._run_chat_js(f"appendThinking({json.dumps(line + chr(10))})")
+                self._append_thinking_step(line)
 
     def _clear_tool_watch_timers(self) -> None:
         for timer in list(self._tool_watch_timers.values()):
@@ -3226,6 +3254,7 @@ class PyniaChatPanel(QWidget):
         from src.services.pynia.agent_status import activity_line_for_tool
 
         activity = activity_line_for_tool(tool_name, arguments or {})
+        self._append_thinking_step(activity)
         self._run_chat_js(
             f"trackAgentTool({json.dumps(tool_id)}, {json.dumps(activity)}, 'start')"
         )
@@ -3269,6 +3298,14 @@ class PyniaChatPanel(QWidget):
                 (tid for tid, name in reversed(list(self._active_tool_calls.items())) if name == tool_name),
                 "",
             )
+        from src.services.pynia.agent_status import format_tool_display
+
+        display_title, _ = format_tool_display(tool_name, {})
+        status_word = "failed" if is_error else "done"
+        if result_preview:
+            self._append_thinking_step(f"{display_title}: {result_preview}")
+        else:
+            self._append_thinking_step(f"{display_title} — {status_word}")
         self._run_chat_js(
             f"trackAgentTool({json.dumps(tool_id)}, {json.dumps(tool_name)}, "
             f"{json.dumps('error' if is_error else 'done')})"
@@ -3276,27 +3313,39 @@ class PyniaChatPanel(QWidget):
         if tool_id in self._active_tool_calls:
             del self._active_tool_calls[tool_id]
 
-    def _append_visible_thinking(self, text: str) -> None:
-        """Show reasoning / sequential steps in the collapsible thinking block."""
+    def _ensure_thinking_block(self) -> None:
+        if not self._is_thinking:
+            self._is_thinking = True
+            turn_id = json.dumps(self._chat_runtime.active_turn_id)
+            self._run_chat_js(f"startThinkingBlock({turn_id})")
+
+    def _append_thinking_stream(self, delta: str) -> None:
+        """Append model reasoning tokens; skip DSML / tool-call markup."""
+        if not delta or not self._turn_events_allowed():
+            return
+        from src.services.pynia.thinking_sanitize import sanitize_thinking_chunk
+
+        cleaned = sanitize_thinking_chunk(delta)
+        if not cleaned:
+            return
+        self._chat_runtime.mark_thinking(cleaned)
+        self._ensure_thinking_block()
+        self._run_chat_js(f"appendThinkingStream({json.dumps(cleaned)})")
+
+    def _append_thinking_step(self, text: str) -> None:
+        """Append a discrete planning step line to the thinking block."""
         chunk = (text or "").strip()
         if not chunk or not self._turn_events_allowed():
             return
         self._chat_runtime.mark_thinking(chunk)
-        if not self._is_thinking:
-            self._is_thinking = True
-            self._run_chat_js("startThinkingBlock()")
-        self._run_chat_js(f"appendThinking({json.dumps(chunk + chr(10))})")
-        preview = chunk.replace("\n", " ")[:100]
-        phase = getattr(S.pynia, "thinking", "Thinking")
-        self._run_chat_js(
-            f"setActivity({json.dumps({'phase': phase, 'detail': preview})})"
-        )
+        self._ensure_thinking_block()
+        self._run_chat_js(f"appendThinkingStep({json.dumps(chunk)})")
 
     def _on_thinking(self, text: str):
         """Copilot SDK native reasoning stream → visible thinking block."""
-        if not text.strip():
+        if not (text or "").strip():
             return
-        self._append_visible_thinking(text)
+        self._append_thinking_stream(text)
 
     def _populate_model_combo(self, models: list):
         normalized = normalize_models(models) or fallback_models()
@@ -3309,7 +3358,11 @@ class PyniaChatPanel(QWidget):
             model_name = model.get("name", model_id)
             idx = self._model_combo.count()
             self._model_combo.addItem(model_name, model_id)
-            self._model_combo.setItemData(idx, self._format_multiplier(model.get("multiplier", 1.0)), Qt.ItemDataRole.UserRole + 1)
+            self._model_combo.setItemData(
+                idx,
+                self._format_multiplier(model.get("multiplier", 1.0), model.get("price_label", "")),
+                Qt.ItemDataRole.UserRole + 1,
+            )
             self._model_combo.setItemData(idx, dict(model), Qt.ItemDataRole.UserRole + 2)
         restore_idx = self._model_combo.findData(current_model) if current_model else -1
         if restore_idx < 0 and current_model:

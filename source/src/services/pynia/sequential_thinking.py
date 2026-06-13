@@ -73,7 +73,7 @@ def emit_planned_tools_thinking(
     round_idx: int,
     prepared: List[Tuple[str, Dict[str, Any], str, bool]],
 ) -> None:
-    title = round_step_title(round_idx)
+    title = "Planned tool calls" if round_idx == 0 else round_step_title(round_idx)
     body = summarize_planned_tools(prepared)
     if not body:
         body = "• Respond in chat (no tools needed)"

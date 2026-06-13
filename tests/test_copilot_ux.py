@@ -407,6 +407,14 @@ class TestCopilotChatWebViewApp:
         assert "line.className" not in js[: js.index("function showThinking")]
         assert "block.setAttribute" not in js[: js.index("function startThinkingBlock")]
 
+    def test_turn_ui_guards_empty_turn_id_and_complete_release(self, app_files):
+        js = app_files["js"]
+        assert "if (!expected) return !blockId;" in js
+        assert "window.beginAgentTurnUI" in js
+        assert "turn.state === \"complete\"" in js
+        assert "initBridge();" in js
+        assert "setAccountSwitchBusy({ visible: false });" in js
+
     def test_chat_app_does_not_show_raw_i18n_keys_before_bridge(self, app_files):
         js = app_files["js"]
         assert 'fallback || ""' in js
@@ -487,12 +495,11 @@ class TestCopilotChatWebViewApp:
         assert host.copilot_dock.visible is True
         assert host._copilot_chat_panel.focused is True
 
-    def test_work_display_is_collapsed_by_default(self, app_files):
+    def test_work_display_uses_expandable_work_block(self, app_files):
         js = app_files["js"]
-        assert 'document.createElement("details")' in js
-        assert "work-block" in js
         assert "work-block-compact" in js
-        assert "open = true" not in js
+        assert "bindWorkToggle" in js
+        assert "work-block-compact is-open" in js
 
 
 # ===== Chat Panel Thinking State Machine =====
@@ -557,6 +564,52 @@ class TestChatPanelThinkingState:
             assert panel._is_thinking is False
             # No JS calls should be made for empty thinking
             assert mock_js.call_count == 0
+
+    def test_release_turn_ui_scoped_by_turn_id(self, panel):
+        """Stale release JS must target the completed turn id (not the next turn)."""
+        turn_id = panel._chat_runtime.active_turn_id
+        panel._chat_runtime.complete("done")
+        with patch.object(panel, "_run_chat_js") as mock_js:
+            panel._release_turn_ui()
+        call = mock_js.call_args[0][0]
+        assert "releaseTurnUi" in call
+        assert json.dumps(turn_id) in call
+
+    def test_response_chunk_end_thinking_scoped_by_turn_id(self, panel):
+        turn_id = panel._chat_runtime.active_turn_id
+        with patch.object(panel, "_run_chat_js") as mock_js:
+            panel._is_thinking = True
+            panel._on_response_chunk("Hello")
+        calls = [c[0][0] for c in mock_js.call_args_list]
+        end_calls = [c for c in calls if "endThinkingBlock" in c]
+        assert end_calls
+        assert json.dumps(turn_id) in end_calls[0]
+
+    def test_on_send_batches_start_agent_turn_with_first_step(self, panel):
+        panel._chat_runtime.complete("done")
+        panel._agent_client = MagicMock()
+        panel._agent_client.is_authenticated = True
+        panel._agent_client.provider_id = "openrouter"
+        panel._agent_client.send_chat = MagicMock()
+        with patch.object(panel, "_build_system_prompt", return_value="sys"), patch.object(
+            panel, "_build_context_snapshot", return_value={}
+        ), patch.object(
+            panel, "_build_request_context_section", return_value=("", "")
+        ), patch.object(panel, "_build_api_messages_for_agent", return_value=[]), patch.object(
+            panel, "_is_copilot_provider", return_value=False
+        ), patch.object(panel, "_run_chat_js") as mock_js, patch.object(
+            panel, "_add_message"
+        ), patch.object(panel, "_save_current_session"):
+            panel._on_bridge_message_submitted(
+                json.dumps({"text": "second question", "references": [], "attachments": []})
+            )
+        begin_calls = [
+            c[0][0] for c in mock_js.call_args_list if "beginAgentTurnUI" in c[0][0]
+        ]
+        assert begin_calls
+        assert "beginAgentTurnUI(" in begin_calls[0]
+        assert "setAppState" in begin_calls[0]
+        assert '"loading": true' in begin_calls[0].lower()
 
 
 class TestChatPanelModelControls:

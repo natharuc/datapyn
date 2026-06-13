@@ -16,11 +16,11 @@ from src.services.pynia.subagents.classifier import (
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 4
-# Rounds 0-2 offer tools; the last round forces a chat answer. Three rounds
-# give the model read → act → verify/recover (2 was too tight to fix a failed
-# run or retry a safety-refused edit).
-FORCE_ANSWER_AFTER_ROUND = 3
+MAX_TOOL_ROUNDS = 8
+# Rounds 0..(N-1) offer tools; later rounds force a chat answer. API providers
+# (OpenRouter) need more rounds than Copilot SDK — explore schema, fix SQL,
+# run, and recover from errors without stopping mid-plan.
+FORCE_ANSWER_AFTER_ROUND = 6
 MAX_MUTATING_PER_ROUND = 2
 MAX_READ_ONLY_PER_ROUND = 4
 MAX_SUBAGENTS_PER_ROUND = 3

@@ -80,7 +80,10 @@ class _PyniaModelFetchWorker(QObject):
 
                 extra = OPENROUTER_HEADERS if pid == "openrouter" else None
                 fetched = fetch_openai_models(
-                    settings.base_url(pid), token, extra_headers=extra
+                    settings.base_url(pid),
+                    token,
+                    extra_headers=extra,
+                    provider_id=pid,
                 )
                 if fetched:
                     models = normalize_models(fetched) or models
@@ -118,6 +121,7 @@ class SettingsDialog(QDialog):
         self._pending_notification_test = None
         self._pynia_model_cache: dict[str, list] = {}
         self._pynia_model_thread = None
+        self._pynia_model_worker = None
         self._notification_delivery_service = get_notification_delivery_service(self)
         self._setup_ui()
         self._load_shortcuts()
@@ -646,13 +650,17 @@ class SettingsDialog(QDialog):
         tab_title = S.settings.tab_copilot if hasattr(S.settings, 'tab_copilot') else "Copilot"
         self.tabs.addTab(copilot_widget, tab_title)
 
-        # Connect to auth service signals for real-time updates
+        # Chat auth runs through PyniaAuthService; LSP stays on CopilotAuthService.
         from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
-        auth_service.chat_authenticated.connect(self._on_auth_service_chat_updated)
-        auth_service.chat_logged_out.connect(self._on_auth_service_chat_updated)
-        auth_service.lsp_authenticated.connect(self._on_auth_service_lsp_updated)
-        auth_service.lsp_logged_out.connect(self._on_auth_service_lsp_updated)
+        from src.services.pynia import get_pynia_auth_service
+
+        pynia_auth = get_pynia_auth_service()
+        pynia_auth.chat_authenticated.connect(self._on_auth_service_chat_updated)
+        pynia_auth.chat_logged_out.connect(self._on_auth_service_chat_updated)
+        pynia_auth.chat_auth_failed.connect(self._on_auth_service_chat_updated)
+        copilot_auth = get_copilot_auth_service()
+        copilot_auth.lsp_authenticated.connect(self._on_auth_service_lsp_updated)
+        copilot_auth.lsp_logged_out.connect(self._on_auth_service_lsp_updated)
 
     def _setup_pynia_tab(self):
         """Pynia connectors: OpenAI, Open Router, Claude API tokens."""
@@ -987,6 +995,7 @@ class SettingsDialog(QDialog):
             return  # one fetch at a time is enough for a settings dialog
 
         dialog_ref = weakref.ref(self)
+        main_window = self.window()
         thread = QThread()
         thread.setObjectName("PyniaModelFetch")
         worker = _PyniaModelFetchWorker(pid)
@@ -1006,24 +1015,30 @@ class SettingsDialog(QDialog):
         worker.done.connect(_on_models_fetched)
         worker.done.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(_clear_thread_ref)
+        adopted = False
+        if main_window is not None and hasattr(main_window, "_adopt_background_thread"):
+            adopted = main_window._adopt_background_thread(thread, worker)
+        if not adopted:
+            thread.finished.connect(thread.deleteLater)
         self._pynia_model_thread = thread
+        self._pynia_model_worker = worker
         thread.start()
 
     def _clear_pynia_model_thread(self):
         self._pynia_model_thread = None
+        self._pynia_model_worker = None
 
     def _stop_pynia_model_thread(self) -> None:
         thread = self._pynia_model_thread
+        worker = self._pynia_model_worker
         if thread is None:
             return
         self._pynia_model_thread = None
-        try:
-            thread.quit()
-            thread.wait(2500)
-        except RuntimeError:
-            pass
+        self._pynia_model_worker = None
+        from src.utils.qt_threading import kick_qthread_stop
+
+        kick_qthread_stop(thread, worker)
 
     def closeEvent(self, event):
         self._stop_pynia_model_thread()
@@ -1052,39 +1067,79 @@ class SettingsDialog(QDialog):
             pid, self._pynia_completion_model_combo.currentText().strip()
         )
 
-    def _on_pynia_save_token(self):
+    def _persist_pynia_connector_settings(self, *, emit_live_update: bool = True) -> bool:
+        """Save the active API connector token/URL from the form (no-op for Copilot)."""
         from src.services.pynia import set_provider_secret
+        from src.services.pynia.types import PROVIDERS
 
+        if not hasattr(self, "_pynia_provider_combo"):
+            return False
         pid = self._current_pynia_connector_id()
+        info = PROVIDERS.get(pid)
+        if not info or info.auth_kind != "api_token":
+            if emit_live_update and pid == "copilot":
+                self._pynia_settings.set_active_provider("copilot")
+                self.pynia_connector_changed.emit("copilot")
+            return False
+
         token = self._pynia_token_edit.text().strip()
         set_provider_secret(pid, token)
         self._pynia_settings.set_base_url(pid, self._pynia_base_url_edit.text().strip())
         self._save_pynia_completion_model()
         if token:
             self._pynia_settings.on_token_authenticated(pid, pid)
-            # Make the saved connector the active one and tell the live agent,
-            # so the chat authenticates immediately (no restart needed).
-            self._pynia_settings.set_active_provider(pid)
-            self.pynia_connector_changed.emit(pid)
+        else:
+            self._pynia_settings.on_logout(pid)
+        self._pynia_settings.set_active_provider(pid)
+        self._pynia_model_cache.pop(pid, None)
+        self._fetch_pynia_models(pid)
+        if emit_live_update:
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, lambda p=pid: self.pynia_connector_changed.emit(p))
+        return bool(token)
+
+    def _on_pynia_save_token(self):
+        saved = self._persist_pynia_connector_settings(emit_live_update=True)
         from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
 
         reset_ai_autocomplete_circuit_breaker()
-        self._pynia_status_label.setText(S.pynia.verify_ok if hasattr(S, "pynia") else "Saved.")
+        if saved:
+            self._pynia_status_label.setText(S.pynia.verify_ok if hasattr(S, "pynia") else "Saved.")
         self._refresh_pynia_autocomplete_status()
 
     def _on_pynia_verify_token(self):
-        from src.services.pynia.agent_client import PyniaAgentClient
+        from PyQt6.QtCore import QThread
+        from src.services.pynia.providers.token_worker import TokenAgentWorker
         from src.services.pynia.types import ProviderId
 
         pid: ProviderId = self._current_pynia_connector_id()
-        self._on_pynia_save_token()
-        client = PyniaAgentClient(parent=self)
-        client.set_provider(pid)
+        if not self._persist_pynia_connector_settings(emit_live_update=False):
+            show_danger(
+                self,
+                getattr(S.pynia, "verify_failed_title", "Verification failed"),
+                getattr(S.pynia, "token_required_message", "API token required."),
+            )
+            return
 
-        def _ok(username: str):
-            _ = username
+        verifying = getattr(S.pynia, "verifying", "Verifying…") if hasattr(S, "pynia") else "Verifying…"
+        self._pynia_status_label.setText(verifying)
+        self._pynia_verify_btn.setEnabled(False)
+
+        thread = QThread()
+        thread.setObjectName("PyniaVerify")
+        worker = TokenAgentWorker(pid)
+        worker.moveToThread(thread)
+
+        dialog_ref = weakref.ref(self)
+
+        def _ok() -> None:
+            dialog = dialog_ref()
+            if dialog is None or not widget_is_valid(dialog):
+                return
+            dialog._pynia_verify_btn.setEnabled(True)
             template = S.pynia.verify_ok if hasattr(S, "pynia") else "OK"
-            self._pynia_status_label.setText(template)
+            dialog._pynia_status_label.setText(template)
             title = (
                 getattr(S.pynia, "verify_ok_title", None)
                 or getattr(S.pynia, "verify_ok", "Connection verified")
@@ -1094,23 +1149,34 @@ class SettingsDialog(QDialog):
                 "verify_ok_detail",
                 "Your API token is valid and the connector is ready to use.",
             )
-            show_success(self, title, detail)
-            client.deleteLater()
+            show_success(dialog, title, detail)
+            dialog.pynia_connector_changed.emit(pid)
 
-        def _fail(msg: str):
+        def _fail(msg: str) -> None:
+            dialog = dialog_ref()
+            if dialog is None or not widget_is_valid(dialog):
+                return
+            dialog._pynia_verify_btn.setEnabled(True)
             template = S.pynia.verify_failed if hasattr(S, "pynia") else "Failed: {error}"
-            self._pynia_status_label.setText(template.format(error=msg))
+            dialog._pynia_status_label.setText(template.format(error=msg))
             show_danger(
-                self,
+                dialog,
                 getattr(S.pynia, "verify_failed_title", "Verification failed"),
                 template.format(error=msg),
             )
-            client.deleteLater()
 
-        client.authenticated.connect(_ok)
-        client.auth_failed.connect(_fail)
-        client.chat_error.connect(_fail)
-        client.start_auth()
+        thread.started.connect(worker.run_verify)
+        worker.auth_ok.connect(_ok)
+        worker.error.connect(_fail)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        main_window = self.window()
+        adopted = False
+        if main_window is not None and hasattr(main_window, "_adopt_background_thread"):
+            adopted = main_window._adopt_background_thread(thread, worker)
+        if not adopted:
+            thread.finished.connect(thread.deleteLater)
+        thread.start()
 
     def _update_chat_status_label(self):
         """Update the Chat status label based on current state."""
@@ -2414,15 +2480,8 @@ class SettingsDialog(QDialog):
             from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
 
             reset_ai_autocomplete_circuit_breaker()
-            # If Copilot is the chosen connector, make it active so the chat
-            # switches to it (the actual GitHub login is the Sign in button).
-            if (
-                hasattr(self, "_pynia_provider_combo")
-                and self._current_pynia_connector_id() == "copilot"
-                and self._pynia_settings.active_provider != "copilot"
-            ):
-                self._pynia_settings.set_active_provider("copilot")
-                self.pynia_connector_changed.emit("copilot")
+            # Persist API token / active connector so OK applies what the user typed.
+            self._persist_pynia_connector_settings(emit_live_update=True)
 
         # Surface conflicting shortcuts before persisting (e.g. duplicates
         # carried over from an old config). Let the user go back and fix them.

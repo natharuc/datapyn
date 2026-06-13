@@ -57,6 +57,26 @@ def test_pool_creates_separate_connectors_per_block_key():
     assert a is not b
 
 
+def test_peek_connected_returns_none_without_entry():
+    pool = BlockConnectorPool()
+    assert pool.peek_connected("block-a", "conn") is None
+
+
+def test_peek_connected_reuses_live_connector_without_connect():
+    pool = BlockConnectorPool()
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+    pool.register("block-a", "conn", connector)
+
+    with patch(
+        "src.database.block_connector_pool.connect_connector_from_config",
+    ) as connect_mock:
+        found = pool.peek_connected("block-a", "conn")
+
+    assert found is connector
+    connect_mock.assert_not_called()
+
+
 def test_connect_connector_from_config_applies_database_context():
     connector = MagicMock()
     connector.is_connected.return_value = True

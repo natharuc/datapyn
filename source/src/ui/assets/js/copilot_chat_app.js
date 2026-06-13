@@ -28,7 +28,10 @@
         activityDetail: "",
         authReady: false,
         thinkingText: "",
+        thinkingStreamText: "",
         thinkingStartedAt: 0,
+        thinkingTick: null,
+        agentTurnId: "",
         agentTimelineEl: null,
         turnToolLog: [],
         pasteBusy: false,
@@ -199,6 +202,10 @@
         }
     }
 
+    function isThinkingLive() {
+        return state.thinkingEl && state.thinkingEl.classList.contains("live");
+    }
+
     function setActivity(payload) {
         payload = payload || {};
         if (payload.phase) state.activityPhase = payload.phase;
@@ -207,6 +214,10 @@
         }
         state.activityStartedAt = Date.now();
         hideWelcome();
+        if (isThinkingLive()) {
+            updateThinkingSummary();
+            return;
+        }
         startActivityTimer();
         updateActivityLine();
     }
@@ -279,11 +290,21 @@
         }
     }
 
+    function setThinkingLiveClass() {
+        const app = $("app");
+        if (app) app.classList.toggle("thinking-live", isThinkingLive());
+    }
+
     function setWorking(working) {
         const active = !!working;
         state.loading = active;
         const app = $("app");
         if (app) app.classList.toggle("working", active);
+        if (!active) {
+            if (app) app.classList.remove("thinking-live");
+        } else {
+            setThinkingLiveClass();
+        }
         const sendBtn = $("sendBtn");
         const cancelBtn = $("cancelBtn");
         if (sendBtn) sendBtn.hidden = active;
@@ -467,6 +488,8 @@
         stopActivityTimer();
         state.streamingEl = null;
         state.thinkingEl = null;
+        state.thinkingText = "";
+        state.thinkingStreamText = "";
         state.workEl = null;
         state.toolCount = 0;
         state.completedTools = 0;
@@ -495,63 +518,193 @@
         if (line) line.remove();
     }
 
-    function startThinkingBlock() {
+    function updateThinkingSummary() {
+        if (!state.thinkingEl) return;
+        const status = state.thinkingEl.querySelector(".thinking-summary-status");
+        const combined = `${state.thinkingText}\n${state.thinkingStreamText}`.trim();
+        const preview = summarizeThinkingPreview(combined);
+        const secs = Math.max(0, Math.floor((Date.now() - (state.thinkingStartedAt || Date.now())) / 1000));
+        if (status) {
+            if (state.thinkingEl.classList.contains("live")) {
+                const live = preview || label("thinking_live", label("waiting_response", ""));
+                status.textContent = preview ? `${live} · ${secs}s` : live;
+            } else {
+                status.textContent = preview || label("thinking_live", label("waiting_response", ""));
+            }
+        }
+    }
+
+    function bindThinkingToggle(block) {
+        const header = block && block.querySelector(".thinking-summary");
+        if (!header || header.dataset.bound) return;
+        header.dataset.bound = "1";
+        header.addEventListener("click", () => {
+            block.classList.toggle("is-open");
+            header.setAttribute(
+                "aria-expanded",
+                block.classList.contains("is-open") ? "true" : "false",
+            );
+        });
+    }
+
+    function clearTurnArtifacts() {
+        document.querySelectorAll(".thinking-block,.work-block").forEach((node) => node.remove());
+        state.thinkingEl = null;
+        state.thinkingText = "";
+        state.thinkingStreamText = "";
+        state.thinkingStartedAt = 0;
+        state.workEl = null;
+        stopActivityTimer();
+        setThinkingLiveClass();
+    }
+
+    function startThinkingBlock(forTurnId) {
+        if (forTurnId !== undefined && forTurnId !== null) {
+            state.agentTurnId = String(forTurnId);
+        }
         hideWelcome();
-        if (state.thinkingEl) return;
-        const block = document.createElement("details");
-        block.className = "thinking-block live";
-        block.setAttribute("open", "");
-        block.innerHTML = `<summary><span>${escapeHtml(label("thinking", ""))}</span><span class="thinking-summary-status">${escapeHtml(label("thinking_live", label("waiting_response", "")))}</span></summary><div class="thinking-block-content"></div>`;
-        $("messages").appendChild(block);
+        stopActivityTimer();
+        if (state.thinkingEl && !state.thinkingEl.isConnected) {
+            state.thinkingEl = null;
+        }
+        if (state.thinkingEl && state.thinkingEl.classList.contains("live")) {
+            const liveTurn = state.thinkingEl.getAttribute("data-turn-id") || "";
+            const expectedTurn = String(state.agentTurnId || "");
+            if (state.thinkingEl.isConnected && expectedTurn && liveTurn && liveTurn === expectedTurn) {
+                bindThinkingToggle(state.thinkingEl);
+                state.thinkingEl.classList.add("is-open");
+                const header = state.thinkingEl.querySelector(".thinking-summary");
+                if (header) header.setAttribute("aria-expanded", "true");
+                setThinkingLiveClass();
+                return;
+            }
+            state.thinkingEl.remove();
+            state.thinkingEl = null;
+        }
+        if (state.thinkingEl) {
+            state.thinkingEl.remove();
+            state.thinkingEl = null;
+        }
+        const block = document.createElement("div");
+        block.className = "thinking-block live is-open";
+        if (state.agentTurnId) block.setAttribute("data-turn-id", state.agentTurnId);
+        block.innerHTML = `
+            <button type="button" class="thinking-summary" aria-expanded="true">
+                <span class="thinking-summary-leading">
+                    <span class="thinking-chevron" aria-hidden="true"></span>
+                    <span class="thinking-summary-label">${escapeHtml(label("thinking", ""))}</span>
+                    <span class="thinking-live-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+                </span>
+                <span class="thinking-summary-status">${escapeHtml(label("thinking_live", label("waiting_response", "")))}</span>
+            </button>
+            <div class="thinking-block-body">
+                <div class="thinking-steps"></div>
+                <pre class="thinking-stream" hidden></pre>
+            </div>`;
+        const messages = $("messages");
+        if (!messages) return;
+        bindThinkingToggle(block);
+        messages.appendChild(block);
         state.thinkingEl = block;
         state.thinkingText = "";
+        state.thinkingStreamText = "";
         state.thinkingStartedAt = Date.now();
-        setActivity({ phase: label("thinking", ""), detail: label("thinking_live", "") });
+        if (!state.thinkingTick) {
+            state.thinkingTick = window.setInterval(() => {
+                if (isThinkingLive()) updateThinkingSummary();
+            }, 1000);
+        }
+        updateThinkingSummary();
+        setThinkingLiveClass();
         scrollToBottom();
     }
 
-    function renderThinkingHtml(text) {
-        const raw = String(text || "");
-        if (window.marked && typeof window.marked.parse === "function") {
-            return window.marked.parse(raw);
+    function appendThinkingStep(text) {
+        startThinkingBlock();
+        const line = String(text || "").trim();
+        if (!line) return;
+        const steps = state.thinkingEl && state.thinkingEl.querySelector(".thinking-steps");
+        if (!steps) return;
+        const last = steps.lastElementChild;
+        if (last && last.textContent === line) return;
+        const item = document.createElement("div");
+        item.className = "thinking-step";
+        item.textContent = line;
+        steps.appendChild(item);
+        state.thinkingText = `${state.thinkingText}${state.thinkingText ? "\n" : ""}${line}`;
+        updateThinkingSummary();
+        scrollToBottom();
+    }
+
+    function appendThinkingStream(delta) {
+        startThinkingBlock();
+        const chunk = String(delta || "");
+        if (!chunk) return;
+        state.thinkingStreamText += chunk;
+        const stream = state.thinkingEl && state.thinkingEl.querySelector(".thinking-stream");
+        if (stream) {
+            stream.hidden = false;
+            stream.textContent = state.thinkingStreamText;
         }
-        return escapeHtml(raw).replace(/\n/g, "<br>");
+        updateThinkingSummary();
+        scrollToBottom();
     }
 
     function appendThinking(text) {
-        startThinkingBlock();
         const chunk = String(text || "");
         if (!chunk) return;
-        state.thinkingText += chunk;
-        const content = state.thinkingEl && state.thinkingEl.querySelector(".thinking-block-content");
-        if (content) {
-            content.className = "thinking-block-content markdown-body";
-            content.innerHTML = renderThinkingHtml(state.thinkingText);
+        if (chunk.includes("\n")) {
+            chunk.split(/\n+/).forEach((line) => appendThinkingStep(line));
+        } else {
+            appendThinkingStream(chunk);
         }
-        const preview = summarizeThinkingPreview(state.thinkingText);
-        const status = state.thinkingEl && state.thinkingEl.querySelector(".thinking-summary-status");
-        if (status) status.textContent = preview || label("thinking_live", "");
-        setActivity({ phase: label("thinking", ""), detail: preview || label("thinking_live", "") });
-        scrollToBottom();
     }
 
-    function endThinkingBlock() {
+    function turnIdMatches(blockTurn, expectedTurn) {
+        const blockId = String(blockTurn || "");
+        const expected = String(expectedTurn || "");
+        if (!expected) return !blockId;
+        if (!blockId) return false;
+        return blockId === expected;
+    }
+
+    function isStaleTurnCleanup(forTurnId) {
+        const tid = String(forTurnId || "");
+        return tid && state.agentTurnId && tid !== state.agentTurnId;
+    }
+
+    function endThinkingBlock(forTurnId) {
         if (!state.thinkingEl) return;
+        const blockTurn = state.thinkingEl.getAttribute("data-turn-id") || "";
+        const expected = forTurnId !== undefined && forTurnId !== null
+            ? String(forTurnId)
+            : state.agentTurnId;
+        if (!turnIdMatches(blockTurn, expected)) return;
         state.thinkingEl.classList.remove("live");
         state.thinkingEl.classList.add("complete");
+        state.thinkingEl.classList.add("is-open");
+        const header = state.thinkingEl.querySelector(".thinking-summary");
+        if (header) header.setAttribute("aria-expanded", "true");
         const secs = Math.max(1, Math.round((Date.now() - (state.thinkingStartedAt || Date.now())) / 1000));
         const status = state.thinkingEl.querySelector(".thinking-summary-status");
         if (status) {
             status.textContent = label("thinking_complete", "").replace("{seconds}", String(secs));
         }
-        state.thinkingEl = null;
+        const dots = state.thinkingEl.querySelector(".thinking-live-dots");
+        if (dots) dots.remove();
+        if (state.thinkingTick) {
+            window.clearInterval(state.thinkingTick);
+            state.thinkingTick = null;
+        }
+        setThinkingLiveClass();
         state.thinkingText = "";
+        state.thinkingStreamText = "";
         state.thinkingStartedAt = 0;
     }
 
     function startStreaming() {
         hideThinking();
-        endThinkingBlock();
+        endThinkingBlock(state.agentTurnId);
         endToolGroup();
         stopActivityTimer();
         const row = addMessage("assistant", "", `stream-${Date.now()}`);
@@ -614,12 +767,38 @@
         }
     }
 
+    function bindWorkToggle(block) {
+        const header = block && block.querySelector(".work-summary");
+        if (!header || header.dataset.bound) return;
+        header.dataset.bound = "1";
+        header.addEventListener("click", () => {
+            block.classList.toggle("is-open");
+            const open = block.classList.contains("is-open");
+            header.setAttribute("aria-expanded", open ? "true" : "false");
+            const status = block.querySelector(".work-status");
+            if (status) {
+                status.textContent = open
+                    ? label("work_collapse_hint", label("work_expand_hint", ""))
+                    : label("work_expand_hint", "");
+            }
+        });
+    }
+
     function ensureCompactWorkBlock() {
         hideWelcome();
+        if (state.workEl && !state.workEl.isConnected) {
+            state.workEl = null;
+        }
         if (state.workEl) return state.workEl;
-        const block = document.createElement("details");
-        block.className = "work-block work-block-compact";
-        block.innerHTML = `<summary><span class="work-summary-title">${escapeHtml(label("work_title", ""))}</span><span class="work-status">${escapeHtml(label("work_expand_hint", ""))}</span></summary><div class="work-list"></div>`;
+        const block = document.createElement("div");
+        block.className = "work-block work-block-compact is-open";
+        block.innerHTML = `
+            <button type="button" class="work-summary" aria-expanded="true">
+                <span class="work-summary-title">${escapeHtml(label("work_title", ""))}</span>
+                <span class="work-status">${escapeHtml(label("work_collapse_hint", label("work_expand_hint", "")))}</span>
+            </button>
+            <div class="work-list"></div>`;
+        bindWorkToggle(block);
         $("messages").appendChild(block);
         state.workEl = block;
         return block;
@@ -662,9 +841,6 @@
                 existing.status = "running";
             }
             state.toolCount = state.turnToolLog.length;
-            if (title) {
-                setActivity({ phase: title, detail: "" });
-            }
             appendToolLogRow(title, toolId, "running");
             refreshCompactWorkSummary();
         } else {
@@ -674,44 +850,65 @@
                 appendToolLogRow(entry.title, toolId, entry.status);
             }
             state.completedTools = state.turnToolLog.filter((t) => t.status !== "running").length;
-            const next = state.turnToolLog.find((t) => t.status === "running");
-            if (next) {
-                setActivity({ phase: next.title, detail: "" });
-            } else if (state.turnToolLog.length) {
-                setActivity({
-                    phase: label("activity_synthesizing", label("waiting_response", "")),
-                    detail: "",
-                });
-            }
             refreshCompactWorkSummary();
         }
         scrollToBottom();
         return toolId;
     }
 
-    function startAgentTurn() {
+    function startAgentTurn(turnId) {
+        state.agentTurnId = String(turnId || "");
         hideWelcome();
         hideThinking();
-        state.workEl = null;
         state.toolCount = 0;
         state.completedTools = 0;
         state.turnToolLog = [];
         document.querySelectorAll(".agent-timeline").forEach((node) => node.remove());
         state.agentTimelineEl = null;
         document.querySelectorAll(".turn-context-chip").forEach((node) => node.remove());
-        setActivity({
-            phase: label("activity_working", label("waiting_response", "")),
-            detail: "",
-        });
+        clearTurnArtifacts();
+        startThinkingBlock(state.agentTurnId);
         setWorking(true);
         scrollToBottom();
     }
 
-    function endAgentTurn() {
+    function beginAgentTurnUI(turnId, firstStep) {
+        startAgentTurn(turnId);
+        const step = String(firstStep || "").trim();
+        if (step) appendThinkingStep(step);
+        if (!isThinkingLive()) {
+            setActivity({
+                phase: label("thinking", label("waiting_response", "")),
+                detail: label("waiting_response", ""),
+            });
+        }
+        scrollToBottom();
+    }
+
+    function endAgentTurn(forTurnId) {
+        if (forTurnId !== undefined && forTurnId !== null) {
+            const expected = String(forTurnId);
+            if (state.agentTurnId && state.agentTurnId !== expected) return;
+        }
         refreshCompactWorkSummary();
         if (state.workEl) {
             state.workEl.removeAttribute("open");
         }
+    }
+
+    function releaseTurnUi(turnId) {
+        const tid = String(turnId || "");
+        if (!isStaleTurnCleanup(tid)) {
+            setWorking(false);
+            const app = $("app");
+            if (app) app.classList.remove("thinking-live");
+        }
+        completeAllRunningTools();
+        endThinkingBlock(tid);
+        endStreaming();
+        endToolGroup();
+        endAgentTurn(tid);
+        stopActivityTimer();
     }
 
     function ensureWorkBlock() {
@@ -754,7 +951,7 @@
     function formatMultiplier(multiplier) {
         if (multiplier == null || multiplier === "") return "";
         const value = Number(multiplier);
-        if (!Number.isFinite(value)) return "";
+        if (!Number.isFinite(value) || value <= 0 || value === 1) return "";
         return `${value.toLocaleString()}x`;
     }
 
@@ -796,7 +993,9 @@
             item.classList.toggle("selected", String(model.id) === String(state.selectedModel));
 
             const effort = model.default_reasoning_effort || (Array.isArray(model.supported_reasoning_efforts) && model.supported_reasoning_efforts[0]) || "";
-            const meta = [effort ? label(`effort_${effort}`, effort) : "", formatMultiplier(model.multiplier)].filter(Boolean).join(" - ");
+            const priceMeta = model.price_label || "";
+            const multiplierMeta = priceMeta ? "" : formatMultiplier(model.multiplier);
+            const meta = [effort ? label(`effort_${effort}`, effort) : "", priceMeta || multiplierMeta].filter(Boolean).join(" - ");
             item.innerHTML = `<span class="model-option-name">${escapeHtml(model.name || model.id)}</span><span class="model-option-meta">${escapeHtml(meta)}</span>`;
             item.addEventListener("click", () => {
                 state.selectedModel = model.id || "";
@@ -1755,6 +1954,12 @@
     }
 
     function setTurnState(turn) {
+        if (turn && turn.turn_id && isStaleTurnCleanup(turn.turn_id)) {
+            if (["complete", "error", "timed_out", "cancelled"].includes(turn.state)) {
+                releaseTurnUi(turn.turn_id || "");
+            }
+            return;
+        }
         const previousTurnId = state.currentTurn && state.currentTurn.turn_id;
         if (turn && turn.turn_id && turn.turn_id !== previousTurnId) {
             state.workEl = null;
@@ -1762,14 +1967,15 @@
             state.completedTools = 0;
         }
         state.currentTurn = turn || null;
-        setWorking(!!turn && ["sending", "thinking", "streaming", "running_tool"].includes(turn.state));
         writeDebug(turn || {});
+
+        if (turn && turn.state === "complete") {
+            releaseTurnUi(turn.turn_id || "");
+            return;
+        }
+
         if (turn && ["error", "timed_out", "cancelled"].includes(turn.state)) {
-            stopActivityTimer();
-            hideThinking();
-            endThinkingBlock();
-            endStreaming();
-            endToolGroup();
+            releaseTurnUi(turn.turn_id || "");
             const row = addMessage("error", turn.error || turn.state, `error-${turn.turn_id || Date.now()}`);
             if (turn.can_retry) {
                 const bubble = row && row.querySelector(".message");
@@ -1782,6 +1988,20 @@
                     bubble.appendChild(retry);
                 }
             }
+            return;
+        }
+
+        const turnActive = !!turn && ["sending", "thinking", "streaming", "running_tool"].includes(turn.state);
+        if (turnActive) {
+            setWorking(true);
+            if (!isThinkingLive()) {
+                setActivity({
+                    phase: label("waiting_response", ""),
+                    detail: "",
+                });
+            }
+        } else if (!isThinkingLive()) {
+            setWorking(false);
         }
     }
 
@@ -1815,7 +2035,12 @@
         if (payload.selected_effort) state.selectedEffort = payload.selected_effort;
         if (payload.supported_efforts) renderEfforts(payload.supported_efforts);
         if (Object.prototype.hasOwnProperty.call(payload, "history_collapsed")) applyHistoryCollapsed(!!payload.history_collapsed, false);
-        if (typeof payload.loading === "boolean") setWorking(payload.loading);
+        if (typeof payload.loading === "boolean") {
+            const liveThinking = isThinkingLive();
+            if (payload.loading || !liveThinking) {
+                setWorking(payload.loading);
+            }
+        }
         renderModels();
     }
 
@@ -2095,13 +2320,21 @@
         window.setWelcome({ logo: dataUri });
     };
     window.setTheme = (theme) => {
+        const themeAliases = {
+            interactive_primary: "accent",
+            interactive_primary_hover: "accent_hover",
+            interactive_secondary: "bg_tertiary",
+            interactive_secondary_hover: "bg_elevated",
+        };
         Object.entries(theme || {}).forEach(([key, value]) => {
-            if (key === "font_family" && value) {
+            if (!value) return;
+            if (key === "font_family") {
                 document.documentElement.style.setProperty("--font-family", value);
                 document.body.style.fontFamily = value;
                 return;
             }
-            document.documentElement.style.setProperty(`--${key.replace(/_/g, "-")}`, value);
+            const cssKey = themeAliases[key] || key;
+            document.documentElement.style.setProperty(`--${cssKey.replace(/_/g, "-")}`, value);
         });
     };
     window.addMessage = addMessage;
@@ -2112,6 +2345,8 @@
     window.hideThinking = hideThinking;
     window.startThinkingBlock = startThinkingBlock;
     window.appendThinking = appendThinking;
+    window.appendThinkingStep = appendThinkingStep;
+    window.appendThinkingStream = appendThinkingStream;
     window.endThinkingBlock = endThinkingBlock;
     window.startStreaming = startStreaming;
     window.streamChunk = streamChunk;
@@ -2120,8 +2355,10 @@
     window.trackAgentTool = trackAgentTool;
     window.pushAgentProgress = pushAgentProgress;
     window.startAgentTurn = startAgentTurn;
+    window.beginAgentTurnUI = beginAgentTurnUI;
     window.setFocusedBlockAttachment = setFocusedBlockAttachment;
     window.endAgentTurn = endAgentTurn;
+    window.releaseTurnUi = releaseTurnUi;
     window.updateToolStatus = updateToolStatus;
     window.completeAllRunningTools = completeAllRunningTools;
     window.endToolGroup = endToolGroup;
@@ -2157,9 +2394,14 @@
     window.setAttachmentLimits = setAttachmentLimits;
 
     document.addEventListener("DOMContentLoaded", () => {
-        wireEvents();
+        setAccountSwitchBusy({ visible: false });
+        initBridge();
+        try {
+            wireEvents();
+        } catch (err) {
+            writeDebug({ wireEventsError: String(err) });
+        }
         renderStaticLabels();
         renderEfforts([]);
-        initBridge();
     });
 })();

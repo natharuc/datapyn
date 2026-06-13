@@ -116,7 +116,9 @@ class TokenAgentWorker(QObject):
             models = FALLBACK_MODELS.get(self._provider_id, fallback_models())
             if self._provider_id in ("openai", "openrouter"):
                 extra = OPENROUTER_HEADERS if self._provider_id == "openrouter" else None
-                fetched = fetch_openai_models(base, token, extra_headers=extra)
+                fetched = fetch_openai_models(
+                    base, token, extra_headers=extra, provider_id=self._provider_id
+                )
                 if fetched:
                     models = normalize_models(fetched) or models
             elif self._provider_id == "anthropic":
@@ -186,6 +188,12 @@ class TokenAgentWorker(QObject):
                 )
             if self._cancelled:
                 return
+            logger.info(
+                "Pynia token chat complete: provider=%s model=%s response_chars=%d",
+                self._provider_id,
+                self._model,
+                len(final or ""),
+            )
             self.complete.emit(final or "")
         except Exception as exc:
             logger.exception("Token agent chat failed")
