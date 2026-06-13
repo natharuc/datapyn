@@ -9,34 +9,53 @@ on:
       - main
 
 jobs:
-  test:
+  audit:
+    name: Security audit
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Setup | Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: pip-audit
+        run: uv run pip-audit
+
+  test:
+    name: Tests (shard ${{ matrix.shard }}/${{ matrix.shards }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+        shards: [3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Disable ESM apt sources
-        # Disable Ubuntu Pro ESM sources to prevent firewall blocks during apt-get operations
         run: |
           sudo rm -f /etc/apt/sources.list.d/ubuntu-esm-*.list
           sudo sed -i '/esm\.ubuntu\.com/d' /etc/apt/sources.list
       - name: Disable Microsoft apt sources
-        # Disable Microsoft repos (azure-cli, prod) that return 403 Forbidden
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo rm -f /etc/apt/sources.list.d/azure-cli.list
           sudo rm -f /etc/apt/sources.list.d/packages.microsoft.com.list
-      - name: Install MariaDB Connector/C dependencies (Ubuntu)
-        run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
-
-      - name: Install OpenGL dependencies (Ubuntu)
-        run: sudo apt-get install -y freeglut3-dev
-
-      - name: Install Qt dependencies and Xvfb for headless testing
+      - name: Install system dependencies (Ubuntu)
         run: |
+          sudo apt-get update
           sudo apt-get install -y \
+            libmariadb-dev \
+            freeglut3-dev \
             xvfb \
             libxkbcommon-x11-0 \
             libxcb-icccm4 \
@@ -63,77 +82,12 @@ jobs:
         with:
           version: "latest"
 
-      - name: install requirements
+      - name: Install Python dependencies
         run: uv sync --dev
-      - name: security audit
-        run: uv run pip-audit
-      - name: run tests
+
+      - name: Run tests (shard)
         env:
           QT_QPA_PLATFORM: offscreen
           QTWEBENGINE_DISABLE_SANDBOX: "1"
           QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox"
-        run: |
-          MAX_ATTEMPTS=3
-          ATTEMPT=0
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            ATTEMPT=$((ATTEMPT + 1))
-            echo "=== Test attempt $ATTEMPT/$MAX_ATTEMPTS ==="
-
-            set +e
-            # Ignore tests that require QWebEngine (Monaco Editor / MainWindow / SessionWidget):
-            # QWebEngine causes crashes in headless CI environments (exit code 134/SIGABRT)
-            # These tests work locally but crash in GitHub Actions Ubuntu runner
-            uv run pytest tests/ \
-              --ignore=tests/test_visual_manual.py \
-              --ignore=tests/test_gui.py \
-              --ignore=tests/test_file_operations.py \
-              --ignore=tests/test_usability.py \
-              --ignore=tests/test_ui_integration.py \
-              --ignore=tests/test_monaco_editor.py \
-              --ignore=tests/test_shortcuts.py \
-              --ignore=tests/test_session_panels_integration.py \
-              --ignore=tests/test_file_management_feedback.py \
-              --ignore=tests/test_export_script.py \
-              --ignore=tests/test_jupyter_import.py \
-              --ignore=tests/test_context_menu.py \
-              --ignore=tests/test_package_manager.py \
-              --ignore=tests/test_new_features.py \
-              --ignore=tests/test_block_editor.py \
-              --ignore=tests/test_block_connection.py \
-              --ignore=tests/test_block_database.py \
-              --ignore=tests/test_block_namespace.py \
-              --ignore=tests/test_new_tab_connection.py \
-              --ignore=tests/test_session_restoration.py \
-              --ignore=tests/test_python_output_e2e.py \
-              -p no:faulthandler \
-              -q 2>&1 | tee test_output.txt
-            PIPE_EXIT=${PIPESTATUS[0]}
-            set -e
-
-            # pytest exit 0=passed, 1=failed, >=128=signal crash (SIGSEGV/SIGABRT do QWebEngine)
-            if [ $PIPE_EXIT -eq 0 ]; then
-              echo "All tests passed."
-              exit 0
-            elif [ $PIPE_EXIT -eq 1 ]; then
-              # Testes falharam de verdade (assertions) - nao faz retry
-              echo "Some tests failed."
-              exit 1
-            elif [ $PIPE_EXIT -ge 128 ]; then
-              # Crash por sinal (SIGSEGV/SIGABRT) - pode ser cleanup ou mid-test
-              if grep -q "passed" test_output.txt && ! grep -qP "\d+ failed" test_output.txt; then
-                echo "Tests passed (QWebEngine crash ignored, exit code $PIPE_EXIT)"
-                exit 0
-              else
-                echo "Qt/QWebEngine crash during tests (exit code $PIPE_EXIT, attempt $ATTEMPT/$MAX_ATTEMPTS)"
-                if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-                  echo "Retrying..."
-                  sleep 2
-                else
-                  echo "All $MAX_ATTEMPTS attempts crashed. Failing build."
-                  exit 1
-                fi
-              fi
-            else
-              exit $PIPE_EXIT
-            fi
-          done
+        run: bash scripts/ci_pytest.sh ${{ matrix.shard }} ${{ matrix.shards }}
