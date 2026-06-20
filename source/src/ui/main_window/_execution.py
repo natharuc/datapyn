@@ -33,6 +33,11 @@ class ExecutionMixin:
 
     def _run_trigger_allowed(self) -> bool:
         """Debounce execution entry points so a held run shortcut runs only once."""
+        widget = getattr(self, "_get_current_session_widget", lambda: None)()
+        if widget is not None and getattr(widget, "is_tab_cancellation_pending", lambda: False)():
+            widget.status_changed.emit(S.session_widget.status_sql_cancelling)
+            return False
+
         timer = getattr(self, "_last_run_trigger_timer", None)
         if timer is None:
             timer = QElapsedTimer()
@@ -676,6 +681,23 @@ class ExecutionMixin:
 
         self.session_tabs.set_tab_running(tab_index, is_running)
         return tab_index
+
+    def _mark_tab_cancelling(self, is_cancelling: bool, tab_index: int = None) -> int:
+        """Switch tab spinner to counter-clockwise while SQL cancel is in progress."""
+        if tab_index is None:
+            tab_index = self.session_tabs.currentIndex()
+
+        if tab_index < 0 or tab_index >= self.session_tabs.count():
+            return tab_index
+
+        self.session_tabs.set_tab_cancelling(tab_index, is_cancelling)
+        return tab_index
+
+    def _on_execution_cancelling(self, widget):
+        """Keep tab spinner visible but switch to counter-clockwise rotation."""
+        tab_index = self.session_tabs.indexOf(widget)
+        if tab_index >= 0:
+            self._mark_tab_cancelling(True, tab_index)
 
     def _on_execution_cancelled(self, widget):
         """

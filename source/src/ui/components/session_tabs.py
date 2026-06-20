@@ -400,8 +400,9 @@ class SessionTabs(QTabWidget):
         super().__init__(parent)
 
         # Execution state by widget id (not index, to survive tab reordering)
-        self._running_widgets: Dict[int, bool] = {}
-        self._spinner_angle = 0
+        self._running_widgets: Dict[int, str] = {}  # widget_id -> "running" | "cancelling"
+        self._spinner_angle_cw = 0
+        self._spinner_angle_ccw = 0
         self._spinner_timer = QTimer(self)
         self._spinner_timer.timeout.connect(self._tick_spinner)
 
@@ -524,38 +525,55 @@ class SessionTabs(QTabWidget):
         """Set colored strip on tab to indicate active connection"""
         self.tab_bar.set_tab_connection_color(index, color)
 
-    def set_tab_running(self, index: int, is_running: bool):
-        """Indicate if session is running with animated spinner."""
+    def set_tab_running(self, index: int, is_running: bool, *, cancelling: bool = False):
+        """Indicate if session is running with animated spinner.
+
+        Executing uses clockwise rotation; cancelling uses counter-clockwise.
+        """
         widget = self.widget(index)
         if widget is None:
             return
         widget_id = id(widget)
 
-        if is_running:
-            self._running_widgets[widget_id] = True
-            # Iniciar timer de animacao se necessario
+        if is_running or cancelling:
+            self._running_widgets[widget_id] = "cancelling" if cancelling else "running"
             if not self._spinner_timer.isActive():
-                self._spinner_angle = 0
+                self._spinner_angle_cw = 0
+                self._spinner_angle_ccw = 0
                 self._spinner_timer.start(80)  # ~12 FPS
         else:
             self._running_widgets.pop(widget_id, None)
-            # Parar timer se nenhuma aba esta rodando
             if not self._running_widgets:
                 self._spinner_timer.stop()
-            # Limpar icone
             self.setTabIcon(index, QIcon())
+
+    def set_tab_cancelling(self, index: int, is_cancelling: bool):
+        """Switch tab spinner to counter-clockwise while SQL cancel finishes."""
+        if is_cancelling:
+            self.set_tab_running(index, True, cancelling=True)
+        else:
+            widget = self.widget(index)
+            if widget is None:
+                return
+            widget_id = id(widget)
+            if self._running_widgets.get(widget_id) == "cancelling":
+                self._running_widgets[widget_id] = "running"
 
     def _tick_spinner(self):
         """Advance spinner animation and update icons."""
-        self._spinner_angle = (self._spinner_angle + 30) % 360
-        icon = self._make_spinner_icon()
-        # Update only tabs whose widgets are in _running_widgets
+        self._spinner_angle_cw = (self._spinner_angle_cw - 30) % 360
+        self._spinner_angle_ccw = (self._spinner_angle_ccw + 30) % 360
         for i in range(self.count()):
             widget = self.widget(i)
-            if widget and id(widget) in self._running_widgets:
-                self.setTabIcon(i, icon)
+            if widget is None:
+                continue
+            state = self._running_widgets.get(id(widget))
+            if not state:
+                continue
+            angle = self._spinner_angle_ccw if state == "cancelling" else self._spinner_angle_cw
+            self.setTabIcon(i, self._make_spinner_icon(angle))
 
-    def _make_spinner_icon(self) -> QIcon:
+    def _make_spinner_icon(self, angle: int) -> QIcon:
         """Cria icone de spinner circular com o angulo atual."""
         size = 16
         pixmap = QPixmap(size, size)
@@ -578,7 +596,7 @@ class SessionTabs(QTabWidget):
         painter.setPen(pen_fg)
         from PyQt6.QtCore import QRectF
         rect = QRectF(center - radius, center - radius, radius * 2, radius * 2)
-        start = int(self._spinner_angle * 16)
+        start = int(angle * 16)
         span = 90 * 16  # 90 graus
         painter.drawArc(rect, start, span)
 

@@ -124,6 +124,9 @@ class SessionsMixin:
             new_widget.execution_cancelled.connect(
                 lambda w=new_widget: self._on_execution_cancelled(w)
             )
+            new_widget.execution_cancelling.connect(
+                lambda w=new_widget: self._on_execution_cancelling(w)
+            )
             new_widget.completion_log.connect(self._on_completion_log)
             new_widget.cursor_changed.connect(self._on_cursor_position_changed)
 
@@ -986,6 +989,9 @@ class SessionsMixin:
         )
         widget.execution_cancelled.connect(
             lambda w=widget: self._on_execution_cancelled(w)
+        )
+        widget.execution_cancelling.connect(
+            lambda w=widget: self._on_execution_cancelling(w)
         )
 
         # Per-tab periodic timer: update tab icon when periodic starts/stops

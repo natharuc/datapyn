@@ -197,8 +197,37 @@ class SchemaMixin:
             referenced_catalogs=referenced_catalogs,
         )
 
+    def _session_widget_is_alive(self, widget) -> bool:
+        if widget is None:
+            return False
+        try:
+            from PyQt6 import sip
+            if sip.isdeleted(widget):
+                return False
+        except Exception:
+            pass
+        session = getattr(widget, "session", None)
+        session_id = getattr(session, "session_id", None) if session else None
+        if not session_id:
+            return False
+        widgets = getattr(self, "_session_widgets", None)
+        if isinstance(widgets, dict) and session_id not in widgets:
+            return False
+        tabs = getattr(self, "session_tabs", None)
+        if tabs is not None:
+            try:
+                for index in range(tabs.count()):
+                    if tabs.widget(index) is widget:
+                        return True
+                return False
+            except RuntimeError:
+                return False
+        return True
+
     def _schedule_cross_database_schema_sync(self, widget) -> None:
         """Debounce lazy metadata loads for databases referenced in SQL text."""
+        if not self._session_widget_is_alive(widget):
+            return
         if not widget or not hasattr(widget, "session") or not widget.session:
             return
 
@@ -220,6 +249,8 @@ class SchemaMixin:
 
         def run_sync(sid=session_id, w=widget):
             timers.pop(sid, None)
+            if not self._session_widget_is_alive(w):
+                return
             self._sync_cross_database_schema_for_widget(w)
 
         timer.timeout.connect(run_sync)
@@ -227,6 +258,8 @@ class SchemaMixin:
         timer.start(400)
 
     def _sync_cross_database_schema_for_widget(self, widget) -> None:
+        if not self._session_widget_is_alive(widget):
+            return
         session = getattr(widget, "session", None)
         if not session:
             return

@@ -179,6 +179,7 @@ class BlockEditor(QWidget):
         self._sql_schema = {}  # Cached SQL schema for completions
         self._maximized_block: Optional[CodeBlock] = None  # Block in maximized/focus mode
         self._session = None  # SessionWidget tab — namespace with SQL DataFrames
+        self._session_widget = None  # SessionWidget host for execution guards
 
         self._completion_context_timer = QTimer(self)
         self._completion_context_timer.setSingleShot(True)
@@ -378,13 +379,15 @@ class BlockEditor(QWidget):
         # Execute SQL (default F5)
         exec_key = sm.get_shortcut("execute_sql")
         if exec_key and key_seq.matches(QKeySequence(exec_key)) == QKeySequence.SequenceMatch.ExactMatch:
-            self._execute_smart()
+            if not self._execution_blocked():
+                self._execute_smart()
             return
 
         # Execute All (default Ctrl+F5 / Ctrl+Enter)
         exec_all_key = sm.get_shortcut("execute_all")
         if exec_all_key and key_seq.matches(QKeySequence(exec_all_key)) == QKeySequence.SequenceMatch.ExactMatch:
-            self.execute_all_blocks()
+            if not self._execution_blocked():
+                self.execute_all_blocks()
             return
 
         # Escape - restore from maximized mode
@@ -400,6 +403,8 @@ class BlockEditor(QWidget):
         - If there's a selection in focused block: runs selection with block's language
         - If no selection: runs focused block
         """
+        if self._execution_blocked():
+            return
         if self._focused_block:
             editor = getattr(self._focused_block, "editor", None)
             if editor is not None and hasattr(editor, "request_execute"):
@@ -430,6 +435,8 @@ class BlockEditor(QWidget):
 
     def execute_block(self, block: CodeBlock):
         """Run a specific block (public API for MCP tools and internal use)."""
+        if self._execution_blocked():
+            return
         code = block.get_code().strip()
         if not code:
             return
@@ -442,6 +449,8 @@ class BlockEditor(QWidget):
 
     def _execute_code(self, code: str, language: str, block: CodeBlock):
         """Emit appropriate execution signal"""
+        if self._execution_blocked():
+            return
         self._current_executing_block = block
         block.set_running(True)
 
@@ -461,6 +470,8 @@ class BlockEditor(QWidget):
 
     def execute_all_blocks(self):
         """Run all blocks in sequence"""
+        if self._execution_blocked():
+            return
         if not self._blocks:
             return
 
@@ -520,10 +531,31 @@ class BlockEditor(QWidget):
             self._execution_queue_blocks = []
             self._current_executing_block = None
 
-    def cancel_all_executions(self):
-        """Cancel all pending executions"""        # Mark current block as cancelled
+    def mark_execution_cancelling(self):
+        """Mark the active block as cancelling while the SQL worker stops."""
+        if self._current_executing_block:
+            self._current_executing_block.set_cancelling()
+            return
+        for block in self._blocks:
+            if getattr(block, "_is_running", False):
+                block.set_cancelling()
+                self._current_executing_block = block
+                return
+
+    def mark_execution_cancelled(self):
+        """Mark running/waiting blocks as cancelled without emitting cancel_execution."""
         if self._current_executing_block:
             self._current_executing_block.set_cancelled()
+        for block in self._execution_queue_blocks:
+            if block != self._current_executing_block:
+                block.set_cancelled()
+        self._execution_queue_blocks = []
+        self._current_executing_block = None
+
+    def cancel_all_executions(self):
+        """Cancel all pending executions"""
+        if self._current_executing_block:
+            self._current_executing_block.set_cancelling()
 
         # Mark waiting blocks as cancelled too
         for block in self._execution_queue_blocks:
@@ -531,7 +563,6 @@ class BlockEditor(QWidget):
                 block.set_cancelled()
 
         self._execution_queue_blocks = []
-        self._current_executing_block = None
 
         # Emit cancellation signal
         self.cancel_execution.emit()
@@ -553,6 +584,21 @@ class BlockEditor(QWidget):
         for block in self._blocks:
             block.set_block_editor(self)
         self.refresh_completion_context()
+
+    def bind_session_widget(self, session_widget) -> None:
+        """Attach SessionWidget host for execution lock checks."""
+        self._session_widget = session_widget
+
+    def _execution_blocked(self) -> bool:
+        """True while this tab is waiting for an in-flight SQL cancel."""
+        widget = getattr(self, "_session_widget", None)
+        if widget is None:
+            return False
+        checker = getattr(widget, "is_tab_cancellation_pending", None)
+        if callable(checker) and checker():
+            widget.status_changed.emit(S.session_widget.status_sql_cancelling)
+            return True
+        return False
 
     def _get_completion_namespace(self) -> dict:
         if self._session is not None:
@@ -1198,6 +1244,8 @@ class BlockEditor(QWidget):
             block: The CodeBlock requesting execution
             selected_text: Selected text from the editor (empty if no selection)
         """
+        if self._execution_blocked():
+            return
         print(f"[BlockEditor] _on_block_execute_requested: selected_text={len(selected_text)} chars")
         if selected_text:
             # Run only selection from this block

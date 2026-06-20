@@ -64,6 +64,9 @@ dev = [
 
 [tool.uv]
 native-tls = true
+override-dependencies = [
+    "msgpack>=1.2.1",
+]
 
 
 [tool.semantic_release]

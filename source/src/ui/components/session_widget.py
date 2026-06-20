@@ -242,6 +242,7 @@ class SessionWidget(QWidget):
     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
     block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
     execution_started = pyqtSignal()  # Emitted when execution starts (for running indicator)
+    execution_cancelling = pyqtSignal()  # Emitted when SQL cancel is in progress (tab spinner CCW)
     execution_finished = pyqtSignal(str, str, bool)  # (title, message, success)
     execution_cancelled = pyqtSignal()  # Emitted when execution is cancelled
     execution_idle = pyqtSignal()  # Emitted when workers finish after cancel
@@ -293,6 +294,13 @@ class SessionWidget(QWidget):
         self._current_database_name_exec: str = ""
         self._sql_execution_token: int = 0
         self._sql_finished_handler = None
+        self._sql_stopping: bool = False
+        self._sql_stop_is_cancel: bool = False
+        self._sql_stopping_connector = None
+        self._sql_stopping_thread = None
+        self._sql_stopping_worker = None
+        self._sql_stop_started_at: float = 0.0
+        self._SQL_STOP_TIMEOUT_SEC: float = 15.0
         self._python_finished_handler = None
         self._db_switch_token: int = 0
         self._db_switch_threads: list = []
@@ -501,6 +509,7 @@ class SessionWidget(QWidget):
         # Block editor (replaces UnifiedEditor)
         self.editor = BlockEditor(theme_manager=self.theme_manager)
         self.editor.bind_session(self.session)
+        self.editor.bind_session_widget(self)
         editor_layout.addWidget(self.editor)
 
         self.splitter.addWidget(editor_container)
@@ -1037,6 +1046,9 @@ class SessionWidget(QWidget):
             connection_name: Custom connection name (None = use session default)
             database_name: Custom database name (None = use connection default)
         """
+        if self._reject_if_cancelling_sql():
+            return
+
         block = self.editor.get_current_executing_block()
         conn_name = connection_name or self.session.connection_name
         if not conn_name:
@@ -1100,6 +1112,8 @@ class SessionWidget(QWidget):
         block=None,
     ):
         """Callback when auto-connect finishes. Proceeds with SQL execution if successful."""
+        if self._reject_if_cancelling_sql():
+            return
         if not connector or error_msg:
             self.append_output(
                 S.session_widget.block_connect_error.format(name=connection_name, error=error_msg),
@@ -1237,12 +1251,17 @@ class SessionWidget(QWidget):
             self._sql_thread = None
             self._sql_worker = None
             self._sql_finished_handler = None
+        elif self._sql_stopping and thread is getattr(self, "_sql_stopping_thread", None):
+            self._sql_stopping_thread = None
+            self._sql_stopping_worker = None
         try:
             self.session.unregister_thread(thread)
         except Exception:
             pass
-        if not self._is_executing and not self._is_closing:
+        if not self._is_executing and not self._is_closing and not self._sql_stopping:
             QTimer.singleShot(0, self._process_next_in_queue)
+        if self._sql_stopping:
+            QTimer.singleShot(0, self._schedule_sql_stop_finalize)
         self._maybe_emit_execution_idle()
 
     def _on_python_thread_terminated(self) -> None:
@@ -1364,8 +1383,21 @@ class SessionWidget(QWidget):
         for thread, worker in pending:
             self._orphan_background_thread(thread, worker)
 
+    def is_tab_cancellation_pending(self) -> bool:
+        """True while a user-initiated SQL cancel is still stopping on this tab."""
+        return self._sql_stopping and self._sql_stop_is_cancel
+
+    def _reject_if_cancelling_sql(self) -> bool:
+        """Block new execution while SQL cancel is in progress."""
+        if not self.is_tab_cancellation_pending():
+            return False
+        self.status_changed.emit(S.session_widget.status_sql_cancelling)
+        return True
+
     def is_execution_busy(self) -> bool:
         """True while SQL/Python runs or a database switch is still pending."""
+        if self._sql_stopping:
+            return True
         if self._is_executing:
             return True
         if self._sql_thread_is_active() or self._python_thread_is_active():
@@ -1443,6 +1475,9 @@ class SessionWidget(QWidget):
         skip_database_prep: bool = False,
     ):
         """Execute SQL query using the given connector (called after connection is ready)."""
+        if self._reject_if_cancelling_sql():
+            return
+
         import re
         self._current_execution_block = self._get_active_execution_block()
         conn_label = connection_name or S.session_widget.default_connection_label
@@ -1519,9 +1554,15 @@ class SessionWidget(QWidget):
             self._detach_stale_sql_thread()
 
         if getattr(connector, "is_query_busy", lambda: False)():
-            self.append_output(self._format_log("SQL", S.session_widget.sql_previous_still_running), error=True)
-            self.status_changed.emit(S.session_widget.status_sql_previous_still_running)
-            self._finish_block_after_switch(has_error=True)
+            self._execution_queue.append(
+                ("sql", query, None, block_name, connection_name, database_name, sql_parameters)
+            )
+            if not self._sql_stopping:
+                self._sql_stopping = True
+                self._sql_stop_is_cancel = False
+                self._arm_sql_stop_watch(None, None, connector)
+                self.status_changed.emit(S.session_widget.status_sql_waiting_previous)
+                self._schedule_sql_stop_finalize()
             return
 
         if self._is_executing:
@@ -1620,6 +1661,8 @@ class SessionWidget(QWidget):
         # If cancelled, ignore result (UI already cleaned by cancel)
         if error == "__CANCELLED__" or self._cancel_requested:
             self._is_executing = False
+            if self._sql_stopping:
+                self._schedule_sql_stop_finalize()
             return
 
         # Marcar bloco atual como finalizado
@@ -1752,6 +1795,8 @@ class SessionWidget(QWidget):
 
     def _on_execute_python(self, code: str):
         """Execute Python in background"""
+        if self._reject_if_cancelling_sql():
+            return
         if self._python_thread_is_active():
             self._execution_queue.append(("python", code))
             return
@@ -2080,6 +2125,9 @@ class SessionWidget(QWidget):
         Args:
             queue: Lista de tuplas (language, code, block)
         """
+        if self._reject_if_cancelling_sql():
+            return
+
         # Reset cancellation flag
         self._cancel_requested = False
 
@@ -2101,43 +2149,175 @@ class SessionWidget(QWidget):
         if not self._is_executing:
             self._process_next_in_queue()
 
+    def _schedule_sql_stop_finalize(self) -> None:
+        """Poll until the SQL worker thread finishes, then finalize."""
+        if not self._sql_stopping:
+            return
+        if self._sql_stop_timed_out():
+            logger.warning("SQL cancel finalize timed out; forcing cleanup")
+            self._force_release_stopping_query_lock()
+            self._finalize_sql_stop()
+            return
+        if self._sql_stop_ready_to_finalize():
+            self._finalize_sql_stop()
+            return
+        QTimer.singleShot(100, self._schedule_sql_stop_finalize)
+
+    def _sql_stop_timed_out(self) -> bool:
+        started = getattr(self, "_sql_stop_started_at", 0.0) or 0.0
+        if started <= 0:
+            return False
+        return (time.time() - started) >= getattr(self, "_SQL_STOP_TIMEOUT_SEC", 15.0)
+
+    def _sql_stop_ready_to_finalize(self) -> bool:
+        """Finalize once the worker thread has stopped (lock should be released in finally)."""
+        thread = getattr(self, "_sql_stopping_thread", None)
+        if thread is not None:
+            try:
+                return not thread.isRunning()
+            except RuntimeError:
+                return True
+
+        connector = self._sql_stopping_connector
+        if connector is not None:
+            try:
+                return not connector.is_query_busy()
+            except Exception:
+                return True
+        return True
+
+    def _force_release_stopping_query_lock(self) -> None:
+        connector = self._sql_stopping_connector
+        if connector is None:
+            return
+        lock = getattr(connector, "_query_lock", None)
+        if lock is None:
+            return
+        try:
+            if lock.locked():
+                lock.release()
+        except RuntimeError:
+            pass
+
+    def _arm_sql_stop_watch(self, thread, worker, connector) -> None:
+        """Keep watching an orphaned SQL worker until cancel cleanup can finish."""
+        self._sql_stopping_thread = thread
+        self._sql_stopping_worker = worker
+        self._sql_stopping_connector = connector
+        self._sql_stop_started_at = time.time()
+
+        def _bump_finalize(*_args):
+            if self._sql_stopping:
+                QTimer.singleShot(0, self._schedule_sql_stop_finalize)
+
+        if worker is not None:
+            try:
+                worker.finished.connect(
+                    _bump_finalize,
+                    Qt.ConnectionType.SingleShotConnection,
+                )
+            except (TypeError, RuntimeError):
+                pass
+        if thread is not None:
+            try:
+                thread.finished.connect(
+                    _bump_finalize,
+                    Qt.ConnectionType.SingleShotConnection,
+                )
+            except (TypeError, RuntimeError):
+                pass
+
+    def _clear_sql_stop_watch(self) -> None:
+        self._sql_stopping_thread = None
+        self._sql_stopping_worker = None
+        self._sql_stopping_connector = None
+        self._sql_stop_started_at = 0.0
+
+    def _finalize_sql_stop(self, *, cancelled: bool | None = None) -> None:
+        """Finish SQL stop/cancel UI once the worker thread has stopped."""
+        if not self._sql_stopping:
+            return
+        if cancelled is None:
+            cancelled = self._sql_stop_is_cancel
+
+        if not self._sql_stop_ready_to_finalize() and not self._sql_stop_timed_out():
+            self._schedule_sql_stop_finalize()
+            return
+
+        was_stopping = self._sql_stopping
+        self._sql_stopping = False
+        self._sql_stop_is_cancel = False
+        self._clear_sql_stop_watch()
+
+        if cancelled:
+            self._complete_user_cancel()
+        elif was_stopping and not self._is_executing and not self._is_closing:
+            QTimer.singleShot(0, self._process_next_in_queue)
+        self._maybe_emit_execution_idle()
+
+    def _complete_user_cancel(self) -> None:
+        """Apply cancelled UI/output after SQL worker and lock are idle."""
+        self._is_executing = False
+        self._current_block_name = None
+
+        if hasattr(self.editor, "mark_execution_cancelled"):
+            self.editor.mark_execution_cancelled()
+        else:
+            self.editor.mark_execution_finished()
+
+        self.append_output(
+            self._format_log(
+                "CANCELLED",
+                S.session_widget.cancelled_output.replace("[CANCELLED] ", ""),
+            ),
+            error=True,
+        )
+        self._show_output()
+        self.status_changed.emit(S.session_widget.status_cancelled)
+        self.session.finish_execution(False, S.session_widget.execution_cancelled)
+        self.execution_cancelled.emit()
+
     def _on_cancel_execution(self):
         """Cancel current execution and clear queue.
-        
+
         Non-blocking: sends cancellation signal and returns immediately.
-        Actual cleanup happens when worker emits finished signal.
+        SQL cleanup finishes once the worker thread and query lock are idle.
         """
         self._cancel_requested = True
         self._execution_queue.clear()
         self._cancel_pending_db_switches()
 
-        # Cancel SQL on the worker thread (never call driver cancel() on the UI thread).
+        worker = getattr(self, "_sql_worker", None)
+        stopping_thread = getattr(self, "_sql_thread", None)
+        connector = getattr(worker, "connector", None) if worker is not None else None
+
         self._stop_sql_execution()
+        had_sql_worker = worker is not None or stopping_thread is not None
         self._release_sql_slot()
         self._stop_python_execution()
 
-        # CRITICO: Resetar estado de execucao e UI do bloco imediatamente
         self._is_executing = False
         self._current_block_name = None
 
-        # Marcar todos os blocos como nao executando (limpa visual)
-        self.editor.mark_execution_finished()
+        if had_sql_worker and connector is not None:
+            self._sql_stopping = True
+            self._sql_stop_is_cancel = True
+            self._arm_sql_stop_watch(stopping_thread, worker, connector)
+            if hasattr(self.editor, "mark_execution_cancelling"):
+                self.editor.mark_execution_cancelling()
+            self.status_changed.emit(S.session_widget.status_sql_cancelling)
+            self.execution_cancelling.emit()
+            self._schedule_sql_stop_finalize()
+        else:
+            self._complete_user_cancel()
 
-        self.append_output(self._format_log("CANCELLED", S.session_widget.cancelled_output.replace("[CANCELLED] ", "")), error=True)
-        self._show_output()
-        self.status_changed.emit(S.session_widget.status_cancelled)
-
-        # Terminar execucao na sessao
-        self.session.finish_execution(False, S.session_widget.execution_cancelled)
-
-        # Emit cancellation signal so MainWindow can clear tab running state
-        self.execution_cancelled.emit()
-
-        # CRITICO: Resetar flag de cancelamento para nao bloquear proximas execucoes
         self._cancel_requested = False
 
     def _process_next_in_queue(self):
         """Process next item in execution queue"""
+        if self._sql_stopping:
+            return
+
         # Check if cancelled
         if self._cancel_requested:
             self._cancel_requested = False
@@ -2565,6 +2745,8 @@ class SessionWidget(QWidget):
 
     def _execute_all(self):
         """Execute all blocks in this tab (used by periodic timer)."""
+        if self._reject_if_cancelling_sql():
+            return
         if self.editor:
             self.editor.execute_all_blocks()
 
@@ -2593,6 +2775,9 @@ class SessionWidget(QWidget):
 
         self._stop_sql_execution()
         self._stop_python_execution()
+        if self._sql_stopping:
+            self._force_release_stopping_query_lock()
+            self._finalize_sql_stop()
         self.detach_connection_thread()
         self._orphan_running_threads()
         self._block_connector_pool.release_all()

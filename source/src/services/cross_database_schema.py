@@ -150,14 +150,31 @@ def collect_sql_text_from_widget(widget) -> str:
     if not editor or not hasattr(editor, "get_blocks"):
         return ""
 
+    try:
+        from PyQt6 import sip
+    except Exception:
+        sip = None
+
     chunks: List[str] = []
     for block in editor.get_blocks():
-        lang = block.get_language() if hasattr(block, "get_language") else ""
+        if sip is not None:
+            try:
+                if sip.isdeleted(block):
+                    continue
+            except Exception:
+                continue
+        try:
+            lang = block.get_language() if hasattr(block, "get_language") else ""
+        except RuntimeError:
+            continue
         if lang != "sql":
             continue
         get_code = getattr(block, "get_code", None)
         if callable(get_code):
-            code = get_code() or ""
+            try:
+                code = get_code() or ""
+            except RuntimeError:
+                continue
             if code.strip():
                 chunks.append(code)
     return "\n".join(chunks)

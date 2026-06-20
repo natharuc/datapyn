@@ -211,6 +211,9 @@ class SessionController(QObject):
         widget.execution_cancelled.connect(
             lambda w=widget: self._main._on_execution_cancelled(w)
         )
+        widget.execution_cancelling.connect(
+            lambda w=widget: self._main._on_execution_cancelling(w)
+        )
         
         # Completion logging (for Copilot output panel)
         widget.completion_log.connect(self._main._on_completion_log)
