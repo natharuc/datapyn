@@ -425,6 +425,7 @@ class CodeBlock(QFrame):
         self._is_focused = False
         self._is_running = False
         self._is_waiting = False
+        self._is_cancelling = False
         self._is_resizing = False
         self._resize_start_y = 0
         self._resize_start_height = 0
@@ -876,6 +877,8 @@ class CodeBlock(QFrame):
 
     def _on_run_btn_clicked(self):
         """Handle run button click - execute or cancel depending on state"""
+        if self._is_cancelling:
+            return
         if self._is_running:
             self.cancel_requested.emit(self)
         elif hasattr(self.editor, "request_execute"):
@@ -1212,6 +1215,8 @@ class CodeBlock(QFrame):
         # Play button - fundo escuro, icone colorido (ou stop vermelho quando running)
         self._current_lang_color = color
         if not self._is_running:
+            self.run_btn.setEnabled(True)
+            self.run_btn.setToolTip(S.block.tooltip_run)
             self.run_btn.setIcon(qta.icon("mdi.play", color=color))
             self.run_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -1506,6 +1511,16 @@ class CodeBlock(QFrame):
             if not self._is_running:
                 self._update_style()
 
+    def _set_spinner_spinning(self, color: str, *, counter_clockwise: bool = False) -> None:
+        """Show animated spinner; clockwise when executing, CCW when cancelling."""
+        step = -1 if counter_clockwise else 1
+        if self._spinner_animation is not None:
+            self._spinner_animation.stop()
+        self._spinner_animation = qta.Spin(self._spinner_widget, step=step)
+        spin_icon = qta.icon("fa5s.spinner", animation=self._spinner_animation, color=color)
+        self._spinner_widget.setIcon(spin_icon)
+        self._spinner_widget.show()
+
     def set_running_status(self, message: str):
         """Show a busy state on the block while work runs off the UI thread."""
         self._is_running = True
@@ -1536,12 +1551,7 @@ class CodeBlock(QFrame):
                 border-radius: 4px;
             }
         """)
-        if self._spinner_animation is not None:
-            self._spinner_animation.stop()
-        self._spinner_animation = qta.Spin(self._spinner_widget)
-        spin_icon = qta.icon("fa5s.spinner", animation=self._spinner_animation, color="#3498db")
-        self._spinner_widget.setIcon(spin_icon)
-        self._spinner_widget.show()
+        self._set_spinner_spinning("#3498db", counter_clockwise=False)
         if not self._execution_tick_timer.isActive():
             self._execution_tick_timer.start()
 
@@ -1549,6 +1559,7 @@ class CodeBlock(QFrame):
         self._is_running = running
         self._is_waiting = False
         if running:
+            self._is_cancelling = False
             self._custom_running_status = ""
             self._execution_start_time = time.time()
             # Stop icon vermelho quando executando
@@ -1575,14 +1586,7 @@ class CodeBlock(QFrame):
                     border-radius: 4px;
                 }
             """)
-            # Show animated spinner
-            if self._spinner_animation is not None:
-                self._spinner_animation.stop()
-            self._spinner_animation = qta.Spin(self._spinner_widget)
-            spin_icon = qta.icon("fa5s.spinner", animation=self._spinner_animation, color="#f39c12")
-            self._spinner_widget.setIcon(spin_icon)
-            self._spinner_widget.show()
-            # Start elapsed time counter
+            self._set_spinner_spinning("#f39c12", counter_clockwise=False)
             self._execution_tick_timer.start()
         else:
             self._custom_running_status = ""
@@ -1615,6 +1619,7 @@ class CodeBlock(QFrame):
         """Set cancelled state"""
         self._is_running = False
         self._is_waiting = False
+        self._is_cancelling = False
         self._custom_running_status = ""
         self._execution_tick_timer.stop()
         if self._spinner_animation is not None:
@@ -1634,6 +1639,29 @@ class CodeBlock(QFrame):
             }
         """)
         self._execution_start_time = 0
+
+    def set_cancelling(self):
+        """Set cancelling state while the SQL worker is still stopping."""
+        self._is_running = True
+        self._is_waiting = False
+        self._is_cancelling = True
+        self._custom_running_status = S.block.status_cancelling
+        self.run_btn.setIcon(qta.icon("mdi.stop", color="#ef4444"))
+        self.run_btn.setEnabled(False)
+        self.run_btn.setToolTip(S.block.tooltip_cancelling)
+        self.status_label.setText(S.block.status_cancelling)
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #e67e22;
+                font-size: 11px;
+                padding: 2px 6px;
+                background: rgba(230, 126, 34, 0.12);
+                border-radius: 4px;
+            }
+        """)
+        self._set_spinner_spinning("#e67e22", counter_clockwise=True)
+        if not self._execution_tick_timer.isActive():
+            self._execution_tick_timer.start()
 
     def set_error(self):
         """Set error state"""

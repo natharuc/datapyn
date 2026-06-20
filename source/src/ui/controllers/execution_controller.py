@@ -136,7 +136,18 @@ class ExecutionController(QObject):
         
         self.session_tabs.set_tab_running(tab_index, is_running)
         return tab_index
-    
+
+    def mark_tab_cancelling(self, is_cancelling: bool, tab_index: int = None) -> int:
+        """Switch tab spinner to counter-clockwise while SQL cancel is in progress."""
+        if tab_index is None:
+            tab_index = self.session_tabs.currentIndex()
+
+        if tab_index < 0 or tab_index >= self.session_tabs.count():
+            return tab_index
+
+        self.session_tabs.set_tab_cancelling(tab_index, is_cancelling)
+        return tab_index
+
     # =========================================================================
     # EXECUTION COMMANDS
     # =========================================================================
@@ -490,6 +501,12 @@ class ExecutionController(QObject):
             self.mark_tab_running(True, tab_index)
             self.start_execution_timer()
     
+    def on_execution_cancelling(self, widget):
+        """Keep tab spinner visible but switch to counter-clockwise rotation."""
+        tab_index = self.session_tabs.indexOf(widget)
+        if tab_index >= 0:
+            self.mark_tab_cancelling(True, tab_index)
+
     def on_execution_cancelled(self, widget):
         """Handle execution cancellation from SessionWidget"""
         tab_index = self.session_tabs.indexOf(widget)

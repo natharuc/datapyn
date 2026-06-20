@@ -217,3 +217,148 @@ def test_cancel_clears_sql_slot_refs(qtbot, monkeypatch):
     assert widget._sql_thread is None
     assert widget._sql_worker is None
     orphan.assert_called_once_with(thread, worker)
+
+
+def test_cancel_defers_finish_until_query_lock_released(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+    session.finish_execution = MagicMock()
+    session.register_thread = MagicMock()
+    session.unregister_thread = MagicMock()
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+    widget.editor = MagicMock()
+    widget.append_output = MagicMock()
+    widget._show_output = MagicMock()
+
+    connector = MagicMock()
+    worker = SessionSqlWorker(connector, "SELECT 1")
+    thread = MagicMock()
+    thread.isRunning.return_value = True
+    widget._sql_worker = worker
+    widget._sql_thread = thread
+
+    with patch.object(widget, "_release_sql_slot"):
+        with patch.object(widget, "_request_sql_cancel_interrupt"):
+            widget._on_cancel_execution()
+
+    assert widget._sql_stopping is True
+    session.finish_execution.assert_not_called()
+
+    thread.isRunning.return_value = False
+    widget._schedule_sql_stop_finalize()
+    session.finish_execution.assert_called_once()
+
+
+def test_is_execution_busy_while_sql_stopping(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+    widget._sql_stopping = True
+
+    assert widget.is_execution_busy() is True
+
+
+def test_busy_sql_queues_rerun_instead_of_error(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+    session.connection_name = "c1"
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+    widget.editor = MagicMock()
+    widget.editor.get_current_executing_block.return_value = None
+    widget.editor.get_focused_block.return_value = None
+    widget.editor.get_last_focused_block.return_value = None
+    widget.append_output = MagicMock()
+    widget._detach_stale_sql_thread = MagicMock()
+    widget._schedule_sql_stop_finalize = MagicMock()
+
+    connector = MagicMock()
+    connector.is_query_busy.return_value = True
+
+    widget._execute_sql_with_connector(
+        connector,
+        "SELECT 2",
+        "block2",
+        "c1",
+        None,
+    )
+
+    assert len(widget._execution_queue) == 1
+    assert widget._execution_queue[0][1] == "SELECT 2"
+    assert widget._sql_stopping is True
+    widget.append_output.assert_not_called()
+    widget._schedule_sql_stop_finalize.assert_called_once()
+
+
+def test_execution_blocked_while_sql_cancelling(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+    widget._sql_stopping = True
+    widget._sql_stop_is_cancel = True
+    widget.status_changed = MagicMock()
+
+    assert widget._reject_if_cancelling_sql() is True
+    widget.status_changed.emit.assert_called_once()
+
+    widget._on_execute_queue([("sql", "SELECT 1", None, None, None, None, None)])
+    assert widget._execution_queue == []
+
+
+def test_tab_spinner_clockwise_and_counter_clockwise(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    from src.ui.components.session_tabs import SessionTabs
+
+    tabs = SessionTabs()
+    qtbot.addWidget(tabs)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+
+    tabs.addTab(widget, "Tab 1")
+    tabs.set_tab_running(0, True)
+    assert tabs._running_widgets[id(widget)] == "running"
+
+    angle_cw_before = tabs._spinner_angle_cw
+    tabs._tick_spinner()
+    assert tabs._spinner_angle_cw == (angle_cw_before - 30) % 360
+
+    tabs.set_tab_cancelling(0, True)
+    assert tabs._running_widgets[id(widget)] == "cancelling"
+
+    angle_ccw_before = tabs._spinner_angle_ccw
+    tabs._tick_spinner()
+    assert tabs._spinner_angle_ccw == (angle_ccw_before + 30) % 360
