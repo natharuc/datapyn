@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.46.0 (2026-06-20)
+
+### Features
+
+- Ajuste em testes e audit
+  ([`b99a728`](https://github.com/natharuc/datapyn/commit/b99a728edd301e40f1c55ceaebdd5e5070fed87a))
+
+- Melhorando consistencia em cancelamento de execuções
+  ([`6ec4cab`](https://github.com/natharuc/datapyn/commit/6ec4cab6f0c8d85830758c406141ccf09cd3b48c))
+
+- Melhorando consistencia em cancelamento de execuções
+  ([`620e5aa`](https://github.com/natharuc/datapyn/commit/620e5aa7408ab309b7da62fd493e079c9f94f00a))
+
+### Heuristic
+
+- Merge pull request #131 from natharuc/feat/keep-last-result
+  ([`6ec4cab`](https://github.com/natharuc/datapyn/commit/6ec4cab6f0c8d85830758c406141ccf09cd3b48c))
+
+
 ## v1.45.0 (2026-06-13)
 
 ### Bug Fixes
