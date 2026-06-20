@@ -490,15 +490,18 @@ class MainWindow(
             if hasattr(widget, "_is_executing")
         )
 
+        quitting_for_update = getattr(self, "_quitting_for_update", False)
+
         if has_running:
-            if not ask_yes_no(
-                self,
-                S.dialogs.execution_in_progress_title,
-                S.dialogs.execution_in_progress_msg,
-                default_yes=False,
-            ):
-                event.ignore()
-                return
+            if not quitting_for_update:
+                if not ask_yes_no(
+                    self,
+                    S.dialogs.execution_in_progress_title,
+                    S.dialogs.execution_in_progress_msg,
+                    default_yes=False,
+                ):
+                    event.ignore()
+                    return
 
             # Cancel all executions
             for widget in self._session_widgets.values():

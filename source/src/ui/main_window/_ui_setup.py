@@ -1248,8 +1248,9 @@ class UISetupMixin:
             show_error(self, S.dialogs.installation_error_title, detail)
 
     def _quit_for_update(self) -> None:
-        """Exit the app so DataPyn-Setup.exe can replace the install folder."""
-        QApplication.quit()
+        """Exit the app so the in-app updater can replace the install folder."""
+        self._quitting_for_update = True
+        self.close()
 
     def _on_update_available(self, version: str, download_url: str, release_notes: str):
         """Callback when an update is available (manual check)."""

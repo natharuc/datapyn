@@ -285,9 +285,48 @@ def _datapyn_process_pids(exclude_pid: Optional[int] = None) -> list[int]:
         return []
 
 
+def _process_is_running(pid: int) -> bool:
+    """Return True when *pid* refers to a live process."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                creationflags=_no_window_flags(),
+            )
+            line = (result.stdout or "").strip()
+            if not line or "INFO:" in line.upper():
+                return False
+            return f'"{pid}"' in line or f",{pid}," in line.replace(" ", "")
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    else:
+        return True
+
+
+def wait_for_process_exit(pid: int, timeout_sec: int = 180) -> bool:
+    """Block until the process *pid* is no longer running."""
+    import time
+
+    if pid <= 0:
+        return True
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if not _process_is_running(pid):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def wait_for_datapyn_exit(timeout_sec: int = 180, exclude_pid: Optional[int] = None) -> bool:
     """Block until no other DataPyn.exe instance is running (excludes updater PID)."""
-    import os
     import time
 
     excluded = exclude_pid if exclude_pid is not None else os.getpid()
@@ -809,6 +848,11 @@ def _spawn_detached(command: list[str], cwd: Path) -> None:
         creationflags = _no_window_flags()
         creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        stderr_target: int | object = subprocess.DEVNULL
+        if "--apply-update" in launch_cmd:
+            updater_log = Path(tempfile.gettempdir()) / "datapyn-updater.log"
+            _append_update_log(f"Spawn detached: {' '.join(launch_cmd)}")
+            stderr_target = updater_log.open("a", encoding="utf-8")
         subprocess.Popen(
             launch_cmd,
             cwd=str(cwd),
@@ -817,7 +861,7 @@ def _spawn_detached(command: list[str], cwd: Path) -> None:
             close_fds=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=stderr_target,
         )
         return
     subprocess.Popen(
@@ -1068,6 +1112,8 @@ def launch_setup_update(
                 ver,
                 "--dir",
                 str(root),
+                "--parent-pid",
+                str(os.getpid()),
             ]
             cwd = updater_exe.parent
             launcher = str(updater_exe)
@@ -1083,6 +1129,8 @@ def launch_setup_update(
                 ver,
                 "--dir",
                 str(root),
+                "--parent-pid",
+                str(os.getpid()),
             ]
             cwd = source_main.parent
             launcher = source_main
