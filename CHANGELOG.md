@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.46.1 (2026-06-22)
+
+### Bug Fixes
+
+- Resolvendo atualização automatica
+  ([`9053449`](https://github.com/natharuc/datapyn/commit/9053449d4f658d8379f47210620bd67ff8c6c46c))
+
+- Resolvendo atualização automatica
+  ([`a372a93`](https://github.com/natharuc/datapyn/commit/a372a93a1e05db0a98fb6076756ae05ab4112a8d))
+
+### Heuristic
+
+- Merge pull request #132 from natharuc/bug/bug-update
+  ([`9053449`](https://github.com/natharuc/datapyn/commit/9053449d4f658d8379f47210620bd67ff8c6c46c))
+
+
 ## v1.46.0 (2026-06-20)
 
 ### Features
