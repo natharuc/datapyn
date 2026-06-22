@@ -231,6 +231,7 @@ class TestLaunchSetupUpdate:
         assert command[0] == str(staged)
         assert command[1] == "--apply-update"
         assert command[2] == str(zip_path)
+        assert "--parent-pid" in command
         assert cwd == staged.parent
 
     @patch("src.services.windows_installer._is_frozen_runtime", return_value=False)
@@ -253,6 +254,7 @@ class TestLaunchSetupUpdate:
         assert command[0] == sys.executable
         assert command[2] == "--apply-update"
         assert command[3] == str(zip_path)
+        assert "--parent-pid" in command
         assert cwd.name == "source"
 
 
@@ -319,3 +321,46 @@ class TestWaitForDatapynExit:
         from src.services.windows_installer import wait_for_datapyn_exit
 
         assert wait_for_datapyn_exit(timeout_sec=1, exclude_pid=12345) is False
+
+
+class TestWaitForProcessExit:
+    @patch("src.services.windows_installer._process_is_running", return_value=False)
+    def test_wait_returns_when_process_gone(self, _mock_running):
+        from src.services.windows_installer import wait_for_process_exit
+
+        assert wait_for_process_exit(12345, timeout_sec=1) is True
+
+    @patch("time.monotonic", side_effect=[0.0, 0.0, 2.0])
+    @patch("time.sleep")
+    @patch("src.services.windows_installer._process_is_running", return_value=True)
+    def test_wait_times_out_when_process_stays(self, _mock_running, _sleep, _mono):
+        from src.services.windows_installer import wait_for_process_exit
+
+        assert wait_for_process_exit(12345, timeout_sec=1) is False
+
+    def test_wait_returns_true_for_invalid_pid(self):
+        from src.services.windows_installer import wait_for_process_exit
+
+        assert wait_for_process_exit(0, timeout_sec=1) is True
+
+
+class TestParseApplyUpdateArgv:
+    def test_parse_parent_pid(self):
+        from src.services.in_app_update import parse_apply_update_argv
+
+        args = parse_apply_update_argv(
+            [
+                "main.py",
+                "--apply-update",
+                "/tmp/pkg.zip",
+                "--version",
+                "1.2.0",
+                "--dir",
+                "C:/DataPyn",
+                "--parent-pid",
+                "4242",
+            ]
+        )
+        assert args is not None
+        assert args.parent_pid == 4242
+        assert args.zip_path == "/tmp/pkg.zip"
