@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-datapyn-workspace">
+    <comment>DataPyn Workspace</comment>
+    <comment xml:lang="pt_BR">Workspace DataPyn</comment>
+    <glob pattern="*.dpw"/>
+  </mime-type>
+</mime-info>

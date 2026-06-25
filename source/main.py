@@ -83,6 +83,10 @@ def main():
     parser.add_argument("--workspace", type=str, help="Path to workspace folder to open")
     args, unknown = parser.parse_known_args()
     
+    from src.services.file_import_service import collect_startup_file_paths
+
+    startup_files = collect_startup_file_paths(unknown)
+
     # Setar AppUserModelID para icone correto na barra de tarefas do Windows
     try:
         import ctypes
@@ -180,6 +184,11 @@ def main():
     window = MainWindow(splash=splash)
 
     splash.finish_with_window(window)
+
+    if startup_files:
+        from PyQt6.QtCore import QTimer
+
+        QTimer.singleShot(0, lambda: window.open_startup_files(startup_files))
 
     # Iniciar loop de eventos
     sys.exit(app.exec())

@@ -11,6 +11,7 @@ Principio: Toda importacao de arquivo DEVE passar por este servico.
 """
 
 import os
+from pathlib import Path
 from typing import List, Optional, Tuple
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -229,3 +230,16 @@ class FileImportService(QObject):
                 )
 
         return result
+
+
+def collect_startup_file_paths(argv_tail: list[str]) -> list[str]:
+    """Collect supported file paths from leftover CLI arguments (e.g. double-click .dpw)."""
+    paths: list[str] = []
+    for item in argv_tail:
+        if not item or item.startswith("-"):
+            continue
+        if not FileImportService.is_supported(item):
+            continue
+        path = Path(item)
+        paths.append(str(path.resolve()) if path.is_file() else str(path))
+    return paths

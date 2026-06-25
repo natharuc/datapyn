@@ -96,6 +96,23 @@ class FileIOMixin:
         self.recent_files_manager.clear()
         self._update_recent_menu()
 
+    def open_startup_files(self, paths: list[str]) -> None:
+        """Open files passed on the command line after the main window is ready."""
+        import os
+
+        for path in paths:
+            if not os.path.isfile(path):
+                logger.warning("Startup file not found: %s", path)
+                continue
+            ext = os.path.splitext(path.lower())[1]
+            if ext in (".dpw", ".sql", ".py", ".ipynb"):
+                self._open_code_file(path)
+            elif ext in (".csv", ".json", ".xlsx", ".xls"):
+                self._new_session()
+                widget = self._get_current_session_widget()
+                if widget and hasattr(widget, "_on_file_dropped"):
+                    widget._on_file_dropped(path)
+
     def _open_code_file(self, filename: str):
         """Opens code file in new tab with complete panels"""
         try:

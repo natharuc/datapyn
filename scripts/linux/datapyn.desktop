@@ -2,8 +2,9 @@
 Type=Application
 Name=DataPyn
 Comment=Data Analysis Tool
-Exec=/opt/datapyn/DataPyn
+Exec=/opt/datapyn/DataPyn %F
 Icon=/opt/datapyn/datapyn_logo.svg
 Terminal=false
 Categories=Development;Database;DataVisualization;
 StartupNotify=true
+MimeType=application/x-datapyn-workspace;
