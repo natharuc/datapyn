@@ -70,6 +70,10 @@ class TestZipInstall:
             "src.services.windows_installer.register_uninstall",
             lambda *_args, **_kwargs: None,
         )
+        monkeypatch.setattr(
+            "src.services.windows_installer.register_dpw_file_association",
+            lambda *_args, **_kwargs: None,
+        )
 
         exe = install_from_zip(zip_path, install_dir, "1.2.3")
         assert exe.name == "DataPyn.exe"
@@ -364,3 +368,75 @@ class TestParseApplyUpdateArgv:
         assert args is not None
         assert args.parent_pid == 4242
         assert args.zip_path == "/tmp/pkg.zip"
+
+
+class TestDpwFileAssociation:
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows registry only")
+    def test_register_dpw_file_association_writes_registry(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from src.services.windows_installer import (
+            DPW_APPS_EXE_KEY,
+            DPW_EXT_KEY,
+            DPW_PROGID,
+            DPW_PROGID_KEY,
+            register_dpw_file_association,
+        )
+
+        install_dir = tmp_path / "DataPyn"
+        install_dir.mkdir()
+        exe_path = install_dir / "DataPyn.exe"
+        exe_path.write_bytes(b"MZ")
+        icon_path = install_dir / "datapyn-logo.ico"
+        icon_path.write_bytes(b"ico")
+
+        created: dict[str, object] = {}
+        subkey_by_call: list[str] = []
+
+        def fake_create_key(_root, subkey):
+            subkey_by_call.append(subkey)
+            key = MagicMock(name=f"key:{subkey}")
+            key.__enter__ = lambda self: key
+            key.__exit__ = lambda *args: None
+            return key
+
+        def fake_set_value(_key, name, _reserved, _typ, data):
+            subkey = subkey_by_call[-1] if subkey_by_call else "?"
+            created[f"{subkey}|{name}"] = data
+
+        with patch("src.services.windows_installer.winreg") as mock_winreg:
+            mock_winreg.HKEY_CURRENT_USER = 0
+            mock_winreg.REG_SZ = 1
+            mock_winreg.CreateKey.side_effect = fake_create_key
+            mock_winreg.SetValueEx.side_effect = fake_set_value
+            with patch(
+                "src.services.windows_installer._ensure_brand_icon",
+                return_value=icon_path,
+            ):
+                register_dpw_file_association(install_dir, exe_path)
+
+        assert created[f"{DPW_EXT_KEY}|"] == DPW_PROGID
+        assert created[f"{DPW_PROGID_KEY}|"] == "DataPyn Workspace"
+        assert created[f"{DPW_PROGID_KEY}\\DefaultIcon|"] == f"{icon_path},0"
+        assert created[f"{DPW_PROGID_KEY}\\shell\\open\\command|"] == f'"{exe_path}" "%1"'
+        assert created[f"{DPW_APPS_EXE_KEY}\\SupportedTypes|.dpw"] == ""
+
+    def test_unregister_dpw_file_association_deletes_keys(self):
+        from unittest.mock import patch
+
+        from src.services.windows_installer import unregister_dpw_file_association
+
+        deleted: list[str] = []
+
+        with patch("src.services.windows_installer.sys.platform", "win32"):
+            with patch("src.services.windows_installer.winreg") as mock_winreg:
+                mock_winreg.HKEY_CURRENT_USER = 0
+
+                def delete_key(root, subkey):
+                    deleted.append(subkey)
+
+                mock_winreg.DeleteKey.side_effect = delete_key
+                unregister_dpw_file_association()
+
+        assert deleted
+        assert any(key.endswith(".dpw") for key in deleted)

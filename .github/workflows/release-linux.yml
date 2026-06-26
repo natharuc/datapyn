@@ -104,9 +104,11 @@ jobs:
           # Prepare directory structure for fpm
           mkdir -p pkg/opt/datapyn
           mkdir -p pkg/usr/share/applications
+          mkdir -p pkg/usr/share/mime/packages
 
           cp -r dist/DataPyn/* pkg/opt/datapyn/
           cp scripts/linux/datapyn.desktop pkg/usr/share/applications/
+          cp scripts/linux/datapyn-workspace.xml pkg/usr/share/mime/packages/
 
           fpm -s dir -t deb \
             -n datapyn \

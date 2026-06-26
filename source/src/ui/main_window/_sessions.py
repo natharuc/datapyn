@@ -711,10 +711,7 @@ class SessionsMixin:
 
         # Abrir arquivos de codigo/workspace normalmente
         for file_path in code_files:
-            if file_path.lower().endswith(".dpw"):
-                self._open_workspace(file_path)
-            else:
-                self._open_code_file(file_path)
+            self._open_code_file(file_path)
 
         # Abrir arquivos de dados com dialogo de importacao
         if data_files:

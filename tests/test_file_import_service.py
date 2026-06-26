@@ -240,3 +240,25 @@ class TestGenerateImportCode:
         code = FileImportService.generate_import_code("C:/data/DADOS FINANCEIROS (2024).xlsx")
         assert "dados_financeiros_2024" in code
         assert "fastexcel" in code
+
+
+class TestCollectStartupFilePaths:
+    def test_collects_supported_extensions(self, tmp_path):
+        from src.services.file_import_service import collect_startup_file_paths
+
+        dpw = tmp_path / "workspace.dpw"
+        dpw.write_text("{}", encoding="utf-8")
+        sql = tmp_path / "query.sql"
+        sql.write_text("select 1", encoding="utf-8")
+
+        paths = collect_startup_file_paths(
+            [str(dpw), str(sql), "--flag", "readme.txt", ""]
+        )
+        assert str(dpw.resolve()) in paths
+        assert str(sql.resolve()) in paths
+        assert len(paths) == 2
+
+    def test_ignores_flags_and_unsupported(self):
+        from src.services.file_import_service import collect_startup_file_paths
+
+        assert collect_startup_file_paths(["--workspace", "/tmp/ws", "-h"]) == []

@@ -31,10 +31,14 @@ from urllib.request import Request, urlopen
 logger = logging.getLogger(__name__)
 
 APP_NAME = "DataPyn"
+EXE_NAME = "DataPyn.exe"
 REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\DataPyn"
 REGISTRY_DELETE_ARG = rf"HKCU\{REGISTRY_KEY}"
+DPW_PROGID = "DataPyn.dpw"
+DPW_EXT_KEY = r"Software\Classes\.dpw"
+DPW_PROGID_KEY = rf"Software\Classes\{DPW_PROGID}"
+DPW_APPS_EXE_KEY = rf"Software\Classes\Applications\{EXE_NAME}"
 ICON_FILE_NAME = "datapyn-logo.ico"
-EXE_NAME = "DataPyn.exe"
 DEFAULT_INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "DataPyn"
 GITHUB_OWNER = "natharuc"
 GITHUB_REPO = "datapyn"
@@ -519,6 +523,7 @@ def install_from_zip(
 
         write_installed_version(install_dir, version)
         register_uninstall(install_dir, version)
+        register_dpw_file_association(install_dir)
         create_shortcuts(install_dir / EXE_NAME)
 
         if backup_dir.exists():
@@ -627,6 +632,71 @@ def _write_uninstall_cmd(install_dir: Path) -> Path:
     return script
 
 
+def register_dpw_file_association(install_dir: Path, exe_path: Optional[Path] = None) -> None:
+    """Register DataPyn as the handler for .dpw workspace files (per-user, HKCU)."""
+    if sys.platform != "win32" or winreg is None:
+        return
+
+    install_dir = Path(install_dir)
+    exe_path = Path(exe_path or install_dir / EXE_NAME)
+    icon_path = _ensure_brand_icon(install_dir, exe_path)
+    open_cmd = f'"{exe_path}" "%1"'
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, DPW_EXT_KEY) as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, DPW_PROGID)
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, DPW_PROGID_KEY) as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "DataPyn Workspace")
+        winreg.SetValueEx(key, "FriendlyTypeName", 0, winreg.REG_SZ, "DataPyn Workspace")
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{DPW_PROGID_KEY}\DefaultIcon") as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, _display_icon_value(icon_path))
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{DPW_PROGID_KEY}\shell\open\command") as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, open_cmd)
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, DPW_APPS_EXE_KEY) as key:
+        winreg.SetValueEx(key, "FriendlyAppName", 0, winreg.REG_SZ, APP_NAME)
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{DPW_APPS_EXE_KEY}\shell\open\command") as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, open_cmd)
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{DPW_APPS_EXE_KEY}\SupportedTypes") as key:
+        winreg.SetValueEx(key, ".dpw", 0, winreg.REG_SZ, "")
+
+
+def unregister_dpw_file_association() -> None:
+    """Remove .dpw file association created by register_dpw_file_association."""
+    if sys.platform != "win32":
+        return
+
+    keys_to_delete = (
+        rf"{DPW_PROGID_KEY}\shell\open\command",
+        rf"{DPW_PROGID_KEY}\shell\open",
+        rf"{DPW_PROGID_KEY}\shell",
+        rf"{DPW_PROGID_KEY}\DefaultIcon",
+        DPW_PROGID_KEY,
+        DPW_EXT_KEY,
+        rf"{DPW_APPS_EXE_KEY}\shell\open\command",
+        rf"{DPW_APPS_EXE_KEY}\shell\open",
+        rf"{DPW_APPS_EXE_KEY}\shell",
+        rf"{DPW_APPS_EXE_KEY}\SupportedTypes",
+        DPW_APPS_EXE_KEY,
+    )
+    for key_path in keys_to_delete:
+        if winreg is not None:
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
+                continue
+            except OSError:
+                pass
+        subprocess.run(
+            ["reg", "delete", rf"HKCU\{key_path}", "/f"],
+            check=False,
+            creationflags=_no_window_flags(),
+        )
+
+
 def register_uninstall(install_dir: Path, version: str) -> None:
     install_dir = Path(install_dir)
     exe_path = install_dir / EXE_NAME
@@ -688,6 +758,7 @@ def uninstall(install_dir: Optional[Path] = None) -> bool:
         return False
 
     _delete_uninstall_registry()
+    unregister_dpw_file_association()
 
     try:
         subprocess.run(
