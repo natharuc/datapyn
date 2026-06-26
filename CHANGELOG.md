@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.47.0 (2026-06-26)
+
+### Features
+
+- Instalador default dpw
+  ([`b6daa69`](https://github.com/natharuc/datapyn/commit/b6daa696e26ce4def247866a246ce9009afdd5da))
+
+- Instalador default dpw
+  ([`0acda62`](https://github.com/natharuc/datapyn/commit/0acda624b47a4373a8b4874611e2bf82dc93a0f8))
+
+### Heuristic
+
+- Merge pull request #133 from natharuc/feature/feature-dpw-file
+  ([`b6daa69`](https://github.com/natharuc/datapyn/commit/b6daa696e26ce4def247866a246ce9009afdd5da))
+
+
 ## v1.46.1 (2026-06-22)
 
 ### Bug Fixes
