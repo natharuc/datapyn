@@ -88,6 +88,8 @@
         const SQL_CONTEXT_DEBOUNCE_MS = 80;
         // VS Code Copilot: ~300ms pause after last keystroke before ghost text.
         const INLINE_SUGGEST_IDLE_MS = 300;
+        const INLINE_PREFIX_MAX = 2000;
+        const INLINE_SUFFIX_MAX = 500;
         let inlineGhostTriggerToken = 0;
         const COMPLETION_TIMEOUT_MS = 8000;
         let sqlSchemaIndex = { columnsByKey: {}, tableItems: [], currentDatabase: '' };
@@ -647,7 +649,19 @@
             setTimeout(fireInlineTrigger, 120);
         }
 
+        function trimInlineCompletionPayload(prefix, suffix) {
+            return {
+                prefix: prefix.length > INLINE_PREFIX_MAX
+                    ? prefix.slice(-INLINE_PREFIX_MAX)
+                    : prefix,
+                suffix: suffix.length > INLINE_SUFFIX_MAX
+                    ? suffix.slice(0, INLINE_SUFFIX_MAX)
+                    : suffix,
+            };
+        }
+
         function clearInlineCompletionCache() {
+            const hadPending = !!(pendingCompletion || cachedInlineCompletion);
             inlineGhostTriggerToken += 1;
             cachedInlineCompletion = null;
             cachedInlinePosition = null;
@@ -655,7 +669,7 @@
                 pendingCompletion.resolve('');
                 pendingCompletion = null;
             }
-            if (pyBridge && pyBridge.cancelInlineCompletion) {
+            if (hadPending && pyBridge && pyBridge.cancelInlineCompletion) {
                 pyBridge.cancelInlineCompletion();
             }
         }
@@ -682,8 +696,8 @@
                 }
                 const line = model.getLineContent(pos.lineNumber);
                 const before = line.substring(0, pos.column - 1);
-                const trimmed = before.trim();
-                if (trimmed.length < 3 && !/[.([=]$/.test(trimmed)) {
+                const linePrefix = before.trim();
+                if (linePrefix.length < 3 && !/[.([=]$/.test(linePrefix)) {
                     return;
                 }
 
@@ -699,12 +713,13 @@
                     endLineNumber: model.getLineCount(),
                     endColumn: model.getLineMaxColumn(model.getLineCount())
                 });
+                const payload = trimInlineCompletionPayload(textBeforeCursor, textAfterCursor);
 
                 // Request IA directly after idle. Relying only on inlineSuggest.trigger
                 // fails when the SQL suggest widget is still open (Monaco 0.45).
                 requestCompletion(
-                    textBeforeCursor,
-                    textAfterCursor,
+                    payload.prefix,
+                    payload.suffix,
                     pos.lineNumber,
                     pos.column
                 ).then(function(text) {
@@ -855,14 +870,15 @@
                             endLineNumber: model.getLineCount(),
                             endColumn: model.getLineMaxColumn(model.getLineCount())
                         });
+                        const trimmed = trimInlineCompletionPayload(textBeforeCursor, textAfterCursor);
 
                         if (!pyBridge) {
                             return { items: [] };
                         }
 
                         requestCompletion(
-                            textBeforeCursor,
-                            textAfterCursor,
+                            trimmed.prefix,
+                            trimmed.suffix,
                             position.lineNumber,
                             position.column
                         ).catch(function() {});

@@ -417,9 +417,15 @@ class TestInlineCompletionService:
 
         results = []
         service.completion_ready.connect(results.append)
+        service._active_req = {"id": 1, "prefix": "", "suffix": ""}
+        service._active_id = 1
+        service._busy = True
         service._on_lsp_result("file:///python.py", "df.head()")
         assert results == []
 
+        service._active_req = {"id": 2, "prefix": "", "suffix": ""}
+        service._active_id = 2
+        service._busy = True
         service._on_lsp_result("file:///sql.sql", "SELECT 1")
         assert results == ["SELECT 1"]
 
@@ -428,6 +434,8 @@ class TestInlineCompletionService:
         results = []
         service.completion_ready.connect(results.append)
         service._busy = True
+        service._active_req = {"id": 1, "prefix": "", "suffix": ""}
+        service._active_id = 1
         service._deliver_completion("df.head()")
         assert results == ["df.head()"]
         assert service._busy is False
@@ -441,6 +449,8 @@ class TestInlineCompletionService:
         results = []
         service.completion_ready.connect(results.append)
         service._busy = True
+        service._active_req = {"id": 1, "prefix": "", "suffix": ""}
+        service._active_id = 1
         service._on_worker_error(worker, "HTTP 401")
         assert results == [""]
         assert service._busy is False
@@ -464,6 +474,87 @@ class TestInlineCompletionService:
         service.set_python_namespace({"df": "DataFrame"})
         ctx = service._context_for("python")
         assert "df: DataFrame" in ctx
+
+    def test_orphan_worker_does_not_block(self, monkeypatch):
+        from src.editors.monaco import inline_completion_service as mod
+
+        service = self._service()
+        thread = Mock()
+        thread.isRunning.return_value = True
+        worker = Mock()
+        service._thread = thread
+        service._worker = worker
+
+        wait_calls = []
+        monkeypatch.setattr(thread, "wait", lambda *a, **k: wait_calls.append(True))
+        detach_calls = []
+        monkeypatch.setattr(
+            mod,
+            "detach_qthread",
+            lambda t, w: detach_calls.append((t, w)),
+        )
+
+        service._orphan_worker()
+
+        assert wait_calls == []
+        assert detach_calls == [(thread, worker)]
+        assert service._worker is None
+        assert service._thread is None
+
+    def test_cancel_request_invalidates_stale_delivery(self):
+        service = self._service()
+        results = []
+        service.completion_ready.connect(results.append)
+        service._active_req = {"id": 5, "prefix": "sel", "suffix": ""}
+        service._active_id = 5
+        service._busy = True
+        service.cancel_request()
+        service._deliver_completion("stale ghost text")
+        assert results == []
+
+    def test_start_worker_does_not_build_context_on_main_thread(self, monkeypatch):
+        import src.services.pynia.completion as completion_mod
+        from PyQt6.QtCore import QThread
+
+        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+        service = self._service()
+        service.set_python_namespace({"df": object()})
+
+        context_calls = []
+        monkeypatch.setattr(
+            service,
+            "_context_for",
+            lambda lang: context_calls.append(lang) or "ctx",
+        )
+        monkeypatch.setattr(service, "_orphan_worker", lambda: None)
+
+        worker = MagicMock()
+        monkeypatch.setattr(completion_mod, "PyniaInlineCompletionWorker", lambda: worker)
+
+        class FakeThread(QThread):
+            def start(self):
+                pass
+
+        monkeypatch.setattr(
+            "src.editors.monaco.inline_completion_service.QThread",
+            FakeThread,
+        )
+
+        req = {
+            "id": 1,
+            "prefix": "SELECT ",
+            "suffix": "",
+            "language": "python",
+            "line": 1,
+            "column": 8,
+        }
+        service._start_worker("openrouter", "test-model", req)
+
+        assert context_calls == []
+        worker.set_request.assert_called_once()
+        kwargs = worker.set_request.call_args.kwargs
+        assert "python_namespace_objects" in kwargs
+        assert kwargs.get("context", "") == ""
 
 
 

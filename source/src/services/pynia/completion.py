@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
@@ -73,6 +73,38 @@ def build_inline_prompt(
         f"Output only the text to insert (may be multiple lines):\n\n"
         f"```{language}\n{prefix_trunc}<CURSOR>{suffix_trunc}\n```"
     )
+
+
+def build_inline_context(
+    language: str,
+    *,
+    database_context: str = "",
+    python_namespace_objects: Optional[Dict[str, Any]] = None,
+    python_namespace: Optional[Dict[str, str]] = None,
+    blocks_code_context: str = "",
+) -> str:
+    """Build session context for inline completion (run off the UI thread)."""
+    if language == "sql":
+        return database_context or ""
+    if language == "python":
+        from src.editors.completion_context import describe_namespace_dataframes
+
+        parts: list[str] = []
+        ns_objects = python_namespace_objects or {}
+        ns_types = python_namespace or {}
+        df_schema = describe_namespace_dataframes(ns_objects)
+        if df_schema.strip():
+            parts.append(df_schema.strip())
+        elif ns_types:
+            rows = [
+                f"  {name}: {type_name}"
+                for name, type_name in sorted(ns_types.items())
+            ]
+            parts.append("Available variables:\n" + "\n".join(rows))
+        if blocks_code_context.strip():
+            parts.append("Other blocks in this tab:\n" + blocks_code_context.strip())
+        return "\n\n".join(parts)
+    return ""
 
 
 def clean_completion_text(text: str, prefix: str, suffix: str) -> str:
@@ -219,7 +251,11 @@ class PyniaInlineCompletionWorker(QObject):
         self._provider_id: ProviderId = "openai"
         self._model = COMPLETION_MODELS["openai"]
         self._language = "python"
-        self._context = ""
+        self._database_context = ""
+        self._python_namespace_objects: Dict[str, Any] = {}
+        self._python_namespace: Dict[str, str] = {}
+        self._blocks_code_context = ""
+        self._prebuilt_context = ""
         self._prefix = ""
         self._suffix = ""
         self._cancelled = False
@@ -230,14 +266,28 @@ class PyniaInlineCompletionWorker(QObject):
         language: str,
         prefix: str,
         suffix: str,
-        context: str = "",
+        *,
+        database_context: str = "",
+        python_namespace_objects: Optional[Dict[str, Any]] = None,
+        python_namespace: Optional[Dict[str, str]] = None,
+        blocks_code_context: str = "",
         model: Optional[str] = None,
+        context: str = "",
     ) -> None:
+        """Configure one completion request.
+
+        ``context`` is a backward-compatible pre-built context string; when
+        empty, context is assembled from the raw session fields in ``run()``.
+        """
         self._provider_id = provider_id
         self._language = language
         self._prefix = prefix
         self._suffix = suffix
-        self._context = context or ""
+        self._database_context = database_context or ""
+        self._python_namespace_objects = dict(python_namespace_objects or {})
+        self._python_namespace = dict(python_namespace or {})
+        self._blocks_code_context = blocks_code_context or ""
+        self._prebuilt_context = context or ""
         self._model = model or COMPLETION_MODELS.get(provider_id, COMPLETION_MODELS["openai"])
         self._cancelled = False
 
@@ -250,11 +300,20 @@ class PyniaInlineCompletionWorker(QObject):
             if self._cancelled:
                 self.inline_complete.emit("")
                 return
+            context = self._prebuilt_context
+            if not context:
+                context = build_inline_context(
+                    self._language,
+                    database_context=self._database_context,
+                    python_namespace_objects=self._python_namespace_objects,
+                    python_namespace=self._python_namespace,
+                    blocks_code_context=self._blocks_code_context,
+                )
             prompt = build_inline_prompt(
                 language=self._language,
                 prefix=self._prefix,
                 suffix=self._suffix,
-                context=self._context,
+                context=context,
             )
             if self._cancelled:
                 self.inline_complete.emit("")

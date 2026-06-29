@@ -68,7 +68,7 @@ class MonacoBridge(QObject):
     @pyqtSlot()
     def cancelInlineCompletion(self):
         """Called from JS when the user types — drop stale ghost-text requests."""
-        self.cancel_inline_completion.emit()
+        self._defer_emit(self.cancel_inline_completion)
     
     @pyqtSlot()
     def onFocusIn(self):
