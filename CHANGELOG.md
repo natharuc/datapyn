@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.48.0 (2026-06-29)
+
+### Features
+
+- Melhoria em digitação, removendo congelamentos
+  ([`0ce8028`](https://github.com/natharuc/datapyn/commit/0ce80285f27fb1d156d61801582333ece2297bdf))
+
+- Melhoria em digitação, removendo congelamentos
+  ([`08a507b`](https://github.com/natharuc/datapyn/commit/08a507b9f70110866aa531472c911d7323fca6a5))
+
+### Heuristic
+
+- Merge pull request #134 from natharuc/feature/feature-dpw-file
+  ([`0ce8028`](https://github.com/natharuc/datapyn/commit/0ce80285f27fb1d156d61801582333ece2297bdf))
+
+
 ## v1.47.0 (2026-06-26)
 
 ### Features
