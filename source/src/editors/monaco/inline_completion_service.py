@@ -14,13 +14,13 @@ HTTP connector path is simple, fast, and debuggable.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer
 
 from src.services.ai_autocomplete_circuit_breaker import get_ai_autocomplete_circuit_breaker
 from src.services.pynia.settings import get_pynia_settings, get_provider_secret
-from src.utils.qt_threading import kick_qthread_stop
+from src.utils.qt_threading import detach_qthread
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # excluded — its completion endpoint never worked reliably in this integration.
 COMPLETION_PROVIDERS = ("openai", "openrouter", "anthropic")
 
-_DEBOUNCE_MS = 350
+_DEBOUNCE_MS = 400
 _WATCHDOG_MS = 4500
 _MIN_PREFIX = 3
 
@@ -71,6 +71,7 @@ class InlineCompletionService(QObject):
         self._last_key = ""
         self._no_provider_logged = False
         self._circuit_open_logged = False
+        self._provider_cache: Optional[Tuple[Optional[str], Optional[str]]] = None
 
         self._thread: Optional[QThread] = None
         self._worker: Optional[QObject] = None
@@ -84,7 +85,7 @@ class InlineCompletionService(QObject):
         self._document_version = 0
 
     # ------------------------------------------------------------------ logging
-    def _log(self, message: str, level: str = "info") -> None:
+    def _log(self, message: str, level: str = "info", *, panel: bool = True) -> None:
         logger.log(
             {"error": logging.ERROR, "warning": logging.WARNING, "debug": logging.DEBUG}.get(
                 level, logging.INFO
@@ -92,7 +93,8 @@ class InlineCompletionService(QObject):
             "[Autocomplete] %s",
             message,
         )
-        self.log_message.emit(f"[Autocomplete] {message}", level)
+        if panel:
+            self.log_message.emit(f"[Autocomplete] {message}", level)
 
     # -------------------------------------------------------------- context API
     def set_database_context(self, context: str) -> None:
@@ -196,6 +198,10 @@ class InlineCompletionService(QObject):
         provider, _ = self._resolve_provider()
         return provider is not None
 
+    def invalidate_provider_cache(self) -> None:
+        """Clear cached provider resolution (e.g. after settings change)."""
+        self._provider_cache = None
+
     # ----------------------------------------------------------- provider pick
     def _resolve_provider(self):
         """Return (provider_id, model) for an API connector that has a token.
@@ -204,9 +210,12 @@ class InlineCompletionService(QObject):
         first configured one. Returns (None, None) when autocomplete is off or
         no API token is set.
         """
+        if self._provider_cache is not None:
+            return self._provider_cache
         settings = get_pynia_settings()
         if not settings.autocomplete_enabled:
-            return None, None
+            self._provider_cache = (None, None)
+            return self._provider_cache
         order = []
         active = settings.active_provider
         if active in COMPLETION_PROVIDERS:
@@ -214,8 +223,10 @@ class InlineCompletionService(QObject):
         order += [p for p in COMPLETION_PROVIDERS if p not in order]
         for pid in order:
             if get_provider_secret(pid):
-                return pid, settings.completion_model(pid)
-        return None, None
+                self._provider_cache = (pid, settings.completion_model(pid))
+                return self._provider_cache
+        self._provider_cache = (None, None)
+        return self._provider_cache
 
     # ---------------------------------------------------------------- requests
     def request_completion(self, prefix: str, suffix: str, language: str, line: int, column: int) -> None:
@@ -251,6 +262,13 @@ class InlineCompletionService(QObject):
         self._debounce.stop()
         self._pending = None
         self._req_id += 1
+        self._active_req = None
+        self._active_id = 0
+        if self._worker is not None:
+            try:
+                self._worker.cancel()
+            except Exception:
+                pass
         self._release()
 
     def cancel(self) -> None:
@@ -311,10 +329,12 @@ class InlineCompletionService(QObject):
 
             lsp_present = self._lsp_client is not None
             lsp_auth = lsp_present and bool(getattr(self._lsp_client, "is_authenticated", False))
+            provider_id, model = self._resolve_provider()
             self._log(
                 f"state: lsp_client={lsp_present}, lsp_auth={lsp_auth}, "
-                f"doc={'yes' if self._document_uri else 'NO'}, pynia={self.has_pynia}",
+                f"doc={'yes' if self._document_uri else 'NO'}, pynia={provider_id is not None}",
                 "debug",
+                panel=False,
             )
 
             if self.has_lsp and self._document_uri:
@@ -324,6 +344,7 @@ class InlineCompletionService(QObject):
                 self._log(
                     f"Requesting Copilot completion (L{req['line']}:C{req['column']})",
                     "debug",
+                    panel=False,
                 )
                 self._lsp_client.request_completion(
                     self._document_uri,
@@ -335,14 +356,13 @@ class InlineCompletionService(QObject):
 
             # LSP exists but paused (network/auth) — don't hammer HTTP on every keystroke.
             if self._lsp_client is not None and not self.has_lsp and not req.get("force"):
-                self._log("Copilot paused; skipping auto HTTP inline (use Ctrl+.)", "debug")
+                self._log("Copilot paused; skipping auto HTTP inline (use Ctrl+.)", "debug", panel=False)
                 try:
                     self.completion_ready.emit("")
                 except RuntimeError:
                     pass
                 return
 
-            provider_id, model = self._resolve_provider()
             if not provider_id:
                 if not self._no_provider_logged:
                     self._log(
@@ -361,6 +381,7 @@ class InlineCompletionService(QObject):
             self._log(
                 f"Requesting completion ({req['language']}, {provider_id}/{model})",
                 "debug",
+                panel=False,
             )
             self._start_worker(provider_id, model, req)
         except Exception as exc:
@@ -377,16 +398,17 @@ class InlineCompletionService(QObject):
 
             self._orphan_worker()
 
-            context = self._context_for(req["language"])
-
             worker = PyniaInlineCompletionWorker()
             worker.set_request(
                 provider_id,
                 req["language"],
                 req["prefix"],
                 req["suffix"],
-                context=context,
                 model=model,
+                database_context=self._database_context,
+                python_namespace_objects=self._python_namespace_objects,
+                python_namespace=self._python_namespace,
+                blocks_code_context=self._blocks_code_context,
             )
             thread = QThread(self)
             thread.setObjectName("PyniaInlineCompletion")
@@ -413,17 +435,12 @@ class InlineCompletionService(QObject):
                 pass
 
     def _orphan_worker(self) -> None:
-        """Detach in-flight HTTP worker so teardown never destroys a running QThread."""
+        """Detach in-flight HTTP worker without blocking the UI thread."""
         worker, thread = self._worker, self._thread
         self._worker = None
         self._thread = None
         if worker is None and thread is None:
             return
-        try:
-            if worker is not None:
-                worker.cancel()
-        except Exception:
-            pass
         try:
             if worker is not None:
                 worker.setParent(None)
@@ -436,7 +453,7 @@ class InlineCompletionService(QObject):
             thread.finished.connect(
                 lambda t=thread, w=worker: self._drop_orphaned(t, w)
             )
-        kick_qthread_stop(thread, worker)
+        detach_qthread(thread, worker)
 
     def _drop_orphaned(self, thread: QThread, worker: QObject) -> None:
         try:
@@ -456,26 +473,16 @@ class InlineCompletionService(QObject):
             pass
 
     def _context_for(self, language: str) -> str:
-        """Session context already loaded in memory (schema, namespace, blocks)."""
-        if language == "sql":
-            return self._database_context
-        if language == "python":
-            from src.editors.completion_context import describe_namespace_dataframes
+        """Session context for tests and backward compatibility."""
+        from src.services.pynia.completion import build_inline_context
 
-            parts: list[str] = []
-            df_schema = describe_namespace_dataframes(self._python_namespace_objects)
-            if df_schema.strip():
-                parts.append(df_schema.strip())
-            elif self._python_namespace:
-                rows = [
-                    f"  {name}: {type_name}"
-                    for name, type_name in sorted(self._python_namespace.items())
-                ]
-                parts.append("Available variables:\n" + "\n".join(rows))
-            if self._blocks_code_context.strip():
-                parts.append("Other blocks in this tab:\n" + self._blocks_code_context.strip())
-            return "\n\n".join(parts)
-        return ""
+        return build_inline_context(
+            language,
+            database_context=self._database_context,
+            python_namespace_objects=self._python_namespace_objects,
+            python_namespace=self._python_namespace,
+            blocks_code_context=self._blocks_code_context,
+        )
 
     @pyqtSlot(str, str)
     def _on_lsp_result(self, document_uri: str, text: str) -> None:
@@ -499,14 +506,16 @@ class InlineCompletionService(QObject):
         if worker is not self._worker:
             return
         if message:
-            self._log(f"Completion failed: {message}", "debug")
+            self._log(f"Completion failed: {message}", "debug", panel=False)
         get_ai_autocomplete_circuit_breaker().record_failure(message or "HTTP inline completion failed")
         self._deliver_completion("")
 
     def _deliver_completion(self, text: str) -> None:
         """Forward ghost-text to Monaco; never raises."""
         try:
-            req = self._active_req or {}
+            req = self._active_req
+            if req is None or req.get("id", 0) != self._active_id:
+                return
             self._active_req = None
             self._release()
             cleaned = text or ""
@@ -523,7 +532,7 @@ class InlineCompletionService(QObject):
                     pass
             if cleaned:
                 preview = cleaned[:60].replace("\n", " ")
-                self._log(f"Completion: {preview}…", "debug")
+                self._log(f"Completion: {preview}…", "debug", panel=False)
             self.completion_ready.emit(cleaned)
             self._maybe_serve_pending()
         except Exception as exc:
@@ -535,10 +544,12 @@ class InlineCompletionService(QObject):
         if not self._busy:
             return
         try:
-            self._log("Watchdog: releasing slow inline completion", "debug")
+            self._log("Watchdog: releasing slow inline completion", "debug", panel=False)
             client = self._lsp_client
             if client is not None and hasattr(client, "mark_degraded"):
                 client.mark_degraded("inline completion watchdog")
+            self._active_req = None
+            self._active_id = 0
             self._orphan_worker()
             self._release()
             self.completion_ready.emit("")
@@ -554,4 +565,3 @@ class InlineCompletionService(QObject):
     def _maybe_serve_pending(self) -> None:
         if self._pending and not self._debounce.isActive():
             self._debounce.start()
-

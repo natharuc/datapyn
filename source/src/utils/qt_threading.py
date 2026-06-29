@@ -61,6 +61,25 @@ def stop_qthread(
         return True
 
 
+def detach_qthread(
+    thread: Optional[QThread],
+    worker=None,
+) -> None:
+    """Cooperatively stop a QThread without blocking the caller (UI-safe)."""
+    if worker is not None and hasattr(worker, "cancel"):
+        try:
+            worker.cancel()
+        except RuntimeError:
+            pass
+    if not qthread_is_alive(thread):
+        return
+    try:
+        if qthread_is_running(thread):
+            thread.quit()
+    except RuntimeError:
+        pass
+
+
 def kick_qthread_stop(
     thread: Optional[QThread],
     worker=None,
