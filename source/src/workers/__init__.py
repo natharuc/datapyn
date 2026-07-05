@@ -5,7 +5,7 @@ Completely separates processing logic from UI.
 Each worker emits signals with results, never manipulates UI directly.
 """
 
-from PyQt6.QtCore import QObject, pyqtSignal, QThread
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, pyqtSlot
 import sys
 import traceback
 from io import StringIO
@@ -486,4 +486,95 @@ class FileExportWorker(BaseWorker):
             self.error.emit(str(e))
         finally:
             self.finished.emit()
+
+
+class QueryDownloadWorker(BaseWorker):
+    """Stream SQL query results directly to CSV or Parquet files."""
+
+    progress = pyqtSignal(int, int, int)  # file_index, rows_written, bytes_written
+    file_started = pyqtSignal(int, str)  # file_index, filename
+    total_ready = pyqtSignal(int, int)  # file_index, total_rows
+    download_finished = pyqtSignal(object, str)  # StreamExportResult, error_msg
+    status = pyqtSignal(str)
+
+    def __init__(self, connector, query: str, file_path: str, export_format: str, sql_parameters=None):
+        super().__init__()
+        self.connector = connector
+        self.query = query
+        self.file_path = file_path
+        self.export_format = export_format
+        self.sql_parameters = sql_parameters or []
+        self._cancel_requested = False
+        self._last_progress_emit = 0.0
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+        connector = self.connector
+        if connector is not None and hasattr(connector, "request_cancel"):
+            connector.request_cancel()
+
+    def _throttled_progress(self, file_index: int, rows: int, bytes_written: int) -> None:
+        import time
+
+        now = time.monotonic()
+        if now - self._last_progress_emit >= 0.2:
+            self._last_progress_emit = now
+            self.progress.emit(file_index, rows, bytes_written)
+
+    def _is_cancelled(self) -> bool:
+        if self._cancel_requested:
+            return True
+        connector = self.connector
+        cancelled = getattr(connector, "_cancelled", False)
+        return cancelled is True
+
+    def run(self):
+        from pathlib import Path
+
+        from src.database.database_connector import QueryBusyError
+        from src.database.query_stream_exporter import StreamExportResult
+
+        self.started.emit()
+        result: StreamExportResult | None = None
+        error_msg = ""
+
+        def _on_file_started(file_index: int, path) -> None:
+            self.file_started.emit(file_index, Path(path).name)
+
+        def _on_total(file_index: int, total: int) -> None:
+            self.total_ready.emit(file_index, total)
+
+        try:
+            result = self.connector.stream_query_to_files(
+                self.query,
+                base_path=Path(self.file_path),
+                export_format=self.export_format,
+                parameters=self.sql_parameters,
+                on_progress=self._throttled_progress,
+                on_file_started=_on_file_started,
+                on_total=_on_total,
+                is_cancelled=self._is_cancelled,
+            )
+            if result.cancelled or self._is_cancelled():
+                error_msg = "__CANCELLED__"
+            elif result.errors and not result.files:
+                error_msg = "\n".join(result.errors)
+        except QueryBusyError as e:
+            error_msg = str(e)
+        except Exception as e:
+            cancelled = self._is_cancelled()
+            if cancelled:
+                error_msg = "__CANCELLED__"
+            else:
+                db_type = getattr(self.connector, "db_type", "")
+                error_msg = _format_sql_error_for_user(e, db_type, self.query)
+        finally:
+            self.download_finished.emit(result, error_msg)
+            self.finished.emit()
+
+    @pyqtSlot()
+    def interrupt_query(self):
+        connector = self.connector
+        if connector is not None and hasattr(connector, "interrupt_query"):
+            connector.interrupt_query()
 

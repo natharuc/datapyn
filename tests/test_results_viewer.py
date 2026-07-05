@@ -860,6 +860,38 @@ class TestResultsViewerMultiTab:
         assert viewer.current_df is None
 
 
+class TestResultsViewerEmptyGrid:
+    """Empty result sets must render column headers with zero rows."""
+
+    @pytest.fixture
+    def viewer(self, qtbot):
+        from src.ui.components.results_viewer import ResultsViewer
+        v = ResultsViewer()
+        qtbot.addWidget(v)
+        return v
+
+    def test_empty_with_columns_renders_headers(self, viewer):
+        from PyQt6.QtCore import Qt
+
+        df = pd.DataFrame(columns=["id", "name"])
+        viewer.display_dataframe(df, "result")
+
+        model = viewer.model
+        assert model.columnCount() == 2
+        assert model.rowCount() == 0
+        assert model.headerData(0, Qt.Orientation.Horizontal) == "id"
+        assert model.headerData(1, Qt.Orientation.Horizontal) == "name"
+
+    def test_clear_resets_to_empty(self, viewer):
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        viewer.display_dataframe(df, "result")
+        assert viewer.model.rowCount() == 3
+
+        viewer.clear()
+        assert viewer.current_df is None
+        assert viewer.model.rowCount() == 0
+
+
 class TestResultsViewerFiltering:
     """Tests for the ResultsViewer grid filter."""
 

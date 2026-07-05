@@ -21,6 +21,15 @@ from src.utils.sql_parameter_service import (
     prepare_sqlserver_batch,
 )
 from src.language import S
+from src.database.query_stream_exporter import (
+    ExportFormat,
+    StreamExportResult,
+    iter_rows_chunked,
+    make_result_path,
+    stream_arrow_to_file,
+    stream_result_set_to_file,
+    STREAM_EXPORT_CHUNK_ROWS,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -806,6 +815,496 @@ class DatabaseConnector:
         finally:
             self._query_lock.release()
 
+    def _success_message_df(self, key: str, **fmt) -> pd.DataFrame:
+        """Build the single-row {'Result': [msg]} frame for non-result commands.
+
+        Centralizes the success/no-commands messaging so every backend emits
+        identical, localized text. ``key`` is an attribute on ``S.connector``.
+        """
+        template = getattr(getattr(S, "connector", None), key, None)
+        if template is None:
+            template = self._FALLBACK_MESSAGES.get(key, "Command executed successfully.")
+        try:
+            msg = template.format(**fmt) if fmt else template
+        except Exception:
+            msg = template
+        return pd.DataFrame({"Result": [msg]})
+
+    _FALLBACK_MESSAGES = {
+        "success_commands": "Command(s) executed successfully.",
+        "success_commands_plural": "Commands executed successfully.",
+        "success_command_rows": "Command executed successfully. {rows} row(s) affected.",
+        "success_command": "Command executed successfully.",
+        "no_commands": "No SQL commands to execute.",
+    }
+
+    def stream_query_to_files(
+        self,
+        query: str,
+        *,
+        base_path: Path,
+        export_format: ExportFormat,
+        parameters: Optional[List[Dict[str, Any]]] = None,
+        on_progress: Optional[Any] = None,
+        on_file_started: Optional[Any] = None,
+        is_cancelled: Optional[Any] = None,
+        on_total: Optional[Any] = None,
+    ) -> StreamExportResult:
+        """Execute query and stream result sets to files without building DataFrames."""
+        if not self.engine:
+            raise ConnectionError("No active database connection")
+
+        if not self._query_lock.acquire(blocking=False):
+            raise QueryBusyError("A query is still running on this connection")
+
+        try:
+            return self._stream_query_unlocked(
+                query,
+                base_path=Path(base_path),
+                export_format=export_format,
+                parameters=parameters,
+                on_progress=on_progress,
+                on_file_started=on_file_started,
+                is_cancelled=is_cancelled,
+                on_total=on_total,
+            )
+        finally:
+            self._query_lock.release()
+
+    def _estimate_databricks_row_count(
+        self,
+        query: str,
+        parameters: Optional[List[Dict[str, Any]]],
+        is_cancelled: Optional[Any] = None,
+    ) -> Optional[int]:
+        """Best-effort COUNT(*) over the user query. None if not countable."""
+        if is_cancelled and is_cancelled():
+            return None
+        stmts = self._split_sql_statements(query)
+        if len(stmts) != 1:
+            return None
+        stmt = stmts[0].strip().rstrip(";").strip()
+        if not stmt:
+            return None
+        head = self._statement_head(stmt).upper()
+        if not (head.startswith("SELECT") or head.startswith("WITH")):
+            return None
+        count_sql = f"SELECT COUNT(*) AS __dp_count FROM ({stmt}) AS __dp_count_sub"
+        raw = None
+        cur = None
+        try:
+            raw = self.engine.raw_connection()
+            cur = raw.cursor()
+            prepared = prepare_databricks_sql(count_sql, parameters) if parameters else None
+            if prepared:
+                cur.execute(prepared.query, prepared.params)
+            else:
+                cur.execute(count_sql)
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                return int(row[0])
+            return None
+        except Exception as e:
+            logger.info(f"Databricks COUNT estimation skipped: {_safe_exception_text(e)}")
+            return None
+        finally:
+            if cur:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+            if raw:
+                try:
+                    raw.close()
+                except Exception:
+                    pass
+
+    def _stream_query_unlocked(
+        self,
+        query: str,
+        *,
+        base_path: Path,
+        export_format: ExportFormat,
+        parameters: Optional[List[Dict[str, Any]]] = None,
+        on_progress: Optional[Any] = None,
+        on_file_started: Optional[Any] = None,
+        is_cancelled: Optional[Any] = None,
+        on_total: Optional[Any] = None,
+    ) -> StreamExportResult:
+        import re
+
+        use_match = self._match_use_only_command(query)
+        if use_match:
+            new_db = use_match.group(1)
+            if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
+                self.change_database(new_db)
+                return StreamExportResult(errors=[f"Database changed to: {new_db}"])
+            self.connection_params["database"] = new_db
+
+        if self.db_type == "sqlserver":
+            batches = self._split_sql_batches(query)
+            if not batches:
+                return StreamExportResult(errors=["No SQL commands to execute."])
+            return self._stream_mssql_batches(
+                batches,
+                base_path=base_path,
+                export_format=export_format,
+                parameters=parameters,
+                on_progress=on_progress,
+                on_file_started=on_file_started,
+                is_cancelled=is_cancelled,
+            )
+
+        if self.db_type == "databricks":
+            return self._stream_databricks_query(
+                query,
+                base_path=base_path,
+                export_format=export_format,
+                parameters=parameters,
+                on_progress=on_progress,
+                on_file_started=on_file_started,
+                is_cancelled=is_cancelled,
+                on_total=on_total,
+            )
+
+        return self._stream_generic_query(
+            query,
+            base_path=base_path,
+            export_format=export_format,
+            parameters=parameters,
+            on_progress=on_progress,
+            is_cancelled=is_cancelled,
+        )
+
+    def _stream_write_result_set(
+        self,
+        columns: list,
+        row_source,
+        *,
+        base_path: Path,
+        export_format: ExportFormat,
+        file_index: int,
+        result: StreamExportResult,
+        on_progress: Optional[Any] = None,
+        on_file_started: Optional[Any] = None,
+        is_cancelled: Optional[Any] = None,
+    ) -> bool:
+        """Write one result set; return False if cancelled."""
+        path = make_result_path(base_path, file_index, export_format)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if on_file_started:
+            try:
+                on_file_started(file_index, path)
+            except Exception:
+                pass
+        total_for_file = 0
+
+        def on_chunk(n: int) -> None:
+            nonlocal total_for_file
+            total_for_file += n
+            if on_progress:
+                bytes_written = 0
+                try:
+                    bytes_written = path.stat().st_size if path.exists() else 0
+                except OSError:
+                    bytes_written = 0
+                on_progress(file_index, total_for_file, bytes_written)
+
+        if hasattr(row_source, "fetchmany_arrow"):
+            rows_written = stream_arrow_to_file(
+                row_source.fetchmany_arrow,
+                path=path,
+                export_format=export_format,
+                columns=list(columns) if columns else None,
+                is_cancelled=is_cancelled,
+                on_chunk=on_chunk,
+            )
+        else:
+            rows_written = stream_result_set_to_file(
+                columns,
+                iter_rows_chunked(row_source, STREAM_EXPORT_CHUNK_ROWS)
+                if hasattr(row_source, "fetchmany")
+                else row_source,
+                path=path,
+                export_format=export_format,
+                is_cancelled=is_cancelled,
+                on_chunk=on_chunk,
+            )
+        if rows_written < 0:
+            result.cancelled = True
+            return False
+        result.files.append(path)
+        result.row_counts.append(rows_written)
+        result.columns_per_file.append(list(columns))
+        return True
+
+    def _stream_mssql_batches(
+        self,
+        batches: list,
+        *,
+        base_path: Path,
+        export_format: ExportFormat,
+        parameters: Optional[List[Dict[str, Any]]] = None,
+        on_progress: Optional[Any] = None,
+        on_file_started: Optional[Any] = None,
+        is_cancelled: Optional[Any] = None,
+    ) -> StreamExportResult:
+        import pyodbc
+
+        self._cancelled = False
+        cursor = None
+        raw_conn = None
+        result = StreamExportResult()
+        file_index = 0
+        errors: list[str] = []
+
+        try:
+            if not self._sqlserver_supports_use():
+                normalized_batches = []
+                for batch in batches:
+                    use_match = self._match_use_only_command(batch)
+                    if use_match:
+                        self.change_database(use_match.group(1))
+                        continue
+                    normalized_batches.append(batch)
+                batches = normalized_batches
+
+            if not batches:
+                return StreamExportResult(errors=["No SQL commands to execute."])
+
+            raw_conn = self.engine.raw_connection()
+            self._active_raw_conn = raw_conn
+
+            current_db = self.connection_params.get("database", "")
+            if current_db and self._sqlserver_supports_use():
+                try:
+                    init_cursor = raw_conn.cursor()
+                    init_cursor.execute(f"USE [{current_db}]")
+                    while init_cursor.nextset():
+                        pass
+                    init_cursor.close()
+                except Exception as e:
+                    logger.warning(f"Failed to set database [{current_db}]: {e}")
+
+            for batch_idx, batch in enumerate(batches, start=1):
+                if self._cancelled or (is_cancelled and is_cancelled()):
+                    result.cancelled = True
+                    break
+
+                cursor = raw_conn.cursor()
+                self._active_cursor = cursor
+                batch_error = None
+                try:
+                    prepared = prepare_sqlserver_batch(batch, parameters) if parameters else None
+                    if prepared:
+                        cursor.execute(prepared.query, *prepared.params)
+                    else:
+                        cursor.execute(batch)
+                except pyodbc.Error as e:
+                    batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                    errors.append(batch_error)
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                    cursor = None
+                    continue
+
+                while True:
+                    if self._cancelled or (is_cancelled and is_cancelled()):
+                        result.cancelled = True
+                        break
+                    try:
+                        if cursor.description:
+                            columns = [col[0] for col in cursor.description]
+                            file_index += 1
+                            if not self._stream_write_result_set(
+                                columns,
+                                cursor,
+                                base_path=base_path,
+                                export_format=export_format,
+                                file_index=file_index,
+                                result=result,
+                                on_progress=on_progress,
+                                is_cancelled=is_cancelled,
+                            ):
+                                break
+                    except Exception as e:
+                        batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        break
+
+                    try:
+                        has_next = cursor.nextset()
+                        if batch_error or not has_next:
+                            break
+                    except Exception as e:
+                        batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        break
+
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                cursor = None
+                if batch_error:
+                    errors.append(batch_error)
+
+            raw_conn.commit()
+            result.errors = errors
+            return result
+
+        except Exception as e:
+            logger.error(f"Error streaming SQL Server batches: {str(e)}")
+            raise
+        finally:
+            self._active_raw_conn = None
+            self._active_cursor = None
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if raw_conn:
+                try:
+                    raw_conn.close()
+                except Exception:
+                    pass
+
+    def _stream_databricks_query(
+        self,
+        query: str,
+        *,
+        base_path: Path,
+        export_format: ExportFormat,
+        parameters: Optional[List[Dict[str, Any]]] = None,
+        on_progress: Optional[Any] = None,
+        on_file_started: Optional[Any] = None,
+        is_cancelled: Optional[Any] = None,
+        on_total: Optional[Any] = None,
+    ) -> StreamExportResult:
+        self._cancelled = False
+        cursor = None
+        raw_conn = None
+        result = StreamExportResult()
+
+        try:
+            if on_total is not None:
+                total = self._estimate_databricks_row_count(query, parameters, is_cancelled)
+                if is_cancelled and is_cancelled():
+                    result.cancelled = True
+                    return result
+                if total is not None:
+                    try:
+                        on_total(1, total)
+                    except Exception:
+                        pass
+
+            raw_conn = self.engine.raw_connection()
+            self._active_raw_conn = raw_conn
+            cursor = raw_conn.cursor()
+            self._active_cursor = cursor
+
+            if parameters:
+                prepared = prepare_databricks_sql(query, parameters)
+                cursor.execute(prepared.query, prepared.params)
+            else:
+                cursor.execute(query)
+
+            if self._cancelled or (is_cancelled and is_cancelled()):
+                result.cancelled = True
+                return result
+
+            if cursor.description:
+                columns = [desc[0] for desc in cursor.description]
+                self._stream_write_result_set(
+                    columns,
+                    cursor,
+                    base_path=base_path,
+                    export_format=export_format,
+                    file_index=1,
+                    result=result,
+                    on_progress=on_progress,
+                    on_file_started=on_file_started,
+                    is_cancelled=is_cancelled,
+                )
+            return result
+
+        except Exception as e:
+            if self._cancelled:
+                result.cancelled = True
+                return result
+            raise
+        finally:
+            self._active_raw_conn = None
+            self._active_cursor = None
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if raw_conn:
+                try:
+                    raw_conn.close()
+                except Exception:
+                    pass
+
+    def _stream_generic_query(
+        self,
+        query: str,
+        *,
+        base_path: Path,
+        export_format: ExportFormat,
+        parameters: Optional[List[Dict[str, Any]]] = None,
+        on_progress: Optional[Any] = None,
+        on_file_started: Optional[Any] = None,
+        is_cancelled: Optional[Any] = None,
+    ) -> StreamExportResult:
+        commands = self._split_sql_statements(query)
+        result = StreamExportResult()
+        file_index = 0
+
+        if not commands:
+            result.errors.append("No SQL commands to execute.")
+            return result
+
+        with self.engine.connect() as conn:
+            for cmd in commands:
+                if self._cancelled or (is_cancelled and is_cancelled()):
+                    result.cancelled = True
+                    break
+
+                prepared = prepare_generic_sql(cmd, parameters) if parameters else None
+                executable_sql = prepared.query if prepared else cmd
+                executable_params = prepared.params if prepared else {}
+
+                if self._requires_postgresql_autocommit(cmd):
+                    conn.commit()
+                    self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
+                    continue
+
+                if self._is_select_query(cmd):
+                    db_result = conn.execute(text(executable_sql), executable_params)
+                    columns = list(db_result.keys())
+                    file_index += 1
+                    if not self._stream_write_result_set(
+                        columns,
+                        db_result,
+                        base_path=base_path,
+                        export_format=export_format,
+                        file_index=file_index,
+                        result=result,
+                        on_progress=on_progress,
+                        on_file_started=on_file_started,
+                        is_cancelled=is_cancelled,
+                    ):
+                        break
+                else:
+                    conn.execute(text(executable_sql), executable_params)
+
+            conn.commit()
+
+        return result
+
     def _execute_query_unlocked(
         self, query: str, parameters: Optional[List[Dict[str, Any]]] = None
     ) -> Union[pd.DataFrame, List[pd.DataFrame]]:
@@ -825,7 +1324,7 @@ class DatabaseConnector:
         if self.db_type == "sqlserver":
             batches = self._split_sql_batches(query)
             if not batches:
-                return pd.DataFrame({"Result": ["No SQL commands to execute."]})
+                return self._success_message_df("no_commands")
             return self._execute_mssql_batches(batches, parameters=parameters)
 
         # For Databricks, use specific method with cursor access for cancellation
@@ -968,9 +1467,8 @@ class DatabaseConnector:
                         if cursor.description:
                             columns = [col[0] for col in cursor.description]
                             rows = fetch_rows_chunked(cursor)
-                            if rows:
-                                df = records_to_dataframe(rows, columns)
-                                dataframes.append(df)
+                            df = records_to_dataframe(rows, columns)
+                            dataframes.append(df)
                     except pyodbc.Error as e:
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                         break
@@ -1035,7 +1533,7 @@ class DatabaseConnector:
             if dataframes:
                 return dataframes[0]
 
-            return pd.DataFrame({"Result": ["Command(s) executed successfully."]})
+            return self._success_message_df("success_commands")
 
         except Exception as e:
             logger.error(f"Error executing SQL Server batches: {str(e)}")
@@ -1094,10 +1592,8 @@ class DatabaseConnector:
                     # No results (DDL/DML command)
                     rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else -1
                     if rows_affected >= 0:
-                        msg = f"Command executed successfully. {rows_affected} row(s) affected."
-                    else:
-                        msg = "Command executed successfully."
-                    return pd.DataFrame({"Result": [msg]})
+                        return self._success_message_df("success_command_rows", rows=rows_affected)
+                    return self._success_message_df("success_command")
             except Exception as fetch_err:
                 # Query was cancelled or had no results
                 if self._cancelled:
@@ -1190,11 +1686,8 @@ class DatabaseConnector:
             rows_affected = getattr(result, "rowcount", -1)
 
         if isinstance(rows_affected, int) and rows_affected >= 0:
-            msg = f"Command executed successfully. {rows_affected} row(s) affected."
-        else:
-            msg = "Command executed successfully."
-        logger.info(msg)
-        return pd.DataFrame({"Result": [msg]})
+            return self._success_message_df("success_command_rows", rows=rows_affected)
+        return self._success_message_df("success_command")
 
     @staticmethod
     def _split_sql_statements(query: str) -> list:
@@ -1383,9 +1876,8 @@ class DatabaseConnector:
                 return dataframes[0]
 
             # No SELECT executed - return success message
-            msg = "Commands executed successfully."
-            logger.info(msg)
-            return pd.DataFrame({"Result": [msg]})
+            logger.info("Commands executed successfully.")
+            return self._success_message_df("success_commands_plural")
         elif len(commands) == 1:
             # Single command - use the cleaned statement (DELIMITER stripped)
             cmd = commands[0]
@@ -1409,15 +1901,11 @@ class DatabaseConnector:
                     rows_affected = result.rowcount
 
                     if rows_affected >= 0:
-                        msg = f"Command executed successfully. {rows_affected} row(s) affected."
-                    else:
-                        msg = "Command executed successfully."
-
-                    logger.info(msg)
-                    return pd.DataFrame({"Result": [msg]})
+                        return self._success_message_df("success_command_rows", rows=rows_affected)
+                    return self._success_message_df("success_command")
         else:
             # No commands (empty input or only DELIMITER directives)
-            return pd.DataFrame({"Result": ["No SQL commands to execute."]})
+            return self._success_message_df("no_commands")
 
     def execute_statement(self, statement: str) -> int:
         """
