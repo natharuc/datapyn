@@ -125,6 +125,9 @@ class BlockEditor(QWidget):
 
     # Execution signals
     execute_sql = pyqtSignal(str, object, object, object, object)  # query, block_name, connection_name, database_name, sql_parameters
+    download_sql = pyqtSignal(str, object, object, object, object, str, str)  # + export_format, file_path
+    download_cancel_requested = pyqtSignal(object)  # CodeBlock
+    reveal_file_requested = pyqtSignal(str)  # absolute file path
     execute_python = pyqtSignal(str)  # code
 
     # Signal to run multiple blocks in sequence
@@ -468,6 +471,64 @@ class BlockEditor(QWidget):
 
         # Note: caller needs to call mark_execution_finished afterwards
 
+    def _on_block_download_requested(self, block: CodeBlock, export_format: str) -> None:
+        """Run SQL and stream results to a local file (no in-memory grid)."""
+        if self._execution_blocked():
+            return
+        code = block.get_code().strip()
+        if not code or block.get_language() != "sql":
+            return
+
+        from pathlib import Path
+
+        from PyQt6.QtCore import QSettings
+        from PyQt6.QtWidgets import QFileDialog
+
+        settings = QSettings("DataPyn", "DataPyn")
+        last_dir = str(settings.value("download/last_dir", "") or "")
+        block_name = block.get_block_name() or "query"
+        if export_format == "parquet":
+            file_filter = getattr(S.block, "download_filter_parquet", "Parquet (*.parquet)")
+            default_ext = ".parquet"
+        else:
+            file_filter = getattr(S.block, "download_filter_csv", "CSV (*.csv)")
+            default_ext = ".csv"
+        suggested = f"{block_name}{default_ext}"
+        start_path = str(Path(last_dir) / suggested) if last_dir else suggested
+        title = getattr(S.block, "download_save_title", "Save query results")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self.window(),
+            title,
+            start_path,
+            file_filter,
+        )
+        if not file_path:
+            return
+        path = Path(file_path)
+        if path.suffix.lower() != default_ext:
+            path = path.with_suffix(default_ext)
+        settings.setValue("download/last_dir", str(path.parent))
+
+        self._current_executing_block = block
+        block.set_running(True)
+
+        block_name = block.get_block_name()
+        connection_name = block.get_connection_name()
+        database_name = block.get_database_name()
+        get_sql_parameters = getattr(block, "get_sql_parameters_for_query", None)
+        sql_parameters = get_sql_parameters(code) if callable(get_sql_parameters) else []
+        if not isinstance(sql_parameters, list):
+            sql_parameters = []
+        self.download_sql.emit(
+            code,
+            block_name,
+            connection_name,
+            database_name,
+            sql_parameters,
+            export_format,
+            str(path),
+        )
+
     def execute_all_blocks(self):
         """Run all blocks in sequence"""
         if self._execution_blocked():
@@ -795,6 +856,9 @@ class BlockEditor(QWidget):
         # Connect signals
         # execute_requested runs only that block
         block.execute_requested.connect(lambda b, sel: self._on_block_execute_requested(b, sel))
+        block.download_requested.connect(self._on_block_download_requested)
+        block.cancel_download_requested.connect(self.download_cancel_requested.emit)
+        block.reveal_file_requested.connect(self.reveal_file_requested.emit)
         block.remove_requested.connect(self.remove_block)
         block.cancel_requested.connect(lambda b: self.cancel_all_executions())
         block.focus_changed.connect(self._on_block_focus_changed)

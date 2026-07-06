@@ -130,11 +130,8 @@ class SessionSqlWorker(QObject):
         except QueryBusyError as e:
             self.finished.emit(None, str(e))
         except Exception as e:
-            raw_error_msg = _safe_exception_text(e)
-            # Detect if it was cancellation
             cancelled = getattr(self.connector, "_cancelled", False)
-            lower_msg = raw_error_msg.lower()
-            if cancelled or "cancel" in lower_msg or "abort" in lower_msg:
+            if cancelled:
                 self.finished.emit(None, "__CANCELLED__")
             else:
                 db_type = getattr(self.connector, "db_type", "")
@@ -261,6 +258,7 @@ class SessionWidget(QWidget):
         # Active workers
         self._sql_thread: Optional[QThread] = None
         self._sql_worker: Optional[SessionSqlWorker] = None
+        self._sql_is_download: bool = False
         self._python_thread: Optional[QThread] = None
         self._connection_thread: Optional[QThread] = None
         self._connection_worker: Optional[SessionConnectionWorker] = None
@@ -897,6 +895,9 @@ class SessionWidget(QWidget):
         """Connect editor signals"""
         # BlockEditor emits signals with correct language
         self.editor.execute_sql.connect(self._on_execute_sql)
+        self.editor.download_sql.connect(self._on_download_sql)
+        self.editor.download_cancel_requested.connect(self._on_download_cancel_requested)
+        self.editor.reveal_file_requested.connect(self._on_reveal_download_file)
         self.editor.execute_python.connect(self._on_execute_python)
 
         # Execution queue (multiple blocks)
@@ -1093,6 +1094,146 @@ class SessionWidget(QWidget):
             connector, query, block_name, connection_name, database_name, sql_parameters
         )
 
+
+    def _on_download_cancel_requested(self, block) -> None:
+        """Cancel an in-flight streaming download from the block progress UI."""
+        if not getattr(self, "_sql_is_download", False):
+            return
+        self._current_download_block = block
+        self._on_cancel_execution()
+
+    @staticmethod
+    def _reveal_in_folder(path: str) -> None:
+        import os
+        import subprocess
+        import sys
+
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl
+
+        normalized = os.path.normpath(path)
+        folder = os.path.dirname(normalized) or os.getcwd()
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        if opened:
+            return
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.Popen(["explorer", f"/select,{normalized}"])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", normalized])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as e:
+            logger.warning(f"Reveal failed for '{normalized}': {_safe_exception_text(e)}")
+
+    def _on_reveal_download_file(self, file_path: str) -> None:
+        """Open the OS file explorer at the downloaded file location."""
+        if file_path:
+            self._reveal_in_folder(file_path)
+
+    def _on_download_sql(
+        self,
+        query: str,
+        block_name: str = None,
+        connection_name: str = None,
+        database_name: str = None,
+        sql_parameters: list = None,
+        export_format: str = "csv",
+        file_path: str = "",
+    ):
+        """Stream SQL results to a local file without loading into memory."""
+        if self._reject_if_cancelling_sql():
+            return
+
+        block = self.editor.get_current_executing_block()
+        conn_name = connection_name or self.session.connection_name
+        if not conn_name:
+            self.append_output(S.session_widget.no_active_connection, error=True)
+            self.status_changed.emit(S.session_widget.status_no_connection)
+            self.editor.mark_execution_finished(block, has_error=True)
+            return
+
+        connector = self._peek_sql_connector_for_block(block, connection_name, database_name)
+
+        if connector is None or not connector.is_connected():
+            manager = self._get_connection_manager()
+            self._set_block_busy_status(S.block.status_reconnecting)
+            self.append_output(S.session_widget.connecting_block.format(name=conn_name))
+            self.status_changed.emit(S.session_widget.connecting_block.format(name=conn_name))
+
+            thread = QThread()
+            worker = BlockAutoConnectWorker(
+                conn_name,
+                connection_manager=manager,
+                database_name=database_name or (block.get_database_name() if block else None),
+            )
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(
+                lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name,
+                sp=sql_parameters, ef=export_format, fp=file_path, b=block:
+                    self._on_download_auto_connect_finished(
+                        conn, err, q, bn, cn, dn, sp, ef, fp, b
+                    )
+            )
+            worker.finished.connect(thread.quit)
+            thread.finished.connect(lambda t=thread: self._cleanup_auto_connect_thread(t))
+
+            if not hasattr(self, "_auto_connect_threads"):
+                self._auto_connect_threads = []
+            self._auto_connect_threads.append((thread, worker))
+            self._register_background_thread(thread, worker)
+
+            thread.start()
+            return
+
+        self._execute_download_with_connector(
+            connector,
+            query,
+            block_name,
+            connection_name,
+            database_name,
+            sql_parameters,
+            export_format,
+            file_path,
+        )
+
+    def _on_download_auto_connect_finished(
+        self,
+        connector,
+        error_msg,
+        query,
+        block_name,
+        connection_name,
+        database_name,
+        sql_parameters,
+        export_format,
+        file_path,
+        block=None,
+    ):
+        if self._reject_if_cancelling_sql():
+            return
+        if not connector or error_msg:
+            self.append_output(
+                S.session_widget.block_connect_error.format(name=connection_name, error=error_msg),
+                error=True,
+            )
+            self.status_changed.emit(S.session_widget.status_conn_failed)
+            self._finish_block_after_switch(has_error=True)
+            return
+
+        self._execute_download_with_connector(
+            connector,
+            query,
+            block_name,
+            connection_name,
+            database_name,
+            sql_parameters,
+            export_format,
+            file_path,
+        )
+
     def _cleanup_auto_connect_thread(self, thread):
         """Remove finished auto-connect thread from tracking list."""
         if hasattr(self, "_auto_connect_threads"):
@@ -1251,6 +1392,7 @@ class SessionWidget(QWidget):
             self._sql_thread = None
             self._sql_worker = None
             self._sql_finished_handler = None
+            self._sql_is_download = False
         elif self._sql_stopping and thread is getattr(self, "_sql_stopping_thread", None):
             self._sql_stopping_thread = None
             self._sql_stopping_worker = None
@@ -1343,6 +1485,11 @@ class SessionWidget(QWidget):
                 connector.request_cancel()
             except Exception as e:
                 logger.warning(f"Error requesting SQL cancel flag: {e}")
+        if hasattr(worker, "cancel"):
+            try:
+                worker.cancel()
+            except Exception:
+                pass
         QMetaObject.invokeMethod(
             worker,
             "interrupt_query",
@@ -1461,6 +1608,212 @@ class SessionWidget(QWidget):
         self._db_switch_threads.append((thread, worker))
         self._register_background_thread(thread, worker)
 
+        thread.start()
+
+    def _execute_download_with_connector(
+        self,
+        connector,
+        query,
+        block_name,
+        connection_name,
+        database_name,
+        sql_parameters=None,
+        export_format: str = "csv",
+        file_path: str = "",
+        *,
+        skip_database_prep: bool = False,
+    ):
+        """Stream SQL results to file using the given connector."""
+        if self._reject_if_cancelling_sql():
+            return
+
+        import re
+        from src.workers import QueryDownloadWorker
+
+        self._current_execution_block = self._get_active_execution_block()
+        conn_label = connection_name or S.session_widget.default_connection_label
+
+        if database_name and not skip_database_prep:
+            if self._connector_matches_database(connector, database_name):
+                self._execute_download_with_connector(
+                    connector,
+                    query,
+                    block_name,
+                    connection_name,
+                    None,
+                    sql_parameters,
+                    export_format,
+                    file_path,
+                    skip_database_prep=True,
+                )
+            else:
+                self._start_database_switch_async(
+                    connector,
+                    database_name,
+                    connection_name=connection_name,
+                    busy_message=S.block.status_switching_database,
+                    on_success=lambda _db: self._execute_download_with_connector(
+                        connector,
+                        query,
+                        block_name,
+                        connection_name,
+                        None,
+                        sql_parameters,
+                        export_format,
+                        file_path,
+                        skip_database_prep=True,
+                    ),
+                    on_error=self._on_database_switch_failed,
+                )
+            return
+
+        use_match = re.match(
+            r"^\s*USE\s+(?:CATALOG\s+|SCHEMA\s+)?[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$",
+            query,
+            re.IGNORECASE,
+        )
+        if use_match:
+            db_name = use_match.group(1)
+            if hasattr(connector, "db_type") and connector.db_type == "databricks":
+                cat_m = re.match(r"^\s*USE\s+CATALOG\s+", query, re.IGNORECASE)
+                sch_m = re.match(r"^\s*USE\s+SCHEMA\s+", query, re.IGNORECASE)
+                if cat_m:
+                    db_name = f"CATALOG:{db_name}"
+                elif sch_m:
+                    db_name = f"SCHEMA:{db_name}"
+
+            def on_use_success(_db_name: str):
+                try:
+                    resolved = get_connector_database_context(connector) or _db_name
+                    self._update_block_database_ui(self._current_execution_block, resolved)
+                    self.append_output(self._format_log("SQL", f"Database changed to: {resolved}"))
+                    self.status_changed.emit(f"Database: {resolved}")
+                finally:
+                    self._finish_block_after_switch(has_error=False)
+
+            self._start_database_switch_async(
+                connector,
+                db_name,
+                connection_name=connection_name,
+                busy_message=S.block.status_switching_database,
+                on_success=on_use_success,
+                on_error=self._on_database_switch_failed,
+            )
+            return
+
+        if self._sql_thread_is_active() or self._is_executing:
+            self.append_output(
+                getattr(S.block, "download_busy", "Another query is running. Try again when it finishes."),
+                error=True,
+            )
+            self.editor.mark_execution_finished(self._get_active_execution_block(), has_error=True)
+            return
+
+        if getattr(connector, "is_query_busy", lambda: False)():
+            self.append_output(
+                getattr(S.block, "download_busy", "Another query is running. Try again when it finishes."),
+                error=True,
+            )
+            self.editor.mark_execution_finished(self._get_active_execution_block(), has_error=True)
+            return
+
+        prepared_parameters = []
+        if sql_parameters:
+            prepared_parameters, parameter_errors = validate_and_convert_parameters(query, sql_parameters)
+            if parameter_errors:
+                message = S.sql_parameters.validation_failed.format(errors="; ".join(parameter_errors))
+                self.append_output(self._format_log("SQL", message), error=True)
+                self.status_changed.emit(S.sql_parameters.status_invalid)
+                current_block = self.editor.get_current_executing_block()
+                self.editor.mark_execution_finished(current_block, has_error=True)
+                return
+
+        self._is_executing = True
+        self._sql_is_download = True
+        self._cancel_requested = False
+        self._sql_execution_token += 1
+        execution_token = self._sql_execution_token
+
+        self.session.start_execution("sql")
+        download_status = getattr(S.block, "download_running", "Downloading… ({conn})")
+        self.status_changed.emit(download_status.format(conn=conn_label))
+        self.execution_started.emit()
+        block = self._get_active_execution_block()
+        self._current_download_block = block
+        if block is not None:
+            self.editor.mark_block_started(block)
+            from pathlib import Path as _Path
+
+            block.clear_downloads()
+            preparing = getattr(S.block, "download_preparing", "Preparing download...")
+            block.start_download(1, _Path(file_path).name or preparing)
+
+        self._execution_start_time = time.time()
+        self._current_query = query
+        self._current_block_index = self.editor.get_current_block_index()
+        self._current_connection_name_exec = connection_name or self.session.connection_name or ""
+        self._current_database_name_exec = database_name or ""
+        self._current_block_name = block_name
+        self._current_connector = connector
+        self._current_connection_name = connection_name or self.session.connection_name
+        self._current_download_path = file_path
+        self._current_download_format = export_format
+
+        thread = QThread()
+        worker = QueryDownloadWorker(
+            connector,
+            query,
+            file_path,
+            export_format,
+            prepared_parameters,
+        )
+        worker.moveToThread(thread)
+        self._sql_thread = thread
+        self._sql_worker = worker
+
+        token = execution_token
+
+        def _download_progress(file_index: int, rows: int, bytes_written: int, _token=token) -> None:
+            if _token != self._sql_execution_token:
+                return
+            elapsed = max(time.time() - self._execution_start_time, 0.001)
+            rate_mbps = (bytes_written / (1024 * 1024)) / elapsed
+            active_block = getattr(self, "_current_download_block", None) or self._get_active_execution_block()
+            if active_block is not None and hasattr(active_block, "update_download_progress"):
+                active_block.update_download_progress(file_index, rows, bytes_written, rate_mbps)
+            template = getattr(S.block, "download_progress", "Downloading… {rows:,} rows (file {file})")
+            self.status_changed.emit(template.format(rows=rows, file=file_index))
+
+        def _download_file_started(file_index: int, filename: str, _token=token) -> None:
+            if _token != self._sql_execution_token:
+                return
+            active_block = getattr(self, "_current_download_block", None) or self._get_active_execution_block()
+            if active_block is not None and hasattr(active_block, "start_download"):
+                active_block.start_download(file_index, filename)
+
+        def _download_total(file_index: int, total: int, _token=token) -> None:
+            if _token != self._sql_execution_token:
+                return
+            active_block = getattr(self, "_current_download_block", None) or self._get_active_execution_block()
+            if active_block is not None and hasattr(active_block, "set_download_total"):
+                active_block.set_download_total(file_index, total)
+
+        def _download_finished_handler(result, err, _token=token):
+            if _token != self._sql_execution_token:
+                return
+            self._on_download_finished(result, err)
+
+        self._sql_finished_handler = _download_finished_handler
+        thread.started.connect(worker.run)
+        worker.progress.connect(_download_progress)
+        worker.file_started.connect(_download_file_started)
+        worker.total_ready.connect(_download_total)
+        worker.download_finished.connect(_download_finished_handler)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(self._on_sql_thread_terminated)
+
+        self.session.register_thread(thread)
+        self._register_background_thread(thread, worker)
         thread.start()
 
     def _execute_sql_with_connector(
@@ -1658,19 +2011,33 @@ class SessionWidget(QWidget):
 
     def _on_sql_finished(self, df: Optional[pd.DataFrame], error: str):
         """Callback when SQL finishes"""
+        # Marcar bloco atual como finalizado
+        current_block = self.editor.get_current_executing_block()
+
         # If cancelled, ignore result (UI already cleaned by cancel)
         if error == "__CANCELLED__" or self._cancel_requested:
+            if current_block is not None and hasattr(current_block, "clear_downloads"):
+                current_block.clear_downloads()
+            self._current_download_block = None
             self._is_executing = False
             if self._sql_stopping:
                 self._schedule_sql_stop_finalize()
             return
 
-        # Marcar bloco atual como finalizado
-        current_block = self.editor.get_current_executing_block()
         self.editor.mark_execution_finished(current_block)
 
         # Compute execution duration
         duration_ms = (time.time() - self._execution_start_time) * 1000 if self._execution_start_time else None
+
+        # Defensive: worker emitted no DataFrame and no error message (e.g. a
+        # driver/path that swallows the failure). Synthesize an error so the UI
+        # does not silently keep the previous result on the grid.
+        if df is None and not error:
+            error = getattr(
+                S.session_widget,
+                "sql_no_result_error",
+                "Query returned no result and no error was reported.",
+            )
 
         if error:
             from src.ui.components.output_panel import LogEntry, parse_error_position
@@ -1696,6 +2063,15 @@ class SessionWidget(QWidget):
             self._queue_last_error = error[:80]
             self._queue_last_type = "sql"
             self._queue_blocks_done += 1
+            # Clear the results grid so stale rows from the previous query do
+            # not linger while the error is shown in the output panel.
+            info = self._get_own_panels()
+            viewer = info.get("results") if info else None
+            if viewer is not None and hasattr(viewer, "clear"):
+                try:
+                    viewer.clear()
+                except Exception:
+                    pass
             self._show_output()
         else:
             # Determine namespace prefix (isolated per block or global)
@@ -1790,6 +2166,106 @@ class SessionWidget(QWidget):
 
         self._is_executing = False
         self._current_execution_block = None
+
+    def _on_download_finished(self, result, error: str) -> None:
+        """Callback when a streaming download finishes."""
+        self._sql_is_download = False
+        current_block = getattr(self, "_current_download_block", None) or self.editor.get_current_executing_block()
+        duration_ms = (time.time() - self._execution_start_time) * 1000 if self._execution_start_time else None
+
+        if error == "__CANCELLED__" or self._cancel_requested:
+            if current_block is not None and hasattr(current_block, "clear_downloads"):
+                current_block.clear_downloads()
+            self._current_download_block = None
+            self._is_executing = False
+            if self._sql_stopping:
+                self._schedule_sql_stop_finalize()
+            return
+
+        if error:
+            if current_block is not None and hasattr(current_block, "clear_downloads"):
+                current_block.clear_downloads()
+            self._current_download_block = None
+            self.editor.mark_execution_finished(current_block, has_error=True)
+            from src.ui.components.output_panel import LogEntry, parse_error_position
+
+            err_line, err_col = parse_error_position(error, self._current_query, "SQL")
+            entry = LogEntry(
+                level="error",
+                log_type="SQL",
+                message=f"ERROR: {error.split(chr(10))[0][:120]}",
+                detail=error,
+                block_index=self._current_block_index,
+                block_name=self._current_block_name or "",
+                line_number=err_line,
+                column_number=err_col,
+                duration_ms=duration_ms,
+                code_snippet=self._current_query,
+                connection_name=self._current_connection_name_exec,
+                database_name=self._current_database_name_exec,
+            )
+            self._log_entry(entry)
+            self.session.finish_execution(False, f"Error: {error[:50]}...")
+            self.status_changed.emit(S.session_widget.status_sql_error)
+            self._show_output()
+        elif result is None or (not getattr(result, "files", None) and not getattr(result, "errors", None)):
+            if current_block is not None and hasattr(current_block, "clear_downloads"):
+                current_block.clear_downloads()
+            self._current_download_block = None
+            self.editor.mark_execution_finished(current_block)
+            msg = getattr(S.block, "download_no_rows", "No row results to download.")
+            self.append_output(self._format_log("SQL", msg))
+            self.session.finish_execution(True, msg)
+            self.status_changed.emit(msg)
+        else:
+            from src.ui.components.output_panel import LogEntry
+
+            total_rows = getattr(result, "total_rows", 0) or 0
+            file_count = len(result.files)
+            paths = [str(p) for p in result.files]
+            summary = getattr(S.block, "download_success", "Saved {files} file(s), {rows:,} rows")
+            msg = summary.format(files=file_count, rows=total_rows)
+            if result.errors:
+                msg = f"{msg} ({len(result.errors)} warning(s))"
+
+            if current_block is not None and hasattr(current_block, "finish_download"):
+                for idx, path in enumerate(result.files, start=1):
+                    row_count = result.row_counts[idx - 1] if idx - 1 < len(result.row_counts) else 0
+                    current_block.finish_download(idx, str(path), row_count)
+            self._current_download_block = None
+            self.editor.mark_execution_finished(current_block)
+
+            entry = LogEntry(
+                level="success",
+                log_type="SQL",
+                message=msg,
+                detail="\n".join(paths),
+                block_index=self._current_block_index,
+                block_name=self._current_block_name or "",
+                duration_ms=duration_ms,
+                code_snippet=self._current_query,
+                connection_name=self._current_connection_name_exec,
+                database_name=self._current_database_name_exec,
+            )
+            self._log_entry(entry)
+            self.append_output(self._format_log("SQL", msg))
+            self.session.finish_execution(True, msg)
+            self.status_changed.emit(msg)
+
+            try:
+                from src.ui.components.toast_notification import ToastManager
+
+                ToastManager.notify(
+                    getattr(S.block, "download_toast_title", "Download complete"),
+                    msg,
+                    success=True,
+                )
+            except Exception:
+                pass
+
+        self._is_executing = False
+        self._current_execution_block = None
+        self._process_next_in_queue()
 
     # === PYTHON EXECUTION ===
 

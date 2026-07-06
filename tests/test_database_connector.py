@@ -1324,6 +1324,59 @@ class TestMssqlBatchErrorHandling:
             connector._execute_mssql_batches(["BAD SQL", "ALSO BAD"])
 
 
+class TestMssqlEmptyResultSet:
+    """Empty result sets must produce a columns-only DataFrame, not a message row."""
+
+    def test_zero_row_select_returns_columns_only(self):
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.connection_params = {}
+
+        mock_cursor = MagicMock()
+        mock_cursor.description = [("id",), ("name",)]
+        _set_result_rows(mock_cursor, [])  # 0 rows
+        mock_cursor.nextset.return_value = False
+
+        mock_raw_conn = MagicMock()
+        mock_raw_conn.cursor.return_value = mock_cursor
+
+        mock_engine = MagicMock()
+        mock_engine.raw_connection.return_value = mock_raw_conn
+        connector.engine = mock_engine
+
+        result = connector._execute_mssql_batches(["SELECT * FROM t WHERE 1=0"])
+
+        # Columns preserved, zero rows — NOT the {"Result": [...]} message frame.
+        assert list(result.columns) == ["id", "name"]
+        assert len(result) == 0
+        assert "Result" not in result.columns
+
+    def test_ddl_only_returns_success_message(self):
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "sqlserver"
+        connector.connection_params = {}
+
+        mock_cursor = MagicMock()
+        mock_cursor.description = None  # no result set (DDL)
+        mock_cursor.nextset.return_value = False
+
+        mock_raw_conn = MagicMock()
+        mock_raw_conn.cursor.return_value = mock_cursor
+
+        mock_engine = MagicMock()
+        mock_engine.raw_connection.return_value = mock_raw_conn
+        connector.engine = mock_engine
+
+        result = connector._execute_mssql_batches(["CREATE TABLE t (id INT)"])
+
+        assert "Result" in result.columns
+        assert len(result) == 1
+
+
 class TestDatabricksOAuthRetry:
     """Testes para retry automatico quando OAuth token do Databricks expira"""
 

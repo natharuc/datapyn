@@ -411,6 +411,9 @@ class CodeBlock(QFrame):
     database_changed = pyqtSignal(object, str)  # self, database_name - when block database changes
     completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
     maximize_requested = pyqtSignal(object)  # self - toggle maximize/restore
+    download_requested = pyqtSignal(object, str)  # self, export_format ("csv"|"parquet")
+    cancel_download_requested = pyqtSignal(object)  # self
+    reveal_file_requested = pyqtSignal(str)  # absolute file path
 
     LANGUAGE_COLORS = {"python": "#3572A5", "sql": "#E38C00"}
     BLOCK_RADIUS = 12
@@ -586,6 +589,8 @@ class CodeBlock(QFrame):
         self.run_btn.setToolTip(S.block.tooltip_run)
         self.run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._run_icon_play = True
+        self.run_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.run_btn.customContextMenuRequested.connect(self._on_run_btn_context_menu)
         control_layout.addWidget(self.run_btn)
 
         # Language selector with icons
@@ -791,6 +796,23 @@ class CodeBlock(QFrame):
 
         layout.addWidget(self.editor_container, 1)  # stretch=1 to expand
 
+        # === Download progress (below editor, above resize handle) ===
+        self.download_progress_container = QWidget()
+        self.download_progress_container.setObjectName("downloadProgressContainer")
+        self._download_progress_layout = QVBoxLayout(self.download_progress_container)
+        self._download_progress_layout.setContentsMargins(8, 4, 8, 4)
+        self._download_progress_layout.setSpacing(4)
+        self.download_progress_container.setStyleSheet(f"""
+            QWidget#downloadProgressContainer {{
+                background: {colors.bg_tertiary};
+                border-top: 1px solid {colors.border_default};
+            }}
+        """)
+        self.download_progress_container.hide()
+        self._download_bars: dict[int, object] = {}
+        layout.addWidget(self.download_progress_container)
+
+
         # === Resize handle ===
         self.resize_handle = QFrame()
         self.resize_handle.setFixedHeight(6)
@@ -886,6 +908,29 @@ class CodeBlock(QFrame):
             self.editor.request_execute()
         else:
             self.execute_requested.emit(self, "")
+
+    def _on_run_btn_context_menu(self, pos: QPoint) -> None:
+        """Right-click: run query and stream results to a local file."""
+        if self.get_language() != "sql":
+            return
+        if self.__dict__.get("_is_running") or self.__dict__.get("_is_cancelling"):
+            return
+
+        menu = QMenu(self)
+        download_menu = menu.addMenu(
+            getattr(S.block, "ctx_run_and_download", "Run and Download")
+        )
+        csv_action = download_menu.addAction(
+            getattr(S.block, "download_csv", "CSV…")
+        )
+        parquet_action = download_menu.addAction(
+            getattr(S.block, "download_parquet", "Parquet…")
+        )
+        chosen = menu.exec(self.run_btn.mapToGlobal(pos))
+        if chosen is csv_action:
+            self.download_requested.emit(self, "csv")
+        elif chosen is parquet_action:
+            self.download_requested.emit(self, "parquet")
 
     def _setup_monaco_completion(self):
         """Setup inline completion for Monaco editor."""
@@ -1803,6 +1848,46 @@ class CodeBlock(QFrame):
         drag.exec(Qt.DropAction.MoveAction)
 
         self.drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
+
+
+    def start_download(self, file_index: int, label: str) -> None:
+        from src.ui.components.download_progress_bar import DownloadProgressBar
+
+        if file_index in self._download_bars:
+            self._download_bars[file_index].title_label.setText(label)
+        else:
+            bar = DownloadProgressBar(file_index, label, self.download_progress_container)
+            bar.cancel_clicked.connect(self._on_download_bar_cancel)
+            bar.reveal_clicked.connect(self.reveal_file_requested.emit)
+            self._download_bars[file_index] = bar
+            self._download_progress_layout.addWidget(bar)
+        self.download_progress_container.show()
+
+    def update_download_progress(self, file_index: int, rows: int, bytes_written: int, rate_mbps: float) -> None:
+        bar = self._download_bars.get(file_index)
+        if bar is not None:
+            bar.update_stats(rows, bytes_written, rate_mbps)
+
+    def set_download_total(self, file_index: int, total: Optional[int]) -> None:
+        bar = self._download_bars.get(file_index)
+        if bar is not None:
+            bar.set_total(total)
+
+    def finish_download(self, file_index: int, file_path: str = "", total_rows: int = 0) -> None:
+        bar = self._download_bars.get(file_index)
+        if bar is not None and file_path:
+            bar.finish(file_path, total_rows)
+
+    def clear_downloads(self) -> None:
+        for file_index in list(self._download_bars.keys()):
+            bar = self._download_bars.pop(file_index, None)
+            if bar is not None:
+                self._download_progress_layout.removeWidget(bar)
+                bar.deleteLater()
+        self.download_progress_container.hide()
+
+    def _on_download_bar_cancel(self, _file_index: int) -> None:
+        self.cancel_download_requested.emit(self)
 
     # === Resize (editor_container only) ===
 
