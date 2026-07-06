@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.49.0 (2026-07-06)
+
+### Features
+
+- **download**: Streaming export, progress bars, error surfacing, parquet null fix
+  ([`90d734d`](https://github.com/natharuc/datapyn/commit/90d734dd0f7add92057033e71a80d6f660a57efa))
+
+- **download**: Streaming export, progress bars, error surfacing, parquet null fix
+  ([`3d38dc3`](https://github.com/natharuc/datapyn/commit/3d38dc3d218b50bbf79a5d3e2a6f33174f203611))
+
+### Heuristic
+
+- Merge pull request #135 from natharuc/fix/download-error-parquet-reveal
+  ([`90d734d`](https://github.com/natharuc/datapyn/commit/90d734dd0f7add92057033e71a80d6f660a57efa))
+
+
 ## v1.48.0 (2026-06-29)
 
 ### Features
