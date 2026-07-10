@@ -54,7 +54,10 @@ def _keyring_persist(secret_name: str, value: str) -> None:
         except keyring.errors.PasswordDeleteError:
             pass
     except Exception as exc:
-        logger.warning("Failed to persist notification secret '%s': %s", secret_name, exc)
+        logger.warning(
+            "Failed to persist notification credential via keyring: %s",
+            type(exc).__name__,
+        )
 
 
 def get_notification_secret(secret_name: str) -> str:
@@ -64,7 +67,10 @@ def get_notification_secret(secret_name: str) -> str:
     try:
         return keyring.get_password(NOTIFICATION_KEYRING_SERVICE, secret_name) or ""
     except Exception as exc:
-        logger.warning("Failed to load notification secret '%s': %s", secret_name, exc)
+        logger.warning(
+            "Failed to load notification credential via keyring: %s",
+            type(exc).__name__,
+        )
         return ""
 
 
@@ -75,7 +81,7 @@ def set_notification_secret(secret_name: str, value: str) -> None:
         target=_keyring_persist,
         args=(secret_name, value or ""),
         daemon=True,
-        name=f"NotificationKeyring-{secret_name}",
+        name="NotificationKeyring",
     ).start()
 
 
