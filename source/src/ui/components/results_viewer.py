@@ -2214,9 +2214,11 @@ class ResultsViewer(QWidget):
         self._pending_result_tab_index: Optional[int] = None
         self._result_tab_switch_timer: Optional[QTimer] = None
         self._pending_grid_prepare: Optional[dict] = None
+        self._defer_grid_prepare_on_hide = False
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._defer_grid_prepare_on_hide = True
         pending = self._pending_grid_prepare
         if not pending:
             return
@@ -4351,7 +4353,7 @@ class ResultsViewer(QWidget):
         job = self._grid_prepare_job_meta.pop(job_id, None)
         if not job or not self._grid_prepare_job_is_current(job):
             return
-        if not self.isVisible():
+        if not self.isVisible() and self._defer_grid_prepare_on_hide:
             self._pending_grid_prepare = {
                 "result": result,
                 "var_name": job.get("var_name") or self._current_result_label(),
