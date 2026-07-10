@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v1.50.0 (2026-07-10)
+
+### Bug Fixes
+
+- **results**: Apply grid prepare when viewer was never shown
+  ([`083b677`](https://github.com/natharuc/datapyn/commit/083b677cc11e86c19eafecdf84545251e0cd9ef8))
+
+- **results**: Apply grid prepare when viewer was never shown
+  ([`58182b0`](https://github.com/natharuc/datapyn/commit/58182b04415df8a14ba782597099b5d0cbe0f7b5))
+
+- **security**: Stop logging notification credential key names
+  ([`710cf52`](https://github.com/natharuc/datapyn/commit/710cf52ec27dbcb7bc083bd55034e71b039418f0))
+
+### Features
+
+- **ui**: Tab-close UX, typing-freeze fixes, and related polish
+  ([`5702631`](https://github.com/natharuc/datapyn/commit/57026313d504d010aee989efdf0f0f2ec0441d71))
+
+- **ui**: Tab-close UX, typing-freeze fixes, and related polish
+  ([`3dcc33e`](https://github.com/natharuc/datapyn/commit/3dcc33ee5f09ce72ab96d342aa280ff7dda0586b))
+
+### Heuristic
+
+- Merge pull request #136 from natharuc/feat/tab-close-ux-typing-freeze
+  ([`5702631`](https://github.com/natharuc/datapyn/commit/57026313d504d010aee989efdf0f0f2ec0441d71))
+
+- Merge pull request #137 from natharuc/fix/results-viewer-defer-grid-ci
+  ([`083b677`](https://github.com/natharuc/datapyn/commit/083b677cc11e86c19eafecdf84545251e0cd9ef8))
+
+
 ## v1.49.0 (2026-07-06)
 
 ### Features
