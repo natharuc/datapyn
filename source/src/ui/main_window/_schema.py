@@ -4,7 +4,9 @@ SchemaMixin - Schema loading, Object Explorer updates, variable panel interactio
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 import weakref
 
 import pandas as pd
@@ -17,11 +19,13 @@ from src.services.cross_database_schema import (
     prepare_editor_sql_schema,
     schema_has_columns_for_table,
 )
+from src.services.schema_service import SCHEMA_BUSY_SENTINEL, is_schema_busy_result
 
 logger = logging.getLogger(__name__)
 
 _EDITOR_REF_FROM_SQL = object()
 _EDITOR_REF_ALL_LAZY = object()
+_SCHEMA_BUSY_COOLDOWN_SEC = 5.0
 
 
 class SchemaMixin:
@@ -34,6 +38,35 @@ class SchemaMixin:
         if ic is None:
             return False
         return ic() if callable(ic) else bool(ic)
+
+    def _schema_busy_cooldown_key_tables(self, catalog_name: str, schema_name: str) -> tuple:
+        return ("tables", catalog_name, schema_name)
+
+    def _schema_busy_cooldown_key_columns(
+        self, catalog_name: str, schema_name: str, table_name: str
+    ) -> tuple:
+        return ("columns", catalog_name, schema_name, table_name)
+
+    def _is_schema_request_on_cooldown(self, key: tuple) -> bool:
+        cooldowns = getattr(self, "_schema_busy_cooldowns", {})
+        return time.monotonic() < cooldowns.get(key, 0.0)
+
+    def _set_schema_request_cooldown(self, key: tuple, ttl: float = _SCHEMA_BUSY_COOLDOWN_SEC) -> None:
+        if not hasattr(self, "_schema_busy_cooldowns"):
+            self._schema_busy_cooldowns = {}
+        self._schema_busy_cooldowns[key] = time.monotonic() + ttl
+
+    def _stop_cross_database_schema_sync(self, session_id: str) -> None:
+        """Cancel a pending debounced cross-database schema sync for a session."""
+        timers = getattr(self, "_cross_db_schema_timers", None)
+        if not timers:
+            return
+        timer = timers.pop(session_id, None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
 
     def _on_oe_schemas_requested(self, catalog_name: str):
         """Load schemas for a Databricks catalog (lazy loading)."""
@@ -62,6 +95,10 @@ class SchemaMixin:
 
     def _on_oe_tables_requested(self, catalog_name: str, schema_name: str):
         """Load tables for a schema (lazy loading)."""
+        cooldown_key = self._schema_busy_cooldown_key_tables(catalog_name, schema_name)
+        if self._is_schema_request_on_cooldown(cooldown_key):
+            return
+
         connector, connection_name = self._get_effective_connector_info()
         if not connector or not self._connector_is_connected(connector):
             return
@@ -79,6 +116,11 @@ class SchemaMixin:
         """Callback when tables are loaded for a schema."""
         pending = getattr(self, "_pending_oe_table_requests", {})
         sid = pending.pop((catalog_name, schema_name), None)
+        if is_schema_busy_result(tables):
+            self._set_schema_request_cooldown(
+                self._schema_busy_cooldown_key_tables(catalog_name, schema_name)
+            )
+            return
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
@@ -87,6 +129,12 @@ class SchemaMixin:
 
     def _on_oe_columns_requested(self, catalog_name: str, schema_name: str, table_name: str):
         """Load columns for a table (lazy loading)."""
+        cooldown_key = self._schema_busy_cooldown_key_columns(
+            catalog_name, schema_name, table_name
+        )
+        if self._is_schema_request_on_cooldown(cooldown_key):
+            return
+
         connector, connection_name = self._get_effective_connector_info()
         if not connector or not self._connector_is_connected(connector):
             return
@@ -104,6 +152,11 @@ class SchemaMixin:
         """Callback when columns are loaded for a table."""
         pending = getattr(self, "_pending_oe_column_requests", {})
         sid = pending.pop((catalog_name, schema_name, table_name), None)
+        if is_schema_busy_result(columns):
+            self._set_schema_request_cooldown(
+                self._schema_busy_cooldown_key_columns(catalog_name, schema_name, table_name)
+            )
+            return
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
@@ -277,6 +330,10 @@ class SchemaMixin:
         if not connector or not self._connector_is_connected(connector):
             return
 
+        is_query_busy = getattr(connector, "is_query_busy", None)
+        if callable(is_query_busy) and is_query_busy():
+            return
+
         db_type = ""
         config = self.connection_manager.get_connection_config(connection_name)
         if config:
@@ -284,6 +341,14 @@ class SchemaMixin:
 
         sql_text = collect_sql_text_from_widget(widget)
         if not sql_text.strip():
+            return
+
+        sql_hash = hashlib.md5(sql_text.encode("utf-8", errors="replace")).hexdigest()
+        hashes = getattr(self, "_cross_db_schema_sql_hashes", None)
+        if hashes is None:
+            hashes = {}
+            self._cross_db_schema_sql_hashes = hashes
+        if hashes.get(session_id) == sql_hash:
             return
 
         explorer = self._session_explorers.get(session_id) if hasattr(self, "_session_explorers") else None
@@ -334,6 +399,9 @@ class SchemaMixin:
             request_key = (catalog_name, "")
             if table_requests.get(request_key) == session_id:
                 continue
+            cooldown_key = self._schema_busy_cooldown_key_tables(catalog_name, "")
+            if self._is_schema_request_on_cooldown(cooldown_key):
+                continue
             table_requests[request_key] = session_id
             self._schema_service.load_tables_for_schema(
                 connector,
@@ -364,6 +432,11 @@ class SchemaMixin:
             request_key = (catalog_name, schema_name, table_name)
             if column_requests.get(request_key) == session_id:
                 continue
+            cooldown_key = self._schema_busy_cooldown_key_columns(
+                catalog_name, schema_name, table_name
+            )
+            if self._is_schema_request_on_cooldown(cooldown_key):
+                continue
             column_requests[request_key] = session_id
             self._schema_service.load_columns_for_table(
                 connector,
@@ -372,6 +445,8 @@ class SchemaMixin:
                 schema_name,
                 table_name,
             )
+
+        hashes[session_id] = sql_hash
 
     def _block_schema_database(self, block) -> str:
         """Current database label on a block's autocomplete schema, if any."""

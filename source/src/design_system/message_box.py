@@ -4,10 +4,11 @@ Frameless message / confirmation dialogs with flat icons (replaces QMessageBox c
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Union, overload
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from src.design_system.button import GhostButton, PrimaryButton, SecondaryButton
 from src.design_system.frameless_dialog import install_frameless_shell
@@ -92,6 +93,7 @@ class _BaseMessageDialog(QDialog):
         self._footer_layout.setContentsMargins(0, 8, 0, 0)
         content.addLayout(self._footer_layout)
 
+        self._content_layout = content
         self._body_layout.addLayout(content)
 
     def _add_footer_buttons(self, *buttons) -> None:
@@ -105,12 +107,72 @@ class _BaseMessageDialog(QDialog):
         self._footer_layout.addStretch()
         self._footer_layout.addWidget(right_btn)
 
+    def _insert_above_footer(self, widget: QWidget) -> None:
+        """Insert a widget directly above the footer button row."""
+        footer_index = self._content_layout.count() - 1
+        self._content_layout.insertWidget(footer_index, widget)
+
+
+def _repeat_checkbox_style() -> str:
+    colors = get_colors()
+    return f"""
+        QCheckBox {{
+            color: {colors.text_secondary};
+            font-size: 11px;
+            font-weight: normal;
+            spacing: 8px;
+        }}
+        QCheckBox::indicator {{
+            width: 16px;
+            height: 16px;
+            border: 1px solid {colors.border_default};
+            border-radius: 3px;
+            background-color: {colors.bg_secondary};
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: {colors.interactive_primary};
+            border-color: {colors.interactive_primary};
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {colors.interactive_primary};
+        }}
+    """
+
+
+def _add_repeat_checkbox(dlg: _BaseMessageDialog, label: str) -> QCheckBox:
+    checkbox = QCheckBox(label)
+    checkbox.setStyleSheet(_repeat_checkbox_style())
+    dlg._insert_above_footer(checkbox)
+    return checkbox
+
+
+@overload
+def ask_save_discard_cancel(
+    parent: Optional[QWidget],
+    title: str,
+    message: str,
+    *,
+    repeat_checkbox_label: None = None,
+) -> SaveDiscardCancel: ...
+
+
+@overload
+def ask_save_discard_cancel(
+    parent: Optional[QWidget],
+    title: str,
+    message: str,
+    *,
+    repeat_checkbox_label: str,
+) -> tuple[SaveDiscardCancel, bool]: ...
+
 
 def ask_save_discard_cancel(
     parent: Optional[QWidget],
     title: str,
     message: str,
-) -> SaveDiscardCancel:
+    *,
+    repeat_checkbox_label: Optional[str] = None,
+) -> Union[SaveDiscardCancel, tuple[SaveDiscardCancel, bool]]:
     """Unsaved changes — Save / Don't Save / Cancel."""
     dlg = _BaseMessageDialog(
         parent,
@@ -140,9 +202,39 @@ def ask_save_discard_cancel(
 
     dlg._add_footer_buttons(cancel_btn, discard_btn, save_btn)
 
+    repeat_checkbox = None
+    if repeat_checkbox_label:
+        repeat_checkbox = _add_repeat_checkbox(dlg, repeat_checkbox_label)
+
     if dlg.exec() != QDialog.DialogCode.Accepted:
+        if repeat_checkbox is not None:
+            return "cancel", repeat_checkbox.isChecked()
         return "cancel"
+    if repeat_checkbox is not None:
+        return result, repeat_checkbox.isChecked()
     return result
+
+
+@overload
+def ask_yes_no(
+    parent: Optional[QWidget],
+    title: str,
+    message: str,
+    *,
+    default_yes: bool = False,
+    repeat_checkbox_label: None = None,
+) -> bool: ...
+
+
+@overload
+def ask_yes_no(
+    parent: Optional[QWidget],
+    title: str,
+    message: str,
+    *,
+    default_yes: bool = False,
+    repeat_checkbox_label: str,
+) -> tuple[bool, bool]: ...
 
 
 def ask_yes_no(
@@ -151,7 +243,8 @@ def ask_yes_no(
     message: str,
     *,
     default_yes: bool = False,
-) -> bool:
+    repeat_checkbox_label: Optional[str] = None,
+) -> Union[bool, tuple[bool, bool]]:
     dlg = _BaseMessageDialog(
         parent,
         title,
@@ -176,7 +269,18 @@ def ask_yes_no(
         no_btn.setDefault(True)
 
     dlg._set_footer_actions(no_btn, yes_btn)
+
+    for key in ("Y", "S"):
+        QShortcut(QKeySequence(key), dlg, activated=yes_btn.click)
+    QShortcut(QKeySequence("N"), dlg, activated=no_btn.click)
+
+    repeat_checkbox = None
+    if repeat_checkbox_label:
+        repeat_checkbox = _add_repeat_checkbox(dlg, repeat_checkbox_label)
+
     dlg.exec()
+    if repeat_checkbox is not None:
+        return accepted["value"], repeat_checkbox.isChecked()
     return accepted["value"]
 
 

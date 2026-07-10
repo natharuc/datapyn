@@ -120,6 +120,24 @@ class UpdateDownloader(QObject):
             self.download_failed.emit(f"Error: {str(e)}")
 
 
+class ApplyUpdateWorker(QObject):
+    """Stage updater files off the UI thread (copying _internal can take seconds)."""
+
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, service: "AutoUpdateService"):
+        super().__init__()
+        self._service = service
+
+    def run(self) -> None:
+        try:
+            ok, err = self._service.apply_pending_update()
+            self.finished.emit(ok, err or "")
+        except Exception as exc:
+            logger.error("Apply update failed: %s", exc)
+            self.finished.emit(False, str(exc))
+
+
 class AutoUpdateService(QObject):
     """Main auto-update service (lives on the UI thread; marshals worker callbacks safely)."""
 
@@ -138,6 +156,8 @@ class AutoUpdateService(QObject):
         self._checker: Optional[UpdateChecker] = None
         self._download_thread: Optional[QThread] = None
         self._downloader: Optional[UpdateDownloader] = None
+        self._apply_thread: Optional[QThread] = None
+        self._apply_worker: Optional[ApplyUpdateWorker] = None
 
         self._cb_on_available = None
         self._cb_on_no_update = None
@@ -317,11 +337,40 @@ class AutoUpdateService(QObject):
         ok, err = launch_setup_update(Path(zip_path), version, root)
         return ok, err
 
+    def apply_pending_update_async(self, on_finished) -> bool:
+        """Stage updater and spawn apply flow on a worker thread."""
+        if not self.has_pending_update():
+            return False
+        try:
+            if self._apply_thread and self._apply_thread.isRunning():
+                logger.warning("Update apply already in progress")
+                return False
+        except RuntimeError:
+            self._apply_thread = None
+
+        self._apply_thread = QThread()
+        self._apply_worker = ApplyUpdateWorker(self)
+        self._apply_worker.moveToThread(self._apply_thread)
+        self._apply_thread.started.connect(self._apply_worker.run)
+        self._apply_worker.finished.connect(on_finished)
+        self._apply_worker.finished.connect(self._apply_thread.quit)
+        self._apply_thread.finished.connect(self._apply_worker.deleteLater)
+        self._apply_thread.finished.connect(self._apply_thread.deleteLater)
+        self._apply_thread.finished.connect(self._clear_apply_worker)
+        self._apply_thread.start()
+        return True
+
+    def _clear_apply_worker(self) -> None:
+        self._apply_worker = None
+        self._apply_thread = None
+
     def cleanup(self):
         self._stop_thread("_check_thread")
         self._stop_thread("_download_thread")
+        self._stop_thread("_apply_thread")
         self._checker = None
         self._downloader = None
+        self._apply_worker = None
 
     def _stop_thread(self, attr_name: str):
         thread = getattr(self, attr_name, None)

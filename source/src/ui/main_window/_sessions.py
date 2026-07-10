@@ -1014,7 +1014,7 @@ class SessionsMixin:
 
         # Atualizar autocomplete quando namespace muda (apos SQL ou Python via SessionWidget)
         session.variables_changed.connect(
-            lambda ns, w=widget: w.editor.refresh_completion_context()
+            lambda ns, w=widget: self._on_session_variables_changed(w)
         )
 
         # Guardar referencia
@@ -1056,7 +1056,16 @@ class SessionsMixin:
         widget.session.title = new_name.strip()
         self._schedule_session_autosave()
 
-    def _ask_save_before_close(self) -> str:
+    def _on_session_variables_changed(self, widget) -> None:
+        """Refresh completion only for the focused tab; defer for background tabs."""
+        current = self._get_current_session_widget()
+        if current is widget:
+            if hasattr(widget, "editor") and hasattr(widget.editor, "refresh_completion_context"):
+                widget.editor.refresh_completion_context()
+            return
+        widget._pending_completion_refresh = True
+
+    def _ask_save_before_close(self, repeat_checkbox_label: str | None = None):
         """Ask user whether to save, discard, or cancel when closing unsaved tab."""
         from src.design_system.message_box import ask_save_discard_cancel
 
@@ -1064,39 +1073,84 @@ class SessionsMixin:
             self,
             S.dialogs.close_tab_unsaved_title,
             S.dialogs.close_tab_unsaved_msg,
+            repeat_checkbox_label=repeat_checkbox_label,
         )
 
     def _close_session_tab(self, index: int):
         """Closes session tab"""
-        widget = self.session_tabs.widget(index)
-        if not isinstance(widget, SessionWidget):
+        self._close_multiple_session_tabs([index])
+
+    def _close_multiple_session_tabs(self, indices: list[int]) -> None:
+        """Close one or more session tabs, optionally reusing the user's last decision."""
+        if not indices:
             return
 
-        # Check if tab has unsaved changes - ask user what to do
-        if getattr(widget, "_is_modified", False):
-            action = self._ask_save_before_close()
-            if action == "cancel":
-                return  # User clicked Cancel - don't close
-            elif action == "save":
-                # Save the file before closing
-                self._save_file()
+        repeat_label = (
+            getattr(S.dialogs, "apply_to_all_tabs", None) if len(indices) > 1 else None
+        )
+        remembered_unsaved: str | None = None
+        remembered_busy: bool | None = None
 
-        is_busy = (
-            getattr(widget, "is_execution_busy", None)
-            and widget.is_execution_busy()
-        ) or getattr(widget, "_is_executing", False)
-        if is_busy:
-            from src.design_system.message_box import ask_yes_no
+        for index in indices:
+            widget = self.session_tabs.widget(index)
+            if not isinstance(widget, SessionWidget):
+                continue
 
-            if not ask_yes_no(
-                self,
-                "Cancel Execution?",
-                "A script is running in this tab. Do you want to cancel it and close the tab?",
-            ):
-                return
-            widget._on_cancel_execution()
+            if getattr(widget, "_is_modified", False):
+                if remembered_unsaved is None:
+                    save_result = self._ask_save_before_close(repeat_label)
+                    if repeat_label:
+                        if isinstance(save_result, tuple):
+                            action, apply_all = save_result
+                        else:
+                            action, apply_all = save_result, False
+                        if apply_all and action != "cancel":
+                            remembered_unsaved = action
+                    else:
+                        action = save_result
+                    if action == "cancel":
+                        return
+                    if action == "save":
+                        self._save_file()
+                else:
+                    action = remembered_unsaved
+                    if action == "cancel":
+                        return
+                    if action == "save":
+                        self._save_file()
 
-        self._finalize_close_session_tab(index, widget)
+            is_busy = (
+                getattr(widget, "is_execution_busy", None)
+                and widget.is_execution_busy()
+            ) or getattr(widget, "_is_executing", False)
+            if is_busy:
+                if remembered_busy is None:
+                    from src.design_system.message_box import ask_yes_no
+
+                    busy_result = ask_yes_no(
+                        self,
+                        S.dialogs.close_tab_busy_title,
+                        S.dialogs.close_tab_busy_msg,
+                        repeat_checkbox_label=repeat_label,
+                    )
+                    if repeat_label:
+                        if isinstance(busy_result, tuple):
+                            accepted, apply_all = busy_result
+                        else:
+                            accepted, apply_all = busy_result, False
+                        if apply_all:
+                            remembered_busy = accepted
+                    else:
+                        accepted = busy_result
+                    if not accepted:
+                        return
+                    widget._on_cancel_execution()
+                elif remembered_busy:
+                    widget._on_cancel_execution()
+                else:
+                    return
+
+            self._finalize_close_session_tab(index, widget)
 
     def _finalize_close_session_tab(self, index: int, widget) -> None:
         """Remove session tab immediately; workers finish detached in background."""
@@ -1185,6 +1239,13 @@ class SessionsMixin:
         if hasattr(self, "_closing_session") and self._closing_session:
             return
 
+        prev_index = getattr(self, "_previous_session_tab_index", -1)
+        if prev_index >= 0 and prev_index != index:
+            prev_widget = self.session_tabs.widget(prev_index)
+            if isinstance(prev_widget, SessionWidget):
+                self._stop_cross_database_schema_sync(prev_widget.session.session_id)
+        self._previous_session_tab_index = index
+
         widget = self.session_tabs.widget(index)
         if isinstance(widget, SessionWidget):
             self.session_manager.focus_session(widget.session.session_id)
@@ -1192,6 +1253,8 @@ class SessionsMixin:
             self._switch_session_panels(widget.session.session_id)
 
             if hasattr(widget, "editor") and hasattr(widget.editor, "refresh_completion_context"):
+                if getattr(widget, "_pending_completion_refresh", False):
+                    widget._pending_completion_refresh = False
                 widget.editor.refresh_completion_context()
 
             # Atualizar OE para mostrar a conexao efetiva desta aba (deferido)

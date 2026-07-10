@@ -1036,9 +1036,9 @@ class SettingsDialog(QDialog):
             return
         self._pynia_model_thread = None
         self._pynia_model_worker = None
-        from src.utils.qt_threading import kick_qthread_stop
+        from src.utils.qt_threading import detach_qthread
 
-        kick_qthread_stop(thread, worker)
+        detach_qthread(thread, worker)
 
     def closeEvent(self, event):
         self._stop_pynia_model_thread()
@@ -1092,8 +1092,8 @@ class SettingsDialog(QDialog):
             self._pynia_settings.on_logout(pid)
         self._pynia_settings.set_active_provider(pid)
         self._pynia_model_cache.pop(pid, None)
-        self._fetch_pynia_models(pid)
         if emit_live_update:
+            self._fetch_pynia_models(pid)
             from PyQt6.QtCore import QTimer
 
             QTimer.singleShot(0, lambda p=pid: self.pynia_connector_changed.emit(p))
@@ -1743,17 +1743,28 @@ class SettingsDialog(QDialog):
         set_notification_secret(EMAIL_PASSWORD_KEY, self.notif_email_password.text())
 
     def _refresh_notification_transport_status(self):
-        transport = load_notification_transport_settings()
-
-        if transport["telegram"]["configured"]:
-            self.notif_telegram_status.setText(S.settings.notification_telegram_status_ready)
-        else:
-            self.notif_telegram_status.setText(S.settings.notification_telegram_status_missing)
-
-        if transport["email"]["configured"]:
-            self.notif_email_status.setText(S.settings.notification_email_status_ready)
-        else:
-            self.notif_email_status.setText(S.settings.notification_email_status_missing)
+        """Refresh transport hints from the form (avoid slow keyring reads on save)."""
+        telegram_ready = bool(
+            self.notif_telegram_chat_id.text().strip()
+            and self.notif_telegram_token.text().strip()
+        )
+        email_ready = bool(
+            self.notif_email_host.text().strip()
+            and self.notif_email_username.text().strip()
+            and self.notif_email_password.text().strip()
+            and self.notif_email_from.text().strip()
+            and self.notif_email_to.text().strip()
+        )
+        self.notif_telegram_status.setText(
+            S.settings.notification_telegram_status_ready
+            if telegram_ready
+            else S.settings.notification_telegram_status_missing
+        )
+        self.notif_email_status.setText(
+            S.settings.notification_email_status_ready
+            if email_ready
+            else S.settings.notification_email_status_missing
+        )
 
     def _on_notification_email_ssl_toggled(self, checked: bool):
         if checked and self.notif_email_use_tls.isChecked():
@@ -2468,7 +2479,6 @@ class SettingsDialog(QDialog):
         settings.setValue("notifications/error_title", self.notif_error_title.text())
         settings.setValue("notifications/error_message", self.notif_error_msg.text())
         self._persist_notification_transport_settings()
-        self._refresh_notification_transport_status()
 
         if hasattr(self, "_pynia_autocomplete_cb"):
             from src.services.pynia.settings import get_pynia_settings
@@ -2480,8 +2490,8 @@ class SettingsDialog(QDialog):
             from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
 
             reset_ai_autocomplete_circuit_breaker()
-            # Persist API token / active connector so OK applies what the user typed.
-            self._persist_pynia_connector_settings(emit_live_update=True)
+            # Persist token/settings only — live connector switch runs after dialog closes.
+            self._persist_pynia_connector_settings(emit_live_update=False)
 
         # Surface conflicting shortcuts before persisting (e.g. duplicates
         # carried over from an old config). Let the user go back and fix them.
@@ -2499,34 +2509,62 @@ class SettingsDialog(QDialog):
             ):
                 return
 
-        # Save shortcuts
+        # Save shortcuts (one disk write)
+        shortcut_updates = {}
         for row in range(self.table.rowCount()):
             shortcut_item = self.table.item(row, 1)
             action = shortcut_item.data(Qt.ItemDataRole.UserRole)
-            shortcut = shortcut_item.text()
-            self.shortcut_manager.set_shortcut(action, shortcut)
+            shortcut_updates[action] = shortcut_item.text()
+        self.shortcut_manager.update_shortcuts(shortcut_updates)
 
-        # Emit signal for MainWindow to re-register shortcuts
-        self.shortcuts_changed.emit()
-
-        show_information(self, S.settings.success_title, S.settings.success_msg)
-
-        # If language changed, prompt restart
         needs_restart = selected_lang != self._original_language
-        if needs_restart:
-            if confirm_yes_no(
-                self,
-                S.dialogs.language_restart_title,
-                S.dialogs.language_restart_msg,
-            ):
-                import sys
-                import os
-                from PyQt6.QtWidgets import QApplication
-                QApplication.quit()
-                os.execl(sys.executable, sys.executable, *sys.argv)
-                return
+        pynia_pid = ""
+        if hasattr(self, "_pynia_provider_combo"):
+            pynia_pid = self._current_pynia_connector_id()
+        parent = self.parent()
+
+        self.shortcuts_changed.emit()
+        if pynia_pid:
+            self.pynia_connector_changed.emit(pynia_pid)
 
         self.accept()
+        SettingsDialog._schedule_post_save_ui(parent, needs_restart=needs_restart)
+
+    @staticmethod
+    def _schedule_post_save_ui(parent, *, needs_restart: bool) -> None:
+        """Toast and optional restart prompt after the dialog has closed."""
+        from PyQt6.QtCore import QTimer
+
+        def _toast() -> None:
+            try:
+                from src.ui.components.toast_notification import ToastManager
+
+                ToastManager.notify(
+                    S.settings.success_title,
+                    S.settings.success_msg,
+                    success=True,
+                )
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _toast)
+        if needs_restart and parent is not None:
+            QTimer.singleShot(150, lambda: SettingsDialog._prompt_language_restart(parent))
+
+    @staticmethod
+    def _prompt_language_restart(parent) -> None:
+        if confirm_yes_no(
+            parent,
+            S.dialogs.language_restart_title,
+            S.dialogs.language_restart_msg,
+        ):
+            import os
+            import sys
+
+            from PyQt6.QtWidgets import QApplication
+
+            QApplication.quit()
+            os.execl(sys.executable, sys.executable, *sys.argv)
 
     def _reset_defaults(self):
         """Restores default shortcuts"""

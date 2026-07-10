@@ -84,6 +84,7 @@ class MainToolbar(QToolBar):
         """)
         self._icon_color = icon_color
         self._icon_hover = icon_hover
+        self._colors = colors
 
     def _setup_buttons(self):
         """Buttons with uniform icons"""
@@ -125,6 +126,9 @@ class MainToolbar(QToolBar):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
+
+        # Update (right side, before Pynia)
+        self._setup_update_action()
 
         # Pynia button (right side) - icon only
         self.btn_pynia = QPushButton()
@@ -188,22 +192,21 @@ class MainToolbar(QToolBar):
         self.workspace_config_btn.clicked.connect(self.workspace_settings_requested.emit)
         self.addWidget(self.workspace_config_btn)
 
-        # Update — QAction (QToolBar ignores addWidget buttons that start hidden)
-        self._setup_update_action()
-
         # Connect to workspace service signals for auto-refresh
         ws_service = get_workspace_service()
         ws_service.workspace_added.connect(self._refresh_workspace_combo)
         ws_service.workspace_removed.connect(self._refresh_workspace_combo)
 
     def _setup_update_action(self) -> None:
-        """One-click update next to workspace config (QAction shows/hides reliably)."""
+        """One-click update next to Pynia (QAction shows/hides reliably)."""
+        colors = self._colors
         self._update_action = QAction(
-            qta.icon("mdi.download-circle", color="#4ade80"),
+            qta.icon("mdi.download-circle-outline", color="#1a1a1a"),
             "",
             self,
         )
         self._update_action.setVisible(False)
+        self._update_action.setEnabled(True)
         self._update_action.triggered.connect(self.update_clicked.emit)
         self.addAction(self._update_action)
 
@@ -215,23 +218,34 @@ class MainToolbar(QToolBar):
         btn = self._update_action_button()
         if btn is None:
             return
+        colors = self._colors
         btn.setObjectName("ToolbarUpdateBtn")
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        btn.setStyleSheet("""
-            QToolButton#ToolbarUpdateBtn {
-                background-color: rgba(74, 222, 128, 0.15);
-                color: #4ade80;
-                border: 1px solid rgba(74, 222, 128, 0.45);
+        btn.setStyleSheet(f"""
+            QToolButton#ToolbarUpdateBtn {{
+                background-color: #ffffff;
+                color: #1a1a1a;
+                border: 1px solid {colors.border_default};
                 padding: 4px 10px;
                 font-size: 11px;
                 font-weight: 600;
                 border-radius: 6px;
-            }
-            QToolButton#ToolbarUpdateBtn:hover {
-                background-color: rgba(74, 222, 128, 0.28);
-                color: #86efac;
-            }
+            }}
+            QToolButton#ToolbarUpdateBtn:hover {{
+                background-color: #f3f3f3;
+                color: #000000;
+            }}
+            QToolButton#ToolbarUpdateBtn:disabled {{
+                background-color: #e8e8e8;
+                color: #888888;
+            }}
         """)
+
+    def set_update_enabled(self, enabled: bool) -> None:
+        self._update_action.setEnabled(enabled)
+        btn = self._update_action_button()
+        if btn is not None:
+            btn.setEnabled(enabled)
 
     def _refresh_workspace_combo(self, *args):
         """Refresh workspace combo box items."""
@@ -265,9 +279,11 @@ class MainToolbar(QToolBar):
             label = getattr(S.toolbar, "update_btn", "Update")
             text = f"{label} v{version}"
             tip = getattr(S.toolbar, "update_tooltip", "Install downloaded update")
+            self._update_action.setIcon(qta.icon("mdi.download-circle-outline", color="#1a1a1a"))
             self._update_action.setText(text)
             self._update_action.setToolTip(f"{tip} (v{version})")
             self._update_action.setVisible(True)
+            self._update_action.setEnabled(True)
             btn = self._update_action_button()
             if btn is not None:
                 btn.setVisible(True)

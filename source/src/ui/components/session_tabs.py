@@ -21,6 +21,7 @@ class SessionTabBar(QTabBar):
 
     tab_renamed = pyqtSignal(int, str)  # index, new_name
     closeRequested = pyqtSignal(int)
+    close_multiple_requested = pyqtSignal(list)  # indices, back-to-front
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -151,18 +152,18 @@ class SessionTabBar(QTabBar):
         """Close all tabs"""
         tab_widget = self.parent()
         if tab_widget:
-            # Close from back to front to avoid index changes
-            for i in range(tab_widget.count() - 1, -1, -1):
-                tab_widget.session_closed.emit(i)
+            indices = list(range(tab_widget.count() - 1, -1, -1))
+            self.close_multiple_requested.emit(indices)
 
     def _close_other_tabs(self, keep_index):
         """Close all tabs except the specified one"""
         tab_widget = self.parent()
         if tab_widget:
-            # Close from back to front
-            for i in range(tab_widget.count() - 1, -1, -1):
-                if i != keep_index:
-                    tab_widget.session_closed.emit(i)
+            indices = [
+                i for i in range(tab_widget.count() - 1, -1, -1) if i != keep_index
+            ]
+            if indices:
+                self.close_multiple_requested.emit(indices)
 
     def _rename_tab_inline(self, index):
         """Rename tab using inline input"""
@@ -388,6 +389,7 @@ class SessionTabs(QTabWidget):
     # Signals
     session_changed = pyqtSignal(int)  # index
     session_closed = pyqtSignal(int)  # index
+    close_multiple_tabs = pyqtSignal(list)  # indices, back-to-front
     session_renamed = pyqtSignal(int, str)  # index, new_name
     new_session_requested = pyqtSignal()
     duplicate_session = pyqtSignal(int)  # index - duplicate session
@@ -477,6 +479,7 @@ class SessionTabs(QTabWidget):
         self.currentChanged.connect(self.session_changed.emit)
         self.currentChanged.connect(lambda _index: self._reposition_new_tab_button())
         self.tab_bar.closeRequested.connect(self._on_close_requested)
+        self.tab_bar.close_multiple_requested.connect(self.close_multiple_tabs.emit)
         self.tab_bar.tab_renamed.connect(self.session_renamed.emit)
 
     def _reposition_new_tab_button(self) -> None:
