@@ -1,6 +1,7 @@
 import pandas as pd
 
-from src.services.schema_service import SchemaService
+from src.database.database_connector import QueryBusyError
+from src.services.schema_service import SCHEMA_BUSY_SENTINEL, SchemaService, is_schema_busy_result
 
 
 class FakeMultiDbConnector:
@@ -119,3 +120,42 @@ def test_sqlserver_lazy_columns_use_requested_database(qapp):
     assert any("TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'users'" in query for query in connector.queries)
     assert captured[0][0:3] == ("warehouse", "dbo", "users")
     assert [column["name"] for column in captured[0][3]] == ["id", "name"]
+
+
+class BusyConnector(FakeMultiDbConnector):
+    def execute_query(self, query: str):
+        raise QueryBusyError("A query is still running on this connection")
+
+
+def test_load_columns_emits_busy_sentinel_on_query_busy(qapp, caplog):
+    service = SchemaService()
+    run_schema_service_sync(service)
+    connector = BusyConnector("mysql")
+    captured = []
+    service.columns_loaded.connect(
+        lambda database, schema, table, columns: captured.append(columns)
+    )
+
+    with caplog.at_level("DEBUG"):
+        service.load_columns_for_table(connector, "Conn", "analytics", "analytics", "orders")
+
+    assert len(captured) == 1
+    assert is_schema_busy_result(captured[0])
+    assert not any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_load_tables_emits_busy_sentinel_on_query_busy(qapp, caplog):
+    service = SchemaService()
+    run_schema_service_sync(service)
+    connector = BusyConnector("mysql")
+    captured = []
+    service.tables_loaded.connect(
+        lambda database, schema, tables: captured.append(tables)
+    )
+
+    with caplog.at_level("DEBUG"):
+        service.load_tables_for_schema(connector, "Conn", "analytics", "")
+
+    assert len(captured) == 1
+    assert is_schema_busy_result(captured[0])
+    assert not any(record.levelname == "WARNING" for record in caplog.records)

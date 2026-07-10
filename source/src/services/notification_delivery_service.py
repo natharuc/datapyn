@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import threading
 from email.message import EmailMessage
 from typing import Any, Dict, Optional
 
@@ -18,9 +19,48 @@ logger = logging.getLogger(__name__)
 NOTIFICATION_KEYRING_SERVICE = "DataPyn.notifications"
 TELEGRAM_TOKEN_KEY = "telegram_bot_token"
 EMAIL_PASSWORD_KEY = "email_password"
+_FALLBACK_SETTINGS: Optional[QSettings] = None
+
+
+def _fallback_settings() -> QSettings:
+    """Fast local store; keyring writes run in the background."""
+    global _FALLBACK_SETTINGS
+    from src.core.workspace_service import qsettings_alive
+
+    if not qsettings_alive(_FALLBACK_SETTINGS):
+        _FALLBACK_SETTINGS = QSettings("DataPyn", "NotificationSecrets")
+    return _FALLBACK_SETTINGS
+
+
+def _fallback_get(secret_name: str) -> str:
+    return _fallback_settings().value(secret_name, "") or ""
+
+
+def _fallback_set(secret_name: str, value: str) -> None:
+    settings = _fallback_settings()
+    if value:
+        settings.setValue(secret_name, value)
+    else:
+        settings.remove(secret_name)
+
+
+def _keyring_persist(secret_name: str, value: str) -> None:
+    try:
+        if value:
+            keyring.set_password(NOTIFICATION_KEYRING_SERVICE, secret_name, value)
+            return
+        try:
+            keyring.delete_password(NOTIFICATION_KEYRING_SERVICE, secret_name)
+        except keyring.errors.PasswordDeleteError:
+            pass
+    except Exception as exc:
+        logger.warning("Failed to persist notification secret '%s': %s", secret_name, exc)
 
 
 def get_notification_secret(secret_name: str) -> str:
+    fallback = _fallback_get(secret_name)
+    if fallback:
+        return fallback
     try:
         return keyring.get_password(NOTIFICATION_KEYRING_SERVICE, secret_name) or ""
     except Exception as exc:
@@ -28,18 +68,15 @@ def get_notification_secret(secret_name: str) -> str:
         return ""
 
 
-def set_notification_secret(secret_name: str, value: str):
-    try:
-        if value:
-            keyring.set_password(NOTIFICATION_KEYRING_SERVICE, secret_name, value)
-            return
-
-        try:
-            keyring.delete_password(NOTIFICATION_KEYRING_SERVICE, secret_name)
-        except keyring.errors.PasswordDeleteError:
-            return
-    except Exception as exc:
-        logger.warning("Failed to persist notification secret '%s': %s", secret_name, exc)
+def set_notification_secret(secret_name: str, value: str) -> None:
+    """Persist instantly to QSettings; keyring write runs in the background."""
+    _fallback_set(secret_name, value or "")
+    threading.Thread(
+        target=_keyring_persist,
+        args=(secret_name, value or ""),
+        daemon=True,
+        name=f"NotificationKeyring-{secret_name}",
+    ).start()
 
 
 def _split_recipients(raw_value: str) -> list[str]:

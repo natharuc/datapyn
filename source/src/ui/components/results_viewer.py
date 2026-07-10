@@ -2213,6 +2213,21 @@ class ResultsViewer(QWidget):
         self._summarize_refresh_timer: Optional[QTimer] = None
         self._pending_result_tab_index: Optional[int] = None
         self._result_tab_switch_timer: Optional[QTimer] = None
+        self._pending_grid_prepare: Optional[dict] = None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        pending = self._pending_grid_prepare
+        if not pending:
+            return
+        self._pending_grid_prepare = None
+        self._apply_grid_prepare_result(
+            pending["result"],
+            var_name=pending.get("var_name") or self._current_result_label(),
+            model=pending.get("model") or self.model,
+            table_view=pending.get("table_view") or self.table_view,
+            page=pending.get("page"),
+        )
 
     def _setup_ui(self):
         """Configura a interface"""
@@ -4335,6 +4350,15 @@ class ResultsViewer(QWidget):
     def _on_grid_prepare_finished(self, job_id: int, result: GridPrepareResult):
         job = self._grid_prepare_job_meta.pop(job_id, None)
         if not job or not self._grid_prepare_job_is_current(job):
+            return
+        if not self.isVisible():
+            self._pending_grid_prepare = {
+                "result": result,
+                "var_name": job.get("var_name") or self._current_result_label(),
+                "model": job.get("model") or self.model,
+                "table_view": job.get("table_view") or self.table_view,
+                "page": job.get("page"),
+            }
             return
         self._apply_grid_prepare_result(
             result,

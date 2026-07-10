@@ -105,6 +105,13 @@ class ShortcutManager:
         self.shortcuts[action] = key_sequence
         self.save_shortcuts()
 
+    def update_shortcuts(self, updates: Dict[str, str]) -> None:
+        """Apply multiple shortcut changes with a single disk write."""
+        if not updates:
+            return
+        self.shortcuts.update(updates)
+        self.save_shortcuts()
+
     def reset_to_defaults(self):
         """Reset all shortcuts to default"""
         self.shortcuts = self.DEFAULT_SHORTCUTS.copy()

@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 from src.language import S
 from src.services.entity_metadata_service import build_display_data_type
 
+SCHEMA_BUSY_SENTINEL = object()
+
+
+def is_schema_busy_result(result) -> bool:
+    return result is SCHEMA_BUSY_SENTINEL
+
 
 def _sql_literal(value: str) -> str:
     return str(value or "").replace("'", "''")
@@ -407,8 +413,8 @@ class SchemaService(QObject):
     
     # Lazy loading signals (thread-safe communication)
     schemas_loaded = pyqtSignal(str, list)  # catalog_name, schemas_list
-    tables_loaded = pyqtSignal(str, str, list)  # catalog_name, schema_name, tables_list
-    columns_loaded = pyqtSignal(str, str, str, list)  # catalog_name, schema_name, table_name, columns_list
+    tables_loaded = pyqtSignal(str, str, object)  # catalog_name, schema_name, tables_list|busy
+    columns_loaded = pyqtSignal(str, str, str, object)  # catalog_name, schema_name, table_name, columns|busy
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -669,6 +675,8 @@ class SchemaService(QObject):
             schema_name: Schema name to load tables for
         """
         def _run():
+            from src.database.database_connector import QueryBusyError
+
             try:
                 db_type = getattr(connector, "db_type", "").lower()
                 tables = []
@@ -768,6 +776,14 @@ class SchemaService(QObject):
                     return []
 
                 return tables
+            except QueryBusyError as e:
+                logger.debug(
+                    "Deferred table metadata load (connection busy) for %s.%s: %s",
+                    catalog_name,
+                    schema_name,
+                    e,
+                )
+                return SCHEMA_BUSY_SENTINEL
             except Exception as e:
                 logger.warning(f"Error loading tables for {catalog_name}.{schema_name}: {e}")
                 return []
@@ -792,6 +808,8 @@ class SchemaService(QObject):
         _schema_name = schema_name
         
         def _run():
+            from src.database.database_connector import QueryBusyError
+
             try:
                 db_type = getattr(connector, "db_type", "").lower()
                 columns = []
@@ -899,6 +917,13 @@ class SchemaService(QObject):
                     return []
 
                 return columns
+            except QueryBusyError as e:
+                logger.debug(
+                    "Deferred column metadata load (connection busy) for %s: %s",
+                    _table_name,
+                    e,
+                )
+                return SCHEMA_BUSY_SENTINEL
             except Exception as e:
                 logger.warning(f"Error loading columns for {_table_name}: {e}")
                 return []

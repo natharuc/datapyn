@@ -448,6 +448,55 @@ class TestCloseTab:
             )
             assert final_count == initial_count
 
+    def test_close_multiple_tabs_applies_remembered_discard(self, main_window, qtbot):
+        """First dialog discard + apply-to-all closes remaining modified tabs without more prompts."""
+        from unittest.mock import patch
+        from src.ui.components.session_widget import SessionWidget
+
+        main_window._new_session()
+        main_window._new_session()
+        qtbot.wait(50)
+
+        modified_indices = []
+        for index in range(main_window.session_tabs.count()):
+            widget = main_window.session_tabs.widget(index)
+            if isinstance(widget, SessionWidget):
+                widget._is_modified = True
+                modified_indices.append(index)
+
+        if len(modified_indices) < 2:
+            pytest.skip("Need at least two session tabs for batch-close test")
+
+        ask_results = iter([("discard", True)])
+
+        with patch.object(main_window, "_ask_save_before_close", side_effect=lambda *_a, **_k: next(ask_results)) as mock_ask:
+            with patch.object(main_window, "_finalize_close_session_tab") as mock_finalize:
+                main_window._close_multiple_session_tabs(list(reversed(modified_indices)))
+
+        assert mock_finalize.call_count == len(modified_indices)
+        assert mock_ask.call_count == 1
+
+    def test_close_multiple_tabs_cancel_aborts_batch(self, main_window, qtbot):
+        """Cancel on the first unsaved tab aborts the whole batch."""
+        from unittest.mock import patch
+        from src.ui.components.session_widget import SessionWidget
+
+        main_window._new_session()
+        qtbot.wait(50)
+
+        modified_indices = []
+        for index in range(main_window.session_tabs.count()):
+            widget = main_window.session_tabs.widget(index)
+            if isinstance(widget, SessionWidget):
+                widget._is_modified = True
+                modified_indices.append(index)
+
+        with patch.object(main_window, "_ask_save_before_close", return_value="cancel"):
+            with patch.object(main_window, "_finalize_close_session_tab") as mock_finalize:
+                main_window._close_multiple_session_tabs(list(reversed(modified_indices)))
+
+        mock_finalize.assert_not_called()
+
     def test_close_saved_tab_no_dialog(self, main_window, qtbot):
         """Fechar aba sem alteracoes nao salvas nao deve mostrar dialogo"""
         from unittest.mock import patch

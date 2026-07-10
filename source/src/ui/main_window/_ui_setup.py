@@ -93,6 +93,7 @@ class UISetupMixin:
         # TabWidget for sessions (each tab is a complete SessionWidget)
         self.session_tabs = SessionTabs()
         self.session_tabs.session_closed.connect(self._close_session_tab)
+        self.session_tabs.close_multiple_tabs.connect(self._close_multiple_session_tabs)
         self.session_tabs.session_renamed.connect(self._on_session_renamed)
         self.session_tabs.session_changed.connect(self._on_session_tab_changed)
         self.session_tabs.new_session_requested.connect(self._new_session)
@@ -965,19 +966,6 @@ class UISetupMixin:
                 background-color: {colors["border"]};
                 color: #666666;
             }}
-            QToolButton#ToolbarUpdateBtn {{
-                background-color: rgba(74, 222, 128, 0.15);
-                color: #4ade80;
-                border: 1px solid rgba(74, 222, 128, 0.45);
-                padding: 4px 10px;
-                font-size: 11px;
-                font-weight: 600;
-                border-radius: 6px;
-            }}
-            QToolButton#ToolbarUpdateBtn:hover {{
-                background-color: rgba(74, 222, 128, 0.28);
-                color: #86efac;
-            }}
         """)
 
         # Atualizar paineis de todas as sessoes
@@ -1024,13 +1012,27 @@ class UISetupMixin:
             parent=self,
             initial_tab=initial_tab,
         )
-        dialog.shortcuts_changed.connect(self._reload_shortcuts)
-        dialog.pynia_connector_changed.connect(self._on_pynia_connector_changed)
+        dialog.shortcuts_changed.connect(
+            self._on_settings_shortcuts_saved,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        dialog.pynia_connector_changed.connect(
+            self._on_settings_pynia_connector_saved,
+            Qt.ConnectionType.QueuedConnection,
+        )
         dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
         dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
         dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
         dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
         dialog.exec()
+
+    def _on_settings_shortcuts_saved(self) -> None:
+        QTimer.singleShot(0, self._reload_shortcuts)
+
+    def _on_settings_pynia_connector_saved(self, provider_id: str) -> None:
+        pid = str(provider_id or "").strip()
+        if pid:
+            QTimer.singleShot(50, lambda p=pid: self._on_pynia_connector_changed(p))
 
     def _on_pynia_connector_changed(self, provider_id: str):
         """A Pynia connector was saved in Settings — switch the live agent and
@@ -1089,8 +1091,14 @@ class UISetupMixin:
             parent=self,
             initial_tab="workspace",
         )
-        dialog.shortcuts_changed.connect(self._reload_shortcuts)
-        dialog.pynia_connector_changed.connect(self._on_pynia_connector_changed)
+        dialog.shortcuts_changed.connect(
+            self._on_settings_shortcuts_saved,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        dialog.pynia_connector_changed.connect(
+            self._on_settings_pynia_connector_saved,
+            Qt.ConnectionType.QueuedConnection,
+        )
 
         # Connect Copilot auth signals
         dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
@@ -1218,7 +1226,6 @@ class UISetupMixin:
                 getattr(S.toolbar, "update_btn", "Update"),
                 getattr(S.status, "update_ready", "Update ready").format(version=version),
                 success=True,
-                color="#4ade80",
                 on_click=self._apply_pending_update,
             )
         except Exception:
@@ -1228,8 +1235,32 @@ class UISetupMixin:
         """Spawn detached Setup.exe, then quit so the updater can replace files."""
         if getattr(self, "_update_apply_started", False):
             return
+        if getattr(self, "_update_apply_running", False):
+            return
 
-        ok, err = self.auto_update_service.apply_pending_update()
+        self._update_apply_running = True
+        if hasattr(self, "main_toolbar"):
+            self.main_toolbar.set_update_enabled(False)
+        if hasattr(self, "statusbar"):
+            self.statusbar.showMessage(
+                getattr(S.status, "preparing_update", "Preparing update…"),
+                0,
+            )
+
+        if not self.auto_update_service.apply_pending_update_async(self._on_update_apply_finished):
+            self._update_apply_running = False
+            if hasattr(self, "main_toolbar"):
+                self.main_toolbar.set_update_enabled(True)
+            show_error(
+                self,
+                S.dialogs.installation_error_title,
+                S.dialogs.installation_error_msg,
+            )
+
+    def _on_update_apply_finished(self, ok: bool, err: str) -> None:
+        self._update_apply_running = False
+        if hasattr(self, "main_toolbar"):
+            self.main_toolbar.set_update_enabled(True)
         if ok:
             self._update_apply_started = True
             if hasattr(self, "main_toolbar"):
@@ -1239,7 +1270,6 @@ class UISetupMixin:
                     getattr(S.status, "applying_update", "Applying update…"),
                     5000,
                 )
-            # Let the updater process start before this instance exits.
             QTimer.singleShot(900, self._quit_for_update)
         else:
             detail = getattr(S.dialogs, "installation_error_detail", "{error}").format(

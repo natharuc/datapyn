@@ -290,8 +290,9 @@ class TestNotificationSettingsDialog:
         dialog.notif_email_to.setText("to@example.com")
 
         with patch("src.ui.dialogs.settings_dialog.set_notification_secret") as set_secret, \
-                patch("src.ui.dialogs.settings_dialog.show_information"), \
+                patch("src.ui.components.toast_notification.ToastManager") as toast_mgr, \
                 patch("src.ui.dialogs.settings_dialog.confirm_yes_no", return_value=False):
+            toast_mgr.notify = MagicMock()
             dialog._save_all()
 
         settings = QSettings("DataPyn", "DataPyn")
