@@ -612,10 +612,10 @@ class FileIOMixin:
             if isinstance(result_view_state, dict) and result_view_state:
                 dpw_content["result_view_state"] = result_view_state
 
-            shared_params = getattr(current_widget.session, "shared_parameters", None) or getattr(
-                current_widget, "_shared_parameters", []
-            )
-            if shared_params:
+            shared_params = getattr(current_widget.session, "shared_parameters", None)
+            if not isinstance(shared_params, list):
+                shared_params = getattr(current_widget, "_shared_parameters", None)
+            if isinstance(shared_params, list) and shared_params:
                 dpw_content["shared_parameters"] = shared_params
 
             with open(file_path, "w", encoding="utf-8") as f:

@@ -999,6 +999,8 @@ class SessionWidget(QWidget):
             return code, [str(exc)]
 
     def _refresh_shared_parameters_from_blocks(self) -> None:
+        if not hasattr(self, "editor"):
+            return
         codes = [code for _language, code in self.editor.get_all_block_codes()]
         merged = merge_shared_parameter_definitions(
             codes,
