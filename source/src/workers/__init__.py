@@ -533,7 +533,7 @@ class QueryDownloadWorker(BaseWorker):
     def run(self):
         from pathlib import Path
 
-        from src.database.database_connector import QueryBusyError
+        from src.database.database_connector import OperationCancelled, QueryBusyError
         from src.database.query_stream_exporter import StreamExportResult
 
         self.started.emit()
@@ -562,6 +562,8 @@ class QueryDownloadWorker(BaseWorker):
                 error_msg = "__CANCELLED__"
             elif result.errors and not result.files:
                 error_msg = "\n".join(result.errors)
+        except OperationCancelled:
+            error_msg = "__CANCELLED__"
         except QueryBusyError as e:
             error_msg = str(e)
         except Exception as e:
