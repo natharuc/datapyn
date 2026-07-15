@@ -2,6 +2,43 @@
 
 <!-- version list -->
 
+## v1.51.0 (2026-07-15)
+
+### Bug Fixes
+
+- **ci**: Guard shared-params refresh and DPW save serialization
+  ([`1fb39b2`](https://github.com/natharuc/datapyn/commit/1fb39b24617f9357b1afebcb6f152a0cf6cf0ed1))
+
+### Continuous Integration
+
+- Trigger PR checks
+  ([`b8073b5`](https://github.com/natharuc/datapyn/commit/b8073b50bca3f56f7c3d5844be06c8dfc0f24518))
+
+### Features
+
+- **params**: Shared parameter panel at tab footer
+  ([`1f4f774`](https://github.com/natharuc/datapyn/commit/1f4f77415fbc48981ccecc06dc29f7745b873a95))
+
+- **params**: Shared tab parameters with {{name}} syntax
+  ([`e17ab0b`](https://github.com/natharuc/datapyn/commit/e17ab0b3a9a19ae0a76cf68204ef2ac105c44ffa))
+
+- **ui**: Polish params panel, CSV download options, and tab chrome
+  ([`c270c3d`](https://github.com/natharuc/datapyn/commit/c270c3d46171035b51747e8dd652a3a79df952b5))
+
+- **ui**: Polish params panel, CSV download options, and tab chrome
+  ([`0065e1e`](https://github.com/natharuc/datapyn/commit/0065e1e9009f20396768b0f7966037fb5ed37423))
+
+### Heuristic
+
+- Merge pull request #140 from natharuc/feat/params-ui-polish-download-csv
+  ([`c270c3d`](https://github.com/natharuc/datapyn/commit/c270c3d46171035b51747e8dd652a3a79df952b5))
+
+### Testing
+
+- **params**: Shared tab parameter detection, prep, and persistence
+  ([`c293783`](https://github.com/natharuc/datapyn/commit/c293783726079943fdc7e8fe9e4590e8ca8db0e5))
+
+
 ## v1.50.0 (2026-07-10)
 
 ### Bug Fixes
