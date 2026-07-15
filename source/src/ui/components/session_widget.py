@@ -28,6 +28,7 @@ from src.database.database_connector import (
     _format_sql_error_for_user,
     _safe_exception_text,
     get_connector_database_context,
+    OperationCancelled,
     QueryBusyError,
 )
 from src.editors.block_editor import BlockEditor
@@ -127,6 +128,8 @@ class SessionSqlWorker(QObject):
         try:
             df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.finished.emit(df, "")
+        except OperationCancelled:
+            self.finished.emit(None, "__CANCELLED__")
         except QueryBusyError as e:
             self.finished.emit(None, str(e))
         except Exception as e:
@@ -2630,6 +2633,21 @@ class SessionWidget(QWidget):
         if not self._sql_stopping:
             return
         if self._sql_stop_timed_out():
+            thread = getattr(self, "_sql_stopping_thread", None)
+            thread_alive = False
+            if thread is not None:
+                try:
+                    thread_alive = thread.isRunning()
+                except RuntimeError:
+                    thread_alive = False
+            connector = self._sql_stopping_connector
+            if thread_alive and connector is not None:
+                connector._abandoned = True
+                logger.warning(
+                    "SQL cancel timed out with worker still running; connection marked abandoned"
+                )
+                self._finalize_sql_stop()
+                return
             logger.warning("SQL cancel finalize timed out; forcing cleanup")
             self._force_release_stopping_query_lock()
             self._finalize_sql_stop()
