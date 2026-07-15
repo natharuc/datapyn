@@ -1,5 +1,6 @@
 """Tests for non-blocking SQL query cancellation."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +9,7 @@ from PyQt6.QtWidgets import QApplication
 
 from PyQt6.QtCore import QThread
 
-from src.database.database_connector import DatabaseConnector, QueryBusyError
+from src.database.database_connector import DatabaseConnector, OperationCancelled, QueryBusyError
 from src.ui.components.session_widget import SessionSqlWorker, SessionWidget
 
 
@@ -362,3 +363,142 @@ def test_tab_spinner_clockwise_and_counter_clockwise(qtbot, monkeypatch):
     angle_ccw_before = tabs._spinner_angle_ccw
     tabs._tick_spinner()
     assert tabs._spinner_angle_ccw == (angle_ccw_before + 30) % 360
+
+
+def test_generic_execute_sets_active_raw_conn_and_cursor():
+    connector = DatabaseConnector()
+    connector.db_type = "postgresql"
+    connector.engine = MagicMock()
+
+    raw_conn = MagicMock()
+    cursor = MagicMock()
+    cursor.description = [("value",)]
+    cursor.fetchmany.side_effect = [[(1,)], []]
+    raw_conn.cursor.return_value = cursor
+    connector.engine.raw_connection.return_value = raw_conn
+
+    connector._execute_generic_query("SELECT 1")
+
+    raw_conn.cursor.assert_called_once()
+    raw_conn.close.assert_called_once()
+    assert connector._active_raw_conn is None
+    assert connector._active_cursor is None
+
+
+def test_generic_execute_raises_operation_cancelled_when_flag_set():
+    connector = DatabaseConnector()
+    connector.db_type = "postgresql"
+    connector.engine = MagicMock()
+
+    raw_conn = MagicMock()
+    cursor = MagicMock()
+
+    def _mark_cancelled(*_args, **_kwargs):
+        connector._cancelled = True
+
+    cursor.execute.side_effect = _mark_cancelled
+    raw_conn.cursor.return_value = cursor
+    connector.engine.raw_connection.return_value = raw_conn
+
+    with pytest.raises(OperationCancelled):
+        connector._execute_generic_query("SELECT 1")
+
+
+def test_interrupt_query_postgresql_uses_active_raw_conn_cancel():
+    connector = DatabaseConnector()
+    connector.db_type = "postgresql"
+    raw_conn = MagicMock()
+    connector._active_raw_conn = raw_conn
+
+    connector.interrupt_query()
+
+    raw_conn.cancel.assert_called_once()
+
+
+def test_interrupt_query_mysql_kill_query_fallback():
+    connector = DatabaseConnector()
+    connector.db_type = "mysql"
+    connector._active_mysql_thread_id = 42
+
+    admin = MagicMock()
+    admin_raw = MagicMock()
+    admin_cursor = MagicMock()
+    admin_raw.cursor.return_value = admin_cursor
+
+    with patch.object(connector, "_spawn_admin_connection", return_value=(admin, admin_raw)):
+        connector.interrupt_query()
+
+    admin_cursor.execute.assert_called_once_with("KILL QUERY 42")
+    admin_raw.close.assert_called_once()
+    admin.disconnect.assert_called_once()
+
+
+def test_interrupt_query_mysql_kill_access_denied_silent(caplog):
+    connector = DatabaseConnector()
+    connector.db_type = "mariadb"
+    connector._active_mysql_thread_id = 7
+
+    with patch.object(
+        connector,
+        "_spawn_admin_connection",
+        side_effect=Exception("Access denied for user"),
+    ):
+        with caplog.at_level("DEBUG"):
+            connector.interrupt_query()
+
+    assert not any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_execute_query_rejects_abandoned_connection():
+    connector = DatabaseConnector()
+    connector.engine = MagicMock()
+    connector._abandoned = True
+
+    with pytest.raises(QueryBusyError, match="blocked after a query failed to cancel"):
+        connector.execute_query("SELECT 1")
+
+
+def test_force_disconnect_disposes_engine():
+    connector = DatabaseConnector()
+    engine = MagicMock()
+    connector.engine = engine
+    connector._abandoned = True
+
+    connector.force_disconnect()
+
+    engine.dispose.assert_called_once()
+    assert connector.engine is None
+    assert connector._abandoned is False
+
+
+def test_lock_not_released_while_thread_alive_after_cancel(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+    session.finish_execution = MagicMock()
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+
+    connector = DatabaseConnector()
+    connector._query_lock.acquire()
+    thread = MagicMock()
+    thread.isRunning.return_value = True
+
+    widget._sql_stopping = True
+    widget._sql_stopping_thread = thread
+    widget._sql_stopping_connector = connector
+    widget._sql_stop_started_at = time.time() - 1.0
+    widget._SQL_STOP_TIMEOUT_SEC = 0.0
+
+    with patch.object(widget, "_force_release_stopping_query_lock") as force_release:
+        with patch.object(widget, "_finalize_sql_stop") as finalize:
+            widget._schedule_sql_stop_finalize()
+
+    assert connector._abandoned is True
+    force_release.assert_not_called()
+    finalize.assert_called_once()
