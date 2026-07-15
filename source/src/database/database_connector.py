@@ -39,7 +39,11 @@ class QueryBusyError(ConnectionError):
     """Raised when a second query starts while another is still running."""
 
 
-# Fetch rows from DB cursors in bounded chunks. Long fetchall() calls hold
+class OperationCancelled(Exception):
+    """Raised when a running query was cancelled by the user."""
+
+
+# Fetch rows from DB cursors in bounded chunks.
 # the GIL for the whole result set, starving the Qt UI thread even though the
 # query runs in a worker thread. Chunking adds explicit yield points so the
 # UI keeps painting while large results stream into memory.
@@ -394,6 +398,8 @@ class DatabaseConnector:
         self._active_cursor = None  # Cursor reference for cancellation
         self._cancelled = False  # Cancellation flag
         self._query_lock = threading.Lock()
+        self._abandoned = False
+        self._active_mysql_thread_id: Optional[int] = None
         self._connection_config: Dict[str, Any] = {}
         self._sqlserver_mfa_credential = None
 
@@ -804,11 +810,19 @@ class DatabaseConnector:
         if not self.engine:
             raise ConnectionError("No active database connection")
 
+        if getattr(self, "_abandoned", False):
+            raise QueryBusyError(
+                "Connection is blocked after a query failed to cancel on the server. "
+                "Reconnect to continue."
+            )
+
         if not self._query_lock.acquire(blocking=False):
             raise QueryBusyError("A query is still running on this connection")
 
         try:
             return self._execute_query_unlocked(query, parameters=parameters)
+        except OperationCancelled:
+            raise
         except Exception as e:
             logger.error(f"Error executing query: {str(e)}")
             raise
@@ -853,6 +867,12 @@ class DatabaseConnector:
         """Execute query and stream result sets to files without building DataFrames."""
         if not self.engine:
             raise ConnectionError("No active database connection")
+
+        if getattr(self, "_abandoned", False):
+            raise QueryBusyError(
+                "Connection is blocked after a query failed to cancel on the server. "
+                "Reconnect to continue."
+            )
 
         if not self._query_lock.acquire(blocking=False):
             raise QueryBusyError("A query is still running on this connection")
@@ -1262,12 +1282,15 @@ class DatabaseConnector:
         commands = self._split_sql_statements(query)
         result = StreamExportResult()
         file_index = 0
+        raw_conn = None
+        cursor = None
 
         if not commands:
             result.errors.append("No SQL commands to execute.")
             return result
 
-        with self.engine.connect() as conn:
+        try:
+            raw_conn, cursor = self._begin_cancellable_raw_query()
             for cmd in commands:
                 if self._cancelled or (is_cancelled and is_cancelled()):
                     result.cancelled = True
@@ -1278,17 +1301,16 @@ class DatabaseConnector:
                 executable_params = prepared.params if prepared else {}
 
                 if self._requires_postgresql_autocommit(cmd):
-                    conn.commit()
                     self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
                     continue
 
                 if self._is_select_query(cmd):
-                    db_result = conn.execute(text(executable_sql), executable_params)
-                    columns = list(db_result.keys())
+                    self._execute_raw_statement(cursor, executable_sql, executable_params)
+                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
                     file_index += 1
                     if not self._stream_write_result_set(
                         columns,
-                        db_result,
+                        cursor,
                         base_path=base_path,
                         export_format=export_format,
                         file_index=file_index,
@@ -1297,12 +1319,23 @@ class DatabaseConnector:
                         on_file_started=on_file_started,
                         is_cancelled=is_cancelled,
                     ):
+                        result.cancelled = True
                         break
                 else:
-                    conn.execute(text(executable_sql), executable_params)
+                    self._execute_raw_statement(cursor, executable_sql, executable_params)
 
-            conn.commit()
+            if not result.cancelled:
+                try:
+                    raw_conn.commit()
+                except Exception:
+                    pass
+        except OperationCancelled:
+            result.cancelled = True
+        finally:
+            self._end_cancellable_raw_query(raw_conn, cursor)
 
+        if self._cancelled:
+            result.cancelled = True
         return result
 
     def _execute_query_unlocked(
@@ -1334,6 +1367,144 @@ class DatabaseConnector:
         # For other databases, use legacy logic
         return self._execute_generic_query(query, parameters=parameters)
 
+    def _ensure_not_cancelled(self) -> None:
+        if self._cancelled:
+            raise OperationCancelled()
+
+    @staticmethod
+    def _is_mysql_kill_access_denied(error: BaseException) -> bool:
+        text = _safe_exception_text(error).lower()
+        markers = (
+            "access denied",
+            "command denied",
+            "kill denied",
+            "er_kill_denied_error",
+            "1045",
+            "1095",
+            "1227",
+        )
+        return any(marker in text for marker in markers)
+
+    def _adapt_named_params_sql(self, sql: str, params: Optional[Dict[str, Any]]) -> tuple[str, Optional[Dict[str, Any]]]:
+        if not params:
+            return sql, None
+        if self.db_type in ("postgresql", "mysql", "mariadb"):
+            import re
+
+            adapted = re.sub(r":(\w+)", r"%(\1)s", sql)
+            return adapted, params
+        return sql, params
+
+    def _execute_raw_statement(self, cursor, sql: str, params: Optional[Dict[str, Any]] = None) -> None:
+        adapted_sql, adapted_params = self._adapt_named_params_sql(sql, params)
+        if adapted_params:
+            cursor.execute(adapted_sql, adapted_params)
+        else:
+            cursor.execute(adapted_sql)
+
+    def _cursor_to_dataframe(self, cursor) -> pd.DataFrame:
+        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+        if not columns:
+            return pd.DataFrame()
+        rows = fetch_rows_chunked(cursor)
+        return records_to_dataframe(rows, columns)
+
+    def _capture_mysql_thread_id(self, cursor) -> None:
+        if self.db_type not in ("mysql", "mariadb"):
+            return
+        try:
+            cursor.execute("SELECT CONNECTION_ID()")
+            row = cursor.fetchone()
+            if row:
+                self._active_mysql_thread_id = int(row[0])
+        except Exception as exc:
+            logger.debug("Could not read MySQL CONNECTION_ID(): %s", exc)
+
+    def _spawn_admin_connection(self) -> tuple["DatabaseConnector", Any]:
+        from src.database.block_connector_pool import connect_connector_from_config
+
+        config = dict(getattr(self, "_connection_config", None) or {})
+        if not config:
+            raise ConnectionError("No connection configuration for admin connection")
+        admin = connect_connector_from_config(config, password=config.get("password", ""))
+        if not admin.is_connected() or admin.engine is None:
+            raise ConnectionError("Failed to open admin connection for query cancel")
+        return admin, admin.engine.raw_connection()
+
+    def _kill_mysql_query(self, thread_id: int) -> None:
+        admin = None
+        admin_raw = None
+        try:
+            admin, admin_raw = self._spawn_admin_connection()
+            cursor = admin_raw.cursor()
+            try:
+                cursor.execute(f"KILL QUERY {int(thread_id)}")
+                logger.info("MySQL/MariaDB query cancelled via KILL QUERY %s", thread_id)
+            finally:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            if self._is_mysql_kill_access_denied(exc):
+                logger.debug("KILL QUERY skipped (insufficient privileges): %s", exc)
+                return
+            logger.warning(
+                "KILL QUERY failed for thread %s: %s",
+                thread_id,
+                type(exc).__name__,
+            )
+        finally:
+            if admin_raw is not None:
+                try:
+                    admin_raw.close()
+                except Exception:
+                    pass
+            if admin is not None:
+                try:
+                    admin.disconnect()
+                except Exception:
+                    pass
+
+    def _begin_cancellable_raw_query(self) -> tuple[Any, Any]:
+        self._cancelled = False
+        self._active_mysql_thread_id = None
+        raw_conn = self.engine.raw_connection()
+        self._active_raw_conn = raw_conn
+        cursor = raw_conn.cursor()
+        self._active_cursor = cursor
+        self._capture_mysql_thread_id(cursor)
+        return raw_conn, cursor
+
+    def _end_cancellable_raw_query(self, raw_conn, cursor) -> None:
+        self._active_raw_conn = None
+        self._active_cursor = None
+        self._active_mysql_thread_id = None
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if raw_conn is not None:
+            try:
+                raw_conn.close()
+            except Exception:
+                pass
+
+    def force_disconnect(self) -> None:
+        """Drop pooled connections so a stuck server-side query cannot block reuse."""
+        self._active_raw_conn = None
+        self._active_cursor = None
+        self._active_mysql_thread_id = None
+        self._cancelled = False
+        self._abandoned = False
+        if self.engine is not None:
+            try:
+                self.engine.dispose()
+            except Exception as exc:
+                logger.warning("Error disposing engine during force_disconnect: %s", exc)
+            self.engine = None
+
     def request_cancel(self) -> None:
         """Set cancellation flag (safe from any thread; does not call the driver)."""
         self._cancelled = True
@@ -1363,10 +1534,17 @@ class DatabaseConnector:
                     logger.info("Databricks query cancelled via cursor.cancel()")
                 else:
                     logger.warning("Cancel requested but Databricks cursor not available")
+            elif self.db_type in ("mysql", "mariadb"):
+                thread_id = getattr(self, "_active_mysql_thread_id", None)
+                if thread_id:
+                    self._kill_mysql_query(thread_id)
+                else:
+                    logger.debug(
+                        "Cancel requested for %s but no active connection id is available",
+                        self.db_type,
+                    )
             else:
-                # MySQL/MariaDB: no native cancel in driver,
-                # but _cancelled flag will interrupt processing
-                logger.info(f"Cancel requested for {self.db_type} (via flag)")
+                logger.debug("Cancel requested for %s (no driver interrupt available)", self.db_type)
         except Exception as e:
             logger.warning(f"Error cancelling query: {e}")
 
@@ -1832,80 +2010,83 @@ class DatabaseConnector:
         return records_to_dataframe(rows, columns)
 
     def _execute_generic_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> pd.DataFrame:
-        """Execute generic query for non-MSSQL databases"""
-        # Split statements with DELIMITER-awareness
+        """Execute generic query for non-MSSQL databases using raw DBAPI for cancellation."""
         commands = self._split_sql_statements(query)
+        if not commands:
+            return self._success_message_df("no_commands")
 
-        if len(commands) > 1:
-            # Multiple commands - execute all and capture SELECT results
-            dataframes = []
-
-            with self.engine.connect() as conn:
-                for cmd in commands:
-                    prepared = prepare_generic_sql(cmd, parameters) if parameters else None
-                    executable_sql = prepared.query if prepared else cmd
-                    executable_params = prepared.params if prepared else {}
-
-                    if self._requires_postgresql_autocommit(cmd):
-                        conn.commit()
-                        result_df = self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
-                    elif self._is_select_query(cmd):
-                        # Is SELECT - capture result
-                        try:
-                            result = conn.execute(text(executable_sql), executable_params)
-                            df = self._result_to_dataframe(result)
-                            logger.info(f"SELECT executed: {len(df)} rows returned")
-                            dataframes.append(df)
-                        except Exception as e:
-                            logger.error(f"Error executing SELECT: {str(e)}")
-                            raise
-                    else:
-                        # Not SELECT - execute as statement
-                        conn.execute(text(executable_sql), executable_params)
-
-                conn.commit()
-
-            # If captured multiple results, return list of DataFrames
-            if len(dataframes) > 1:
-                logger.info(f"Returning list with {len(dataframes)} DataFrames")
-                return dataframes
-
-            # If captured single result, return directly
-            if dataframes:
-                logger.info(f"Returning single DataFrame with {len(dataframes[0])} rows")
-                return dataframes[0]
-
-            # No SELECT executed - return success message
-            logger.info("Commands executed successfully.")
-            return self._success_message_df("success_commands_plural")
-        elif len(commands) == 1:
-            # Single command - use the cleaned statement (DELIMITER stripped)
+        if len(commands) == 1:
             cmd = commands[0]
             prepared = prepare_generic_sql(cmd, parameters) if parameters else None
             executable_sql = prepared.query if prepared else cmd
             executable_params = prepared.params if prepared else {}
             if self._requires_postgresql_autocommit(cmd):
                 return self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
-            if self._is_select_query(cmd):
-                # SELECT query - fetch rows directly so DB driver values are preserved
-                with self.engine.connect() as conn:
-                    result = conn.execute(text(executable_sql), executable_params)
-                    df = self._result_to_dataframe(result)
-                logger.info(f"Query executed successfully. Rows returned: {len(df)}")
-                return df
-            else:
-                # Non-SELECT - execute as statement
-                with self.engine.connect() as conn:
-                    result = conn.execute(text(executable_sql), executable_params)
-                    conn.commit()
-                    rows_affected = result.rowcount
 
-                    if rows_affected >= 0:
-                        return self._success_message_df("success_command_rows", rows=rows_affected)
-                    return self._success_message_df("success_command")
-        else:
-            # No commands (empty input or only DELIMITER directives)
-            return self._success_message_df("no_commands")
+            raw_conn = None
+            cursor = None
+            try:
+                raw_conn, cursor = self._begin_cancellable_raw_query()
+                if self._is_select_query(cmd):
+                    self._execute_raw_statement(cursor, executable_sql, executable_params)
+                    self._ensure_not_cancelled()
+                    df = self._cursor_to_dataframe(cursor)
+                    logger.info(f"Query executed successfully. Rows returned: {len(df)}")
+                    return df
+
+                self._execute_raw_statement(cursor, executable_sql, executable_params)
+                self._ensure_not_cancelled()
+                try:
+                    raw_conn.commit()
+                except Exception:
+                    pass
+                rows_affected = cursor.rowcount if hasattr(cursor, "rowcount") else -1
+                if isinstance(rows_affected, int) and rows_affected >= 0:
+                    return self._success_message_df("success_command_rows", rows=rows_affected)
+                return self._success_message_df("success_command")
+            finally:
+                self._end_cancellable_raw_query(raw_conn, cursor)
+
+        dataframes = []
+        raw_conn = None
+        cursor = None
+        try:
+            raw_conn, cursor = self._begin_cancellable_raw_query()
+            for cmd in commands:
+                self._ensure_not_cancelled()
+
+                prepared = prepare_generic_sql(cmd, parameters) if parameters else None
+                executable_sql = prepared.query if prepared else cmd
+                executable_params = prepared.params if prepared else {}
+
+                if self._requires_postgresql_autocommit(cmd):
+                    self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
+                    continue
+
+                if self._is_select_query(cmd):
+                    self._execute_raw_statement(cursor, executable_sql, executable_params)
+                    self._ensure_not_cancelled()
+                    df = self._cursor_to_dataframe(cursor)
+                    logger.info(f"SELECT executed: {len(df)} rows returned")
+                    dataframes.append(df)
+                else:
+                    self._execute_raw_statement(cursor, executable_sql, executable_params)
+
+            try:
+                raw_conn.commit()
+            except Exception:
+                pass
+        finally:
+            self._end_cancellable_raw_query(raw_conn, cursor)
+
+        if len(dataframes) > 1:
+            logger.info(f"Returning list with {len(dataframes)} DataFrames")
+            return dataframes
+        if dataframes:
+            logger.info(f"Returning single DataFrame with {len(dataframes[0])} rows")
+            return dataframes[0]
+        logger.info("Commands executed successfully.")
+        return self._success_message_df("success_commands_plural")
 
     def execute_statement(self, statement: str) -> int:
         """
