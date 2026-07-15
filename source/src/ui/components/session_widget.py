@@ -31,8 +31,15 @@ from src.database.database_connector import (
     QueryBusyError,
 )
 from src.editors.block_editor import BlockEditor
+from src.editors.sql_parameters_panel import SharedParametersPanel
 from src.language import S
-from src.utils.sql_parameter_service import validate_and_convert_parameters
+from src.utils.sql_parameter_service import (
+    SqlParameterError,
+    merge_shared_parameter_definitions,
+    normalize_parameter_definition,
+    prepare_python_code_with_shared_parameters,
+    validate_and_convert_parameters,
+)
 # from src.ui.components.bottom_tabs import BottomTabs  # Removed - using global panels
 
 logger = logging.getLogger(__name__)
@@ -328,6 +335,8 @@ class SessionWidget(QWidget):
         self._periodic_timer: Optional[QTimer] = None
         self._periodic_interval: int = 0  # seconds
         self._periodic_active: bool = False
+        self._shared_parameters: list[dict[str, Any]] = list(getattr(session, "shared_parameters", []) or [])
+        self._shared_parameters_enabled: bool = bool(getattr(session, "shared_parameters_enabled", True))
 
         self._setup_ui()
         self._connect_signals()
@@ -340,6 +349,8 @@ class SessionWidget(QWidget):
         elif session.code:
             # Compatibility: old code without blocks
             self.editor.setText(session.code)
+
+        self._refresh_shared_parameters_from_blocks()
 
         # Connections are selected per block via clickable panel (no need to populate list)
 
@@ -500,22 +511,28 @@ class SessionWidget(QWidget):
         self.splitter = QSplitter(Qt.Orientation.Vertical)
 
         # === PARTE SUPERIOR: Editor de Blocos ===
-        editor_container = QWidget()
-        editor_layout = QVBoxLayout(editor_container)
-        editor_layout.setContentsMargins(5, 5, 5, 5)
+        self._editor_host = QWidget()
+        editor_layout = QVBoxLayout(self._editor_host)
+        editor_layout.setContentsMargins(5, 5, 5, 0)
+        editor_layout.setSpacing(0)
 
         # Block editor (replaces UnifiedEditor)
         self.editor = BlockEditor(theme_manager=self.theme_manager)
         self.editor.bind_session(self.session)
         self.editor.bind_session_widget(self)
-        editor_layout.addWidget(self.editor)
+        editor_layout.addWidget(self.editor, 1)
 
-        self.splitter.addWidget(editor_container)
+        self.shared_parameters_panel = SharedParametersPanel()
+        self.shared_parameters_panel.parameters_changed.connect(self._on_shared_parameters_changed)
+        self.shared_parameters_panel.close_requested.connect(self._on_shared_parameters_panel_closed)
+        editor_layout.addWidget(self.shared_parameters_panel)
+
+        self.splitter.addWidget(self._editor_host)
 
         # Note: BottomTabs removed - using global panels from MainWindow
         # Layout now only contains the editor (Results/Output/Variables panels are dockable)
 
-        layout.addWidget(self.editor)  # Simplified layout: just editor
+        layout.addWidget(self.splitter)
 
         # Loading overlay (initially hidden)
         self._loading_overlay = QLabel(self)
@@ -930,6 +947,7 @@ class SessionWidget(QWidget):
 
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
+        self.editor.shared_parameters_scan_needed.connect(self._refresh_shared_parameters_from_blocks)
 
         # Connect session signals
         self.session.variables_changed.connect(self._update_variables_view)
@@ -947,6 +965,71 @@ class SessionWidget(QWidget):
         if message:
             return f"[{timestamp}][{log_type}] {message}"
         return f"[{timestamp}][{log_type}]"
+
+    def get_shared_parameters(self) -> list[dict[str, Any]]:
+        if not self._shared_parameters_enabled:
+            return []
+        if hasattr(self, "shared_parameters_panel"):
+            return self.shared_parameters_panel.parameters()
+        return [dict(item) for item in self._shared_parameters]
+
+    def set_shared_parameters(self, parameters: list[dict[str, Any]] | None, *, enabled: bool | None = None) -> None:
+        self._shared_parameters = [dict(item) for item in (parameters or [])]
+        if enabled is not None:
+            self._shared_parameters_enabled = bool(enabled)
+        if not hasattr(self, "shared_parameters_panel"):
+            return
+        if self._shared_parameters_enabled and self._shared_parameters:
+            self.shared_parameters_panel.set_parameters(self._shared_parameters)
+        else:
+            self.shared_parameters_panel.set_parameters([])
+            self.shared_parameters_panel.hide()
+
+    def _sql_parameters_for_execution(
+        self,
+        query: str,
+        block_parameters: list[dict[str, Any]] | None,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        combined = list(self.get_shared_parameters()) + list(block_parameters or [])
+        if not combined:
+            return [], []
+        return validate_and_convert_parameters(query, combined)
+
+    def _prepare_python_code(self, code: str) -> tuple[str, list[str]]:
+        shared_parameters = self.get_shared_parameters()
+        if not shared_parameters:
+            return code, []
+        try:
+            return prepare_python_code_with_shared_parameters(code, shared_parameters), []
+        except SqlParameterError as exc:
+            return code, [str(exc)]
+
+    def _refresh_shared_parameters_from_blocks(self) -> None:
+        codes = [code for _language, code in self.editor.get_all_block_codes()]
+        merged = merge_shared_parameter_definitions(
+            codes,
+            self._shared_parameters,
+            self.editor.collect_sql_schemas(),
+        )
+        self._shared_parameters = [
+            normalize_parameter_definition(item, index) for index, item in enumerate(merged)
+        ]
+        self.session.shared_parameters = self._shared_parameters
+        if self._shared_parameters_enabled and self._shared_parameters:
+            self.shared_parameters_panel.set_parameters(self._shared_parameters)
+        else:
+            self.shared_parameters_panel.set_parameters([])
+            self.shared_parameters_panel.hide()
+
+    def _on_shared_parameters_changed(self, parameters: list[dict[str, Any]]) -> None:
+        self._shared_parameters = [dict(item) for item in (parameters or [])]
+        self.session.shared_parameters = self._shared_parameters
+        self.editor.content_changed.emit()
+
+    def _on_shared_parameters_panel_closed(self) -> None:
+        self._shared_parameters_enabled = False
+        self.session.shared_parameters_enabled = False
+        self.shared_parameters_panel.hide()
 
     # === SQL EXECUTION ===
 
@@ -1718,8 +1801,9 @@ class SessionWidget(QWidget):
             return
 
         prepared_parameters = []
-        if sql_parameters:
-            prepared_parameters, parameter_errors = validate_and_convert_parameters(query, sql_parameters)
+        combined_parameters = list(self.get_shared_parameters()) + list(sql_parameters or [])
+        if combined_parameters:
+            prepared_parameters, parameter_errors = self._sql_parameters_for_execution(query, sql_parameters)
             if parameter_errors:
                 message = S.sql_parameters.validation_failed.format(errors="; ".join(parameter_errors))
                 self.append_output(self._format_log("SQL", message), error=True)
@@ -1923,8 +2007,9 @@ class SessionWidget(QWidget):
             return
 
         prepared_parameters = []
-        if sql_parameters:
-            prepared_parameters, parameter_errors = validate_and_convert_parameters(query, sql_parameters)
+        combined_parameters = list(self.get_shared_parameters()) + list(sql_parameters or [])
+        if combined_parameters:
+            prepared_parameters, parameter_errors = self._sql_parameters_for_execution(query, sql_parameters)
             if parameter_errors:
                 message = S.sql_parameters.validation_failed.format(errors="; ".join(parameter_errors))
                 self.append_output(self._format_log("SQL", message), error=True)
@@ -2279,6 +2364,21 @@ class SessionWidget(QWidget):
         if self._is_executing:
             self._execution_queue.append(("python", code))
             return
+
+        prepared_code, parameter_errors = self._prepare_python_code(code)
+        if parameter_errors:
+            message = S.sql_parameters.validation_failed.format(errors="; ".join(parameter_errors))
+            self.append_output(self._format_log("Python", message), error=True)
+            self.status_changed.emit(S.sql_parameters.status_invalid)
+            current_block = self.editor.get_current_executing_block()
+            if not current_block:
+                current_block = self.editor.get_focused_block() or self.editor.get_last_focused_block()
+            self.editor.mark_execution_finished(current_block, has_error=True)
+            self.session.finish_execution(False, S.sql_parameters.status_invalid)
+            self._is_executing = False
+            self._process_next_in_queue()
+            return
+        code = prepared_code
 
         self._is_executing = True
         self._cancel_requested = False  # Limpar flag de cancelamento anterior
@@ -2934,6 +3034,8 @@ class SessionWidget(QWidget):
         """Sync widget state to session"""
         self.session.code = self.get_code()  # Compatibilidade
         self.session.blocks = self.editor.to_list()  # Novo: blocos
+        self.session.shared_parameters = self._shared_parameters
+        self.session.shared_parameters_enabled = self._shared_parameters_enabled
         if self.session.is_connected:
             db = get_connector_database_context(self.session.connector)
             if db:
@@ -2955,6 +3057,11 @@ class SessionWidget(QWidget):
 
         self.set_tab_notification_config(getattr(self.session, "notification_config", None))
         self.set_result_view_state(getattr(self.session, "result_view_state", None))
+        self.set_shared_parameters(
+            getattr(self.session, "shared_parameters", []) or [],
+            enabled=getattr(self.session, "shared_parameters_enabled", True),
+        )
+        self._refresh_shared_parameters_from_blocks()
 
     def _on_file_dropped(self, file_path: str):
         """Open import dialog when data file is dropped on editor"""

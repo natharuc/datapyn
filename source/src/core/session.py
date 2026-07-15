@@ -59,6 +59,8 @@ class Session(QObject):
         self._last_status = S.session.status_ready
         self._code = ""  # Compatibility
         self._blocks: list = []  # Lista de blocos [{language, code}]
+        self._shared_parameters: list = []
+        self._shared_parameters_enabled: bool = True
         self.notification_config: Optional[Dict[str, Any]] = None
         self.result_view_state: Dict[str, Any] = {}
 
@@ -151,6 +153,22 @@ class Session(QObject):
     @blocks.setter
     def blocks(self, value: list):
         self._blocks = value
+
+    @property
+    def shared_parameters(self) -> list:
+        return self._shared_parameters
+
+    @shared_parameters.setter
+    def shared_parameters(self, value: list):
+        self._shared_parameters = value if isinstance(value, list) else []
+
+    @property
+    def shared_parameters_enabled(self) -> bool:
+        return self._shared_parameters_enabled
+
+    @shared_parameters_enabled.setter
+    def shared_parameters_enabled(self, value: bool):
+        self._shared_parameters_enabled = bool(value)
 
     # === CONNECTION ===
 
@@ -350,6 +368,8 @@ class Session(QObject):
             "database_context": self._database_context,
             "code": self._code,  # Compatibility
             "blocks": self._blocks,  # New: list of blocks
+            "shared_parameters": self._shared_parameters,
+            "shared_parameters_enabled": self._shared_parameters_enabled,
             "notification_config": self.notification_config,
             "result_view_state": self.result_view_state,
             "created_at": self.created_at.isoformat(),
@@ -367,6 +387,8 @@ class Session(QObject):
         session._database_context = data.get("database_context", "") or ""
         session._code = data.get("code", "")
         session._blocks = data.get("blocks", [])
+        session._shared_parameters = data.get("shared_parameters", []) or []
+        session._shared_parameters_enabled = bool(data.get("shared_parameters_enabled", True))
         session.notification_config = data.get("notification_config")
         result_view_state = data.get("result_view_state", {})
         session.result_view_state = result_view_state if isinstance(result_view_state, dict) else {}

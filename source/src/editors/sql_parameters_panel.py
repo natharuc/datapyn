@@ -33,10 +33,18 @@ import qtawesome as qta
 from src.design_system.tokens import get_colors
 from src.language import S
 from src.utils.sql_parameter_service import (
+    is_shared_parameter_id,
     normalize_parameter_definition,
     resolve_parameter_default_value,
     SQL_PARAMETER_TYPES,
 )
+
+
+def _parameter_token_label(parameter: dict[str, Any]) -> str:
+    name = parameter.get("name", "")
+    if is_shared_parameter_id(str(parameter.get("id", ""))):
+        return f"{{{{{name}}}}}"
+    return f"@{name}"
 
 
 _TYPE_LABELS = {
@@ -363,7 +371,7 @@ class SqlParameterSettingsDialog(QDialog):
 
     def _load_parameter(self):
         self._loading_parameter = True
-        self.token_value.setText(f"@{self._parameter['name']}")
+        self.token_value.setText(_parameter_token_label(self._parameter))
         self.label_edit.setText(self._parameter.get("label", ""))
         self._set_combo_value(self.type_combo, self._parameter.get("sql_type", "text"))
         self._set_combo_value(self.input_combo, self._parameter.get("input_kind", "value"))
@@ -638,7 +646,7 @@ class SqlParameterRow(QFrame):
         label_text = str(self._parameter.get("label") or "").strip()
         self.display_label.setText(label_text)
         self.display_label.setVisible(bool(label_text))
-        self.token_label.setText(f"@{self._parameter['name']}")
+        self.token_label.setText(_parameter_token_label(self._parameter))
         is_required = bool(self._parameter.get("required", True))
         self.required_toggle.setText(
             S.sql_parameters.required_inline if is_required else S.sql_parameters.optional_inline
@@ -1026,4 +1034,232 @@ class SqlParametersPanel(QFrame):
         for index, parameter in enumerate(self._parameters):
             parameter["order"] = index
         self._rebuild_rows()
+        self.parameters_changed.emit(self.parameters())
+
+
+class SharedParametersPanel(QFrame):
+    """Horizontal shared-parameter strip shown at the bottom of a session tab."""
+
+    parameters_changed = pyqtSignal(list)
+    close_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._parameters: list[dict[str, Any]] = []
+        self._row_widgets: dict[str, SqlParameterRow] = {}
+        self._setup_ui()
+        self.hide()
+
+    def _setup_ui(self):
+        colors = get_colors()
+        self.setObjectName("SharedParametersPanel")
+        self.setMaximumHeight(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet(f"""
+            QFrame#SharedParametersPanel {{
+                background: {colors.bg_secondary};
+                border-top: 1px solid {colors.border_default};
+            }}
+            QLabel {{
+                background: transparent;
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(4)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        icon = QLabel()
+        icon.setFixedSize(16, 16)
+        icon.setPixmap(qta.icon("mdi.variable-box", color=colors.info).pixmap(16, 16))
+        header.addWidget(icon)
+        title = QLabel(getattr(S.sql_parameters, "shared_panel_title", S.sql_parameters.panel_title))
+        title.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: 600;")
+        header.addWidget(title, 1)
+
+        self.close_btn = QPushButton()
+        self.close_btn.setFixedSize(18, 18)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setToolTip(S.sql_parameters.tooltip_close_panel)
+        self.close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary))
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background: {colors.bg_elevated};
+            }}
+        """)
+        self.close_btn.clicked.connect(self.close_requested.emit)
+        header.addWidget(self.close_btn)
+        root.addLayout(header)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self.rows_container = QWidget()
+        self.rows_layout = QHBoxLayout(self.rows_container)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(8)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.scroll.setWidget(self.rows_container)
+        root.addWidget(self.scroll, 1)
+
+    def set_parameters(self, parameters: list[dict[str, Any]]):
+        self._parameters = [normalize_parameter_definition(item, idx) for idx, item in enumerate(parameters or [])]
+        self._parameters.sort(key=lambda item: int(item.get("order", 0)))
+        self._rebuild_rows()
+        self.setVisible(bool(self._parameters))
+
+    def parameters(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self._parameters]
+
+    def _rebuild_rows(self):
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self._row_widgets = {}
+
+        for index, parameter in enumerate(self._parameters):
+            parameter = normalize_parameter_definition(parameter, index)
+            parameter["order"] = index
+            self._parameters[index] = parameter
+            row = SqlParameterRow(parameter, self)
+            row.setMinimumWidth(200)
+            row.setMaximumWidth(260)
+            row.changed.connect(self._on_row_changed)
+            self._row_widgets[parameter["id"]] = row
+            self.rows_layout.addWidget(row)
+        self.rows_layout.addStretch(1)
+
+    def _on_row_changed(self, parameter: dict[str, Any]):
+        for index, current in enumerate(self._parameters):
+            if current.get("id") == parameter.get("id"):
+                parameter = normalize_parameter_definition(parameter, index)
+                parameter["order"] = index
+                self._parameters[index] = parameter
+                break
+        self.parameters_changed.emit(self.parameters())
+
+
+class SharedParametersPanel(QFrame):
+    """Horizontal shared-parameter strip shown at the bottom of a session tab."""
+
+    parameters_changed = pyqtSignal(list)
+    close_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._parameters: list[dict[str, Any]] = []
+        self._row_widgets: dict[str, SqlParameterRow] = {}
+        self._setup_ui()
+        self.hide()
+
+    def _setup_ui(self):
+        colors = get_colors()
+        self.setObjectName("SharedParametersPanel")
+        self.setMaximumHeight(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet(f"""
+            QFrame#SharedParametersPanel {{
+                background: {colors.bg_secondary};
+                border-top: 1px solid {colors.border_default};
+            }}
+            QLabel {{
+                background: transparent;
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(4)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        icon = QLabel()
+        icon.setFixedSize(16, 16)
+        icon.setPixmap(qta.icon("mdi.variable-box", color=colors.info).pixmap(16, 16))
+        header.addWidget(icon)
+        title = QLabel(getattr(S.sql_parameters, "shared_panel_title", S.sql_parameters.panel_title))
+        title.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: 600;")
+        header.addWidget(title, 1)
+
+        self.close_btn = QPushButton()
+        self.close_btn.setFixedSize(18, 18)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setToolTip(S.sql_parameters.tooltip_close_panel)
+        self.close_btn.setIcon(qta.icon("mdi.close", color=colors.text_tertiary))
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background: {colors.bg_elevated};
+            }}
+        """)
+        self.close_btn.clicked.connect(self.close_requested.emit)
+        header.addWidget(self.close_btn)
+        root.addLayout(header)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self.rows_container = QWidget()
+        self.rows_layout = QHBoxLayout(self.rows_container)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(8)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.scroll.setWidget(self.rows_container)
+        root.addWidget(self.scroll, 1)
+
+    def set_parameters(self, parameters: list[dict[str, Any]]):
+        self._parameters = [normalize_parameter_definition(item, idx) for idx, item in enumerate(parameters or [])]
+        self._parameters.sort(key=lambda item: int(item.get("order", 0)))
+        self._rebuild_rows()
+        self.setVisible(bool(self._parameters))
+
+    def parameters(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self._parameters]
+
+    def _rebuild_rows(self):
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self._row_widgets = {}
+
+        for index, parameter in enumerate(self._parameters):
+            parameter = normalize_parameter_definition(parameter, index)
+            parameter["order"] = index
+            self._parameters[index] = parameter
+            row = SqlParameterRow(parameter, self)
+            row.setMinimumWidth(200)
+            row.setMaximumWidth(260)
+            row.changed.connect(self._on_row_changed)
+            self._row_widgets[parameter["id"]] = row
+            self.rows_layout.addWidget(row)
+        self.rows_layout.addStretch(1)
+
+    def _on_row_changed(self, parameter: dict[str, Any]):
+        for index, current in enumerate(self._parameters):
+            if current.get("id") == parameter.get("id"):
+                parameter = normalize_parameter_definition(parameter, index)
+                parameter["order"] = index
+                self._parameters[index] = parameter
+                break
         self.parameters_changed.emit(self.parameters())

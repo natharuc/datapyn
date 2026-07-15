@@ -756,6 +756,7 @@
   },
   "sql_parameters": {
     "panel_title": "Parametros",
+    "shared_panel_title": "Parametros compartilhados",
     "no_parameters": "Nenhum parametro encontrado.",
     "label_label": "Label",
     "label_token": "Token",
