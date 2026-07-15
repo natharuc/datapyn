@@ -204,6 +204,10 @@ class FileIOMixin:
                     result_view_state = dpw_data.get("result_view_state")
                     if isinstance(result_view_state, dict):
                         widget.set_result_view_state(result_view_state)
+                    shared_params = dpw_data.get("shared_parameters")
+                    if shared_params:
+                        widget.set_shared_parameters(shared_params)
+                    widget._refresh_shared_parameters_from_blocks()
                 except json.JSONDecodeError:
                     # Fallback: treat as single SQL block
                     blocks = widget.editor.get_blocks()
@@ -404,11 +408,17 @@ class FileIOMixin:
         if not hasattr(widget, "editor") or not widget.editor:
             return ""
 
+        import json
+
         blocks = widget.editor.get_blocks()
         parts = []
         for block in blocks:
             parts.append(block.get_language())
             parts.append(block.get_code())
+
+        shared_params = getattr(widget, "_shared_parameters", []) or []
+        if shared_params:
+            parts.append(json.dumps(shared_params, sort_keys=True, default=str))
 
         content = "\n".join(parts)
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -601,6 +611,12 @@ class FileIOMixin:
             result_view_state = current_widget.get_result_view_state()
             if isinstance(result_view_state, dict) and result_view_state:
                 dpw_content["result_view_state"] = result_view_state
+
+            shared_params = getattr(current_widget.session, "shared_parameters", None)
+            if not isinstance(shared_params, list):
+                shared_params = getattr(current_widget, "_shared_parameters", None)
+            if isinstance(shared_params, list) and shared_params:
+                dpw_content["shared_parameters"] = shared_params
 
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(dpw_content, f, indent=2, ensure_ascii=False)

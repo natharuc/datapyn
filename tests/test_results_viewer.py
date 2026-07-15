@@ -1868,3 +1868,32 @@ class TestDuplicateColumns:
 
         df = pd.DataFrame([[1, 2]], columns=["a", "b"])
         assert _dedupe_grid_columns(df) is df       # no copy when already unique
+
+
+class TestCSVExportDialog:
+    def test_csv_export_dialog_decimal_getter(self, qtbot):
+        from src.ui.components.results_viewer import CSVExportDialog
+
+        dialog = CSVExportDialog()
+        qtbot.addWidget(dialog)
+
+        comma_index = dialog.decimal_combo.findData(",")
+        dialog.decimal_combo.setCurrentIndex(comma_index)
+        assert dialog.get_decimal() == ","
+
+    def test_csv_export_dialog_decimal_persisted(self, qtbot):
+        from PyQt6.QtCore import QSettings
+
+        from src.ui.components.results_viewer import CSVExportDialog
+
+        settings = QSettings("DataPyn", "CSVExport")
+        settings.setValue("decimal", ",")
+
+        dialog = CSVExportDialog()
+        qtbot.addWidget(dialog)
+        assert dialog.get_decimal() == ","
+
+        dot_index = dialog.decimal_combo.findData(".")
+        dialog.decimal_combo.setCurrentIndex(dot_index)
+        dialog.accept()
+        assert settings.value("decimal") == "."

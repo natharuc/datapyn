@@ -13,6 +13,8 @@ from src.language import S
 
 
 PARAMETER_ID_PREFIX = "sqlparam:"
+SHARED_PARAMETER_ID_PREFIX = "sharedparam:"
+_SHARED_PARAMETER_PATTERN = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 SQL_PARAMETER_TYPES = ("text", "integer", "decimal", "boolean", "date", "datetime", "uuid")
 INPUT_KINDS = ("value", "choice", "multi_choice")
 _DEFAULT_EMPTY_ALIASES = {"empty", "vazio", "''", '""'}
@@ -69,6 +71,16 @@ def parameter_id(name: str) -> str:
     return f"{PARAMETER_ID_PREFIX}{clean_name.lower()}"
 
 
+def shared_parameter_id(name: str) -> str:
+    """Return a stable internal id for a shared tab parameter name."""
+    clean_name = normalize_parameter_name(name)
+    return f"{SHARED_PARAMETER_ID_PREFIX}{clean_name.lower()}"
+
+
+def is_shared_parameter_id(parameter_id_value: str) -> bool:
+    return str(parameter_id_value or "").startswith(SHARED_PARAMETER_ID_PREFIX)
+
+
 def normalize_parameter_name(name: str) -> str:
     """Normalize a user-visible parameter name, without the @ prefix."""
     value = str(name or "").strip()
@@ -97,6 +109,13 @@ def default_parameter_definition(name: str, order: int = 0, sql_type: str = "tex
         "multi_select": False,
         "type_source": "default",
     }
+
+
+def default_shared_parameter_definition(name: str, order: int = 0, sql_type: str = "text") -> dict[str, Any]:
+    """Build a default UI/model definition for a detected shared tab parameter."""
+    definition = default_parameter_definition(name, order=order, sql_type=sql_type)
+    definition["id"] = shared_parameter_id(definition["name"])
+    return definition
 
 
 def _scan_sql_parameters(sql: str, replacer: Callable[[str, str, int, int], str] | None = None) -> tuple[list[SqlParameterToken], str]:
@@ -230,13 +249,115 @@ def extract_sql_parameter_names(sql: str) -> list[str]:
     return [token.name for token in extract_sql_parameter_tokens(sql)]
 
 
+def _scan_shared_parameters(
+    text: str,
+    replacer: Callable[[str, str, int, int], str] | None = None,
+) -> tuple[list[SqlParameterToken], str]:
+    """Scan text for {{name}} shared parameters, optionally replacing each token."""
+    source = text or ""
+    tokens: list[SqlParameterToken] = []
+    seen: set[str] = set()
+    if replacer is None:
+        for match in _SHARED_PARAMETER_PATTERN.finditer(source):
+            start = match.start()
+            if start > 0 and source[start - 1] == "{":
+                continue
+            if start + 2 < len(source) and source[start + 2] == "{":
+                continue
+            name = match.group(1)
+            pid = shared_parameter_id(name)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            tokens.append(
+                SqlParameterToken(
+                    id=pid,
+                    name=name,
+                    token=match.group(0),
+                    start=match.start(),
+                    end=match.end(),
+                    order=len(tokens),
+                )
+            )
+        return tokens, source
+
+    output: list[str] = []
+    last = 0
+    for match in _SHARED_PARAMETER_PATTERN.finditer(source):
+        start, end = match.span()
+        if start > 0 and source[start - 1] == "{":
+            continue
+        if start + 2 < len(source) and source[start + 2] == "{":
+            continue
+        name = match.group(1)
+        token_text = match.group(0)
+        pid = shared_parameter_id(name)
+        if pid not in seen:
+            seen.add(pid)
+            tokens.append(
+                SqlParameterToken(
+                    id=pid,
+                    name=name,
+                    token=token_text,
+                    start=start,
+                    end=end,
+                    order=len(tokens),
+                )
+            )
+        output.append(source[last:start])
+        output.append(replacer(name, token_text, start, end))
+        last = end
+    output.append(source[last:])
+    return tokens, "".join(output)
+
+
+def extract_shared_parameter_tokens(text: str) -> list[SqlParameterToken]:
+    """Return unique shared parameter tokens in first-seen order."""
+    tokens, _ = _scan_shared_parameters(text)
+    return tokens
+
+
+def extract_shared_parameter_names(text: str) -> list[str]:
+    """Return shared parameter names in first-seen order."""
+    return [token.name for token in extract_shared_parameter_tokens(text)]
+
+
+def extract_shared_parameter_tokens_from_codes(codes: list[str] | None) -> list[SqlParameterToken]:
+    """Aggregate shared tokens across multiple block codes."""
+    seen: set[str] = set()
+    tokens: list[SqlParameterToken] = []
+    for code in codes or []:
+        for token in extract_shared_parameter_tokens(code):
+            if token.id in seen:
+                continue
+            seen.add(token.id)
+            tokens.append(
+                SqlParameterToken(
+                    id=token.id,
+                    name=token.name,
+                    token=token.token,
+                    start=token.start,
+                    end=token.end,
+                    order=len(tokens),
+                )
+            )
+    return tokens
+
+
 def normalize_parameter_definition(definition: dict[str, Any], order: int | None = None) -> dict[str, Any]:
     """Normalize persisted/UI parameter data to the current schema."""
     name = normalize_parameter_name(definition.get("name") or definition.get("token") or definition.get("id", ""))
     if name.startswith(PARAMETER_ID_PREFIX):
         name = name[len(PARAMETER_ID_PREFIX):]
+    if name.startswith(SHARED_PARAMETER_ID_PREFIX):
+        name = name[len(SHARED_PARAMETER_ID_PREFIX):]
     if not name:
         name = "param"
+
+    parameter_id_value = str(definition.get("id") or "").strip()
+    use_shared_id = is_shared_parameter_id(parameter_id_value) or bool(
+        definition.get("shared") or definition.get("scope") == "shared"
+    )
 
     label = str(definition.get("label") or "").strip()
 
@@ -277,10 +398,14 @@ def normalize_parameter_definition(definition: dict[str, Any], order: int | None
         elif raw_default_value not in auto_default_aliases:
             type_source = "manual"
 
-    normalized = default_parameter_definition(name, int(definition.get("order", order or 0) or 0))
+    normalized = (
+        default_shared_parameter_definition(name, int(definition.get("order", order or 0) or 0))
+        if use_shared_id
+        else default_parameter_definition(name, int(definition.get("order", order or 0) or 0))
+    )
     normalized.update(
         {
-            "id": definition.get("id") or parameter_id(name),
+            "id": definition.get("id") or (shared_parameter_id(name) if use_shared_id else parameter_id(name)),
             "name": name,
             "label": label,
             "order": int(definition.get("order", order if order is not None else normalized["order"]) or 0),
@@ -332,10 +457,82 @@ def merge_parameter_definitions(
     return sorted(merged, key=lambda item: int(item.get("order", 0)))
 
 
+def merge_shared_parameter_definitions(
+    codes: list[str] | None,
+    existing: list[dict[str, Any]] | None = None,
+    sql_schemas: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Merge detected shared {{tokens}} across tab blocks with existing configuration."""
+    tokens = extract_shared_parameter_tokens_from_codes(codes)
+    existing_by_id = {
+        normalize_parameter_definition(item).get("id"): normalize_parameter_definition(item)
+        for item in (existing or [])
+        if isinstance(item, dict)
+    }
+    schemas = [schema for schema in (sql_schemas or []) if isinstance(schema, dict)]
+    merged: list[dict[str, Any]] = []
+    for token in tokens:
+        current = existing_by_id.get(token.id)
+        source_sql = next((code for code in (codes or []) if token.token in (code or "")), "")
+        inferred = _inferred_parameter_defaults(token, source_sql, schemas[0] if schemas else None)
+        if not inferred["type_source"] or inferred["type_source"] == "default":
+            for schema in schemas:
+                candidate = _inferred_parameter_defaults(token, source_sql, schema)
+                if candidate["type_source"] not in {"", "default", None}:
+                    inferred = candidate
+                    break
+        if current:
+            current = dict(current)
+            current["name"] = token.name
+            current["order"] = int(current.get("order", token.order))
+            if current.get("type_source") != "manual":
+                current["sql_type"] = inferred["sql_type"]
+                current["default_value"] = inferred["default_value"]
+                current["type_source"] = inferred["type_source"]
+        else:
+            current = default_shared_parameter_definition(token.name, token.order, inferred["sql_type"])
+            current["default_value"] = inferred["default_value"]
+            current["type_source"] = inferred["type_source"]
+        merged.append(current)
+    return sorted(merged, key=lambda item: int(item.get("order", 0)))
+
+
+def _ordered_parameter_ids_for_query(query: str) -> list[str]:
+    block_tokens = extract_sql_parameter_tokens(query)
+    shared_tokens = extract_shared_parameter_tokens(query)
+    ordered = sorted(block_tokens + shared_tokens, key=lambda item: item.start)
+    seen: set[str] = set()
+    result: list[str] = []
+    for token in ordered:
+        if token.id in seen:
+            continue
+        seen.add(token.id)
+        result.append(token.id)
+    return result
+
+
 def filter_parameters_for_query(query: str, parameters: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Return parameter definitions that are present in the provided SQL text."""
-    token_ids = [token.id for token in extract_sql_parameter_tokens(query)]
+    token_ids = _ordered_parameter_ids_for_query(query)
     by_id = {normalize_parameter_definition(item)["id"]: normalize_parameter_definition(item) for item in (parameters or [])}
+    filtered = []
+    for order, pid in enumerate(token_ids):
+        item = by_id.get(pid)
+        if item:
+            item = dict(item)
+            item["order"] = order
+            filtered.append(item)
+    return filtered
+
+
+def filter_shared_parameters_for_code(code: str, parameters: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Return shared parameter definitions present in arbitrary block code."""
+    token_ids = [token.id for token in extract_shared_parameter_tokens(code)]
+    by_id = {
+        normalize_parameter_definition(item)["id"]: normalize_parameter_definition(item)
+        for item in (parameters or [])
+        if is_shared_parameter_id(normalize_parameter_definition(item).get("id", ""))
+    }
     filtered = []
     for order, pid in enumerate(token_ids):
         item = by_id.get(pid)
@@ -703,19 +900,29 @@ def _definition_map(parameters: list[dict[str, Any]] | None) -> dict[str, dict[s
     return {item["id"]: item for item in converted}
 
 
-def _has_in_context(query: str, token_name: str) -> bool:
+def _has_in_context(query: str, token_name: str, *, shared: bool = False) -> bool:
+    if shared:
+        return re.search(
+            rf"\bIN\s*\(\s*\{{\{{\s*{re.escape(token_name)}\s*\}}\}}\s*\)",
+            query,
+            flags=re.IGNORECASE,
+        ) is not None
     return re.search(rf"\bIN\s*\(\s*@{re.escape(token_name)}\s*\)", query, flags=re.IGNORECASE) is not None
 
 
+def _shared_bind_name(parameter: dict[str, Any]) -> str:
+    return f"shared_{normalize_parameter_name(parameter['name'])}"
+
+
 def prepare_generic_sql(query: str, parameters: list[dict[str, Any]] | None) -> PreparedSql:
-    """Prepare SQLAlchemy-compatible named binds from DataPyn @parameters."""
+    """Prepare SQLAlchemy-compatible named binds from DataPyn @ and {{parameters}}."""
     converted, errors = validate_and_convert_parameters(query, parameters)
     if errors:
         raise SqlParameterError("; ".join(errors))
     by_id = {item["id"]: item for item in converted}
     bind_values: dict[str, Any] = {}
 
-    def replace(name: str, token: str, start: int, end: int) -> str:
+    def replace_block(name: str, token: str, start: int, end: int) -> str:
         pid = parameter_id(name)
         parameter = by_id.get(pid)
         if not parameter:
@@ -723,7 +930,7 @@ def prepare_generic_sql(query: str, parameters: list[dict[str, Any]] | None) -> 
         bind_name = normalize_parameter_name(parameter["name"])
         value = parameter.get("converted_value")
         if parameter_is_multi(parameter):
-            if not _has_in_context(query, parameter["name"]):
+            if not _has_in_context(query, parameter["name"], shared=False):
                 raise SqlParameterError(_error_multi_requires_in(parameter["name"]))
             placeholders = []
             for idx, item_value in enumerate(value or []):
@@ -736,7 +943,29 @@ def prepare_generic_sql(query: str, parameters: list[dict[str, Any]] | None) -> 
         bind_values[bind_name] = value
         return f":{bind_name}"
 
-    _, prepared_query = _scan_sql_parameters(query, replace)
+    def replace_shared(name: str, token: str, start: int, end: int) -> str:
+        pid = shared_parameter_id(name)
+        parameter = by_id.get(pid)
+        if not parameter:
+            return token
+        bind_name = _shared_bind_name(parameter)
+        value = parameter.get("converted_value")
+        if parameter_is_multi(parameter):
+            if not _has_in_context(query, parameter["name"], shared=True):
+                raise SqlParameterError(_error_multi_requires_in(parameter["name"]))
+            placeholders = []
+            for idx, item_value in enumerate(value or []):
+                expanded_name = f"{bind_name}_{idx}"
+                bind_values[expanded_name] = item_value
+                placeholders.append(f":{expanded_name}")
+            if not placeholders:
+                raise SqlParameterError(_error_missing_value(parameter["name"]))
+            return ", ".join(placeholders)
+        bind_values[bind_name] = value
+        return f":{bind_name}"
+
+    _, query_after_block = _scan_sql_parameters(query, replace_block)
+    _, prepared_query = _scan_shared_parameters(query_after_block, replace_shared)
     return PreparedSql(query=prepared_query, params=bind_values)
 
 
@@ -764,13 +993,13 @@ def prepare_sqlserver_batch(batch: str, parameters: list[dict[str, Any]] | None)
     inline_values: list[Any] = []
     declared: set[str] = set()
 
-    def replace(name: str, token: str, start: int, end: int) -> str:
+    def replace_block(name: str, token: str, start: int, end: int) -> str:
         pid = parameter_id(name)
         parameter = by_id.get(pid)
         if not parameter:
             return token
         if parameter_is_multi(parameter):
-            if not _has_in_context(batch, parameter["name"]):
+            if not _has_in_context(batch, parameter["name"], shared=False):
                 raise SqlParameterError(_error_multi_requires_in(parameter["name"]))
             values = parameter.get("converted_value") or []
             if not values:
@@ -783,10 +1012,60 @@ def prepare_sqlserver_batch(batch: str, parameters: list[dict[str, Any]] | None)
             declaration_values.append(parameter.get("converted_value"))
         return token
 
-    _, prepared_batch = _scan_sql_parameters(batch, replace)
+    def replace_shared(name: str, token: str, start: int, end: int) -> str:
+        pid = shared_parameter_id(name)
+        parameter = by_id.get(pid)
+        if not parameter:
+            return token
+        var_name = _shared_bind_name(parameter)
+        if parameter_is_multi(parameter):
+            if not _has_in_context(batch, parameter["name"], shared=True):
+                raise SqlParameterError(_error_multi_requires_in(parameter["name"]))
+            values = parameter.get("converted_value") or []
+            if not values:
+                raise SqlParameterError(_error_missing_value(parameter["name"]))
+            inline_values.extend(values)
+            return ", ".join("?" for _ in values)
+        if pid not in declared:
+            declared.add(pid)
+            declarations.append(
+                f"DECLARE @{var_name} {sqlserver_type_name(parameter.get('sql_type', 'text'))} = ?;"
+            )
+            declaration_values.append(parameter.get("converted_value"))
+        return f"@{var_name}"
+
+    _, batch_after_block = _scan_sql_parameters(batch, replace_block)
+    _, prepared_batch = _scan_shared_parameters(batch_after_block, replace_shared)
     if declarations:
         prepared_batch = "\n".join(declarations) + "\n" + prepared_batch
     return PreparedSql(query=prepared_batch, params=declaration_values + inline_values)
+
+
+def _python_repr(value: Any) -> str:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (date, datetime)):
+        return repr(value.isoformat())
+    return repr(value)
+
+
+def prepare_python_code_with_shared_parameters(code: str, shared_parameters: list[dict[str, Any]] | None) -> str:
+    """Replace {{name}} tokens in Python code with validated literal values."""
+    if not shared_parameters:
+        return code
+    converted, errors = validate_and_convert_parameters(code, shared_parameters)
+    if errors:
+        raise SqlParameterError("; ".join(errors))
+    by_id = {item["id"]: item for item in converted}
+
+    def replace_shared(name: str, token: str, start: int, end: int) -> str:
+        parameter = by_id.get(shared_parameter_id(name))
+        if not parameter:
+            return token
+        return _python_repr(parameter.get("converted_value"))
+
+    _, prepared_code = _scan_shared_parameters(code, replace_shared)
+    return prepared_code
 
 
 def prepare_databricks_sql(query: str, parameters: list[dict[str, Any]] | None) -> PreparedSql:

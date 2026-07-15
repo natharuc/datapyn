@@ -183,6 +183,22 @@ class TestStreamResultSetToFile:
         assert rows == 3
         assert path.read_text(encoding="utf-8-sig").count("\n") >= 3
 
+    def test_csv_stream_writer_uses_separator_and_decimal(self, tmp_path):
+        cursor = MockCursor(["amount", "qty"], [(1.5, 2), (2.25, 3)], chunk_size=2)
+        path = tmp_path / "custom.csv"
+        rows = stream_result_set_to_file(
+            ["amount", "qty"],
+            iter_rows_chunked(cursor, chunk_size=2),
+            path=path,
+            export_format="csv",
+            csv_options={"delimiter": ";", "decimal": ",", "encoding": "utf-8", "header": True},
+        )
+        assert rows == 2
+        content = path.read_text(encoding="utf-8")
+        assert content.startswith("amount;qty")
+        assert "1,5;2" in content
+        assert "2,25;3" in content
+
     def test_parquet_streaming(self, tmp_path):
         cursor = MockCursor(["n"], [(1,), (2,)], chunk_size=1)
         path = tmp_path / "stream.parquet"

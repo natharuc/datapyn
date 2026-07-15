@@ -166,3 +166,61 @@ class TestQueryDownloadWorker:
         thread.start()
         qtbot.waitUntil(lambda: len(finished) >= 1, timeout=5000)
         assert totals == []
+
+    def test_passes_csv_options_to_connector(self, qtbot):
+        connector = MagicMock()
+        connector.stream_query_to_files.return_value = StreamExportResult(
+            files=[Path("out.csv")],
+            row_counts=[1],
+        )
+        csv_options = {"delimiter": ";", "decimal": ",", "encoding": "utf-8", "header": True}
+
+        worker = QueryDownloadWorker(
+            connector,
+            "SELECT 1",
+            "out.csv",
+            "csv",
+            csv_options=csv_options,
+        )
+        results: list[tuple] = []
+        worker.download_finished.connect(lambda r, e: results.append((r, e)))
+
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        qtbot.waitUntil(lambda: len(results) == 1, timeout=5000)
+
+        _, kwargs = connector.stream_query_to_files.call_args
+        assert kwargs["csv_options"] == csv_options
+
+    def test_passes_csv_options_to_connector(self, qtbot):
+        connector = MagicMock()
+        connector.stream_query_to_files.return_value = StreamExportResult(
+            files=[Path("out.csv")],
+            row_counts=[1],
+        )
+        csv_options = {"delimiter": ";", "decimal": ",", "encoding": "utf-8", "header": True}
+
+        worker = QueryDownloadWorker(
+            connector,
+            "SELECT 1",
+            "out.csv",
+            "csv",
+            csv_options=csv_options,
+        )
+        results: list[tuple] = []
+        worker.download_finished.connect(lambda r, e: results.append((r, e)))
+
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        qtbot.waitUntil(lambda: len(results) == 1, timeout=5000)
+
+        _, kwargs = connector.stream_query_to_files.call_args
+        assert kwargs["csv_options"] == csv_options

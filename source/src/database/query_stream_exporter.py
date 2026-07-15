@@ -24,6 +24,86 @@ STREAM_ARROW_ROW_GROUP_ROWS = 50_000
 CSV_YIELD_EVERY_ROWS = 1_000
 
 
+def normalize_csv_options(csv_options: dict | None) -> dict[str, Any]:
+    opts = csv_options or {}
+    return {
+        "sep": opts.get("sep", opts.get("delimiter", ",")),
+        "decimal": opts.get("decimal", "."),
+        "encoding": opts.get("encoding", "utf-8-sig"),
+        "header": opts.get("header", True),
+    }
+
+
+def _csv_cell(value: Any, *, decimal: str = ".") -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (datetime, date, dt_time)):
+        return value.isoformat(sep=" ", timespec="seconds") if isinstance(value, datetime) else value.isoformat()
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value.decode("latin-1", errors="replace")
+    if isinstance(value, float):
+        text = str(value)
+        if decimal != ".":
+            return text.replace(".", decimal)
+        return text
+    if isinstance(value, Decimal):
+        text = str(value)
+        if decimal != ".":
+            return text.replace(".", decimal)
+        return text
+    return str(value)
+
+
+class CsvStreamWriter:
+    """Append row chunks to a CSV file with configurable delimiter/encoding."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        sep: str = ",",
+        decimal: str = ".",
+        encoding: str = "utf-8-sig",
+        header: bool = True,
+    ):
+        self.path = Path(path)
+        self._sep = sep
+        self._decimal = decimal
+        self._header = header
+        self._file = self.path.open("w", encoding=encoding, newline="")
+        self._writer: csv.writer | None = None
+        self.rows_written = 0
+
+    def write_header(self, columns: Sequence[str]) -> None:
+        self._writer = csv.writer(self._file, delimiter=self._sep)
+        if self._header:
+            self._writer.writerow(list(columns))
+
+    def write_chunk(self, rows: Sequence[Sequence[Any]]) -> None:
+        if self._writer is None:
+            raise RuntimeError("CSV header not written")
+        for idx, row in enumerate(rows):
+            self._writer.writerow([_csv_cell(v, decimal=self._decimal) for v in row])
+            self.rows_written += 1
+            if (idx + 1) % CSV_YIELD_EVERY_ROWS == 0:
+                _gil_yield()
+
+    def close(self) -> None:
+        self._file.close()
+
+    def abort(self) -> None:
+        self.close()
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _gil_yield() -> None:
     time.sleep(0.001)
 
@@ -52,56 +132,6 @@ def iter_rows_chunked(
             break
         yield columns, list(chunk)
         _gil_yield()
-
-
-def _csv_cell(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (datetime, date, dt_time)):
-        return value.isoformat(sep=" ", timespec="seconds") if isinstance(value, datetime) else value.isoformat()
-    if isinstance(value, bytes):
-        try:
-            return value.decode("utf-8")
-        except UnicodeDecodeError:
-            return value.decode("latin-1", errors="replace")
-    if isinstance(value, Decimal):
-        return str(value)
-    return str(value)
-
-
-class CsvStreamWriter:
-    """Append row chunks to a CSV file (UTF-8 with BOM for Excel)."""
-
-    def __init__(self, path: Path):
-        self.path = Path(path)
-        self._file = self.path.open("w", encoding="utf-8-sig", newline="")
-        self._writer: csv.writer | None = None
-        self.rows_written = 0
-
-    def write_header(self, columns: Sequence[str]) -> None:
-        self._writer = csv.writer(self._file)
-        self._writer.writerow(list(columns))
-
-    def write_chunk(self, rows: Sequence[Sequence[Any]]) -> None:
-        if self._writer is None:
-            raise RuntimeError("CSV header not written")
-        for idx, row in enumerate(rows):
-            self._writer.writerow([_csv_cell(v) for v in row])
-            self.rows_written += 1
-            if (idx + 1) % CSV_YIELD_EVERY_ROWS == 0:
-                _gil_yield()
-
-    def close(self) -> None:
-        self._file.close()
-
-    def abort(self) -> None:
-        self.close()
-        try:
-            self.path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def _infer_pa_type(value: Any) -> pa.DataType:
@@ -379,6 +409,62 @@ def _abort_stream_path(path: Path) -> None:
         pass
 
 
+def _arrow_table_rows(table: pa.Table) -> list[list[Any]]:
+    return [
+        [table.column(col_idx)[row_idx].as_py() for col_idx in range(table.num_columns)]
+        for row_idx in range(table.num_rows)
+    ]
+
+
+def _stream_arrow_to_csv_manual(
+    arrow_fetcher: Callable[[int], pa.Table | None],
+    *,
+    path: Path,
+    columns: list[str] | None,
+    csv_options: dict,
+    is_cancelled: Callable[[], bool] | None = None,
+    on_chunk: Callable[[int], None] | None = None,
+) -> int:
+    opts = normalize_csv_options(csv_options)
+    writer = CsvStreamWriter(
+        path,
+        sep=opts["sep"],
+        decimal=opts["decimal"],
+        encoding=opts["encoding"],
+        header=opts["header"],
+    )
+    rows_written = 0
+    header_written = False
+    try:
+        while True:
+            if is_cancelled and is_cancelled():
+                writer.abort()
+                return -1
+            table = arrow_fetcher(STREAM_ARROW_CHUNK_ROWS)
+            if table is None or table.num_rows == 0:
+                break
+            use_columns = columns or list(table.column_names)
+            if not header_written:
+                writer.write_header(use_columns)
+                header_written = True
+            chunk_rows = _arrow_table_rows(table)
+            writer.write_chunk(chunk_rows)
+            rows_written += len(chunk_rows)
+            if on_chunk:
+                on_chunk(len(chunk_rows))
+            if is_cancelled and is_cancelled():
+                writer.abort()
+                return -1
+            _gil_yield()
+        if rows_written == 0 and columns:
+            writer.write_header(columns)
+        writer.close()
+        return rows_written
+    except Exception:
+        writer.abort()
+        raise
+
+
 def stream_arrow_to_file(
     arrow_fetcher: Callable[[int], pa.Table | None],
     *,
@@ -387,8 +473,19 @@ def stream_arrow_to_file(
     columns: list[str] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
     on_chunk: Callable[[int], None] | None = None,
+    csv_options: dict | None = None,
 ) -> int:
     """Stream Arrow tables from fetchmany_arrow directly to CSV or Parquet."""
+    if export_format == "csv" and csv_options is not None:
+        return _stream_arrow_to_csv_manual(
+            arrow_fetcher,
+            path=path,
+            columns=columns,
+            csv_options=csv_options,
+            is_cancelled=is_cancelled,
+            on_chunk=on_chunk,
+        )
+
     path = Path(path)
     rows_written = 0
     schema: pa.Schema | None = None
@@ -515,10 +612,18 @@ def stream_result_set_to_file(
     export_format: ExportFormat,
     is_cancelled: Callable[[], bool] | None = None,
     on_chunk: Callable[[int], None] | None = None,
+    csv_options: dict | None = None,
 ) -> int:
     """Stream one result set to a file. Returns rows written."""
     if export_format == "csv":
-        writer: CsvStreamWriter | ParquetStreamWriter = CsvStreamWriter(path)
+        opts = normalize_csv_options(csv_options)
+        writer: CsvStreamWriter | ParquetStreamWriter = CsvStreamWriter(
+            path,
+            sep=opts["sep"],
+            decimal=opts["decimal"],
+            encoding=opts["encoding"],
+            header=opts["header"],
+        )
         writer.write_header(columns)
         rows_written = 0
         try:

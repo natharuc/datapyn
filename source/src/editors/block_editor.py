@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
     QLabel,
+    QDialog,
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl, QEvent, QSize
 from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent, QKeySequence
@@ -125,7 +126,7 @@ class BlockEditor(QWidget):
 
     # Execution signals
     execute_sql = pyqtSignal(str, object, object, object, object)  # query, block_name, connection_name, database_name, sql_parameters
-    download_sql = pyqtSignal(str, object, object, object, object, str, str)  # + export_format, file_path
+    download_sql = pyqtSignal(str, object, object, object, object, str, str, object)  # + export_format, file_path, csv_options
     download_cancel_requested = pyqtSignal(object)  # CodeBlock
     reveal_file_requested = pyqtSignal(str)  # absolute file path
     execute_python = pyqtSignal(str)  # code
@@ -165,6 +166,9 @@ class BlockEditor(QWidget):
     # Signal when focused block changes (for Object Explorer tracking)
     block_focused = pyqtSignal(object)  # CodeBlock that gained focus
 
+    # Signal when any block text changes and shared {{parameters}} should be rescanned
+    shared_parameters_scan_needed = pyqtSignal()
+
     def __init__(self, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager or ThemeManager()
@@ -190,6 +194,11 @@ class BlockEditor(QWidget):
         self._completion_context_timer.timeout.connect(
             lambda: self.refresh_completion_context(self._focused_block)
         )
+
+        self._shared_parameter_scan_timer = QTimer(self)
+        self._shared_parameter_scan_timer.setSingleShot(True)
+        self._shared_parameter_scan_timer.setInterval(250)
+        self._shared_parameter_scan_timer.timeout.connect(self.shared_parameters_scan_needed.emit)
 
         self._setup_ui()
 
@@ -221,6 +230,25 @@ class BlockEditor(QWidget):
     def _schedule_completion_context_refresh(self) -> None:
         """Debounce LSP/Monaco context refresh while the user edits."""
         self._completion_context_timer.start()
+
+    def _schedule_shared_parameter_scan(self) -> None:
+        """Debounce shared {{parameter}} detection across all blocks."""
+        self._shared_parameter_scan_timer.start()
+
+    def get_all_block_codes(self) -> List[tuple[str, str]]:
+        """Return (language, code) for every block in the tab."""
+        return [(block.get_language(), block.get_code()) for block in self._blocks]
+
+    def collect_sql_schemas(self) -> list:
+        """Return SQL schemas from SQL blocks for shared-parameter inference."""
+        schemas = []
+        for block in self._blocks:
+            if block.get_language() != "sql":
+                continue
+            schema = getattr(block, "_sql_schema", None) or {}
+            if isinstance(schema, dict) and schema:
+                schemas.append(schema)
+        return schemas
     
     def set_database_context(self, context: str) -> None:
         """Store session-default SQL context for new blocks (not broadcast)."""
@@ -484,6 +512,21 @@ class BlockEditor(QWidget):
         from PyQt6.QtCore import QSettings
         from PyQt6.QtWidgets import QFileDialog
 
+        csv_options = None
+        if export_format == "csv":
+            from src.ui.components.results_viewer import CSVExportDialog
+
+            dialog = CSVExportDialog(self.window(), theme_manager=self.theme_manager)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            csv_options = {
+                "delimiter": dialog.get_delimiter(),
+                "decimal": dialog.get_decimal(),
+                "encoding": dialog.get_encoding(),
+                "header": dialog.get_include_header(),
+                "open_folder": dialog.get_open_folder(),
+            }
+
         settings = QSettings("DataPyn", "DataPyn")
         last_dir = str(settings.value("download/last_dir", "") or "")
         block_name = block.get_block_name() or "query"
@@ -527,6 +570,7 @@ class BlockEditor(QWidget):
             sql_parameters,
             export_format,
             str(path),
+            csv_options,
         )
 
     def execute_all_blocks(self):
@@ -801,8 +845,7 @@ class BlockEditor(QWidget):
                 block.set_database_context(self._database_context)
         elif language == "python":
             self.refresh_completion_context(focus_block=block)
-
-    # === Block Management ===
+        self._schedule_shared_parameter_scan()
 
     def add_block(
         self,
@@ -871,6 +914,7 @@ class BlockEditor(QWidget):
         block.completion_log.connect(self.completion_log.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
         block.editor.textChanged.connect(self._schedule_completion_context_refresh)
+        block.editor.textChanged.connect(self._schedule_shared_parameter_scan)
         block.language_changed.connect(lambda b, lang: self._on_block_language_changed(b, lang))
         block.maximize_requested.connect(self._toggle_maximize_block)
         
@@ -1239,6 +1283,8 @@ class BlockEditor(QWidget):
                 block.set_sql_parameters(data.get("sql_parameters") or [])
             if "sql_parameters_enabled" in data and hasattr(block, "set_sql_parameters_enabled"):
                 block.set_sql_parameters_enabled(data.get("sql_parameters_enabled", True))
+
+        self._schedule_shared_parameter_scan()
 
     # === Compatibility with UnifiedEditor ===
 

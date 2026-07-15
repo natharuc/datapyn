@@ -33,10 +33,18 @@ import qtawesome as qta
 from src.design_system.tokens import get_colors
 from src.language import S
 from src.utils.sql_parameter_service import (
+    is_shared_parameter_id,
     normalize_parameter_definition,
     resolve_parameter_default_value,
     SQL_PARAMETER_TYPES,
 )
+
+
+def _parameter_token_label(parameter: dict[str, Any]) -> str:
+    name = parameter.get("name", "")
+    if is_shared_parameter_id(str(parameter.get("id", ""))):
+        return f"{{{{{name}}}}}"
+    return f"@{name}"
 
 
 _TYPE_LABELS = {
@@ -363,7 +371,7 @@ class SqlParameterSettingsDialog(QDialog):
 
     def _load_parameter(self):
         self._loading_parameter = True
-        self.token_value.setText(f"@{self._parameter['name']}")
+        self.token_value.setText(_parameter_token_label(self._parameter))
         self.label_edit.setText(self._parameter.get("label", ""))
         self._set_combo_value(self.type_combo, self._parameter.get("sql_type", "text"))
         self._set_combo_value(self.input_combo, self._parameter.get("input_kind", "value"))
@@ -471,12 +479,21 @@ class SqlParameterRow(QFrame):
     changed = pyqtSignal(dict)
     drag_started = pyqtSignal(str)
 
-    def __init__(self, parameter: dict[str, Any], parent=None):
+    def __init__(
+        self,
+        parameter: dict[str, Any],
+        parent=None,
+        *,
+        divider: str = "bottom",
+        show_divider: bool = True,
+    ):
         super().__init__(parent)
         self._parameter = normalize_parameter_definition(parameter)
         self._input_widget: QWidget | None = None
         self._loading = False
         self._using_default_display = False
+        self._divider = divider if divider in {"bottom", "right"} else "bottom"
+        self._show_divider = bool(show_divider)
         self._setup_ui()
         self._apply_parameter(self._parameter)
 
@@ -493,14 +510,17 @@ class SqlParameterRow(QFrame):
         self.setObjectName("SqlParameterRow")
         self.setFrameStyle(QFrame.Shape.NoFrame)
         self.setToolTip(S.sql_parameters.tooltip_configure)
+        divider_rule = ""
+        if self._show_divider:
+            if self._divider == "right":
+                divider_rule = f"border-right: 1px solid {colors.border_muted};"
+            else:
+                divider_rule = f"border-bottom: 1px solid {colors.border_muted};"
         self.setStyleSheet(f"""
             QFrame#SqlParameterRow {{
-                background: {colors.bg_tertiary};
-                border: 1px solid {colors.border_default};
-                border-radius: 8px;
-            }}
-            QFrame#SqlParameterRow:hover {{
-                border-color: {colors.interactive_primary};
+                background: transparent;
+                border: none;
+                {divider_rule}
             }}
             QLabel {{
                 color: {colors.text_secondary};
@@ -517,16 +537,17 @@ class SqlParameterRow(QFrame):
                 font-size: 9px;
             }}
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit, QDateTimeEdit, QToolButton {{
-                background: {colors.bg_secondary};
+                background: transparent;
                 color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: 6px;
-                padding: 3px 8px;
+                border: none;
+                border-bottom: 1px solid {colors.border_muted};
+                border-radius: 0;
+                padding: 2px 4px;
                 font-size: 10px;
-                min-height: 24px;
+                min-height: 22px;
             }}
             QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QDateTimeEdit:focus, QToolButton:focus {{
-                border-color: {colors.interactive_primary};
+                border-bottom: 1px solid {colors.interactive_primary};
             }}
             QPushButton {{
                 background: transparent;
@@ -559,8 +580,8 @@ class SqlParameterRow(QFrame):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 7, 8, 7)
-        root.setSpacing(6)
+        root.setContentsMargins(8, 4, 8, 4)
+        root.setSpacing(4)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -638,7 +659,7 @@ class SqlParameterRow(QFrame):
         label_text = str(self._parameter.get("label") or "").strip()
         self.display_label.setText(label_text)
         self.display_label.setVisible(bool(label_text))
-        self.token_label.setText(f"@{self._parameter['name']}")
+        self.token_label.setText(_parameter_token_label(self._parameter))
         is_required = bool(self._parameter.get("required", True))
         self.required_toggle.setText(
             S.sql_parameters.required_inline if is_required else S.sql_parameters.optional_inline
@@ -937,9 +958,11 @@ class SqlParametersPanel(QFrame):
         self.rows_container = QWidget()
         self.rows_layout = QVBoxLayout(self.rows_container)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
-        self.rows_layout.setSpacing(6)
+        self.rows_layout.setSpacing(0)
         self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll.setWidget(self.rows_container)
+        self.scroll.setAcceptDrops(True)
+        self.scroll.viewport().setAcceptDrops(True)
         root.addWidget(self.scroll, 1)
 
     def set_parameters(self, parameters: list[dict[str, Any]]):
@@ -964,12 +987,24 @@ class SqlParametersPanel(QFrame):
             parameter = normalize_parameter_definition(parameter, index)
             parameter["order"] = index
             self._parameters[index] = parameter
-            row = SqlParameterRow(parameter, self)
+            row = SqlParameterRow(
+                parameter,
+                self,
+                divider="bottom",
+                show_divider=index < len(self._parameters) - 1,
+            )
             row.changed.connect(self._on_row_changed)
             row.drag_started.connect(self._on_row_drag_started)
             self._row_widgets[parameter["id"]] = row
             self.rows_layout.addWidget(row)
         self.rows_layout.addStretch(1)
+
+    def _drop_position_in_rows(self, event) -> QPoint:
+        if hasattr(event, "position"):
+            local_point = event.position().toPoint()
+        else:
+            local_point = event.pos()
+        return self.rows_container.mapFrom(self.scroll.viewport(), self.scroll.viewport().mapFrom(self, local_point))
 
     def _on_row_changed(self, parameter: dict[str, Any]):
         for index, current in enumerate(self._parameters):
@@ -1000,7 +1035,7 @@ class SqlParametersPanel(QFrame):
             event.ignore()
             return
         parameter_id = event.mimeData().data("application/x-sql-parameter-id").data().decode("utf-8")
-        target_index = self._index_for_drop_y(event.position().toPoint().y())
+        target_index = self._index_for_drop_y(self._drop_position_in_rows(event).y())
         self.move_parameter(parameter_id, target_index)
         event.acceptProposedAction()
 
@@ -1011,6 +1046,165 @@ class SqlParametersPanel(QFrame):
             if not isinstance(widget, SqlParameterRow):
                 continue
             if y_position < widget.geometry().center().y():
+                return index
+        return len(self._parameters) - 1
+
+    def move_parameter(self, parameter_id: str, target_index: int):
+        current_index = next((idx for idx, item in enumerate(self._parameters) if item.get("id") == parameter_id), -1)
+        if current_index < 0:
+            return
+        target_index = max(0, min(target_index, len(self._parameters) - 1))
+        if current_index == target_index:
+            return
+        item = self._parameters.pop(current_index)
+        self._parameters.insert(target_index, item)
+        for index, parameter in enumerate(self._parameters):
+            parameter["order"] = index
+        self._rebuild_rows()
+        self.parameters_changed.emit(self.parameters())
+
+
+class SharedParametersPanel(QFrame):
+    """Horizontal shared-parameter strip shown at the bottom of a session tab."""
+
+    parameters_changed = pyqtSignal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._parameters: list[dict[str, Any]] = []
+        self._row_widgets: dict[str, SqlParameterRow] = {}
+        self._dragging_parameter_id: str | None = None
+        self._setup_ui()
+        self.hide()
+
+    def _setup_ui(self):
+        colors = get_colors()
+        self.setObjectName("SharedParametersPanel")
+        self.setMaximumHeight(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAcceptDrops(True)
+        self.setStyleSheet(f"""
+            QFrame#SharedParametersPanel {{
+                background: {colors.bg_secondary};
+                border-top: 1px solid {colors.border_default};
+            }}
+            QLabel {{
+                background: transparent;
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(4)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        icon = QLabel()
+        icon.setFixedSize(16, 16)
+        icon.setPixmap(qta.icon("mdi.variable-box", color=colors.info).pixmap(16, 16))
+        header.addWidget(icon)
+        title = QLabel(getattr(S.sql_parameters, "shared_panel_title", S.sql_parameters.panel_title))
+        title.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: 600;")
+        header.addWidget(title, 1)
+        root.addLayout(header)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self.scroll.setAcceptDrops(True)
+        self.scroll.viewport().setAcceptDrops(True)
+        self.rows_container = QWidget()
+        self.rows_layout = QHBoxLayout(self.rows_container)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(0)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.scroll.setWidget(self.rows_container)
+        root.addWidget(self.scroll, 1)
+
+    def set_parameters(self, parameters: list[dict[str, Any]]):
+        self._parameters = [normalize_parameter_definition(item, idx) for idx, item in enumerate(parameters or [])]
+        self._parameters.sort(key=lambda item: int(item.get("order", 0)))
+        self._rebuild_rows()
+        self.setVisible(bool(self._parameters))
+
+    def parameters(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self._parameters]
+
+    def _rebuild_rows(self):
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self._row_widgets = {}
+
+        for index, parameter in enumerate(self._parameters):
+            parameter = normalize_parameter_definition(parameter, index)
+            parameter["order"] = index
+            self._parameters[index] = parameter
+            row = SqlParameterRow(
+                parameter,
+                self,
+                divider="right",
+                show_divider=index < len(self._parameters) - 1,
+            )
+            row.setMinimumWidth(180)
+            row.changed.connect(self._on_row_changed)
+            row.drag_started.connect(self._on_row_drag_started)
+            self._row_widgets[parameter["id"]] = row
+            self.rows_layout.addWidget(row)
+        self.rows_layout.addStretch(1)
+
+    def _drop_position_in_rows(self, event) -> QPoint:
+        if hasattr(event, "position"):
+            local_point = event.position().toPoint()
+        else:
+            local_point = event.pos()
+        return self.rows_container.mapFrom(self.scroll.viewport(), self.scroll.viewport().mapFrom(self, local_point))
+
+    def _on_row_changed(self, parameter: dict[str, Any]):
+        for index, current in enumerate(self._parameters):
+            if current.get("id") == parameter.get("id"):
+                parameter = normalize_parameter_definition(parameter, index)
+                parameter["order"] = index
+                self._parameters[index] = parameter
+                break
+        self.parameters_changed.emit(self.parameters())
+
+    def _on_row_drag_started(self, parameter_id: str):
+        self._dragging_parameter_id = parameter_id
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat("application/x-sql-parameter-id"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/x-sql-parameter-id"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat("application/x-sql-parameter-id"):
+            event.ignore()
+            return
+        parameter_id = event.mimeData().data("application/x-sql-parameter-id").data().decode("utf-8")
+        target_index = self._index_for_drop_x(self._drop_position_in_rows(event).x())
+        self.move_parameter(parameter_id, target_index)
+        event.acceptProposedAction()
+
+    def _index_for_drop_x(self, x_position: int) -> int:
+        for index in range(self.rows_layout.count()):
+            item = self.rows_layout.itemAt(index)
+            widget = item.widget()
+            if not isinstance(widget, SqlParameterRow):
+                continue
+            if x_position < widget.geometry().center().x():
                 return index
         return len(self._parameters) - 1
 
