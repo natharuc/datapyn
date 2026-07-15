@@ -13,7 +13,13 @@ import subprocess
 import os
 import math
 
+from src.design_system.tokens import get_colors
+from src.design_system.tab_controls import TAB_CLOSE_BUTTON_SIZE
 from src.language import S
+
+
+TAB_TIMER_SLOT = TAB_CLOSE_BUTTON_SIZE + 4
+TAB_BASE_PADDING_RIGHT = 28
 
 
 class SessionTabBar(QTabBar):
@@ -36,9 +42,18 @@ class SessionTabBar(QTabBar):
 
     def _setup_style(self):
         """Configure style - modern, clean, web-like"""
+        self._apply_tab_style()
+
+    def _tab_padding_right(self) -> int:
+        if self._timer_tab_indices:
+            return TAB_BASE_PADDING_RIGHT + TAB_TIMER_SLOT
+        return TAB_BASE_PADDING_RIGHT
+
+    def _apply_tab_style(self) -> None:
         from src.design_system.tokens import get_colors, RADIUS
+
         colors = get_colors()
-        
+        pad_right = self._tab_padding_right()
         self.setStyleSheet(f"""
             QTabBar {{
                 background-color: {colors.bg_secondary};
@@ -48,7 +63,7 @@ class SessionTabBar(QTabBar):
                 background-color: transparent;
                 color: {colors.text_secondary};
                 padding: 10px 16px;
-                padding-right: 28px;
+                padding-right: {pad_right}px;
                 border: none;
                 border-bottom: 2px solid transparent;
                 margin-right: 2px;
@@ -199,9 +214,10 @@ class SessionTabBar(QTabBar):
         line_edit.returnPressed.connect(save_name)
         line_edit.editingFinished.connect(save_name)
 
-        # Position line_edit over the tab (leave 60px on right for close button)
+        # Position line_edit over the tab (leave room for close + optional timer)
         tab_rect = self.tabRect(index)
-        line_edit.setGeometry(tab_rect.adjusted(8, 6, -36, -6))
+        right_margin = 36 + (TAB_TIMER_SLOT if index in self._timer_tab_indices else 0)
+        line_edit.setGeometry(tab_rect.adjusted(8, 6, -right_margin, -6))
         line_edit.show()
         line_edit.setFocus()
 
@@ -281,6 +297,8 @@ class SessionTabBar(QTabBar):
             self._timer_tab_indices.add(index)
         else:
             self._timer_tab_indices.discard(index)
+        self._apply_tab_style()
+        self.updateGeometry()
         self.update()
 
     def paintEvent(self, event):
@@ -303,14 +321,8 @@ class SessionTabBar(QTabBar):
 
         for index in sorted(self._timer_tab_indices):
             if 0 <= index < self.count():
-                close_rect = self._close_button_rect(index)
-                if close_rect.isValid():
-                    timer_rect = QRect(
-                        close_rect.left() - close_rect.height() - 2,
-                        close_rect.top(),
-                        close_rect.height(),
-                        close_rect.height(),
-                    )
+                timer_rect = self._timer_button_rect(index)
+                if timer_rect.isValid():
                     icon = qta.icon("mdi.timer-outline", color="#4ec9b0", scale_factor=0.65)
                     painter.drawPixmap(
                         timer_rect,

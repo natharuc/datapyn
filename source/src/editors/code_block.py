@@ -916,10 +916,38 @@ class CodeBlock(QFrame):
         if self.__dict__.get("_is_running") or self.__dict__.get("_is_cancelling"):
             return
 
+        from src.design_system.tokens import get_colors
+
+        colors = get_colors()
+        menu_style = f"""
+            QMenu {{
+                background: {colors.bg_elevated};
+                border: 1px solid {colors.border_default};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 18px;
+                border-radius: 4px;
+                color: {colors.text_primary};
+            }}
+            QMenu::item:selected {{
+                background: {colors.interactive_primary};
+                color: {colors.text_inverse};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {colors.border_muted};
+                margin: 4px 8px;
+            }}
+        """
+
         menu = QMenu(self)
+        menu.setStyleSheet(menu_style)
         download_menu = menu.addMenu(
             getattr(S.block, "ctx_run_and_download", "Run and Download")
         )
+        download_menu.setStyleSheet(menu_style)
         csv_action = download_menu.addAction(
             getattr(S.block, "download_csv", "CSV…")
         )

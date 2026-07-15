@@ -336,7 +336,6 @@ class SessionWidget(QWidget):
         self._periodic_interval: int = 0  # seconds
         self._periodic_active: bool = False
         self._shared_parameters: list[dict[str, Any]] = list(getattr(session, "shared_parameters", []) or [])
-        self._shared_parameters_enabled: bool = bool(getattr(session, "shared_parameters_enabled", True))
 
         self._setup_ui()
         self._connect_signals()
@@ -524,7 +523,6 @@ class SessionWidget(QWidget):
 
         self.shared_parameters_panel = SharedParametersPanel()
         self.shared_parameters_panel.parameters_changed.connect(self._on_shared_parameters_changed)
-        self.shared_parameters_panel.close_requested.connect(self._on_shared_parameters_panel_closed)
         editor_layout.addWidget(self.shared_parameters_panel)
 
         self.splitter.addWidget(self._editor_host)
@@ -967,19 +965,15 @@ class SessionWidget(QWidget):
         return f"[{timestamp}][{log_type}]"
 
     def get_shared_parameters(self) -> list[dict[str, Any]]:
-        if not self._shared_parameters_enabled:
-            return []
         if hasattr(self, "shared_parameters_panel"):
             return self.shared_parameters_panel.parameters()
         return [dict(item) for item in self._shared_parameters]
 
-    def set_shared_parameters(self, parameters: list[dict[str, Any]] | None, *, enabled: bool | None = None) -> None:
+    def set_shared_parameters(self, parameters: list[dict[str, Any]] | None) -> None:
         self._shared_parameters = [dict(item) for item in (parameters or [])]
-        if enabled is not None:
-            self._shared_parameters_enabled = bool(enabled)
         if not hasattr(self, "shared_parameters_panel"):
             return
-        if self._shared_parameters_enabled and self._shared_parameters:
+        if self._shared_parameters:
             self.shared_parameters_panel.set_parameters(self._shared_parameters)
         else:
             self.shared_parameters_panel.set_parameters([])
@@ -1015,7 +1009,7 @@ class SessionWidget(QWidget):
             normalize_parameter_definition(item, index) for index, item in enumerate(merged)
         ]
         self.session.shared_parameters = self._shared_parameters
-        if self._shared_parameters_enabled and self._shared_parameters:
+        if self._shared_parameters:
             self.shared_parameters_panel.set_parameters(self._shared_parameters)
         else:
             self.shared_parameters_panel.set_parameters([])
@@ -1025,11 +1019,6 @@ class SessionWidget(QWidget):
         self._shared_parameters = [dict(item) for item in (parameters or [])]
         self.session.shared_parameters = self._shared_parameters
         self.editor.content_changed.emit()
-
-    def _on_shared_parameters_panel_closed(self) -> None:
-        self._shared_parameters_enabled = False
-        self.session.shared_parameters_enabled = False
-        self.shared_parameters_panel.hide()
 
     # === SQL EXECUTION ===
 
@@ -1223,6 +1212,7 @@ class SessionWidget(QWidget):
         sql_parameters: list = None,
         export_format: str = "csv",
         file_path: str = "",
+        csv_options: dict | None = None,
     ):
         """Stream SQL results to a local file without loading into memory."""
         if self._reject_if_cancelling_sql():
@@ -1255,9 +1245,9 @@ class SessionWidget(QWidget):
             thread.started.connect(worker.run)
             worker.finished.connect(
                 lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name,
-                sp=sql_parameters, ef=export_format, fp=file_path, b=block:
+                sp=sql_parameters, ef=export_format, fp=file_path, co=csv_options, b=block:
                     self._on_download_auto_connect_finished(
-                        conn, err, q, bn, cn, dn, sp, ef, fp, b
+                        conn, err, q, bn, cn, dn, sp, ef, fp, co, b
                     )
             )
             worker.finished.connect(thread.quit)
@@ -1280,6 +1270,7 @@ class SessionWidget(QWidget):
             sql_parameters,
             export_format,
             file_path,
+            csv_options,
         )
 
     def _on_download_auto_connect_finished(
@@ -1293,6 +1284,7 @@ class SessionWidget(QWidget):
         sql_parameters,
         export_format,
         file_path,
+        csv_options=None,
         block=None,
     ):
         if self._reject_if_cancelling_sql():
@@ -1315,6 +1307,7 @@ class SessionWidget(QWidget):
             sql_parameters,
             export_format,
             file_path,
+            csv_options,
         )
 
     def _cleanup_auto_connect_thread(self, thread):
@@ -1703,6 +1696,7 @@ class SessionWidget(QWidget):
         sql_parameters=None,
         export_format: str = "csv",
         file_path: str = "",
+        csv_options=None,
         *,
         skip_database_prep: bool = False,
     ):
@@ -1727,6 +1721,7 @@ class SessionWidget(QWidget):
                     sql_parameters,
                     export_format,
                     file_path,
+                    csv_options,
                     skip_database_prep=True,
                 )
             else:
@@ -1744,6 +1739,7 @@ class SessionWidget(QWidget):
                         sql_parameters,
                         export_format,
                         file_path,
+                        csv_options,
                         skip_database_prep=True,
                     ),
                     on_error=self._on_database_switch_failed,
@@ -1842,6 +1838,7 @@ class SessionWidget(QWidget):
         self._current_connection_name = connection_name or self.session.connection_name
         self._current_download_path = file_path
         self._current_download_format = export_format
+        self._current_download_csv_options = csv_options
 
         thread = QThread()
         worker = QueryDownloadWorker(
@@ -1850,6 +1847,7 @@ class SessionWidget(QWidget):
             file_path,
             export_format,
             prepared_parameters,
+            csv_options,
         )
         worker.moveToThread(thread)
         self._sql_thread = thread
@@ -2347,6 +2345,10 @@ class SessionWidget(QWidget):
                 )
             except Exception:
                 pass
+
+            csv_options = getattr(self, "_current_download_csv_options", None) or {}
+            if csv_options.get("open_folder") and paths:
+                self._reveal_in_folder(paths[0])
 
         self._is_executing = False
         self._current_execution_block = None
@@ -3035,7 +3037,6 @@ class SessionWidget(QWidget):
         self.session.code = self.get_code()  # Compatibilidade
         self.session.blocks = self.editor.to_list()  # Novo: blocos
         self.session.shared_parameters = self._shared_parameters
-        self.session.shared_parameters_enabled = self._shared_parameters_enabled
         if self.session.is_connected:
             db = get_connector_database_context(self.session.connector)
             if db:
@@ -3057,10 +3058,7 @@ class SessionWidget(QWidget):
 
         self.set_tab_notification_config(getattr(self.session, "notification_config", None))
         self.set_result_view_state(getattr(self.session, "result_view_state", None))
-        self.set_shared_parameters(
-            getattr(self.session, "shared_parameters", []) or [],
-            enabled=getattr(self.session, "shared_parameters_enabled", True),
-        )
+        self.set_shared_parameters(getattr(self.session, "shared_parameters", []) or [])
         self._refresh_shared_parameters_from_blocks()
 
     def _on_file_dropped(self, file_path: str):

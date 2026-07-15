@@ -152,38 +152,14 @@ class TestSessionSharedPersistence:
         assert restored.shared_parameters_enabled is True
 
 
-def test_shared_panel_visibility_toggle(qtbot, monkeypatch):
-    from unittest.mock import MagicMock
-
-    from src.ui.components.session_widget import SessionWidget
-
-    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
-    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
-    monkeypatch.setattr(SessionWidget, "_refresh_shared_parameters_from_blocks", lambda self: None)
-
-    session = MagicMock()
-    session.session_id = "s1"
-    session.blocks = []
-    session.code = ""
-    session.shared_parameters = []
-    session.shared_parameters_enabled = True
-
-    widget = SessionWidget(session)
-    qtbot.addWidget(widget)
-
+def test_shared_panel_hides_when_no_parameters(qtbot):
     from src.editors.sql_parameters_panel import SharedParametersPanel
 
-    widget.shared_parameters_panel = SharedParametersPanel()
-    qtbot.addWidget(widget.shared_parameters_panel)
-    widget._shared_parameters = [_shared_param("x", value="1")]
-    widget._shared_parameters_enabled = True
+    panel = SharedParametersPanel()
+    qtbot.addWidget(panel)
 
-    widget._refresh_shared_parameters_from_blocks = lambda: widget.shared_parameters_panel.set_parameters(
-        widget._shared_parameters
-    )
-    widget.shared_parameters_panel.set_parameters(widget._shared_parameters)
+    panel.set_parameters([_shared_param("x", value="1")])
+    assert panel.isVisible() is True
 
-    assert widget.shared_parameters_panel.isVisible() is True
-    widget._on_shared_parameters_panel_closed()
-    assert widget.shared_parameters_panel.isVisible() is False
-    assert widget.get_shared_parameters() == []
+    panel.set_parameters([])
+    assert panel.isVisible() is False

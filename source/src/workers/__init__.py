@@ -464,6 +464,7 @@ class FileExportWorker(BaseWorker):
                     index=self.options.get("index", False),
                     encoding=self.options.get("encoding", "utf-8"),
                     sep=self.options.get("sep", ","),
+                    decimal=self.options.get("decimal", "."),
                     header=self.options.get("header", True),
                 )
             elif self.export_format == "excel":
@@ -497,13 +498,14 @@ class QueryDownloadWorker(BaseWorker):
     download_finished = pyqtSignal(object, str)  # StreamExportResult, error_msg
     status = pyqtSignal(str)
 
-    def __init__(self, connector, query: str, file_path: str, export_format: str, sql_parameters=None):
+    def __init__(self, connector, query: str, file_path: str, export_format: str, sql_parameters=None, csv_options=None):
         super().__init__()
         self.connector = connector
         self.query = query
         self.file_path = file_path
         self.export_format = export_format
         self.sql_parameters = sql_parameters or []
+        self.csv_options = csv_options
         self._cancel_requested = False
         self._last_progress_emit = 0.0
 
@@ -550,6 +552,7 @@ class QueryDownloadWorker(BaseWorker):
                 base_path=Path(self.file_path),
                 export_format=self.export_format,
                 parameters=self.sql_parameters,
+                csv_options=self.csv_options,
                 on_progress=self._throttled_progress,
                 on_file_started=_on_file_started,
                 on_total=_on_total,

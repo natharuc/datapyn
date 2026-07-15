@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
     QLabel,
+    QDialog,
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl, QEvent, QSize
 from PyQt6.QtGui import QKeyEvent, QDragEnterEvent, QDropEvent, QKeySequence
@@ -125,7 +126,7 @@ class BlockEditor(QWidget):
 
     # Execution signals
     execute_sql = pyqtSignal(str, object, object, object, object)  # query, block_name, connection_name, database_name, sql_parameters
-    download_sql = pyqtSignal(str, object, object, object, object, str, str)  # + export_format, file_path
+    download_sql = pyqtSignal(str, object, object, object, object, str, str, object)  # + export_format, file_path, csv_options
     download_cancel_requested = pyqtSignal(object)  # CodeBlock
     reveal_file_requested = pyqtSignal(str)  # absolute file path
     execute_python = pyqtSignal(str)  # code
@@ -511,6 +512,21 @@ class BlockEditor(QWidget):
         from PyQt6.QtCore import QSettings
         from PyQt6.QtWidgets import QFileDialog
 
+        csv_options = None
+        if export_format == "csv":
+            from src.ui.components.results_viewer import CSVExportDialog
+
+            dialog = CSVExportDialog(self.window(), theme_manager=self.theme_manager)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            csv_options = {
+                "delimiter": dialog.get_delimiter(),
+                "decimal": dialog.get_decimal(),
+                "encoding": dialog.get_encoding(),
+                "header": dialog.get_include_header(),
+                "open_folder": dialog.get_open_folder(),
+            }
+
         settings = QSettings("DataPyn", "DataPyn")
         last_dir = str(settings.value("download/last_dir", "") or "")
         block_name = block.get_block_name() or "query"
@@ -554,6 +570,7 @@ class BlockEditor(QWidget):
             sql_parameters,
             export_format,
             str(path),
+            csv_options,
         )
 
     def execute_all_blocks(self):

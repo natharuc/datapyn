@@ -516,6 +516,9 @@
   "csv_export": {
     "dialog_title": "Exportar CSV",
     "label_delimiter": "Delimitador:",
+    "label_decimal": "Separador decimal:",
+    "decimal_dot": "Ponto (.)",
+    "decimal_comma": "Virgula (,)",
     "delimiter_semicolon": "Ponto e virgula (;)",
     "delimiter_comma": "Virgula (,)",
     "delimiter_tab": "Tabulacao (\\t)",

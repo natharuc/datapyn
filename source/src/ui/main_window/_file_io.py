@@ -206,10 +206,7 @@ class FileIOMixin:
                         widget.set_result_view_state(result_view_state)
                     shared_params = dpw_data.get("shared_parameters")
                     if shared_params:
-                        widget.set_shared_parameters(
-                            shared_params,
-                            enabled=dpw_data.get("shared_parameters_enabled", True),
-                        )
+                        widget.set_shared_parameters(shared_params)
                     widget._refresh_shared_parameters_from_blocks()
                 except json.JSONDecodeError:
                     # Fallback: treat as single SQL block
@@ -620,8 +617,6 @@ class FileIOMixin:
             )
             if shared_params:
                 dpw_content["shared_parameters"] = shared_params
-            if not getattr(current_widget.session, "shared_parameters_enabled", True):
-                dpw_content["shared_parameters_enabled"] = False
 
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(dpw_content, f, indent=2, ensure_ascii=False)

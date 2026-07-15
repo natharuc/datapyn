@@ -4,7 +4,7 @@ from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtWidgets import QComboBox, QDateEdit, QDialog, QPushButton, QSpinBox
 
 import src.editors.sql_parameters_panel as sql_parameters_panel_module
-from src.editors.sql_parameters_panel import MultiSelectMenuButton, SqlParameterRow, SqlParameterSettingsDialog
+from src.editors.sql_parameters_panel import MultiSelectMenuButton, SqlParameterRow, SqlParameterSettingsDialog, SqlParametersPanel, SharedParametersPanel
 from src.language import S
 
 
@@ -133,6 +133,43 @@ class TestSqlParameterRow:
         assert row.to_parameter()["sql_type"] == "integer"
         assert row.to_parameter()["value"] == ""
         assert row.to_parameter()["default_value"] == ""
+
+
+class TestSqlParametersPanelDragReorder:
+    def test_drag_reorder_block_maps_coordinates(self, qtbot):
+        panel = SqlParametersPanel()
+        qtbot.addWidget(panel)
+        panel.set_parameters([
+            _param("first", value="1", label="First"),
+            _param("second", value="2", label="Second"),
+            _param("third", value="3", label="Third"),
+        ])
+        first_id = panel.parameters()[0]["id"]
+        third_id = panel.parameters()[2]["id"]
+
+        panel.move_parameter(first_id, 2)
+
+        names = [item["name"] for item in panel.parameters()]
+        assert names == ["second", "third", "first"]
+
+        panel.move_parameter(third_id, 0)
+        names = [item["name"] for item in panel.parameters()]
+        assert names == ["third", "second", "first"]
+
+    def test_shared_panel_drag_reorder_horizontal(self, qtbot):
+        panel = SharedParametersPanel()
+        qtbot.addWidget(panel)
+        panel.set_parameters([
+            _param("alpha", value="a"),
+            _param("beta", value="b"),
+            _param("gamma", value="c"),
+        ])
+        alpha_id = panel.parameters()[0]["id"]
+
+        panel.move_parameter(alpha_id, 2)
+
+        names = [item["name"] for item in panel.parameters()]
+        assert names == ["beta", "gamma", "alpha"]
 
 
 class TestSqlParameterSettingsDialog:

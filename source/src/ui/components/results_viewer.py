@@ -944,6 +944,12 @@ class CSVExportDialog(QDialog):
         apply_combobox_style(self.delimiter_combo)
         form.addRow(S.csv_export.label_delimiter, self.delimiter_combo)
 
+        self.decimal_combo = QComboBox()
+        self.decimal_combo.addItem(S.csv_export.decimal_dot, ".")
+        self.decimal_combo.addItem(S.csv_export.decimal_comma, ",")
+        apply_combobox_style(self.decimal_combo)
+        form.addRow(S.csv_export.label_decimal, self.decimal_combo)
+
         self.encoding_combo = QComboBox()
         self.encoding_combo.addItem(S.csv_export.encoding_utf8bom, "utf-8-sig")
         self.encoding_combo.addItem(S.csv_export.encoding_utf8, "utf-8")
@@ -982,6 +988,12 @@ class CSVExportDialog(QDialog):
         if index >= 0:
             self.delimiter_combo.setCurrentIndex(index)
 
+        # Decimal separator
+        decimal = settings.value("decimal", ".")
+        index = self.decimal_combo.findData(decimal)
+        if index >= 0:
+            self.decimal_combo.setCurrentIndex(index)
+
         # Encoding
         encoding = settings.value("encoding", "utf-8-sig")
         index = self.encoding_combo.findData(encoding)
@@ -1000,6 +1012,7 @@ class CSVExportDialog(QDialog):
         """Save settings"""
         settings = QSettings("DataPyn", "CSVExport")
         settings.setValue("delimiter", self.get_delimiter())
+        settings.setValue("decimal", self.get_decimal())
         settings.setValue("encoding", self.get_encoding())
         settings.setValue("header", self.get_include_header())
         settings.setValue("open_folder", self.get_open_folder())
@@ -1011,6 +1024,9 @@ class CSVExportDialog(QDialog):
 
     def get_delimiter(self) -> str:
         return self.delimiter_combo.currentData()
+
+    def get_decimal(self) -> str:
+        return self.decimal_combo.currentData()
 
     def get_encoding(self) -> str:
         return self.encoding_combo.currentData()
@@ -5162,6 +5178,7 @@ class ResultsViewer(QWidget):
             return
 
         delimiter = dialog.get_delimiter()
+        decimal = dialog.get_decimal()
         encoding = dialog.get_encoding()
         include_header = dialog.get_include_header()
         open_folder = dialog.get_open_folder()
@@ -5172,7 +5189,13 @@ class ResultsViewer(QWidget):
             # Export to clipboard with settings
             from PyQt6.QtWidgets import QApplication
 
-            csv_text = self.current_df.to_csv(index=False, sep=delimiter, encoding=encoding, header=include_header)
+            csv_text = self.current_df.to_csv(
+                index=False,
+                sep=delimiter,
+                decimal=decimal,
+                encoding=encoding,
+                header=include_header,
+            )
             QApplication.instance().clipboard().setText(csv_text)
             self._show_clipboard_success("CSV")
             return
@@ -5192,6 +5215,7 @@ class ResultsViewer(QWidget):
             "csv",
             encoding=encoding,
             sep=delimiter,
+            decimal=decimal,
             header=include_header,
             open_folder=open_folder
         )
