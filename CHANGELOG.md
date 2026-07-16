@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v1.53.0 (2026-07-16)
+
+### Bug Fixes
+
+- **connections**: Idle reaper must read is_periodic_active as property
+  ([`56a3c7d`](https://github.com/natharuc/datapyn/commit/56a3c7d0ea0afca3eee664848c30d88f7bf5eb30))
+
+- **qt**: Marshal cross-thread signals to prevent Qt6Core crashes.
+  ([`db0cb40`](https://github.com/natharuc/datapyn/commit/db0cb40979eb751a4d09e4d02027c7484f2632ea))
+
+- **schema**: Populate block database dropdown after lazy connect
+  ([`129c6a3`](https://github.com/natharuc/datapyn/commit/129c6a352c17d410f27d60b1466198661eb4de51))
+
+- **schema,oe**: Block db dropdown + OE focus-load + global crash guard
+  ([`0de260c`](https://github.com/natharuc/datapyn/commit/0de260c74413b023c501bf770919a1867012662a))
+
+### Features
+
+- **crash-guard**: Global exception interceptor with GitHub issue reporter
+  ([`049c455`](https://github.com/natharuc/datapyn/commit/049c4550716c3c64637cc3958bd225ced3447c33))
+
+- **object-explorer**: Auto-load databases on focus and visibility
+  ([`ae5b8a5`](https://github.com/natharuc/datapyn/commit/ae5b8a5905283002813ba9bbd72a033bcdce9897))
+
+### Heuristic
+
+- Merge branch 'fix/application-crashes' into fix/schema-dropdown-oe-focus-crash-guard
+  ([`3100cab`](https://github.com/natharuc/datapyn/commit/3100cab731c8967c1569dc921e7d067651a5f0fe))
+
+- Merge pull request #144 from natharuc/fix/schema-dropdown-oe-focus-crash-guard
+  ([`0de260c`](https://github.com/natharuc/datapyn/commit/0de260c74413b023c501bf770919a1867012662a))
+
+### Refactoring
+
+- **crash-guard**: Marshal dialog via QueuedConnection signal
+  ([`8f7c757`](https://github.com/natharuc/datapyn/commit/8f7c757e469dbe15e5c267b5bb1b62f74551fa90))
+
+
 ## v1.52.0 (2026-07-16)
 
 ### Bug Fixes
