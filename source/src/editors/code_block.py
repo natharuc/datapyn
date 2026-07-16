@@ -204,6 +204,7 @@ class BlockDatabasePanel(QFrame):
     database_clicked = pyqtSignal()  # User clicked on panel
     database_dropped = pyqtSignal(str)  # database_name (drag & drop from Object Explorer)
     database_selected = pyqtSignal(str)  # database_name (selected from popup menu)
+    databases_requested = pyqtSignal()  # empty dropdown clicked -> request server db list
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -289,6 +290,9 @@ class BlockDatabasePanel(QFrame):
             if self._available_databases:
                 self._show_database_menu()
             else:
+                # Empty dropdown: ask for the server database list (lazy connect),
+                # then fall back to the default click behavior.
+                self.databases_requested.emit()
                 self.database_clicked.emit()
         super().mousePressEvent(event)
 
@@ -835,6 +839,7 @@ class CodeBlock(QFrame):
         self.db_panel.database_clicked.connect(self._on_database_panel_clicked)
         self.db_panel.database_dropped.connect(self._on_database_dropped)
         self.db_panel.database_selected.connect(self._on_database_selected)
+        self.db_panel.databases_requested.connect(self._on_databases_requested)
         self.run_btn.clicked.connect(self._on_run_btn_clicked)
         self.maximize_btn.clicked.connect(lambda: self.maximize_requested.emit(self))
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
@@ -1135,6 +1140,12 @@ class CodeBlock(QFrame):
         editor = getattr(self, "_block_editor", None)
         if editor is not None and hasattr(editor, "sql_schema_requested"):
             editor.sql_schema_requested.emit(self)
+
+    def _on_databases_requested(self) -> None:
+        """Empty per-block database dropdown clicked -> request server db list."""
+        editor = getattr(self, "_block_editor", None)
+        if editor is not None and hasattr(editor, "databases_requested"):
+            editor.databases_requested.emit(self)
 
     def _on_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
         """Handle completion request from Monaco editor."""

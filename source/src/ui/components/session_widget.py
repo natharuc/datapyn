@@ -949,6 +949,8 @@ class SessionWidget(QWidget):
 
         if hasattr(self.editor, "sql_schema_requested"):
             self.editor.sql_schema_requested.connect(self._on_editor_sql_schema_requested)
+        if hasattr(self.editor, "databases_requested"):
+            self.editor.databases_requested.connect(self._on_editor_databases_requested)
 
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
@@ -1074,6 +1076,13 @@ class SessionWidget(QWidget):
         main_window = self._get_main_window()
         if main_window is not None and hasattr(main_window, "request_lazy_schema_for_completion"):
             main_window.request_lazy_schema_for_completion(block, self)
+
+    def _on_editor_databases_requested(self, block) -> None:
+        """Empty per-block database dropdown clicked -> request server db list."""
+        self._touch_db_activity()
+        main_window = self._get_main_window()
+        if main_window is not None and hasattr(main_window, "request_databases_for_block"):
+            main_window.request_databases_for_block(block, self)
 
     # === SQL EXECUTION ===
 
