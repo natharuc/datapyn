@@ -30,6 +30,8 @@ import traceback
 from datetime import datetime
 from typing import Optional
 
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
+
 logger = logging.getLogger(__name__)
 
 _CRASH_LOG_NAME = "crashes.log"
@@ -40,6 +42,47 @@ _installed = False
 _reentry_guard = threading.Lock()
 _pending_dialog_scheduled = False
 _app_ref: Optional[object] = None
+_dispatcher: Optional["_CrashDispatcher"] = None
+
+
+class _CrashDispatcher(QObject):
+    """Lives on the UI thread (parented to the QApplication) so a cross-thread
+    ``emit()`` is marshalled to the UI thread by Qt via QueuedConnection.
+
+    This mirrors the ``_signal_dispatch`` pattern used in
+    ``copilot_lsp_client.py`` / ``session_widget.py``: never call into Qt
+    widgets directly from a worker thread — always hop through a signal.
+    """
+
+    dispatch = pyqtSignal(str, str)  # traceback_text, signature
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.dispatch.connect(self._on_dispatch, Qt.ConnectionType.QueuedConnection)
+
+    def _on_dispatch(self, traceback_text: str, signature: str) -> None:
+        global _pending_dialog_scheduled
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            app_obj = QApplication.instance()
+            if app_obj is None:
+                return
+            from src.ui.dialogs.crash_report_dialog import CrashReportDialog
+
+            parent = app_obj.activeWindow()
+            dialog = CrashReportDialog(
+                traceback_text=traceback_text,
+                signature=signature,
+                version=_app_version(),
+                parent=parent,
+            )
+            dialog.exec()
+        except Exception as exc:
+            logger.debug("Crash dialog itself failed: %s", exc)
+        finally:
+            with _reentry_guard:
+                _pending_dialog_scheduled = False
 
 
 def _crash_log_path() -> str:
@@ -143,48 +186,62 @@ def _record_crash(traceback_text: str, signature: str, *, source: str) -> None:
 
 
 def _show_crash_dialog_on_ui(traceback_text: str, signature: str) -> None:
-    """Schedule the crash dialog on the UI thread (safe from any thread)."""
+    """Schedule the crash dialog on the UI thread (safe from any thread).
+
+    Emits through ``_CrashDispatcher.dispatch`` (a signal connected with
+    QueuedConnection and parented to the QApplication, so it has UI-thread
+    affinity). Qt marshals the emission to the UI thread — no direct widget
+    call from a worker thread, which is the Qt6Core crash pattern we avoid.
+    """
     global _pending_dialog_scheduled
     with _reentry_guard:
         if _pending_dialog_scheduled:
             return
         _pending_dialog_scheduled = True
 
-    app = _app_ref
-    if app is None:
+    dispatcher = _dispatcher
+    if dispatcher is None:
+        # No dispatcher yet (e.g. install never ran) — fall back to a timer
+        # so we still surface something instead of silently dropping it.
+        try:
+            from PyQt6.QtCore import QTimer
+
+            def _show() -> None:
+                global _pending_dialog_scheduled
+                try:
+                    from PyQt6.QtWidgets import QApplication
+
+                    app_obj = QApplication.instance()
+                    if app_obj is None:
+                        return
+                    from src.ui.dialogs.crash_report_dialog import CrashReportDialog
+
+                    parent = app_obj.activeWindow()
+                    dialog = CrashReportDialog(
+                        traceback_text=traceback_text,
+                        signature=signature,
+                        version=_app_version(),
+                        parent=parent,
+                    )
+                    dialog.exec()
+                except Exception as exc:
+                    logger.debug("Crash dialog itself failed: %s", exc)
+                finally:
+                    with _reentry_guard:
+                        _pending_dialog_scheduled = False
+
+            QTimer.singleShot(0, _show)
+        except Exception as exc:
+            logger.debug("Could not schedule crash dialog: %s", exc)
         return
 
-    def _show() -> None:
-        global _pending_dialog_scheduled
-        try:
-            from PyQt6.QtWidgets import QApplication
-
-            app_obj = QApplication.instance()
-            if app_obj is None:
-                return
-            from src.ui.dialogs.crash_report_dialog import CrashReportDialog
-
-            parent = app_obj.activeWindow()
-            dialog = CrashReportDialog(
-                traceback_text=traceback_text,
-                signature=signature,
-                version=_app_version(),
-                parent=parent,
-            )
-            dialog.exec()
-        except Exception as exc:
-            logger.debug("Crash dialog itself failed: %s", exc)
-        finally:
-            with _reentry_guard:
-                _pending_dialog_scheduled = False
-
     try:
-        from PyQt6.QtCore import QTimer
-
-        # singleShot(0, ...) from any thread posts the call to the UI thread.
-        QTimer.singleShot(0, _show)
-    except Exception as exc:
-        logger.debug("Could not schedule crash dialog: %s", exc)
+        dispatcher.dispatch.emit(traceback_text, signature)
+    except RuntimeError as exc:
+        # Dispatcher QObject destroyed (app tearing down) — drop quietly.
+        logger.debug("Crash dispatcher destroyed, could not emit: %s", exc)
+        with _reentry_guard:
+            _pending_dialog_scheduled = False
 
 
 def _handle_exception(exc_type, exc_value, exc_tb) -> None:
@@ -230,10 +287,18 @@ def install_crash_guard(app) -> None:
     Idempotent. Must be called after ``QApplication`` is created and before
     ``app.exec()`` so import/construction errors are also caught.
     """
-    global _installed, _app_ref
+    global _installed, _app_ref, _dispatcher
     if _installed:
         return
     _app_ref = app
+
+    # UI-thread dispatcher: parented to the app so it has main-thread affinity.
+    # Emitting ``dispatch`` from any worker thread is marshalled to the UI thread
+    # by Qt (QueuedConnection) — the crash-safe way to show the dialog.
+    try:
+        _dispatcher = _CrashDispatcher(app)
+    except Exception as exc:
+        logger.debug("Could not create crash dispatcher: %s", exc)
 
     sys.excepthook = _handle_exception
     try:

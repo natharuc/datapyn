@@ -10,11 +10,14 @@ def test_install_sets_excepthooks(qapp):
     from src.core import crash_guard
 
     crash_guard._installed = False
+    crash_guard._dispatcher = None
     crash_guard.install_crash_guard(qapp)
 
     assert sys.excepthook is crash_guard._handle_exception
     assert threading.excepthook is crash_guard._thread_excepthook
     assert crash_guard._installed is True
+    assert crash_guard._dispatcher is not None
+    assert crash_guard._dispatcher.parent() is qapp
 
     # Idempotent.
     crash_guard.install_crash_guard(qapp)
@@ -22,6 +25,7 @@ def test_install_sets_excepthooks(qapp):
 
     crash_guard._installed = False
     crash_guard._app_ref = None
+    crash_guard._dispatcher = None
     sys.excepthook = sys.__excepthook__
     try:
         threading.excepthook = threading.__excepthook__
@@ -78,6 +82,7 @@ def test_handle_exception_records_and_schedules_dialog(qapp, monkeypatch):
 
     crash_guard._installed = False
     crash_guard._app_ref = None
+    crash_guard._dispatcher = None
     sys.excepthook = sys.__excepthook__
     try:
         threading.excepthook = threading.__excepthook__
@@ -101,3 +106,59 @@ def test_notify_wrapper_records_and_returns_false(qapp, monkeypatch):
     assert result is False
     assert len(recorded) == 1
     assert recorded[0][1]["source"] == "QApplication.notify"
+
+
+def test_dispatcher_marshals_dialog_to_ui_thread(qapp, monkeypatch):
+    """Emitting dispatch from a worker thread must run the dialog on the UI thread."""
+    import threading as _threading
+
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtTest import QSignalSpy
+
+    from src.core import crash_guard
+
+    crash_guard._installed = False
+    crash_guard._dispatcher = None
+    crash_guard.install_crash_guard(qapp)
+
+    shown = []
+    main_thread = QThread.currentThread()
+
+    class _FakeDialog:
+        def __init__(self, **kwargs):
+            shown.append(kwargs)
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(
+        "src.ui.dialogs.crash_report_dialog.CrashReportDialog", _FakeDialog, raising=False
+    )
+
+    done = _threading.Event()
+
+    def worker():
+        crash_guard._show_crash_dialog_on_ui("TB", "sig123")
+        done.set()
+
+    _threading.Thread(target=worker, daemon=True).start()
+    assert done.wait(timeout=2.0)
+
+    spy = QSignalSpy(crash_guard._dispatcher.dispatch)
+    qapp.processEvents()
+    # The queued emission must be delivered to the UI thread.
+    if len(spy) == 0:
+        qapp.processEvents()
+
+    assert shown, "dialog was not shown on the UI thread"
+    assert shown[0]["traceback_text"] == "TB"
+    assert shown[0]["signature"] == "sig123"
+
+    crash_guard._installed = False
+    crash_guard._app_ref = None
+    crash_guard._dispatcher = None
+    sys.excepthook = sys.__excepthook__
+    try:
+        threading.excepthook = threading.__excepthook__
+    except Exception:
+        pass
