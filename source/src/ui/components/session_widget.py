@@ -1059,7 +1059,7 @@ class SessionWidget(QWidget):
 
         if (
             self.session.is_connected
-            and not self.is_periodic_active()
+            and not self.is_periodic_active
             and not self._is_executing
             and not self._sql_stopping
             and not self._execution_queue
