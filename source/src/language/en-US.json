@@ -1768,5 +1768,19 @@
     "failed": "Download failed: {error}",
     "btn_cancel": "Cancel",
     "btn_close": "Close"
+  },
+  "crash": {
+    "title": "DataPyn encountered a problem",
+    "message": "An unexpected error occurred while running this action. The app is still running — you can continue working. Please report it so we can fix it.",
+    "traceback_label": "Error details",
+    "report_btn": "Report on GitHub",
+    "copy": "Copy",
+    "continue_btn": "Continue",
+    "copied": "Error details copied to clipboard.",
+    "reporting": "Reporting...",
+    "report_success": "Reported. Track it at {url}",
+    "report_failed": "Could not report automatically: {error}",
+    "signature": "signature",
+    "report_browser_fallback": "Opening your browser to create the issue..."
   }
 }

@@ -166,6 +166,7 @@ class BlockEditor(QWidget):
     # Signal when focused block changes (for Object Explorer tracking)
     block_focused = pyqtSignal(object)  # CodeBlock that gained focus
     sql_schema_requested = pyqtSignal(object)  # CodeBlock
+    databases_requested = pyqtSignal(object)  # CodeBlock (empty dropdown clicked)
 
     # Signal when any block text changes and shared {{parameters}} should be rescanned
     shared_parameters_scan_needed = pyqtSignal()

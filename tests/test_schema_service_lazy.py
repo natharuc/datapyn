@@ -53,3 +53,35 @@ def test_schema_worker_full_loads_databases():
 
     calls = [str(call.args[0]) for call in connector.execute_query.call_args_list]
     assert any("sys.databases" in q for q in calls)
+
+
+def test_load_databases_emits_databases_loaded(qtbot):
+    """SchemaService.load_databases fetches the server db list and emits databases_loaded."""
+    import pandas as pd
+
+    from src.services.schema_service import SchemaService
+
+    connector = MagicMock()
+    connector.db_type = "sqlserver"
+    connector.execute_query.return_value = pd.DataFrame({"name": ["master", "AppDb", "tempdb"]})
+
+    service = SchemaService()
+    captured: dict = {}
+
+    def _on_loaded(connection_name, session_id, databases):
+        captured["connection_name"] = connection_name
+        captured["session_id"] = session_id
+        captured["databases"] = list(databases or [])
+
+    service.databases_loaded.connect(_on_loaded)
+
+    service.load_databases(connector, "Gecon", session_id="sid-1")
+
+    qtbot.waitUntil(lambda: "databases" in captured, timeout=3000)
+
+    assert captured["connection_name"] == "Gecon"
+    assert captured["session_id"] == "sid-1"
+    assert captured["databases"] == ["master", "AppDb", "tempdb"]
+
+    service.cleanup()
+

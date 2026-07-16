@@ -2000,3 +2000,62 @@ class TestObjectExplorerEnhancedContextMenu:
         query = f"SELECT {cols_quoted}\nFROM {quoted_table}\nLIMIT 1000"
         assert "LIMIT 1000" in query
         assert "id" in query
+
+
+class TestObjectExplorerFocusAutoLoad:
+    """Smart lazy load: focus/visibility triggers databases_requested once per connection."""
+
+    def test_focus_emits_databases_requested_once(self, qtbot):
+        """Focusing the tree emits databases_requested once when the db list is empty."""
+        explorer = ObjectExplorerPanel()
+        qtbot.addWidget(explorer)
+
+        # Minimal schema (lazy, no server db list) for a SQL Server connection.
+        schema = {"database": "AppDb", "tables": [], "columns": {}, "lazy": True}
+        explorer.set_schema(schema, "Gecon", db_type="mssql")
+
+        emitted = []
+        explorer.databases_requested.connect(lambda: emitted.append(True))
+
+        # First focus must trigger the request.
+        explorer.tree.setFocus()
+        explorer._maybe_request_databases_on_focus()
+        assert len(emitted) == 1
+
+        # Second focus must NOT re-trigger (guard set).
+        explorer._maybe_request_databases_on_focus()
+        assert len(emitted) == 1
+
+    def test_focus_skipped_when_databases_loaded(self, qtbot):
+        """No request when the server db list is already populated."""
+        explorer = ObjectExplorerPanel()
+        qtbot.addWidget(explorer)
+
+        schema = {
+            "database": "AppDb",
+            "databases": ["AppDb", "master"],
+            "tables": [],
+            "columns": {},
+        }
+        explorer.set_schema(schema, "Gecon", db_type="mssql")
+
+        emitted = []
+        explorer.databases_requested.connect(lambda: emitted.append(True))
+        explorer._maybe_request_databases_on_focus()
+        assert emitted == []
+
+    def test_connection_change_resets_guard(self, qtbot):
+        """Switching connection resets the focus-trigger guard so it re-loads."""
+        explorer = ObjectExplorerPanel()
+        qtbot.addWidget(explorer)
+
+        explorer.set_schema({"database": "A", "tables": [], "columns": {}}, "conn1", db_type="mssql")
+        emitted = []
+        explorer.databases_requested.connect(lambda: emitted.append(True))
+        explorer._maybe_request_databases_on_focus()
+        assert len(emitted) == 1
+
+        # New connection -> guard resets.
+        explorer.set_schema({"database": "B", "tables": [], "columns": {}}, "conn2", db_type="mssql")
+        explorer._maybe_request_databases_on_focus()
+        assert len(emitted) == 2

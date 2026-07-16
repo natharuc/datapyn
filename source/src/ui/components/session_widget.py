@@ -255,6 +255,7 @@ class SessionWidget(QWidget):
     block_focused = pyqtSignal(object)  # CodeBlock that gained focus (for OE tracking)
     periodic_changed = pyqtSignal(bool)  # True=started, False=stopped - for tab icon
     _persisted_variables_loaded = pyqtSignal(object)  # dict loaded off-thread (internal)
+    _restore_dispatch = pyqtSignal(object)  # marshal restore payload to UI thread
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -343,6 +344,10 @@ class SessionWidget(QWidget):
         self._setup_ui()
         self._connect_signals()
         # Queued from the loader thread back onto the UI thread
+        self._restore_dispatch.connect(
+            self._emit_persisted_variables_loaded,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._persisted_variables_loaded.connect(self._apply_restored_variables)
 
         # Restore blocks if they exist
@@ -678,6 +683,12 @@ class SessionWidget(QWidget):
         """Restore DataFrame variables from the on-disk snapshot (manual action)."""
         return self._restore_variables_from_disk(require_enabled=False)
 
+    def _emit_persisted_variables_loaded(self, variables: object) -> None:
+        try:
+            self._persisted_variables_loaded.emit(variables)
+        except RuntimeError:
+            pass  # widget destroyed while loading
+
     def _restore_variables_from_disk(self, *, require_enabled: bool) -> bool:
         """Load snapshot in a background thread; apply on the UI thread via signal."""
         import threading
@@ -705,7 +716,7 @@ class SessionWidget(QWidget):
                 variables = None
             if variables:
                 try:
-                    self._persisted_variables_loaded.emit(variables)
+                    self._restore_dispatch.emit(variables)
                 except RuntimeError:
                     pass  # widget destroyed while loading
 
@@ -949,6 +960,8 @@ class SessionWidget(QWidget):
 
         if hasattr(self.editor, "sql_schema_requested"):
             self.editor.sql_schema_requested.connect(self._on_editor_sql_schema_requested)
+        if hasattr(self.editor, "databases_requested"):
+            self.editor.databases_requested.connect(self._on_editor_databases_requested)
 
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
@@ -1059,7 +1072,7 @@ class SessionWidget(QWidget):
 
         if (
             self.session.is_connected
-            and not self.is_periodic_active()
+            and not self.is_periodic_active
             and not self._is_executing
             and not self._sql_stopping
             and not self._execution_queue
@@ -1074,6 +1087,13 @@ class SessionWidget(QWidget):
         main_window = self._get_main_window()
         if main_window is not None and hasattr(main_window, "request_lazy_schema_for_completion"):
             main_window.request_lazy_schema_for_completion(block, self)
+
+    def _on_editor_databases_requested(self, block) -> None:
+        """Empty per-block database dropdown clicked -> request server db list."""
+        self._touch_db_activity()
+        main_window = self._get_main_window()
+        if main_window is not None and hasattr(main_window, "request_databases_for_block"):
+            main_window.request_databases_for_block(block, self)
 
     # === SQL EXECUTION ===
 

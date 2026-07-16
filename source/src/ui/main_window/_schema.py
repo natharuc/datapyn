@@ -82,6 +82,49 @@ class SchemaMixin:
         sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
         self._schema_service.load_databases(connector, connection_name, session_id=sid or "")
 
+    # DB types that expose a server-wide database/catalog list worth fetching
+    # automatically so the per-block database dropdown is populated.
+    _SERVER_DB_LIST_TYPES = frozenset(("mssql", "sqlserver", "mysql", "mariadb", "databricks"))
+
+    def _maybe_auto_request_databases(
+        self, schema: dict, connection_name: str, db_type: str, session_id: str
+    ) -> None:
+        """After a lazy/minimal schema load, fetch the server database list once.
+
+        Minimal mode (default on connect) loads neither tables nor the server
+        database list, so the per-block database dropdown would stay empty until
+        the user manually expands the OE "Databases" node. Trigger the cheap
+        single-query list load automatically instead.
+        """
+        if not connection_name or not session_id:
+            return
+        if not schema.get("lazy"):
+            return
+        if schema.get("databases"):
+            return
+        if str(db_type or "").lower() not in self._SERVER_DB_LIST_TYPES:
+            return
+
+        if not hasattr(self, "_auto_db_list_requested"):
+            self._auto_db_list_requested = set()
+        key = (connection_name, session_id)
+        if key in self._auto_db_list_requested:
+            return
+        self._auto_db_list_requested.add(key)
+
+        connector = None
+        widget = self._session_widgets.get(session_id) if hasattr(self, "_session_widgets") else None
+        if widget and hasattr(widget, "session") and widget.session:
+            connector = getattr(widget.session, "connector", None)
+        if (connector is None or not self._connector_is_connected(connector)) and connection_name:
+            get_connection = getattr(self.connection_manager, "get_connection", None)
+            if callable(get_connection):
+                connector = get_connection(connection_name)
+        if connector is None or not self._connector_is_connected(connector):
+            return
+
+        self._schema_service.load_databases(connector, connection_name, session_id=session_id)
+
     def _on_databases_loaded(self, connection_name: str, session_id: str, databases: list):
         """Merge on-demand database list into cached schema and refresh OE."""
         if not connection_name or not isinstance(databases, list):
@@ -102,6 +145,13 @@ class SchemaMixin:
                 db_type = self._get_connection_db_type(connection_name)
                 explorer.set_schema(merged, connection_name, db_type=db_type)
                 explorer.add_databases(databases)
+
+        # Push the freshly loaded database list to every SQL block of this session
+        # so the per-block database dropdown is populated (lazy connect path).
+        if sid:
+            self._apply_schema_to_session_blocks(
+                sid, connection_name, merged, db_type=self._get_connection_db_type(connection_name)
+            )
 
     def _on_oe_schemas_requested(self, catalog_name: str):
         """Load schemas for a Databricks catalog (lazy loading)."""
@@ -789,6 +839,11 @@ class SchemaMixin:
             ),
         )
 
+        # Lazy connect: minimal mode loads no server database list. Request it
+        # once so the per-block database dropdown and the OE get populated without
+        # forcing the user to expand the "Databases" node manually.
+        self._maybe_auto_request_databases(schema, connection_name, db_type, requesting_sid)
+
         # Update Object Explorer for the session that REQUESTED this schema
         # (not all sessions - each session has its own OE state)
         if hasattr(self, "_session_explorers"):
@@ -1099,6 +1154,44 @@ class SchemaMixin:
             if connection_name not in self._pending_block_schemas:
                 self._pending_block_schemas[connection_name] = []
             self._pending_block_schemas[connection_name].append(weakref.ref(block))
+
+    def request_databases_for_block(self, block, session_widget) -> None:
+        """Load the server database list when a block's empty dropdown is clicked.
+
+        This is the self-heal fallback for the lazy-connect path: the auto-request
+        in ``_on_schema_loaded`` may not have completed (or the connector was not
+        ready yet), so clicking the empty dropdown triggers the cheap single-query
+        database list load on demand. Results are merged back into the cached
+        schema and pushed to every block of the session via ``_on_databases_loaded``.
+        """
+        if block is None or session_widget is None:
+            return
+
+        session = getattr(session_widget, "session", None)
+        if session is None:
+            return
+
+        block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+        connection_name = block_conn or getattr(session, "connection_name", "") or ""
+        if not connection_name:
+            return
+
+        sid = session.session_id
+        cached = self._schema_service.get_cached_schema(connection_name, session_id=sid) or {}
+        if cached.get("databases"):
+            return  # already populated
+
+        connector = None
+        if block_conn and hasattr(session_widget, "_peek_sql_connector_for_block"):
+            connector = session_widget._peek_sql_connector_for_block(block, block_conn, None)
+        if connector is None or not self._connector_is_connected(connector):
+            connector = getattr(session, "connector", None)
+        if connector is None or not self._connector_is_connected(connector):
+            connector = self.connection_manager.get_connection(connection_name)
+        if connector is None or not self._connector_is_connected(connector):
+            return
+
+        self._schema_service.load_databases(connector, connection_name, session_id=sid)
 
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback when an individual block connection changes.

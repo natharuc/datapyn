@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from PyQt6.QtCore import QObject, QThread, QEventLoop, QTimer
+from PyQt6.QtCore import QObject, QThread
 
 from src.utils.qt_threading import qthread_is_running
 
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_PARALLEL_EXPLORE = 4
-# Safety net for the nested event loop. A hung subagent (e.g. a stalled LLM
+# Safety net for parallel explore. A hung subagent (e.g. a stalled LLM
 # stream) must never freeze the whole chat turn — we bail with partial results.
 EXPLORE_PARALLEL_TIMEOUT_MS = 120_000
 EXPLORE_CANCEL_POLL_MS = 200
@@ -75,6 +76,9 @@ class SubagentOrchestrator(QObject):
                 if qthread_is_running(thread):
                     thread.quit()
                     if not thread.wait(300):
+                        logger.warning(
+                            "Explore QThread did not stop after quit(); terminating as last resort"
+                        )
                         thread.terminate()
                         thread.wait(300)
             except RuntimeError:
@@ -88,6 +92,9 @@ class SubagentOrchestrator(QObject):
                 if thread.isRunning():
                     thread.quit()
                     if not thread.wait(500):
+                        logger.warning(
+                            "Explore QThread did not stop after quit(); terminating as last resort"
+                        )
                         thread.terminate()
                         thread.wait(500)
             except RuntimeError:
@@ -105,8 +112,8 @@ class SubagentOrchestrator(QObject):
     ) -> List[ExploreTaskResult]:
         """Run up to MAX_PARALLEL_EXPLORE explore jobs; blocks until all finish.
 
-        The nested event loop is bounded by a safety timeout and (optionally)
-        a cancellation poll so a hung subagent can never freeze the chat turn.
+        Uses threading.Event with a safety timeout and (optionally) a
+        cancellation poll so a hung subagent can never freeze the chat turn.
         """
         if not tasks:
             return []
@@ -142,18 +149,20 @@ class SubagentOrchestrator(QObject):
             )
 
         results: Dict[str, ExploreTaskResult] = {}
-        pending = len(capped)
-        loop = QEventLoop()
         workers: List[ExploreSubagentWorker] = []
         timed_out = False
         cancelled = False
+        done_event = threading.Event()
+        done_lock = threading.Lock()
+        remaining = len(capped)
 
         def on_one_done(result: ExploreTaskResult) -> None:
-            nonlocal pending
             results[result.task_id] = result
-            pending -= 1
-            if pending <= 0:
-                loop.quit()
+            with done_lock:
+                nonlocal remaining
+                remaining -= 1
+                if remaining <= 0:
+                    done_event.set()
 
         threads: List[QThread] = []
         self.cancel_active_explore()
@@ -180,38 +189,28 @@ class SubagentOrchestrator(QObject):
         self._active_workers = workers
         self._active_threads = threads
 
-        # Safety timeout: a stalled subagent must not block the turn forever.
-        safety_timer = QTimer()
-        safety_timer.setSingleShot(True)
+        # Block with threading.Event — no Qt event loop on this worker thread.
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        poll_s = EXPLORE_CANCEL_POLL_MS / 1000.0
 
-        def _on_timeout() -> None:
-            nonlocal timed_out
-            timed_out = True
-            logger.warning("Parallel explore timed out after %sms; cancelling workers", timeout_ms)
-            for w in workers:
-                w.cancel()
-            loop.quit()
-
-        safety_timer.timeout.connect(_on_timeout)
-        safety_timer.start(timeout_ms)
-
-        # Cancellation poll: respond to the user pressing Stop on the main turn.
-        cancel_timer = QTimer()
-        if is_cancelled is not None:
-            def _check_cancel() -> None:
-                nonlocal cancelled
-                if is_cancelled():
-                    cancelled = True
-                    for w in workers:
-                        w.cancel()
-                    loop.quit()
-
-            cancel_timer.timeout.connect(_check_cancel)
-            cancel_timer.start(EXPLORE_CANCEL_POLL_MS)
-
-        loop.exec()
-        safety_timer.stop()
-        cancel_timer.stop()
+        while not done_event.is_set():
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0:
+                timed_out = True
+                logger.warning(
+                    "Parallel explore timed out after %sms; cancelling workers", timeout_ms
+                )
+                for w in workers:
+                    w.cancel()
+                break
+            wait_s = min(poll_s, remaining_s)
+            if done_event.wait(timeout=wait_s):
+                break
+            if is_cancelled is not None and is_cancelled():
+                cancelled = True
+                for w in workers:
+                    w.cancel()
+                break
 
         # Wind down any worker that didn't finish on its own (timeout/cancel).
         for w in workers:

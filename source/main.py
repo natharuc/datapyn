@@ -100,6 +100,13 @@ def main():
     app.setOrganizationName("DataPyn")
     app.setStyle("Fusion")
 
+    # Global crash guard — must be installed before MainWindow is created so
+    # import/construction errors are also caught. The app NEVER exits on an
+    # unhandled exception; it surfaces a formatted dialog instead.
+    from src.core.crash_guard import install_crash_guard
+
+    install_crash_guard(app)
+
     # Splash o mais cedo possível (antes de fontes, tema e imports pesados)
     from src.ui.splash_screen import SplashScreen
 
