@@ -311,6 +311,9 @@ class SessionWidget(QWidget):
         self._db_switch_threads: list = []
         self._is_closing: bool = False
         self._block_connector_pool = BlockConnectorPool()
+        self._last_db_activity_at = time.monotonic()
+        self._idle_reaper_timer = QTimer(self)
+        self._idle_reaper_timer.timeout.connect(self._on_idle_reaper_tick)
         self._current_execution_block = None
 
         # Overlay de loading
@@ -339,6 +342,7 @@ class SessionWidget(QWidget):
 
         self._setup_ui()
         self._connect_signals()
+        self._start_idle_reaper()
         # Queued from the loader thread back onto the UI thread
         self._persisted_variables_loaded.connect(self._apply_restored_variables)
 
@@ -943,6 +947,9 @@ class SessionWidget(QWidget):
         # Block focus change (for Object Explorer connection tracking)
         self.editor.block_focused.connect(self.block_focused.emit)
 
+        if hasattr(self.editor, "sql_schema_requested"):
+            self.editor.sql_schema_requested.connect(self._on_editor_sql_schema_requested)
+
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
         self.editor.shared_parameters_scan_needed.connect(self._refresh_shared_parameters_from_blocks)
@@ -1021,6 +1028,52 @@ class SessionWidget(QWidget):
         self._shared_parameters = [dict(item) for item in (parameters or [])]
         self.session.shared_parameters = self._shared_parameters
         self.editor.content_changed.emit()
+
+    def _touch_db_activity(self) -> None:
+        """Record database activity to defer idle disconnect."""
+        self._last_db_activity_at = time.monotonic()
+
+    def _start_idle_reaper(self) -> None:
+        from src.core.connection_settings import get_idle_timeout_sec, get_reaper_interval_sec
+
+        if get_idle_timeout_sec() <= 0:
+            return
+        interval_ms = max(1000, int(get_reaper_interval_sec() * 1000))
+        self._idle_reaper_timer.start(interval_ms)
+
+    def _on_idle_reaper_tick(self) -> None:
+        if self._is_closing:
+            return
+
+        from src.core.connection_settings import get_idle_timeout_sec
+
+        idle_timeout = float(get_idle_timeout_sec())
+        if idle_timeout <= 0:
+            return
+
+        now = time.monotonic()
+        if now - self._last_db_activity_at < idle_timeout:
+            return
+
+        self._block_connector_pool.reap_idle(idle_timeout)
+
+        if (
+            self.session.is_connected
+            and not self.is_periodic_active()
+            and not self._is_executing
+            and not self._sql_stopping
+            and not self._execution_queue
+        ):
+            try:
+                self.session.disconnect()
+            except Exception:
+                pass
+
+    def _on_editor_sql_schema_requested(self, block) -> None:
+        self._touch_db_activity()
+        main_window = self._get_main_window()
+        if main_window is not None and hasattr(main_window, "request_lazy_schema_for_completion"):
+            main_window.request_lazy_schema_for_completion(block, self)
 
     # === SQL EXECUTION ===
 
@@ -1123,6 +1176,8 @@ class SessionWidget(QWidget):
         """
         if self._reject_if_cancelling_sql():
             return
+
+        self._touch_db_activity()
 
         block = self.editor.get_current_executing_block()
         conn_name = connection_name or self.session.connection_name
@@ -1341,6 +1396,8 @@ class SessionWidget(QWidget):
             self.status_changed.emit(S.session_widget.status_conn_failed)
             self._finish_block_after_switch(has_error=True)
             return
+
+        self._touch_db_activity()
 
         conn_name = connection_name or self.session.connection_name
         if block is not None and conn_name and hasattr(block, "get_block_key"):
@@ -1914,6 +1971,8 @@ class SessionWidget(QWidget):
         """Execute SQL query using the given connector (called after connection is ready)."""
         if self._reject_if_cancelling_sql():
             return
+
+        self._touch_db_activity()
 
         import re
         self._current_execution_block = self._get_active_execution_block()
@@ -3244,6 +3303,7 @@ class SessionWidget(QWidget):
 
         # Mostrar resultado
         if success:
+            self._touch_db_activity()
             self.append_output(message)
             self.status_changed.emit(message)
             # Emit connection change signal
@@ -3363,6 +3423,7 @@ class SessionWidget(QWidget):
             self._finalize_sql_stop()
         self.detach_connection_thread()
         self._orphan_running_threads()
+        self._idle_reaper_timer.stop()
         self._block_connector_pool.release_all()
         self._sql_finished_handler = None
         self._python_finished_handler = None

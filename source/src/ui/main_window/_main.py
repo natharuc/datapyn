@@ -173,6 +173,7 @@ class MainWindow(
         self._schema_service.schemas_loaded.connect(self._on_schemas_loaded)
         self._schema_service.tables_loaded.connect(self._on_tables_loaded)
         self._schema_service.columns_loaded.connect(self._on_columns_loaded)
+        self._schema_service.databases_loaded.connect(self._on_databases_loaded)
 
         # Pynia agent (multi-provider chat) + Copilot backend (LSP / Copilot connector)
         self._mcp_server = MCPServer() if MCPServer else None

@@ -974,6 +974,9 @@ class CodeBlock(QFrame):
         # Connect force completion request (Ctrl+.)
         self.editor.force_completion_requested.connect(self._on_force_completion_requested)
 
+        if hasattr(self.editor, "sql_schema_requested"):
+            self.editor.sql_schema_requested.connect(self._on_sql_schema_requested)
+
         bridge = getattr(self.editor, "_bridge", None)
         if bridge is not None:
             bridge.cancel_inline_completion.connect(self._cancel_noisy_completions)
@@ -1128,6 +1131,11 @@ class CodeBlock(QFrame):
         if hasattr(self.editor, "set_global_imports"):
             self.editor.set_global_imports(global_imports)
     
+    def _on_sql_schema_requested(self) -> None:
+        editor = getattr(self, "_block_editor", None)
+        if editor is not None and hasattr(editor, "sql_schema_requested"):
+            editor.sql_schema_requested.emit(self)
+
     def _on_completion_requested(self, prefix: str, suffix: str, line: int, column: int):
         """Handle completion request from Monaco editor."""
         if hasattr(self, "_completion_service"):

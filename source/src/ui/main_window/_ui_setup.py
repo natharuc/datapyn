@@ -265,6 +265,7 @@ class UISetupMixin:
         panel.schemas_requested.connect(self._on_oe_schemas_requested)
         panel.tables_requested.connect(self._on_oe_tables_requested)
         panel.columns_requested.connect(self._on_oe_columns_requested)
+        panel.databases_requested.connect(self._on_oe_databases_requested)
         panel.schema_changed.connect(
             lambda schema, sid=session_id: self._on_object_explorer_schema_changed(sid, schema)
         )
