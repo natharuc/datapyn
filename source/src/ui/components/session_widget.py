@@ -342,7 +342,6 @@ class SessionWidget(QWidget):
 
         self._setup_ui()
         self._connect_signals()
-        self._start_idle_reaper()
         # Queued from the loader thread back onto the UI thread
         self._persisted_variables_loaded.connect(self._apply_restored_variables)
 
@@ -542,6 +541,7 @@ class SessionWidget(QWidget):
         # Style will be set dynamically in _show_loading
         self._loading_overlay.hide()
         self._loading_overlay.raise_()
+        self._start_idle_reaper()
 
     # === Propriedades de compatibilidade ===
 
