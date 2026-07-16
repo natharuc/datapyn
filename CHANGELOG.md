@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.52.0 (2026-07-16)
+
+### Bug Fixes
+
+- **connections**: Start idle reaper only after SessionWidget UI setup
+  ([`31ff2e6`](https://github.com/natharuc/datapyn/commit/31ff2e6caba3b5b6f1f74a5629feb4d0bd78da80))
+
+### Features
+
+- **connections**: Close idle SQL Server connections and lazy-load schema
+  ([`5f702d4`](https://github.com/natharuc/datapyn/commit/5f702d4e1e97f7388c53333346b480bdc8961660))
+
+- **connections**: Close idle SQL Server connections and lazy-load schema
+  ([`c4819ed`](https://github.com/natharuc/datapyn/commit/c4819ed569411fdaff31e005da6d210f14ba3adf))
+
+### Heuristic
+
+- Merge pull request #142 from natharuc/feat/optimize-sleeping-sql-connections
+  ([`5f702d4`](https://github.com/natharuc/datapyn/commit/5f702d4e1e97f7388c53333346b480bdc8961660))
+
+
 ## v1.51.0 (2026-07-15)
 
 ### Bug Fixes
