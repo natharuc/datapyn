@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+import time
+from typing import Dict, List, Optional
 
 from src.database.database_connector import DatabaseConnector, get_connector_database_context
 
@@ -79,6 +80,7 @@ class BlockConnectorPool:
         connector = entry.get("connector")
         if connector is None or not connector.is_connected():
             return None
+        self._touch(block_key)
         self._apply_database(connector, database, database_context)
         return connector
 
@@ -96,6 +98,7 @@ class BlockConnectorPool:
         if entry and entry.get("connection_name") == connection_name:
             connector = entry.get("connector")
             if connector is not None and connector.is_connected():
+                self._touch(block_key)
                 self._apply_database(connector, database, database_context)
                 return connector
             self.release(block_key)
@@ -117,6 +120,7 @@ class BlockConnectorPool:
         self._entries[block_key] = {
             "connector": connector,
             "connection_name": connection_name,
+            "last_used_at": time.monotonic(),
         }
         return connector
 
@@ -128,6 +132,7 @@ class BlockConnectorPool:
         self._entries[block_key] = {
             "connector": connector,
             "connection_name": connection_name,
+            "last_used_at": time.monotonic(),
         }
 
     def release(self, block_key: str) -> None:
@@ -138,6 +143,32 @@ class BlockConnectorPool:
     def release_all(self) -> None:
         for key in list(self._entries):
             self.release(key)
+
+    def reap_idle(self, idle_timeout_sec: float) -> List[str]:
+        """Disconnect block connectors idle longer than *idle_timeout_sec*."""
+        if idle_timeout_sec <= 0:
+            return []
+
+        now = time.monotonic()
+        released: List[str] = []
+        for block_key in list(self._entries):
+            entry = self._entries.get(block_key)
+            if not entry:
+                continue
+            last_used = float(entry.get("last_used_at", 0.0))
+            if now - last_used < idle_timeout_sec:
+                continue
+            connector = entry.get("connector")
+            if connector is not None and connector.is_query_busy():
+                continue
+            self.release(block_key)
+            released.append(block_key)
+        return released
+
+    def _touch(self, block_key: str) -> None:
+        entry = self._entries.get(block_key)
+        if entry is not None:
+            entry["last_used_at"] = time.monotonic()
 
     def _apply_database(
         self,

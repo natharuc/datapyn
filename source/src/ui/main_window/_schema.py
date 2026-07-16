@@ -19,7 +19,12 @@ from src.services.cross_database_schema import (
     prepare_editor_sql_schema,
     schema_has_columns_for_table,
 )
-from src.services.schema_service import SCHEMA_BUSY_SENTINEL, is_schema_busy_result
+from src.services.schema_service import (
+    SCHEMA_BUSY_SENTINEL,
+    SCHEMA_LAZY_AUTOCOMPLETE,
+    SCHEMA_LAZY_FULL,
+    is_schema_busy_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +72,36 @@ class SchemaMixin:
                 timer.stop()
             except RuntimeError:
                 pass
+
+    def _on_oe_databases_requested(self):
+        """Load all server databases when the lazy OE node is expanded."""
+        connector, connection_name = self._get_effective_connector_info()
+        if not connector or not self._connector_is_connected(connector):
+            return
+
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        self._schema_service.load_databases(connector, connection_name, session_id=sid or "")
+
+    def _on_databases_loaded(self, connection_name: str, session_id: str, databases: list):
+        """Merge on-demand database list into cached schema and refresh OE."""
+        if not connection_name or not isinstance(databases, list):
+            return
+
+        sid = session_id or self._get_active_session_id() or ""
+        cached = self._schema_service.get_cached_schema(connection_name, session_id=sid) or {}
+        if not isinstance(cached, dict):
+            cached = {}
+        merged = dict(cached)
+        merged["databases"] = list(databases)
+        merged["lazy"] = True
+        self._schema_service.update_cached_schema(connection_name, merged, session_id=sid)
+
+        if sid and hasattr(self, "_session_explorers"):
+            explorer = self._session_explorers.get(sid)
+            if explorer:
+                db_type = self._get_connection_db_type(connection_name)
+                explorer.set_schema(merged, connection_name, db_type=db_type)
+                explorer.add_databases(databases)
 
     def _on_oe_schemas_requested(self, catalog_name: str):
         """Load schemas for a Databricks catalog (lazy loading)."""
@@ -580,13 +615,23 @@ class SchemaMixin:
                 connection_name=connection_name,
             )
 
-    def _load_schema_with_loading(self, connector, connection_name: str, session_id: str = ""):
+    def _load_schema_with_loading(
+        self,
+        connector,
+        connection_name: str,
+        session_id: str = "",
+        *,
+        lazy: bool = True,
+        lazy_mode: str | None = None,
+    ):
         """Load schema and show loading indicator in Object Explorer.
         
         Args:
             connector: DatabaseConnector with active connection
             connection_name: Connection name
             session_id: Session ID for per-session cache (optional, defaults to active)
+            lazy: When True, only load current database context (default on connect)
+            lazy_mode: Override lazy level (minimal | autocomplete | full)
         """
         # Get or CREATE the explorer for the current session (important: _get_session_explorer creates if needed)
         sid = session_id or self._get_active_session_id()
@@ -608,7 +653,13 @@ class SchemaMixin:
             if hasattr(self, 'object_explorer_action'):
                 self.object_explorer_action.setChecked(True)
 
-        self._schema_service.load_schema(connector, connection_name, session_id=sid or "")
+        self._schema_service.load_schema(
+            connector,
+            connection_name,
+            session_id=sid or "",
+            lazy=lazy,
+            lazy_mode=lazy_mode,
+        )
 
     def _reload_schema(self):
         """Reloads the SQL schema from the focused block connection (or session).
@@ -649,14 +700,18 @@ class SchemaMixin:
         self.statusBar().showMessage(S.status.reloading_schema.format(name=connection_name), 5000)
 
         if connector and self._connector_is_connected(connector):
-            self._load_schema_with_loading(connector, connection_name, session_id=sid)
+            self._load_schema_with_loading(
+                connector, connection_name, session_id=sid, lazy=False, lazy_mode=SCHEMA_LAZY_FULL
+            )
         else:
             # Need to get connector from ConnectionManager
             from src.database.connection_manager import ConnectionManager
             manager = ConnectionManager()
             conn = manager.connections.get(connection_name)
             if conn and self._connector_is_connected(conn):
-                self._load_schema_with_loading(conn, connection_name, session_id=sid)
+                self._load_schema_with_loading(
+                    conn, connection_name, session_id=sid, lazy=False, lazy_mode=SCHEMA_LAZY_FULL
+                )
             else:
                 self.statusBar().showMessage(S.status.connection_not_active.format(name=connection_name), 3000)
 
@@ -995,9 +1050,55 @@ class SchemaMixin:
             explorer.set_schema(cached, effective_conn, db_type=db_type)
             return
 
-        # If not cached and it's a block-specific connection, load it
+        # If not cached, schema loads on first autocomplete request (lazy)
         if block_conn:
-            self._load_schema_for_block(block, block_conn)
+            return
+
+    def request_lazy_schema_for_completion(self, block, session_widget) -> None:
+        """Load tables/columns/routines when Monaco autocomplete needs schema."""
+        if block is None or session_widget is None:
+            return
+
+        session = getattr(session_widget, "session", None)
+        if session is None:
+            return
+
+        block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+        connection_name = block_conn or getattr(session, "connection_name", "") or ""
+        if not connection_name:
+            return
+
+        sid = session.session_id
+        block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
+        cached = self._schema_service.get_cached_schema(
+            connection_name, session_id=sid, block_key=block_key
+        )
+        if cached and cached.get("tables"):
+            return
+
+        connector = None
+        if block_conn and hasattr(session_widget, "_peek_sql_connector_for_block"):
+            connector = session_widget._peek_sql_connector_for_block(block, block_conn, None)
+        if connector is None or not self._connector_is_connected(connector):
+            connector = getattr(session, "connector", None)
+        if connector is None or not self._connector_is_connected(connector):
+            connector = self.connection_manager.get_connection(connection_name)
+        if connector is None or not self._connector_is_connected(connector):
+            return
+
+        self._schema_service.load_schema(
+            connector,
+            connection_name,
+            session_id=sid,
+            block_key=block_key,
+            lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE,
+        )
+        if block_key:
+            if not hasattr(self, "_pending_block_schemas"):
+                self._pending_block_schemas = {}
+            if connection_name not in self._pending_block_schemas:
+                self._pending_block_schemas[connection_name] = []
+            self._pending_block_schemas[connection_name].append(weakref.ref(block))
 
     def _on_block_connection_changed(self, block, connection_name: str):
         """Callback when an individual block connection changes.
@@ -1210,6 +1311,7 @@ class SchemaMixin:
             connection_name,
             session_id=sid,
             block_key=block_key,
+            lazy_mode=SCHEMA_LAZY_FULL,
         )
 
     def _on_block_database_changed(self, block, database_name: str):

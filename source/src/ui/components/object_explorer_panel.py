@@ -144,6 +144,7 @@ class ObjectExplorerPanel(QWidget):
     schemas_requested = pyqtSignal(str)  # catalog_name -> request schemas for this catalog
     tables_requested = pyqtSignal(str, str)  # catalog, schema -> request tables
     columns_requested = pyqtSignal(str, str, str)  # catalog, schema, table -> request columns
+    databases_requested = pyqtSignal()  # request all server databases (lazy OE)
     schema_changed = pyqtSignal(dict)  # current schema after lazy metadata merge
 
     # Placeholder marker for lazy loading
@@ -853,6 +854,12 @@ class ObjectExplorerPanel(QWidget):
             self._build_tree_databricks(tables, columns, db_name, all_databases, filter_text)
         elif all_databases and len(all_databases) > 1:
             self._build_tree_multi_db(tables, columns, db_name, all_databases, filter_text)
+        elif (
+            schema.get("lazy")
+            and self._db_type in ("sqlserver", "mssql", "mysql", "mariadb")
+            and not all_databases
+        ):
+            self._build_tree_lazy_server(tables, columns, db_name, filter_text)
         else:
             # Single database (PostgreSQL, or single MySQL/MariaDB)
             db_display = db_name or self._current_connection or "Database"
@@ -884,6 +891,27 @@ class ObjectExplorerPanel(QWidget):
 
         # Restore expansion state
         self._restore_expansion_state(expanded_paths)
+
+    def _build_tree_lazy_server(self, tables, columns, db_name, filter_text):
+        """Lazy SQL Server/MySQL tree: current DB + expandable server database list."""
+        if db_name:
+            db_display = db_name
+            db_item = QTreeWidgetItem(self.tree, [db_display])
+            db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
+            if HAS_QTAWESOME:
+                db_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
+            font = db_item.font(0)
+            font.setBold(True)
+            db_item.setFont(0, font)
+            self._add_tables_to_node(db_item, tables, columns, filter_text)
+            db_item.setExpanded(True)
+
+        server_label = getattr(S.object_explorer, "server_databases", "Databases")
+        server_item = QTreeWidgetItem(self.tree, [server_label])
+        server_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "server_databases"})
+        if HAS_QTAWESOME:
+            server_item.setIcon(0, qta.icon("mdi.server", color="#888888"))
+        self._add_placeholder_child(server_item)
 
     def _build_tree_databricks(self, tables, columns, current_catalog, all_catalogs, filter_text):
         """Build tree for Databricks 3-level namespace: Catalog > Schema > Table > Columns
@@ -1311,6 +1339,42 @@ class ObjectExplorerPanel(QWidget):
         elif item_type == "database" and name:
             # For non-Databricks, request tables for this database
             self.tables_requested.emit(name, "")
+        elif item_type == "server_databases":
+            self.databases_requested.emit()
+
+    def add_databases(self, databases: list):
+        """Populate the lazy server-databases node after on-demand load."""
+        server_label = getattr(S.object_explorer, "server_databases", "Databases")
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if not data or data.get("type") != "server_databases":
+                continue
+            self._remove_placeholder_children(item)
+            item.takeChildren()
+            current_db = ""
+            if self._current_schema:
+                current_db = str(self._current_schema.get("database", "") or "")
+            for db_name in sorted(databases or []):
+                is_current = current_db and db_name.lower() == current_db.lower()
+                display = (
+                    f"{db_name} {S.object_explorer.db_connected.format(db='')}"
+                    if is_current
+                    else db_name
+                )
+                db_item = QTreeWidgetItem(item, [display])
+                db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
+                if HAS_QTAWESOME:
+                    icon_color = "#569cd6" if is_current else "#888888"
+                    db_item.setIcon(0, qta.icon("mdi.database", color=icon_color))
+                if is_current:
+                    font = db_item.font(0)
+                    font.setBold(True)
+                    db_item.setFont(0, font)
+                else:
+                    self._add_placeholder_child(db_item)
+            item.setExpanded(True)
+            return
 
     def add_schemas_to_catalog(self, catalog_name: str, schemas: list):
         """Add schemas to a catalog item (lazy loading callback)."""

@@ -1481,3 +1481,22 @@ class TestDatabricksOAuthRetry:
 
         assert result is True
         mock_path.unlink.assert_not_called()
+
+
+class TestSqlAlchemyEnginePool:
+  def test_build_engine_kwargs_on_prem_sqlserver_uses_recycle_not_pre_ping(self):
+      from database.database_connector import build_sqlalchemy_engine_kwargs
+
+      kwargs = build_sqlalchemy_engine_kwargs("sqlserver", "sql01.corp.local")
+      assert kwargs["pool_recycle"] == 300
+      assert kwargs["pool_size"] == 2
+      assert "pool_pre_ping" not in kwargs
+
+  def test_build_engine_kwargs_azure_sql_enables_pre_ping(self):
+      from database.database_connector import build_sqlalchemy_engine_kwargs
+
+      kwargs = build_sqlalchemy_engine_kwargs(
+          "sqlserver", "myserver.database.windows.net"
+      )
+      assert kwargs["pool_pre_ping"] is True
+

@@ -156,6 +156,7 @@ class MonacoEditor(QWidget):
     # Completion signals
     completion_requested = pyqtSignal(str, str, int, int)
     force_completion_requested = pyqtSignal(str, str, int, int)  # bypasses throttling
+    sql_schema_requested = pyqtSignal()
     
     # Cursor position signal
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
@@ -197,6 +198,7 @@ class MonacoEditor(QWidget):
         self._static_completions: list = []
         self._sibling_block_completions: list = []
         self._sql_db_type: str = ""
+        self._schema_load_pending = False
         self._completion_service = MonacoCompletionService(self)
         self._syntax_validate_timer = QTimer(self)
         self._syntax_validate_timer.setSingleShot(True)
@@ -543,9 +545,21 @@ class MonacoEditor(QWidget):
         self._selected_text_cache = text or ""
         self._has_selection_cache = bool(has_selection)
     
+    def _maybe_request_sql_schema(self) -> None:
+        """Ask the host to load schema lazily when autocomplete has no metadata."""
+        if self._language != "sql":
+            return
+        if self._sql_schema.get("tables") or self._sql_schema.get("columns"):
+            return
+        if self._schema_load_pending:
+            return
+        self._schema_load_pending = True
+        self.sql_schema_requested.emit()
+
     def _on_sql_context_requested(self, full_text: str, prefix: str, line: int, column: int, request_id: int):
         """Handle SQL context-aware completion request off the UI thread."""
         if not self._sql_schema.get("tables") and not self._sql_schema.get("columns"):
+            self._maybe_request_sql_schema()
             logger.warning(
                 "[MONACO] SQL context completion without schema (prefix=%s)",
                 prefix,
@@ -556,6 +570,7 @@ class MonacoEditor(QWidget):
     def _on_sql_completion_requested(self, full_text: str, line: int, column: int, request_id: int):
         """Handle SQL completion request off the UI thread."""
         if not self._sql_schema.get("tables") and not self._sql_schema.get("columns"):
+            self._maybe_request_sql_schema()
             logger.warning(
                 "[MONACO] SQL completion request without schema (L%s:C%s)",
                 line,
@@ -827,6 +842,8 @@ class MonacoEditor(QWidget):
             columns,
         )
         self._sql_schema = schema
+        if tables or columns:
+            self._schema_load_pending = False
         self._completion_service.set_sql_schema(schema)
         if schema.get("db_type"):
             self.set_sql_dialect(str(schema.get("db_type", "")))

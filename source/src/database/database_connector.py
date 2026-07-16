@@ -375,6 +375,18 @@ class DatabricksOAuthTokenCache:
         return None
 
 
+def build_sqlalchemy_engine_kwargs(db_type: str, host: str) -> dict:
+    """SQLAlchemy pool options tuned to avoid idle sleeping SPIDs on SQL Server."""
+    kwargs: dict = {
+        "pool_size": 2,
+        "pool_timeout": 10,
+        "pool_recycle": 300,
+    }
+    if db_type == "sqlserver" and _is_azure_sql_host(host):
+        kwargs["pool_pre_ping"] = True
+    return kwargs
+
+
 class DatabaseConnector:
     """Class to manage connections with different databases"""
 
@@ -435,7 +447,12 @@ class DatabaseConnector:
                 db_type, host, port, database, username, password, **kwargs
             )
 
-            self.engine = create_engine(connection_string, pool_pre_ping=True, connect_args=connect_args)
+            engine_kwargs = build_sqlalchemy_engine_kwargs(db_type, host)
+            self.engine = create_engine(
+                connection_string,
+                connect_args=connect_args,
+                **engine_kwargs,
+            )
 
             if db_type == "sqlserver" and sqlserver_auth_mode == SQLSERVER_AUTH_ENTRA_MFA:
                 credential = sqlserver_mfa_credential
@@ -483,7 +500,9 @@ class DatabaseConnector:
                         logger.info(f"Deleted stale OAuth cache: {cache_path}")
                     self.engine.dispose()
                     self.engine = create_engine(
-                        connection_string, pool_pre_ping=True, connect_args=connect_args
+                        connection_string,
+                        connect_args=connect_args,
+                        **build_sqlalchemy_engine_kwargs(db_type, host),
                     )
                     with self.engine.connect() as conn:
                         conn.execute(text("SELECT 1"))
@@ -500,8 +519,8 @@ class DatabaseConnector:
                         )
                         retry_engine = create_engine(
                             retry_connection_string,
-                            pool_pre_ping=True,
                             connect_args=retry_connect_args,
+                            **build_sqlalchemy_engine_kwargs(db_type, host),
                         )
                         try:
                             self.engine.dispose()

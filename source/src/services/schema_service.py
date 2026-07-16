@@ -20,6 +20,9 @@ from src.language import S
 from src.services.entity_metadata_service import build_display_data_type
 
 SCHEMA_BUSY_SENTINEL = object()
+SCHEMA_LAZY_MINIMAL = "minimal"
+SCHEMA_LAZY_AUTOCOMPLETE = "autocomplete"
+SCHEMA_LAZY_FULL = "full"
 
 
 def is_schema_busy_result(result) -> bool:
@@ -71,9 +74,10 @@ class SchemaWorker(QObject):
     progress = pyqtSignal(str)  # progress message
     completed = pyqtSignal()
 
-    def __init__(self, connector):
+    def __init__(self, connector, lazy_mode: str = SCHEMA_LAZY_MINIMAL):
         super().__init__()
         self.connector = connector
+        self._lazy_mode = lazy_mode or SCHEMA_LAZY_MINIMAL
         self._cancelled = False
 
     def cancel(self):
@@ -96,6 +100,7 @@ class SchemaWorker(QObject):
                 "databases": [],
                 "db_type": "",
                 "routines": [],
+                "lazy": self._lazy_mode != SCHEMA_LAZY_FULL,
             }
 
             if self._cancelled:
@@ -127,110 +132,118 @@ class SchemaWorker(QObject):
             if self._cancelled:
                 return
 
-            # Get list of all server databases
-            try:
-                databases_query = self._get_databases_query()
-                df = self.connector.execute_query(databases_query)
-                db_type = getattr(self.connector, "db_type", "").lower()
-                if df is not None and len(df) > 0:
-                    for _, row in df.iterrows():
-                        db = str(row.iloc[0])
-                        schema["databases"].append(db)
-                    if db_type == "databricks":
-                        logger.info(f"[SchemaService] Databricks catalogs: {schema['databases']}")
-            except Exception as e:
-                logger.debug(f"Error loading database list: {e}")
+            load_databases = self._lazy_mode == SCHEMA_LAZY_FULL
+            load_metadata = self._lazy_mode in (SCHEMA_LAZY_FULL, SCHEMA_LAZY_AUTOCOMPLETE)
+
+            # Get list of all server databases (full schema / OE expand only)
+            if load_databases:
+                try:
+                    databases_query = self._get_databases_query()
+                    df = self.connector.execute_query(databases_query)
+                    db_type = getattr(self.connector, "db_type", "").lower()
+                    if df is not None and len(df) > 0:
+                        for _, row in df.iterrows():
+                            db = str(row.iloc[0])
+                            schema["databases"].append(db)
+                        if db_type == "databricks":
+                            logger.info(f"[SchemaService] Databricks catalogs: {schema['databases']}")
+                except Exception as e:
+                    logger.debug(f"Error loading database list: {e}")
 
             if self._cancelled:
                 return
 
             # Get tables and views
-            try:
-                tables_query = self._get_tables_query()
-                df = self.connector.execute_query(tables_query)
-                db_type = getattr(self.connector, "db_type", "").lower()
-                if df is not None and len(df) > 0:
-                    for _, row in df.iterrows():
-                        if self._cancelled:
-                            return
-                        table_name = str(_row_value(row, "table_name", "TABLE_NAME", default=row.iloc[0]))
-                        table_schema = str(_row_value(row, "table_schema", "TABLE_SCHEMA", default=""))
-                        table_catalog = str(_row_value(row, "table_catalog", "TABLE_CATALOG", default=""))
-                        # Build unique key for column matching: schema.table for multi-schema DBs
-                        if db_type == "databricks":
-                            table_catalog = table_catalog or schema.get("database", "")
-                            table_key = _databricks_relation_key(table_catalog, table_schema, table_name)
-                            if table_catalog and table_schema:
-                                schema.setdefault("catalog_schemas", {}).setdefault(table_catalog, [])
-                                if table_schema not in schema["catalog_schemas"][table_catalog]:
-                                    schema["catalog_schemas"][table_catalog].append(table_schema)
-                        else:
-                            table_key = f"{table_schema}.{table_name}" if table_schema else table_name
-                        table_info = {
-                            "name": table_name,
-                            "key": table_key,
-                            "schema": table_schema,
-                            "catalog": table_catalog,
-                            "type": str(_row_value(row, "table_type", "TABLE_TYPE", default="TABLE")),
-                        }
-                        schema["tables"].append(table_info)
-            except Exception as e:
-                logger.debug(f"Error loading tables: {e}")
+            if load_metadata:
+                try:
+                    tables_query = self._get_tables_query()
+                    df = self.connector.execute_query(tables_query)
+                    db_type = getattr(self.connector, "db_type", "").lower()
+                    if df is not None and len(df) > 0:
+                        for _, row in df.iterrows():
+                            if self._cancelled:
+                                return
+                            table_name = str(_row_value(row, "table_name", "TABLE_NAME", default=row.iloc[0]))
+                            table_schema = str(_row_value(row, "table_schema", "TABLE_SCHEMA", default=""))
+                            table_catalog = str(_row_value(row, "table_catalog", "TABLE_CATALOG", default=""))
+                            # Build unique key for column matching: schema.table for multi-schema DBs
+                            if db_type == "databricks":
+                                table_catalog = table_catalog or schema.get("database", "")
+                                table_key = _databricks_relation_key(table_catalog, table_schema, table_name)
+                                if table_catalog and table_schema:
+                                    schema.setdefault("catalog_schemas", {}).setdefault(table_catalog, [])
+                                    if table_schema not in schema["catalog_schemas"][table_catalog]:
+                                        schema["catalog_schemas"][table_catalog].append(table_schema)
+                            else:
+                                table_key = f"{table_schema}.{table_name}" if table_schema else table_name
+                            table_info = {
+                                "name": table_name,
+                                "key": table_key,
+                                "schema": table_schema,
+                                "catalog": table_catalog,
+                                "type": str(_row_value(row, "table_type", "TABLE_TYPE", default="TABLE")),
+                            }
+                            schema["tables"].append(table_info)
+                except Exception as e:
+                    logger.debug(f"Error loading tables: {e}")
 
             if self._cancelled:
                 return
 
             # Get columns of all tables
-            try:
-                columns_query = self._get_columns_query()
-                df = self.connector.execute_query(columns_query)
-                if df is not None and len(df) > 0:
-                    for _, row in df.iterrows():
-                        if self._cancelled:
-                            return
-                        table_name = str(_row_value(row, "table_name", "TABLE_NAME", default=row.iloc[0]))
-                        # Use schema.table_name as key to match table keys
-                        table_schema = str(_row_value(row, "table_schema", "TABLE_SCHEMA", default=""))
-                        table_catalog = str(_row_value(row, "table_catalog", "TABLE_CATALOG", default=""))
-                        if db_type == "databricks":
-                            table_catalog = table_catalog or schema.get("database", "")
-                            table_name = _databricks_relation_key(table_catalog, table_schema, table_name)
-                        elif table_schema:
-                            table_name = f"{table_schema}.{table_name}"
-                        col_info = {
-                            "name": str(_row_value(row, "column_name", "COLUMN_NAME", default="")),
-                            "type": str(_row_value(row, "data_type", "DATA_TYPE", default="")),
-                            "display_type": build_display_data_type(row, db_type),
-                            "nullable": str(_row_value(row, "is_nullable", "IS_NULLABLE", default="YES")),
-                        }
-                        if table_name not in schema["columns"]:
-                            schema["columns"][table_name] = []
-                        schema["columns"][table_name].append(col_info)
-            except Exception as e:
-                logger.debug(f"Error loading columns: {e}")
+            if load_metadata:
+                try:
+                    columns_query = self._get_columns_query()
+                    df = self.connector.execute_query(columns_query)
+                    if df is not None and len(df) > 0:
+                        for _, row in df.iterrows():
+                            if self._cancelled:
+                                return
+                            table_name = str(_row_value(row, "table_name", "TABLE_NAME", default=row.iloc[0]))
+                            # Use schema.table_name as key to match table keys
+                            table_schema = str(_row_value(row, "table_schema", "TABLE_SCHEMA", default=""))
+                            table_catalog = str(_row_value(row, "table_catalog", "TABLE_CATALOG", default=""))
+                            row_db_type = schema.get("db_type", "")
+                            if row_db_type == "databricks":
+                                table_catalog = table_catalog or schema.get("database", "")
+                                table_name = _databricks_relation_key(table_catalog, table_schema, table_name)
+                            elif table_schema:
+                                table_name = f"{table_schema}.{table_name}"
+                            col_info = {
+                                "name": str(_row_value(row, "column_name", "COLUMN_NAME", default="")),
+                                "type": str(_row_value(row, "data_type", "DATA_TYPE", default="")),
+                                "display_type": build_display_data_type(row, row_db_type),
+                                "nullable": str(_row_value(row, "is_nullable", "IS_NULLABLE", default="YES")),
+                            }
+                            if table_name not in schema["columns"]:
+                                schema["columns"][table_name] = []
+                            schema["columns"][table_name].append(col_info)
+                except Exception as e:
+                    logger.debug(f"Error loading columns: {e}")
 
             if self._cancelled:
                 return
 
             # Get stored procedures and functions
-            try:
-                routines_query = self._get_routines_query()
-                if routines_query:
-                    df = self.connector.execute_query(routines_query)
-                    if df is not None and len(df) > 0:
-                        for _, row in df.iterrows():
-                            if self._cancelled:
-                                return
-                            routine_name = str(row.get("routine_name", row.iloc[0]))
-                            routine_schema = str(row.get("routine_schema", "")) if "routine_schema" in df.columns else ""
-                            routine_type = str(row.get("routine_type", "PROCEDURE")) if "routine_type" in df.columns else "PROCEDURE"
-                            schema["routines"].append({
-                                "name": routine_name,
-                                "schema": routine_schema,
-                                "type": routine_type.upper(),
-                            })
-            except Exception as e:
-                logger.debug(f"Error loading routines: {e}")
+            if load_metadata:
+                try:
+                    routines_query = self._get_routines_query()
+                    if routines_query:
+                        df = self.connector.execute_query(routines_query)
+                        if df is not None and len(df) > 0:
+                            for _, row in df.iterrows():
+                                if self._cancelled:
+                                    return
+                                routine_name = str(row.get("routine_name", row.iloc[0]))
+                                routine_schema = str(row.get("routine_schema", "")) if "routine_schema" in df.columns else ""
+                                routine_type = str(row.get("routine_type", "PROCEDURE")) if "routine_type" in df.columns else "PROCEDURE"
+                                schema["routines"].append({
+                                    "name": routine_name,
+                                    "schema": routine_schema,
+                                    "type": routine_type.upper(),
+                                })
+                except Exception as e:
+                    logger.debug(f"Error loading routines: {e}")
 
             if self._cancelled:
                 return
@@ -410,6 +423,7 @@ class SchemaService(QObject):
     schema_loaded = pyqtSignal(dict, str, str, str)  # schema, connection_name, session_id, block_key
     schema_error = pyqtSignal(str)
     loading_progress = pyqtSignal(str)
+    databases_loaded = pyqtSignal(str, str, list)  # connection_name, session_id, databases
     
     # Lazy loading signals (thread-safe communication)
     schemas_loaded = pyqtSignal(str, list)  # catalog_name, schemas_list
@@ -439,6 +453,9 @@ class SchemaService(QObject):
         connection_name: str = "",
         session_id: str = "",
         block_key: str = "",
+        *,
+        lazy: bool = True,
+        lazy_mode: str | None = None,
     ):
         """
         Start loading schema in background.
@@ -449,9 +466,13 @@ class SchemaService(QObject):
             connector: DatabaseConnector with active connection
             connection_name: Connection name (for cache)
             session_id: Session ID for per-session cache isolation
+            lazy: When True (default), only load current database context
+            lazy_mode: ``minimal`` | ``autocomplete`` | ``full`` (overrides lazy)
         """
         if self._shutting_down:
             return
+
+        mode = lazy_mode or (SCHEMA_LAZY_MINIMAL if lazy else SCHEMA_LAZY_FULL)
 
         # Cancel previous workers (won't emit signals)
         self._cancel_pending_workers()
@@ -460,18 +481,22 @@ class SchemaService(QObject):
         cache_key = self._cache_key(connection_name, session_id, block_key)
         if connection_name and cache_key in self._cache:
             cached = self._cache[cache_key]
-            QTimer.singleShot(
-                0,
-                lambda c=cached, cn=connection_name, sid=session_id, bk=block_key: self.schema_loaded.emit(
-                    c, cn, sid, bk
-                ),
-            )
-            return
+            if mode == SCHEMA_LAZY_FULL or (
+                mode == SCHEMA_LAZY_AUTOCOMPLETE
+                and cached.get("tables")
+            ):
+                QTimer.singleShot(
+                    0,
+                    lambda c=cached, cn=connection_name, sid=session_id, bk=block_key: self.schema_loaded.emit(
+                        c, cn, sid, bk
+                    ),
+                )
+                return
 
         try:
             # Create worker and thread (parented to service — never deleteLater QThread)
             thread = QThread(self)
-            worker = SchemaWorker(connector)
+            worker = SchemaWorker(connector, lazy_mode=mode)
             worker.moveToThread(thread)
 
             # Connect signals
@@ -632,6 +657,28 @@ class SchemaService(QObject):
     # =========================================================================
     # Lazy loading methods for Object Explorer
     # =========================================================================
+
+    def load_databases(self, connector, connection_name: str, session_id: str = ""):
+        """Load server database/catalog list on demand (Object Explorer expand)."""
+
+        def _run():
+            try:
+                worker = SchemaWorker(connector, lazy_mode=SCHEMA_LAZY_FULL)
+                query = worker._get_databases_query()
+                df = connector.execute_query(query)
+                if df is None or len(df) == 0:
+                    return []
+                return [str(row.iloc[0]) for _, row in df.iterrows()]
+            except Exception as exc:
+                logger.warning("Error loading database list: %s", exc)
+                return []
+
+        self._run_in_thread_with_signal(
+            _run,
+            lambda result: self.databases_loaded.emit(
+                connection_name, session_id, result or []
+            ),
+        )
 
     def load_schemas_for_catalog(self, connector, connection_name: str, catalog_name: str):
         """Load schemas for a catalog (Databricks) in background.

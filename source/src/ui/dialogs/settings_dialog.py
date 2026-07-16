@@ -499,6 +499,35 @@ class SettingsDialog(QDialog):
 
         general_layout.addWidget(display_card)
 
+        connections_card, connections_layout = self._make_section_card(
+            S.settings.section_connections if hasattr(S.settings, "section_connections") else "CONNECTIONS",
+            colors,
+        )
+        self.idle_timeout_spin = QSpinBox()
+        self.idle_timeout_spin.setRange(0, 86400)
+        self.idle_timeout_spin.setSingleStep(60)
+        self.idle_timeout_spin.setSuffix(" s")
+        self.idle_timeout_spin.setValue(
+            int(settings.value("connections/idle_timeout_sec", 300))
+        )
+        self.idle_timeout_spin.setMinimumWidth(120)
+        self.idle_timeout_spin.setStyleSheet(input_style)
+        connections_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_idle_timeout if hasattr(S.settings, "label_idle_timeout")
+                else "Close idle DB connections after:",
+                self.idle_timeout_spin,
+                colors,
+                label_width=220,
+            )
+        )
+        connections_layout.addWidget(self._make_hint(
+            S.settings.idle_timeout_hint if hasattr(S.settings, "idle_timeout_hint")
+            else "0 disables auto-close. Block connectors reconnect on next run.",
+            colors,
+        ))
+        general_layout.addWidget(connections_card)
+
         editor_card, editor_layout = self._make_section_card(
             S.settings.section_editor if hasattr(S.settings, "section_editor") else "CODE EDITOR",
             colors,
@@ -2461,6 +2490,7 @@ class SettingsDialog(QDialog):
 
         # Save grid display row limit
         settings.setValue("grid/display_row_limit", self.grid_row_limit_spin.value())
+        settings.setValue("connections/idle_timeout_sec", self.idle_timeout_spin.value())
 
         if hasattr(self, "session_results_restore_cb"):
             from src.core.session_result_storage import (
