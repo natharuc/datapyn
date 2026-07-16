@@ -251,6 +251,21 @@ class UISetupMixin:
         # Hide until there is an active connection
         self.object_explorer_dock.hide()
 
+        # Smart lazy load: when the dock becomes visible, ask the active
+        # explorer to fetch the server database list (before any focus event).
+        self.object_explorer_dock.visibilityChanged.connect(self._on_object_explorer_visibility_changed)
+
+    def _on_object_explorer_visibility_changed(self, visible: bool) -> None:
+        """When the OE dock is shown, auto-load databases for the active session."""
+        if not visible:
+            return
+        sid = self._get_active_session_id() if hasattr(self, "_get_active_session_id") else ""
+        if not sid or not hasattr(self, "_session_explorers"):
+            return
+        explorer = self._session_explorers.get(sid)
+        if explorer is not None and hasattr(explorer, "maybe_request_databases_on_visibility"):
+            explorer.maybe_request_databases_on_visibility()
+
     def _get_session_explorer(self, session_id: str) -> ObjectExplorerPanel:
         """Returns the ObjectExplorerPanel for the session, creating if necessary."""
         if session_id in self._session_explorers:

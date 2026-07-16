@@ -158,8 +158,12 @@ class ObjectExplorerPanel(QWidget):
         self._db_type = ""  # Database type (mssql, postgresql, mysql, etc.)
         self._all_databases = []  # list of all databases from server
         self._filter_timer = None
+        self._databases_auto_requested = False  # focus-triggered load guard (per connection)
         self._setup_ui()
         self._apply_theme()
+        # Auto-load the server database list when the panel or its tree gains focus
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.tree.installEventFilter(self)
 
     def _setup_ui(self):
         """Configure UI"""
@@ -490,11 +494,18 @@ class ObjectExplorerPanel(QWidget):
         
         self.set_loading(False)  # Hide loading when schema arrives
         self.info_label.setStyleSheet("color: #808080; font-size: 11px;")  # Reset error style
+        connection_changed = connection_name != self._current_connection
         self._current_schema = schema
         self._current_connection = connection_name
         self._db_type = db_type.lower() if db_type else ""
         if schema:
             self._all_databases = schema.get("databases", [])
+        # Reset the focus-triggered load guard when the connection changes, or
+        # mark it satisfied when the database list has already been loaded.
+        if connection_changed:
+            self._databases_auto_requested = False
+        if self._all_databases:
+            self._databases_auto_requested = True
         
         # Update connection header
         db_name = schema.get("database", "") if schema else ""
@@ -1303,6 +1314,40 @@ class ObjectExplorerPanel(QWidget):
         for child in to_remove:
             item.removeChild(child)
 
+    def focusInEvent(self, event):
+        """Auto-load the server database list when the panel gains focus."""
+        super().focusInEvent(event)
+        self._maybe_request_databases_on_focus()
+
+    def eventFilter(self, obj, event):
+        """Detect focus entering the tree so we can auto-load databases."""
+        if obj is self.tree and event.type() == event.Type.FocusIn:
+            self._maybe_request_databases_on_focus()
+        return super().eventFilter(obj, event)
+
+    def maybe_request_databases_on_visibility(self):
+        """Triggered when the OE dock becomes visible (before any focus event)."""
+        self._maybe_request_databases_on_focus()
+
+    def _maybe_request_databases_on_focus(self):
+        """Emit databases_requested once per connection when the OE is focused/visible.
+
+        Smart lazy load: instead of waiting for the user to manually expand the
+        "Databases" node, fetch the cheap single-query server database list as
+        soon as the OE panel is focused or shown — so the per-block dropdown and
+        the tree are populated proactively. Skipped when the list is already
+        loaded or already requested for the current connection.
+        """
+        if not self._current_connection:
+            return
+        if self._databases_auto_requested:
+            return
+        if self._all_databases:
+            self._databases_auto_requested = True
+            return
+        self._databases_auto_requested = True
+        self.databases_requested.emit()
+
     def _on_item_expanded(self, item: QTreeWidgetItem):
         """Handle item expansion for lazy loading."""
         if item is None:
@@ -1311,6 +1356,7 @@ class ObjectExplorerPanel(QWidget):
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
             return
+
 
         # Check if this item needs lazy loading (has placeholder child)
         if not self._has_placeholder_child(item):
