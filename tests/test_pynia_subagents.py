@@ -152,7 +152,7 @@ def test_run_explore_parallel_times_out(qtbot, monkeypatch):
 
 
 def test_run_explore_parallel_cancels(qtbot, monkeypatch):
-    """Pressing Stop (is_cancelled) unblocks the nested loop."""
+    """Pressing Stop (is_cancelled) unblocks the wait loop."""
     import time
 
     _install_hanging_worker(monkeypatch)
@@ -169,6 +169,19 @@ def test_run_explore_parallel_cancels(qtbot, monkeypatch):
 
     assert elapsed < 5, "cancellation should unblock promptly"
     assert results and results[0].summary == "Cancelled by user."
+
+
+def test_run_explore_parallel_no_qevent_loop_or_qtimer():
+    """Parallel explore must not import or use QEventLoop or QTimer."""
+    from pathlib import Path
+
+    src = Path("source/src/services/pynia/subagents/orchestrator.py").read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "QEventLoop" not in line
+        assert "QTimer" not in line
 
 
 def test_should_delegate_matches_portuguese():

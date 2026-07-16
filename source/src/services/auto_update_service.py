@@ -387,6 +387,9 @@ class AutoUpdateService(QObject):
             try:
                 thread.quit()
                 if not thread.wait(3000):
+                    logger.warning(
+                        "Auto-update QThread did not stop after quit(); terminating as last resort"
+                    )
                     thread.terminate()
                     thread.wait(1000)
             except RuntimeError:
