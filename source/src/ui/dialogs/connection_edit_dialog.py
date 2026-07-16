@@ -2,6 +2,8 @@
 Unified dialog for creating and editing connections
 """
 
+import logging
+
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -41,6 +43,8 @@ try:
     HAS_QTAWESOME = True
 except ImportError:
     HAS_QTAWESOME = False
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionTestWorker(QThread):
@@ -604,8 +608,13 @@ class ConnectionEditDialog(QDialog):
         """Cancels the ongoing connection test"""
         self._test_cancelled = True
         if hasattr(self, 'test_worker') and self.test_worker.isRunning():
-            self.test_worker.terminate()
-            self.test_worker.wait(2000)
+            self.test_worker.quit()
+            if not self.test_worker.wait(2000):
+                logger.warning(
+                    "Connection test QThread did not stop after quit(); terminating as last resort"
+                )
+                self.test_worker.terminate()
+                self.test_worker.wait(2000)
 
     def _on_test_finished(self, success: bool, message: str):
         """Callback when connection test finishes"""

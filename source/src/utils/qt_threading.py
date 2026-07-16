@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from PyQt6.QtCore import QThread
+
+logger = logging.getLogger(__name__)
 
 
 def qthread_is_alive(thread: Optional[QThread]) -> bool:
@@ -51,10 +54,12 @@ def stop_qthread(
         if not qthread_is_running(thread):
             return True
         if force_terminate:
+            logger.warning("Forcing QThread terminate (force_terminate=True)")
             thread.terminate()
             return thread.wait(wait_ms)
         thread.quit()
         if not thread.wait(min(wait_ms, 800)):
+            logger.warning("QThread did not stop after quit(); terminating as last resort")
             thread.terminate()
         return thread.wait(wait_ms)
     except RuntimeError:
@@ -98,6 +103,7 @@ def kick_qthread_stop(
         thread.quit()
         if thread.wait(300):
             return
+        logger.warning("QThread did not stop after quit(); terminating as last resort")
         thread.terminate()
         thread.wait(500)
     except RuntimeError:

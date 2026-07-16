@@ -338,6 +338,9 @@ class JediCompleter(QObject):
             if thread.isRunning():
                 thread.quit()
                 if not thread.wait(500):
+                    logger.warning(
+                        "Jedi completer QThread did not stop after quit(); terminating as last resort"
+                    )
                     thread.terminate()
                     thread.wait(500)
             thread.deleteLater()

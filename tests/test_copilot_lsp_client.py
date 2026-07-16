@@ -128,3 +128,31 @@ class TestInlineCompletion:
             {"message": "FetchError: connect ETIMEDOUT", "type": 2},
         )
         assert client.is_degraded
+
+
+class TestReaderThreadSignalMarshalling:
+    def test_did_change_status_emits_on_main_thread(self, qtbot):
+        import threading
+
+        from PyQt6.QtCore import QThread
+        from PyQt6.QtTest import QSignalSpy
+
+        client = CopilotLSPClient("mock-server")
+        spy = QSignalSpy(client.status_changed)
+        main_thread = QThread.currentThread()
+        emit_threads: list = []
+        client.status_changed.connect(lambda _s: emit_threads.append(QThread.currentThread()))
+
+        done = threading.Event()
+
+        def reader_work() -> None:
+            client._handle_notification("didChangeStatus", {"status": "SignedIn"})
+            done.set()
+
+        threading.Thread(target=reader_work, daemon=True).start()
+        assert done.wait(timeout=2.0)
+        qtbot.waitUntil(lambda: len(spy) >= 1, timeout=2000)
+
+        assert len(spy) >= 1
+        assert emit_threads
+        assert emit_threads[0] == main_thread

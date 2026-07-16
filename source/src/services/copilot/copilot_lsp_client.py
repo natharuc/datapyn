@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer, Qt
 from src.services.copilot.copilot_settings import get_copilot_settings
 
 logger = logging.getLogger(__name__)
@@ -65,9 +65,14 @@ class CopilotLSPClient(QObject):
     error = pyqtSignal(str)
     status_changed = pyqtSignal(str)
     log_message = pyqtSignal(str, str)  # message, level
+    _signal_dispatch = pyqtSignal(object, tuple)  # internal: marshal emits to main thread
     
     def __init__(self, server_path: str, parent=None):
         super().__init__(parent)
+        self._signal_dispatch.connect(
+            self._dispatch_signal_emit,
+            Qt.ConnectionType.QueuedConnection,
+        )
         
         self._server_path = server_path
         self._process: Optional[subprocess.Popen] = None
@@ -166,14 +171,24 @@ class CopilotLSPClient(QObject):
         self._degraded_reason = ""
         self._log("Copilot inline completion restored", "info")
 
+    def _dispatch_signal_emit(self, signal, args: tuple) -> None:
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            pass  # QObject destroyed
+
+    def _emit_on_main(self, signal, *args) -> None:
+        """Marshal a pyqtSignal emission to the Qt main thread."""
+        try:
+            self._signal_dispatch.emit(signal, args)
+        except RuntimeError:
+            pass  # QObject destroyed
+
     def _queue_completion(self, text: str, uri: str = "") -> None:
         """Deliver the completion result on the Qt main thread."""
         target_uri = uri or self._pending_completion_uri or ""
         payload_text = text or ""
-        QTimer.singleShot(
-            0,
-            lambda u=target_uri, t=payload_text: self.completion_ready.emit(u, t),
-        )
+        self._emit_on_main(self.completion_ready, target_uri, payload_text)
     
     def _set_authenticated(self, value: bool, source: str = "unknown") -> None:
         """Set authentication state with logging."""
@@ -188,7 +203,7 @@ class CopilotLSPClient(QObject):
             logger.debug(f"[LSP] {message}")
         else:
             logger.info(f"[LSP] {message}")
-        self.log_message.emit(f"[LSP] {message}", level)
+        self._emit_on_main(self.log_message, f"[LSP] {message}", level)
 
     def _emit_authenticated(self, username: str) -> None:
         """Emit authenticated signal.
@@ -197,7 +212,7 @@ class CopilotLSPClient(QObject):
         via its signal handler.
         """
         self._set_authenticated(True, "_emit_authenticated")
-        self.authenticated.emit(username)
+        self._emit_on_main(self.authenticated, username)
 
     def start(self) -> bool:
         """
@@ -316,7 +331,7 @@ class CopilotLSPClient(QObject):
         def on_init_response(result, error):
             if error:
                 logger.error(f"[LSP] Initialize failed: {error}")
-                self.error.emit(f"Initialize failed: {error}")
+                self._emit_on_main(self.error, f"Initialize failed: {error}")
                 return
             
             logger.info("[LSP] Initialize response received")
@@ -333,7 +348,7 @@ class CopilotLSPClient(QObject):
             })
             
             self._initialized = True
-            self.initialized.emit()
+            self._emit_on_main(self.initialized)
             
             # Check authentication status
             self.check_status()
@@ -379,7 +394,7 @@ class CopilotLSPClient(QObject):
 
             # LSP returns "OK" or "SignedIn" when authenticated
             self._set_authenticated(status in ("SignedIn", "OK"), f"on_status({status})")
-            QTimer.singleShot(0, lambda s=status: self.status_changed.emit(s))
+            self._emit_on_main(self.status_changed, status)
 
             if self._is_authenticated:
                 self._clear_degraded()
@@ -412,7 +427,7 @@ class CopilotLSPClient(QObject):
             
             if error:
                 self._log(f"signIn error: {error}", "error")
-                self.error.emit(f"Sign-in failed: {error}")
+                self._emit_on_main(self.error, f"Sign-in failed: {error}")
                 # Note: CopilotAuthService handles lock release via error signal
                 return
             
@@ -428,7 +443,7 @@ class CopilotLSPClient(QObject):
                 user = result.get("user", "GitHub User")
                 self._log(f"Signed in as {user}", "info")
                 self._emit_authenticated(user)
-                self.status_changed.emit("SignedIn")
+                self._emit_on_main(self.status_changed, "SignedIn")
             
             elif status == "PromptUserDeviceFlow":
                 # Device flow - userCode is already in the response
@@ -437,7 +452,7 @@ class CopilotLSPClient(QObject):
                 
                 if user_code:
                     self._log(f"Device flow: enter code {user_code} at {verification_uri}", "info")
-                    self.auth_required.emit(user_code, verification_uri)
+                    self._emit_on_main(self.auth_required, user_code, verification_uri)
                 
                 # Execute finishDeviceFlow to poll for completion
                 command = result.get("command", {})
@@ -452,7 +467,7 @@ class CopilotLSPClient(QObject):
                 
                 if user_code:
                     self._log(f"Device flow: enter code {user_code} at {verification_uri}", "info")
-                    self.auth_required.emit(user_code, verification_uri)
+                    self._emit_on_main(self.auth_required, user_code, verification_uri)
                     
                     # Execute the finish command to complete device flow
                     command = result.get("command", {})
@@ -470,7 +485,7 @@ class CopilotLSPClient(QObject):
                 user = result.get("user", "GitHub User")
                 self._log(f"Already signed in as {user}", "info")
                 self._emit_authenticated(user)
-                self.status_changed.emit("SignedIn")
+                self._emit_on_main(self.status_changed, "SignedIn")
             
             else:
                 self._log(f"Unexpected signIn status: {status}", "warning")
@@ -481,7 +496,7 @@ class CopilotLSPClient(QObject):
         """Sign out from Copilot."""
         def on_sign_out(result, error):
             self._set_authenticated(False, "sign_out")
-            self.status_changed.emit("SignedOut")
+            self._emit_on_main(self.status_changed, "SignedOut")
             # Mark as logged out in centralized settings
             get_copilot_settings().on_lsp_logged_out()
         
@@ -492,7 +507,7 @@ class CopilotLSPClient(QObject):
         def on_result(result, error):
             if error:
                 self._log(f"finishDeviceFlow error: {error}", "error")
-                self.error.emit(f"Device flow failed: {error}")
+                self._emit_on_main(self.error, f"Device flow failed: {error}")
                 # Note: CopilotAuthService handles lock release via error signal
                 return
             
@@ -509,7 +524,7 @@ class CopilotLSPClient(QObject):
                 user = result.get("user", "GitHub User")
                 self._log(f"Signed in as {user}", "info")
                 self._emit_authenticated(user)
-                self.status_changed.emit("SignedIn")
+                self._emit_on_main(self.status_changed, "SignedIn")
                 return
             
             # Look for device code in the response
@@ -518,7 +533,7 @@ class CopilotLSPClient(QObject):
             
             if user_code:
                 self._log(f"Device flow: enter code {user_code} at {verification_uri}", "info")
-                self.auth_required.emit(user_code, verification_uri)
+                self._emit_on_main(self.auth_required, user_code, verification_uri)
                 # Poll for completion
                 self._poll_for_auth_completion()
             else:
@@ -566,7 +581,7 @@ class CopilotLSPClient(QObject):
                         self._polling_active = False
                         self._log(f"Poll detected sign-in: {user}", "info")
                         self._emit_authenticated(user)
-                        self.status_changed.emit("SignedIn")
+                        self._emit_on_main(self.status_changed, "SignedIn")
                         return
                 
                 # Continue polling if not authenticated
@@ -976,10 +991,10 @@ class CopilotLSPClient(QObject):
             # Ignore "Unknown" - keep current state
             if status in ("SignedIn", "OK"):
                 self._set_authenticated(True, f"didChangeStatus({status})")
-                self.status_changed.emit(status)
+                self._emit_on_main(self.status_changed, status)
             elif status in ("NotSignedIn", "SignedOut"):
                 self._set_authenticated(False, f"didChangeStatus({status})")
-                self.status_changed.emit(status)
+                self._emit_on_main(self.status_changed, status)
             else:
                 # Unknown or other status - don't change auth state
                 logger.debug(f"[LSP] Ignoring unknown status: {status}")

@@ -255,6 +255,7 @@ class SessionWidget(QWidget):
     block_focused = pyqtSignal(object)  # CodeBlock that gained focus (for OE tracking)
     periodic_changed = pyqtSignal(bool)  # True=started, False=stopped - for tab icon
     _persisted_variables_loaded = pyqtSignal(object)  # dict loaded off-thread (internal)
+    _restore_dispatch = pyqtSignal(object)  # marshal restore payload to UI thread
 
     def __init__(self, session: Session, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
@@ -343,6 +344,10 @@ class SessionWidget(QWidget):
         self._setup_ui()
         self._connect_signals()
         # Queued from the loader thread back onto the UI thread
+        self._restore_dispatch.connect(
+            self._emit_persisted_variables_loaded,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._persisted_variables_loaded.connect(self._apply_restored_variables)
 
         # Restore blocks if they exist
@@ -678,6 +683,12 @@ class SessionWidget(QWidget):
         """Restore DataFrame variables from the on-disk snapshot (manual action)."""
         return self._restore_variables_from_disk(require_enabled=False)
 
+    def _emit_persisted_variables_loaded(self, variables: object) -> None:
+        try:
+            self._persisted_variables_loaded.emit(variables)
+        except RuntimeError:
+            pass  # widget destroyed while loading
+
     def _restore_variables_from_disk(self, *, require_enabled: bool) -> bool:
         """Load snapshot in a background thread; apply on the UI thread via signal."""
         import threading
@@ -705,7 +716,7 @@ class SessionWidget(QWidget):
                 variables = None
             if variables:
                 try:
-                    self._persisted_variables_loaded.emit(variables)
+                    self._restore_dispatch.emit(variables)
                 except RuntimeError:
                     pass  # widget destroyed while loading
 

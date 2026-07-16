@@ -433,6 +433,9 @@ class ThreadSafeToolExecutor(QObject):
 
         self._execute_requested.connect(
             self._do_execute_on_main_thread,
+            # BlockingQueuedConnection: caller blocks until the main thread runs the slot.
+            # Safe while the main thread is not itself blocked on the same worker thread
+            # (e.g. during a Pynia chat turn that uses threading.Event, not QEventLoop).
             Qt.ConnectionType.BlockingQueuedConnection,
         )
 
