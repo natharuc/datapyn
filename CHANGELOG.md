@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.53.1 (2026-07-17)
+
+### Bug Fixes
+
+- **schema**: Populate per-block database dropdown on connect
+  ([`e21b7ef`](https://github.com/natharuc/datapyn/commit/e21b7efc8119ca06c0e571fa5526ae03002ab7f7))
+
+- **schema**: Populate per-block database dropdown on connect
+  ([`c662b41`](https://github.com/natharuc/datapyn/commit/c662b41efced727c9ee5338a4b5ca954d52c2fdc))
+
+### Heuristic
+
+- Merge pull request #145 from natharuc/fix/schema-dropdown-oe-focus-crash-guard
+  ([`e21b7ef`](https://github.com/natharuc/datapyn/commit/e21b7efc8119ca06c0e571fa5526ae03002ab7f7))
+
+
 ## v1.53.0 (2026-07-16)
 
 ### Bug Fixes
