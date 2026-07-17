@@ -163,3 +163,97 @@ def test_shared_panel_hides_when_no_parameters(qtbot):
 
     panel.set_parameters([])
     assert panel.isVisible() is False
+
+
+class TestSharedParameterDelimiter:
+    """Configurable shared parameter delimiter presets."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_delimiter(self, monkeypatch):
+        from src.core import parameter_settings
+        from src.utils import sql_parameter_service
+
+        monkeypatch.setattr(
+            parameter_settings, "get_shared_parameter_delimiter_tokens",
+            lambda: parameter_settings.SHARED_PARAMETER_DELIMITERS["double_brace"],
+        )
+        # Bust the lru_cache so the monkeypatched tokens are picked up.
+        sql_parameter_service._shared_parameter_pattern.cache_clear()
+        yield
+        monkeypatch.setattr(
+            parameter_settings, "get_shared_parameter_delimiter_tokens",
+            lambda: parameter_settings.SHARED_PARAMETER_DELIMITERS["double_brace"],
+        )
+        sql_parameter_service._shared_parameter_pattern.cache_clear()
+
+    def test_double_colon_delimiter_extracts_names(self, monkeypatch):
+        from src.core import parameter_settings
+        from src.utils import sql_parameter_service
+
+        monkeypatch.setattr(
+            parameter_settings, "get_shared_parameter_delimiter_tokens",
+            lambda: ("::", "::"),
+        )
+        sql_parameter_service._shared_parameter_pattern.cache_clear()
+        text = "select * from t where id = ::foo:: and name = :: bar ::"
+        assert extract_shared_parameter_names(text) == ["foo", "bar"]
+
+    def test_double_colon_delimiter_prepare_generic_sql(self, monkeypatch):
+        from src.core import parameter_settings
+        from src.utils import sql_parameter_service
+
+        monkeypatch.setattr(
+            parameter_settings, "get_shared_parameter_delimiter_tokens",
+            lambda: ("::", "::"),
+        )
+        sql_parameter_service._shared_parameter_pattern.cache_clear()
+        prepared = prepare_generic_sql(
+            "select * from t where id = ::foo::",
+            [_shared_param("foo", value="7", sql_type="integer")],
+        )
+        assert prepared.query == "select * from t where id = :shared_foo"
+        assert prepared.params == {"shared_foo": 7}
+
+    def test_single_brace_delimiter_extracts_names(self, monkeypatch):
+        from src.core import parameter_settings
+        from src.utils import sql_parameter_service
+
+        monkeypatch.setattr(
+            parameter_settings, "get_shared_parameter_delimiter_tokens",
+            lambda: ("{", "}"),
+        )
+        sql_parameter_service._shared_parameter_pattern.cache_clear()
+        text = "select * from t where id = {foo} and name = { bar }"
+        assert extract_shared_parameter_names(text) == ["foo", "bar"]
+
+    def test_single_brace_delimiter_prepare_generic_sql(self, monkeypatch):
+        from src.core import parameter_settings
+        from src.utils import sql_parameter_service
+
+        monkeypatch.setattr(
+            parameter_settings, "get_shared_parameter_delimiter_tokens",
+            lambda: ("{", "}"),
+        )
+        sql_parameter_service._shared_parameter_pattern.cache_clear()
+        prepared = prepare_generic_sql(
+            "select * from t where id = {foo}",
+            [_shared_param("foo", value="7", sql_type="integer")],
+        )
+        assert prepared.query == "select * from t where id = :shared_foo"
+        assert prepared.params == {"shared_foo": 7}
+
+    def test_default_double_brace_still_works(self):
+        text = "select * from t where id = {{x}}"
+        assert extract_shared_parameter_names(text) == ["x"]
+
+    def test_double_colon_does_not_intercept_double_brace(self, monkeypatch):
+        from src.core import parameter_settings
+        from src.utils import sql_parameter_service
+
+        monkeypatch.setattr(
+            parameter_settings, "get_shared_parameter_delimiter_tokens",
+            lambda: ("::", "::"),
+        )
+        sql_parameter_service._shared_parameter_pattern.cache_clear()
+        text = "select * from t where id = {{x}}"
+        assert extract_shared_parameter_names(text) == []

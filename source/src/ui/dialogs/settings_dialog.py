@@ -36,6 +36,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QSettings, QObject, QThread, pyqtSlot
 from PyQt6.QtGui import QKeySequence, QColor, QBrush
 from src.core import ShortcutManager
+from src.core.parameter_settings import (
+    DEFAULT_SHARED_PARAMETER_DELIMITER,
+    SHARED_PARAMETER_DELIMITERS,
+    get_shared_parameter_delimiter,
+    set_shared_parameter_delimiter,
+)
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
 import weakref
@@ -527,6 +533,48 @@ class SettingsDialog(QDialog):
             colors,
         ))
         general_layout.addWidget(connections_card)
+
+        params_card, params_layout = self._make_section_card(
+            S.settings.section_parameters if hasattr(S.settings, "section_parameters")
+            else "PARAMETERS",
+            colors,
+        )
+        self.shared_delimiter_combo = QComboBox()
+        self.shared_delimiter_combo.setMinimumWidth(220)
+        self.shared_delimiter_combo.setStyleSheet(input_style)
+        current_delim = get_shared_parameter_delimiter()
+        current_idx = 0
+        for i, key in enumerate(SHARED_PARAMETER_DELIMITERS):
+            open_t, close_t = SHARED_PARAMETER_DELIMITERS[key]
+            label_key = f"shared_delimiter_{key}"
+            label = (
+                getattr(S.settings, label_key)
+                if hasattr(S.settings, label_key)
+                else f"{open_t}name{close_t}"
+            )
+            self.shared_delimiter_combo.addItem(label, key)
+            if key == current_delim:
+                current_idx = i
+        if not self.shared_delimiter_combo.count():
+            self.shared_delimiter_combo.addItem(
+                "{{name}}", DEFAULT_SHARED_PARAMETER_DELIMITER
+            )
+        self.shared_delimiter_combo.setCurrentIndex(current_idx)
+        params_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_shared_delimiter if hasattr(S.settings, "label_shared_delimiter")
+                else "Shared parameter delimiter:",
+                self.shared_delimiter_combo,
+                colors,
+                label_width=220,
+            )
+        )
+        params_layout.addWidget(self._make_hint(
+            S.settings.shared_delimiter_hint if hasattr(S.settings, "shared_delimiter_hint")
+            else "Use this delimiter in SQL/Python to intercept parameters. Default: {{name}}. Notifications still use {{...}}.",
+            colors,
+        ))
+        general_layout.addWidget(params_card)
 
         editor_card, editor_layout = self._make_section_card(
             S.settings.section_editor if hasattr(S.settings, "section_editor") else "CODE EDITOR",
@@ -2491,6 +2539,9 @@ class SettingsDialog(QDialog):
         # Save grid display row limit
         settings.setValue("grid/display_row_limit", self.grid_row_limit_spin.value())
         settings.setValue("connections/idle_timeout_sec", self.idle_timeout_spin.value())
+
+        if hasattr(self, "shared_delimiter_combo"):
+            set_shared_parameter_delimiter(self.shared_delimiter_combo.currentData())
 
         if hasattr(self, "session_results_restore_cb"):
             from src.core.session_result_storage import (

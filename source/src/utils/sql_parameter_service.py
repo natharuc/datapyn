@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable
+import functools
 import re
 import uuid
 
@@ -14,7 +15,28 @@ from src.language import S
 
 PARAMETER_ID_PREFIX = "sqlparam:"
 SHARED_PARAMETER_ID_PREFIX = "sharedparam:"
-_SHARED_PARAMETER_PATTERN = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+
+@functools.lru_cache(maxsize=8)
+def _shared_parameter_pattern(open_t: str, close_t: str) -> re.Pattern[str]:
+    """Build the shared parameter regex for the given (open, close) tokens."""
+    return re.compile(
+        rf"{re.escape(open_t)}\s*([A-Za-z_][A-Za-z0-9_]*)\s*{re.escape(close_t)}"
+    )
+
+
+def _current_shared_pattern() -> re.Pattern[str]:
+    """Return the shared parameter regex for the configured delimiter."""
+    from src.core.parameter_settings import get_shared_parameter_delimiter_tokens
+
+    return _shared_parameter_pattern(*get_shared_parameter_delimiter_tokens())
+
+
+def _current_shared_tokens() -> tuple[str, str]:
+    """Return the configured (open, close) tokens for shared parameters."""
+    from src.core.parameter_settings import get_shared_parameter_delimiter_tokens
+
+    return get_shared_parameter_delimiter_tokens()
 SQL_PARAMETER_TYPES = ("text", "integer", "decimal", "boolean", "date", "datetime", "uuid")
 INPUT_KINDS = ("value", "choice", "multi_choice")
 _DEFAULT_EMPTY_ALIASES = {"empty", "vazio", "''", '""'}
@@ -257,13 +279,17 @@ def _scan_shared_parameters(
     source = text or ""
     tokens: list[SqlParameterToken] = []
     seen: set[str] = set()
+    open_t, _close_t = _current_shared_tokens()
+    guard_triple = open_t.startswith("{")
+    pattern = _current_shared_pattern()
     if replacer is None:
-        for match in _SHARED_PARAMETER_PATTERN.finditer(source):
+        for match in pattern.finditer(source):
             start = match.start()
-            if start > 0 and source[start - 1] == "{":
-                continue
-            if start + 2 < len(source) and source[start + 2] == "{":
-                continue
+            if guard_triple:
+                if start > 0 and source[start - 1] == "{":
+                    continue
+                if start + 2 < len(source) and source[start + 2] == "{":
+                    continue
             name = match.group(1)
             pid = shared_parameter_id(name)
             if pid in seen:
@@ -283,12 +309,13 @@ def _scan_shared_parameters(
 
     output: list[str] = []
     last = 0
-    for match in _SHARED_PARAMETER_PATTERN.finditer(source):
+    for match in pattern.finditer(source):
         start, end = match.span()
-        if start > 0 and source[start - 1] == "{":
-            continue
-        if start + 2 < len(source) and source[start + 2] == "{":
-            continue
+        if guard_triple:
+            if start > 0 and source[start - 1] == "{":
+                continue
+            if start + 2 < len(source) and source[start + 2] == "{":
+                continue
         name = match.group(1)
         token_text = match.group(0)
         pid = shared_parameter_id(name)
@@ -902,8 +929,9 @@ def _definition_map(parameters: list[dict[str, Any]] | None) -> dict[str, dict[s
 
 def _has_in_context(query: str, token_name: str, *, shared: bool = False) -> bool:
     if shared:
+        open_t, close_t = _current_shared_tokens()
         return re.search(
-            rf"\bIN\s*\(\s*\{{\{{\s*{re.escape(token_name)}\s*\}}\}}\s*\)",
+            rf"\bIN\s*\(\s*{re.escape(open_t)}\s*{re.escape(token_name)}\s*{re.escape(close_t)}\s*\)",
             query,
             flags=re.IGNORECASE,
         ) is not None
