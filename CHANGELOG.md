@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.53.2 (2026-07-17)
+
+### Bug Fixes
+
+- **connections**: Auto-reconnect transparently after idle sleep
+  ([`d2edc6c`](https://github.com/natharuc/datapyn/commit/d2edc6ce2d5cc45c3e7847e8cf35e2c35c074ddc))
+
+- **connections**: Auto-reconnect transparently after idle sleep
+  ([`ff489db`](https://github.com/natharuc/datapyn/commit/ff489dbc4870fc45a051e67bb977c29fa049f2eb))
+
+### Heuristic
+
+- Merge pull request #146 from natharuc/fix/schema-dropdown-oe-focus-crash-guard
+  ([`d2edc6c`](https://github.com/natharuc/datapyn/commit/d2edc6ce2d5cc45c3e7847e8cf35e2c35c074ddc))
+
+
 ## v1.53.1 (2026-07-17)
 
 ### Bug Fixes
