@@ -1078,7 +1078,10 @@ class SessionWidget(QWidget):
             and not self._execution_queue
         ):
             try:
-                self.session.disconnect()
+                # Sleep (release the DB connection) but keep the connection
+                # name so the next query auto-reconnects transparently instead
+                # of erroring with "No active connection in this session".
+                self.session.sleep()
             except Exception:
                 pass
 

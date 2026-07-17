@@ -288,6 +288,28 @@ class Session(QObject):
                 pass
         self.clear_connection()
 
+    def sleep(self):
+        """Release the underlying DB connection but remember the connection name.
+
+        The idle reaper calls this instead of ``disconnect()`` so the session can
+        auto-reconnect transparently on the next query: the SQL execute path sees
+        ``connection_name`` still set plus ``connector is None`` and triggers the
+        ``BlockAutoConnectWorker`` reconnect (a brief "connecting" status, no error).
+
+        Unlike ``disconnect()``/``clear_connection()`` this does NOT emit
+        ``connection_changed("")`` or the "disconnected" status, so the UI keeps
+        showing the session as connected -- the reconnect is invisible to the
+        user, which is the desired "transparent" behaviour.
+        """
+        if self._connector and self._connector.is_connected:
+            try:
+                self._connector.disconnect()
+            except Exception:
+                pass
+        # Drop the live connector but keep _connection_name so the next query
+        # knows which connection to restore. _database_context is preserved too.
+        self._connector = None
+
     def clear_connection(self):
         """Removes the connection from this session"""
         self._connection_name = None
