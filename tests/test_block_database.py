@@ -97,6 +97,42 @@ class TestBlockDatabasePanel:
         panel.mousePressEvent(event)
         assert len(clicked) == 1
 
+    def test_empty_click_requests_databases_and_shows_loading(self, qapp):
+        """Clicking an empty dropdown requests the db list and shows loading feedback."""
+        panel = BlockDatabasePanel()
+        requested = []
+        panel.databases_requested.connect(lambda: requested.append(True))
+
+        from PyQt6.QtGui import QMouseEvent
+        from PyQt6.QtCore import QEvent
+
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(10, 10),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        panel.mousePressEvent(event)
+
+        assert len(requested) == 1
+        assert panel._loading_feedback is True
+        assert panel.name_label.text() == "Loading databases..."
+
+    def test_set_available_databases_restores_label_after_load(self, qapp):
+        """When databases arrive after loading feedback, the label is restored."""
+        panel = BlockDatabasePanel()
+        panel.set_database("AppDb")
+
+        # Simulate the empty-click loading feedback path.
+        panel._show_loading_feedback()
+        assert panel.name_label.text() == "Loading databases..."
+
+        # Host pushes the freshly loaded database list.
+        panel.set_available_databases(["AppDb", "Other"])
+        assert panel._loading_feedback is False
+        assert panel.name_label.text() == "AppDb"
+
     def test_panel_drop_emits_signal(self, qapp):
         """Drop de banco deve emitir database_dropped(name)"""
         panel = BlockDatabasePanel()

@@ -210,6 +210,7 @@ class BlockDatabasePanel(QFrame):
         super().__init__(parent)
         self._database_name = None
         self._available_databases: list = []
+        self._loading_feedback = False
         self._setup_ui()
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -279,6 +280,8 @@ class BlockDatabasePanel(QFrame):
     def set_available_databases(self, databases: list):
         """Set the list of databases available for selection."""
         self._available_databases = list(databases) if databases else []
+        if self._available_databases:
+            self._restore_label_after_load()
 
     def get_available_databases(self) -> list:
         """Return list of available databases."""
@@ -290,11 +293,33 @@ class BlockDatabasePanel(QFrame):
             if self._available_databases:
                 self._show_database_menu()
             else:
-                # Empty dropdown: ask for the server database list (lazy connect),
-                # then fall back to the default click behavior.
+                # Empty dropdown: ask the host for the server database list (lazy
+                # connect / load still in flight) and show non-blocking feedback on
+                # the panel itself. ``set_available_databases`` restores the label
+                # once the list arrives, so the next click shows the real menu.
                 self.databases_requested.emit()
+                self._show_loading_feedback()
                 self.database_clicked.emit()
         super().mousePressEvent(event)
+
+    def _show_loading_feedback(self):
+        """Non-blocking 'loading databases' feedback on the panel label."""
+        from src.design_system.tokens import get_colors
+
+        self._loading_feedback = True
+        colors = get_colors()
+        self.name_label.setText(S.block.db_loading)
+        self.name_label.setStyleSheet(
+            f"color: {colors.text_tertiary}; font-size: 11px; font-style: italic;"
+        )
+
+    def _restore_label_after_load(self):
+        """Restore the panel label after loading feedback (called when dbs arrive)."""
+        if not getattr(self, "_loading_feedback", False):
+            return
+        self._loading_feedback = False
+        # Re-apply the current database label/style via set_database.
+        self.set_database(self._database_name)
 
     def _show_database_menu(self):
         """Show popup menu with available databases."""

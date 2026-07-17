@@ -132,7 +132,13 @@ class SchemaWorker(QObject):
             if self._cancelled:
                 return
 
-            load_databases = self._lazy_mode == SCHEMA_LAZY_FULL
+            # The server database/catalog list is a single cheap catalog query
+            # (sys.databases / SHOW DATABASES / SHOW CATALOGS / current_database).
+            # Load it even in minimal mode so the per-block database dropdown is
+            # populated right after connect -- the user must not see an empty
+            # combobox that only "comes alive" after a manual OE expand.
+            # Tables/columns/routines stay lazy (those are the expensive queries).
+            load_databases = self._lazy_mode in (SCHEMA_LAZY_FULL, SCHEMA_LAZY_MINIMAL)
             load_metadata = self._lazy_mode in (SCHEMA_LAZY_FULL, SCHEMA_LAZY_AUTOCOMPLETE)
 
             # Get list of all server databases (full schema / OE expand only)
