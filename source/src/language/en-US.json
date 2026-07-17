@@ -710,6 +710,7 @@
     "conn_tab_default": "Tab Default",
     "conn_first_block_locked": "First block uses the tab connection",
     "db_default": "Default DB",
+    "db_loading": "Loading databases...",
     "lang_python": "Python",
     "lang_sql": "SQL",
     "lang_cross_syntax": "Cross-Syntax",

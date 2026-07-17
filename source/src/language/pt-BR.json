@@ -710,6 +710,7 @@
     "conn_tab_default": "Padrao da Aba",
     "conn_first_block_locked": "O primeiro bloco usa a conexao da aba",
     "db_default": "BD Padrao",
+    "db_loading": "Carregando bancos...",
     "lang_python": "Python",
     "lang_sql": "SQL",
     "lang_cross_syntax": "Cross-Syntax",
