@@ -98,6 +98,12 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DataPyn")
     app.setOrganizationName("DataPyn")
+
+    from src.services.single_instance import try_forward_to_running_instance
+
+    if try_forward_to_running_instance(startup_files):
+        sys.exit(0)
+
     app.setStyle("Fusion")
 
     # Global crash guard — must be installed before MainWindow is created so
@@ -189,6 +195,18 @@ def main():
     from src.ui import MainWindow
 
     window = MainWindow(splash=splash)
+
+    from src.services.single_instance import install_single_instance_server
+
+    def _on_second_instance(paths: list[str], focus: bool) -> None:
+        if paths:
+            window.open_startup_files(paths)
+        if focus:
+            window.showNormal()
+            window.raise_()
+            window.activateWindow()
+
+    install_single_instance_server(app, _on_second_instance)
 
     splash.finish_with_window(window)
 

@@ -335,13 +335,13 @@ class ActiveConnectionWidget(QFrame):
 
 
 class ConnectionsList(QFrame):
-    """Connections list - flat design"""
+    """Connections list grouped by folder."""
 
-    connection_double_clicked = pyqtSignal(str)
-    new_tab_connection_requested = pyqtSignal(str)  # Always connect in new tab
+    connection_double_clicked = pyqtSignal(str, str)  # group, name
+    new_tab_connection_requested = pyqtSignal(str, str)  # group, name
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
-    edit_connection_clicked = pyqtSignal(str)  # Signal to edit connection directly
+    edit_connection_clicked = pyqtSignal(str, str)  # group, name
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -351,10 +351,9 @@ class ConnectionsList(QFrame):
     def _setup_ui(self):
         colors = get_colors()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)  # Back to normal margin
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        # Header
         header = QHBoxLayout()
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon("mdi.database-cog", color=colors.info).pixmap(20, 20))
@@ -373,13 +372,12 @@ class ConnectionsList(QFrame):
             drag_enabled=True,
             list_min_height=150,
         )
-        self.list_widget = self._saved_list.list_widget
-        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
+        self.tree_widget = self._saved_list.tree_widget
+        self._saved_list.connection_activated.connect(self._on_connection_activated)
+        self.tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree_widget.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._saved_list, 1)
 
-        # Buttons
         btn_layout = QHBoxLayout()
 
         self.btn_new = QPushButton(f" {S.connection_panel.btn_new}")
@@ -395,33 +393,26 @@ class ConnectionsList(QFrame):
 
         layout.addLayout(btn_layout)
 
-    def _on_item_double_clicked(self, item: QListWidgetItem):
-        """Emit signal when item is double-clicked"""
+    def _on_connection_activated(self, group: str, name: str) -> None:
         from PyQt6.QtGui import QGuiApplication
 
-        conn_name = None
-        if isinstance(item, ConnectionItem):
-            conn_name = item.connection_name
+        modifiers = QGuiApplication.keyboardModifiers()
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.new_tab_connection_requested.emit(group, name)
         else:
-            conn_name = item.data(Qt.ItemDataRole.UserRole)
+            self.connection_double_clicked.emit(group, name)
 
-        if conn_name:
-            # Check if CTRL is pressed
-            modifiers = QGuiApplication.keyboardModifiers()
-            if modifiers & Qt.KeyboardModifier.ControlModifier:
-                # CTRL pressed - always new tab
-                self.new_tab_connection_requested.emit(conn_name)
-            else:
-                # Normal behavior
-                self.connection_double_clicked.emit(conn_name)
+    def _connection_at_pos(self, pos):
+        item = self.tree_widget.itemAt(pos)
+        if not item:
+            return None, None
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data and data.get("type") == "connection":
+            return data.get("group", ""), data.get("name", "")
+        return None, None
 
     def _show_context_menu(self, pos):
-        """Show context menu on connection"""
-        item = self.list_widget.itemAt(pos)
-        if not item:
-            return
-
-        conn_name = item.data(Qt.ItemDataRole.UserRole)
+        group, conn_name = self._connection_at_pos(pos)
         if not conn_name:
             return
 
@@ -429,44 +420,63 @@ class ConnectionsList(QFrame):
         colors = get_colors()
 
         connect_action = QAction(qta.icon("mdi.lan-connect", color=colors.interactive_primary), f" {S.connection_panel.ctx_connect}", self)
-        connect_action.triggered.connect(lambda: self.connection_double_clicked.emit(conn_name))
+        connect_action.triggered.connect(lambda: self.connection_double_clicked.emit(group, conn_name))
         menu.addAction(connect_action)
 
         new_tab_action = QAction(qta.icon("mdi.tab-plus", color=colors.interactive_primary), f" {S.connection_panel.ctx_connect_new_tab}", self)
-        new_tab_action.triggered.connect(lambda: self.new_tab_connection_requested.emit(conn_name))
+        new_tab_action.triggered.connect(lambda: self.new_tab_connection_requested.emit(group, conn_name))
         menu.addAction(new_tab_action)
 
         menu.addSeparator()
 
         edit_action = QAction(qta.icon("mdi.pencil", color=colors.info), f" {S.connection_panel.ctx_edit}", self)
-        edit_action.triggered.connect(lambda: self._edit_connection(conn_name))
+        edit_action.triggered.connect(lambda: self.edit_connection_clicked.emit(group, conn_name))
         menu.addAction(edit_action)
 
-        menu.exec(self.list_widget.mapToGlobal(pos))
-
-    def _edit_connection(self, conn_name: str):
-        """Emit signal to edit connection directly"""
-        self.edit_connection_clicked.emit(conn_name)
+        menu.exec(self.tree_widget.mapToGlobal(pos))
 
     def refresh(self, connections: list):
-        """Refresh connections list
+        """Refresh connections list.
 
         Args:
-            connections: List of tuples (name, config)
+            connections: List of tuples (group, name, config)
         """
         self._saved_list.refresh(connections)
+
+    def highlight_connection(self, group: str, name: str) -> None:
+        """Select and expand the tree item for (group, name)."""
+        tree = self.tree_widget
+        target_group = group or ""
+        for i in range(tree.topLevelItemCount()):
+            group_item = tree.topLevelItem(i)
+            gdata = group_item.data(0, Qt.ItemDataRole.UserRole)
+            if not gdata or gdata.get("type") != "group":
+                continue
+            if (gdata.get("group") or "") != target_group:
+                continue
+            group_item.setExpanded(True)
+            for j in range(group_item.childCount()):
+                child = group_item.child(j)
+                cdata = child.data(0, Qt.ItemDataRole.UserRole)
+                if (
+                    cdata
+                    and cdata.get("type") == "connection"
+                    and cdata.get("name") == name
+                ):
+                    tree.setCurrentItem(child)
+                    return
 
 
 class ConnectionPanel(QWidget):
     """Connection panel (dock widget)"""
 
     # Signals
-    connection_requested = pyqtSignal(str)  # connection_name
-    new_tab_connection_requested = pyqtSignal(str)  # connection_name for new tab
+    connection_requested = pyqtSignal(str, str)  # group, name
+    new_tab_connection_requested = pyqtSignal(str, str)  # group, name
     disconnect_clicked = pyqtSignal()
     new_connection_clicked = pyqtSignal()
     manage_connections_clicked = pyqtSignal()
-    edit_connection_clicked = pyqtSignal(str)  # connection_name to edit
+    edit_connection_clicked = pyqtSignal(str, str)  # group, name
 
     def __init__(self, connection_manager=None, theme_manager=None, parent=None):
         super().__init__(parent)
@@ -512,18 +522,13 @@ class ConnectionPanel(QWidget):
         self.active_widget.set_disconnected()
 
     def refresh_connections(self, connections: list = None):
-        """Refresh connections list
+        """Refresh connections list.
 
         Args:
-            connections: List of tuples (name, config) or None to use connection_manager
+            connections: List of tuples (group, name, config) or None to use connection_manager
         """
         if connections is None and self.connection_manager:
-            # Fetch from connection manager
-            connections = []
-            for conn_name in self.connection_manager.get_saved_connections():
-                config = self.connection_manager.get_connection_config(conn_name)
-                if config:
-                    connections.append((conn_name, config))
+            connections = self.connection_manager.iter_saved_connections()
 
-        if connections:
+        if connections is not None:
             self.connections_list.refresh(connections)

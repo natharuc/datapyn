@@ -12,6 +12,8 @@ from src.database.database_connector import get_connector_database_context
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.language import S
+from src.core.connection_ref import ConnectionRef
+from src.database.connection_manager import DuplicateConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -209,11 +211,13 @@ class ConnectionsMixin:
                     break
 
         # --- Highlight connection in list ---
-        for i in range(self.connections_list.count()):
-            item = self.connections_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == connection_name:
-                self.connections_list.setCurrentItem(item)
-                break
+        if hasattr(self, "connection_panel"):
+            group = ""
+            if widget and hasattr(widget, "session") and getattr(widget.session, "connection_group", None):
+                group = widget.session.connection_group or ""
+            elif config:
+                group = config.get("group", "") or ""
+            self.connection_panel.connections_list.highlight_connection(group, connection_name)
 
         # --- Status bar ---
         self.action_label.setText(S.status.connected_to.format(name=connection_name, db=display_name))
@@ -228,15 +232,15 @@ class ConnectionsMixin:
                         block.db_panel.set_database(display_name)
 
     def _get_effective_connector_info(self):
-        """Return (connector, connection_name) for the effective connection.
+        """Return (connector, connection_group, connection_name) for the effective connection.
 
         If the focused block has a per-block connection, returns that
         connector.  Otherwise falls back to the session connector.
-        Returns (None, "") when no connection is available.
+        Returns (None, "", "") when no connection is available.
         """
         current_widget = self._get_current_session_widget()
         if not current_widget or not hasattr(current_widget, "session"):
-            return None, ""
+            return None, "", ""
         session = current_widget.session
 
         # Check focused block for per-block connection
@@ -245,14 +249,18 @@ class ConnectionsMixin:
             if block and hasattr(block, "get_connection_name"):
                 block_conn = block.get_connection_name()
                 if block_conn:
-                    connector = self.connection_manager.get_connection(block_conn)
+                    block_group = ""
+                    if hasattr(block, "get_connection_group"):
+                        block_group = block.get_connection_group() or ""
+                    connector = self.connection_manager.get_connection(block_group, block_conn)
                     if connector and connector.is_connected():
-                        return connector, block_conn
+                        return connector, block_group, block_conn
 
         # Fall back to session connection
         connector = getattr(session, "connector", None)
         connection_name = getattr(session, "connection_name", "") or ""
-        return connector, connection_name
+        connection_group = getattr(session, "connection_group", "") or ""
+        return connector, connection_group, connection_name
 
     def _on_object_explorer_refresh(self):
         """Object Explorer refresh - reloads schema from effective connection.
@@ -260,17 +268,24 @@ class ConnectionsMixin:
         Respects per-block connections: if the focused block has its own
         connection, refresh uses that connector instead of the session's.
         """
-        connector, connection_name = self._get_effective_connector_info()
+        connector, connection_group, connection_name = self._get_effective_connector_info()
         if not connector or not connector.is_connected():
             return
 
         # Get session_id for per-session cache
         sid = self._get_active_session_id() or ""
 
-        self._schema_service.invalidate_cache(connection_name, session_id=sid)
-        self._load_schema_with_loading(connector, connection_name, session_id=sid)
+        self._schema_service.invalidate_cache(
+            connection_name, session_id=sid, connection_group=connection_group
+        )
+        self._load_schema_with_loading(
+            connector,
+            connection_name,
+            session_id=sid,
+            connection_group=connection_group,
+        )
 
-    def _quick_connect(self, connection_name: str):
+    def _quick_connect(self, group: str, connection_name: str):
         """
         Conecta a um banco de dados.
         - If there is no tab: creates a new tab
@@ -278,11 +293,8 @@ class ConnectionsMixin:
         - If current tab is available: switches the connection of that tab
         Connection happens in background (does not block the application).
         """
-        # Get current tab
         current_widget = self._get_current_session_widget()
 
-        # If there is no tab or current tab is connecting, create a new one
-        # (without inheriting the previous connection - we connect explicitly below)
         if not current_widget or current_widget.is_connecting():
             self._new_session(inherit_connection=False)
             current_widget = self._get_current_session_widget()
@@ -291,32 +303,25 @@ class ConnectionsMixin:
             self._show_warning(S.dialogs.error, "Could not create new tab")
             return
 
-        # Get config (metadata only, not connection)
-        config = self.connection_manager.get_connection_config(connection_name)
+        config = self.connection_manager.get_connection_config(group, connection_name)
         if not config:
             self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
 
-        # Get password if necessary
         password = ""
         if not config.get("use_windows_auth", False):
             password = config.get("password", "")
 
-        # DELEGATE to tab - it manages connection in background
-        # Returns True immediately (asynchronous)
-        current_widget.connect_to_database(connection_name, password)
+        current_widget.connect_to_database(group, connection_name, password)
 
-        # Update status (tab will show loading internally)
-        self.action_label.setText(S.status.connecting_to.format(name=connection_name))
+        display = ConnectionRef(group=group or "", name=connection_name).display()
+        self.action_label.setText(S.status.connecting_to.format(name=display))
 
-    def _connect_new_tab(self, connection_name: str):
+    def _connect_new_tab(self, group: str, connection_name: str):
         """
         Connects to a database ALWAYS creating a new tab.
         Used when CTRL+double-click or 'Connect in New Tab' in menu.
         """
-        # Always create new tab WITHOUT inheriting the previous connection:
-        # the deferred inherited auto-connect would race with (and override)
-        # the explicit connection requested below.
         self._new_session(inherit_connection=False)
         current_widget = self._get_current_session_widget()
 
@@ -324,22 +329,19 @@ class ConnectionsMixin:
             self._show_warning(S.dialogs.error, "Could not create new tab")
             return
 
-        # Get config (metadata only, not connection)
-        config = self.connection_manager.get_connection_config(connection_name)
+        config = self.connection_manager.get_connection_config(group, connection_name)
         if not config:
             self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
 
-        # Get password if necessary
         password = ""
         if not config.get("use_windows_auth", False):
             password = config.get("password", "")
 
-        # DELEGATE to tab - it manages connection in background
-        current_widget.connect_to_database(connection_name, password)
+        current_widget.connect_to_database(group, connection_name, password)
 
-        # Update status
-        self.action_label.setText(S.status.connecting_to_new_tab.format(name=connection_name))
+        display = ConnectionRef(group=group or "", name=connection_name).display()
+        self.action_label.setText(S.status.connecting_to_new_tab.format(name=display))
 
     def _manage_connections(self):
         """Opens the connection management dialog"""
@@ -349,9 +351,9 @@ class ConnectionsMixin:
         # Update list after closing dialog
         self._refresh_connections_list()
 
-    def _connect_from_manager(self, name: str, config: dict):
+    def _connect_from_manager(self, group: str, name: str, config: dict):
         """Connects from the connection manager - same behavior as the side panel"""
-        self._quick_connect(name)
+        self._quick_connect(group, name)
 
     def _new_connection(self):
         """Opens dialog for new connection"""
@@ -365,34 +367,42 @@ class ConnectionsMixin:
 
         if dialog.exec():
             name, config = dialog.get_result()
+            group = config.get("group", "")
 
-            # Save connection
-            self.connection_manager.save_connection_config(
-                name,
-                config["db_type"],
-                config["host"],
-                config["port"],
-                config["database"],
-                config.get("username", ""),
-                config.get("save_password", False),
-                config.get("password", ""),
-                config.get("group", ""),
-                config.get("use_windows_auth", False),
-                config.get("color", ""),
-                config.get("trust_server_certificate", True),
-                config.get("http_path", ""),
-                config.get("sqlserver_auth_mode", ""),
-            )
+            try:
+                self.connection_manager.save_connection_config(
+                    name,
+                    config["db_type"],
+                    config["host"],
+                    config["port"],
+                    config["database"],
+                    config.get("username", ""),
+                    config.get("save_password", False),
+                    config.get("password", ""),
+                    group,
+                    config.get("use_windows_auth", False),
+                    config.get("color", ""),
+                    config.get("trust_server_certificate", True),
+                    config.get("http_path", ""),
+                    config.get("sqlserver_auth_mode", ""),
+                )
+            except DuplicateConnectionError:
+                msg = getattr(
+                    S.connections_manager,
+                    "dialog_duplicate_in_group",
+                    "A connection with this name already exists in the selected group.",
+                )
+                self._show_warning(S.dialogs.warning, msg)
+                return
 
             self._update_connection_status()
             self._refresh_connections_list()
             self._log_info(S.status.connection_created.format(name=name))
             self.action_label.setText(S.status.connection_created.format(name=name))
 
-    def _edit_connection(self, connection_name: str):
+    def _edit_connection(self, group: str, connection_name: str):
         """Opens dialog to edit a specific connection"""
-        # Get connection config
-        config = self.connection_manager.get_connection_config(connection_name)
+        config = self.connection_manager.get_connection_config(group, connection_name)
         if not config:
             self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
@@ -407,28 +417,35 @@ class ConnectionsMixin:
 
         if dialog.exec():
             name, new_config = dialog.get_result()
+            new_group = new_config.get("group", "")
 
-            # Se mudou o nome, deletar antiga
-            if name != connection_name:
-                self.connection_manager.delete_connection_config(connection_name)
-
-            # Save connection
-            self.connection_manager.save_connection_config(
-                name,
-                new_config["db_type"],
-                new_config["host"],
-                new_config["port"],
-                new_config["database"],
-                new_config.get("username", ""),
-                new_config.get("save_password", False),
-                new_config.get("password", ""),
-                new_config.get("group", ""),
-                new_config.get("use_windows_auth", False),
-                new_config.get("color", ""),
-                new_config.get("trust_server_certificate", True),
-                new_config.get("http_path", ""),
-                new_config.get("sqlserver_auth_mode", ""),
-            )
+            try:
+                self.connection_manager.update_connection_config(
+                    group,
+                    connection_name,
+                    name,
+                    new_config["db_type"],
+                    new_config["host"],
+                    new_config["port"],
+                    new_config["database"],
+                    new_config.get("username", ""),
+                    new_config.get("save_password", False),
+                    new_config.get("password", ""),
+                    new_group,
+                    new_config.get("use_windows_auth", False),
+                    new_config.get("color", ""),
+                    new_config.get("trust_server_certificate", True),
+                    new_config.get("http_path", ""),
+                    new_config.get("sqlserver_auth_mode", ""),
+                )
+            except DuplicateConnectionError:
+                msg = getattr(
+                    S.connections_manager,
+                    "dialog_duplicate_in_group",
+                    "A connection with this name already exists in the selected group.",
+                )
+                self._show_warning(S.dialogs.warning, msg)
+                return
 
             self._update_connection_status()
             self._refresh_connections_list()
@@ -462,23 +479,16 @@ class ConnectionsMixin:
 
         if session and session.is_connected:
             conn_name = session.connection_name
+            conn_group = session.connection_group or ""
             connector = session.connector
 
-            # Get connection config
-            config = self.connection_manager.get_connection_config(conn_name)
+            config = self.connection_manager.get_connection_config(conn_group, conn_name)
             host = config.get("host", "localhost") if config else "localhost"
             db = config.get("database", "") if config else ""
             db_type = config.get("db_type", "") if config else ""
 
-            # === PAINEL LATERAL ===
             self.connection_panel.set_active_connection(conn_name, host=host, database=db, db_type=db_type)
-
-            # Highlight active connection in list
-            for i in range(self.connections_list.count()):
-                item = self.connections_list.item(i)
-                if item.data(Qt.ItemDataRole.UserRole) == conn_name:
-                    self.connections_list.setCurrentItem(item)
-                    break
+            self.connection_panel.connections_list.highlight_connection(conn_group, conn_name)
 
             # === STATUSBAR ===
             self.main_statusbar.set_connection(conn_name, db_type)

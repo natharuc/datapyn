@@ -583,27 +583,30 @@ def databricks_schema():
     """Schema Databricks com catalogo, schemas e tabelas, usando campo 'key'"""
     return {
         "database": "main",
+        "current_schema": "default",
+        "current_context": "main.default",
+        "catalog_schemas": {"main": ["default", "audit"]},
         "databases": ["main", "hive_metastore"],
         "tables": [
-            {"name": "customers", "schema": "default", "key": "default.customers", "type": "BASE TABLE"},
-            {"name": "orders", "schema": "default", "key": "default.orders", "type": "BASE TABLE"},
-            {"name": "logs", "schema": "audit", "key": "audit.logs", "type": "BASE TABLE"},
-            {"name": "v_report", "schema": "audit", "key": "audit.v_report", "type": "VIEW"},
+            {"name": "customers", "schema": "default", "catalog": "main", "key": "main.default.customers", "type": "BASE TABLE"},
+            {"name": "orders", "schema": "default", "catalog": "main", "key": "main.default.orders", "type": "BASE TABLE"},
+            {"name": "logs", "schema": "audit", "catalog": "main", "key": "main.audit.logs", "type": "BASE TABLE"},
+            {"name": "v_report", "schema": "audit", "catalog": "main", "key": "main.audit.v_report", "type": "VIEW"},
         ],
         "columns": {
-            "default.customers": [
+            "main.default.customers": [
                 {"name": "id", "type": "bigint", "nullable": "NO"},
                 {"name": "name", "type": "string", "nullable": "YES"},
             ],
-            "default.orders": [
+            "main.default.orders": [
                 {"name": "order_id", "type": "bigint", "nullable": "NO"},
                 {"name": "amount", "type": "double", "nullable": "YES"},
             ],
-            "audit.logs": [
+            "main.audit.logs": [
                 {"name": "log_id", "type": "bigint", "nullable": "NO"},
                 {"name": "message", "type": "string", "nullable": "YES"},
             ],
-            "audit.v_report": [
+            "main.audit.v_report": [
                 {"name": "total", "type": "double", "nullable": "YES"},
             ],
         },

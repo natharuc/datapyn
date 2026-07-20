@@ -1689,8 +1689,9 @@ class PyniaChatPanel(QWidget):
         self._hide_account_switch_busy()
         self._update_auth_state()
         username = getattr(self._agent_client, "_username", "") if self._agent_client else ""
-        get_copilot_settings().on_chat_authenticated(username)
-        self._settings.setValue("was_authenticated", True)
+        if self._agent_client and self._agent_client.provider_id == "copilot":
+            get_copilot_settings().on_chat_authenticated(username)
+            self._settings.setValue("was_authenticated", True)
 
     def _on_auth_failed(self, error: str):
         """Authentication failed — show status in gate."""

@@ -43,7 +43,10 @@ from src.utils.sql_parameter_service import (
 def _parameter_token_label(parameter: dict[str, Any]) -> str:
     name = parameter.get("name", "")
     if is_shared_parameter_id(str(parameter.get("id", ""))):
-        return f"{{{{{name}}}}}"
+        from src.core.parameter_settings import get_shared_parameter_delimiter_tokens
+
+        open_t, close_t = get_shared_parameter_delimiter_tokens()
+        return f"{open_t}{name}{close_t}"
     return f"@{name}"
 
 

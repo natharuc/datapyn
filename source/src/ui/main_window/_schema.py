@@ -12,6 +12,7 @@ import weakref
 import pandas as pd
 from PyQt6.QtCore import Qt, QThread, QTimer
 from src.language import S
+from src.core.connection_ref import ConnectionRef
 from src.services.cross_database_schema import (
     collect_sql_text_from_widget,
     extract_referenced_catalogs,
@@ -24,6 +25,7 @@ from src.services.schema_service import (
     SCHEMA_LAZY_AUTOCOMPLETE,
     SCHEMA_LAZY_FULL,
     is_schema_busy_result,
+    schema_cache_identity,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,88 @@ _SCHEMA_BUSY_COOLDOWN_SEC = 5.0
 
 class SchemaMixin:
     """Handles schema loading, OE updates, block schema, variable panel."""
+
+    def _connection_ref_for_session(self, session) -> ConnectionRef | None:
+        if session is None:
+            return None
+        name = getattr(session, "connection_name", "") or ""
+        if not name:
+            return None
+        group = getattr(session, "connection_group", "") or ""
+        return ConnectionRef(group=group, name=name)
+
+    def _effective_connection_for_block(self, block=None, session=None) -> tuple[str, str]:
+        """Return (connection_group, connection_name) for a block or session."""
+        if block and hasattr(block, "get_connection_name"):
+            block_name = block.get_connection_name()
+            if block_name:
+                block_group = ""
+                if hasattr(block, "get_connection_group"):
+                    block_group = block.get_connection_group() or ""
+                return block_group, block_name
+        if session:
+            return (
+                getattr(session, "connection_group", "") or "",
+                getattr(session, "connection_name", "") or "",
+            )
+        return "", ""
+
+    def _get_connection_config(self, connection_group: str = "", connection_name: str = ""):
+        if not connection_name:
+            return None
+        return self.connection_manager.get_connection_config(connection_group, connection_name)
+
+    def _get_connection_db_type(
+        self, connection_name: str, connection_group: str = ""
+    ) -> str:
+        config = self._get_connection_config(connection_group, connection_name)
+        return config.get("db_type", "") if config else ""
+
+    def _resolve_live_connector(
+        self, connection_group: str, connection_name: str, session=None
+    ):
+        connector = None
+        if session is not None:
+            connector = getattr(session, "connector", None)
+            if connector and self._connector_is_connected(connector):
+                return connector
+        get_connection = getattr(self.connection_manager, "get_connection", None)
+        if callable(get_connection):
+            connector = get_connection(connection_group, connection_name)
+        if connector and self._connector_is_connected(connector):
+            return connector
+        return None
+
+    def _run_with_metadata_connector(self, session_id: str, callback):
+        """Invoke callback(connector, group, name) when a live connector is available."""
+        widget = self._session_widgets.get(session_id) if hasattr(self, "_session_widgets") else None
+        if not widget or not hasattr(widget, "session"):
+            return
+        session = widget.session
+        ref = self._connection_ref_for_session(session)
+        if ref is None:
+            return
+
+        connector = self._resolve_live_connector(ref.group, ref.name, session=session)
+        if connector is not None:
+            callback(connector, ref.group, ref.name)
+            return
+
+        ensure = getattr(widget, "ensure_connector_for_metadata", None)
+        if callable(ensure):
+            ensure(lambda conn: callback(conn, ref.group, ref.name))
+            return
+
+        callback(None, ref.group, ref.name)
+
+    def _pending_oe_key(self, session_id: str, *parts):
+        return (session_id, *parts)
+
+    def _pop_pending_oe_session(self, pending: dict, key) -> str:
+        value = pending.pop(key, None)
+        if isinstance(value, tuple) and len(value) == 2:
+            return value[1]
+        return value or ""
 
     @staticmethod
     def _connector_is_connected(connector) -> bool:
@@ -75,19 +159,26 @@ class SchemaMixin:
 
     def _on_oe_databases_requested(self):
         """Load all server databases when the lazy OE node is expanded."""
-        connector, connection_name = self._get_effective_connector_info()
-        if not connector or not self._connector_is_connected(connector):
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        if not sid:
             return
 
-        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
-        self._schema_service.load_databases(connector, connection_name, session_id=sid or "")
+        def _load(connector, _group, connection_name):
+            self._schema_service.load_databases(connector, connection_name, session_id=sid)
+
+        self._run_with_metadata_connector(sid, _load)
 
     # DB types that expose a server-wide database/catalog list worth fetching
     # automatically so the per-block database dropdown is populated.
     _SERVER_DB_LIST_TYPES = frozenset(("mssql", "sqlserver", "mysql", "mariadb", "databricks"))
 
     def _maybe_auto_request_databases(
-        self, schema: dict, connection_name: str, db_type: str, session_id: str
+        self,
+        schema: dict,
+        connection_name: str,
+        db_type: str,
+        session_id: str,
+        connection_group: str = "",
     ) -> None:
         """After a lazy/minimal schema load, fetch the server database list once.
 
@@ -112,18 +203,23 @@ class SchemaMixin:
             return
         self._auto_db_list_requested.add(key)
 
-        connector = None
-        widget = self._session_widgets.get(session_id) if hasattr(self, "_session_widgets") else None
-        if widget and hasattr(widget, "session") and widget.session:
-            connector = getattr(widget.session, "connector", None)
-        if (connector is None or not self._connector_is_connected(connector)) and connection_name:
-            get_connection = getattr(self.connection_manager, "get_connection", None)
-            if callable(get_connection):
-                connector = get_connection(connection_name)
-        if connector is None or not self._connector_is_connected(connector):
+        if not hasattr(self, "_auto_db_list_requested"):
+            self._auto_db_list_requested = set()
+        identity = schema_cache_identity(connection_name, connection_group)
+        key = (identity, session_id)
+        if key in self._auto_db_list_requested:
             return
+        self._auto_db_list_requested.add(key)
 
-        self._schema_service.load_databases(connector, connection_name, session_id=session_id)
+        def _load(connector, group, name):
+            self._schema_service.load_databases(connector, name, session_id=session_id)
+
+        self._run_with_metadata_connector(session_id, _load)
+
+    def _session_connection_group(self, session_id: str) -> str:
+        widget = self._session_widgets.get(session_id) if hasattr(self, "_session_widgets") else None
+        session = getattr(widget, "session", None) if widget else None
+        return getattr(session, "connection_group", "") or "" if session else ""
 
     def _on_databases_loaded(self, connection_name: str, session_id: str, databases: list):
         """Merge on-demand database list into cached schema and refresh OE."""
@@ -131,52 +227,102 @@ class SchemaMixin:
             return
 
         sid = session_id or self._get_active_session_id() or ""
-        cached = self._schema_service.get_cached_schema(connection_name, session_id=sid) or {}
+        connection_group = self._session_connection_group(sid)
+        cached = self._schema_service.get_cached_schema(
+            connection_name, session_id=sid, connection_group=connection_group
+        ) or {}
         if not isinstance(cached, dict):
             cached = {}
         merged = dict(cached)
         merged["databases"] = list(databases)
         merged["lazy"] = True
-        self._schema_service.update_cached_schema(connection_name, merged, session_id=sid)
+        self._schema_service.update_cached_schema(
+            connection_name, merged, session_id=sid, connection_group=connection_group
+        )
 
         if sid and hasattr(self, "_session_explorers"):
             explorer = self._session_explorers.get(sid)
             if explorer:
-                db_type = self._get_connection_db_type(connection_name)
+                db_type = self._get_connection_db_type(connection_name, connection_group)
                 explorer.set_schema(merged, connection_name, db_type=db_type)
                 explorer.add_databases(databases)
 
-        # Push the freshly loaded database list to every SQL block of this session
-        # so the per-block database dropdown is populated (lazy connect path).
         if sid:
             self._apply_schema_to_session_blocks(
-                sid, connection_name, merged, db_type=self._get_connection_db_type(connection_name)
+                sid,
+                connection_name,
+                merged,
+                db_type=self._get_connection_db_type(connection_name, connection_group),
+                connection_group=connection_group,
             )
+
+    def _store_pending_oe_request(self, attr_name: str, key, session_id: str) -> None:
+        pending = getattr(self, attr_name, None)
+        if pending is None:
+            pending = {}
+            setattr(self, attr_name, pending)
+        pending[key] = session_id
 
     def _on_oe_schemas_requested(self, catalog_name: str):
         """Load schemas for a Databricks catalog (lazy loading)."""
-        connector, connection_name = self._get_effective_connector_info()
-        if not connector or not self._connector_is_connected(connector):
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        if not sid:
             return
 
-        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
-        if sid:
-            self._pending_oe_schema_requests = getattr(self, "_pending_oe_schema_requests", {})
-            self._pending_oe_schema_requests[catalog_name] = sid
+        def _load(connector, _group, connection_name):
+            self._store_pending_oe_request(
+                "_pending_oe_schema_requests",
+                self._pending_oe_key(sid, catalog_name),
+                sid,
+            )
+            self._schema_service.load_schemas_for_catalog(
+                connector, connection_name, catalog_name
+            )
 
-        self._schema_service.load_schemas_for_catalog(
-            connector, connection_name, catalog_name
-        )
+        self._run_with_metadata_connector(sid, _load)
 
     def _on_schemas_loaded(self, catalog_name: str, schemas: list):
         """Callback when schemas are loaded for a catalog."""
         pending = getattr(self, "_pending_oe_schema_requests", {})
-        sid = pending.pop(catalog_name, None)
+        sid = ""
+        request_key = None
+        for key, pending_sid in list(pending.items()):
+            if (
+                isinstance(key, tuple)
+                and len(key) >= 2
+                and key[-1] == catalog_name
+                and pending_sid
+            ):
+                sid = pending.pop(key, "")
+                request_key = key
+                break
         if not sid:
             return
         explorer = self._session_explorers.get(sid)
         if explorer:
             explorer.add_schemas_to_catalog(catalog_name, schemas)
+
+        cross_db = getattr(self, "_pending_cross_db_table_schemas", {}) or {}
+        schema_targets = cross_db.pop((sid, catalog_name), None)
+        if schema_targets is not None and explorer:
+            widget = self._session_widgets.get(sid)
+            session = getattr(widget, "session", None) if widget else None
+            ref = self._connection_ref_for_session(session)
+            if ref is None:
+                return
+
+            def _load_tables(connector, _group, connection_name):
+                for schema_name in sorted(schema_targets):
+                    self._store_pending_oe_request(
+                        "_pending_oe_table_requests",
+                        self._pending_oe_key(sid, catalog_name, schema_name),
+                        sid,
+                    )
+                    self._schema_service.load_tables_for_schema(
+                        connector, connection_name, catalog_name, schema_name
+                    )
+
+            self._run_with_metadata_connector(sid, _load_tables)
 
     def _on_oe_tables_requested(self, catalog_name: str, schema_name: str):
         """Load tables for a schema (lazy loading)."""
@@ -184,27 +330,49 @@ class SchemaMixin:
         if self._is_schema_request_on_cooldown(cooldown_key):
             return
 
-        connector, connection_name = self._get_effective_connector_info()
-        if not connector or not self._connector_is_connected(connector):
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        if not sid:
             return
 
-        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
-        if sid:
-            self._pending_oe_table_requests = getattr(self, "_pending_oe_table_requests", {})
-            self._pending_oe_table_requests[(catalog_name, schema_name)] = sid
+        def _load(connector, _group, connection_name):
+            self._store_pending_oe_request(
+                "_pending_oe_table_requests",
+                self._pending_oe_key(sid, catalog_name, schema_name),
+                sid,
+            )
+            self._schema_service.load_tables_for_schema(
+                connector, connection_name, catalog_name, schema_name
+            )
 
-        self._schema_service.load_tables_for_schema(
-            connector, connection_name, catalog_name, schema_name
-        )
+        self._run_with_metadata_connector(sid, _load)
 
     def _on_tables_loaded(self, catalog_name: str, schema_name: str, tables: list):
         """Callback when tables are loaded for a schema."""
         pending = getattr(self, "_pending_oe_table_requests", {})
-        sid = pending.pop((catalog_name, schema_name), None)
+        sid = ""
+        match_key = None
+        for key, pending_sid in list(pending.items()):
+            if (
+                isinstance(key, tuple)
+                and len(key) >= 3
+                and key[-2:] == (catalog_name, schema_name)
+            ):
+                sid = pending.pop(key, "")
+                match_key = key
+                break
         if is_schema_busy_result(tables):
             self._set_schema_request_cooldown(
                 self._schema_busy_cooldown_key_tables(catalog_name, schema_name)
             )
+            if sid:
+                explorer = self._session_explorers.get(sid)
+                if explorer:
+                    explorer.notify_schema_busy(
+                        self._schema_busy_cooldown_key_tables(catalog_name, schema_name),
+                        retry_callback=lambda: self._retry_oe_tables_for_session(
+                            sid, catalog_name, schema_name
+                        ),
+                    )
             return
         if not sid:
             return
@@ -220,27 +388,49 @@ class SchemaMixin:
         if self._is_schema_request_on_cooldown(cooldown_key):
             return
 
-        connector, connection_name = self._get_effective_connector_info()
-        if not connector or not self._connector_is_connected(connector):
+        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
+        if not sid:
             return
 
-        sid = self._session_id_for_object_explorer_sender() or self._get_active_session_id()
-        if sid:
-            self._pending_oe_column_requests = getattr(self, "_pending_oe_column_requests", {})
-            self._pending_oe_column_requests[(catalog_name, schema_name, table_name)] = sid
+        def _load(connector, _group, connection_name):
+            self._store_pending_oe_request(
+                "_pending_oe_column_requests",
+                self._pending_oe_key(sid, catalog_name, schema_name, table_name),
+                sid,
+            )
+            self._schema_service.load_columns_for_table(
+                connector, connection_name, catalog_name, schema_name, table_name
+            )
 
-        self._schema_service.load_columns_for_table(
-            connector, connection_name, catalog_name, schema_name, table_name
-        )
+        self._run_with_metadata_connector(sid, _load)
 
     def _on_columns_loaded(self, catalog_name: str, schema_name: str, table_name: str, columns: list):
         """Callback when columns are loaded for a table."""
         pending = getattr(self, "_pending_oe_column_requests", {})
-        sid = pending.pop((catalog_name, schema_name, table_name), None)
+        sid = ""
+        for key, pending_sid in list(pending.items()):
+            if (
+                isinstance(key, tuple)
+                and len(key) >= 4
+                and key[-3:] == (catalog_name, schema_name, table_name)
+            ):
+                sid = pending.pop(key, "")
+                break
         if is_schema_busy_result(columns):
             self._set_schema_request_cooldown(
                 self._schema_busy_cooldown_key_columns(catalog_name, schema_name, table_name)
             )
+            if sid:
+                explorer = self._session_explorers.get(sid)
+                if explorer:
+                    explorer.notify_schema_busy(
+                        self._schema_busy_cooldown_key_columns(
+                            catalog_name, schema_name, table_name
+                        ),
+                        retry_callback=lambda: self._retry_oe_columns_for_session(
+                            sid, catalog_name, schema_name, table_name
+                        ),
+                    )
             return
         if not sid:
             return
@@ -262,9 +452,43 @@ class SchemaMixin:
             if not isinstance(pending, dict):
                 continue
 
-            stale_keys = [key for key, pending_session_id in pending.items() if pending_session_id == session_id]
+            stale_keys = [
+                key for key, pending_session_id in pending.items()
+                if pending_session_id == session_id
+                and isinstance(key, tuple)
+                and key
+                and key[0] == session_id
+            ]
             for key in stale_keys:
                 pending.pop(key, None)
+
+    def _retry_oe_tables_for_session(self, session_id: str, catalog_name: str, schema_name: str) -> None:
+        def _load(connector, _group, connection_name):
+            self._store_pending_oe_request(
+                "_pending_oe_table_requests",
+                self._pending_oe_key(session_id, catalog_name, schema_name),
+                session_id,
+            )
+            self._schema_service.load_tables_for_schema(
+                connector, connection_name, catalog_name, schema_name
+            )
+
+        self._run_with_metadata_connector(session_id, _load)
+
+    def _retry_oe_columns_for_session(
+        self, session_id: str, catalog_name: str, schema_name: str, table_name: str
+    ) -> None:
+        def _load(connector, _group, connection_name):
+            self._store_pending_oe_request(
+                "_pending_oe_column_requests",
+                self._pending_oe_key(session_id, catalog_name, schema_name, table_name),
+                session_id,
+            )
+            self._schema_service.load_columns_for_table(
+                connector, connection_name, catalog_name, schema_name, table_name
+            )
+
+        self._run_with_metadata_connector(session_id, _load)
 
     def _session_id_for_object_explorer_sender(self) -> str:
         sender = self.sender()
@@ -288,20 +512,29 @@ class SchemaMixin:
         if not connection_name:
             return
 
-        db_type = getattr(explorer, "_db_type", "") or self._get_connection_db_type(connection_name)
+        connection_group = self._session_connection_group(session_id)
+        db_type = getattr(explorer, "_db_type", "") or self._get_connection_db_type(
+            connection_name, connection_group
+        )
         editor_schema = self._editor_schema_for_session(
             schema,
             session_id=session_id,
             db_type=db_type,
             referenced_mode=_EDITOR_REF_ALL_LAZY,
         )
-        self._schema_service.update_cached_schema(connection_name, editor_schema, session_id=session_id)
+        self._schema_service.update_cached_schema(
+            connection_name,
+            editor_schema,
+            session_id=session_id,
+            connection_group=connection_group,
+        )
         self._apply_schema_to_session_blocks(
             session_id,
             connection_name,
             schema,
             db_type=db_type,
             referenced_mode=_EDITOR_REF_ALL_LAZY,
+            connection_group=connection_group,
         )
 
     def _collect_session_sql_text(self, session_id: str) -> str:
@@ -404,25 +637,11 @@ class SchemaMixin:
 
         session_id = session.session_id
         connection_name = getattr(session, "connection_name", "") or ""
+        connection_group = getattr(session, "connection_group", "") or ""
         if not connection_name:
             return
 
-        connector = getattr(session, "connector", None)
-        if not connector or not self._connector_is_connected(connector):
-            get_connection = getattr(self.connection_manager, "get_connection", None)
-            if callable(get_connection):
-                connector = get_connection(connection_name)
-        if not connector or not self._connector_is_connected(connector):
-            return
-
-        is_query_busy = getattr(connector, "is_query_busy", None)
-        if callable(is_query_busy) and is_query_busy():
-            return
-
-        db_type = ""
-        config = self.connection_manager.get_connection_config(connection_name)
-        if config:
-            db_type = config.get("db_type", "")
+        db_type = self._get_connection_db_type(connection_name, connection_group)
 
         sql_text = collect_sql_text_from_widget(widget)
         if not sql_text.strip():
@@ -438,7 +657,11 @@ class SchemaMixin:
 
         explorer = self._session_explorers.get(session_id) if hasattr(self, "_session_explorers") else None
         oe_schema = getattr(explorer, "_current_schema", None) if explorer else None
-        cached = self._schema_service.get_cached_schema(connection_name, session_id=session_id)
+        cached = self._schema_service.get_cached_schema(
+            connection_name,
+            session_id=session_id,
+            connection_group=connection_group,
+        )
         base_schema = oe_schema if isinstance(oe_schema, dict) else cached
 
         current_database = ""
@@ -450,88 +673,152 @@ class SchemaMixin:
             current_database=current_database,
             db_type=db_type,
         )
-        if not referenced_catalogs:
-            return
-
-        loaded_catalogs = set()
-        if isinstance(base_schema, dict):
-            for table in base_schema.get("tables", []) or []:
-                if isinstance(table, dict):
-                    db_name = str(table.get("database", "") or table.get("catalog", "") or "")
-                    if db_name:
-                        loaded_catalogs.add(db_name.lower())
-
-        server_databases = set()
-        if isinstance(base_schema, dict):
-            server_databases = {
-                str(name).lower() for name in (base_schema.get("databases", []) or []) if name
-            }
-
-        table_requests = getattr(self, "_pending_oe_table_requests", None)
-        if table_requests is None:
-            table_requests = {}
-            self._pending_oe_table_requests = table_requests
-
-        for catalog_name in sorted(referenced_catalogs):
-            catalog_lower = catalog_name.lower()
-            if catalog_lower == (current_database or "").lower():
-                continue
-            if server_databases and catalog_lower not in server_databases:
-                continue
-            if catalog_lower in loaded_catalogs:
-                continue
-
-            request_key = (catalog_name, "")
-            if table_requests.get(request_key) == session_id:
-                continue
-            cooldown_key = self._schema_busy_cooldown_key_tables(catalog_name, "")
-            if self._is_schema_request_on_cooldown(cooldown_key):
-                continue
-            table_requests[request_key] = session_id
-            self._schema_service.load_tables_for_schema(
-                connector,
-                connection_name,
-                catalog_name,
-                "",
-            )
-
-        column_requests = getattr(self, "_pending_oe_column_requests", None)
-        if column_requests is None:
-            column_requests = {}
-            self._pending_oe_column_requests = column_requests
-
-        for catalog_name, schema_name, table_name in extract_referenced_table_refs(
+        table_refs = extract_referenced_table_refs(
             sql_text,
             current_database=current_database,
             db_type=db_type,
-        ):
-            if not table_name:
-                continue
-            if catalog_name and catalog_name.lower() == (current_database or "").lower():
-                continue
-            if isinstance(base_schema, dict) and schema_has_columns_for_table(
-                base_schema, catalog_name, schema_name, table_name
-            ):
-                continue
+        )
+        if not referenced_catalogs and not table_refs:
+            return
 
-            request_key = (catalog_name, schema_name, table_name)
-            if column_requests.get(request_key) == session_id:
-                continue
-            cooldown_key = self._schema_busy_cooldown_key_columns(
-                catalog_name, schema_name, table_name
-            )
-            if self._is_schema_request_on_cooldown(cooldown_key):
-                continue
-            column_requests[request_key] = session_id
-            self._schema_service.load_columns_for_table(
-                connector,
-                connection_name,
-                catalog_name,
-                schema_name,
-                table_name,
-            )
+        def _sync(connector, _group, conn_name):
+            is_query_busy = getattr(connector, "is_query_busy", None)
+            if callable(is_query_busy) and is_query_busy():
+                return
 
-        hashes[session_id] = sql_hash
+            loaded_catalogs = set()
+            if isinstance(base_schema, dict):
+                for table in base_schema.get("tables", []) or []:
+                    if isinstance(table, dict):
+                        db_name = str(table.get("database", "") or table.get("catalog", "") or "")
+                        if db_name:
+                            loaded_catalogs.add(db_name.lower())
+
+            server_databases = set()
+            if isinstance(base_schema, dict):
+                server_databases = {
+                    str(name).lower()
+                    for name in (base_schema.get("databases", []) or [])
+                    if name
+                }
+
+            table_requests = getattr(self, "_pending_oe_table_requests", None)
+            if table_requests is None:
+                table_requests = {}
+                self._pending_oe_table_requests = table_requests
+
+            column_requests = getattr(self, "_pending_oe_column_requests", None)
+            if column_requests is None:
+                column_requests = {}
+                self._pending_oe_column_requests = column_requests
+
+            refs_by_catalog: dict[str, set[str]] = {}
+            for catalog_name, schema_name, _table_name in table_refs:
+                if catalog_name and schema_name:
+                    refs_by_catalog.setdefault(catalog_name, set()).add(schema_name)
+
+            if db_type == "databricks":
+                cross_db_schemas = getattr(self, "_pending_cross_db_table_schemas", None)
+                if cross_db_schemas is None:
+                    cross_db_schemas = {}
+                    self._pending_cross_db_table_schemas = cross_db_schemas
+
+                for catalog_name in sorted(referenced_catalogs):
+                    catalog_lower = catalog_name.lower()
+                    if catalog_lower == (current_database or "").lower():
+                        continue
+                    if server_databases and catalog_lower not in server_databases:
+                        continue
+                    if catalog_lower in loaded_catalogs and not refs_by_catalog.get(catalog_name):
+                        continue
+
+                    schema_targets = refs_by_catalog.get(catalog_name, set())
+                    if schema_targets:
+                        for schema_name in sorted(schema_targets):
+                            request_key = self._pending_oe_key(
+                                session_id, catalog_name, schema_name
+                            )
+                            if table_requests.get(request_key) == session_id:
+                                continue
+                            cooldown_key = self._schema_busy_cooldown_key_tables(
+                                catalog_name, schema_name
+                            )
+                            if self._is_schema_request_on_cooldown(cooldown_key):
+                                continue
+                            table_requests[request_key] = session_id
+                            self._schema_service.load_tables_for_schema(
+                                connector,
+                                conn_name,
+                                catalog_name,
+                                schema_name,
+                            )
+                    else:
+                        targets = refs_by_catalog.get(catalog_name, set())
+                        if targets:
+                            cross_db_schemas[(session_id, catalog_name)] = set(targets)
+                        schema_request_key = self._pending_oe_key(session_id, catalog_name)
+                        if table_requests.get(schema_request_key) == session_id:
+                            continue
+                        table_requests[schema_request_key] = session_id
+                        self._schema_service.load_schemas_for_catalog(
+                            connector, conn_name, catalog_name
+                        )
+            else:
+                for catalog_name in sorted(referenced_catalogs):
+                    catalog_lower = catalog_name.lower()
+                    if catalog_lower == (current_database or "").lower():
+                        continue
+                    if server_databases and catalog_lower not in server_databases:
+                        continue
+                    if catalog_lower in loaded_catalogs:
+                        continue
+
+                    request_key = self._pending_oe_key(session_id, catalog_name, "")
+                    if table_requests.get(request_key) == session_id:
+                        continue
+                    cooldown_key = self._schema_busy_cooldown_key_tables(catalog_name, "")
+                    if self._is_schema_request_on_cooldown(cooldown_key):
+                        continue
+                    table_requests[request_key] = session_id
+                    self._schema_service.load_tables_for_schema(
+                        connector,
+                        conn_name,
+                        catalog_name,
+                        "",
+                    )
+
+            for catalog_name, schema_name, table_name in table_refs:
+                if not table_name:
+                    continue
+                if catalog_name and catalog_name.lower() == (current_database or "").lower():
+                    continue
+                if isinstance(base_schema, dict) and schema_has_columns_for_table(
+                    base_schema, catalog_name, schema_name, table_name
+                ):
+                    continue
+
+                request_key = self._pending_oe_key(
+                    session_id, catalog_name, schema_name, table_name
+                )
+                if column_requests.get(request_key) == session_id:
+                    continue
+                cooldown_key = self._schema_busy_cooldown_key_columns(
+                    catalog_name, schema_name, table_name
+                )
+                if self._is_schema_request_on_cooldown(cooldown_key):
+                    continue
+                column_requests[request_key] = session_id
+                self._schema_service.load_columns_for_table(
+                    connector,
+                    conn_name,
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                )
+
+            hashes[session_id] = sql_hash
+
+        self._run_with_metadata_connector(session_id, _sync)
 
     def _block_schema_database(self, block) -> str:
         """Current database label on a block's autocomplete schema, if any."""
@@ -588,10 +875,6 @@ class SchemaMixin:
             elif hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
                 block.editor.set_sql_schema({})
 
-    def _get_connection_db_type(self, connection_name: str) -> str:
-        config = self.connection_manager.get_connection_config(connection_name) if connection_name else None
-        return config.get("db_type", "") if config else ""
-
     def _available_databases_from_schema(self, schema: dict, db_type: str = "") -> list:
         all_databases = list(schema.get("databases", []) or [])
         if db_type != "databricks":
@@ -621,6 +904,7 @@ class SchemaMixin:
         db_type: str = "",
         *,
         referenced_mode=_EDITOR_REF_FROM_SQL,
+        connection_group: str = "",
     ):
         widget = self._session_widgets.get(session_id)
         if not widget or not hasattr(widget, "editor") or not widget.editor:
@@ -629,6 +913,8 @@ class SchemaMixin:
         session_conn = ""
         if hasattr(widget, "session") and widget.session:
             session_conn = getattr(widget.session, "connection_name", "") or ""
+            if not connection_group:
+                connection_group = getattr(widget.session, "connection_group", "") or ""
 
         available_databases = self._available_databases_from_schema(schema, db_type)
 
@@ -673,6 +959,7 @@ class SchemaMixin:
         *,
         lazy: bool = True,
         lazy_mode: str | None = None,
+        connection_group: str = "",
     ):
         """Load schema and show loading indicator in Object Explorer.
         
@@ -685,6 +972,8 @@ class SchemaMixin:
         """
         # Get or CREATE the explorer for the current session (important: _get_session_explorer creates if needed)
         sid = session_id or self._get_active_session_id()
+        if sid and not connection_group:
+            connection_group = self._session_connection_group(sid)
         if sid:
             explorer = self._get_session_explorer(sid)
             explorer.set_loading(True, S.object_explorer.loading)
@@ -693,8 +982,9 @@ class SchemaMixin:
             # Track which session requested this schema load
             # (so _on_schema_loaded only updates this session's OE)
             if not hasattr(self, "_pending_schema_sessions"):
-                self._pending_schema_sessions = {}  # connection_name -> session_id
-            self._pending_schema_sessions[connection_name] = sid
+                self._pending_schema_sessions = {}
+            identity = schema_cache_identity(connection_name, connection_group)
+            self._pending_schema_sessions[identity] = sid
 
         # Show Object Explorer dock if hidden (so user sees the loading)
         if hasattr(self, 'object_explorer_dock') and not self.object_explorer_dock.isVisible():
@@ -707,6 +997,7 @@ class SchemaMixin:
             connector,
             connection_name,
             session_id=sid or "",
+            connection_group=connection_group,
             lazy=lazy,
             lazy_mode=lazy_mode,
         )
@@ -724,17 +1015,23 @@ class SchemaMixin:
 
         # Determine connection: focused block or session
         connection_name = None
+        connection_group = ""
         connector = None
 
         focused_block = widget.editor.get_focused_block()
         if focused_block:
-            block_conn = focused_block.get_connection_name()
-            if block_conn:
-                connection_name = block_conn
+            connection_group, connection_name = self._effective_connection_for_block(
+                focused_block, widget.session
+            )
+            if connection_name and focused_block.get_connection_name():
+                connector = self.connection_manager.get_connection(
+                    connection_group, connection_name
+                )
 
         if not connection_name:
             # Use session connection
             if widget.session.is_connected and widget.session.connection_name:
+                connection_group = getattr(widget.session, "connection_group", "") or ""
                 connection_name = widget.session.connection_name
                 connector = widget.session.connector
 
@@ -746,21 +1043,33 @@ class SchemaMixin:
         sid = widget.session.session_id if hasattr(widget, "session") else ""
 
         # Invalidate cache and reload (per-session)
-        self._schema_service.invalidate_cache(connection_name, session_id=sid)
+        self._schema_service.invalidate_cache(
+            connection_name, session_id=sid, connection_group=connection_group
+        )
         self.statusBar().showMessage(S.status.reloading_schema.format(name=connection_name), 5000)
 
         if connector and self._connector_is_connected(connector):
             self._load_schema_with_loading(
-                connector, connection_name, session_id=sid, lazy=False, lazy_mode=SCHEMA_LAZY_FULL
+                connector,
+                connection_name,
+                session_id=sid,
+                connection_group=connection_group,
+                lazy=False,
+                lazy_mode=SCHEMA_LAZY_FULL,
             )
         else:
             # Need to get connector from ConnectionManager
             from src.database.connection_manager import ConnectionManager
             manager = ConnectionManager()
-            conn = manager.connections.get(connection_name)
+            conn = manager.get_connection(connection_group, connection_name)
             if conn and self._connector_is_connected(conn):
                 self._load_schema_with_loading(
-                    conn, connection_name, session_id=sid, lazy=False, lazy_mode=SCHEMA_LAZY_FULL
+                    conn,
+                    connection_name,
+                    session_id=sid,
+                    connection_group=connection_group,
+                    lazy=False,
+                    lazy_mode=SCHEMA_LAZY_FULL,
                 )
             else:
                 self.statusBar().showMessage(S.status.connection_not_active.format(name=connection_name), 3000)
@@ -807,16 +1116,22 @@ class SchemaMixin:
             5000,
         )
 
-        db_type = ""
-        conn_config = self.connection_manager.get_connection_config(connection_name)
-        if conn_config:
-            db_type = conn_config.get("db_type", "")
-
+        connection_group = ""
         pending_sid = ""
         if hasattr(self, "_pending_schema_sessions"):
-            pending_sid = self._pending_schema_sessions.get(connection_name, "") or ""
+            for identity, sid in list(self._pending_schema_sessions.items()):
+                if identity.endswith(connection_name) or identity == connection_name:
+                    pending_sid = sid
+                    if "\x1f" in identity:
+                        connection_group = identity.split("\x1f", 1)[0]
+                    break
+            if not pending_sid:
+                pending_sid = self._pending_schema_sessions.get(connection_name, "") or ""
 
         requesting_sid = session_id or pending_sid
+        if requesting_sid and not connection_group:
+            connection_group = self._session_connection_group(requesting_sid)
+        db_type = self._get_connection_db_type(connection_name, connection_group)
         self._clear_pending_object_explorer_requests(requesting_sid)
 
         if block_key:
@@ -842,12 +1157,16 @@ class SchemaMixin:
         # Lazy connect: minimal mode loads no server database list. Request it
         # once so the per-block database dropdown and the OE get populated without
         # forcing the user to expand the "Databases" node manually.
-        self._maybe_auto_request_databases(schema, connection_name, db_type, requesting_sid)
+        self._maybe_auto_request_databases(
+            schema, connection_name, db_type, requesting_sid, connection_group
+        )
 
         # Update Object Explorer for the session that REQUESTED this schema
         # (not all sessions - each session has its own OE state)
         if hasattr(self, "_session_explorers"):
             if pending_sid and requesting_sid == pending_sid and hasattr(self, "_pending_schema_sessions"):
+                identity = schema_cache_identity(connection_name, connection_group)
+                self._pending_schema_sessions.pop(identity, None)
                 self._pending_schema_sessions.pop(connection_name, None)
 
             if requesting_sid:
@@ -1003,17 +1322,12 @@ class SchemaMixin:
         session = widget.session
         sid = session.session_id
 
-        # Determine effective connection: focused block's or session's
-        effective_conn = ""
-        if hasattr(widget, "editor"):
-            block = widget.editor.get_last_focused_block()
-            if block and hasattr(block, "get_connection_name"):
-                block_conn = block.get_connection_name()
-                if block_conn:
-                    effective_conn = block_conn
-
-        if not effective_conn:
-            effective_conn = getattr(session, "connection_name", "") or ""
+        connection_group, effective_conn = self._effective_connection_for_block(
+            widget.editor.get_last_focused_block()
+            if hasattr(widget, "editor")
+            else None,
+            session,
+        )
 
         if not effective_conn:
             # No connection - clear OE or show empty
@@ -1033,12 +1347,11 @@ class SchemaMixin:
         self._oe_current_connection[sid] = effective_conn
 
         # Try cache first (per-session cache)
-        cached = self._schema_service.get_cached_schema(effective_conn, session_id=sid)
+        cached = self._schema_service.get_cached_schema(
+            effective_conn, session_id=sid, connection_group=connection_group
+        )
         if cached:
-            db_type = ""
-            config = self.connection_manager.get_connection_config(effective_conn)
-            if config:
-                db_type = config.get("db_type", "")
+            db_type = self._get_connection_db_type(effective_conn, connection_group)
 
             explorer = self._get_session_explorer(sid)
             explorer.set_schema(cached, effective_conn, db_type=db_type)
@@ -1048,9 +1361,16 @@ class SchemaMixin:
         connector = getattr(session, "connector", None)
         if not connector or not self._connector_is_connected(connector):
             # Fallback to connection_manager for per-block connections
-            connector = self.connection_manager.get_connection(effective_conn)
+            connector = self.connection_manager.get_connection(
+                connection_group, effective_conn
+            )
         if connector and self._connector_is_connected(connector):
-            self._load_schema_with_loading(connector, effective_conn, session_id=sid)
+            self._load_schema_with_loading(
+                connector,
+                effective_conn,
+                session_id=sid,
+                connection_group=connection_group,
+            )
 
     def _on_block_focused(self, block, widget):
         """Called when a block gains focus. Updates Object Explorer to show the
@@ -1072,12 +1392,7 @@ class SchemaMixin:
 
         sid = session.session_id
 
-        # Determine which connection name to show
-        block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-        session_conn = getattr(session, "connection_name", "") or ""
-
-        # The effective connection for this block
-        effective_conn = block_conn or session_conn
+        connection_group, effective_conn = self._effective_connection_for_block(block, session)
         if not effective_conn:
             return
 
@@ -1093,20 +1408,18 @@ class SchemaMixin:
         self._oe_current_connection[sid] = effective_conn
 
         # Try to get schema from cache first (per-session cache)
-        cached = self._schema_service.get_cached_schema(effective_conn, session_id=sid)
+        cached = self._schema_service.get_cached_schema(
+            effective_conn, session_id=sid, connection_group=connection_group
+        )
         if cached:
-            # Get db_type for proper SQL quoting
-            db_type = ""
-            config = self.connection_manager.get_connection_config(effective_conn)
-            if config:
-                db_type = config.get("db_type", "")
+            db_type = self._get_connection_db_type(effective_conn, connection_group)
 
             explorer = self._get_session_explorer(sid)
             explorer.set_schema(cached, effective_conn, db_type=db_type)
             return
 
         # If not cached, schema loads on first autocomplete request (lazy)
-        if block_conn:
+        if block.get_connection_name() if hasattr(block, "get_connection_name") else None:
             return
 
     def request_lazy_schema_for_completion(self, block, session_widget) -> None:
@@ -1119,14 +1432,17 @@ class SchemaMixin:
             return
 
         block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-        connection_name = block_conn or getattr(session, "connection_name", "") or ""
+        connection_group, connection_name = self._effective_connection_for_block(block, session)
         if not connection_name:
             return
 
         sid = session.session_id
         block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
         cached = self._schema_service.get_cached_schema(
-            connection_name, session_id=sid, block_key=block_key
+            connection_name,
+            session_id=sid,
+            block_key=block_key,
+            connection_group=connection_group,
         )
         if cached and cached.get("tables"):
             return
@@ -1137,7 +1453,9 @@ class SchemaMixin:
         if connector is None or not self._connector_is_connected(connector):
             connector = getattr(session, "connector", None)
         if connector is None or not self._connector_is_connected(connector):
-            connector = self.connection_manager.get_connection(connection_name)
+            connector = self.connection_manager.get_connection(
+                connection_group, connection_name
+            )
         if connector is None or not self._connector_is_connected(connector):
             return
 
@@ -1146,6 +1464,7 @@ class SchemaMixin:
             connection_name,
             session_id=sid,
             block_key=block_key,
+            connection_group=connection_group,
             lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE,
         )
         if block_key:
@@ -1172,12 +1491,14 @@ class SchemaMixin:
             return
 
         block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-        connection_name = block_conn or getattr(session, "connection_name", "") or ""
+        connection_group, connection_name = self._effective_connection_for_block(block, session)
         if not connection_name:
             return
 
         sid = session.session_id
-        cached = self._schema_service.get_cached_schema(connection_name, session_id=sid) or {}
+        cached = self._schema_service.get_cached_schema(
+            connection_name, session_id=sid, connection_group=connection_group
+        ) or {}
         if cached.get("databases"):
             return  # already populated
 
@@ -1187,7 +1508,9 @@ class SchemaMixin:
         if connector is None or not self._connector_is_connected(connector):
             connector = getattr(session, "connector", None)
         if connector is None or not self._connector_is_connected(connector):
-            connector = self.connection_manager.get_connection(connection_name)
+            connector = self.connection_manager.get_connection(
+                connection_group, connection_name
+            )
         if connector is None or not self._connector_is_connected(connector):
             return
 
@@ -1206,18 +1529,21 @@ class SchemaMixin:
 
         # Try to get session_id from current widget for per-session cache
         sid = ""
+        connection_group = ""
         current_widget = self._get_current_session_widget()
         if current_widget and hasattr(current_widget, "session"):
             sid = current_widget.session.session_id
+            connection_group = getattr(current_widget.session, "connection_group", "") or ""
+        if block and hasattr(block, "get_connection_name") and block.get_connection_name():
+            if hasattr(block, "get_connection_group"):
+                connection_group = block.get_connection_group() or connection_group
 
         # Check cache first - if available, apply immediately (per-session cache)
-        cached = self._schema_service.get_cached_schema(connection_name, session_id=sid)
+        cached = self._schema_service.get_cached_schema(
+            connection_name, session_id=sid, connection_group=connection_group
+        )
         if cached:
-            # Get db_type for special handling (e.g., Databricks catalog.schema)
-            db_type = ""
-            config = self.connection_manager.get_connection_config(connection_name)
-            if config:
-                db_type = config.get("db_type", "")
+            db_type = self._get_connection_db_type(connection_name, connection_group)
             self._apply_schema_to_block(
                 block,
                 cached,
@@ -1229,7 +1555,7 @@ class SchemaMixin:
             return
 
         # Need to load schema in background
-        self._load_schema_for_block(block, connection_name)
+        self._load_schema_for_block(block, connection_name, connection_group)
 
     def _apply_schema_to_block(
         self,
@@ -1278,10 +1604,8 @@ class SchemaMixin:
         if not sid:
             return
 
-        db_type = ""
-        config = self.connection_manager.get_connection_config(connection_name)
-        if config:
-            db_type = config.get("db_type", "")
+        connection_group, _ = self._effective_connection_for_block(block, session)
+        db_type = self._get_connection_db_type(connection_name, connection_group)
 
         explorer = self._get_session_explorer(sid)
         explorer.set_schema(schema, connection_name, db_type=db_type)
@@ -1291,14 +1615,18 @@ class SchemaMixin:
             self._oe_current_connection = {}
         self._oe_current_connection[sid] = connection_name
 
-    def _load_schema_for_block(self, block, connection_name: str):
+    def _load_schema_for_block(
+        self, block, connection_name: str, connection_group: str = ""
+    ):
         """Load schema in background and apply to specific block when ready."""
         try:
             from src.database.connection_manager import ConnectionManager
             from src.workers import BlockConnectionWorker
 
             manager = ConnectionManager()
-            config = manager.get_connection_config(connection_name)
+            if not connection_group and block and hasattr(block, "get_connection_group"):
+                connection_group = block.get_connection_group() or ""
+            config = manager.get_connection_config(connection_group, connection_name)
             if not config:
                 self._log_info(f"Connection config not found: {connection_name}")
                 return
@@ -1336,7 +1664,12 @@ class SchemaMixin:
             # When connection is ready, load schema (also in background via SchemaService)
             def on_connection_ready(connector, session_id=sid):
                 # SchemaService.load_schema already runs in background (per-session)
-                self._schema_service.load_schema(connector, connection_name, session_id=session_id)
+                self._schema_service.load_schema(
+                    connector,
+                    connection_name,
+                    session_id=session_id,
+                    connection_group=connection_group,
+                )
                 # Store block reference to apply schema when loaded (support multiple blocks)
                 if not hasattr(self, "_pending_block_schemas"):
                     self._pending_block_schemas = {}  # conn_name -> [weakref.ref(block)]
@@ -1387,6 +1720,9 @@ class SchemaMixin:
             return
         block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
         sid = session_id or self._get_active_session_id() or ""
+        connection_group = ""
+        if hasattr(block, "get_connection_group"):
+            connection_group = block.get_connection_group() or ""
 
         if sid:
             explorer = self._get_session_explorer(sid)
@@ -1397,13 +1733,17 @@ class SchemaMixin:
             self._pending_schema_sessions[connection_name] = sid
 
         self._schema_service.invalidate_cache(
-            connection_name, session_id=sid, block_key=block_key
+            connection_name,
+            session_id=sid,
+            block_key=block_key,
+            connection_group=connection_group,
         )
         self._schema_service.load_schema(
             connector,
             connection_name,
             session_id=sid,
             block_key=block_key,
+            connection_group=connection_group,
             lazy_mode=SCHEMA_LAZY_FULL,
         )
 
@@ -1420,9 +1760,7 @@ class SchemaMixin:
         session = current_widget.session if current_widget and hasattr(current_widget, "session") else None
 
         block_conn_name = block.get_connection_name() if hasattr(block, "get_connection_name") else None
-        connection_name = block_conn_name or (
-            getattr(session, "connection_name", "") if session else ""
-        )
+        connection_group, connection_name = self._effective_connection_for_block(block, session)
         if not connection_name:
             self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
@@ -1433,6 +1771,7 @@ class SchemaMixin:
                 connection_name,
                 database_name,
                 session_widget=current_widget,
+                connection_group=connection_group,
             )
         except Exception as exc:
             logger.warning("Block database change failed: %s", exc)
@@ -1469,13 +1808,16 @@ class SchemaMixin:
         connection_name: str,
         database_name: str,
         session_widget=None,
+        connection_group: str = "",
     ):
         """Switch database for a block connection in background (never blocks UI)."""
         from src.database.connection_manager import ConnectionManager
         from src.workers import BlockConnectionWorker
 
         manager = ConnectionManager()
-        config = manager.get_connection_config(connection_name)
+        if not connection_group and block and hasattr(block, "get_connection_group"):
+            connection_group = block.get_connection_group() or ""
+        config = manager.get_connection_config(connection_group, connection_name)
         if not config:
             self._log_info(f"Connection config not found: {connection_name}")
             return
@@ -1512,8 +1854,15 @@ class SchemaMixin:
 
         def on_connection_ready(connector, session_id=sid):
             # Invalidate old cache and load new schema (per-session)
-            self._schema_service.invalidate_cache(connection_name, session_id=session_id)
-            self._schema_service.load_schema(connector, connection_name, session_id=session_id)
+            self._schema_service.invalidate_cache(
+                connection_name, session_id=session_id, connection_group=connection_group
+            )
+            self._schema_service.load_schema(
+                connector,
+                connection_name,
+                session_id=session_id,
+                connection_group=connection_group,
+            )
             # Store block reference to apply schema when loaded (support multiple blocks)
             if not hasattr(self, "_pending_block_schemas"):
                 self._pending_block_schemas = {}

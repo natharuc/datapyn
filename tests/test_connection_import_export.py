@@ -33,7 +33,7 @@ class TestExportConnections:
         )
 
         result = export_connections(connection_manager)
-        conn = result["connections"]["Prod"]
+        conn = result["connections"][""]["Prod"]
 
         assert "password" not in conn
         assert conn["db_type"] == "sqlserver"
@@ -64,7 +64,7 @@ class TestExportConnections:
         assert "Backend" in result["groups"]
         assert result["groups"]["Backend"]["color"] == "#00ff00"
 
-        conn = result["connections"]["DevDB"]
+        conn = result["connections"]["Backend"]["DevDB"]
         assert conn["db_type"] == "postgresql"
         assert conn["host"] == "localhost"
         assert conn["port"] == 5432
@@ -89,7 +89,7 @@ class TestExportConnections:
         )
 
         result = export_connections(connection_manager)
-        conn = result["connections"]["Azure SQL MFA"]
+        conn = result["connections"][""]["Azure SQL MFA"]
         assert conn["sqlserver_auth_mode"] == "entra_mfa"
 
     def test_export_multiple_connections(self, connection_manager):
@@ -106,8 +106,9 @@ class TestExportConnections:
             )
 
         result = export_connections(connection_manager)
-        assert len(result["connections"]) == 3
-        assert all(f"conn_{i}" in result["connections"] for i in range(3))
+        ungrouped = result["connections"].get("", {})
+        assert len(ungrouped) == 3
+        assert all(f"conn_{i}" in ungrouped for i in range(3))
 
 
 class TestValidateImportJson:
@@ -222,7 +223,7 @@ class TestApplyImport:
         count = apply_import(connection_manager, data)
         assert count == 1
 
-        config = connection_manager.get_connection_config("ImportedConn")
+        config = connection_manager.get_connection_config("", "ImportedConn")
         assert config is not None
         assert config["db_type"] == "postgresql"
         assert config["host"] == "pg-server"
@@ -278,7 +279,7 @@ class TestApplyImport:
         }
         apply_import(connection_manager, data)
 
-        config = connection_manager.get_connection_config("Shared")
+        config = connection_manager.get_connection_config("", "Shared")
         assert config["db_type"] == "postgresql"
         assert config["host"] == "new-host"
 
@@ -316,6 +317,6 @@ class TestApplyImport:
             fresh = ConnectionManager(os.path.join(td, "conn.json"))
             count = apply_import(fresh, data)
             assert count == 2
-            assert fresh.get_connection_config("A")["database"] == "db_a"
-            assert fresh.get_connection_config("B")["database"] == "db_b"
+            assert fresh.get_connection_config("Team", "A")["database"] == "db_a"
+            assert fresh.get_connection_config("Team", "B")["database"] == "db_b"
             assert "Team" in fresh.get_groups()

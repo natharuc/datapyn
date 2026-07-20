@@ -110,10 +110,7 @@ class CopilotMixin:
     def _on_auth_service_chat_authenticated(self, username: str):
         """Handle Chat authentication via auth service."""
         import logging
-        logging.info(f"[MAIN] Chat authenticated via auth service: {username}")
-        # Update chat panel if needed
-        if hasattr(self, "_copilot_chat_panel"):
-            self._copilot_chat_panel._on_authenticated(username)
+        logging.debug("[MAIN] Chat authenticated via auth service: %s", username)
 
     def _on_auth_service_lsp_authenticated(self, username: str):
         """Handle LSP authentication via auth service."""

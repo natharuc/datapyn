@@ -1,33 +1,44 @@
 """
-Reusable saved-connections list with optional search filter.
+Reusable saved-connections tree with optional search filter.
 
 Used by the connections sidebar panel and the connection picker dialog.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QSettings
+from PyQt6.QtGui import QDrag, QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QLineEdit,
-    QListWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QSizePolicy,
 )
 
-from src.design_system.tokens import get_colors
+from src.design_system.tokens import get_colors, get_tree_stylesheet, SPACING
 from src.language import S
 
+MIME_CONNECTION_NAME = "application/x-connection-name"
+MIME_CONNECTION_GROUP = "application/x-connection-group"
+MIME_DB_TYPE = "application/x-db-type"
+MIME_CONNECTION_COLOR = "application/x-connection-color"
 
-def build_connection_search_text(name: str, config: dict) -> str:
+ConnectionTuple = Tuple[str, str, dict]  # group, name, config
+
+
+def build_connection_search_text(group: str, name: str, config: dict) -> str:
     """Lowercase blob used to match connection picker / sidebar search."""
     if not config:
         return (name or "").lower()
 
     parts: list[str] = [
         name or "",
+        group or "",
         str(config.get("group", "") or ""),
         str(config.get("host", "") or ""),
         str(config.get("database", "") or ""),
@@ -48,21 +59,67 @@ def build_connection_search_text(name: str, config: dict) -> str:
     return " ".join(p.strip() for p in parts if p and str(p).strip()).lower()
 
 
-def _connection_item_classes():
+def _ungrouped_label() -> str:
+    return getattr(S.connection_panel, "ungrouped_label", "(Ungrouped)")
+
+
+def _connection_row_classes():
     from src.ui.components.connection_panel import (
-        ConnectionItem,
         ConnectionItemWidget,
-        DraggableConnectionList,
+        get_db_icon,
         _CONNECTION_ICON_SIZE,
+        _CONNECTION_ROW_HEIGHT,
     )
 
-    return ConnectionItem, ConnectionItemWidget, DraggableConnectionList, _CONNECTION_ICON_SIZE
+    return ConnectionItemWidget, get_db_icon, _CONNECTION_ICON_SIZE, _CONNECTION_ROW_HEIGHT
+
+
+class DraggableConnectionTree(QTreeWidget):
+    """QTreeWidget that allows dragging connection leaves."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.setHeaderHidden(True)
+        self.setRootIsDecorated(True)
+        self.setIndentation(10)
+
+    def startDrag(self, supportedActions):
+        item = self.currentItem()
+        if not item:
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or data.get("type") != "connection":
+            return
+
+        group = data.get("group", "")
+        conn_name = data.get("name", "")
+        config = data.get("config", {}) or {}
+        db_type = config.get("db_type", "mysql")
+
+        from PyQt6.QtCore import QMimeData
+
+        mime_data = QMimeData()
+        mime_data.setData(MIME_CONNECTION_NAME, conn_name.encode("utf-8"))
+        mime_data.setData(MIME_CONNECTION_GROUP, group.encode("utf-8"))
+        mime_data.setData(MIME_DB_TYPE, str(db_type).encode("utf-8"))
+        conn_color = config.get("color", "") or ""
+        if conn_color:
+            mime_data.setData(MIME_CONNECTION_COLOR, conn_color.encode("utf-8"))
+
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        _, get_db_icon, _, _ = _connection_row_classes()
+        icon = get_db_icon(db_type, conn_color or None, size=32)
+        drag.setPixmap(icon.pixmap(32, 32))
+        drag.exec(Qt.DropAction.CopyAction)
 
 
 class SavedConnectionsListView(QWidget):
-    """Scrollable list of saved connections with optional search."""
+    """Scrollable tree of saved connections grouped by folder with optional search."""
 
-    connection_activated = pyqtSignal(str)
+    connection_activated = pyqtSignal(str, str)  # group, name
 
     def __init__(
         self,
@@ -78,8 +135,9 @@ class SavedConnectionsListView(QWidget):
         self._drag_enabled = drag_enabled
         self._list_min_height = list_min_height
         self._bordered = bordered
-        self._all_connections: List[Tuple[str, dict]] = []
+        self._all_connections: List[ConnectionTuple] = []
         self._search_edit: Optional[QLineEdit] = None
+        self._settings = QSettings("DataPyn", "DataPyn")
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -111,77 +169,36 @@ class SavedConnectionsListView(QWidget):
             self._search_edit.textChanged.connect(self._apply_filter)
             layout.addWidget(self._search_edit)
 
-        (
-            _ConnectionItem,
-            _ConnectionItemWidget,
-            _DraggableConnectionList,
-            icon_size,
-        ) = _connection_item_classes()
-
-        self.list_widget = _DraggableConnectionList()
-        self.list_widget.setDragEnabled(self._drag_enabled)
-        self.list_widget.setMinimumHeight(self._list_min_height)
-        self.list_widget.setSizePolicy(
+        self.tree_widget = DraggableConnectionTree()
+        self.tree_widget.setDragEnabled(self._drag_enabled)
+        self.tree_widget.setMinimumHeight(self._list_min_height)
+        self.tree_widget.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        self.list_widget.setIconSize(QSize(icon_size, icon_size))
-        self.list_widget.setSpacing(4 if not self._bordered else 2)
-        self.list_widget.setWordWrap(True)
-        self.list_widget.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.tree_widget.setStyleSheet(self._tree_stylesheet())
+        self.tree_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self.tree_widget, 1)
 
-        border_css = (
-            f"border: 1px solid {colors.border_muted};"
-            if self._bordered
-            else "border: none;"
-        )
-        self.list_widget.setStyleSheet(
-            f"""
-            QListWidget {{
-                background: {colors.bg_primary};
-                {border_css}
+    def _tree_stylesheet(self) -> str:
+        colors = get_colors()
+        stylesheet = get_tree_stylesheet() + f"""
+            QTreeWidget {{
+                padding: {SPACING.space_2}px 0px {SPACING.space_1}px 0px;
+            }}
+            QTreeWidget::item {{
+                padding: {SPACING.space_1}px {SPACING.space_2}px {SPACING.space_1}px 0px;
+            }}
+        """
+        if self._bordered:
+            stylesheet += f"""
+            QTreeWidget {{
+                border: 1px solid {colors.border_muted};
                 border-radius: 8px;
-                padding: 4px;
-            }}
-            QListWidget::item {{
-                padding: 0px 6px;
-                border-radius: 6px;
-                margin: 2px 0px;
-            }}
-            QListWidget::item:selected {{
-                background: rgba(59, 130, 246, 0.25);
-            }}
-            QListWidget::item:hover {{
-                background: {colors.bg_elevated};
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 8px;
-                margin: 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(128, 128, 128, 0.3);
-                border-radius: 4px;
-                min-height: 40px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: rgba(128, 128, 128, 0.5);
-            }}
-            QScrollBar::handle:vertical:pressed {{
-                background: rgba(128, 128, 128, 0.7);
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
             }}
             """
-        )
-        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        layout.addWidget(self.list_widget, 1)
+        return stylesheet
 
-    def refresh(self, connections: List[Tuple[str, dict]]) -> None:
+    def refresh(self, connections: List[ConnectionTuple]) -> None:
         """Replace the full connection set and re-apply the current search filter."""
         self._all_connections = list(connections)
         self._apply_filter()
@@ -190,6 +207,15 @@ class SavedConnectionsListView(QWidget):
         if self._search_edit is not None:
             self._search_edit.clear()
 
+    def _expanded_key(self, group: str) -> str:
+        return f"connections/tree_expanded/{group or '__ungrouped__'}"
+
+    def _is_group_expanded(self, group: str, *, default: bool = True) -> bool:
+        return self._settings.value(self._expanded_key(group), default, type=bool)
+
+    def _set_group_expanded(self, group: str, expanded: bool) -> None:
+        self._settings.setValue(self._expanded_key(group), expanded)
+
     def _apply_filter(self) -> None:
         query = ""
         if self._search_edit is not None:
@@ -197,33 +223,88 @@ class SavedConnectionsListView(QWidget):
 
         if query:
             filtered = [
-                (name, config)
-                for name, config in self._all_connections
-                if query in build_connection_search_text(name, config)
+                (group, name, config)
+                for group, name, config in self._all_connections
+                if query in build_connection_search_text(group, name, config)
             ]
         else:
             filtered = list(self._all_connections)
 
-        self._populate(filtered)
+        self._populate(filtered, force_expand=bool(query))
 
-    def _populate(self, connections: List[Tuple[str, dict]]) -> None:
-        ConnectionItem, ConnectionItemWidget, _, _ = _connection_item_classes()
+    def _populate(self, connections: List[ConnectionTuple], *, force_expand: bool = False) -> None:
+        ConnectionItemWidget, get_db_icon, icon_size, row_height = _connection_row_classes()
+        colors = get_colors()
 
-        self.list_widget.clear()
-        for name, config in connections:
-            if not config:
-                continue
-            item = ConnectionItem(name, config)
-            item.setData(Qt.ItemDataRole.UserRole, name)
-            self.list_widget.addItem(item)
-            widget = ConnectionItemWidget(name, item.group, item.icon)
-            self.list_widget.setItemWidget(item, widget)
+        grouped: Dict[str, List[Tuple[str, dict]]] = defaultdict(list)
+        for group, name, config in connections:
+            if config:
+                grouped[group or ""].append((name, config))
 
-    def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
-        conn_name = None
-        if hasattr(item, "connection_name"):
-            conn_name = item.connection_name
-        else:
-            conn_name = item.data(Qt.ItemDataRole.UserRole)
-        if conn_name:
-            self.connection_activated.emit(conn_name)
+        self.tree_widget.clear()
+        group_keys = sorted(grouped.keys(), key=lambda g: (g == "", g.lower()))
+
+        group_font = QFont()
+        group_font.setPixelSize(13)
+        group_font.setWeight(QFont.Weight.DemiBold)
+
+        for group in group_keys:
+            label = _ungrouped_label() if not group else group
+            group_item = QTreeWidgetItem([label])
+            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "group": group})
+            group_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            )
+            group_item.setFont(0, group_font)
+            group_item.setForeground(0, QBrush(QColor(colors.text_secondary)))
+            group_item.setSizeHint(0, QSize(250, 28))
+            self.tree_widget.addTopLevelItem(group_item)
+
+            expanded = force_expand or self._is_group_expanded(group)
+            group_item.setExpanded(expanded)
+
+            for name, config in sorted(grouped[group], key=lambda item: item[0].lower()):
+                db_type = config.get("db_type", "SQL Server")
+                host = config.get("host", "")
+                database = config.get("database", "")
+                custom_color = config.get("color", "")
+                icon = get_db_icon(
+                    db_type,
+                    custom_color if custom_color else None,
+                    size=icon_size,
+                )
+
+                conn_item = QTreeWidgetItem(group_item)
+                conn_item.setData(
+                    0,
+                    Qt.ItemDataRole.UserRole,
+                    {
+                        "type": "connection",
+                        "group": group,
+                        "name": name,
+                        "config": config,
+                    },
+                )
+                conn_item.setToolTip(0, f"{db_type}\n{host}\n{database}")
+                conn_item.setSizeHint(0, QSize(250, row_height))
+
+                widget = ConnectionItemWidget(name, "", icon)
+                self.tree_widget.setItemWidget(conn_item, 0, widget)
+
+        self.tree_widget.itemExpanded.connect(self._on_group_expanded)
+        self.tree_widget.itemCollapsed.connect(self._on_group_collapsed)
+
+    def _on_group_expanded(self, item: QTreeWidgetItem) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data and data.get("type") == "group":
+            self._set_group_expanded(data.get("group", ""), True)
+
+    def _on_group_collapsed(self, item: QTreeWidgetItem) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data and data.get("type") == "group":
+            self._set_group_expanded(data.get("group", ""), False)
+
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data and data.get("type") == "connection":
+            self.connection_activated.emit(data.get("group", ""), data.get("name", ""))

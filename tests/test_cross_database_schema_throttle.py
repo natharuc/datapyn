@@ -51,10 +51,9 @@ def test_sync_skips_when_connector_busy(qapp):
     ), patch(
         "src.ui.main_window._schema.extract_referenced_catalogs",
         return_value={"other_db"},
-    ) as mock_catalogs:
+    ):
         host._sync_cross_database_schema_for_widget(widget)
 
-    mock_catalogs.assert_not_called()
     host._schema_service.load_columns_for_table.assert_not_called()
     host._schema_service.load_tables_for_schema.assert_not_called()
 

@@ -17,6 +17,7 @@ import logging
 from io import StringIO
 
 from src.language import S
+from src.core.connection_ref import ConnectionRef, resolve_by_name_only
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class Session(QObject):
         self.created_at = datetime.now()
 
         # Connection reference (not the object itself)
+        self._connection_group: Optional[str] = None
         self._connection_name: Optional[str] = None
         self._connector = None
         self._database_context: str = ""
@@ -72,6 +74,21 @@ class Session(QObject):
     @property
     def connection_name(self) -> Optional[str]:
         return self._connection_name
+
+    @property
+    def connection_group(self) -> Optional[str]:
+        return self._connection_group
+
+    @property
+    def connection_ref(self) -> Optional[ConnectionRef]:
+        if not self._connection_name:
+            return None
+        return ConnectionRef(group=self._connection_group or "", name=self._connection_name)
+
+    @property
+    def connection_display(self) -> str:
+        ref = self.connection_ref
+        return ref.display() if ref else ""
 
     @property
     def connector(self):
@@ -210,20 +227,23 @@ class Session(QObject):
                 exc,
             )
 
-    def set_connection(self, connection_name: str, connector):
+    def set_connection(self, connection_name: str, connector, connection_group: str = ""):
         """Sets the connection for this session"""
+        self._connection_group = connection_group or None
         self._connection_name = connection_name
         self._connector = connector
         self._database_context = self._connector_database_context(connector)
+        display = ConnectionRef(group=connection_group or "", name=connection_name).display()
         self.connection_changed.emit(connection_name)
-        self.status_changed.emit(S.session.status_connected_to.format(name=connection_name))
+        self.status_changed.emit(S.session.status_connected_to.format(name=display))
 
-    def connect(self, connection_name: str, password: str = "") -> bool:
+    def connect(self, group_or_name: str, name: str = "", password: str = "") -> bool:
         """
-        Connects the session to a database using ConnectionManager
+        Connects the session to a database using ConnectionManager.
 
         Args:
-            connection_name: Connection name
+            group_or_name: Group name, or connection name when called legacy-style
+            name: Connection name when group is provided
             password: Password (if required)
 
         Returns:
@@ -233,25 +253,28 @@ class Session(QObject):
             from src.database.connection_manager import ConnectionManager
             from src.database.database_connector import DatabaseConnector
 
-            # Disconnect current connection if it exists
             if self._connector:
                 self.clear_connection()
 
-            # Get configuration
             manager = ConnectionManager()
-            config = manager.get_connection_config(connection_name)
+            if name:
+                group = group_or_name or ""
+                config = manager.get_connection_config(group, name)
+                ref = ConnectionRef(group=group, name=name)
+            else:
+                ref = resolve_by_name_only(manager, group_or_name)
+                if ref is None:
+                    logger.error(f"Connection '{group_or_name}' not found")
+                    return False
+                config = manager.get_connection_config(ref.group, ref.name)
 
             if not config:
-                logger.error(f"Connection '{connection_name}' not found")
+                logger.error(f"Connection not found")
                 return False
 
-            # Create new connection
             connector = DatabaseConnector()
-
-            # Use provided password or saved one
             pwd = password if password else config.get("password", "")
 
-            # Connect
             connector.connect(
                 db_type=config["db_type"],
                 host=config["host"],
@@ -267,10 +290,9 @@ class Session(QObject):
 
             if connector.is_connected:
                 self._apply_saved_database_context(connector)
-                self.set_connection(connection_name, connector)
+                self.set_connection(ref.name, connector, ref.group)
                 return True
-            else:
-                return False
+            return False
 
         except Exception as e:
             import traceback
@@ -312,6 +334,7 @@ class Session(QObject):
 
     def clear_connection(self):
         """Removes the connection from this session"""
+        self._connection_group = None
         self._connection_name = None
         self._connector = None
         self._database_context = ""
@@ -386,6 +409,7 @@ class Session(QObject):
         return {
             "session_id": self.session_id,
             "title": self.title,
+            "connection_group": self._connection_group,
             "connection_name": self._connection_name,
             "database_context": self._database_context,
             "code": self._code,  # Compatibility
@@ -405,6 +429,7 @@ class Session(QObject):
     def deserialize(cls, data: Dict[str, Any]) -> "Session":
         """Creates a session from serialized data"""
         session = cls(session_id=data.get("session_id", ""), title=data.get("title", "Script"))
+        session._connection_group = data.get("connection_group")
         session._connection_name = data.get("connection_name")
         session._database_context = data.get("database_context", "") or ""
         session._code = data.get("code", "")
@@ -429,19 +454,25 @@ class Session(QObject):
         Reconnects to the database if necessary.
         """
         if self._connection_name and connection_manager:
-            # First try to get existing connection
-            connector = connection_manager.get_connection(self._connection_name)
+            ref = self.connection_ref
+            if ref is None:
+                ref = resolve_by_name_only(connection_manager, self._connection_name)
+            if ref is None:
+                return
+
+            connector = connection_manager.get_connection(ref.group, ref.name)
             if connector and connector.is_connected():
+                self._connection_group = ref.group or None
+                self._connection_name = ref.name
                 self._apply_saved_database_context(connector)
                 self._connector = connector
                 self.connection_changed.emit(self._connection_name)
             elif reconnect:
-                # Try to reconnect automatically
                 try:
-                    config = connection_manager.get_connection_config(self._connection_name)
+                    config = connection_manager.get_connection_config(ref.group, ref.name)
                     if config:
                         connector = connection_manager.create_connection(
-                            self._connection_name,
+                            ref,
                             config["db_type"],
                             config["host"],
                             config["port"],
@@ -454,12 +485,16 @@ class Session(QObject):
                             http_path=config.get("http_path", ""),
                         )
                         if connector:
+                            self._connection_group = ref.group or None
+                            self._connection_name = ref.name
                             self._apply_saved_database_context(connector)
                             self._connector = connector
                             self.connection_changed.emit(self._connection_name)
                 except Exception as e:
-                    logger.error(f"Error reconnecting session '{self.title}' to '{self._connection_name}': {e}")
-                    # Clear connection if it fails
+                    logger.error(
+                        f"Error reconnecting session '{self.title}' to '{ref.display()}': {e}"
+                    )
+                    self._connection_group = None
                     self._connection_name = None
 
     # === CLEANUP ===

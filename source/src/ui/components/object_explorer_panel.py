@@ -509,6 +509,10 @@ class ObjectExplorerPanel(QWidget):
         
         # Update connection header
         db_name = schema.get("database", "") if schema else ""
+        if self._db_type == "databricks":
+            context_label = str(schema.get("current_context", "") or "").strip()
+            if context_label:
+                db_name = context_label
         if connection_name and db_name:
             self._conn_label.setText(S.object_explorer.header_connection.format(
                 connection=connection_name, database=db_name
@@ -959,11 +963,9 @@ class ObjectExplorerPanel(QWidget):
                 font = cat_item.font(0)
                 font.setBold(True)
                 cat_item.setFont(0, font)
-                
-                # For current catalog, show schemas if we have table data
-                if tables:
-                    # Extract unique schemas from tables
-                    schemas = self._schemas_for_catalog(catalog, tables)
+
+                schemas = self._schemas_for_catalog(catalog, tables)
+                if schemas:
                     for schema_name in schemas:
                         schema_item = QTreeWidgetItem(cat_item, [schema_name])
                         schema_item.setData(0, Qt.ItemDataRole.UserRole, {
@@ -971,12 +973,9 @@ class ObjectExplorerPanel(QWidget):
                         })
                         if HAS_QTAWESOME:
                             schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
-                        # Add placeholder for tables (lazy load)
                         self._add_placeholder_child(schema_item)
                 else:
-                    # No tables loaded yet, add placeholder
                     self._add_placeholder_child(cat_item)
-                # Auto-expand current catalog
                 cat_item.setExpanded(True)
             else:
                 # Non-current catalogs get placeholder for lazy loading
@@ -1644,6 +1643,29 @@ class ObjectExplorerPanel(QWidget):
                 names.append(data.get("name", ""))
         return [n for n in names if n]
 
+    def notify_schema_busy(self, cooldown_key: tuple, retry_callback=None) -> None:
+        """Show a short busy message and optionally retry metadata load."""
+        self.info_label.setText(S.object_explorer.schema_busy)
+        self.info_label.setStyleSheet("color: #dcdc8b; font-size: 11px;")
+        if retry_callback is None:
+            return
+        pending = getattr(self, "_schema_busy_retries", None)
+        if pending is None:
+            pending = {}
+            self._schema_busy_retries = pending
+        if cooldown_key in pending:
+            return
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def _retry():
+            pending.pop(cooldown_key, None)
+            retry_callback()
+
+        timer.timeout.connect(_retry)
+        pending[cooldown_key] = timer
+        timer.start(5000)
+
     def _on_context_menu(self, pos):
         """Menu de contexto"""
         item = self.tree.itemAt(pos)
@@ -1824,10 +1846,15 @@ class ObjectExplorerPanel(QWidget):
             act_copy.triggered.connect(lambda _, n=name: QApplication.clipboard().setText(n))
 
         elif item_type == "schema" and self._db_type == "databricks":
-            # Switch to this Databricks schema
+            catalog_name = data.get("catalog", "") or (
+                (self._current_schema or {}).get("database", "")
+            )
+            switch_target = (
+                f"{catalog_name}.{name}" if catalog_name and name else f"SCHEMA:{name}"
+            )
             act_switch = menu.addAction(S.object_explorer.ctx_use_schema.format(name=name))
             act_switch.triggered.connect(
-                lambda _, n=name: self.database_switch_requested.emit(f"SCHEMA:{n}")
+                lambda _, target=switch_target: self.database_switch_requested.emit(target)
             )
 
             menu.addSeparator()

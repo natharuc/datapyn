@@ -16,6 +16,7 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
+from src.core.connection_ref import ConnectionRef
 from src.language import S
 from src.services.entity_metadata_service import build_display_data_type
 
@@ -27,6 +28,15 @@ SCHEMA_LAZY_FULL = "full"
 
 def is_schema_busy_result(result) -> bool:
     return result is SCHEMA_BUSY_SENTINEL
+
+
+def schema_cache_identity(connection_name: str, connection_group: str = "") -> str:
+    """Stable cache identity for a saved connection (group-aware)."""
+    if not connection_name:
+        return ""
+    if connection_group:
+        return ConnectionRef(group=connection_group, name=connection_name).storage_key()
+    return connection_name
 
 
 def _sql_literal(value: str) -> str:
@@ -155,6 +165,26 @@ class SchemaWorker(QObject):
                             logger.info(f"[SchemaService] Databricks catalogs: {schema['databases']}")
                 except Exception as e:
                     logger.debug(f"Error loading database list: {e}")
+
+            if self._cancelled:
+                return
+
+            if load_databases and schema.get("db_type") == "databricks" and schema.get("database"):
+                try:
+                    current_catalog = schema["database"]
+                    query = f"SHOW SCHEMAS IN {_quote_databricks_identifier(current_catalog)}"
+                    df = self.connector.execute_query(query)
+                    if df is not None and len(df) > 0:
+                        catalog_schemas = schema.setdefault("catalog_schemas", {})
+                        schemas = catalog_schemas.setdefault(current_catalog, [])
+                        for _, row in df.iterrows():
+                            schema_name = str(row.iloc[0])
+                            if schema_name.lower() not in ("information_schema",):
+                                if schema_name not in schemas:
+                                    schemas.append(schema_name)
+                        catalog_schemas[current_catalog] = sorted(schemas)
+                except Exception as e:
+                    logger.debug(f"Error loading Databricks schemas for {schema.get('database')}: {e}")
 
             if self._cancelled:
                 return
@@ -445,10 +475,17 @@ class SchemaService(QObject):
         self._cache: Dict[str, dict] = {}
 
     def _cache_key(
-        self, connection_name: str, session_id: str = "", block_key: str = ""
+        self,
+        connection_name: str,
+        session_id: str = "",
+        block_key: str = "",
+        connection_group: str = "",
     ) -> str:
         """Build cache key (optional per-session and per-block isolation)."""
-        key = f"{session_id}:{connection_name}" if session_id else connection_name
+        identity = schema_cache_identity(connection_name, connection_group)
+        key = f"{session_id}:{identity}" if session_id and identity else identity
+        if not key:
+            key = connection_name
         if block_key:
             key = f"{key}:{block_key}"
         return key
@@ -459,6 +496,7 @@ class SchemaService(QObject):
         connection_name: str = "",
         session_id: str = "",
         block_key: str = "",
+        connection_group: str = "",
         *,
         lazy: bool = True,
         lazy_mode: str | None = None,
@@ -484,7 +522,9 @@ class SchemaService(QObject):
         self._cancel_pending_workers()
 
         # Check cache (per-session / per-block key)
-        cache_key = self._cache_key(connection_name, session_id, block_key)
+        cache_key = self._cache_key(
+            connection_name, session_id, block_key, connection_group
+        )
         if connection_name and cache_key in self._cache:
             cached = self._cache[cache_key]
             if mode == SCHEMA_LAZY_FULL or (
@@ -507,10 +547,10 @@ class SchemaService(QObject):
 
             # Connect signals
             thread.started.connect(worker.run)
-            def handle_finished(schema, service=self, bk=block_key):
+            def handle_finished(schema, service=self, bk=block_key, cg=connection_group):
                 if sip.isdeleted(service) or service._shutting_down:
                     return
-                service._on_finished(schema, connection_name, session_id, bk)
+                service._on_finished(schema, connection_name, session_id, bk, cg)
 
             def cleanup_thread(service=self, active_thread=thread, active_worker=worker):
                 if sip.isdeleted(service):
@@ -549,6 +589,7 @@ class SchemaService(QObject):
         connection_name: str,
         session_id: str = "",
         block_key: str = "",
+        connection_group: str = "",
     ):
         """Schema loaded successfully"""
         if self._shutting_down:
@@ -556,7 +597,9 @@ class SchemaService(QObject):
 
         try:
             if connection_name:
-                cache_key = self._cache_key(connection_name, session_id, block_key)
+                cache_key = self._cache_key(
+                    connection_name, session_id, block_key, connection_group
+                )
                 self._cache[cache_key] = schema
             self.schema_loaded.emit(schema, connection_name, session_id, block_key)
         except RuntimeError:
@@ -578,33 +621,56 @@ class SchemaService(QObject):
         connection_name: str,
         session_id: str = "",
         block_key: str = "",
+        connection_group: str = "",
     ) -> Optional[dict]:
         """Return cached schema or None."""
-        cache_key = self._cache_key(connection_name, session_id, block_key)
-        return self._cache.get(cache_key)
+        cache_key = self._cache_key(
+            connection_name, session_id, block_key, connection_group
+        )
+        cached = self._cache.get(cache_key)
+        if cached is not None or connection_group or not connection_name:
+            return cached
+        if session_id:
+            legacy_key = self._cache_key(connection_name, session_id, block_key)
+            return self._cache.get(legacy_key)
+        return None
 
     def invalidate_cache(
         self,
         connection_name: str = "",
         session_id: str = "",
         block_key: str = "",
+        connection_group: str = "",
     ):
         """Invalidate cache for one connection/session/block or all."""
+        identity = schema_cache_identity(connection_name, connection_group)
         if connection_name and (session_id or block_key):
-            cache_key = self._cache_key(connection_name, session_id, block_key)
+            cache_key = self._cache_key(
+                connection_name, session_id, block_key, connection_group
+            )
             self._cache.pop(cache_key, None)
             if not block_key and session_id:
                 # Also drop per-block entries for this session connection
-                prefix = f"{session_id}:{connection_name}:"
-                for key in [k for k in self._cache if k.startswith(prefix)]:
-                    self._cache.pop(key, None)
+                prefixes = {f"{session_id}:{identity}:"}
+                if identity != connection_name:
+                    prefixes.add(f"{session_id}:{connection_name}:")
+                for prefix in prefixes:
+                    for key in [k for k in self._cache if k.startswith(prefix)]:
+                        self._cache.pop(key, None)
         elif connection_name and session_id:
-            cache_key = self._cache_key(connection_name, session_id)
+            cache_key = self._cache_key(
+                connection_name, session_id, connection_group=connection_group
+            )
             self._cache.pop(cache_key, None)
+            legacy_key = self._cache_key(connection_name, session_id)
+            self._cache.pop(legacy_key, None)
         elif connection_name:
             keys_to_remove = [
                 key for key in self._cache
-                if key == connection_name or key.endswith(f":{connection_name}")
+                if key == connection_name
+                or key == identity
+                or key.endswith(f":{connection_name}")
+                or key.endswith(f":{identity}")
             ]
             for key in keys_to_remove:
                 self._cache.pop(key, None)
@@ -1040,9 +1106,17 @@ class SchemaService(QObject):
         self._active_threads.append((thread, worker))
         thread.start()
 
-    def update_cached_schema(self, connection_name: str, schema: dict, session_id: str = ""):
+    def update_cached_schema(
+        self,
+        connection_name: str,
+        schema: dict,
+        session_id: str = "",
+        connection_group: str = "",
+    ):
         """Replace cached schema for a connection/session after lazy metadata loads."""
         if not connection_name or not isinstance(schema, dict):
             return
-        cache_key = self._cache_key(connection_name, session_id)
+        cache_key = self._cache_key(
+            connection_name, session_id, connection_group=connection_group
+        )
         self._cache[cache_key] = schema

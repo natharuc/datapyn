@@ -6,6 +6,7 @@ from src.ui.components.saved_connections_list import build_connection_search_tex
 class TestBuildConnectionSearchText:
     def test_includes_name_and_group(self):
         blob = build_connection_search_text(
+            "MAG",
             "LOCAL",
             {"group": "MAG", "db_type": "mysql", "host": "10.0.0.1", "database": "app"},
         )
@@ -14,6 +15,7 @@ class TestBuildConnectionSearchText:
 
     def test_includes_host_database_type_username_port(self):
         blob = build_connection_search_text(
+            "",
             "PROD",
             {
                 "group": "",
@@ -32,6 +34,7 @@ class TestBuildConnectionSearchText:
 
     def test_includes_databricks_http_path(self):
         blob = build_connection_search_text(
+            "",
             "DBX",
             {"db_type": "databricks", "http_path": "/sql/1.0/endpoints/abc"},
         )
@@ -39,6 +42,6 @@ class TestBuildConnectionSearchText:
         assert "/sql/1.0/endpoints/abc" in blob
 
     def test_query_matches_host(self):
-        blob = build_connection_search_text("X", {"host": "unique-host-42"})
+        blob = build_connection_search_text("", "X", {"host": "unique-host-42"})
         assert "unique-host-42" in blob
         assert "unique-host" in blob

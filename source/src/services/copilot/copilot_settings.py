@@ -115,11 +115,18 @@ class CopilotSettingsManager:
     
     def on_chat_authenticated(self, username: str = ""):
         """Call when Chat authentication succeeds."""
+        login = str(username or "").strip()
+        if (
+            self.chat_was_authenticated
+            and not self.chat_user_logged_out
+            and self.chat_username == login
+        ):
+            return
         self._settings.setValue("chat/was_authenticated", "true")
         self._settings.setValue("chat/user_logged_out", "false")
-        self._settings.setValue("chat/username", username)
-        self.register_chat_account(username)
-        logger.info(f"Chat auth state saved: authenticated as {username}")
+        self._settings.setValue("chat/username", login)
+        self.register_chat_account(login)
+        logger.info(f"Chat auth state saved: authenticated as {login}")
 
     def register_chat_account(self, username: str = ""):
         """Remember a GitHub account that successfully signed in to Copilot Chat."""

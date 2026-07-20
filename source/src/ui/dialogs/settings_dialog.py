@@ -21,7 +21,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QKeySequenceEdit,
     QGroupBox,
-    QTabWidget,
     QWidget,
     QComboBox,
     QSpinBox,
@@ -32,10 +31,16 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QLineEdit,
     QStackedWidget,
+    QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSettings, QObject, QThread, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSignal, QSettings, QObject, QThread, pyqtSlot, QPoint
 from PyQt6.QtGui import QKeySequence, QColor, QBrush
 from src.core import ShortcutManager
+from src.core.parameter_settings import (
+    DEFAULT_SHARED_PARAMETER_DELIMITER,
+    get_shared_parameter_delimiter,
+    set_shared_parameter_delimiter,
+)
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
 import weakref
@@ -43,6 +48,8 @@ import weakref
 from src.design_system.frameless_dialog import widget_is_valid
 from src.design_system.tokens import get_colors, RADIUS
 from src.services.copilot.copilot_settings import get_copilot_settings
+from src.ui.components.settings_nav import SettingsNavNode, SettingsNavPanel, section_nav_label
+from src.ui.components.inputs import SearchInput
 from src.ui.components.toggle_switch import LabeledToggleSwitch
 from src.services.notification_delivery_service import (
     EMAIL_PASSWORD_KEY,
@@ -123,15 +130,18 @@ class SettingsDialog(QDialog):
         self._pynia_model_thread = None
         self._pynia_model_worker = None
         self._notification_delivery_service = get_notification_delivery_service(self)
+        self._section_widgets: dict[str, QWidget] = {}
+        self._page_scroll_areas: dict[str, QScrollArea] = {}
+        self._page_order: list[str] = []
         self._setup_ui()
         self._load_shortcuts()
         self._notification_delivery_service.delivery_succeeded.connect(self._on_notification_delivery_success)
         self._notification_delivery_service.delivery_failed.connect(self._on_notification_delivery_failure)
 
     def _setup_ui(self):
-        """Sets up the UI with tabs"""
+        """Sets up the UI with sidebar navigation and stacked content."""
         self.setWindowTitle(S.settings.title)
-        self.resize(750, 550)
+        self.resize(920, 620)
 
         from src.design_system.frameless_dialog import install_frameless_shell
 
@@ -140,75 +150,82 @@ class SettingsDialog(QDialog):
         layout = install_frameless_shell(
             self,
             S.settings.title,
-            min_width=700,
-            min_height=500,
+            min_width=880,
+            min_height=520,
             content_margins=(20, 16, 20, 20),
             content_spacing=15,
         )
 
-        # Tab widget
-        self.tabs = QTabWidget()
-        self.tabs.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border: none;
-                border-top: 1px solid {colors.border_default};
-                background-color: {colors.bg_primary};
-            }}
-            QTabBar::tab {{
-                background: transparent;
-                color: {colors.text_secondary};
-                padding: 10px 22px;
-                border: none;
-                border-bottom: 2px solid transparent;
-                margin-right: 4px;
-            }}
-            QTabBar::tab:selected {{
-                color: {colors.text_primary};
-                border-bottom: 2px solid {colors.interactive_primary};
-            }}
-            QTabBar::tab:hover:!selected {{
-                color: {colors.text_primary};
-                background-color: {colors.bg_elevated};
-            }}
-        """)
+        search_placeholder = (
+            S.settings.search_placeholder
+            if hasattr(S.settings, "search_placeholder")
+            else "Search settings..."
+        )
+        self._settings_search = SearchInput(search_placeholder, consume_return=True)
+        layout.addWidget(self._settings_search)
 
-        # General tab
+        no_results = (
+            S.settings.search_no_results
+            if hasattr(S.settings, "search_no_results")
+            else "No settings match your search"
+        )
+
+        self._settings_body = QWidget()
+        body = QHBoxLayout(self._settings_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        self._nav_panel = SettingsNavPanel()
+        self._nav_panel.set_no_results_text(no_results)
+        body.addWidget(self._nav_panel)
+
+        self._content_stack = QStackedWidget()
+        self._content_stack.setStyleSheet(
+            f"QStackedWidget {{ background-color: {colors.bg_primary}; }}"
+        )
+        body.addWidget(self._content_stack, 1)
+
+        layout.addWidget(self._settings_body, 1)
+
+        self._search_empty_label = QLabel(no_results)
+        self._search_empty_label.setWordWrap(True)
+        self._search_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._search_empty_label.setStyleSheet(
+            f"color: {colors.text_tertiary}; font-size: 12px; padding: 24px;"
+        )
+        self._search_empty_label.hide()
+        layout.addWidget(self._search_empty_label, 1)
+
         self._setup_general_tab()
-
-        # Shortcuts tab
         self._setup_shortcuts_tab()
-
-        # Pynia tab (connectors + inline autocomplete)
         self._setup_pynia_tab()
-
-        # Notifications tab
         self._setup_notifications_tab()
-
-        # Session variables / Parquet storage tab
         self._setup_variables_storage_tab()
-
-        # Workspace tab
         self._setup_workspace_tab()
 
-        layout.addWidget(self.tabs)
+        self._build_settings_nav()
+        self._nav_panel.node_selected.connect(self._on_settings_nav_selected)
+        self._settings_search.textChanged.connect(self._on_settings_search_text_changed)
 
-        # Select initial tab if specified
+        initial_page = "general"
         if self._initial_tab:
-            tab_map = {
-                "general": 0,
-                "shortcuts": 1,
-                "pynia": 2,
-                "notifications": 3,
-                "variables": 4,
-                "variables_storage": 4,
-                "workspace": 5,
-                "copilot": 2,
+            page_map = {
+                "general": "general",
+                "shortcuts": "shortcuts",
+                "pynia": "pynia",
+                "notifications": "notifications",
+                "variables": "variables",
+                "variables_storage": "variables",
+                "workspace": "workspace",
+                "copilot": "pynia",
             }
-            if self._initial_tab in tab_map:
-                self.tabs.setCurrentIndex(tab_map[self._initial_tab])
+            initial_page = page_map.get(self._initial_tab, "general")
+        self.navigate_to(initial_page)
 
         # Buttons
-        btn_layout = QHBoxLayout()
+        self._settings_footer = QWidget()
+        btn_layout = QHBoxLayout(self._settings_footer)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
         btn_layout.setSpacing(10)
 
         btn_reset = QPushButton(S.settings.btn_restore_defaults)
@@ -266,7 +283,14 @@ class SettingsDialog(QDialog):
         btn_save.clicked.connect(self._save_all)
         btn_layout.addWidget(btn_save)
 
-        layout.addLayout(btn_layout)
+        layout.addWidget(self._settings_footer)
+
+    def _apply_search_results_ui(self, query: str, first_match: str | None) -> None:
+        """Hide settings chrome when the search has no matches."""
+        empty = bool(query) and first_match is None
+        self._settings_body.setVisible(not empty)
+        self._search_empty_label.setVisible(empty)
+        self._settings_footer.setVisible(not empty)
 
     # ==================== SHARED STYLE HELPERS ====================
 
@@ -364,6 +388,7 @@ class SettingsDialog(QDialog):
 
     def _make_label(self, text: str, colors, fixed_width: int = 0) -> QLabel:
         lbl = QLabel(text)
+        lbl.setWordWrap(True)
         lbl.setStyleSheet(self._get_label_style(colors))
         if fixed_width:
             lbl.setFixedWidth(fixed_width)
@@ -371,6 +396,7 @@ class SettingsDialog(QDialog):
 
     def _make_hint(self, text: str, colors) -> QLabel:
         lbl = QLabel(text)
+        lbl.setWordWrap(True)
         lbl.setStyleSheet(self._get_hint_style(colors))
         return lbl
 
@@ -397,6 +423,282 @@ class SettingsDialog(QDialog):
         scroll.setWidget(content)
         return scroll
 
+    def _add_settings_page(self, page_id: str, page: QWidget, *, wrap_scroll: bool = True) -> QWidget:
+        """Register a settings page in the content stack."""
+        if wrap_scroll:
+            container = self._wrap_scroll_tab(page)
+        else:
+            container = page
+        self._page_scroll_areas[page_id] = container if isinstance(container, QScrollArea) else None
+        self._content_stack.addWidget(container)
+        self._page_order.append(page_id)
+        return container
+
+    def _register_section(self, section_id: str, widget: QWidget) -> None:
+        self._section_widgets[section_id] = widget
+
+    def navigate_to(self, page_id: str, section_id: str | None = None) -> None:
+        """Show a settings page and optionally scroll to a section."""
+        if page_id not in self._page_order:
+            return
+        if section_id is None:
+            section_id = self._default_section_for_page(page_id)
+        target_node = section_id or page_id
+        self._nav_panel.select_node(target_node)
+        self._show_settings_page(page_id, section_id)
+
+    def _default_section_for_page(self, page_id: str) -> str | None:
+        return {
+            "general": "general.language",
+            "shortcuts": "shortcuts",
+            "pynia": "pynia.connectors",
+            "notifications": "notifications.general",
+            "variables": "variables.persistence",
+            "workspace": "workspace.current",
+        }.get(page_id)
+
+    def _show_settings_page(self, page_id: str, section_id: str | None = None) -> None:
+        if page_id not in self._page_order:
+            return
+        self._content_stack.setCurrentIndex(self._page_order.index(page_id))
+        scroll_target = section_id or page_id
+        widget = self._section_widgets.get(scroll_target)
+        scroll = self._page_scroll_areas.get(page_id)
+        if scroll:
+            self._scroll_to_section(scroll, widget)
+        query = self._nav_panel.current_filter_query()
+        if page_id == "shortcuts" and query:
+            self._filter_shortcuts_table(query)
+
+    def _scroll_to_section(self, scroll: QScrollArea, widget: QWidget | None, margin: int = 16) -> None:
+        """Scroll vertically to a section without shifting content horizontally."""
+        if scroll is None:
+            return
+        scroll.horizontalScrollBar().setValue(0)
+        if widget is None:
+            scroll.verticalScrollBar().setValue(0)
+            return
+        content = scroll.widget()
+        if content is None:
+            return
+        widget_top = widget.mapTo(content, QPoint(0, 0)).y()
+        bar = scroll.verticalScrollBar()
+        bar.setValue(max(0, widget_top - margin))
+
+    def _on_settings_nav_selected(self, node_id: str) -> None:
+        node = self._nav_panel.node_by_id(node_id)
+        if node is None:
+            return
+        if node.is_category:
+            children = self._nav_panel.child_node_ids(node.id)
+            if children:
+                self._nav_panel.select_node(children[0])
+                self._show_settings_page(self._nav_panel.node_by_id(children[0]).page_id, children[0])
+            else:
+                self._show_settings_page(node.page_id, node.id)
+            return
+        self._show_settings_page(node.page_id, node.id)
+
+    def _on_settings_search_text_changed(self, text: str) -> None:
+        first_match = self._nav_panel.filter_text(text)
+        self._apply_search_results_ui((text or "").strip(), first_match)
+        self._on_settings_search_changed(text)
+
+    def _on_settings_search_changed(self, text: str) -> None:
+        query = (text or "").strip().lower()
+        if not query:
+            self._filter_shortcuts_table("")
+            return
+        if "shortcuts" in self._page_order and self._content_stack.currentIndex() == self._page_order.index("shortcuts"):
+            self._filter_shortcuts_table(query)
+
+    def _filter_shortcuts_table(self, query: str) -> None:
+        if not hasattr(self, "table"):
+            return
+        needle = (query or "").strip().lower()
+        for row in range(self.table.rowCount()):
+            action_item = self.table.item(row, 0)
+            key_item = self.table.item(row, 1)
+            if action_item is None or key_item is None:
+                self.table.setRowHidden(row, bool(needle))
+                continue
+            haystack = f"{action_item.text()} {key_item.text()}".lower()
+            self.table.setRowHidden(row, bool(needle) and needle not in haystack)
+
+    def _build_settings_nav(self) -> None:
+        shortcut_keywords = [
+            getattr(S.settings.shortcut_actions, key, key)
+            for key in dir(S.settings.shortcut_actions)
+            if not key.startswith("_")
+        ]
+        nodes = [
+            SettingsNavNode(
+                id="general",
+                label=S.settings.tab_general,
+                page_id="general",
+                is_category=True,
+                keywords=["language", "idioma", "display", "grid", "connection", "timeout", "parameter", "editor", "monaco"],
+            ),
+            SettingsNavNode(
+                id="general.language",
+                label=section_nav_label("section_language", S.settings.section_language),
+                page_id="general",
+                parent_id="general",
+                keywords=["language", "idioma", "locale", S.settings.label_language],
+            ),
+            SettingsNavNode(
+                id="general.display",
+                label=section_nav_label("section_display", getattr(S.settings, "section_display", "Display")),
+                page_id="general",
+                parent_id="general",
+                keywords=["grid", "rows", "display", "limit", getattr(S.settings, "label_grid_row_limit", "")],
+            ),
+            SettingsNavNode(
+                id="general.connections",
+                label=section_nav_label("section_connections", getattr(S.settings, "section_connections", "Connections")),
+                page_id="general",
+                parent_id="general",
+                keywords=["idle", "timeout", "connection", "sleep", getattr(S.settings, "label_idle_timeout", "")],
+            ),
+            SettingsNavNode(
+                id="general.parameters",
+                label=section_nav_label("section_parameters", getattr(S.settings, "section_parameters", "Parameters")),
+                page_id="general",
+                parent_id="general",
+                keywords=["delimiter", "parameter", "shared", getattr(S.settings, "label_shared_delimiter", "")],
+            ),
+            SettingsNavNode(
+                id="general.editor",
+                label=section_nav_label("section_editor", getattr(S.settings, "section_editor", "Code Editor")),
+                page_id="general",
+                parent_id="general",
+                keywords=["monaco", "editor", "code", "scintilla"],
+            ),
+            SettingsNavNode(
+                id="shortcuts",
+                label=S.settings.tab_shortcuts,
+                page_id="shortcuts",
+                keywords=["keyboard", "shortcut", "atalho", "f5"] + shortcut_keywords,
+            ),
+            SettingsNavNode(
+                id="pynia",
+                label=S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia",
+                page_id="pynia",
+                is_category=True,
+                keywords=["pynia", "copilot", "ai", "openai", "anthropic", "autocomplete"],
+            ),
+            SettingsNavNode(
+                id="pynia.connectors",
+                label=section_nav_label(
+                    "section_connectors",
+                    getattr(S.pynia, "section_connectors", "Connectors") if hasattr(S, "pynia") else "Connectors",
+                ),
+                page_id="pynia",
+                parent_id="pynia",
+                keywords=["connector", "token", "copilot", "github", "openai", "openrouter", "anthropic"],
+            ),
+            SettingsNavNode(
+                id="pynia.autocomplete",
+                label=section_nav_label(
+                    "section_autocomplete",
+                    getattr(S.pynia, "section_autocomplete", "Inline Autocomplete") if hasattr(S, "pynia") else "Inline Autocomplete",
+                ),
+                page_id="pynia",
+                parent_id="pynia",
+                keywords=["autocomplete", "inline", "ghost", "model", "completion"],
+            ),
+            SettingsNavNode(
+                id="notifications",
+                label=S.settings.tab_notifications if hasattr(S.settings, "tab_notifications") else "Notifications",
+                page_id="notifications",
+                is_category=True,
+                keywords=["notification", "sound", "telegram", "email", "template"],
+            ),
+            SettingsNavNode(
+                id="notifications.general",
+                label=section_nav_label("section_notifications", S.settings.section_notifications),
+                page_id="notifications",
+                parent_id="notifications",
+                keywords=["enabled", "sound", "notification"],
+            ),
+            SettingsNavNode(
+                id="notifications.template",
+                label=section_nav_label("section_notification_template", S.settings.section_notification_template),
+                page_id="notifications",
+                parent_id="notifications",
+                keywords=["template", "message", "success", "error"],
+            ),
+            SettingsNavNode(
+                id="notifications.telegram",
+                label=section_nav_label("section_notification_telegram", S.settings.section_notification_telegram),
+                page_id="notifications",
+                parent_id="notifications",
+                keywords=["telegram", "bot", "chat id"],
+            ),
+            SettingsNavNode(
+                id="notifications.email",
+                label=section_nav_label("section_notification_email", S.settings.section_notification_email),
+                page_id="notifications",
+                parent_id="notifications",
+                keywords=["email", "smtp", "tls", "ssl"],
+            ),
+            SettingsNavNode(
+                id="variables",
+                label=S.settings.tab_variables_storage if hasattr(S.settings, "tab_variables_storage") else "Variables",
+                page_id="variables",
+                is_category=True,
+                keywords=["variable", "parquet", "dataframe", "session", "storage", "disk"],
+            ),
+            SettingsNavNode(
+                id="variables.persistence",
+                label=section_nav_label(
+                    "section_variables_storage",
+                    getattr(S.settings, "section_variables_storage", "Variable Persistence"),
+                ),
+                page_id="variables",
+                parent_id="variables",
+                keywords=["persist", "restore", "parquet", "dataframe"],
+            ),
+            SettingsNavNode(
+                id="variables.disk",
+                label=section_nav_label(
+                    "section_variables_disk_usage",
+                    getattr(S.settings, "section_variables_disk_usage", "Disk Usage"),
+                ),
+                page_id="variables",
+                parent_id="variables",
+                keywords=["disk", "usage", "storage", "size"],
+            ),
+            SettingsNavNode(
+                id="workspace",
+                label=S.settings.tab_workspace if hasattr(S.settings, "tab_workspace") else "Workspace",
+                page_id="workspace",
+                is_category=True,
+                keywords=["workspace", "profile", "folder"],
+            ),
+            SettingsNavNode(
+                id="workspace.current",
+                label=section_nav_label(
+                    "section_workspace_current",
+                    getattr(S.settings, "section_workspace_current", "Current Workspace"),
+                ),
+                page_id="workspace",
+                parent_id="workspace",
+                keywords=["current", "path", "folder"],
+            ),
+            SettingsNavNode(
+                id="workspace.saved",
+                label=section_nav_label(
+                    "section_workspaces",
+                    getattr(S.settings, "section_workspaces", "Saved Workspaces"),
+                ),
+                page_id="workspace",
+                parent_id="workspace",
+                keywords=["saved", "duplicate", "add", "remove"],
+            ),
+        ]
+        self._nav_panel.register_nodes(nodes)
+
     def _make_section_card(self, title: str, colors) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
         card.setObjectName("settingsSectionCard")
@@ -410,6 +712,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         if title:
             heading = QLabel(title)
             heading.setStyleSheet(
@@ -470,6 +773,7 @@ class SettingsDialog(QDialog):
         )
         lang_layout.addWidget(self._make_hint(S.settings.language_restart_hint, colors))
         general_layout.addWidget(lang_card)
+        self._register_section("general.language", lang_card)
 
         display_card, display_layout = self._make_section_card(
             S.settings.section_display if hasattr(S.settings, "section_display") else "DISPLAY",
@@ -498,6 +802,7 @@ class SettingsDialog(QDialog):
         ))
 
         general_layout.addWidget(display_card)
+        self._register_section("general.display", display_card)
 
         connections_card, connections_layout = self._make_section_card(
             S.settings.section_connections if hasattr(S.settings, "section_connections") else "CONNECTIONS",
@@ -527,6 +832,34 @@ class SettingsDialog(QDialog):
             colors,
         ))
         general_layout.addWidget(connections_card)
+        self._register_section("general.connections", connections_card)
+
+        params_card, params_layout = self._make_section_card(
+            S.settings.section_parameters if hasattr(S.settings, "section_parameters")
+            else "PARAMETERS",
+            colors,
+        )
+        self.shared_delimiter_edit = QLineEdit()
+        self.shared_delimiter_edit.setMinimumWidth(220)
+        self.shared_delimiter_edit.setStyleSheet(input_style)
+        self.shared_delimiter_edit.setText(get_shared_parameter_delimiter())
+        self.shared_delimiter_edit.setPlaceholderText(DEFAULT_SHARED_PARAMETER_DELIMITER)
+        params_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_shared_delimiter if hasattr(S.settings, "label_shared_delimiter")
+                else "Shared parameter delimiter:",
+                self.shared_delimiter_edit,
+                colors,
+                label_width=220,
+            )
+        )
+        params_layout.addWidget(self._make_hint(
+            S.settings.shared_delimiter_hint if hasattr(S.settings, "shared_delimiter_hint")
+            else "Use name as the parameter placeholder (e.g. {{name}}, {name}, ::name::). Notifications still use {{...}}.",
+            colors,
+        ))
+        general_layout.addWidget(params_card)
+        self._register_section("general.parameters", params_card)
 
         editor_card, editor_layout = self._make_section_card(
             S.settings.section_editor if hasattr(S.settings, "section_editor") else "CODE EDITOR",
@@ -539,9 +872,10 @@ class SettingsDialog(QDialog):
         ))
         editor_layout.addWidget(self._make_hint("Powered by Monaco (VS Code editor engine)", colors))
         general_layout.addWidget(editor_card)
+        self._register_section("general.editor", editor_card)
 
         general_layout.addStretch()
-        self.tabs.addTab(self._wrap_scroll_tab(page), S.settings.tab_general)
+        self._add_settings_page("general", page)
 
     def _setup_shortcuts_tab(self):
         """Sets up the Shortcuts tab"""
@@ -590,7 +924,8 @@ class SettingsDialog(QDialog):
         """)
         shortcuts_layout.addWidget(self.table)
 
-        self.tabs.addTab(self._wrap_scroll_tab(page), S.settings.tab_shortcuts)
+        self._add_settings_page("shortcuts", page)
+        self._register_section("shortcuts", self.table)
 
     def _setup_copilot_tab(self):
         """Sets up the Copilot tab with Chat and Autocomplete settings."""
@@ -822,6 +1157,7 @@ class SettingsDialog(QDialog):
         form.addWidget(self._pynia_status_label)
 
         layout.addWidget(conn_card)
+        self._register_section("pynia.connectors", conn_card)
 
         # Reflect the active connector + live Copilot auth updates.
         active_index = self._pynia_provider_combo.findData(self._pynia_settings.active_provider)
@@ -894,6 +1230,7 @@ class SettingsDialog(QDialog):
         self._refresh_pynia_autocomplete_status()
 
         layout.addWidget(auto_card)
+        self._register_section("pynia.autocomplete", auto_card)
         layout.addStretch()
 
         self._pynia_provider_combo.currentIndexChanged.connect(self._load_pynia_connector_fields)
@@ -901,10 +1238,28 @@ class SettingsDialog(QDialog):
         self._load_pynia_connector_fields()
         self._refresh_pynia_autocomplete_status()
 
-        tab_title = S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia"
-        tab_index = self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
-        if logo_icon:
-            self.tabs.setTabIcon(tab_index, logo_icon)
+        self._add_settings_page("pynia", page)
+        self._pynia_snapshot = self._capture_pynia_snapshot()
+
+    def _capture_pynia_snapshot(self) -> dict:
+        """Snapshot Pynia form values to detect whether live connector refresh is needed."""
+        if not hasattr(self, "_pynia_provider_combo"):
+            return {}
+        pid = self._current_pynia_connector_id()
+        snapshot = {
+            "provider": pid,
+            "autocomplete": self._pynia_autocomplete_cb.isChecked(),
+            "completion_model": self._pynia_completion_model_combo.currentText().strip(),
+        }
+        if pid != "copilot" and hasattr(self, "_pynia_token_edit"):
+            snapshot["token"] = self._pynia_token_edit.text().strip()
+            snapshot["base_url"] = self._pynia_base_url_edit.text().strip()
+        return snapshot
+
+    def _pynia_settings_changed_since_open(self) -> bool:
+        if not hasattr(self, "_pynia_snapshot"):
+            return False
+        return self._capture_pynia_snapshot() != self._pynia_snapshot
 
     def _refresh_pynia_autocomplete_status(self) -> None:
         from src.services.pynia.settings import get_provider_secret
@@ -1388,173 +1743,149 @@ class SettingsDialog(QDialog):
         self._lsp_hint_label.setText(self._get_lsp_auth_hint())
 
     def _setup_notifications_tab(self):
-        """Sets up the Notifications tab with toggle and template config."""
+        """Sets up the Notifications page with section cards (General tab pattern)."""
         colors = get_colors()
         settings = QSettings("DataPyn", "DataPyn")
         transport = load_notification_transport_settings()
         input_style = self._get_input_style(colors)
         checkbox_style = self._get_checkbox_style(colors)
 
-        notif_scroll = QScrollArea()
-        notif_scroll.setWidgetResizable(True)
-        notif_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        notif_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        page = QWidget()
+        notif_layout = QVBoxLayout(page)
+        notif_layout.setSpacing(14)
+        notif_layout.setContentsMargins(4, 4, 4, 12)
 
-        notif_widget = QWidget()
-        notif_scroll.setWidget(notif_widget)
-
-        notif_layout = QVBoxLayout(notif_widget)
-        notif_layout.setSpacing(16)
-        notif_layout.setContentsMargins(20, 20, 20, 20)
-
-        def _make_form_layout() -> QFormLayout:
-            form = QFormLayout()
-            form.setHorizontalSpacing(12)
-            form.setVerticalSpacing(10)
-            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            return form
-
-        # --- General notification settings ---
-        general_group = self._make_group(S.settings.section_notifications, colors)
-        general_layout = QVBoxLayout(general_group)
-        general_layout.setSpacing(8)
-
+        general_card, general_layout = self._make_section_card(S.settings.section_notifications, colors)
         self.notif_enabled_cb = LabeledToggleSwitch(
             S.settings.label_notifications_enabled,
             checked=settings.value("notifications/enabled", True, type=bool),
         )
         general_layout.addWidget(self.notif_enabled_cb)
-
         self.notif_sound_cb = LabeledToggleSwitch(
             S.settings.label_notifications_sound,
             checked=settings.value("notifications/sound", True, type=bool),
         )
         general_layout.addWidget(self.notif_sound_cb)
+        notif_layout.addWidget(general_card)
+        self._register_section("notifications.general", general_card)
 
-        notif_layout.addWidget(general_group)
+        template_card, template_layout = self._make_section_card(
+            S.settings.section_notification_template, colors
+        )
+        template_layout.addWidget(self._make_info_box(S.settings.notification_variables_hint, colors))
 
-        # --- Template settings ---
-        template_group = self._make_group(S.settings.section_notification_template, colors)
-        template_layout = QVBoxLayout(template_group)
-        template_layout.setSpacing(10)
-        template_form = _make_form_layout()
-
-        # Available variables hint
-        template_layout.addWidget(self._make_info_box(
-            S.settings.notification_variables_hint, colors,
-        ))
-
-        # Default templates from translations
         default_success_title = S.settings.notification_default_success_title
         default_success_msg = S.settings.notification_default_success_msg
         default_error_title = S.settings.notification_default_error_title
         default_error_msg = S.settings.notification_default_error_msg
 
-        # Success title
         self.notif_success_title = QLineEdit()
-        self.notif_success_title.setText(
-            settings.value("notifications/success_title", default_success_title)
-        )
+        self.notif_success_title.setText(settings.value("notifications/success_title", default_success_title))
         self.notif_success_title.setStyleSheet(input_style)
-        template_form.addRow(self._make_label(S.settings.label_success_title, colors), self.notif_success_title)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_success_title, self.notif_success_title, colors, label_width=140)
+        )
 
-        # Success message
         self.notif_success_msg = QLineEdit()
-        self.notif_success_msg.setText(
-            settings.value("notifications/success_message", default_success_msg)
-        )
+        self.notif_success_msg.setText(settings.value("notifications/success_message", default_success_msg))
         self.notif_success_msg.setStyleSheet(input_style)
-        template_form.addRow(self._make_label(S.settings.label_success_message, colors), self.notif_success_msg)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_success_message, self.notif_success_msg, colors, label_width=140)
+        )
 
-        # Error title
         self.notif_error_title = QLineEdit()
-        self.notif_error_title.setText(
-            settings.value("notifications/error_title", default_error_title)
-        )
+        self.notif_error_title.setText(settings.value("notifications/error_title", default_error_title))
         self.notif_error_title.setStyleSheet(input_style)
-        template_form.addRow(self._make_label(S.settings.label_error_title, colors), self.notif_error_title)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_error_title, self.notif_error_title, colors, label_width=140)
+        )
 
-        # Error message
         self.notif_error_msg = QLineEdit()
-        self.notif_error_msg.setText(
-            settings.value("notifications/error_message", default_error_msg)
-        )
+        self.notif_error_msg.setText(settings.value("notifications/error_message", default_error_msg))
         self.notif_error_msg.setStyleSheet(input_style)
-        template_form.addRow(self._make_label(S.settings.label_error_message, colors), self.notif_error_msg)
-        template_layout.addLayout(template_form)
-
-        notif_layout.addWidget(template_group)
-
-        telegram_group = self._make_group(S.settings.section_notification_telegram, colors)
-        telegram_layout = QVBoxLayout(telegram_group)
-        telegram_layout.setSpacing(10)
-        telegram_form = _make_form_layout()
-
-        self.notif_telegram_enabled_cb = QCheckBox(S.settings.label_notifications_telegram_enabled)
-        self.notif_telegram_enabled_cb.setChecked(
-            settings.value("notifications/telegram/enabled", False, type=bool)
+        template_layout.addLayout(
+            self._make_field_row(S.settings.label_error_message, self.notif_error_msg, colors, label_width=140)
         )
-        self.notif_telegram_enabled_cb.setStyleSheet(checkbox_style)
+        notif_layout.addWidget(template_card)
+        self._register_section("notifications.template", template_card)
+
+        telegram_card, telegram_layout = self._make_section_card(
+            S.settings.section_notification_telegram, colors
+        )
+        self.notif_telegram_enabled_cb = LabeledToggleSwitch(
+            S.settings.label_notifications_telegram_enabled,
+            checked=settings.value("notifications/telegram/enabled", False, type=bool),
+        )
         telegram_layout.addWidget(self.notif_telegram_enabled_cb)
 
         self.notif_telegram_token = QLineEdit()
         self.notif_telegram_token.setEchoMode(QLineEdit.EchoMode.Password)
         self.notif_telegram_token.setText(transport["telegram"]["bot_token"])
         self.notif_telegram_token.setStyleSheet(input_style)
-        telegram_form.addRow(self._make_label(S.settings.label_notification_telegram_token, colors), self.notif_telegram_token)
+        telegram_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_notification_telegram_token,
+                self.notif_telegram_token,
+                colors,
+                label_width=140,
+            )
+        )
 
         self.notif_telegram_chat_id = QLineEdit()
         self.notif_telegram_chat_id.setText(transport["telegram"]["chat_id"])
         self.notif_telegram_chat_id.setStyleSheet(input_style)
-        telegram_form.addRow(self._make_label(S.settings.label_notification_telegram_chat_id, colors), self.notif_telegram_chat_id)
-        telegram_layout.addLayout(telegram_form)
-
+        telegram_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_notification_telegram_chat_id,
+                self.notif_telegram_chat_id,
+                colors,
+                label_width=140,
+            )
+        )
         self.notif_telegram_status = self._make_hint("", colors)
         telegram_layout.addWidget(self.notif_telegram_status)
-
         telegram_btn_row = QHBoxLayout()
         telegram_btn_row.addStretch()
         self.notif_telegram_test_btn = QPushButton(S.settings.btn_notification_test_telegram)
         self.notif_telegram_test_btn.clicked.connect(self._send_test_telegram_notification)
         telegram_btn_row.addWidget(self.notif_telegram_test_btn)
         telegram_layout.addLayout(telegram_btn_row)
+        notif_layout.addWidget(telegram_card)
+        self._register_section("notifications.telegram", telegram_card)
 
-        notif_layout.addWidget(telegram_group)
-
-        email_group = self._make_group(S.settings.section_notification_email, colors)
-        email_layout = QVBoxLayout(email_group)
-        email_layout.setSpacing(10)
-        email_form = _make_form_layout()
-
-        self.notif_email_enabled_cb = QCheckBox(S.settings.label_notifications_email_enabled)
-        self.notif_email_enabled_cb.setChecked(
-            settings.value("notifications/email/enabled", False, type=bool)
+        email_card, email_layout = self._make_section_card(
+            S.settings.section_notification_email, colors
         )
-        self.notif_email_enabled_cb.setStyleSheet(checkbox_style)
+        self.notif_email_enabled_cb = LabeledToggleSwitch(
+            S.settings.label_notifications_email_enabled,
+            checked=settings.value("notifications/email/enabled", False, type=bool),
+        )
         email_layout.addWidget(self.notif_email_enabled_cb)
 
         self.notif_email_host = QLineEdit()
         self.notif_email_host.setText(transport["email"]["host"])
         self.notif_email_host.setStyleSheet(input_style)
-        email_form.addRow(self._make_label(S.settings.label_notification_email_host, colors), self.notif_email_host)
+        email_layout.addLayout(
+            self._make_field_row(S.settings.label_notification_email_host, self.notif_email_host, colors, label_width=140)
+        )
 
         self.notif_email_port = QSpinBox()
         self.notif_email_port.setRange(1, 65535)
         self.notif_email_port.setValue(transport["email"]["port"])
         self.notif_email_port.setStyleSheet(input_style)
-        email_form.addRow(self._make_label(S.settings.label_notification_email_port, colors), self.notif_email_port)
+        self.notif_email_port.setMaximumWidth(120)
+        email_layout.addLayout(
+            self._make_field_row(S.settings.label_notification_email_port, self.notif_email_port, colors, label_width=140)
+        )
 
         self.notif_email_use_tls = QCheckBox(S.settings.label_notification_email_use_tls)
         self.notif_email_use_tls.setChecked(transport["email"]["use_tls"])
         self.notif_email_use_tls.setStyleSheet(checkbox_style)
         self.notif_email_use_tls.toggled.connect(self._on_notification_email_tls_toggled)
-
         self.notif_email_use_ssl = QCheckBox(S.settings.label_notification_email_use_ssl)
         self.notif_email_use_ssl.setChecked(transport["email"]["use_ssl"])
         self.notif_email_use_ssl.setStyleSheet(checkbox_style)
         self.notif_email_use_ssl.toggled.connect(self._on_notification_email_ssl_toggled)
-
         email_security = QWidget()
         email_security_layout = QHBoxLayout(email_security)
         email_security_layout.setContentsMargins(0, 0, 0, 0)
@@ -1562,47 +1893,68 @@ class SettingsDialog(QDialog):
         email_security_layout.addWidget(self.notif_email_use_tls)
         email_security_layout.addWidget(self.notif_email_use_ssl)
         email_security_layout.addStretch()
-        email_form.addRow(self._make_label(S.settings.label_notification_email_security, colors), email_security)
+        email_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_notification_email_security,
+                email_security,
+                colors,
+                label_width=140,
+            )
+        )
 
         self.notif_email_username = QLineEdit()
         self.notif_email_username.setText(transport["email"]["username"])
         self.notif_email_username.setStyleSheet(input_style)
-        email_form.addRow(self._make_label(S.settings.label_notification_email_username, colors), self.notif_email_username)
+        email_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_notification_email_username,
+                self.notif_email_username,
+                colors,
+                label_width=140,
+            )
+        )
 
         self.notif_email_password = QLineEdit()
         self.notif_email_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.notif_email_password.setText(transport["email"]["password"])
         self.notif_email_password.setStyleSheet(input_style)
-        email_form.addRow(self._make_label(S.settings.label_notification_email_password, colors), self.notif_email_password)
+        email_layout.addLayout(
+            self._make_field_row(
+                S.settings.label_notification_email_password,
+                self.notif_email_password,
+                colors,
+                label_width=140,
+            )
+        )
 
         self.notif_email_from = QLineEdit()
         self.notif_email_from.setText(transport["email"]["from_address"])
         self.notif_email_from.setStyleSheet(input_style)
-        email_form.addRow(self._make_label(S.settings.label_notification_email_from, colors), self.notif_email_from)
+        email_layout.addLayout(
+            self._make_field_row(S.settings.label_notification_email_from, self.notif_email_from, colors, label_width=140)
+        )
 
         self.notif_email_to = QLineEdit()
         self.notif_email_to.setText(transport["email"]["to"])
         self.notif_email_to.setStyleSheet(input_style)
-        email_form.addRow(self._make_label(S.settings.label_notification_email_to, colors), self.notif_email_to)
-        email_layout.addLayout(email_form)
+        email_layout.addLayout(
+            self._make_field_row(S.settings.label_notification_email_to, self.notif_email_to, colors, label_width=140)
+        )
 
         self.notif_email_status = self._make_hint("", colors)
         email_layout.addWidget(self.notif_email_status)
-
         email_btn_row = QHBoxLayout()
         email_btn_row.addStretch()
         self.notif_email_test_btn = QPushButton(S.settings.btn_notification_test_email)
         self.notif_email_test_btn.clicked.connect(self._send_test_email_notification)
         email_btn_row.addWidget(self.notif_email_test_btn)
         email_layout.addLayout(email_btn_row)
-
-        notif_layout.addWidget(email_group)
+        notif_layout.addWidget(email_card)
+        self._register_section("notifications.email", email_card)
         notif_layout.addStretch()
 
         self._refresh_notification_transport_status()
-
-        tab_title = S.settings.tab_notifications if hasattr(S.settings, 'tab_notifications') else "Notifications"
-        self.tabs.addTab(notif_scroll, tab_title)
+        self._add_settings_page("notifications", page)
 
     def _setup_variables_storage_tab(self):
         """Session DataFrame variables — auto-persist and disk usage."""
@@ -1610,6 +1962,7 @@ class SettingsDialog(QDialog):
         input_style = self._get_input_style(colors)
 
         page = QWidget()
+        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(page)
         layout.setSpacing(14)
         layout.setContentsMargins(4, 4, 4, 12)
@@ -1638,7 +1991,8 @@ class SettingsDialog(QDialog):
         self.session_results_max_mb_spin.setRange(1, 10000)
         self.session_results_max_mb_spin.setSingleStep(10)
         self.session_results_max_mb_spin.setValue(get_session_result_max_size_mb() or DEFAULT_MAX_SIZE_MB)
-        self.session_results_max_mb_spin.setMinimumWidth(120)
+        self.session_results_max_mb_spin.setMinimumWidth(100)
+        self.session_results_max_mb_spin.setMaximumWidth(120)
         self.session_results_max_mb_spin.setStyleSheet(input_style)
         self.session_results_max_mb_spin.setEnabled(self.session_results_restore_cb.isChecked())
         policy_layout.addLayout(
@@ -1646,12 +2000,13 @@ class SettingsDialog(QDialog):
                 S.settings.label_session_results_max_mb,
                 self.session_results_max_mb_spin,
                 colors,
-                label_width=220,
+                label_width=180,
             )
         )
         policy_layout.addWidget(self._make_hint(S.settings.session_results_max_mb_hint, colors))
         self.session_results_restore_cb.toggled.connect(self.session_results_max_mb_spin.setEnabled)
         layout.addWidget(policy_card)
+        self._register_section("variables.persistence", policy_card)
 
         usage_card, usage_layout = self._make_section_card(
             S.settings.section_variables_disk_usage if hasattr(S.settings, "section_variables_disk_usage")
@@ -1659,21 +2014,20 @@ class SettingsDialog(QDialog):
             colors,
         )
 
+        usage_header = QHBoxLayout()
         self._vars_storage_total_label = QLabel()
+        self._vars_storage_total_label.setWordWrap(True)
         self._vars_storage_total_label.setStyleSheet(
             f"color: {colors.text_primary}; font-size: 12px; font-weight: 600;"
         )
-        usage_layout.addWidget(self._vars_storage_total_label)
-
-        refresh_row = QHBoxLayout()
-        refresh_row.addStretch()
+        usage_header.addWidget(self._vars_storage_total_label, 1)
         self._vars_storage_refresh_btn = QPushButton(
             S.settings.btn_refresh_variables_storage if hasattr(S.settings, "btn_refresh_variables_storage")
             else "Refresh"
         )
         self._vars_storage_refresh_btn.clicked.connect(self._refresh_variables_storage_inventory)
-        refresh_row.addWidget(self._vars_storage_refresh_btn)
-        usage_layout.addLayout(refresh_row)
+        usage_header.addWidget(self._vars_storage_refresh_btn, 0, Qt.AlignmentFlag.AlignRight)
+        usage_layout.addLayout(usage_header)
 
         self._vars_storage_table = QTableWidget()
         self._vars_storage_table.setColumnCount(4)
@@ -1689,14 +2043,16 @@ class SettingsDialog(QDialog):
             _storage_header("variables", "Variables"),
             _storage_header("size", "Size"),
         ])
-        self._vars_storage_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._vars_storage_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._vars_storage_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self._vars_storage_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        table_header = self._vars_storage_table.horizontalHeader()
+        for column in range(4):
+            table_header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         self._vars_storage_table.verticalHeader().setVisible(False)
         self._vars_storage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._vars_storage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._vars_storage_table.setAlternatingRowColors(True)
+        self._vars_storage_table.setMinimumHeight(120)
+        self._vars_storage_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._vars_storage_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         usage_layout.addWidget(self._vars_storage_table)
 
         from src.core.session_result_storage import get_session_snapshots_root
@@ -1710,13 +2066,10 @@ class SettingsDialog(QDialog):
             )
         )
         layout.addWidget(usage_card)
+        self._register_section("variables.disk", usage_card)
         layout.addStretch()
 
-        tab_title = (
-            S.settings.tab_variables_storage if hasattr(S.settings, "tab_variables_storage")
-            else "Variables"
-        )
-        self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
+        self._add_settings_page("variables", page)
         self._refresh_variables_storage_inventory()
 
     def _refresh_variables_storage_inventory(self):
@@ -1900,6 +2253,7 @@ class SettingsDialog(QDialog):
             colors,
         ))
         workspace_layout.addWidget(current_group)
+        self._register_section("workspace.current", current_group)
 
         # --- Saved workspaces section ---
         saved_group, saved_layout = self._make_section_card(
@@ -1968,10 +2322,10 @@ class SettingsDialog(QDialog):
         ))
 
         workspace_layout.addWidget(saved_group)
+        self._register_section("workspace.saved", saved_group)
         workspace_layout.addStretch()
 
-        tab_title = S.settings.tab_workspace if hasattr(S.settings, 'tab_workspace') else "Workspace"
-        self.tabs.addTab(self._wrap_scroll_tab(page), tab_title)
+        self._add_settings_page("workspace", page)
     
     def _workspace_button_stylesheet(self, colors, variant: str) -> str:
         if variant == "primary":
@@ -2492,6 +2846,9 @@ class SettingsDialog(QDialog):
         settings.setValue("grid/display_row_limit", self.grid_row_limit_spin.value())
         settings.setValue("connections/idle_timeout_sec", self.idle_timeout_spin.value())
 
+        if hasattr(self, "shared_delimiter_edit"):
+            set_shared_parameter_delimiter(self.shared_delimiter_edit.text())
+
         if hasattr(self, "session_results_restore_cb"):
             from src.core.session_result_storage import (
                 set_session_result_max_size_mb,
@@ -2554,7 +2911,7 @@ class SettingsDialog(QDialog):
         parent = self.parent()
 
         self.shortcuts_changed.emit()
-        if pynia_pid:
+        if pynia_pid and self._pynia_settings_changed_since_open():
             self.pynia_connector_changed.emit(pynia_pid)
 
         self.accept()

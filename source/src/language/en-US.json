@@ -243,7 +243,8 @@
     "ctx_connect_new_tab": "Connect in New Tab",
     "ctx_edit": "Edit",
     "error_loading_svg": "Error loading SVG: {error}",
-    "search_placeholder": "Search name, group, host, database, type…"
+    "search_placeholder": "Search name, group, host, database, type…",
+    "ungrouped_label": "(Ungrouped)"
   },
   "session_widget": {
     "connected_to": "Connected to {name}",
@@ -564,6 +565,7 @@
     "header_connection": "{connection} - {database}",
     "header_no_database": "{connection}",
     "schema_error": "Error loading schema",
+    "schema_busy": "Connection busy — metadata will retry shortly",
     "not_null": "NOT NULL"
   },
   "variables_panel": {
@@ -846,6 +848,8 @@
   },
   "settings": {
     "title": "Settings",
+    "search_placeholder": "Search settings...",
+    "search_no_results": "No settings match your search",
     "tab_general": "General",
     "tab_shortcuts": "Shortcuts",
     "section_language": "LANGUAGE",
@@ -909,6 +913,12 @@
     "section_connections": "CONNECTIONS",
     "label_idle_timeout": "Close idle DB connections after:",
     "idle_timeout_hint": "0 disables auto-close. Block connectors reconnect on the next run.",
+    "section_parameters": "PARAMETERS",
+    "label_shared_delimiter": "Shared parameter delimiter:",
+    "shared_delimiter_hint": "Use name as the parameter placeholder (e.g. {{name}}, {name}, ::name::). Notifications still use {{...}}.",
+    "shared_delimiter_double_brace": "{{name}}",
+    "shared_delimiter_double_colon": "::name::",
+    "shared_delimiter_single_brace": "{name}",
     "label_session_results_restore": "Auto-save DataFrame variables with the session",
     "session_results_restore_warning": "DataFrame variables in memory are saved as Parquet when you run queries or close the app. Files can grow large depending on your data.",
     "label_session_results_max_mb": "Max storage per session (MB):",
@@ -1143,6 +1153,7 @@
     "dialog_duplicate_prompt": "Name for the new connection:",
     "dialog_duplicate_default": "{name} (copy)",
     "dialog_duplicate_exists": "A connection with this name already exists!",
+    "dialog_duplicate_in_group": "A connection with this name already exists in the selected group.",
     "dialog_confirm_replace_title": "Replace Connection",
     "dialog_confirm_replace_msg": "Connection '{name}' already exists. Do you want to replace it?",
     "dialog_confirm_delete_title": "Confirm Deletion",

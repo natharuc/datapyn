@@ -102,13 +102,14 @@ class DraggableTreeWidget(QTreeWidget):
 class ConnectionsManagerDialog(QDialog):
     """Dialog for managing saved connections"""
 
-    connection_selected = pyqtSignal(str, dict)  # name, config
+    connection_selected = pyqtSignal(str, str, dict)  # group, name, config
 
     def __init__(self, connection_manager, theme_manager: ThemeManager = None, parent=None):
         super().__init__(parent)
         self.connection_manager = connection_manager
         self.theme_manager = theme_manager or ThemeManager()
         self.selected_connection = None
+        self.selected_connection_group = ""
         self.selected_group = None
 
         self.setWindowTitle(S.connections_manager.title)
@@ -325,14 +326,12 @@ class ConnectionsManagerDialog(QDialog):
         """Loads connections into the tree"""
         from src.design_system.tokens import get_colors
         colors = get_colors()
-        
+
         self.tree.clear()
 
-        # Load groups
         groups = self.connection_manager.get_groups()
         group_items = {}
 
-        # Create group items
         for group_name, group_data in groups.items():
             item = QTreeWidgetItem([group_name])
             item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "name": group_name})
@@ -340,7 +339,6 @@ class ConnectionsManagerDialog(QDialog):
             if HAS_QTAWESOME:
                 item.setIcon(0, qta.icon("mdi.folder", color=colors.warning))
 
-            # Apply color if set
             if group_data.get("color"):
                 color = QColor(group_data["color"])
                 item.setForeground(0, QBrush(color))
@@ -348,14 +346,21 @@ class ConnectionsManagerDialog(QDialog):
             group_items[group_name] = item
             self.tree.addTopLevelItem(item)
 
-        # Load connections
-        all_connections = self.connection_manager.saved_configs.get("connections", {})
+        ungrouped_label = getattr(S.connection_panel, "ungrouped_label", "(Ungrouped)")
+        ungrouped_item = QTreeWidgetItem([ungrouped_label])
+        ungrouped_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "name": ""})
+        if HAS_QTAWESOME:
+            ungrouped_item.setIcon(0, qta.icon("mdi.folder-outline", color=colors.text_tertiary))
+        group_items[""] = ungrouped_item
+        self.tree.addTopLevelItem(ungrouped_item)
 
-        for conn_name, conn_config in all_connections.items():
-            group = conn_config.get("group", "")
-
+        for group, conn_name, conn_config in self.connection_manager.iter_saved_connections():
             item = QTreeWidgetItem([conn_name])
-            item.setData(0, Qt.ItemDataRole.UserRole, {"type": "connection", "name": conn_name})
+            item.setData(
+                0,
+                Qt.ItemDataRole.UserRole,
+                {"type": "connection", "name": conn_name, "group": group},
+            )
 
             db_type = conn_config.get("db_type", "")
             custom_color = conn_config.get("color") or None
@@ -363,17 +368,13 @@ class ConnectionsManagerDialog(QDialog):
 
             item.setIcon(0, get_db_icon(db_type, custom_color=custom_color))
 
-            # Apply color if set
             if conn_config.get("color"):
                 color = QColor(conn_config["color"])
                 item.setForeground(0, QBrush(color))
 
-            # Add to group or root
-            if group and group in group_items:
-                group_items[group].addChild(item)
-                group_items[group].setExpanded(True)
-            else:
-                self.tree.addTopLevelItem(item)
+            parent = group_items.get(group, ungrouped_item)
+            parent.addChild(item)
+            parent.setExpanded(True)
 
         self.tree.expandAll()
 
@@ -383,8 +384,9 @@ class ConnectionsManagerDialog(QDialog):
 
         if data and data["type"] == "connection":
             self.selected_connection = data["name"]
+            self.selected_connection_group = data.get("group", "")
             self.selected_group = None
-            self._show_connection_details(data["name"])
+            self._show_connection_details(self.selected_connection_group, self.selected_connection)
             self.btn_connect.setEnabled(True)
             self.btn_edit.setEnabled(True)
             self.btn_delete.setEnabled(True)
@@ -401,45 +403,58 @@ class ConnectionsManagerDialog(QDialog):
         if not connection_name:
             return
 
-        # Gets current connection configuration
-        config = self.connection_manager.get_connection_config(connection_name)
+        item = self.tree.currentItem()
+        source_group = ""
+        if item:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "connection":
+                source_group = data.get("group", "")
+
+        config = self.connection_manager.get_connection_config(source_group, connection_name)
         if not config:
             return
 
-        # Checks if the group changed
-        current_group = config.get("group", "")
-        if current_group == target_group:
-            return  # Nothing changed
+        if source_group == target_group:
+            return
 
-        # Updates the connection's group
-        config["group"] = target_group
+        if self.connection_manager.connection_exists(target_group, connection_name):
+            show_warning(self, S.dialogs.warning, getattr(
+                S.connections_manager,
+                "dialog_duplicate_in_group",
+                "A connection with this name already exists in the target group.",
+            ))
+            return
 
-        # Saves the connection with the new group
-        self.connection_manager.save_connection_config(
-            connection_name,
-            config.get("db_type", "sqlserver"),
-            config.get("host", ""),
-            config.get("port", 1433),
-            config.get("database", ""),
-            config.get("username", ""),
-            config.get("save_password", False),
-            config.get("password", ""),
-            target_group,  # New group
-            config.get("use_windows_auth", False),
-            config.get("color", ""),
-            config.get("trust_server_certificate", False),
-            config.get("http_path", ""),
-            config.get("sqlserver_auth_mode", ""),
-        )
+        from src.database.connection_manager import DuplicateConnectionError
 
-        # Reloads the tree
+        try:
+            self.connection_manager.update_connection_config(
+                source_group,
+                connection_name,
+                connection_name,
+                config.get("db_type", "sqlserver"),
+                config.get("host", ""),
+                config.get("port", 1433),
+                config.get("database", ""),
+                config.get("username", ""),
+                config.get("save_password", False),
+                config.get("password", ""),
+                target_group,
+                config.get("use_windows_auth", False),
+                config.get("color", ""),
+                config.get("trust_server_certificate", False),
+                config.get("http_path", ""),
+                config.get("sqlserver_auth_mode", ""),
+            )
+        except DuplicateConnectionError:
+            show_warning(self, S.dialogs.warning, getattr(
+                S.connections_manager,
+                "dialog_duplicate_in_group",
+                "A connection with this name already exists in the target group.",
+            ))
+            return
+
         self._load_connections()
-
-        # Visual feedback
-        if target_group:
-            print(f"Connection '{connection_name}' moved to group '{target_group}'")
-        else:
-            print(f"Connection '{connection_name}' removed from group")
 
     def _on_item_double_clicked(self, item, column):
         """On double click - edits connection or renames group inline"""
@@ -454,9 +469,9 @@ class ConnectionsManagerDialog(QDialog):
             # Group: edit inline (like tabs)
             self._rename_group_inline(item)
 
-    def _show_connection_details(self, name: str):
+    def _show_connection_details(self, group: str, name: str):
         """Shows connection details"""
-        config = self.connection_manager.get_connection_config(name)
+        config = self.connection_manager.get_connection_config(group, name)
         if not config:
             return
 
@@ -660,9 +675,8 @@ class ConnectionsManagerDialog(QDialog):
         if dialog.exec():
             name, config = dialog.get_result()
 
-            # Check if connection already exists and ask for confirmation
-            existing_connections = self.connection_manager.saved_configs.get("connections", {})
-            if name in existing_connections:
+            group = config.get("group", "")
+            if self.connection_manager.connection_exists(group, name):
                 if not confirm_yes_no(
                     self,
                     S.connections_manager.dialog_confirm_replace_title,
@@ -670,22 +684,33 @@ class ConnectionsManagerDialog(QDialog):
                 ):
                     return
 
-            self.connection_manager.save_connection_config(
-                name,
-                config["db_type"],
-                config["host"],
-                config["port"],
-                config["database"],
-                config.get("username", ""),
-                config.get("save_password", False),
-                config.get("password", ""),
-                config.get("group", ""),
-                config.get("use_windows_auth", False),
-                config.get("color", ""),
-                config.get("trust_server_certificate", False),
-                config.get("http_path", ""),
-                config.get("sqlserver_auth_mode", ""),
-            )
+            from src.database.connection_manager import DuplicateConnectionError
+
+            try:
+                self.connection_manager.save_connection_config(
+                    name,
+                    config["db_type"],
+                    config["host"],
+                    config["port"],
+                    config["database"],
+                    config.get("username", ""),
+                    config.get("save_password", False),
+                    config.get("password", ""),
+                    group,
+                    config.get("use_windows_auth", False),
+                    config.get("color", ""),
+                    config.get("trust_server_certificate", False),
+                    config.get("http_path", ""),
+                    config.get("sqlserver_auth_mode", ""),
+                    allow_overwrite=True,
+                )
+            except DuplicateConnectionError:
+                show_warning(self, S.dialogs.warning, getattr(
+                    S.connections_manager,
+                    "dialog_duplicate_in_group",
+                    "A connection with this name already exists in the selected group.",
+                ))
+                return
 
             self._load_connections()
             show_success(self, S.dialogs.success, S.connections_manager.dialog_connection_saved.format(name=name))
@@ -704,7 +729,9 @@ class ConnectionsManagerDialog(QDialog):
 
         from .connection_edit_dialog import ConnectionEditDialog
 
-        config = self.connection_manager.get_connection_config(self.selected_connection)
+        config = self.connection_manager.get_connection_config(
+            self.selected_connection_group, self.selected_connection
+        )
         if not config:
             return
 
@@ -719,25 +746,37 @@ class ConnectionsManagerDialog(QDialog):
         if dialog.exec():
             new_name, new_config = dialog.get_result()
 
-            self.connection_manager.update_connection_config(
-                self.selected_connection,
-                new_name,
-                new_config["db_type"],
-                new_config["host"],
-                new_config["port"],
-                new_config["database"],
-                new_config.get("username", ""),
-                new_config.get("save_password", False),
-                new_config.get("password", ""),
-                new_config.get("group", ""),
-                new_config.get("use_windows_auth", False),
-                new_config.get("color", ""),
-                new_config.get("trust_server_certificate", False),
-                new_config.get("http_path", ""),
-                new_config.get("sqlserver_auth_mode", ""),
-            )
+            from src.database.connection_manager import DuplicateConnectionError
+
+            try:
+                self.connection_manager.update_connection_config(
+                    self.selected_connection_group,
+                    self.selected_connection,
+                    new_name,
+                    new_config["db_type"],
+                    new_config["host"],
+                    new_config["port"],
+                    new_config["database"],
+                    new_config.get("username", ""),
+                    new_config.get("save_password", False),
+                    new_config.get("password", ""),
+                    new_config.get("group", ""),
+                    new_config.get("use_windows_auth", False),
+                    new_config.get("color", ""),
+                    new_config.get("trust_server_certificate", False),
+                    new_config.get("http_path", ""),
+                    new_config.get("sqlserver_auth_mode", ""),
+                )
+            except DuplicateConnectionError:
+                show_warning(self, S.dialogs.warning, getattr(
+                    S.connections_manager,
+                    "dialog_duplicate_in_group",
+                    "A connection with this name already exists in the selected group.",
+                ))
+                return
 
             self.selected_connection = new_name
+            self.selected_connection_group = new_config.get("group", "")
             self._load_connections()
             show_success(self, S.dialogs.success, S.connections_manager.dialog_connection_updated)
 
@@ -746,7 +785,9 @@ class ConnectionsManagerDialog(QDialog):
         if not self.selected_connection:
             return
 
-        config = self.connection_manager.get_connection_config(self.selected_connection)
+        config = self.connection_manager.get_connection_config(
+            self.selected_connection_group, self.selected_connection
+        )
         if not config:
             return
 
@@ -755,8 +796,13 @@ class ConnectionsManagerDialog(QDialog):
         )
 
         if ok and new_name:
-            if new_name in self.connection_manager.saved_configs.get("connections", {}):
-                show_warning(self, S.dialogs.warning, S.connections_manager.dialog_duplicate_exists)
+            target_group = config.get("group", "")
+            if self.connection_manager.connection_exists(target_group, new_name):
+                show_warning(self, S.dialogs.warning, getattr(
+                    S.connections_manager,
+                    "dialog_duplicate_in_group",
+                    "A connection with this name already exists in the selected group.",
+                ))
                 return
 
             self.connection_manager.save_connection_config(
@@ -787,8 +833,11 @@ class ConnectionsManagerDialog(QDialog):
                 S.connections_manager.dialog_confirm_delete_title,
                 S.connections_manager.dialog_confirm_delete_conn.format(name=self.selected_connection),
             ):
-                self.connection_manager.delete_connection_config(self.selected_connection)
+                self.connection_manager.delete_connection_config(
+                    self.selected_connection_group, self.selected_connection
+                )
                 self.selected_connection = None
+                self.selected_connection_group = ""
                 self._load_connections()
                 self._clear_connection_details()
                 self.btn_connect.setEnabled(False)
@@ -813,10 +862,13 @@ class ConnectionsManagerDialog(QDialog):
         if not self.selected_connection:
             return
 
-        config = self.connection_manager.get_connection_config(self.selected_connection)
+        config = self.connection_manager.get_connection_config(
+            self.selected_connection_group, self.selected_connection
+        )
         if not config:
             return
 
-        # Emit signal with the selected connection
-        self.connection_selected.emit(self.selected_connection, config)
+        self.connection_selected.emit(
+            self.selected_connection_group, self.selected_connection, config
+        )
         self.accept()

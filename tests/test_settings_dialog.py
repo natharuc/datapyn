@@ -6,6 +6,7 @@ import pytest
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
+from PyQt6.QtCore import QEvent
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -24,6 +25,76 @@ def mock_shortcut_manager():
         "show_entity_info": "Alt+F1",
     }
     return manager
+
+
+def test_settings_dialog_has_sidebar_navigation(qapp, mock_shortcut_manager):
+    dialog = SettingsDialog(mock_shortcut_manager)
+    try:
+        assert hasattr(dialog, "_nav_panel")
+        assert hasattr(dialog, "_content_stack")
+        assert "general" in dialog._page_order
+        assert dialog._nav_panel.node_by_id("shortcuts") is not None
+    finally:
+        dialog.close()
+
+
+def test_settings_dialog_initial_tab_pynia(qapp, mock_shortcut_manager):
+    dialog = SettingsDialog(mock_shortcut_manager, initial_tab="pynia")
+    try:
+        assert dialog._page_order[dialog._content_stack.currentIndex()] == "pynia"
+        assert dialog._nav_panel._tree.currentItem() is not None
+    finally:
+        dialog.close()
+
+
+def test_settings_dialog_search_filters_tree(qapp, mock_shortcut_manager):
+    dialog = SettingsDialog(mock_shortcut_manager)
+    try:
+        dialog._nav_panel.filter_text("telegram")
+        assert not dialog._nav_panel._items["notifications.telegram"].isHidden()
+        dialog.navigate_to("notifications", "notifications.telegram")
+        assert dialog._page_order[dialog._content_stack.currentIndex()] == "notifications"
+    finally:
+        dialog.close()
+
+
+def test_settings_search_no_results_hides_content(qapp, mock_shortcut_manager):
+    dialog = SettingsDialog(mock_shortcut_manager)
+    try:
+        dialog._on_settings_search_text_changed("zzzz-not-found")
+        qapp.processEvents()
+        assert not dialog._search_empty_label.isHidden()
+        assert dialog._settings_body.isHidden()
+        assert dialog._settings_footer.isHidden()
+
+        dialog._on_settings_search_text_changed("")
+        qapp.processEvents()
+        assert dialog._search_empty_label.isHidden()
+        assert not dialog._settings_body.isHidden()
+        assert not dialog._settings_footer.isHidden()
+    finally:
+        dialog.close()
+
+
+def test_settings_dialog_search_is_at_dialog_top(qapp, mock_shortcut_manager):
+    dialog = SettingsDialog(mock_shortcut_manager)
+    try:
+        assert hasattr(dialog, "_settings_search")
+        assert not hasattr(dialog._nav_panel, "_search")
+    finally:
+        dialog.close()
+
+
+def test_search_input_consumes_return_key(qapp):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QKeyEvent
+    from src.ui.components.inputs import SearchInput
+
+    widget = SearchInput(consume_return=True)
+    widget.show()
+    qapp.processEvents()
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+    assert widget.eventFilter(widget.input, event) is True
 
 
 def test_settings_dialog_can_be_instantiated(qapp, mock_shortcut_manager):
@@ -190,6 +261,19 @@ def test_pynia_model_picker_lists_fetched_models(qapp, mock_shortcut_manager):
             assert suggestion in items
         # No duplicates in the list.
         assert len(items) == len(set(items))
+    finally:
+        dialog.close()
+
+
+def test_save_all_skips_pynia_connector_emit_when_unchanged(qapp, mock_shortcut_manager):
+    """Saving unrelated settings must not re-apply the live Pynia connector."""
+    dialog = SettingsDialog(mock_shortcut_manager)
+    emitted = []
+    dialog.pynia_connector_changed.connect(lambda pid: emitted.append(pid))
+    try:
+        dialog._save_all()
+        qapp.processEvents()
+        assert emitted == []
     finally:
         dialog.close()
 

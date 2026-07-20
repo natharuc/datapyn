@@ -25,9 +25,13 @@ class _DummyDock:
 
 
 class _DummyConnectionManager:
-    def get_connection_config(self, connection_name: str):
-        if connection_name == "Conn":
-            return {"db_type": "sqlserver"}
+    def get_connection_config(self, group: str, name: str = ""):
+        """Match ConnectionManager: legacy single-name lookup when name is omitted."""
+        if not name:
+            name = group
+            group = ""
+        if name == "Conn":
+            return {"db_type": "sqlserver", "group": group}
         return None
 
 
@@ -277,18 +281,26 @@ def test_on_schema_loaded_clears_stale_pending_object_explorer_requests(qapp):
     widget = _DummyWidget("sid-1", "Conn")
     explorer = MagicMock()
     main_window = _DummyMainWindow(widget, explorer)
-    main_window._pending_oe_schema_requests = {"catalog-old": "sid-1", "catalog-keep": "sid-2"}
-    main_window._pending_oe_table_requests = {("gecon", "dbo"): "sid-1", ("other", "dbo"): "sid-2"}
+    main_window._pending_oe_schema_requests = {
+        ("sid-1", "catalog-old"): "sid-1",
+        ("sid-2", "catalog-keep"): "sid-2",
+    }
+    main_window._pending_oe_table_requests = {
+        ("sid-1", "gecon", "dbo"): "sid-1",
+        ("sid-2", "other", "dbo"): "sid-2",
+    }
     main_window._pending_oe_column_requests = {
-        ("gecon", "dbo", "pessoa"): "sid-1",
-        ("other", "dbo", "venda"): "sid-2",
+        ("sid-1", "gecon", "dbo", "pessoa"): "sid-1",
+        ("sid-2", "other", "dbo", "venda"): "sid-2",
     }
 
     main_window._on_schema_loaded(schema, "Conn", session_id="sid-1")
 
-    assert main_window._pending_oe_schema_requests == {"catalog-keep": "sid-2"}
-    assert main_window._pending_oe_table_requests == {("other", "dbo"): "sid-2"}
-    assert main_window._pending_oe_column_requests == {("other", "dbo", "venda"): "sid-2"}
+    assert main_window._pending_oe_schema_requests == {("sid-2", "catalog-keep"): "sid-2"}
+    assert main_window._pending_oe_table_requests == {("sid-2", "other", "dbo"): "sid-2"}
+    assert main_window._pending_oe_column_requests == {
+        ("sid-2", "other", "dbo", "venda"): "sid-2",
+    }
 
 
 def test_on_tables_loaded_ignores_stale_result_without_pending_request(qapp):
@@ -315,7 +327,9 @@ def test_on_tables_loaded_routes_only_matching_pending_request(qapp):
     widget = _DummyWidget("sid-1", "Conn")
     explorer = MagicMock()
     main_window = _DummyMainWindow(widget, explorer)
-    main_window._pending_oe_table_requests = {("controleproducao", "dbo"): "sid-1"}
+    main_window._pending_oe_table_requests = {
+        ("sid-1", "controleproducao", "dbo"): "sid-1",
+    }
 
     main_window._on_tables_loaded("controleproducao", "dbo", [{"name": "venda"}])
 

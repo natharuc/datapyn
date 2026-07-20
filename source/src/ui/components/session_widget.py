@@ -28,6 +28,7 @@ from src.database.database_connector import (
     _format_sql_error_for_user,
     _safe_exception_text,
     get_connector_database_context,
+    OperationCancelled,
     QueryBusyError,
 )
 from src.editors.block_editor import BlockEditor
@@ -55,10 +56,11 @@ class SessionConnectionWorker(QObject):
 
     finished = pyqtSignal(bool, str)  # (success, message)
 
-    def __init__(self, session, connection_name, password, widget=None):
+    def __init__(self, session, connection_group, connection_name, password, widget=None):
         super().__init__()
         self._session_ref = weakref.ref(session)
         self._widget_ref = weakref.ref(widget) if widget is not None else None
+        self.connection_group = connection_group or ""
         self.connection_name = connection_name
         self.password = password
         self._cancelled = False
@@ -95,7 +97,7 @@ class SessionConnectionWorker(QObject):
             self.finished.emit(False, "")
             return
         try:
-            success = session.connect(self.connection_name, self.password)
+            success = session.connect(self.connection_group, self.connection_name, self.password)
             if self._ignore_ui_result():
                 self.finished.emit(False, "")
                 return
@@ -134,6 +136,8 @@ class SessionSqlWorker(QObject):
         try:
             df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
             self.finished.emit(df, "")
+        except OperationCancelled:
+            self.finished.emit(None, "__CANCELLED__")
         except QueryBusyError as e:
             self.finished.emit(None, str(e))
         except Exception as e:
@@ -2816,6 +2820,21 @@ class SessionWidget(QWidget):
         if not self._sql_stopping:
             return
         if self._sql_stop_timed_out():
+            thread = getattr(self, "_sql_stopping_thread", None)
+            thread_alive = False
+            if thread is not None:
+                try:
+                    thread_alive = thread.isRunning()
+                except RuntimeError:
+                    thread_alive = False
+            connector = self._sql_stopping_connector
+            if thread_alive and connector is not None:
+                connector._abandoned = True
+                logger.warning(
+                    "SQL cancel timed out with worker still running; connection marked abandoned"
+                )
+                self._finalize_sql_stop()
+                return
             logger.warning("SQL cancel finalize timed out; forcing cleanup")
             self._force_release_stopping_query_lock()
             self._finalize_sql_stop()
@@ -3181,46 +3200,94 @@ class SessionWidget(QWidget):
             dialog = ConnectionPickerDialog(manager, self.theme_manager, self)
 
             if dialog.exec():
-                conn_name, config = dialog.get_result()
+                group, conn_name, config = dialog.get_result()
                 if conn_name:
                     db_type = config.get("db_type", "mysql") if config else "mysql"
                     color = config.get("color", "") if config else ""
-                    block.set_connection_name(conn_name, db_type, color or None)
+                    block.set_connection_name(conn_name, db_type, color or None, group or "")
         except Exception as e:
             print(S.session_widget.conn_dialog_error.format(error=e))
 
     # === CONNECTION ===
 
-    def connect_to_database(self, connection_name: str, password: str = "") -> bool:
+    def ensure_connector_for_metadata(self, callback) -> None:
+        """Reconnect after idle sleep, then invoke callback(connector)."""
+        connector = getattr(self.session, "connector", None)
+        if connector is not None and connector.is_connected():
+            callback(connector)
+            return
+
+        group = self.session.connection_group or ""
+        name = self.session.connection_name or ""
+        if not name:
+            return
+
+        pending = getattr(self, "_metadata_connect_callbacks", None)
+        if pending is None:
+            self._metadata_connect_callbacks = []
+            pending = self._metadata_connect_callbacks
+        pending.append(callback)
+
+        thread = getattr(self, "_metadata_connect_thread", None)
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    return
+            except RuntimeError:
+                pass
+
+        thread = QThread()
+        worker = SessionConnectionWorker(self.session, group, name, "", widget=self)
+        worker.moveToThread(thread)
+
+        def _on_finished(success: bool, _message: str):
+            callbacks = list(getattr(self, "_metadata_connect_callbacks", []) or [])
+            self._metadata_connect_callbacks = []
+            if success:
+                live = getattr(self.session, "connector", None)
+                if live is not None and live.is_connected():
+                    for cb in callbacks:
+                        try:
+                            cb(live)
+                        except Exception:
+                            pass
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(_on_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        self._metadata_connect_thread = thread
+        thread.start()
+
+    def connect_to_database(self, group: str, connection_name: str, password: str = "") -> bool:
         """
         Connect this session to a database (in background)
 
         Args:
+            group: Connection group ("" for ungrouped)
             connection_name: Connection name
             password: Password (if required)
 
         Returns:
             True (always, as it's asynchronous)
         """
-        # Get connection color
         from src.database.connection_manager import ConnectionManager
+        from src.core.connection_ref import ConnectionRef
 
         manager = ConnectionManager()
-        config = manager.get_connection_config(connection_name)
+        config = manager.get_connection_config(group, connection_name)
         if config:
             self._connection_color = config.get("color", "#007ACC") or "#007ACC"
 
-        # Drop any in-flight connect without blocking the UI
         self.detach_connection_thread()
 
-        # Mostrar loading overlay
-        self._show_loading(S.session_widget.loading_connecting.format(name=connection_name))
+        display = ConnectionRef(group=group or "", name=connection_name).display()
+        self._show_loading(S.session_widget.loading_connecting.format(name=display))
 
-        # Criar worker e thread (parented to MainWindow guard when adopted)
         self._connection_thread = QThread()
         self._connection_thread.setObjectName("SessionConnection")
         self._connection_worker = SessionConnectionWorker(
-            self.session, connection_name, password, widget=self
+            self.session, group, connection_name, password, widget=self
         )
         self._connection_worker.moveToThread(self._connection_thread)
 
