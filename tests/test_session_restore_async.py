@@ -14,6 +14,8 @@ class _DummySessionsHost(SessionsMixin):
         self._session_widgets = {}
         self._is_closing = False
         self._current_widget = None
+        self.connection_manager = MagicMock()
+        self.connection_manager.get_connection_ref_by_name.return_value = None
 
     def _get_current_session_widget(self):
         return self._current_widget
@@ -28,7 +30,7 @@ def test_session_initialize_skips_reconnect_when_disabled():
 
     session.initialize(manager, reconnect=False)
 
-    manager.get_connection.assert_called_once_with("analytics")
+    manager.get_connection.assert_called_once_with("", "analytics")
     manager.create_connection.assert_not_called()
     assert session.connection_name == "analytics"
     assert not session.is_connected
@@ -88,7 +90,7 @@ def test_restored_connections_are_dispatched_only_after_async_queue_starts(monke
     _, callback = scheduled.pop(0)
     callback()
 
-    widget.connect_to_database.assert_called_once_with("analytics")
+    widget.connect_to_database.assert_called_once_with("", "analytics")
 
 
 def test_legacy_workspace_connection_is_queued_for_focused_session(monkeypatch):
@@ -103,11 +105,11 @@ def test_legacy_workspace_connection_is_queued_for_focused_session(monkeypatch):
 
     host._reconnect_saved_connection("analytics")
 
-    assert host._pending_session_reconnects == [("s1", "analytics")]
+    assert host._pending_session_reconnects == [("s1", "", "analytics")]
     assert widget.connect_to_database.call_count == 0
     assert scheduled
 
     _, callback = scheduled.pop(0)
     callback()
 
-    widget.connect_to_database.assert_called_once_with("analytics")
+    widget.connect_to_database.assert_called_once_with("", "analytics")

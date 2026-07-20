@@ -55,10 +55,11 @@ class SessionConnectionWorker(QObject):
 
     finished = pyqtSignal(bool, str)  # (success, message)
 
-    def __init__(self, session, connection_name, password, widget=None):
+    def __init__(self, session, connection_group, connection_name, password, widget=None):
         super().__init__()
         self._session_ref = weakref.ref(session)
         self._widget_ref = weakref.ref(widget) if widget is not None else None
+        self.connection_group = connection_group or ""
         self.connection_name = connection_name
         self.password = password
         self._cancelled = False
@@ -95,7 +96,7 @@ class SessionConnectionWorker(QObject):
             self.finished.emit(False, "")
             return
         try:
-            success = session.connect(self.connection_name, self.password)
+            success = session.connect(self.connection_group, self.connection_name, self.password)
             if self._ignore_ui_result():
                 self.finished.emit(False, "")
                 return
@@ -3181,46 +3182,45 @@ class SessionWidget(QWidget):
             dialog = ConnectionPickerDialog(manager, self.theme_manager, self)
 
             if dialog.exec():
-                conn_name, config = dialog.get_result()
+                group, conn_name, config = dialog.get_result()
                 if conn_name:
                     db_type = config.get("db_type", "mysql") if config else "mysql"
                     color = config.get("color", "") if config else ""
-                    block.set_connection_name(conn_name, db_type, color or None)
+                    block.set_connection_name(conn_name, db_type, color or None, group or "")
         except Exception as e:
             print(S.session_widget.conn_dialog_error.format(error=e))
 
     # === CONNECTION ===
 
-    def connect_to_database(self, connection_name: str, password: str = "") -> bool:
+    def connect_to_database(self, group: str, connection_name: str, password: str = "") -> bool:
         """
         Connect this session to a database (in background)
 
         Args:
+            group: Connection group ("" for ungrouped)
             connection_name: Connection name
             password: Password (if required)
 
         Returns:
             True (always, as it's asynchronous)
         """
-        # Get connection color
         from src.database.connection_manager import ConnectionManager
+        from src.core.connection_ref import ConnectionRef
 
         manager = ConnectionManager()
-        config = manager.get_connection_config(connection_name)
+        config = manager.get_connection_config(group, connection_name)
         if config:
             self._connection_color = config.get("color", "#007ACC") or "#007ACC"
 
-        # Drop any in-flight connect without blocking the UI
         self.detach_connection_thread()
 
-        # Mostrar loading overlay
-        self._show_loading(S.session_widget.loading_connecting.format(name=connection_name))
+        display = ConnectionRef(group=group or "", name=connection_name).display()
+        self._show_loading(S.session_widget.loading_connecting.format(name=display))
 
-        # Criar worker e thread (parented to MainWindow guard when adopted)
         self._connection_thread = QThread()
         self._connection_thread.setObjectName("SessionConnection")
         self._connection_worker = SessionConnectionWorker(
-            self.session, connection_name, password, widget=self
+            self.session, group, connection_name, password, widget=self
         )
         self._connection_worker.moveToThread(self._connection_thread)
 

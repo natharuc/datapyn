@@ -243,7 +243,8 @@
     "ctx_connect_new_tab": "Conectar em Nova Aba",
     "ctx_edit": "Editar",
     "error_loading_svg": "Erro ao carregar SVG: {error}",
-    "search_placeholder": "Buscar nome, grupo, host, banco, tipo…"
+    "search_placeholder": "Buscar nome, grupo, host, banco, tipo…",
+    "ungrouped_label": "(Sem grupo)"
   },
   "session_widget": {
     "connected_to": "Conectado a {name}",
@@ -911,7 +912,7 @@
     "idle_timeout_hint": "0 desativa o fechamento automatico. Blocos reconectam na proxima execucao.",
     "section_parameters": "PARAMETROS",
     "label_shared_delimiter": "Delimitador de parametros compartilhados:",
-    "shared_delimiter_hint": "Use este delimitador no SQL/Python para interceptar parametros. Padrao: {{name}}. Notificacoes continuam usando {{...}}.",
+    "shared_delimiter_hint": "Use name como placeholder do parametro (ex.: {{name}}, {name}, ::name::). Notificacoes continuam usando {{...}}.",
     "shared_delimiter_double_brace": "{{name}}",
     "shared_delimiter_double_colon": "::name::",
     "shared_delimiter_single_brace": "{name}",
@@ -1149,6 +1150,7 @@
     "dialog_duplicate_prompt": "Nome para a nova conexao:",
     "dialog_duplicate_default": "{name} (copia)",
     "dialog_duplicate_exists": "Uma conexao com este nome ja existe!",
+    "dialog_duplicate_in_group": "Ja existe uma conexao com este nome no grupo selecionado.",
     "dialog_confirm_replace_title": "Substituir Conexao",
     "dialog_confirm_replace_msg": "A conexao '{name}' ja existe. Deseja substitui-la?",
     "dialog_confirm_delete_title": "Confirmar Exclusao",

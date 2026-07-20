@@ -45,7 +45,7 @@ class BlockConnectionPanel(QFrame):
     """
 
     connection_clicked = pyqtSignal()  # User clicked on panel
-    connection_dropped = pyqtSignal(str, str, str)  # connection_name, db_type, color (drag & drop)
+    connection_dropped = pyqtSignal(str, str, str, str)  # group, connection_name, db_type, color
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -177,6 +177,11 @@ class BlockConnectionPanel(QFrame):
         """Receive dragged connection"""
         if event.mimeData().hasFormat("application/x-connection-name"):
             connection_name = event.mimeData().data("application/x-connection-name").data().decode("utf-8")
+            connection_group = ""
+            if event.mimeData().hasFormat("application/x-connection-group"):
+                connection_group = (
+                    event.mimeData().data("application/x-connection-group").data().decode("utf-8")
+                )
             db_type = (
                 event.mimeData().data("application/x-db-type").data().decode("utf-8")
                 if event.mimeData().hasFormat("application/x-db-type")
@@ -188,10 +193,9 @@ class BlockConnectionPanel(QFrame):
                 else ""
             )
 
-            self.connection_dropped.emit(connection_name, db_type or "", color)
+            self.connection_dropped.emit(connection_group, connection_name, db_type or "", color)
             event.acceptProposedAction()
 
-            # Restore style
             self.dragLeaveEvent(event)
 
 
@@ -476,6 +480,7 @@ class CodeBlock(QFrame):
         self._lsp_document_sync_timer.setInterval(650)
         self._lsp_document_sync_timer.timeout.connect(self._sync_lsp_document)
         self._default_language = default_language
+        self._connection_group = None
         self._connection_name = None  # None = use session connection
         self._database_name = None  # None = use connection default database
         self._sql_parameters = []  # Custom SQL parameters detected from @name tokens
@@ -1231,8 +1236,9 @@ class CodeBlock(QFrame):
         """Connection panel was clicked - emit signal to open dialog"""
         self.select_connection_requested.emit(self)
 
-    def _on_connection_dropped(self, connection_name: str, db_type: str, color: str):
+    def _on_connection_dropped(self, connection_group: str, connection_name: str, db_type: str, color: str):
         """Connection was dragged to panel"""
+        self._connection_group = connection_group or None
         self._connection_name = connection_name
         self.conn_panel.set_connection(connection_name, db_type or None, color or None)
         self._sync_syntax_dialect_to_editor()
@@ -1527,13 +1533,24 @@ class CodeBlock(QFrame):
             return []
         return filter_parameters_for_query(query, self._sql_parameters)
 
+    def get_connection_group(self) -> str:
+        """Return custom connection group or None (uses tab default)."""
+        return self._connection_group
+
     def get_connection_name(self) -> str:
         """Return custom connection name or None (uses tab default)"""
         return self._connection_name
 
-    def set_connection_name(self, conn_name: str, db_type: str = None, color: str = None):
+    def set_connection_name(
+        self,
+        conn_name: str,
+        db_type: str = None,
+        color: str = None,
+        connection_group: str = None,
+    ):
         """Set custom connection for this block"""
         self._connection_name = conn_name
+        self._connection_group = connection_group or None
         self.conn_panel.set_connection(conn_name, db_type, color)
         self._sync_syntax_dialect_to_editor()
         self.connection_name_changed.emit(self, conn_name)
@@ -1851,6 +1868,8 @@ class CodeBlock(QFrame):
         }
         if self._connection_name:
             data["connection_name"] = self._connection_name
+            if self._connection_group:
+                data["connection_group"] = self._connection_group
             # Save db_type to restore correct icon
             if hasattr(self, "conn_panel") and self.conn_panel._db_type:
                 data["db_type"] = self.conn_panel._db_type
@@ -1882,7 +1901,12 @@ class CodeBlock(QFrame):
         if "connection_name" in data:
             db_type = data.get("db_type")
             color = data.get("connection_color")
-            block.set_connection_name(data["connection_name"], db_type, color)
+            block.set_connection_name(
+                data["connection_name"],
+                db_type,
+                color,
+                data.get("connection_group"),
+            )
         # Restore custom database
         if "database_name" in data and data["database_name"]:
             block.set_database_name(data["database_name"])

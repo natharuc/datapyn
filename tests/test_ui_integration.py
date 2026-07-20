@@ -226,7 +226,7 @@ class TestConnectionManagement:
         widget2 = main_window.session_tabs.currentWidget()
 
         # Tentar conectar widget1 com nome inválido - deve falhar silenciosamente
-        widget1.connect_to_database("Bad Connection")
+        widget1.connect_to_database("", "Bad Connection")
 
         # widget2 não deve ser afetado
         assert not widget2.session.is_connected

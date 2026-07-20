@@ -243,7 +243,8 @@
     "ctx_connect_new_tab": "Connect in New Tab",
     "ctx_edit": "Edit",
     "error_loading_svg": "Error loading SVG: {error}",
-    "search_placeholder": "Search name, group, host, database, type…"
+    "search_placeholder": "Search name, group, host, database, type…",
+    "ungrouped_label": "(Ungrouped)"
   },
   "session_widget": {
     "connected_to": "Connected to {name}",
@@ -911,7 +912,7 @@
     "idle_timeout_hint": "0 disables auto-close. Block connectors reconnect on the next run.",
     "section_parameters": "PARAMETERS",
     "label_shared_delimiter": "Shared parameter delimiter:",
-    "shared_delimiter_hint": "Use this delimiter in SQL/Python to intercept parameters. Default: {{name}}. Notifications still use {{...}}.",
+    "shared_delimiter_hint": "Use name as the parameter placeholder (e.g. {{name}}, {name}, ::name::). Notifications still use {{...}}.",
     "shared_delimiter_double_brace": "{{name}}",
     "shared_delimiter_double_colon": "::name::",
     "shared_delimiter_single_brace": "{name}",
@@ -1149,6 +1150,7 @@
     "dialog_duplicate_prompt": "Name for the new connection:",
     "dialog_duplicate_default": "{name} (copy)",
     "dialog_duplicate_exists": "A connection with this name already exists!",
+    "dialog_duplicate_in_group": "A connection with this name already exists in the selected group.",
     "dialog_confirm_replace_title": "Replace Connection",
     "dialog_confirm_replace_msg": "Connection '{name}' already exists. Do you want to replace it?",
     "dialog_confirm_delete_title": "Confirm Deletion",

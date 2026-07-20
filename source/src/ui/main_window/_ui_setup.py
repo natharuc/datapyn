@@ -187,7 +187,7 @@ class UISetupMixin:
     def _setup_connection_panel_compat(self):
         """Creates compatibility properties for legacy code"""
         # Maps old attributes to new component
-        self.connections_list = self.connection_panel.connections_list.list_widget
+        self.connections_list = self.connection_panel.connections_list.tree_widget
         self.active_conn_name_label = self.connection_panel.active_widget.name_label
         self.active_conn_info_label = self.connection_panel.active_widget.info_label
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect

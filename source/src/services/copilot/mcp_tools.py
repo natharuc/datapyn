@@ -1398,17 +1398,20 @@ class MCPToolRegistry(QObject):
         if not conn_manager:
             return {"error": "Connection manager not available."}
 
-        config = conn_manager.get_connection_config(connection_name)
+        config = conn_manager.get_connection_config_by_name(connection_name)
         if not config:
-            saved = list(conn_manager.saved_configs.get("connections", {}).keys())
+            saved = [ref.display() for ref in conn_manager.get_saved_connections()]
             return {"error": f"Connection '{connection_name}' not found. Available: {saved}"}
+
+        ref = conn_manager.get_connection_ref_by_name(connection_name)
+        group = ref.group if ref else ""
 
         session_widget = self._get_active_session_widget()
         if not session_widget:
             return {"error": "No active session."}
 
         if hasattr(session_widget, "connect_to_database"):
-            session_widget.connect_to_database(connection_name)
+            session_widget.connect_to_database(group, connection_name)
             return {
                 "content": [{"type": "text", "text": f"Connection request sent for '{connection_name}'."}]
             }

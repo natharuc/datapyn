@@ -166,7 +166,7 @@ def test_shared_panel_hides_when_no_parameters(qtbot):
 
 
 class TestSharedParameterDelimiter:
-    """Configurable shared parameter delimiter presets."""
+    """Configurable shared parameter delimiter templates."""
 
     @pytest.fixture(autouse=True)
     def _reset_delimiter(self, monkeypatch):
@@ -175,14 +175,14 @@ class TestSharedParameterDelimiter:
 
         monkeypatch.setattr(
             parameter_settings, "get_shared_parameter_delimiter_tokens",
-            lambda: parameter_settings.SHARED_PARAMETER_DELIMITERS["double_brace"],
+            lambda: ("{{", "}}"),
         )
         # Bust the lru_cache so the monkeypatched tokens are picked up.
         sql_parameter_service._shared_parameter_pattern.cache_clear()
         yield
         monkeypatch.setattr(
             parameter_settings, "get_shared_parameter_delimiter_tokens",
-            lambda: parameter_settings.SHARED_PARAMETER_DELIMITERS["double_brace"],
+            lambda: ("{{", "}}"),
         )
         sql_parameter_service._shared_parameter_pattern.cache_clear()
 

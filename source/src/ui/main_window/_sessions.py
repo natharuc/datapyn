@@ -1353,11 +1353,8 @@ class SessionsMixin:
                         block.db_panel.set_database(current_db or None)
 
             # Highlight connection in list
-            for i in range(self.connections_list.count()):
-                item = self.connections_list.item(i)
-                if item.data(Qt.ItemDataRole.UserRole) == session.connection_name:
-                    self.connections_list.setCurrentItem(item)
-                    break
+            group = session.connection_group or ""
+            self.connection_panel.connections_list.highlight_connection(group, session.connection_name)
         else:
             # Desconectado
             self.connection_status_bar.setText(S.status.disconnected)
@@ -1439,11 +1436,10 @@ class SessionsMixin:
         self.connection_panel.set_active_connection(connection_name, host=host, database=current_db, db_type=db_type)
 
         # === HIGHLIGHT CONNECTION IN LIST ===
-        for i in range(self.connections_list.count()):
-            item = self.connections_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == connection_name:
-                self.connections_list.setCurrentItem(item)
-                break
+        group = getattr(session, "connection_group", None) or ""
+        if not group:
+            group = config.get("group", "") or ""
+        self.connection_panel.connections_list.highlight_connection(group, connection_name)
 
         # === ATUALIZAR STATUS BAR ===
         self.action_label.setText(S.status.connected_to.format(name=connection_name, db=current_db))
@@ -1607,7 +1603,11 @@ class SessionsMixin:
         self._create_session_widget(session)
 
         if session.connection_name and not session.is_connected:
-            self._queue_restored_session_connection(session.session_id, session.connection_name)
+            self._queue_restored_session_connection(
+                session.session_id,
+                session.connection_name,
+                getattr(session, "connection_group", None) or "",
+            )
 
         # Processar eventos pendentes da UI
         QApplication.processEvents()
@@ -1666,17 +1666,32 @@ class SessionsMixin:
         self._pending_legacy_active_connection = None
         self._start_restored_session_reconnects()
 
-    def _queue_restored_session_connection(self, session_id: str, connection_name: str):
+    def _queue_restored_session_connection(
+        self,
+        session_id: str,
+        connection_name: str,
+        connection_group: str = "",
+    ):
         """Queues a saved session connection to be restored after the UI is ready."""
         if not session_id or not connection_name:
             return
+
+        group = connection_group or ""
+        if not group:
+            widget = self._session_widgets.get(session_id)
+            if widget is not None and getattr(widget.session, "connection_group", None):
+                group = widget.session.connection_group or ""
+        if not group and hasattr(self, "connection_manager"):
+            ref = self.connection_manager.get_connection_ref_by_name(connection_name)
+            if ref is not None:
+                group = ref.group
 
         pending = getattr(self, "_pending_session_reconnects", None)
         if pending is None:
             self._pending_session_reconnects = []
             pending = self._pending_session_reconnects
 
-        item = (session_id, connection_name)
+        item = (session_id, group, connection_name)
         if item not in pending:
             pending.append(item)
 
@@ -1718,12 +1733,12 @@ class SessionsMixin:
 
         pending = getattr(self, "_pending_session_reconnects", None) or []
         while pending:
-            session_id, connection_name = pending.pop(0)
+            session_id, connection_group, connection_name = pending.pop(0)
             widget = self._session_widgets.get(session_id)
             if widget is None or widget.session.is_connected:
                 continue
 
-            widget.connect_to_database(connection_name)
+            widget.connect_to_database(connection_group, connection_name)
             QTimer.singleShot(25, self._connect_next_restored_session)
             return
 

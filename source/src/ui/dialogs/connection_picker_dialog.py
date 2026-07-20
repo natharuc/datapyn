@@ -23,6 +23,7 @@ class ConnectionPickerDialog(QDialog):
         super().__init__(parent)
         self.connection_manager = connection_manager
         self.theme_manager = theme_manager or ThemeManager()
+        self.selected_group = ""
         self.selected_connection = None
         self._selected_config = None
 
@@ -82,18 +83,14 @@ class ConnectionPickerDialog(QDialog):
 
     def _load_connections(self):
         """Loads saved connections into the shared list widget."""
-        connections = []
-        for conn_name in self.connection_manager.get_saved_connections():
-            config = self.connection_manager.get_connection_config(conn_name)
-            if config:
-                connections.append((conn_name, config))
-        self._connections_list.refresh(connections)
+        self._connections_list.refresh(self.connection_manager.iter_saved_connections())
 
-    def _on_connection_selected(self, conn_name: str):
+    def _on_connection_selected(self, group: str, conn_name: str):
+        self.selected_group = group or ""
         self.selected_connection = conn_name
-        self._selected_config = self.connection_manager.get_connection_config(conn_name)
+        self._selected_config = self.connection_manager.get_connection_config(group, conn_name)
         self.accept()
 
     def get_result(self):
-        """Returns (connection_name, config) or (None, None)"""
-        return self.selected_connection, self._selected_config
+        """Returns (group, connection_name, config) or ("", None, None)"""
+        return self.selected_group, self.selected_connection, self._selected_config

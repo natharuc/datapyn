@@ -56,7 +56,7 @@ class ConnectionController(QObject):
     # CONNECTION ACTIONS
     # =========================================================================
     
-    def quick_connect(self, connection_name: str):
+    def quick_connect(self, group: str, connection_name: str):
         """
         Connects to a database.
         - If there is no tab: creates a new tab
@@ -76,7 +76,7 @@ class ConnectionController(QObject):
             return
         
         # Get config
-        config = self.connection_manager.get_connection_config(connection_name)
+        config = self.connection_manager.get_connection_config(group, connection_name)
         if not config:
             self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
@@ -87,12 +87,12 @@ class ConnectionController(QObject):
             password = config.get("password", "")
         
         # Delegate to widget - manages connection in background
-        current_widget.connect_to_database(connection_name, password)
+        current_widget.connect_to_database(group, connection_name, password)
         
         # Update status
         self._main.action_label.setText(S.status.connecting_to.format(name=connection_name))
     
-    def connect_new_tab(self, connection_name: str):
+    def connect_new_tab(self, group: str, connection_name: str):
         """
         Connects to a database ALWAYS creating a new tab.
         Used for CTRL+double-click or 'Connect in New Tab' menu.
@@ -107,7 +107,7 @@ class ConnectionController(QObject):
             self._show_warning(S.dialogs.error, "Could not create new tab")
             return
         
-        config = self.connection_manager.get_connection_config(connection_name)
+        config = self.connection_manager.get_connection_config(group, connection_name)
         if not config:
             self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
@@ -116,7 +116,7 @@ class ConnectionController(QObject):
         if not config.get("use_windows_auth", False):
             password = config.get("password", "")
         
-        current_widget.connect_to_database(connection_name, password)
+        current_widget.connect_to_database(group, connection_name, password)
         self._main.action_label.setText(S.status.connecting_to_new_tab.format(name=connection_name))
     
     def disconnect(self):
@@ -143,10 +143,10 @@ class ConnectionController(QObject):
         dialog.exec()
         self._main._refresh_connections_list()
     
-    def _connect_from_manager(self, name: str, config: dict):
+    def _connect_from_manager(self, group: str, name: str, config: dict):
         """Callback when connection is selected from manager dialog"""
-        self.quick_connect(name)
-    
+        self.quick_connect(group, name)
+
     def new_connection(self):
         """Opens dialog for new connection"""
         dialog = ConnectionEditDialog(
@@ -184,9 +184,9 @@ class ConnectionController(QObject):
             self._main.action_label.setText(S.status.connection_created.format(name=name))
             self.connection_created.emit(name)
     
-    def edit_connection(self, connection_name: str):
+    def edit_connection(self, group: str, connection_name: str):
         """Opens dialog to edit a specific connection"""
-        config = self.connection_manager.get_connection_config(connection_name)
+        config = self.connection_manager.get_connection_config(group, connection_name)
         if not config:
             self._show_warning(S.dialogs.error, f"Connection '{connection_name}' not found")
             return
@@ -201,28 +201,39 @@ class ConnectionController(QObject):
         
         if dialog.exec():
             name, new_config = dialog.get_result()
-            
-            # If name changed, delete old
-            if name != connection_name:
-                self.connection_manager.delete_connection_config(connection_name)
-            
-            # Save connection
-            self.connection_manager.save_connection_config(
-                name,
-                new_config["db_type"],
-                new_config["host"],
-                new_config["port"],
-                new_config["database"],
-                new_config.get("username", ""),
-                new_config.get("save_password", False),
-                new_config.get("password", ""),
-                new_config.get("group", ""),
-                new_config.get("use_windows_auth", False),
-                new_config.get("color", ""),
-                new_config.get("trust_server_certificate", True),
-                new_config.get("http_path", ""),
-                new_config.get("sqlserver_auth_mode", ""),
-            )
+            new_group = new_config.get("group", "")
+
+            from src.database.connection_manager import DuplicateConnectionError
+
+            try:
+                self.connection_manager.update_connection_config(
+                    group,
+                    connection_name,
+                    name,
+                    new_config["db_type"],
+                    new_config["host"],
+                    new_config["port"],
+                    new_config["database"],
+                    new_config.get("username", ""),
+                    new_config.get("save_password", False),
+                    new_config.get("password", ""),
+                    new_group,
+                    new_config.get("use_windows_auth", False),
+                    new_config.get("color", ""),
+                    new_config.get("trust_server_certificate", True),
+                    new_config.get("http_path", ""),
+                    new_config.get("sqlserver_auth_mode", ""),
+                )
+            except DuplicateConnectionError:
+                self._show_warning(
+                    S.dialogs.warning,
+                    getattr(
+                        S.connections_manager,
+                        "dialog_duplicate_in_group",
+                        "A connection with this name already exists in the selected group.",
+                    ),
+                )
+                return
             
             self.update_connection_status()
             self._main._refresh_connections_list()
@@ -254,11 +265,8 @@ class ConnectionController(QObject):
             )
             
             # Highlight active connection in list
-            for i in range(self._main.connections_list.count()):
-                item = self._main.connections_list.item(i)
-                if item.data(0x100) == conn_name:  # Qt.ItemDataRole.UserRole = 0x100
-                    self._main.connections_list.setCurrentItem(item)
-                    break
+            conn_group = session.connection_group or ""
+            self._main.connection_panel.connections_list.highlight_connection(conn_group, conn_name)
             
             # === STATUSBAR ===
             conn_display = f"{conn_name} @ {host}/{db}"

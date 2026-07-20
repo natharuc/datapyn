@@ -88,7 +88,9 @@ class TestBlockConnectionPanel:
         """Drop de conexao deve emitir connection_dropped(name, db_type)"""
         panel = BlockConnectionPanel()
         dropped = []
-        panel.connection_dropped.connect(lambda name, db_type: dropped.append((name, db_type)))
+        panel.connection_dropped.connect(
+            lambda group, name, db_type, color: dropped.append((group, name, db_type))
+        )
 
         # Criar MimeData simulando drag de conexao
         mime_data = QMimeData()
@@ -106,7 +108,7 @@ class TestBlockConnectionPanel:
         panel.dropEvent(event)
 
         assert len(dropped) == 1
-        assert dropped[0] == ("TestConn", "postgresql")
+        assert dropped[0] == ("", "TestConn", "postgresql")
 
     def test_panel_drag_enter_accepts_connection_mime(self, qapp):
         """dragEnterEvent deve aceitar mime application/x-connection-name"""
@@ -152,7 +154,7 @@ class TestCodeBlockConnection:
     def test_block_connection_dropped_updates_state(self, qapp):
         """Drop de conexao no panel deve atualizar _connection_name"""
         block = CodeBlock(default_language="sql")
-        block._on_connection_dropped("DroppedConn", "sqlserver", "")
+        block._on_connection_dropped("", "DroppedConn", "sqlserver", "")
 
         assert block.get_connection_name() == "DroppedConn"
         assert block.conn_panel.get_connection_name() == "DroppedConn"
@@ -435,14 +437,16 @@ class TestSessionWidgetDialog:
             mock_dialog = MockDialog.return_value
             mock_dialog.exec.return_value = True
             mock_dialog.get_result.return_value = (
+                "Prod",
                 "SelectedConn",
                 {"db_type": "postgresql", "color": ""},
             )
 
             widget._on_block_select_connection(block)
 
-            # Deve ter chamado set_connection_name no bloco (com color=None)
-            block.set_connection_name.assert_called_once_with("SelectedConn", "postgresql", None)
+            block.set_connection_name.assert_called_once_with(
+                "SelectedConn", "postgresql", None, "Prod"
+            )
 
     def test_block_select_connection_cancelled(self, qapp):
         """Cancelar dialogo nao deve alterar conexao do bloco"""
@@ -930,19 +934,25 @@ class TestConnectionManagerReuse:
 
         mock_manager = MagicMock()
         mock_manager.get_connection.return_value = mock_connector
+        mock_manager.get_connection_config.return_value = {
+            "db_type": "sqlserver",
+            "host": "localhost",
+            "port": 1433,
+            "database": "db",
+            "username": "",
+            "password": "",
+        }
 
         with patch.object(widget, "_get_connection_manager", return_value=mock_manager):
-            with patch.object(widget, "_execute_sql_with_connector") as mock_exec:
-                # Executar 3 vezes seguidas com a mesma conexao
-                widget._on_execute_sql("SELECT 1", block_name="b1", connection_name="Conn1")
-                widget._on_execute_sql("SELECT 2", block_name="b2", connection_name="Conn1")
-                widget._on_execute_sql("SELECT 3", block_name="b3", connection_name="Conn1")
+            with patch.object(widget, "_peek_sql_connector_for_block", return_value=mock_connector):
+                with patch.object(widget, "_execute_sql_with_connector") as mock_exec:
+                    widget._on_execute_sql("SELECT 1", block_name="b1", connection_name="Conn1")
+                    widget._on_execute_sql("SELECT 2", block_name="b2", connection_name="Conn1")
+                    widget._on_execute_sql("SELECT 3", block_name="b3", connection_name="Conn1")
 
-                # Deve chamar _execute_sql_with_connector 3x sem auto-connect
-                assert mock_exec.call_count == 3
-                # Todas usam o mesmo connector (reutilizado)
-                for call in mock_exec.call_args_list:
-                    assert call[0][0] is mock_connector
+                    assert mock_exec.call_count == 3
+                    for call in mock_exec.call_args_list:
+                        assert call[0][0] is mock_connector
 
     def test_auto_connect_worker_uses_shared_manager(self, qapp):
         """BlockAutoConnectWorker deve receber o manager compartilhado"""
