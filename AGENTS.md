@@ -22,6 +22,20 @@ See `.github/git-commit-instructions.md` and `.cursor/rules/conventional-commits
 
 After tests pass on `main`, python-semantic-release bumps the version and builds the Windows MSI. Manual recovery: GitHub Actions → **Continuous Delivery - PSR** → `force: patch|minor|major` (with `rebuild_only: false`).
 
+## Pull requests (one at a time)
+
+Never leave more than **one open PR** for the same author on this repo.
+
+Before starting new work or opening a PR:
+
+1. Run `gh pr list --author "@me" --state open` and confirm **zero** open PRs (or exactly one that you are continuing).
+2. **Continue the existing PR** — push to the same branch and update the PR title/body if scope grew.
+3. If scope changed entirely, **close the old PR** (with a short comment) before opening a new one.
+4. Do **not** create a new branch/PR while another PR from the same workstream is still open.
+5. When consolidating work from stale PRs, cherry-pick or merge into the active branch first, then close the superseded PRs without merging on GitHub.
+
+Agents must not run `gh pr create` if an open PR already exists unless the user explicitly asked to replace it.
+
 ## Project
 
 - Python 3.12+, PyQt6, `uv` for dependencies
