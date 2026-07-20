@@ -108,6 +108,7 @@ class LabeledToggleSwitch(QWidget):
 
     def __init__(self, text: str = "", parent=None, *, checked: bool = False):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -115,6 +116,7 @@ class LabeledToggleSwitch(QWidget):
         self.switch = ToggleSwitch(checked=checked)
         self.label = QLabel(text)
         colors = get_colors()
+        self.label.setWordWrap(True)
         self.label.setStyleSheet(
             f"color: {colors.text_secondary}; font-size: 11px; background: transparent;"
         )

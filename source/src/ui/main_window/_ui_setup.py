@@ -1065,18 +1065,22 @@ class UISetupMixin:
             from src.services.pynia.settings import get_pynia_settings, get_provider_secret
 
             settings = get_pynia_settings()
+            previous_pid = getattr(agent, "provider_id", None)
+            was_authenticated = bool(getattr(agent, "is_authenticated", False))
             settings.set_active_provider(pid)
 
             if hasattr(agent, "apply_connector_from_settings"):
                 agent.apply_connector_from_settings(pid)
-            elif getattr(agent, "provider_id", None) != pid and hasattr(agent, "set_provider"):
+            elif previous_pid != pid and hasattr(agent, "set_provider"):
                 agent.set_provider(pid)
 
+            connector_changed = previous_pid != pid
+            token_updated = False
             if pid != "copilot":
                 token = get_provider_secret(pid)
                 if token and hasattr(agent, "set_api_token"):
                     label = settings.username(pid) or pid
-                    agent.set_api_token(token, label)
+                    token_updated = bool(agent.set_api_token(token, label))
 
             panel = getattr(self, "_copilot_chat_panel", None)
             if panel is not None:
@@ -1086,7 +1090,11 @@ class UISetupMixin:
                     panel._populate_model_combo(agent.available_models())
                 panel._update_auth_state()
 
-            if pid != "copilot" and hasattr(agent, "refresh_metadata"):
+            if (
+                pid != "copilot"
+                and hasattr(agent, "refresh_metadata")
+                and (connector_changed or not was_authenticated or token_updated)
+            ):
                 from PyQt6.QtCore import QTimer
 
                 QTimer.singleShot(0, agent.refresh_metadata)

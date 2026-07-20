@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QVBoxLayout,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent
 from PyQt6.QtGui import QFont
 
 from src.design_system.tokens import get_colors
@@ -322,8 +322,9 @@ class SearchInput(QWidget):
 
     textChanged = pyqtSignal(str)
 
-    def __init__(self, placeholder: str = "Search...", parent=None):
+    def __init__(self, placeholder: str = "Search...", parent=None, *, consume_return: bool = False):
         super().__init__(parent)
+        self._consume_return = consume_return
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -331,8 +332,16 @@ class SearchInput(QWidget):
 
         self.input = StyledLineEdit(placeholder)
         self.input.textChanged.connect(self.textChanged.emit)
+        if consume_return:
+            self.input.installEventFilter(self)
 
         layout.addWidget(self.input)
+
+    def eventFilter(self, obj, event) -> bool:
+        if self._consume_return and obj is self.input and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                return True
+        return super().eventFilter(obj, event)
 
     def text(self) -> str:
         return self.input.text()

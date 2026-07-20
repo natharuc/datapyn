@@ -199,15 +199,17 @@ class TestNotificationSettingsDialog:
         else:
             settings.remove("notifications/sound")
 
-    def test_notifications_tab_exists(self, dialog):
-        """The Notifications tab is present in the dialog."""
-        tab_texts = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
-        # Check that at least one tab contains notification-related text
-        assert any("notif" in t.lower() or "Notif" in t for t in tab_texts), f"No notifications tab found in: {tab_texts}"
+    def test_notifications_nav_exists(self, dialog):
+        """The Notifications section is present in the settings navigation."""
+        node = dialog._nav_panel.node_by_id("notifications")
+        assert node is not None
+        assert "notif" in node.label.lower() or node.label
 
-    def test_notifications_tab_index(self, dialog):
-        """The Notifications tab is at index 3 (after General, Shortcuts, Copilot)."""
-        assert dialog.tabs.count() >= 5, f"Expected at least 5 tabs, got {dialog.tabs.count()}"
+    def test_notifications_page_registered(self, dialog):
+        """The Notifications page is registered in the content stack."""
+        assert "notifications" in dialog._page_order
+        dialog.navigate_to("notifications")
+        assert dialog._content_stack.currentIndex() == dialog._page_order.index("notifications")
 
     def test_enabled_checkbox_exists(self, dialog):
         """The enabled checkbox is present and defaults to checked."""

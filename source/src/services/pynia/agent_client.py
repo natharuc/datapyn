@@ -256,17 +256,28 @@ class PyniaAgentClient(QObject):
         if self._provider_id == "copilot" and self._copilot_backend:
             self._copilot_backend.set_tool_registry(registry, parent=parent)
 
-    def set_api_token(self, token: str, label: str = "") -> None:
+    def set_api_token(self, token: str, label: str = "") -> bool:
         if self._provider_id == "copilot":
-            return
+            return False
         token = token.strip()
+        label = (label or self._provider_id).strip()
         if token != get_provider_secret(self._provider_id):
             set_provider_secret(self._provider_id, token)
-        if token:
-            self._settings.on_token_authenticated(self._provider_id, label or self._provider_id)
-            self._is_authenticated = True
-            self._username = label or self._provider_id
+        if not token:
+            return False
+        already_authenticated = (
+            self._is_authenticated
+            and self._username == label
+            and token == get_provider_secret(self._provider_id)
+        )
+        if not already_authenticated:
+            self._settings.on_token_authenticated(self._provider_id, label)
+        self._is_authenticated = True
+        self._username = label
+        if not already_authenticated:
             self.authenticated.emit(self._username)
+            return True
+        return False
 
     def start_auth(self) -> None:
         if self._provider_id == "copilot":

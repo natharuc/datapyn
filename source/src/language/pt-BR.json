@@ -848,6 +848,8 @@
   },
   "settings": {
     "title": "Configuracoes",
+    "search_placeholder": "Buscar configuracoes...",
+    "search_no_results": "Nenhuma configuracao corresponde a busca",
     "tab_general": "Geral",
     "tab_shortcuts": "Atalhos",
     "section_language": "IDIOMA",

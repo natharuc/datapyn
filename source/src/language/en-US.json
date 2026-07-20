@@ -848,6 +848,8 @@
   },
   "settings": {
     "title": "Settings",
+    "search_placeholder": "Search settings...",
+    "search_no_results": "No settings match your search",
     "tab_general": "General",
     "tab_shortcuts": "Shortcuts",
     "section_language": "LANGUAGE",
