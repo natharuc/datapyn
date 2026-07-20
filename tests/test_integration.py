@@ -66,6 +66,7 @@ class TestConnectionFlow:
 
         # Update
         connection_manager.update_connection_config(
+            old_group="Development",
             old_name="Test DB",
             new_name="Test DB Renamed",
             db_type="mssql",
@@ -73,16 +74,17 @@ class TestConnectionFlow:
             port=1433,
             database="testdb",
             username="user",
+            group="Development",
         )
 
         # Verify updated
         assert connection_manager.get_connection_config("Test DB") is None
-        new_config = connection_manager.get_connection_config("Test DB Renamed")
+        new_config = connection_manager.get_connection_config("Development", "Test DB Renamed")
         assert new_config["host"] == "newhost"
 
         # Delete
-        connection_manager.delete_connection_config("Test DB Renamed")
-        assert connection_manager.get_connection_config("Test DB Renamed") is None
+        connection_manager.delete_connection_config("Development", "Test DB Renamed")
+        assert connection_manager.get_connection_config("Development", "Test DB Renamed") is None
 
 
 class TestShortcutFlow:

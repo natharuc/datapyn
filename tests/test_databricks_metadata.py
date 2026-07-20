@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
-from src.services.schema_service import SchemaService, SchemaWorker
+from src.services.schema_service import SCHEMA_LAZY_MINIMAL, SchemaService, SchemaWorker
 from src.ui.components.object_explorer_panel import ObjectExplorerPanel
 from src.workers import BlockConnectionWorker
 
@@ -128,6 +128,38 @@ def test_schema_service_tracks_current_databricks_context(qapp):
     assert captured[0]["database"] == "mag_bronze"
     assert captured[0]["current_schema"] == "esim"
     assert captured[0]["current_context"] == "mag_bronze.esim"
+
+
+def test_schema_service_tracks_current_databricks_context(qapp):
+    connector = FakeDatabricksConnector(current_catalog="mag_bronze", current_schema="esim")
+    captured = []
+    worker = SchemaWorker(connector)
+    worker.finished.connect(lambda schema: captured.append(schema))
+
+    worker.run()
+
+    assert captured
+    assert captured[0]["database"] == "mag_bronze"
+    assert captured[0]["current_schema"] == "esim"
+    assert captured[0]["current_context"] == "mag_bronze.esim"
+
+
+def test_schema_worker_minimal_loads_current_catalog_schemas(qapp):
+    connector = FakeDatabricksConnector(
+        current_catalog="main",
+        current_schema="default",
+        responses={
+            "SHOW CATALOGS": __import__("pandas").DataFrame({"catalog": ["main"]}),
+            "SHOW SCHEMAS IN": __import__("pandas").DataFrame({"schema": ["default", "audit"]}),
+        },
+    )
+    captured = []
+    worker = SchemaWorker(connector, lazy_mode=SCHEMA_LAZY_MINIMAL)
+    worker.finished.connect(lambda schema: captured.append(schema))
+    worker.run()
+
+    assert any("SHOW SCHEMAS IN `main`" in query for query in connector.queries)
+    assert captured[0]["catalog_schemas"]["main"] == ["audit", "default"]
 
 
 def test_block_connection_worker_passes_databricks_http_path(qapp):

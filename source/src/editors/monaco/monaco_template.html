@@ -481,6 +481,79 @@
             return t === 'sqlserver' || t === 'mssql';
         }
 
+        function isDatabricksSchema() {
+            return String(sqlSchemaDbType || '').toLowerCase() === 'databricks';
+        }
+
+        function databricksCurrentCatalog() {
+            return String(sqlSchemaIndex.currentDatabase || '');
+        }
+
+        function databricksCurrentSchema() {
+            return String(sqlSchemaIndex.currentSchema || '');
+        }
+
+        function databricksTableLabel(catalog, schemaName, tableName) {
+            const curCat = databricksCurrentCatalog().toLowerCase();
+            const curSch = databricksCurrentSchema().toLowerCase();
+            const cat = String(catalog || '');
+            const sch = String(schemaName || '');
+            if (cat && sch && cat.toLowerCase() === curCat && sch.toLowerCase() === curSch) {
+                return tableName;
+            }
+            return [cat, sch, tableName].filter(function(part) { return part; }).join('.');
+        }
+
+        function collectDatabricksNamespaceItems(prefix) {
+            const parts = String(prefix || '').split('.').filter(function(part) { return part; });
+            if (!parts.length) {
+                return [];
+            }
+            if (parts.length === 1) {
+                const catalog = parts[0];
+                const schemas = ((sqlSchemaIndex.catalogSchemas || {})[catalog] || []).slice();
+                const seen = new Set();
+                (sqlSchemaIndex.tableItems || []).forEach(function(item) {
+                    if (normalizeSchemaKey(item.catalog || '') === normalizeSchemaKey(catalog) && item.schemaName) {
+                        schemas.push(item.schemaName);
+                    }
+                });
+                return schemas.filter(function(schemaName) {
+                    const key = normalizeSchemaKey(schemaName);
+                    if (!key || seen.has(key)) {
+                        return false;
+                    }
+                    seen.add(key);
+                    return true;
+                }).map(function(schemaName) {
+                    return {
+                        label: schemaName,
+                        kind: 'module',
+                        insertText: schemaName,
+                        detail: catalog + '.' + schemaName,
+                        category: 'schema'
+                    };
+                });
+            }
+            if (parts.length === 2) {
+                const catalog = parts[0];
+                const schemaName = parts[1];
+                return (sqlSchemaIndex.tableItems || []).filter(function(item) {
+                    return normalizeSchemaKey(item.catalog || '') === normalizeSchemaKey(catalog)
+                        && normalizeSchemaKey(item.schemaName || '') === normalizeSchemaKey(schemaName);
+                }).map(function(item) {
+                    return {
+                        label: item.label,
+                        kind: item.kind || 'class',
+                        insertText: item.insertText || item.label,
+                        detail: item.detail,
+                        category: 'table'
+                    };
+                });
+            }
+            return [];
+        }
+
         function inferSqlServerTableSchemaName(table, name, tableKey, fallbackKey) {
             const explicit = typeof table === 'object' ? String(table.schema || '').trim() : '';
             if (explicit) {
@@ -544,6 +617,12 @@
         function collectSqlLocalItems(textBefore, dotCtx, crossDbCtx, fullText) {
             if (crossDbCtx) {
                 return collectCrossDatabaseTableItems(crossDbCtx);
+            }
+            if (dotCtx && isDatabricksSchema()) {
+                const nsItems = collectDatabricksNamespaceItems(dotCtx.qualifier);
+                if (nsItems.length) {
+                    return filterPrefixMatches(nsItems, dotCtx.columnPrefix, 80, false);
+                }
             }
             if (dotCtx && isKnownSchemaName(dotCtx.qualifier)) {
                 return collectSchemaTableItems(dotCtx.qualifier, dotCtx.columnPrefix);
@@ -1632,10 +1711,20 @@
                 columnsByKey: {},
                 tableItems: [],
                 schemaNames: new Set(),
-                currentDatabase: schema.database || ''
+                currentDatabase: schema.database || '',
+                currentSchema: schema.current_schema || '',
+                catalogSchemas: schema.catalog_schemas || {}
             };
             const columnsMap = schema.columns || {};
             const tables = schema.tables || [];
+            const catalogSchemas = schema.catalog_schemas || {};
+            Object.keys(catalogSchemas).forEach(function(catalog) {
+                (catalogSchemas[catalog] || []).forEach(function(schemaName) {
+                    if (schemaName) {
+                        sqlSchemaIndex.schemaNames.add(normalizeSchemaKey(schemaName));
+                    }
+                });
+            });
 
             tables.forEach(function(table) {
                 const name = typeof table === 'string' ? table : (table.name || '');
@@ -1686,16 +1775,20 @@
                     }
                 });
                 const filterText = tableDatabase ? (tableDatabase + '..' + name) : name;
+                const displayLabel = isDatabricksSchema()
+                    ? databricksTableLabel(tableCatalog, rawSchemaName, name)
+                    : name;
+                const insertValue = isDatabricksSchema() ? displayLabel : name;
                 sqlSchemaIndex.tableItems.push({
-                    label: name,
+                    label: displayLabel,
                     kind: 'class',
-                    insertText: name,
+                    insertText: insertValue,
                     detail: tableDatabase ? (tableDatabase + '..' + name) : fallbackKey,
                     category: 'table',
                     database: tableDatabase || tableCatalog,
                     catalog: tableCatalog,
                     schemaName: schemaName,
-                    filterText: filterText
+                    filterText: displayLabel + ' ' + filterText
                 });
             });
 

@@ -3210,6 +3210,55 @@ class SessionWidget(QWidget):
 
     # === CONNECTION ===
 
+    def ensure_connector_for_metadata(self, callback) -> None:
+        """Reconnect after idle sleep, then invoke callback(connector)."""
+        connector = getattr(self.session, "connector", None)
+        if connector is not None and connector.is_connected():
+            callback(connector)
+            return
+
+        group = self.session.connection_group or ""
+        name = self.session.connection_name or ""
+        if not name:
+            return
+
+        pending = getattr(self, "_metadata_connect_callbacks", None)
+        if pending is None:
+            self._metadata_connect_callbacks = []
+            pending = self._metadata_connect_callbacks
+        pending.append(callback)
+
+        thread = getattr(self, "_metadata_connect_thread", None)
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    return
+            except RuntimeError:
+                pass
+
+        thread = QThread()
+        worker = SessionConnectionWorker(self.session, group, name, "", widget=self)
+        worker.moveToThread(thread)
+
+        def _on_finished(success: bool, _message: str):
+            callbacks = list(getattr(self, "_metadata_connect_callbacks", []) or [])
+            self._metadata_connect_callbacks = []
+            if success:
+                live = getattr(self.session, "connector", None)
+                if live is not None and live.is_connected():
+                    for cb in callbacks:
+                        try:
+                            cb(live)
+                        except Exception:
+                            pass
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(_on_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        self._metadata_connect_thread = thread
+        thread.start()
+
     def connect_to_database(self, group: str, connection_name: str, password: str = "") -> bool:
         """
         Connect this session to a database (in background)

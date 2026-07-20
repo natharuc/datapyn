@@ -9,6 +9,8 @@ from urllib.parse import unquote
 import sys
 import types
 
+from src.core.connection_ref import ConnectionRef
+
 
 # Mock para pyodbc.drivers() - no CI Linux nao ha ODBC driver instalado
 _MOCK_ODBC_DRIVERS = ["ODBC Driver 18 for SQL Server"]
@@ -26,6 +28,23 @@ def _set_result_rows(mock, rows):
     mock.fetchall.return_value = rows
     chunks = iter([rows])
     mock.fetchmany.side_effect = lambda *_a, **_k: next(chunks, [])
+
+
+def _setup_raw_dbapi_mocks():
+    mock_cursor = MagicMock()
+    mock_raw_conn = MagicMock()
+    mock_engine = MagicMock()
+    mock_engine.raw_connection.return_value = mock_raw_conn
+    mock_raw_conn.cursor.return_value = mock_cursor
+    return mock_engine, mock_raw_conn, mock_cursor
+
+
+def _stub_mysql_connection_id(mock_cursor):
+    def _execute(sql, *args, **kwargs):
+        if "CONNECTION_ID" in str(sql):
+            mock_cursor.fetchone.return_value = (1,)
+
+    mock_cursor.execute.side_effect = _execute
 
 
 class TestDatabaseConnectorConnectionString:
@@ -616,19 +635,15 @@ class TestDatabaseConnectorMocked:
         """execute_query deve retornar DataFrame preservando strings numericas."""
         from database.database_connector import DatabaseConnector
 
-        mock_engine = MagicMock()
-        mock_connection = MagicMock()
-        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
-        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+        mock_engine, mock_raw_conn, mock_cursor = _setup_raw_dbapi_mocks()
+        _stub_mysql_connection_id(mock_cursor)
 
         connector = DatabaseConnector()
         connector.engine = mock_engine
         connector.db_type = "mysql"
 
-        mock_result = MagicMock()
-        mock_result.keys.return_value = ["col"]
-        _set_result_rows(mock_result, [("001",), ("002",), ("003",)])
-        mock_connection.execute.return_value = mock_result
+        mock_cursor.description = [("col",)]
+        _set_result_rows(mock_cursor, [("001",), ("002",), ("003",)])
 
         result = connector.execute_query("SELECT * FROM test")
 
@@ -636,24 +651,20 @@ class TestDatabaseConnectorMocked:
         assert len(result) == 3
         assert result["col"].tolist() == ["001", "002", "003"]
         assert all(isinstance(value, str) for value in result["col"])
+        mock_raw_conn.close.assert_called()
 
     def test_execute_query_preserves_text_columns_with_nulls(self):
         """SELECT generico nao deve converter texto numerico em inteiro mesmo com NULL."""
         from database.database_connector import DatabaseConnector
 
-        mock_engine = MagicMock()
-        mock_connection = MagicMock()
-        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
-        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+        mock_engine, _mock_raw_conn, mock_cursor = _setup_raw_dbapi_mocks()
 
         connector = DatabaseConnector()
         connector.engine = mock_engine
         connector.db_type = "postgresql"
 
-        mock_result = MagicMock()
-        mock_result.keys.return_value = ["external_id"]
-        _set_result_rows(mock_result, [("123",), (None,), ("045",)])
-        mock_connection.execute.return_value = mock_result
+        mock_cursor.description = [("external_id",)]
+        _set_result_rows(mock_cursor, [("123",), (None,), ("045",)])
 
         result = connector.execute_query("SELECT external_id FROM customer")
 
@@ -666,24 +677,28 @@ class TestDatabaseConnectorMocked:
         """Multiplos SELECTs devem retornar DataFrames sem passar por inferencia do pandas.read_sql."""
         from database.database_connector import DatabaseConnector
 
-        mock_engine = MagicMock()
-        mock_connection = MagicMock()
-        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
-        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+        mock_engine, _mock_raw_conn, mock_cursor = _setup_raw_dbapi_mocks()
+        _stub_mysql_connection_id(mock_cursor)
 
         connector = DatabaseConnector()
         connector.engine = mock_engine
         connector.db_type = "mariadb"
 
-        first_result = MagicMock()
-        first_result.keys.return_value = ["code"]
-        _set_result_rows(first_result, [("0007",)])
+        first_description = [("code",)]
+        second_description = [("reference",)]
 
-        second_result = MagicMock()
-        second_result.keys.return_value = ["reference"]
-        _set_result_rows(second_result, [("9001",)])
+        def _execute(sql, *args, **kwargs):
+            if "CONNECTION_ID" in str(sql):
+                mock_cursor.fetchone.return_value = (1,)
+                return
+            if "first_table" in str(sql):
+                mock_cursor.description = first_description
+                _set_result_rows(mock_cursor, [("0007",)])
+            elif "second_table" in str(sql):
+                mock_cursor.description = second_description
+                _set_result_rows(mock_cursor, [("9001",)])
 
-        mock_connection.execute.side_effect = [first_result, second_result]
+        mock_cursor.execute.side_effect = _execute
 
         result = connector.execute_query("SELECT code FROM first_table; SELECT reference FROM second_table;")
 
@@ -734,13 +749,8 @@ class TestDatabaseConnectorMocked:
         """DML comum continua usando transacao normal."""
         from database.database_connector import DatabaseConnector
 
-        mock_engine = MagicMock()
-        mock_connection = MagicMock()
-        mock_result = MagicMock()
-        mock_result.rowcount = 1
-        mock_connection.execute.return_value = mock_result
-        mock_engine.connect.return_value.__enter__ = lambda s: mock_connection
-        mock_engine.connect.return_value.__exit__ = lambda s, *args: None
+        mock_engine, mock_raw_conn, mock_cursor = _setup_raw_dbapi_mocks()
+        mock_cursor.rowcount = 1
 
         connector = DatabaseConnector()
         connector.engine = mock_engine
@@ -748,8 +758,7 @@ class TestDatabaseConnectorMocked:
 
         result = connector.execute_query("UPDATE customer SET active = true")
 
-        mock_connection.execution_options.assert_not_called()
-        mock_connection.commit.assert_called_once()
+        mock_raw_conn.commit.assert_called_once()
         assert result["Result"].iloc[0] == "Command executed successfully. 1 row(s) affected."
 
 

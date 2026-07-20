@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from src.core.connection_ref import ConnectionRef
+
 
 # ==================== TESTES DO CONNECTION MANAGER ====================
 
@@ -25,7 +27,7 @@ class TestConnectionManagerAPI:
             name="Test DB", db_type="mssql", host="localhost", port=1433, database="testdb"
         )
 
-        assert "Test DB" in connection_manager.get_saved_connections()
+        assert ConnectionRef(group="", name="Test DB") in connection_manager.get_saved_connections()
 
     def test_get_saved_connections_returns_list(self, connection_manager):
         """get_saved_connections deve retornar lista de nomes"""
@@ -35,8 +37,8 @@ class TestConnectionManagerAPI:
         result = connection_manager.get_saved_connections()
 
         assert isinstance(result, list)
-        assert "DB1" in result
-        assert "DB2" in result
+        assert ConnectionRef(group="", name="DB1") in result
+        assert ConnectionRef(group="", name="DB2") in result
 
     def test_get_connection_config(self, connection_manager):
         """Deve retornar configuração de conexão"""
@@ -55,9 +57,9 @@ class TestConnectionManagerAPI:
         """Deve remover configuração"""
         connection_manager.save_connection_config(name="ToDelete", db_type="mssql", host="h", port=1433, database="db")
 
-        connection_manager.delete_connection_config("ToDelete")
+        connection_manager.delete_connection_config("", "ToDelete")
 
-        assert "ToDelete" not in connection_manager.get_saved_connections()
+        assert ConnectionRef(group="", name="ToDelete") not in connection_manager.get_saved_connections()
 
     def test_update_connection_config(self, connection_manager):
         """Deve atualizar configuração existente"""
@@ -66,11 +68,17 @@ class TestConnectionManagerAPI:
         )
 
         connection_manager.update_connection_config(
-            old_name="Original", new_name="Updated", db_type="mssql", host="new", port=1433, database="newdb"
+            old_group="",
+            old_name="Original",
+            new_name="Updated",
+            db_type="mssql",
+            host="new",
+            port=1433,
+            database="newdb",
         )
 
-        assert "Original" not in connection_manager.get_saved_connections()
-        assert "Updated" in connection_manager.get_saved_connections()
+        assert ConnectionRef(group="", name="Original") not in connection_manager.get_saved_connections()
+        assert ConnectionRef(group="", name="Updated") in connection_manager.get_saved_connections()
 
         config = connection_manager.get_connection_config("Updated")
         assert config["host"] == "new"
@@ -381,7 +389,7 @@ class TestPersistence:
 
         new_manager = ConnectionManager(str(connection_manager.config_path))
 
-        assert "PersistTest" in new_manager.get_saved_connections()
+        assert ConnectionRef(group="", name="PersistTest") in new_manager.get_saved_connections()
 
 
 # ==================== TESTES DE EDGE CASES ====================
@@ -473,7 +481,7 @@ class TestSystemIntegration:
         workspace_manager.save_workspace(tabs, 0, "DevDB")
 
         # 4. Verificar tudo persiste
-        assert "DevDB" in connection_manager.get_saved_connections()
+        assert ConnectionRef(group="Development", name="DevDB") in connection_manager.get_saved_connections()
         assert shortcut_manager.get_shortcut("execute_sql") == "F5"
 
         loaded = workspace_manager.load_workspace()

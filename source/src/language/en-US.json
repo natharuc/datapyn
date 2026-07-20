@@ -565,6 +565,7 @@
     "header_connection": "{connection} - {database}",
     "header_no_database": "{connection}",
     "schema_error": "Error loading schema",
+    "schema_busy": "Connection busy — metadata will retry shortly",
     "not_null": "NOT NULL"
   },
   "variables_panel": {

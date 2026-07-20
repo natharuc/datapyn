@@ -63,6 +63,8 @@ def extract_referenced_catalogs(
         return referenced
 
     dialect = "tsql" if normalized_db_type in ("mssql", "sqlserver") else None
+    if normalized_db_type == "databricks":
+        dialect = "databricks"
     try:
         statements = sqlglot.parse(sql, read=dialect)
     except Exception:
@@ -122,6 +124,8 @@ def extract_referenced_table_refs(
         return refs
 
     dialect = "tsql" if normalized_db_type in ("mssql", "sqlserver") else None
+    if normalized_db_type == "databricks":
+        dialect = "databricks"
     try:
         statements = sqlglot.parse(sql, read=dialect)
     except Exception:

@@ -565,6 +565,7 @@
     "header_connection": "{connection} - {database}",
     "header_no_database": "{connection}",
     "schema_error": "Erro ao carregar schema",
+    "schema_busy": "Conexão ocupada — metadados serão recarregados em breve",
     "not_null": "NOT NULL"
   },
   "variables_panel": {

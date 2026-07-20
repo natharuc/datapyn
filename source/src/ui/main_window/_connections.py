@@ -232,15 +232,15 @@ class ConnectionsMixin:
                         block.db_panel.set_database(display_name)
 
     def _get_effective_connector_info(self):
-        """Return (connector, connection_name) for the effective connection.
+        """Return (connector, connection_group, connection_name) for the effective connection.
 
         If the focused block has a per-block connection, returns that
         connector.  Otherwise falls back to the session connector.
-        Returns (None, "") when no connection is available.
+        Returns (None, "", "") when no connection is available.
         """
         current_widget = self._get_current_session_widget()
         if not current_widget or not hasattr(current_widget, "session"):
-            return None, ""
+            return None, "", ""
         session = current_widget.session
 
         # Check focused block for per-block connection
@@ -249,14 +249,18 @@ class ConnectionsMixin:
             if block and hasattr(block, "get_connection_name"):
                 block_conn = block.get_connection_name()
                 if block_conn:
-                    connector = self.connection_manager.get_connection(block_conn)
+                    block_group = ""
+                    if hasattr(block, "get_connection_group"):
+                        block_group = block.get_connection_group() or ""
+                    connector = self.connection_manager.get_connection(block_group, block_conn)
                     if connector and connector.is_connected():
-                        return connector, block_conn
+                        return connector, block_group, block_conn
 
         # Fall back to session connection
         connector = getattr(session, "connector", None)
         connection_name = getattr(session, "connection_name", "") or ""
-        return connector, connection_name
+        connection_group = getattr(session, "connection_group", "") or ""
+        return connector, connection_group, connection_name
 
     def _on_object_explorer_refresh(self):
         """Object Explorer refresh - reloads schema from effective connection.
@@ -264,15 +268,22 @@ class ConnectionsMixin:
         Respects per-block connections: if the focused block has its own
         connection, refresh uses that connector instead of the session's.
         """
-        connector, connection_name = self._get_effective_connector_info()
+        connector, connection_group, connection_name = self._get_effective_connector_info()
         if not connector or not connector.is_connected():
             return
 
         # Get session_id for per-session cache
         sid = self._get_active_session_id() or ""
 
-        self._schema_service.invalidate_cache(connection_name, session_id=sid)
-        self._load_schema_with_loading(connector, connection_name, session_id=sid)
+        self._schema_service.invalidate_cache(
+            connection_name, session_id=sid, connection_group=connection_group
+        )
+        self._load_schema_with_loading(
+            connector,
+            connection_name,
+            session_id=sid,
+            connection_group=connection_group,
+        )
 
     def _quick_connect(self, group: str, connection_name: str):
         """
