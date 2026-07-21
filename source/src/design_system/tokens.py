@@ -231,6 +231,12 @@ SPACING = Spacing(
 )
 
 
+# Side dock sizing (Connections, Object Explorer, Variables, Copilot)
+SIDE_DOCK_MIN_WIDTH = 200
+SIDE_DOCK_DEFAULT_WIDTH = 280
+SIDE_DOCK_MAX_WIDTH = 340
+
+
 RADIUS = Radius(
     radius_none=0,
     radius_sm=8,
@@ -996,3 +1002,11 @@ def get_dialog_base_stylesheet() -> str:
         {get_tree_stylesheet()}
         {get_scrollbar_stylesheet()}
     """
+
+
+def configure_side_dock(dock) -> None:
+    """Apply compact width limits to lateral QDockWidget panels."""
+    if dock is None:
+        return
+    dock.setMinimumWidth(SIDE_DOCK_MIN_WIDTH)
+    dock.setMaximumWidth(SIDE_DOCK_MAX_WIDTH)

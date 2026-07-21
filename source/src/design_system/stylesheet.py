@@ -98,6 +98,15 @@ def get_main_window_stylesheet() -> str:
         QMainWindow {{
             background-color: {colors.bg_primary};
         }}
+        QMainWindow::separator {{
+            background: {colors.border_default};
+            width: 5px;
+            height: 5px;
+            margin: 0px;
+        }}
+        QMainWindow::separator:hover {{
+            background: {colors.interactive_primary};
+        }}
         QMenuBar {{
             background-color: {colors.bg_primary};
             color: {colors.text_primary};
@@ -156,8 +165,11 @@ def get_main_window_stylesheet() -> str:
         }}
         QSplitter::handle {{
             background-color: {colors.border_muted};
-            width: 1px;
-            height: 1px;
+            width: 5px;
+            height: 5px;
+        }}
+        QSplitter::handle:hover {{
+            background-color: {colors.interactive_primary};
         }}
         QPushButton {{
             background-color: {colors.interactive_primary};

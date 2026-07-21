@@ -169,9 +169,9 @@ class UISetupMixin:
 
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
 
-        # Configure size policy to occupy full side
-        self.connections_dock.setMinimumWidth(200)
-        self.connections_dock.setMaximumWidth(400)
+        from src.design_system.tokens import configure_side_dock
+
+        configure_side_dock(self.connections_dock)
 
         # Configure features to allow full repositioning
         features = (
@@ -238,7 +238,9 @@ class UISetupMixin:
 
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
 
-        self.object_explorer_dock.setMinimumWidth(200)
+        from src.design_system.tokens import configure_side_dock
+
+        configure_side_dock(self.object_explorer_dock)
         self.object_explorer_dock.setMinimumHeight(150)
 
         features = (

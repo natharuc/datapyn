@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QRect, QModelIndex, QPoint
 from PyQt6.QtGui import QFont, QColor, QAction, QDrag, QPainter, QPen, QMouseEvent
@@ -159,6 +160,7 @@ class ObjectExplorerPanel(QWidget):
         self._all_databases = []  # list of all databases from server
         self._filter_timer = None
         self._databases_auto_requested = False  # focus-triggered load guard (per connection)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._setup_ui()
         self._apply_theme()
         # Auto-load the server database list when the panel or its tree gains focus
@@ -179,17 +181,16 @@ class ObjectExplorerPanel(QWidget):
 
         # Connection header (shows connection name + database)
         self._conn_label = QLabel(S.object_explorer.no_connection)
+        self._conn_label.setWordWrap(True)
+        self._conn_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._conn_label.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 12px;")
-        toolbar_layout.addWidget(self._conn_label)
-
-        toolbar_layout.addStretch()
+        toolbar_layout.addWidget(self._conn_label, 1)
 
         # Info label (stats: tables, columns count)
         self.info_label = QLabel("")
+        self.info_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         self.info_label.setStyleSheet("color: #808080; font-size: 11px;")
-        toolbar_layout.addWidget(self.info_label)
-
-        toolbar_layout.addStretch()
+        toolbar_layout.addWidget(self.info_label, 0)
 
         # Refresh button - icon-only, compact
         self.btn_refresh = QPushButton()
@@ -253,6 +254,7 @@ class ObjectExplorerPanel(QWidget):
         self.tree.setExpandsOnDoubleClick(False)
         self.tree.setDragEnabled(True)
         self.tree.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.tree.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # Context menu
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
