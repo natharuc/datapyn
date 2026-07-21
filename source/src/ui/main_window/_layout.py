@@ -17,7 +17,7 @@ from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.summarize_panel import SummarizePanel
 from src.ui.components.copilot_chat_panel import PyniaChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
-from src.design_system.tokens import get_colors
+from src.design_system.tokens import get_colors, SIDE_DOCK_DEFAULT_WIDTH, SIDE_DOCK_MAX_WIDTH, configure_side_dock
 from src.language import S
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,7 @@ class LayoutMixin:
         self.results_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
         self.summarize_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
         self.output_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
-        self.variables_dock.setMinimumWidth(200)
+        configure_side_dock(self.variables_dock)
         self.variables_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
 
         # Copilot Chat Panel
@@ -512,7 +512,46 @@ class LayoutMixin:
     def _finish_layout_restore(self):
         """Called after layout restore settles - sync menu and allow auto-save."""
         self._restoring_layout = False
+        self._clamp_side_dock_widths()
         self._sync_view_menu_checks()
+
+    def _clamp_side_dock_widths(self) -> None:
+        """Shrink restored side docks that were saved too wide."""
+        candidates = [
+            getattr(self, "connections_dock", None),
+            getattr(self, "object_explorer_dock", None),
+            getattr(self, "variables_dock", None),
+            getattr(self, "copilot_dock", None),
+        ]
+        for dock in candidates:
+            if dock is None or dock.isFloating() or not dock.isVisible():
+                continue
+            if dock.width() > SIDE_DOCK_MAX_WIDTH:
+                try:
+                    self.resizeDocks(
+                        [dock],
+                        [SIDE_DOCK_DEFAULT_WIDTH],
+                        Qt.Orientation.Horizontal,
+                    )
+                except Exception:
+                    logger.debug("Could not resize dock %s", dock.objectName(), exc_info=True)
+
+    def _apply_default_side_dock_widths(self) -> None:
+        """Set sensible default widths when building the default layout."""
+        for dock in (
+            getattr(self, "connections_dock", None),
+            getattr(self, "object_explorer_dock", None),
+        ):
+            if dock is None or dock.isFloating():
+                continue
+            try:
+                self.resizeDocks(
+                    [dock],
+                    [SIDE_DOCK_DEFAULT_WIDTH],
+                    Qt.Orientation.Horizontal,
+                )
+            except Exception:
+                logger.debug("Could not apply default width to %s", dock.objectName(), exc_info=True)
 
     def _setup_auto_save_layout(self):
         """Configure auto-save: save layout when dock visibility/position changes."""
@@ -599,6 +638,8 @@ class LayoutMixin:
             self.results_dock.show()
             self.output_dock.show()
             self.variables_dock.show()
+
+            self._apply_default_side_dock_widths()
 
             # Window size
             screen = QApplication.primaryScreen()
