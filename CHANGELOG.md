@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v1.54.0 (2026-07-20)
+
+### Bug Fixes
+
+- **cancel**: Only release query lock after worker stops
+  ([`55b9e48`](https://github.com/natharuc/datapyn/commit/55b9e483d4b4f9f8dc67c71e971161011c797f42))
+
+### Documentation
+
+- **agents**: Require one open PR at a time per author
+  ([`682344e`](https://github.com/natharuc/datapyn/commit/682344e7d830b476aff54e937051a68332c0b38d))
+
+### Features
+
+- Agrupamento de conexões na lista para melhorar encontros
+  ([`2dd1f11`](https://github.com/natharuc/datapyn/commit/2dd1f115cea02d944e13ec7d494c073d0d1f3746))
+
+- Configurable parameters, connection grouping, single-instance, and server-side cancel
+  ([`6ac51e3`](https://github.com/natharuc/datapyn/commit/6ac51e3b39833cb05215602ba554590cd3c514c1))
+
+- **app**: Open DPW files in running DataPyn instance
+  ([`6a59c0b`](https://github.com/natharuc/datapyn/commit/6a59c0bd875bfeace02eb3fd79d26acfd4c012fe))
+
+- **databricks**: Fix Object Explorer and autocomplete for catalog.schema namespace
+  ([`913db8d`](https://github.com/natharuc/datapyn/commit/913db8d98cf9e09e786d15f9c87b7304b5af86e2))
+
+- **db**: Raw DBAPI path and server-side cancel for generic databases
+  ([`e20d41e`](https://github.com/natharuc/datapyn/commit/e20d41edbb4e528e62b550355c380d7d09b7b8dc))
+
+- **parameters**: Configurable shared parameter delimiter
+  ([`9a64448`](https://github.com/natharuc/datapyn/commit/9a6444873235059d5871124290cddb31f9331aaa))
+
+- **settings**: Refactor navigation with searchable sidebar
+  ([`06100f1`](https://github.com/natharuc/datapyn/commit/06100f17753b2d3b16b187b11e646cba69f8ae55))
+
+### Heuristic
+
+- Merge pull request #148 from natharuc/feat/configurable-parameter-delimiter
+  ([`6ac51e3`](https://github.com/natharuc/datapyn/commit/6ac51e3b39833cb05215602ba554590cd3c514c1))
+
+### Testing
+
+- **cancel**: Server-side cancellation per database type
+  ([`6f5a4b1`](https://github.com/natharuc/datapyn/commit/6f5a4b18fad40312fd4968dec994353c8974eb0e))
+
+- **schema**: Align mocks with ConnectionRef pending OE keys
+  ([`94e7ea3`](https://github.com/natharuc/datapyn/commit/94e7ea3e2877c7b0a73c8e1554d765a86309e7ca))
+
+
 ## v1.53.2 (2026-07-17)
 
 ### Bug Fixes
