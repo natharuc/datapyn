@@ -98,6 +98,7 @@ def get_main_window_stylesheet() -> str:
         QMainWindow {{
             background-color: {colors.bg_primary};
         }}
+        {get_main_window_separator_stylesheet()}
         QMenuBar {{
             background-color: {colors.bg_primary};
             color: {colors.text_primary};
@@ -156,8 +157,11 @@ def get_main_window_stylesheet() -> str:
         }}
         QSplitter::handle {{
             background-color: {colors.border_muted};
-            width: 1px;
-            height: 1px;
+            width: 5px;
+            height: 5px;
+        }}
+        QSplitter::handle:hover {{
+            background-color: {colors.interactive_primary};
         }}
         QPushButton {{
             background-color: {colors.interactive_primary};
@@ -290,6 +294,22 @@ def get_main_window_stylesheet() -> str:
             border-radius: 6px;
             padding: 8px 12px;
             font-size: 12px;
+        }}
+    """
+
+
+def get_main_window_separator_stylesheet() -> str:
+    """Dock splitters — side docks use SideDockFrame grips, so hide horizontal bars."""
+    colors = get_colors()
+    return f"""
+        QMainWindow::separator {{
+            background: transparent;
+            width: 0px;
+            height: 4px;
+            margin: 0px;
+        }}
+        QMainWindow::separator:hover {{
+            background: {colors.interactive_primary};
         }}
     """
 

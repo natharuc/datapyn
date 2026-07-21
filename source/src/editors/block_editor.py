@@ -280,6 +280,10 @@ class BlockEditor(QWidget):
 
         # Blocks container
         self.blocks_container = QWidget()
+        self.blocks_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         self.blocks_layout = QVBoxLayout(self.blocks_container)
         self.blocks_layout.setContentsMargins(8, 8, 8, 8)
         self.blocks_layout.setSpacing(12)
@@ -292,6 +296,8 @@ class BlockEditor(QWidget):
         self._sticky_header.raise_()
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._update_sticky_header)
         self.scroll_area.viewport().installEventFilter(self)
+
+        QTimer.singleShot(0, self._sync_blocks_container_width)
 
         # Add-block strip (divider + centered pill, matches tab accessory controls)
         from src.design_system.tokens import get_colors
@@ -356,8 +362,16 @@ class BlockEditor(QWidget):
 
     def eventFilter(self, obj, event):
         if obj is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
+            self._sync_blocks_container_width()
             self._position_sticky_header()
         return super().eventFilter(obj, event)
+
+    def _sync_blocks_container_width(self) -> None:
+        """Keep blocks flush with the editor width when side docks open or resize."""
+        viewport = self.scroll_area.viewport()
+        width = viewport.width()
+        if width > 0:
+            self.blocks_container.setMinimumWidth(width)
 
     def _position_sticky_header(self) -> None:
         if not hasattr(self, "_sticky_header"):

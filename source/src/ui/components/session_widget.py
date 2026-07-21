@@ -524,7 +524,7 @@ class SessionWidget(QWidget):
         # === PARTE SUPERIOR: Editor de Blocos ===
         self._editor_host = QWidget()
         editor_layout = QVBoxLayout(self._editor_host)
-        editor_layout.setContentsMargins(5, 5, 5, 0)
+        editor_layout.setContentsMargins(0, 5, 0, 0)
         editor_layout.setSpacing(0)
 
         # Block editor (replaces UnifiedEditor)
