@@ -112,7 +112,6 @@ class LayoutMixin:
         self.variables_dock = QDockWidget(S.dock.variables, self)
         self.variables_dock.setObjectName("VariablesDock")
         self.variables_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.variables_dock.setWidget(self._variables_stack)
         self.variables_dock.setStyleSheet(dock_style_bottom)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
 
@@ -120,7 +119,7 @@ class LayoutMixin:
         self.results_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
         self.summarize_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
         self.output_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
-        configure_side_dock(self.variables_dock)
+        configure_side_dock(self.variables_dock, self, self._variables_stack)
         self.variables_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
 
         # Copilot Chat Panel
