@@ -1004,9 +1004,13 @@ def get_dialog_base_stylesheet() -> str:
     """
 
 
-def configure_side_dock(dock) -> None:
-    """Apply compact width limits to lateral QDockWidget panels."""
+def configure_side_dock(dock, main_window=None, content=None) -> None:
+    """Apply compact width limits and mount a visible resize grip."""
     if dock is None:
         return
     dock.setMinimumWidth(SIDE_DOCK_MIN_WIDTH)
     dock.setMaximumWidth(SIDE_DOCK_MAX_WIDTH)
+    if main_window is not None and content is not None:
+        from src.ui.components.side_dock_frame import mount_side_dock
+
+        mount_side_dock(dock, main_window, content)

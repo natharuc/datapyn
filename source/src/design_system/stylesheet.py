@@ -98,15 +98,7 @@ def get_main_window_stylesheet() -> str:
         QMainWindow {{
             background-color: {colors.bg_primary};
         }}
-        QMainWindow::separator {{
-            background: {colors.border_default};
-            width: 5px;
-            height: 5px;
-            margin: 0px;
-        }}
-        QMainWindow::separator:hover {{
-            background: {colors.interactive_primary};
-        }}
+        {get_main_window_separator_stylesheet()}
         QMenuBar {{
             background-color: {colors.bg_primary};
             color: {colors.text_primary};
@@ -302,6 +294,22 @@ def get_main_window_stylesheet() -> str:
             border-radius: 6px;
             padding: 8px 12px;
             font-size: 12px;
+        }}
+    """
+
+
+def get_main_window_separator_stylesheet() -> str:
+    """Visible drag handles between QMainWindow dock areas."""
+    colors = get_colors()
+    return f"""
+        QMainWindow::separator {{
+            background: {colors.border_strong};
+            width: 6px;
+            height: 6px;
+            margin: 0px;
+        }}
+        QMainWindow::separator:hover {{
+            background: {colors.interactive_primary};
         }}
     """
 

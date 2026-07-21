@@ -140,7 +140,6 @@ class UISetupMixin:
         self.connections_dock = QDockWidget(S.dock.connections, self)
         self.connections_dock.setObjectName("ConnectionsDock")  # Para saveState/restoreState
         self.connections_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.connections_dock.setWidget(self.connection_panel)
         self.connections_dock.setStyleSheet(f"""
             QDockWidget {{
                 background-color: {colors.bg_secondary};
@@ -171,7 +170,7 @@ class UISetupMixin:
 
         from src.design_system.tokens import configure_side_dock
 
-        configure_side_dock(self.connections_dock)
+        configure_side_dock(self.connections_dock, self, self.connection_panel)
 
         # Configure features to allow full repositioning
         features = (
@@ -209,7 +208,6 @@ class UISetupMixin:
         self.object_explorer_dock = QDockWidget(S.dock.object_explorer, self)
         self.object_explorer_dock.setObjectName("ObjectExplorerDock")
         self.object_explorer_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.object_explorer_dock.setWidget(self._object_explorer_stack)
         self.object_explorer_dock.setStyleSheet(f"""
             QDockWidget {{
                 background-color: {colors.bg_secondary};
@@ -240,7 +238,7 @@ class UISetupMixin:
 
         from src.design_system.tokens import configure_side_dock
 
-        configure_side_dock(self.object_explorer_dock)
+        configure_side_dock(self.object_explorer_dock, self, self._object_explorer_stack)
         self.object_explorer_dock.setMinimumHeight(150)
 
         features = (
@@ -828,6 +826,7 @@ class UISetupMixin:
 
     def _apply_app_theme(self):
         """Applies theme to the application (not to editors)"""
+        from src.design_system.stylesheet import get_main_window_separator_stylesheet
         from src.design_system.tokens import get_colors as ds_colors
 
         c = ds_colors()
@@ -843,6 +842,7 @@ class UISetupMixin:
             QMainWindow {{
                 background-color: {colors["background"]};
             }}
+            {get_main_window_separator_stylesheet()}
             QMenuBar {{
                 background-color: {colors["background"]};
                 color: {colors["foreground"]};
