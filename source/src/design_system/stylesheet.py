@@ -299,13 +299,13 @@ def get_main_window_stylesheet() -> str:
 
 
 def get_main_window_separator_stylesheet() -> str:
-    """Visible drag handles between QMainWindow dock areas."""
+    """Dock splitters — side docks use SideDockFrame grips, so hide horizontal bars."""
     colors = get_colors()
     return f"""
         QMainWindow::separator {{
-            background: {colors.border_strong};
-            width: 6px;
-            height: 6px;
+            background: transparent;
+            width: 0px;
+            height: 4px;
             margin: 0px;
         }}
         QMainWindow::separator:hover {{
