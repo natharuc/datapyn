@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.54.1 (2026-07-21)
+
+### Bug Fixes
+
+- **ui**: Compact side docks and show resize handles
+  ([`a492799`](https://github.com/natharuc/datapyn/commit/a49279982842a360d4fcbe2c6ba8f10593f83c58))
+
+- **ui**: Show side dock resize grip on Object Explorer
+  ([`8b87bac`](https://github.com/natharuc/datapyn/commit/8b87bac92d6c4a8e39b9c656cea7194adc7b3994))
+
+- **ui**: Side dock column resize and block width with open docks
+  ([`57d9ffb`](https://github.com/natharuc/datapyn/commit/57d9ffb826071d3c1498fb43338ac40942342346))
+
+- **ui**: Side dock resize grip and block layout with Object Explorer
+  ([`9641758`](https://github.com/natharuc/datapyn/commit/96417587eb0d427e9b2f37c07ab5a52024ed7885))
+
+### Heuristic
+
+- Merge pull request #149 from natharuc/fix/side-dock-resize
+  ([`9641758`](https://github.com/natharuc/datapyn/commit/96417587eb0d427e9b2f37c07ab5a52024ed7885))
+
+
 ## v1.54.0 (2026-07-20)
 
 ### Bug Fixes
