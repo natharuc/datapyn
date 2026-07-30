@@ -356,8 +356,12 @@ def test_on_session_connection_changed_clears_autocomplete_before_schema_reload(
     assert widget.editor._sql_schema == {}
     widget.editor.set_database_context.assert_called_once_with("")
     session_block.set_sql_schema.assert_called_once_with({})
-    main_window._schema_service.invalidate_cache.assert_called_once_with("Conn", session_id="sid-1")
-    main_window._load_schema_with_loading.assert_called_once_with(connector, "Conn", session_id="sid-1")
+    main_window._schema_service.invalidate_cache.assert_called_once_with(
+        "Conn", session_id="sid-1", connection_group=""
+    )
+    main_window._load_schema_with_loading.assert_called_once_with(
+        connector, "Conn", session_id="sid-1", connection_group=""
+    )
     session_block.db_panel.set_database.assert_called_once_with("newdb")
 
 
@@ -376,10 +380,10 @@ def test_on_session_connection_changed_ignores_unfocused_session(qapp):
     widget.editor.set_database_context.assert_not_called()
     # Unfocused tabs still refresh schema cache (MCP / autocomplete), but skip UI updates.
     main_window._schema_service.invalidate_cache.assert_called_once_with(
-        "Conn", session_id="sid-1"
+        "Conn", session_id="sid-1", connection_group=""
     )
     main_window._load_schema_with_loading.assert_called_once_with(
-        connector, "Conn", session_id="sid-1"
+        connector, "Conn", session_id="sid-1", connection_group=""
     )
 
 

@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Dict, List, Optional
 
+from src.core.connection_ref import ConnectionRef
 from src.database.database_connector import DatabaseConnector, get_connector_database_context
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,10 @@ def connect_connector_from_config(
     return connector
 
 
+def _connection_storage_key(connection_group: str, connection_name: str) -> str:
+    return ConnectionRef(group=connection_group or "", name=connection_name).storage_key()
+
+
 class BlockConnectorPool:
     """Keeps one live connector per block key (isolated sessions)."""
 
@@ -68,14 +73,16 @@ class BlockConnectorPool:
     def peek_connected(
         self,
         block_key: str,
+        connection_group: str,
         connection_name: str,
         *,
         database: Optional[str] = None,
         database_context: Optional[str] = None,
     ) -> Optional[DatabaseConnector]:
         """Return an existing live connector without opening a new connection."""
+        storage_key = _connection_storage_key(connection_group, connection_name)
         entry = self._entries.get(block_key)
-        if not entry or entry.get("connection_name") != connection_name:
+        if not entry or entry.get("connection_key") != storage_key:
             return None
         connector = entry.get("connector")
         if connector is None or not connector.is_connected():
@@ -87,6 +94,7 @@ class BlockConnectorPool:
     def get(
         self,
         block_key: str,
+        connection_group: str,
         connection_name: str,
         config: dict,
         *,
@@ -94,8 +102,9 @@ class BlockConnectorPool:
         database: Optional[str] = None,
         database_context: Optional[str] = None,
     ) -> DatabaseConnector:
+        storage_key = _connection_storage_key(connection_group, connection_name)
         entry = self._entries.get(block_key)
-        if entry and entry.get("connection_name") == connection_name:
+        if entry and entry.get("connection_key") == storage_key:
             connector = entry.get("connector")
             if connector is not None and connector.is_connected():
                 self._touch(block_key)
@@ -119,19 +128,25 @@ class BlockConnectorPool:
 
         self._entries[block_key] = {
             "connector": connector,
-            "connection_name": connection_name,
+            "connection_key": storage_key,
             "last_used_at": time.monotonic(),
         }
         return connector
 
-    def register(self, block_key: str, connection_name: str, connector: DatabaseConnector) -> None:
+    def register(
+        self,
+        block_key: str,
+        connection_group: str,
+        connection_name: str,
+        connector: DatabaseConnector,
+    ) -> None:
         """Adopt an already-connected connector (e.g. after auto-connect worker)."""
         existing = self._entries.get(block_key)
         if existing and existing.get("connector") is not connector:
             self._disconnect(existing.get("connector"))
         self._entries[block_key] = {
             "connector": connector,
-            "connection_name": connection_name,
+            "connection_key": _connection_storage_key(connection_group, connection_name),
             "last_used_at": time.monotonic(),
         }
 

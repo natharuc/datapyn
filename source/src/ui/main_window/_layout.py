@@ -418,12 +418,6 @@ class LayoutMixin:
         """Updates the saved connections list"""
         self.connection_panel.refresh_connections()
 
-    def _on_connection_double_click(self, item: QListWidgetItem):
-        """Connects on double click on connection"""
-        conn_name = item.data(Qt.ItemDataRole.UserRole)
-        if conn_name:
-            self._quick_connect(conn_name)
-
     def _toggle_panel_visibility(self, panel_name: str, visible: bool):
         """Controls visibility of a panel"""
         if visible:

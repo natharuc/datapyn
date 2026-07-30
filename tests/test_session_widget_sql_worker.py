@@ -1,6 +1,6 @@
 """Regression tests for SessionWidget SQL worker lifecycle."""
 
-import time
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -68,12 +68,18 @@ class _ThreadHost(QWidget, SessionsMixin):
   """Minimal MainWindow stand-in for background-thread adoption tests."""
 
 
-class _SlowConnector:
+class _BlockingConnector:
     db_type = "mssql"
 
+    def __init__(self):
+        self._release = threading.Event()
+
     def execute_query(self, query, parameters=None):
-        time.sleep(3.0)
+        self._release.wait(timeout=30)
         return None
+
+    def release(self):
+        self._release.set()
 
 
 def test_cleanup_orphans_sql_thread_without_destroy_while_running(qtbot, monkeypatch):
@@ -90,7 +96,8 @@ def test_cleanup_orphans_sql_thread_without_destroy_while_running(qtbot, monkeyp
     qtbot.addWidget(widget)
 
     thread = QThread()
-    worker = SessionSqlWorker(_SlowConnector(), "SELECT 1")
+    connector = _BlockingConnector()
+    worker = SessionSqlWorker(connector, "SELECT 1")
     worker.moveToThread(thread)
     widget._sql_thread = thread
     widget._sql_worker = worker
@@ -104,10 +111,12 @@ def test_cleanup_orphans_sql_thread_without_destroy_while_running(qtbot, monkeyp
     from PyQt6 import sip
 
     widget.cleanup()
+    QApplication.processEvents()
 
     assert not sip.isdeleted(thread)
     assert thread.isRunning() or id(thread) in getattr(host, "_adopted_connection_threads", {})
 
+    connector.release()
     stop_qthread = __import__(
         "src.utils.qt_threading", fromlist=["stop_qthread"]
     ).stop_qthread

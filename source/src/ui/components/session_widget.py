@@ -172,10 +172,12 @@ class BlockAutoConnectWorker(QObject):
         connection_name: str,
         connection_manager=None,
         *,
+        connection_group: str = "",
         database_name: str | None = None,
     ):
         super().__init__()
         self.connection_name = connection_name
+        self.connection_group = connection_group or ""
         self._manager = connection_manager
         self._database_name = database_name
 
@@ -186,7 +188,7 @@ class BlockAutoConnectWorker(QObject):
                 from src.database.connection_manager import ConnectionManager
                 manager = ConnectionManager()
 
-            config = manager.get_connection_config(self.connection_name)
+            config = manager.get_connection_config(self.connection_group, self.connection_name)
             if not config:
                 self.finished.emit(None, f"Connection config not found: {self.connection_name}")
                 return
@@ -246,7 +248,7 @@ class SessionWidget(QWidget):
     execute_python = pyqtSignal(str)  # code
     status_changed = pyqtSignal(str)  # status message
     connection_changed = pyqtSignal(str, str)  # (connection_name, database)
-    connection_drop_requested = pyqtSignal(str)  # connection_name
+    connection_drop_requested = pyqtSignal(str, str)  # group, name
     block_connection_changed = pyqtSignal(object, str)  # (CodeBlock, connection_name)
     block_database_changed = pyqtSignal(object, str)  # (CodeBlock, database_name)
     execution_started = pyqtSignal()  # Emitted when execution starts (for running indicator)
@@ -1123,6 +1125,18 @@ class SessionWidget(QWidget):
             return config.get("database", ""), target or None
         return target or config.get("database", ""), None
 
+    def _sql_connection_identity(self, block, connection_name=None):
+        """Return (group, name) for SQL execution on a block or session default."""
+        if connection_name:
+            group = ""
+            if block and hasattr(block, "get_connection_group"):
+                group = block.get_connection_group() or ""
+            return group, connection_name
+        conn = self.session.connection_name
+        if not conn:
+            return "", None
+        return self.session.connection_group or "", conn
+
     def _peek_sql_connector_for_block(
         self,
         block,
@@ -1133,12 +1147,12 @@ class SessionWidget(QWidget):
         if block is None or not hasattr(block, "get_block_key"):
             return self.session.connector if self.session.is_connected else None
 
-        conn_name = connection_name or self.session.connection_name
+        conn_group, conn_name = self._sql_connection_identity(block, connection_name)
         if not conn_name:
             return None
 
         manager = self._get_connection_manager()
-        config = manager.get_connection_config(conn_name)
+        config = manager.get_connection_config(conn_group, conn_name)
         if not config:
             return None
 
@@ -1147,6 +1161,7 @@ class SessionWidget(QWidget):
         )
         return self._block_connector_pool.peek_connected(
             block.get_block_key(),
+            conn_group,
             conn_name,
             database=connect_db,
             database_context=db_context,
@@ -1207,7 +1222,7 @@ class SessionWidget(QWidget):
         self._touch_db_activity()
 
         block = self.editor.get_current_executing_block()
-        conn_name = connection_name or self.session.connection_name
+        conn_group, conn_name = self._sql_connection_identity(block, connection_name)
         if not conn_name:
             self.append_output(S.session_widget.no_active_connection, error=True)
             self.status_changed.emit(S.session_widget.status_no_connection)
@@ -1226,6 +1241,7 @@ class SessionWidget(QWidget):
             worker = BlockAutoConnectWorker(
                 conn_name,
                 connection_manager=manager,
+                connection_group=conn_group,
                 database_name=database_name or (block.get_database_name() if block else None),
             )
             worker.moveToThread(thread)
@@ -1303,7 +1319,7 @@ class SessionWidget(QWidget):
             return
 
         block = self.editor.get_current_executing_block()
-        conn_name = connection_name or self.session.connection_name
+        conn_group, conn_name = self._sql_connection_identity(block, connection_name)
         if not conn_name:
             self.append_output(S.session_widget.no_active_connection, error=True)
             self.status_changed.emit(S.session_widget.status_no_connection)
@@ -1322,6 +1338,7 @@ class SessionWidget(QWidget):
             worker = BlockAutoConnectWorker(
                 conn_name,
                 connection_manager=manager,
+                connection_group=conn_group,
                 database_name=database_name or (block.get_database_name() if block else None),
             )
             worker.moveToThread(thread)
@@ -1426,9 +1443,11 @@ class SessionWidget(QWidget):
 
         self._touch_db_activity()
 
-        conn_name = connection_name or self.session.connection_name
+        conn_group, conn_name = self._sql_connection_identity(block, connection_name)
         if block is not None and conn_name and hasattr(block, "get_block_key"):
-            self._block_connector_pool.register(block.get_block_key(), conn_name, connector)
+            self._block_connector_pool.register(
+                block.get_block_key(), conn_group, conn_name, connector
+            )
 
         self._execute_sql_with_connector(connector, query, block_name, connection_name, database_name, sql_parameters)
 

@@ -1390,6 +1390,7 @@ class MCPToolRegistry(QObject):
     def _connect_database(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Connect the current session to a database."""
         connection_name = args.get("connection_name", "")
+        connection_group = str(args.get("connection_group") or "")
         if not connection_name:
             return {"error": "connection_name is required."}
 
@@ -1398,20 +1399,27 @@ class MCPToolRegistry(QObject):
         if not conn_manager:
             return {"error": "Connection manager not available."}
 
-        config = conn_manager.get_connection_config_by_name(connection_name)
+        config = conn_manager.get_connection_config(connection_group, connection_name)
         if not config:
-            saved = [ref.display() for ref in conn_manager.get_saved_connections()]
-            return {"error": f"Connection '{connection_name}' not found. Available: {saved}"}
-
-        ref = conn_manager.get_connection_ref_by_name(connection_name)
-        group = ref.group if ref else ""
+            if not connection_group:
+                ref = conn_manager.get_connection_ref_by_name(connection_name)
+                if ref is None:
+                    saved = [ref.display() for ref in conn_manager.get_saved_connections()]
+                    return {
+                        "error": f"Connection '{connection_name}' not found or ambiguous. Available: {saved}"
+                    }
+                connection_group = ref.group
+                config = conn_manager.get_connection_config(connection_group, connection_name)
+            if not config:
+                saved = [ref.display() for ref in conn_manager.get_saved_connections()]
+                return {"error": f"Connection '{connection_name}' not found. Available: {saved}"}
 
         session_widget = self._get_active_session_widget()
         if not session_widget:
             return {"error": "No active session."}
 
         if hasattr(session_widget, "connect_to_database"):
-            session_widget.connect_to_database(group, connection_name)
+            session_widget.connect_to_database(connection_group, connection_name)
             return {
                 "content": [{"type": "text", "text": f"Connection request sent for '{connection_name}'."}]
             }
@@ -1451,6 +1459,7 @@ class MCPToolRegistry(QObject):
     def _open_connection(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Open a saved connection in a NEW TAB."""
         connection_name = args.get("connection_name", "")
+        connection_group = str(args.get("connection_group") or "")
         if not connection_name:
             return {"error": "connection_name is required."}
 
@@ -1459,14 +1468,19 @@ class MCPToolRegistry(QObject):
         if not conn_manager:
             return {"error": "Connection manager not available."}
 
-        config = conn_manager.get_connection_config(connection_name)
+        config = conn_manager.get_connection_config(connection_group, connection_name)
+        if not config and not connection_group:
+            ref = conn_manager.get_connection_ref_by_name(connection_name)
+            if ref is not None:
+                connection_group = ref.group
+                config = conn_manager.get_connection_config(connection_group, connection_name)
         if not config:
-            saved = list(conn_manager.saved_configs.get("connections", {}).keys())
+            saved = [ref.display() for ref in conn_manager.get_saved_connections()]
             return {"error": f"Connection '{connection_name}' not found. Available: {saved}"}
 
         # Use _connect_new_tab which always creates a new tab
         if hasattr(mw, "_connect_new_tab"):
-            mw._connect_new_tab(connection_name)
+            mw._connect_new_tab(connection_group, connection_name)
             current_widget = mw._get_current_session_widget() if hasattr(mw, "_get_current_session_widget") else None
             session = getattr(current_widget, "session", None) if current_widget else None
             if getattr(session, "session_id", None):
@@ -2732,14 +2746,16 @@ class MCPToolRegistry(QObject):
 
     # === Database Intelligence Tool Implementations ===
 
-    def _get_connector(self, connection_name: str = ""):
+    def _get_connector(self, connection_name: str = "", connection_group: str = ""):
         """Get a database connector — a named one, or the current session's."""
         name = (connection_name or "").strip()
+        group = (connection_group or "").strip()
+        session = self._get_active_session()
         if not name:
-            session = self._get_active_session()
             if not session or not session.connection_name:
                 return None, "No database connection in current session."
             name = session.connection_name
+            group = getattr(session, "connection_group", None) or ""
 
         mw = self._main_window
         conn_manager = getattr(mw, "_connection_manager", None)
@@ -2751,7 +2767,7 @@ class MCPToolRegistry(QObject):
             except Exception as e:
                 return None, f"Cannot access connection manager: {e}"
 
-        connector = conn_manager.get_connection(name)
+        connector = conn_manager.get_connection(group, name)
         if not connector:
             return None, f"Connection '{name}' not found."
 

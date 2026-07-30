@@ -75,6 +75,28 @@ class TestConnectionManager:
         assert connection_manager.get_connection_config("Prod", "Server")["host"] == "prod"
         assert connection_manager.get_connection_config("Dev", "Server")["host"] == "dev"
 
+    def test_resolve_by_name_only_ambiguous_returns_none(self, connection_manager):
+        connection_manager.save_connection_config(
+            name="Server", db_type="mssql", host="prod", port=1433, database="db", group="Prod"
+        )
+        connection_manager.save_connection_config(
+            name="Server", db_type="mssql", host="dev", port=1433, database="db", group="Dev"
+        )
+
+        from src.core.connection_ref import resolve_by_name_only
+
+        assert resolve_by_name_only(connection_manager, "Server") is None
+
+    def test_get_connection_config_by_name_ambiguous_returns_none(self, connection_manager):
+        connection_manager.save_connection_config(
+            name="Server", db_type="mssql", host="prod", port=1433, database="db", group="Prod"
+        )
+        connection_manager.save_connection_config(
+            name="Server", db_type="mssql", host="dev", port=1433, database="db", group="Dev"
+        )
+
+        assert connection_manager.get_connection_config_by_name("Server") is None
+
     def test_duplicate_in_same_group_raises(self, connection_manager):
         connection_manager.save_connection_config(
             name="Dup", db_type="mssql", host="localhost", port=1433, database="db", group="Prod"

@@ -194,7 +194,10 @@ class ConnectionsMixin:
             widget.connection_changed.emit(connection_name, display_name)
 
         # --- Update connection panel ---
-        config = self.connection_manager.get_connection_config(connection_name)
+        connection_group = ""
+        if widget and hasattr(widget, "session"):
+            connection_group = getattr(widget.session, "connection_group", None) or ""
+        config = self.connection_manager.get_connection_config(connection_group, connection_name)
         if config:
             host = config.get("host", "localhost")
             db_type = config.get("db_type", "")

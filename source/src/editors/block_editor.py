@@ -152,7 +152,7 @@ class BlockEditor(QWidget):
     block_removed = pyqtSignal(object)  # CodeBlock
 
     # Signal when connection is dropped on editor area (to connect session)
-    connection_drop_requested = pyqtSignal(str)  # connection_name
+    connection_drop_requested = pyqtSignal(str, str)  # group, name
 
     # Signal when data file is dropped (to show import dialog)
     file_dropped = pyqtSignal(str)  # file_path
@@ -1284,7 +1284,11 @@ class BlockEditor(QWidget):
 
                 # Restore custom connection only for blocks after the first
                 if "connection_name" in data:
-                    block.set_connection_name(data["connection_name"], data.get("db_type"))
+                    block.set_connection_name(
+                        data["connection_name"],
+                        data.get("db_type"),
+                        connection_group=data.get("connection_group"),
+                    )
 
             # Restore block name
             if "block_name" in data and data["block_name"]:
@@ -1484,12 +1488,15 @@ class BlockEditor(QWidget):
         and optionally the database.
         """
         conn_name = ""
+        conn_group = ""
         db_type = ""
         color = ""
         db_name = ""
 
         if mime_data.hasFormat("application/x-connection-name"):
             conn_name = bytes(mime_data.data("application/x-connection-name")).decode("utf-8")
+        if mime_data.hasFormat("application/x-connection-group"):
+            conn_group = bytes(mime_data.data("application/x-connection-group")).decode("utf-8")
         if mime_data.hasFormat("application/x-db-type"):
             db_type = bytes(mime_data.data("application/x-db-type")).decode("utf-8")
         if mime_data.hasFormat("application/x-connection-color"):
@@ -1500,7 +1507,12 @@ class BlockEditor(QWidget):
         block = self.add_block(language="sql", isolate_sql_context=True)
 
         if conn_name:
-            block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
+            block.set_connection_name(
+                conn_name,
+                db_type=db_type or None,
+                color=color or None,
+                connection_group=conn_group or None,
+            )
 
         if db_name:
             block.set_database_name(db_name)

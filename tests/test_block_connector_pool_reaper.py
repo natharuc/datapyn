@@ -4,6 +4,11 @@ import time
 from unittest.mock import MagicMock, patch
 
 from src.database.block_connector_pool import BlockConnectorPool
+from src.core.connection_ref import ConnectionRef
+
+
+def _conn_key(name: str = "conn", group: str = "") -> str:
+    return ConnectionRef(group=group, name=name).storage_key()
 
 
 def test_reap_idle_releases_stale_connector():
@@ -13,7 +18,7 @@ def test_reap_idle_releases_stale_connector():
     connector.is_query_busy.return_value = False
     pool._entries["block-a"] = {
         "connector": connector,
-        "connection_name": "conn",
+        "connection_key": _conn_key(),
         "last_used_at": time.monotonic() - 600,
     }
 
@@ -31,7 +36,7 @@ def test_reap_idle_skips_active_connector():
     connector.is_query_busy.return_value = False
     pool._entries["block-a"] = {
         "connector": connector,
-        "connection_name": "conn",
+        "connection_key": _conn_key(),
         "last_used_at": time.monotonic(),
     }
 
@@ -49,7 +54,7 @@ def test_reap_idle_skips_busy_query():
     connector.is_query_busy.return_value = True
     pool._entries["block-a"] = {
         "connector": connector,
-        "connection_name": "conn",
+        "connection_key": _conn_key(),
         "last_used_at": time.monotonic() - 600,
     }
 
@@ -64,7 +69,7 @@ def test_reap_idle_disabled_when_timeout_zero():
     connector = MagicMock()
     pool._entries["block-a"] = {
         "connector": connector,
-        "connection_name": "conn",
+        "connection_key": _conn_key(),
         "last_used_at": 0.0,
     }
 
