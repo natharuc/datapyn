@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.54.2 (2026-07-30)
+
+### Bug Fixes
+
+- **ci**: Unblock shard 0 hang and gitpython audit
+  ([`59bcbf7`](https://github.com/natharuc/datapyn/commit/59bcbf78587cb32adcfcfd5422136c954c36b38f))
+
+- **connections**: Handle session mocks without connection_group in tests
+  ([`1b5da11`](https://github.com/natharuc/datapyn/commit/1b5da11a3ce3864a15d2c9457a1dd4b60887341a))
+
+- **connections**: Resolve saved connections by group and name
+  ([`b1eee65`](https://github.com/natharuc/datapyn/commit/b1eee657ba5397cb35c4695c666bfe0f5ad1e5aa))
+
+- **connections**: Resolve saved connections by group and name
+  ([`be116ce`](https://github.com/natharuc/datapyn/commit/be116ceb302c4e7ce7d49c5b3a813e24cbc8ec35))
+
+### Heuristic
+
+- Merge pull request #151 from natharuc/fix/connection-group-name-key
+  ([`b1eee65`](https://github.com/natharuc/datapyn/commit/b1eee657ba5397cb35c4695c666bfe0f5ad1e5aa))
+
+
 ## v1.54.1 (2026-07-21)
 
 ### Bug Fixes
