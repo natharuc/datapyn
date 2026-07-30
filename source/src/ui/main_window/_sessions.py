@@ -1421,7 +1421,7 @@ class SessionsMixin:
             connection_name: Connection name
             database: Nome do banco de dados atual
         """
-        connection_group = session.connection_group or ""
+        connection_group = getattr(session, "connection_group", None) or ""
         config = self.connection_manager.get_connection_config(connection_group, connection_name)
         if not config:
             return
