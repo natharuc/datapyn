@@ -69,6 +69,7 @@ override-dependencies = [
     "click>=8.3.3",
     "pillow>=12.3.0",
     "setuptools>=83.0.0",
+    "gitpython>=3.1.55",
 ]
 
 

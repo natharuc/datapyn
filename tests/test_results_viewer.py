@@ -764,13 +764,14 @@ class TestResultsViewerMultiTab:
 
     def test_set_session_resolves_connection_color(self, viewer):
         """Setting a session should sync the result tab color from the connection config."""
-        session = MagicMock(connection_name="analytics")
+        session = MagicMock(connection_name="analytics", connection_group="Prod")
         manager = MagicMock()
         manager.get_connection_config.return_value = {"color": "#8b5cf6"}
 
         with patch("src.database.connection_manager.ConnectionManager", return_value=manager):
             viewer.set_session(session)
 
+        manager.get_connection_config.assert_called_once_with("Prod", "analytics")
         assert viewer._connection_color == "#8b5cf6"
         assert viewer._result_tabs.tabBar()._connection_color == "#8b5cf6"
 
