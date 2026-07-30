@@ -355,6 +355,7 @@ class TestConnectionResolution:
         block = MagicMock()
         block.get_block_key.return_value = "block-key"
         block.get_database_name.return_value = None
+        block.get_connection_group.return_value = ""
 
         with patch.object(widget.editor, "get_current_executing_block", return_value=block):
             with patch("src.database.connection_manager.ConnectionManager") as MockMgr:
@@ -367,7 +368,7 @@ class TestConnectionResolution:
                     "username": "u",
                     "password": "",
                 }
-                widget._block_connector_pool.register("block-key", "BlockConn", mock_connector)
+                widget._block_connector_pool.register("block-key", "", "BlockConn", mock_connector)
 
                 with patch.object(widget, "_execute_sql_with_connector") as mock_exec:
                     widget._on_execute_sql("SELECT 1", block_name="bloco1", connection_name="BlockConn")

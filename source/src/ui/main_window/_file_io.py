@@ -118,18 +118,22 @@ class FileIOMixin:
         try:
             # Capture connection from current tab BEFORE creating new one
             previous_connection = None
+            previous_group = ""
             previous_color = None
             previous_database_context = ""
             current_widget = self._get_current_session_widget()
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
+                previous_group = getattr(current_widget.session, "connection_group", None) or ""
                 previous_database_context = getattr(current_widget.session, "database_context", "") or ""
                 if not previous_database_context:
                     previous_database_context = get_connector_database_context(
                         getattr(current_widget.session, "connector", None)
                     )
                 if previous_connection:
-                    config = self.connection_manager.get_connection_config(previous_connection)
+                    config = self.connection_manager.get_connection_config(
+                        previous_group, previous_connection
+                    )
                     if config:
                         previous_color = config.get("color", "#007ACC") or "#007ACC"
 
@@ -271,7 +275,7 @@ class FileIOMixin:
             if previous_connection:
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(150, lambda: self._connect_session_background(
-                    widget, session, previous_connection, previous_color, previous_database_context
+                    widget, session, previous_group, previous_connection, previous_color, previous_database_context
                 ))
 
         except Exception as e:
@@ -822,7 +826,8 @@ class FileIOMixin:
 
             if session_widget.session.connection_name:
                 conn_name = session_widget.session.connection_name
-                config = self.connection_manager.get_connection_config(conn_name)
+                conn_group = session_widget.session.connection_group or ""
+                config = self.connection_manager.get_connection_config(conn_group, conn_name)
                 if not config:
                     connector = getattr(session_widget.session, "connector", None)
                     connector_params = getattr(connector, "connection_params", None)

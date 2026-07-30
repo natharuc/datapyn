@@ -456,9 +456,11 @@ class Session(QObject):
         if self._connection_name and connection_manager:
             ref = self.connection_ref
             if ref is None:
-                ref = resolve_by_name_only(connection_manager, self._connection_name)
-            if ref is None:
                 return
+            if not ref.group:
+                resolved = resolve_by_name_only(connection_manager, ref.name)
+                if resolved is not None:
+                    ref = resolved
 
             connector = connection_manager.get_connection(ref.group, ref.name)
             if connector and connector.is_connected():

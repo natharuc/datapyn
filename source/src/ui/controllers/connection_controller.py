@@ -252,9 +252,10 @@ class ConnectionController(QObject):
         
         if session and session.is_connected:
             conn_name = session.connection_name
-            
+            conn_group = session.connection_group or ""
+
             # Get connection config
-            config = self.connection_manager.get_connection_config(conn_name)
+            config = self.connection_manager.get_connection_config(conn_group, conn_name)
             host = config.get("host", "localhost") if config else "localhost"
             db = config.get("database", "") if config else ""
             db_type = config.get("db_type", "") if config else ""

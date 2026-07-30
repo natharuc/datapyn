@@ -73,10 +73,10 @@ def resolve_by_name_only(manager: ConnectionManager, name: str) -> Optional[Conn
     ungrouped = [ref for ref in matches if not ref.group]
     if len(ungrouped) == 1:
         return ungrouped[0]
-    logger.warning(
-        "Ambiguous connection name %r (%d matches); using first match %s",
+    logger.error(
+        "Ambiguous connection name %r (%d matches in different groups); "
+        "specify connection_group and connection_name",
         name,
         len(matches),
-        matches[0].display(),
     )
-    return matches[0]
+    return None

@@ -88,14 +88,18 @@ class SessionController(QObject):
         try:
             # Capture active session connection BEFORE creating new one
             previous_connection = None
+            previous_group = ""
             previous_color = None
             
             if inherit_connection:
                 current_widget = self.get_current_session_widget()
                 if current_widget and hasattr(current_widget, "session"):
                     previous_connection = current_widget.session.connection_name
+                    previous_group = getattr(current_widget.session, "connection_group", None) or ""
                     if previous_connection:
-                        config = self.connection_manager.get_connection_config(previous_connection)
+                        config = self.connection_manager.get_connection_config(
+                            previous_group, previous_connection
+                        )
                         if config:
                             previous_color = config.get("color", "#007ACC") or "#007ACC"
             
@@ -112,7 +116,7 @@ class SessionController(QObject):
             # Defer connection to background with delay
             if previous_connection:
                 QTimer.singleShot(150, lambda: self._connect_session_background(
-                    widget, session, previous_connection, previous_color
+                    widget, session, previous_group, previous_connection, previous_color
                 ))
             
             self.session_created.emit(widget)
@@ -161,7 +165,8 @@ class SessionController(QObject):
         
         # Apply tab color based on session connection
         if hasattr(session, "_connection_name") and session._connection_name:
-            config = self.connection_manager.get_connection_config(session._connection_name)
+            conn_group = getattr(session, "_connection_group", None) or ""
+            config = self.connection_manager.get_connection_config(conn_group, session._connection_name)
             if config:
                 color = config.get("color", "#007ACC") or "#007ACC"
                 self.session_tabs.set_tab_connection_color(index, color)
@@ -190,7 +195,7 @@ class SessionController(QObject):
             lambda block, conn_name: self._main._on_block_connection_changed(block, conn_name)
         )
         widget.connection_drop_requested.connect(
-            lambda conn_name: self._main._quick_connect(conn_name)
+            lambda group, name: self._main._quick_connect(group, name)
         )
         widget.block_database_changed.connect(
             lambda block, db_name: self._main._on_block_database_changed(block, db_name)
@@ -231,7 +236,7 @@ class SessionController(QObject):
             lambda ns, w=widget: w.editor.refresh_completion_context()
         )
     
-    def _connect_session_background(self, widget, session, connection_name, color):
+    def _connect_session_background(self, widget, session, connection_group, connection_name, color):
         """Connect session in background thread to avoid UI freeze"""
         
         import weakref
@@ -239,9 +244,10 @@ class SessionController(QObject):
         class ConnectionWorker(QObject):
             finished = pyqtSignal(bool)
 
-            def __init__(self, session, connection_name):
+            def __init__(self, session, connection_group, connection_name):
                 super().__init__()
                 self._session_ref = weakref.ref(session)
+                self._connection_group = connection_group or ""
                 self._connection_name = connection_name
                 self._cancelled = False
 
@@ -257,7 +263,7 @@ class SessionController(QObject):
                     self.finished.emit(False)
                     return
                 try:
-                    result = session_ref.connect(self._connection_name)
+                    result = session_ref.connect(self._connection_group, self._connection_name)
                     if self._cancelled:
                         self.finished.emit(False)
                         return
@@ -267,7 +273,7 @@ class SessionController(QObject):
                     self.finished.emit(False)
 
         thread = QThread()
-        worker = ConnectionWorker(session, connection_name)
+        worker = ConnectionWorker(session, connection_group, connection_name)
 
         def on_connected(success):
             if success and color:
@@ -417,7 +423,8 @@ class SessionController(QObject):
             # Inherit connection
             if hasattr(widget, "session") and widget.session.connection_name:
                 try:
-                    session.connect(widget.session.connection_name)
+                    src = widget.session
+                    session.connect(src.connection_group or "", src.connection_name)
                 except Exception:
                     pass
             
@@ -437,7 +444,9 @@ class SessionController(QObject):
             
             # Apply tab color
             if session.connection_name:
-                config = self.connection_manager.get_connection_config(session.connection_name)
+                config = self.connection_manager.get_connection_config(
+                    session.connection_group or "", session.connection_name
+                )
                 if config:
                     color = config.get("color", "#007ACC") or "#007ACC"
                     self.session_tabs.set_tab_connection_color(tab_index, color)

@@ -24,8 +24,8 @@ def test_pool_reuses_connector_for_same_block_key():
         "src.database.block_connector_pool.connect_connector_from_config",
         return_value=connector,
     ) as connect_mock:
-        first = pool.get("block-a", "conn", config)
-        second = pool.get("block-a", "conn", config)
+        first = pool.get("block-a", "", "conn", config)
+        second = pool.get("block-a", "", "conn", config)
 
     assert first is second
     connect_mock.assert_called_once()
@@ -49,29 +49,56 @@ def test_pool_creates_separate_connectors_per_block_key():
         "src.database.block_connector_pool.connect_connector_from_config",
         side_effect=connectors,
     ):
-        a = pool.get("block-a", "conn", config)
-        b = pool.get("block-b", "conn", config)
+        a = pool.get("block-a", "", "conn", config)
+        b = pool.get("block-b", "", "conn", config)
 
     assert a is connectors[0]
     assert b is connectors[1]
     assert a is not b
 
 
+def test_pool_distinguishes_same_name_in_different_groups():
+    pool = BlockConnectorPool()
+    config_prod = {
+        "db_type": "postgresql",
+        "host": "prod",
+        "port": 5432,
+        "database": "db1",
+        "username": "u",
+        "password": "",
+    }
+    config_dev = dict(config_prod)
+    config_dev["host"] = "dev"
+    connectors = [MagicMock(), MagicMock()]
+    for c in connectors:
+        c.is_connected.return_value = True
+
+    with patch(
+        "src.database.block_connector_pool.connect_connector_from_config",
+        side_effect=connectors,
+    ):
+        prod = pool.get("block-a", "Prod", "conn", config_prod)
+        dev = pool.get("block-a", "Dev", "conn", config_dev)
+
+    assert prod is connectors[0]
+    assert dev is connectors[1]
+
+
 def test_peek_connected_returns_none_without_entry():
     pool = BlockConnectorPool()
-    assert pool.peek_connected("block-a", "conn") is None
+    assert pool.peek_connected("block-a", "", "conn") is None
 
 
 def test_peek_connected_reuses_live_connector_without_connect():
     pool = BlockConnectorPool()
     connector = MagicMock()
     connector.is_connected.return_value = True
-    pool.register("block-a", "conn", connector)
+    pool.register("block-a", "", "conn", connector)
 
     with patch(
         "src.database.block_connector_pool.connect_connector_from_config",
     ) as connect_mock:
-        found = pool.peek_connected("block-a", "conn")
+        found = pool.peek_connected("block-a", "", "conn")
 
     assert found is connector
     connect_mock.assert_not_called()

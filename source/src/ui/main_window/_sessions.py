@@ -96,7 +96,8 @@ class SessionsMixin:
             # Inherit connection from original session
             if hasattr(widget, "session") and widget.session.connection_name:
                 try:
-                    connected = session.connect(widget.session.connection_name)
+                    src = widget.session
+                    connected = session.connect(src.connection_group or "", src.connection_name)
                     if not connected:
                         pass  # Connection failed, session remains without connection
                 except Exception:
@@ -111,7 +112,7 @@ class SessionsMixin:
                 lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
             )
             new_widget.connection_drop_requested.connect(
-                lambda conn_name: self._quick_connect(conn_name)
+                lambda group, name: self._quick_connect(group, name)
             )
             new_widget.block_database_changed.connect(
                 lambda block, db_name: self._on_block_database_changed(block, db_name)
@@ -146,7 +147,8 @@ class SessionsMixin:
 
             # Apply tab color if original session had connection
             if session.connection_name:
-                config = self.connection_manager.get_connection_config(session.connection_name)
+                conn_group = getattr(widget.session, "connection_group", None) or ""
+                config = self.connection_manager.get_connection_config(conn_group, session.connection_name)
                 if config:
                     color = config.get("color", "#007ACC") or "#007ACC"
                     self.session_tabs.set_tab_connection_color(tab_index, color)
@@ -237,7 +239,13 @@ class SessionsMixin:
 
         session = getattr(widget, "session", None)
         block_connection_name = block.get_connection_name() if hasattr(block, "get_connection_name") else ""
+        block_connection_group = ""
+        if hasattr(block, "get_connection_group"):
+            block_connection_group = block.get_connection_group() or ""
         connection_name = block_connection_name or getattr(session, "connection_name", "")
+        connection_group = block_connection_group if block_connection_name else (
+            getattr(session, "connection_group", None) or ""
+        )
         if not connection_name:
             self.statusBar().showMessage(S.entity_info.no_connection, 4000)
             return
@@ -246,13 +254,13 @@ class SessionsMixin:
         session_connector = getattr(session, "connector", None)
         existing_connector = None
         if block_connection_name:
-            candidate = self.connection_manager.get_connection(connection_name)
+            candidate = self.connection_manager.get_connection(connection_group, connection_name)
             if candidate and self._connector_is_connected(candidate):
                 existing_connector = candidate
         elif session_connector and self._connector_is_connected(session_connector):
             existing_connector = session_connector
 
-        connection_config = self.connection_manager.get_connection_config(connection_name)
+        connection_config = self.connection_manager.get_connection_config(connection_group, connection_name)
         connector = None if connection_config else existing_connector
 
         if connector is None and connection_config is None and existing_connector is None:
@@ -348,18 +356,22 @@ class SessionsMixin:
         try:
             # Capture active session connection BEFORE creating new one
             previous_connection = None
+            previous_group = ""
             previous_color = None
             previous_database_context = ""
             current_widget = self._get_current_session_widget() if inherit_connection else None
             if current_widget and hasattr(current_widget, "session"):
                 previous_connection = current_widget.session.connection_name
+                previous_group = getattr(current_widget.session, "connection_group", None) or ""
                 previous_database_context = getattr(current_widget.session, "database_context", "") or ""
                 if not previous_database_context:
                     previous_database_context = get_connector_database_context(
                         getattr(current_widget.session, "connector", None)
                     )
                 if previous_connection:
-                    config = self.connection_manager.get_connection_config(previous_connection)
+                    config = self.connection_manager.get_connection_config(
+                        previous_group, previous_connection
+                    )
                     if config:
                         previous_color = config.get("color", "#007ACC") or "#007ACC"
 
@@ -376,7 +388,7 @@ class SessionsMixin:
             if previous_connection:
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(150, lambda: self._connect_session_background(
-                    widget, session, previous_connection, previous_color, previous_database_context
+                    widget, session, previous_group, previous_connection, previous_color, previous_database_context
                 ))
         finally:
             self._creating_session = False
@@ -592,7 +604,9 @@ class SessionsMixin:
         ):
             self._stop_orphan_connection(thread, worker)
 
-    def _connect_session_background(self, widget, session, connection_name, color, database_context=""):
+    def _connect_session_background(
+        self, widget, session, connection_group, connection_name, color, database_context=""
+    ):
         """Connect session in a true background thread to avoid UI freeze."""
         from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
@@ -602,10 +616,11 @@ class SessionsMixin:
         class ConnectionWorker(QObject):
             finished = pyqtSignal(bool)
 
-            def __init__(self, session, connection_name, database_context, widget=None):
+            def __init__(self, session, connection_group, connection_name, database_context, widget=None):
                 super().__init__()
                 self._session_ref = weakref.ref(session)
                 self._widget_ref = weakref.ref(widget) if widget is not None else None
+                self._connection_group = connection_group or ""
                 self._connection_name = connection_name
                 self._database_context = database_context
                 self._cancelled = False
@@ -637,7 +652,7 @@ class SessionsMixin:
                 try:
                     if self._database_context:
                         session.database_context = self._database_context
-                    result = session.connect(self._connection_name)
+                    result = session.connect(self._connection_group, self._connection_name)
                     if self._ignore_result():
                         self.finished.emit(False)
                         return
@@ -667,7 +682,7 @@ class SessionsMixin:
         # Create and start background thread
         thread = QThread()
         thread.setObjectName("SessionBackgroundConnection")
-        worker = ConnectionWorker(session, connection_name, database_context, widget)
+        worker = ConnectionWorker(session, connection_group, connection_name, database_context, widget)
         self._adopt_connection_thread(thread, worker)
 
         def cleanup_connection_thread(active_thread=thread, active_worker=worker):
@@ -727,12 +742,15 @@ class SessionsMixin:
     def _handle_empty_state_connection_drop(self, mime_data):
         """Handle connection/database drop on empty state - creates new session with SQL block."""
         conn_name = ""
+        conn_group = ""
         db_type = ""
         color = ""
         db_name = ""
 
         if mime_data.hasFormat("application/x-connection-name"):
             conn_name = bytes(mime_data.data("application/x-connection-name")).decode("utf-8")
+        if mime_data.hasFormat("application/x-connection-group"):
+            conn_group = bytes(mime_data.data("application/x-connection-group")).decode("utf-8")
         if mime_data.hasFormat("application/x-db-type"):
             db_type = bytes(mime_data.data("application/x-db-type")).decode("utf-8")
         if mime_data.hasFormat("application/x-connection-color"):
@@ -743,7 +761,7 @@ class SessionsMixin:
         # Connect session using _quick_connect (creates tab, connects, loads schema,
         # updates Object Explorer, sets tab color)
         if conn_name:
-            self._quick_connect(conn_name)
+            self._quick_connect(conn_group, conn_name)
         else:
             self._new_session()
 
@@ -761,7 +779,12 @@ class SessionsMixin:
         block.set_language("sql")
 
         if conn_name:
-            block.set_connection_name(conn_name, db_type=db_type or None, color=color or None)
+            block.set_connection_name(
+                conn_name,
+                db_type=db_type or None,
+                color=color or None,
+                connection_group=conn_group or None,
+            )
 
         if db_name:
             block.set_database_name(db_name)
@@ -968,7 +991,7 @@ class SessionsMixin:
             lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
         )
         widget.connection_drop_requested.connect(
-            lambda conn_name: self._quick_connect(conn_name)
+            lambda group, name: self._quick_connect(group, name)
         )
         widget.block_database_changed.connect(
             lambda block, db_name: self._on_block_database_changed(block, db_name)
@@ -1025,7 +1048,8 @@ class SessionsMixin:
 
         # During restoration, apply tab color based on session connection
         if hasattr(session, "_connection_name") and session._connection_name:
-            config = self.connection_manager.get_connection_config(session._connection_name)
+            conn_group = getattr(session, "_connection_group", None) or ""
+            config = self.connection_manager.get_connection_config(conn_group, session._connection_name)
             if config:
                 color = config.get("color", "#007ACC") or "#007ACC"
                 self.session_tabs.set_tab_connection_color(index, color)
@@ -1332,7 +1356,9 @@ class SessionsMixin:
             """)
 
             # Update active connection panel
-            config = self.connection_manager.get_connection_config(session.connection_name)
+            config = self.connection_manager.get_connection_config(
+                session.connection_group or "", session.connection_name
+            )
             current_db = get_connector_database_context(session.connector) or getattr(session, "database_context", "")
             if config:
                 self.connection_panel.set_active_connection(
@@ -1395,7 +1421,8 @@ class SessionsMixin:
             connection_name: Connection name
             database: Nome do banco de dados atual
         """
-        config = self.connection_manager.get_connection_config(connection_name)
+        connection_group = session.connection_group or ""
+        config = self.connection_manager.get_connection_config(connection_group, connection_name)
         if not config:
             return
 
@@ -1417,11 +1444,14 @@ class SessionsMixin:
             if not hasattr(self, "_oe_current_connection"):
                 self._oe_current_connection = {}
             self._oe_current_connection[session.session_id] = connection_name
-            self._schema_service.invalidate_cache(connection_name, session_id=session.session_id)
+            self._schema_service.invalidate_cache(
+                connection_name, session_id=session.session_id, connection_group=connection_group
+            )
             self._load_schema_with_loading(
                 session.connector,
                 connection_name,
                 session_id=session.session_id,
+                connection_group=connection_group,
             )
 
         # UI updates only for the focused session tab.
@@ -1710,8 +1740,8 @@ class SessionsMixin:
 
     def _queue_legacy_saved_connection_if_needed(self):
         """Queues the legacy workspace active connection onto the focused tab."""
-        connection_name = getattr(self, "_pending_legacy_active_connection", None)
-        if not connection_name:
+        legacy = getattr(self, "_pending_legacy_active_connection", None)
+        if not legacy:
             return
 
         current_widget = self._get_current_session_widget()
@@ -1722,7 +1752,16 @@ class SessionsMixin:
             self._pending_legacy_active_connection = None
             return
 
-        self._queue_restored_session_connection(current_widget.session.session_id, connection_name)
+        from src.core.connection_ref import ConnectionRef
+
+        group, name = "", str(legacy)
+        if "\x1f" in name:
+            ref = ConnectionRef.from_storage_key(name)
+            group, name = ref.group, ref.name
+
+        self._queue_restored_session_connection(
+            current_widget.session.session_id, name, group
+        )
         self._pending_legacy_active_connection = None
 
     def _connect_next_restored_session(self):

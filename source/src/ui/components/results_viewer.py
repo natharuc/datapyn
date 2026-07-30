@@ -2567,11 +2567,12 @@ class ResultsViewer(QWidget):
 
     def _sync_connection_color_from_session(self):
         connection_name = getattr(self._session, "connection_name", "") if self._session is not None else ""
+        connection_group = getattr(self._session, "connection_group", "") or "" if self._session is not None else ""
         if not connection_name:
             return
         try:
             from src.database.connection_manager import ConnectionManager
-            config = ConnectionManager().get_connection_config(connection_name)
+            config = ConnectionManager().get_connection_config(connection_group, connection_name)
             color = config.get("color", "") if config else ""
         except Exception:
             color = ""
