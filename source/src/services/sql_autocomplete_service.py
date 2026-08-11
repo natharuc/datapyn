@@ -184,12 +184,18 @@ class SqlContextParser:
         if not HAS_SQLGLOT:
             return self._fallback_parse(sql)
 
+        from src.services.syntax_validator import is_large_sql_document, _silence_sqlglot_warnings
+
+        if is_large_sql_document(sql or ""):
+            return self._fallback_parse(sql)
+
         try:
             # Parse SQL - try multiple dialects for best coverage
             parsed = None
             for dialect in [None, "tsql", "mysql", "postgres"]:
                 try:
-                    parsed = sqlglot.parse(sql, dialect=dialect)
+                    with _silence_sqlglot_warnings():
+                        parsed = sqlglot.parse(sql, dialect=dialect)
                     if parsed:
                         break
                 except Exception:
@@ -361,6 +367,12 @@ class SqlAutoCompleteService:
 
     def get_completions(self, text: str, cursor_line: int, cursor_col: int) -> List[Tuple[str, str, str]]:
         """Get contextual completions at the cursor position."""
+        from src.services.syntax_validator import is_large_sql_document
+
+        # Large migration scripts: skip sqlglot script-state analysis entirely.
+        if is_large_sql_document(text or ""):
+            return self._keyword_completions()
+
         text_before = self._text_before_cursor(text, cursor_line, cursor_col)
         if not text_before.strip():
             return self._keyword_completions()
@@ -758,9 +770,16 @@ class SqlAutoCompleteService:
         if not HAS_SQLGLOT or not sql.strip():
             return None
 
+        # Avoid parsing multi-megabyte blobs as a single statement.
+        if len(sql) > 80_000:
+            return None
+
+        from src.services.syntax_validator import _silence_sqlglot_warnings
+
         for dialect in self._preferred_dialects():
             try:
-                parsed = sqlglot.parse_one(sql, dialect=dialect, error_level="ignore")
+                with _silence_sqlglot_warnings():
+                    parsed = sqlglot.parse_one(sql, dialect=dialect, error_level="ignore")
                 if parsed is not None:
                     return parsed
             except Exception:
@@ -1250,6 +1269,12 @@ class SqlAutoCompleteService:
             "variables": {},
         }
         if not previous_sql.strip():
+            return state
+
+        from src.services.syntax_validator import is_large_sql_document
+
+        # Growing previous_sql on huge scripts is O(n) parses — bail out.
+        if is_large_sql_document(previous_sql) or previous_sql.count(";") > 200:
             return state
 
         for statement in self._split_sql_statements(previous_sql):

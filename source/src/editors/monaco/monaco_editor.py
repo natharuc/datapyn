@@ -73,6 +73,7 @@ class _SyntaxValidateWorker(QThread):
                 db_type=self._db_type or None,
                 schema=self._sql_schema if self._language == "sql" else None,
                 namespace=self._python_namespace if self._language == "python" else None,
+                should_abort=self.isInterruptionRequested,
             )
         ]
         if not self.isInterruptionRequested():
@@ -457,11 +458,20 @@ class MonacoEditor(QWidget):
         self._schedule_syntax_validation()
 
     def _schedule_syntax_validation(self) -> None:
+        if self._cleaned_up or sip.isdeleted(self):
+            return
         lang = self._language
         if lang not in ("python", "sql"):
             self._clear_syntax_markers()
             return
-        self._syntax_validate_timer.start()
+        timer = getattr(self, "_syntax_validate_timer", None)
+        if timer is None or sip.isdeleted(timer):
+            return
+        try:
+            timer.start()
+        except RuntimeError:
+            # A queued schema/text update can arrive during Qt teardown.
+            return
 
     def _clear_syntax_markers(self) -> None:
         self._run_js_when_ready("setDiagnostics([])")
@@ -488,6 +498,26 @@ class MonacoEditor(QWidget):
         self._syntax_validate_generation += 1
         generation = self._syntax_validate_generation
         self._stop_syntax_worker()
+
+        # Avoid spinning a worker for huge SQL — validate_sql would skip anyway.
+        if lang == "sql":
+            from src.services.syntax_validator import is_large_sql_document
+
+            if is_large_sql_document(self._text_cache):
+                self._on_syntax_validation_done(
+                    generation,
+                    [
+                        {
+                            "startLineNumber": 1,
+                            "startColumn": 1,
+                            "endLineNumber": 1,
+                            "endColumn": 2,
+                            "message": "Syntax check skipped for large script",
+                            "severity": "warning",
+                        }
+                    ],
+                )
+                return
 
         worker = _SyntaxValidateWorker(
             generation,
@@ -625,8 +655,24 @@ class MonacoEditor(QWidget):
     
     def set_text(self, text: str) -> None:
         """Sets the editor text."""
-        self._text_cache = text
-        escaped = json.dumps(text)
+        self._text_cache = text if text is not None else ""
+        payload = self._text_cache
+        # One giant runJavaScript("setValue(<json>)") duplicates multi-MB buffers and
+        # can freeze WebEngine. Chunk large payloads instead.
+        if len(payload) >= 80_000:
+            chunk_size = 60_000
+            self._run_js_when_ready("beginSetValue()", replace_key="editor:setValueBegin")
+            for index in range(0, len(payload), chunk_size):
+                chunk = payload[index : index + chunk_size]
+                escaped = json.dumps(chunk)
+                self._run_js_when_ready(
+                    f"appendSetValueChunk({escaped})",
+                    replace_key=f"editor:setValueChunk:{index}",
+                )
+            self._run_js_when_ready("endSetValue()", replace_key="editor:setValueEnd")
+            return
+
+        escaped = json.dumps(payload)
         self._run_js_when_ready(f"setValue({escaped})", replace_key="editor:setValue")
     
     def force_request_completion(self) -> None:

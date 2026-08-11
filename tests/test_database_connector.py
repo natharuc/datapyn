@@ -230,7 +230,7 @@ class TestDatabaseConnectorConnectionString:
         assert "my-workspace.cloud.databricks.com" in result
         assert "http_path" in result
         assert "catalog=my_catalog" in result
-        assert connect_args == {}  # PAT auth does not need extra connect_args
+        assert connect_args["enable_telemetry"] is False
 
     def test_databricks_connection_string_without_http_path(self):
         """Deve construir string Databricks sem http_path"""
@@ -270,6 +270,7 @@ class TestDatabaseConnectorConnectionString:
         assert "auth_type" in connect_args
         assert connect_args["auth_type"] == "databricks-oauth"
         assert "experimental_oauth_persistence" in connect_args
+        assert connect_args["enable_telemetry"] is False
 
     def test_unsupported_database_raises_error(self):
         """Banco nao suportado deve lancar erro"""

@@ -10,6 +10,8 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QThread
 
 from src.database.database_connector import DatabaseConnector, OperationCancelled, QueryBusyError
+from src.database.block_connector_pool import BlockConnectorPool
+from src.core.session import Session
 from src.ui.components.session_widget import SessionSqlWorker, SessionWidget
 
 
@@ -469,6 +471,128 @@ def test_force_disconnect_disposes_engine():
     engine.dispose.assert_called_once()
     assert connector.engine is None
     assert connector._abandoned is False
+
+
+def test_block_connector_pool_does_not_reuse_abandoned_connector():
+    pool = BlockConnectorPool()
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+    connector._abandoned = True
+    pool.register("block-1", "", "conn-1", connector)
+
+    assert pool.peek_connected("block-1", "", "conn-1") is None
+
+
+def test_block_connector_pool_reconnects_after_abandoned_connector():
+    pool = BlockConnectorPool()
+    abandoned = MagicMock()
+    abandoned.is_connected.return_value = True
+    abandoned._abandoned = True
+    replacement = MagicMock()
+    replacement.is_connected.return_value = True
+    pool.register("block-1", "", "conn-1", abandoned)
+
+    with patch(
+        "src.database.block_connector_pool.connect_connector_from_config",
+        return_value=replacement,
+    ) as connect:
+        result = pool.get(
+            "block-1",
+            "",
+            "conn-1",
+            {"db_type": "sqlite", "host": "", "port": 0, "database": ""},
+        )
+
+    assert result is replacement
+    connect.assert_called_once()
+
+
+def test_session_is_not_connected_when_connector_is_abandoned(qapp):
+    session = Session("session-1")
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+    connector._abandoned = True
+    session._connector = connector
+
+    assert session.is_connected is False
+
+
+def test_auto_connect_finished_updates_session_connector(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.connection_name = "conn-1"
+    session.connection_group = ""
+    session.blocks = []
+    session.code = ""
+    session.set_connection = MagicMock()
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+    widget.editor = MagicMock()
+    widget._execute_sql_with_connector = MagicMock()
+
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+
+    widget._on_auto_connect_finished(
+        connector,
+        "",
+        "SELECT 1",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+
+    session.set_connection.assert_called_once_with("conn-1", connector, "")
+    widget._execute_sql_with_connector.assert_called_once()
+
+
+def test_cancel_timeout_discards_connector_until_thread_finishes(qtbot, monkeypatch):
+    monkeypatch.setattr(SessionWidget, "_setup_ui", lambda self: None)
+    monkeypatch.setattr(SessionWidget, "_connect_signals", lambda self: None)
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.blocks = []
+    session.code = ""
+
+    widget = SessionWidget(session)
+    qtbot.addWidget(widget)
+    widget.editor = MagicMock()
+    block = MagicMock()
+    block.get_block_key.return_value = "block-1"
+    widget._current_execution_block = block
+
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+    worker = SessionSqlWorker(connector, "SELECT 1")
+    thread = MagicMock()
+    thread.isRunning.return_value = True
+    widget._block_connector_pool.register("block-1", "", "conn-1", connector)
+    widget._sql_stopping = True
+    widget._sql_stopping_thread = thread
+    widget._sql_stopping_worker = worker
+    widget._sql_stopping_connector = connector
+    widget._sql_stopping_block_key = "block-1"
+    widget._sql_stop_started_at = time.time() - 1.0
+    widget._SQL_STOP_TIMEOUT_SEC = 0.0
+
+    with patch.object(widget, "_finalize_sql_stop") as finalize:
+        widget._schedule_sql_stop_finalize()
+
+    assert connector._abandoned is True
+    assert widget._block_connector_pool.peek_connected("block-1", "", "conn-1") is None
+    connector.force_disconnect.assert_not_called()
+    finalize.assert_called_once()
+
+    cleanup_callback = thread.finished.connect.call_args.args[0]
+    cleanup_callback()
+    connector.force_disconnect.assert_called_once()
 
 
 def test_lock_not_released_while_thread_alive_after_cancel(qtbot, monkeypatch):

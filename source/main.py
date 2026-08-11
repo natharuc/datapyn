@@ -18,6 +18,9 @@ def _configure_logging() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[logging.FileHandler("datapyn.log"), logging.StreamHandler()],
     )
+    # sqlglot emits one WARNING per unsupported T-SQL construct; large migration
+    # scripts flood the log and can stall the process. Keep parse errors only.
+    logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
 
 def get_icon_path():

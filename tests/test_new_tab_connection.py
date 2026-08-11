@@ -46,6 +46,50 @@ class TestNewTabInheritsConnection:
 
         assert "TesteConexao" in connected_calls
 
+    def test_new_session_restores_group_database_and_ui_state(self, main, qtbot):
+        with patch("src.core.session.Session.connect", return_value=False):
+            main._new_session()
+
+        source_widget = main._get_current_session_widget()
+        source_session = source_widget.session
+        source_session._connection_group = "Prod"
+        source_session._connection_name = "TesteConexao"
+        source_session._database_context = "Provisao"
+
+        connector = MagicMock()
+        connector.is_connected.return_value = True
+        connector.get_current_database_context.return_value = "Provisao"
+
+        def fake_connect(self_session, group_or_name, name="", password=""):
+            assert group_or_name == "Prod"
+            assert name == "TesteConexao"
+            assert self_session.database_context == "Provisao"
+            self_session._connection_group = group_or_name
+            self_session._connection_name = name
+            self_session._connector = connector
+            self_session._database_context = "Provisao"
+            return True
+
+        with (
+            patch("src.core.session.Session.connect", fake_connect),
+            patch.object(main, "_on_session_connection_changed") as connection_changed,
+        ):
+            main._new_session()
+            qtbot.wait(300)
+
+        new_widget = main._get_current_session_widget()
+        assert new_widget.session.connection_group == "Prod"
+        assert new_widget.session.connection_name == "TesteConexao"
+        assert new_widget.session.database_context == "Provisao"
+        connection_changed.assert_called_once_with(
+            new_widget.session,
+            "TesteConexao",
+            "Provisao",
+        )
+
+        first_block = new_widget.editor.get_blocks()[0]
+        assert first_block.get_database_name() == "Provisao"
+
     def test_new_session_without_connection_stays_disconnected(self, main, qtbot):
         with patch("src.core.session.Session.connect", return_value=False):
             main._new_session()

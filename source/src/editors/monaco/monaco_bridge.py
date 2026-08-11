@@ -5,6 +5,9 @@ Uses QWebChannel to enable bidirectional communication between
 PyQt6 and the embedded Monaco Editor.
 """
 
+import weakref
+
+from PyQt6 import sip
 from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QTimer
 
 
@@ -41,14 +44,17 @@ class MonacoBridge(QObject):
         super().__init__(parent)
         self._completion_callback = None
 
-    @staticmethod
-    def _defer_emit(signal, *args) -> None:
+    def _defer_emit(self, signal, *args) -> None:
         """Queue signal delivery so QWebChannel slots return before heavy Python work."""
+        bridge_ref = weakref.ref(self)
 
         def _fire() -> None:
             try:
+                bridge = bridge_ref()
+                if bridge is None or sip.isdeleted(bridge):
+                    return
                 signal.emit(*args)
-            except RuntimeError:
+            except (AttributeError, RuntimeError, TypeError):
                 pass
 
         QTimer.singleShot(0, _fire)

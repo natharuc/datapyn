@@ -2,6 +2,7 @@
 
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,6 +58,62 @@ def test_signature_differs_for_different_files():
     tb_a = 'File "source/foo.py", line 1, in bar\nValueError: boom\n'
     tb_b = 'File "source/other.py", line 1, in bar\nValueError: boom\n'
     assert crash_guard._signature(tb_a) != crash_guard._signature(tb_b)
+
+
+def test_only_databricks_telemetry_shutdown_error_is_benign():
+    from databricks.sql.exc import RequestError
+
+    from src.core import crash_guard
+
+    args = SimpleNamespace(
+        exc_type=RequestError,
+        exc_value=RequestError("HTTP client is closing or has been closed"),
+    )
+    telemetry_traceback = (
+        'File "databricks/sql/telemetry/telemetry_client.py", line 554, '
+        "in _flush_worker\n"
+    )
+    assert crash_guard._is_benign_databricks_telemetry_shutdown(
+        args, telemetry_traceback
+    )
+    assert not crash_guard._is_benign_databricks_telemetry_shutdown(
+        args, 'File "app/worker.py", line 1, in run\n'
+    )
+
+
+def test_thread_excepthook_keeps_real_errors_visible(monkeypatch):
+    from databricks.sql.exc import RequestError
+
+    from src.core import crash_guard
+
+    args = SimpleNamespace(
+        thread=SimpleNamespace(name="databricks-worker"),
+        exc_type=RequestError,
+        exc_value=RequestError("HTTP client is closing or has been closed"),
+        exc_traceback=None,
+    )
+    recorded = []
+    scheduled = []
+    monkeypatch.setattr(
+        crash_guard,
+        "_format_thread_report",
+        lambda _args: 'File "app/worker.py", line 1, in run\n',
+    )
+    monkeypatch.setattr(
+        crash_guard,
+        "_record_crash",
+        lambda *a, **k: recorded.append((a, k)),
+    )
+    monkeypatch.setattr(
+        crash_guard,
+        "_show_crash_dialog_on_ui",
+        lambda *a: scheduled.append(a),
+    )
+
+    crash_guard._thread_excepthook(args)
+
+    assert len(recorded) == 1
+    assert len(scheduled) == 1
 
 
 def test_handle_exception_records_and_schedules_dialog(qapp, monkeypatch):
