@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.54.3 (2026-08-11)
+
+### Bug Fixes
+
+- **connections**: Preserve context across new tabs
+  ([`e2409b3`](https://github.com/natharuc/datapyn/commit/e2409b34f30cf57b1c29b4e976d6c53b4a4cc6f7))
+
+- **connections**: Preserve context across new tabs
+  ([`af43cf4`](https://github.com/natharuc/datapyn/commit/af43cf48bd1bce988763bac92738a190acd20143))
+
+- **deps**: Update audited vulnerabilities
+  ([`ee37ccd`](https://github.com/natharuc/datapyn/commit/ee37ccd1d7be8b3f2dd7f855a507f6d5caacc5ed))
+
+### Heuristic
+
+- Merge pull request #152 from natharuc/fix/new-tab-connection-inheritance
+  ([`e2409b3`](https://github.com/natharuc/datapyn/commit/e2409b34f30cf57b1c29b4e976d6c53b4a4cc6f7))
+
+
 ## v1.54.2 (2026-07-30)
 
 ### Bug Fixes
