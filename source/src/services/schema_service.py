@@ -55,6 +55,38 @@ def _databricks_relation_key(catalog: str, schema: str, table: str) -> str:
     return ".".join(part for part in (catalog, schema, table) if part)
 
 
+def _connector_database_context(connector) -> str:
+    for method_name in ("get_current_database_context", "get_current_database"):
+        method = getattr(connector, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            value = method()
+        except Exception:
+            continue
+        if value:
+            return str(value)
+    return ""
+
+
+def _database_context_matches(expected: str, actual: str) -> bool:
+    expected = str(expected or "").strip().lower()
+    actual = str(actual or "").strip().lower()
+    if not expected or not actual:
+        return not expected
+    for prefix in ("catalog:", "schema:"):
+        if expected.startswith(prefix):
+            expected = expected[len(prefix):]
+        if actual.startswith(prefix):
+            actual = actual[len(prefix):]
+    return (
+        expected == actual
+        or expected.endswith(f".{actual}")
+        or actual.endswith(f".{expected}")
+        or expected.split(".")[-1] == actual.split(".")[-1]
+    )
+
+
 def _row_value(row, *names: str, default=""):
     for name in names:
         try:
@@ -84,10 +116,19 @@ class SchemaWorker(QObject):
     progress = pyqtSignal(str)  # progress message
     completed = pyqtSignal()
 
-    def __init__(self, connector, lazy_mode: str = SCHEMA_LAZY_MINIMAL):
+    def __init__(
+        self,
+        connector,
+        lazy_mode: str = SCHEMA_LAZY_MINIMAL,
+        *,
+        requested_context: str = "",
+        request_token: int = 0,
+    ):
         super().__init__()
         self.connector = connector
         self._lazy_mode = lazy_mode or SCHEMA_LAZY_MINIMAL
+        self._requested_context = str(requested_context or "")
+        self._request_token = request_token
         self._cancelled = False
 
     def cancel(self):
@@ -111,6 +152,9 @@ class SchemaWorker(QObject):
                 "db_type": "",
                 "routines": [],
                 "lazy": self._lazy_mode != SCHEMA_LAZY_FULL,
+                "requested_context": self._requested_context,
+                "connection_context": "",
+                "_schema_request_token": self._request_token,
             }
 
             if self._cancelled:
@@ -139,6 +183,10 @@ class SchemaWorker(QObject):
             except Exception:
                 schema["database"] = ""
 
+            schema["connection_context"] = _connector_database_context(self.connector)
+            if not schema["requested_context"]:
+                schema["requested_context"] = schema["connection_context"]
+
             if self._cancelled:
                 return
 
@@ -150,6 +198,7 @@ class SchemaWorker(QObject):
             # Tables/columns/routines stay lazy (those are the expensive queries).
             load_databases = self._lazy_mode in (SCHEMA_LAZY_FULL, SCHEMA_LAZY_MINIMAL)
             load_metadata = self._lazy_mode in (SCHEMA_LAZY_FULL, SCHEMA_LAZY_AUTOCOMPLETE)
+            schema["metadata_loaded"] = load_metadata
 
             # Get list of all server databases (full schema / OE expand only)
             if load_databases:
@@ -284,11 +333,15 @@ class SchemaWorker(QObject):
             if self._cancelled:
                 return
 
-            self.progress.emit(
-                f"Schema loaded: {len(schema['tables'])} tables, "
-                f"{sum(len(v) for v in schema['columns'].values())} columns, "
-                f"{len(schema['routines'])} routines"
-            )
+            if schema["metadata_loaded"]:
+                self.progress.emit(
+                    f"Schema loaded: {len(schema['tables'])} tables, "
+                    f"{sum(len(v) for v in schema['columns'].values())} columns, "
+                    f"{len(schema['routines'])} routines"
+                )
+            else:
+                context = schema.get("current_context") or schema.get("database") or "current database"
+                self.progress.emit(f"Schema context loaded: {context}")
             self.finished.emit(schema)
 
         except Exception as e:
@@ -473,6 +526,8 @@ class SchemaService(QObject):
         # Cache per session: key = "session_id:connection_name" for isolation
         # Each tab can have its own database context (USE CATALOG, etc.)
         self._cache: Dict[str, dict] = {}
+        self._schema_request_counter = 0
+        self._active_schema_requests: dict[tuple[str, str, str, str], int] = {}
 
     def _cache_key(
         self,
@@ -500,6 +555,7 @@ class SchemaService(QObject):
         *,
         lazy: bool = True,
         lazy_mode: str | None = None,
+        database_context: str = "",
     ):
         """
         Start loading schema in background.
@@ -517,9 +573,21 @@ class SchemaService(QObject):
             return
 
         mode = lazy_mode or (SCHEMA_LAZY_MINIMAL if lazy else SCHEMA_LAZY_FULL)
+        self._schema_request_counter += 1
+        request_token = self._schema_request_counter
+        requested_context = str(
+            database_context or _connector_database_context(connector) or ""
+        )
+        request_scope = (
+            session_id or "",
+            block_key or "",
+            connection_group or "",
+            connection_name or "",
+        )
+        self._active_schema_requests[request_scope] = request_token
 
-        # Cancel previous workers (won't emit signals)
-        self._cancel_pending_workers()
+        # Cancel only a previous request for this session/block scope.
+        self._cancel_pending_workers(request_scope)
 
         # Check cache (per-session / per-block key)
         cache_key = self._cache_key(
@@ -527,14 +595,28 @@ class SchemaService(QObject):
         )
         if connection_name and cache_key in self._cache:
             cached = self._cache[cache_key]
-            if mode == SCHEMA_LAZY_FULL or (
-                mode == SCHEMA_LAZY_AUTOCOMPLETE
-                and cached.get("tables")
+            cache_has_requested_context = (
+                not requested_context
+                or _database_context_matches(
+                    requested_context,
+                    cached.get("connection_context")
+                    or cached.get("current_context")
+                    or cached.get("database", ""),
+                )
+            )
+            if (
+                (mode == SCHEMA_LAZY_FULL or (
+                    mode == SCHEMA_LAZY_AUTOCOMPLETE
+                    and cached.get("tables")
+                ))
+                and cache_has_requested_context
             ):
                 QTimer.singleShot(
                     0,
-                    lambda c=cached, cn=connection_name, sid=session_id, bk=block_key: self.schema_loaded.emit(
-                        c, cn, sid, bk
+                    lambda c=cached, cn=connection_name, sid=session_id, bk=block_key,
+                    cg=connection_group, token=request_token, expected=requested_context:
+                    self._emit_cached_schema(
+                        c, cn, sid, bk, cg, token, expected
                     ),
                 )
                 return
@@ -542,15 +624,35 @@ class SchemaService(QObject):
         try:
             # Create worker and thread (parented to service — never deleteLater QThread)
             thread = QThread(self)
-            worker = SchemaWorker(connector, lazy_mode=mode)
+            worker = SchemaWorker(
+                connector,
+                lazy_mode=mode,
+                requested_context=requested_context,
+                request_token=request_token,
+            )
             worker.moveToThread(thread)
 
             # Connect signals
             thread.started.connect(worker.run)
-            def handle_finished(schema, service=self, bk=block_key, cg=connection_group):
+            def handle_finished(
+                schema,
+                service=self,
+                bk=block_key,
+                cg=connection_group,
+                token=request_token,
+                expected=requested_context,
+            ):
                 if sip.isdeleted(service) or service._shutting_down:
                     return
-                service._on_finished(schema, connection_name, session_id, bk, cg)
+                service._on_finished(
+                    schema,
+                    connection_name,
+                    session_id,
+                    bk,
+                    cg,
+                    request_token=token,
+                    expected_context=expected,
+                )
 
             def cleanup_thread(service=self, active_thread=thread, active_worker=worker):
                 if sip.isdeleted(service):
@@ -577,11 +679,67 @@ class SchemaService(QObject):
             thread.finished.connect(cleanup_thread)
 
             # Keep reference to avoid garbage collection
-            self._active_threads.append((thread, worker))
+            self._active_threads.append((thread, worker, request_scope))
 
             thread.start()
         except Exception as e:
             logger.warning(f"Error starting schema load: {e}")
+
+    def _request_scope(
+        self,
+        connection_name: str,
+        session_id: str = "",
+        block_key: str = "",
+        connection_group: str = "",
+    ) -> tuple[str, str, str, str]:
+        return (
+            session_id or "",
+            block_key or "",
+            connection_group or "",
+            connection_name or "",
+        )
+
+    def _is_current_schema_request(
+        self,
+        connection_name: str,
+        session_id: str,
+        block_key: str,
+        connection_group: str,
+        request_token: int,
+    ) -> bool:
+        scope = self._request_scope(
+            connection_name, session_id, block_key, connection_group
+        )
+        return self._active_schema_requests.get(scope) == request_token
+
+    def _emit_cached_schema(
+        self,
+        schema: dict,
+        connection_name: str,
+        session_id: str,
+        block_key: str,
+        connection_group: str,
+        request_token: int,
+        expected_context: str,
+    ) -> None:
+        if self._shutting_down or not self._is_current_schema_request(
+            connection_name,
+            session_id,
+            block_key,
+            connection_group,
+            request_token,
+        ):
+            return
+        schema_context = (
+            schema.get("connection_context")
+            or schema.get("current_context")
+            or schema.get("database", "")
+        )
+        if expected_context and not _database_context_matches(
+            expected_context, schema_context
+        ):
+            return
+        self.schema_loaded.emit(schema, connection_name, session_id, block_key)
 
     def _on_finished(
         self,
@@ -590,12 +748,37 @@ class SchemaService(QObject):
         session_id: str = "",
         block_key: str = "",
         connection_group: str = "",
+        *,
+        request_token: int | None = None,
+        expected_context: str = "",
     ):
         """Schema loaded successfully"""
         if self._shutting_down:
             return
+        token = request_token
+        if token is None:
+            token = schema.get("_schema_request_token", 0) if isinstance(schema, dict) else 0
+        if token and not self._is_current_schema_request(
+            connection_name,
+            session_id,
+            block_key,
+            connection_group,
+            token,
+        ):
+            return
+        schema_context = (
+            schema.get("connection_context")
+            or schema.get("current_context")
+            or schema.get("database", "")
+        )
+        expected = expected_context or schema.get("requested_context", "")
+        if expected and not _database_context_matches(expected, schema_context):
+            return
 
         try:
+            if isinstance(schema, dict):
+                schema.setdefault("requested_context", expected)
+                schema.setdefault("connection_context", schema_context)
             if connection_name:
                 cache_key = self._cache_key(
                     connection_name, session_id, block_key, connection_group
@@ -635,6 +818,27 @@ class SchemaService(QObject):
             return self._cache.get(legacy_key)
         return None
 
+    def _invalidate_schema_requests(
+        self,
+        connection_name: str = "",
+        session_id: str = "",
+        block_key: str = "",
+        connection_group: str = "",
+    ) -> None:
+        """Advance tokens for in-flight loads covered by a cache invalidation."""
+        for scope in list(self._active_schema_requests):
+            sid, bk, group, name = scope
+            if connection_name and name != connection_name:
+                continue
+            if session_id and sid != session_id:
+                continue
+            if block_key and bk != block_key:
+                continue
+            if connection_group and group != connection_group:
+                continue
+            self._schema_request_counter += 1
+            self._active_schema_requests[scope] = self._schema_request_counter
+
     def invalidate_cache(
         self,
         connection_name: str = "",
@@ -643,6 +847,12 @@ class SchemaService(QObject):
         connection_group: str = "",
     ):
         """Invalidate cache for one connection/session/block or all."""
+        self._invalidate_schema_requests(
+            connection_name,
+            session_id,
+            block_key,
+            connection_group,
+        )
         identity = schema_cache_identity(connection_name, connection_group)
         if connection_name and (session_id or block_key):
             cache_key = self._cache_key(
@@ -682,9 +892,13 @@ class SchemaService(QObject):
         else:
             self._cache.clear()
 
-    def _cancel_pending_workers(self):
-        """Cancel pending workers (mark as cancelled)"""
-        for thread, worker in self._active_threads:
+    def _cancel_pending_workers(self, scope=None):
+        """Cancel pending workers in one request scope."""
+        for entry in self._active_threads:
+            thread, worker = entry[:2]
+            worker_scope = entry[2] if len(entry) > 2 else None
+            if scope is not None and worker_scope != scope:
+                continue
             try:
                 if worker:
                     worker.cancel()
@@ -695,7 +909,7 @@ class SchemaService(QObject):
         """Remove finished thread from active list; worker only (thread is parented)."""
         try:
             self._active_threads = [
-                (t, w) for t, w in self._active_threads if t is not thread
+                entry for entry in self._active_threads if entry[0] is not thread
             ]
             if worker:
                 worker.deleteLater()
@@ -707,7 +921,8 @@ class SchemaService(QObject):
         self._shutting_down = True
 
         # Cancel all workers
-        for thread, worker in self._active_threads:
+        for entry in self._active_threads:
+            thread, worker = entry[:2]
             try:
                 if worker:
                     worker.cancel()
@@ -715,7 +930,8 @@ class SchemaService(QObject):
                 pass
 
         # Wait for threads to finish
-        for thread, worker in self._active_threads:
+        for entry in self._active_threads:
+            thread, worker = entry[:2]
             try:
                 if thread and thread.isRunning():
                     thread.quit()

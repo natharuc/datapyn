@@ -99,6 +99,18 @@
             'CROSS', 'FULL', 'GROUP', 'ORDER', 'BY', 'HAVING', 'SET', 'SELECT', 'FROM'
         ]);
         const TEXT_CHANGE_DEBOUNCE_MS = 80;
+        const TEXT_CHANGE_DEBOUNCE_LARGE_MS = 1500;
+        const LARGE_DOC_LINE_LIMIT = 2000;
+        const LARGE_DOC_CHAR_LIMIT = 150000;
+
+        function isLargeDocument(model) {
+            if (!model) {
+                return false;
+            }
+            var lineCount = model.getLineCount();
+            var charCount = model.getValueLength ? model.getValueLength() : 0;
+            return lineCount >= LARGE_DOC_LINE_LIMIT || charCount >= LARGE_DOC_CHAR_LIMIT;
+        }
         
         // Current state
         let currentLanguage = 'python';
@@ -819,13 +831,19 @@
                 if (textChangeDebounceTimer) {
                     clearTimeout(textChangeDebounceTimer);
                 }
+                var model = editor.getModel();
+                var large = isLargeDocument(model);
+                var debounceMs = large ? TEXT_CHANGE_DEBOUNCE_LARGE_MS : TEXT_CHANGE_DEBOUNCE_MS;
                 textChangeDebounceTimer = setTimeout(function() {
                     textChangeDebounceTimer = null;
                     if (pyBridge) {
                         pyBridge.onTextChanged(editor.getValue());
                     }
-                }, TEXT_CHANGE_DEBOUNCE_MS);
-                scheduleIdleInlineSuggest();
+                }, debounceMs);
+                // Skip AI idle suggest on huge buffers — it pulls full prefix/suffix over the bridge.
+                if (!large) {
+                    scheduleIdleInlineSuggest();
+                }
             });
             
             // Focus listeners
@@ -841,6 +859,14 @@
             });
             
             editor.onDidBlurEditorWidget(function() {
+                // Flush pending text sync on blur so save/execute see the latest buffer.
+                if (textChangeDebounceTimer) {
+                    clearTimeout(textChangeDebounceTimer);
+                    textChangeDebounceTimer = null;
+                    if (pyBridge) {
+                        pyBridge.onTextChanged(editor.getValue());
+                    }
+                }
                 if (pyBridge) {
                     pyBridge.onFocusOut();
                 }
@@ -1346,8 +1372,28 @@
 
         function setValue(text) {
             if (editor) {
-                editor.setValue(text);
+                editor.setValue(text || '');
             }
+        }
+
+        // Chunked setValue for large scripts — avoids one giant runJavaScript payload.
+        var _setValueChunks = null;
+        function beginSetValue() {
+            _setValueChunks = [];
+        }
+        function appendSetValueChunk(chunk) {
+            if (_setValueChunks) {
+                _setValueChunks.push(chunk || '');
+            }
+        }
+        function endSetValue() {
+            if (!editor) {
+                _setValueChunks = null;
+                return;
+            }
+            var text = _setValueChunks ? _setValueChunks.join('') : '';
+            _setValueChunks = null;
+            editor.setValue(text);
         }
         
         function getValue() {
@@ -1553,6 +1599,19 @@
                             endColumn: word.endColumn
                         };
                     const prefixFilter = getSqlCompletionPrefix(textBeforeCursor, dotCtx, crossDbCtx);
+                    // Huge scripts: local-only suggestions — never ship fullText to Python/sqlglot.
+                    if (isLargeDocument(model)) {
+                        const localRaw = collectSqlLocalItems(textBeforeCursor, dotCtx, crossDbCtx, '');
+                        const localItems = filterPrefixMatches(
+                            localRaw,
+                            prefixFilter,
+                            80,
+                            invokeSuggest
+                        );
+                        return {
+                            suggestions: toMonacoSuggestions(localItems, range)
+                        };
+                    }
                     const localRaw = collectSqlLocalItems(textBeforeCursor, dotCtx, crossDbCtx, fullText);
                     const wantsRemote = invokeSuggest || crossDbCtx || dotCtx || sqlContextWantsRemote(textBeforeCursor);
                     const localItems = filterPrefixMatches(

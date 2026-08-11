@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import ast
+import logging
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, Iterator, List, Optional
 
 # T-SQL batch separator (validated per batch).
 _RE_GO_BATCH = re.compile(r"(?im)^[ \t]*GO(?:[ \t]+--[^\n]*)?[ \t]*$")
+
+# Large scripts: full sqlglot parse of thousands of T-SQL statements (and the
+# WARNING flood it emits) freezes / kills the app. Skip or cap validation.
+# Thresholds are intentionally conservative — a ~2k-line IF/INSERT migration
+# already stalls autocomplete + bridge sync if we try to fully analyze it.
+LARGE_SQL_LINE_LIMIT = 2000
+LARGE_SQL_CHAR_LIMIT = 150_000
+MAX_SQL_STATEMENTS_TO_VALIDATE = 100
 
 _SQL_DIALECT_MAP = {
     "mssql": "tsql",
@@ -189,6 +199,45 @@ def _sql_dialect(db_type: Optional[str]) -> str:
     return _SQL_DIALECT_MAP.get(str(db_type).lower().strip(), "tsql")
 
 
+def sql_document_line_count(code: str) -> int:
+    """Return 1-based line count without allocating a full split list when empty."""
+    text = code or ""
+    if not text:
+        return 0
+    return text.count("\n") + 1
+
+
+def is_large_sql_document(code: str) -> bool:
+    """True when full sqlglot validation should be skipped for stability."""
+    text = code or ""
+    if len(text) >= LARGE_SQL_CHAR_LIMIT:
+        return True
+    return sql_document_line_count(text) >= LARGE_SQL_LINE_LIMIT
+
+
+def _large_sql_skip_marker() -> SyntaxMarker:
+    return SyntaxMarker(
+        start_line=1,
+        start_column=1,
+        end_line=1,
+        end_column=2,
+        message="Syntax check skipped for large script",
+        severity="warning",
+    )
+
+
+@contextmanager
+def _silence_sqlglot_warnings() -> Iterator[None]:
+    """Raise sqlglot logger level so unsupported-syntax WARNINGs do not flood I/O."""
+    sqlglot_logger = logging.getLogger("sqlglot")
+    previous = sqlglot_logger.level
+    sqlglot_logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        sqlglot_logger.setLevel(previous)
+
+
 def _split_sql_batches(code: str) -> List[tuple[str, int]]:
     """Return (batch_text, 1-based start line of batch)."""
     lines = code.splitlines(keepends=True)
@@ -235,7 +284,8 @@ def _validate_sql_batch(batch: str, dialect: str, line_offset: int) -> List[Synt
         return []
 
     try:
-        sqlglot.parse(batch, dialect=dialect)
+        with _silence_sqlglot_warnings():
+            sqlglot.parse(batch, dialect=dialect)
         return []
     except ParseError as exc:
         markers: List[SyntaxMarker] = []
@@ -291,15 +341,20 @@ def _marker_from_sqlglot_exception(exc: Exception, line_offset: int) -> SyntaxMa
     )
 
 
-def _iter_sql_statements_in_batch(batch: str) -> List[tuple[str, int]]:
+def _iter_sql_statements_in_batch(
+    batch: str,
+    *,
+    max_statements: int | None = None,
+) -> List[tuple[str, int]]:
     """Split a batch into statements with 1-based start lines (T-SQL ``;`` / ``GO``)."""
+    limit = MAX_SQL_STATEMENTS_TO_VALIDATE if max_statements is None else max_statements
     try:
         from src.services.sql_autocomplete_service import SqlAutoCompleteService
 
         service = SqlAutoCompleteService()
         from src.services.sql_schema_validator import _statement_slices
 
-        return _statement_slices(batch, service)
+        return _statement_slices(batch, service, max_statements=limit)
     except Exception:
         stripped = batch.strip()
         return [(stripped, 1)] if stripped else []
@@ -310,10 +365,21 @@ def validate_sql(
     db_type: Optional[str] = None,
     *,
     schema: Optional[dict] = None,
+    should_abort: Optional[Callable[[], bool]] = None,
 ) -> List[SyntaxMarker]:
-    """Parse SQL with sqlglot; return syntax and optional schema error markers."""
+    """Parse SQL with sqlglot; return syntax and optional schema error markers.
+
+    Large documents skip full validation (see ``is_large_sql_document``).
+    Otherwise at most ``MAX_SQL_STATEMENTS_TO_VALIDATE`` statements are parsed.
+    """
     text = code or ""
     if not text.strip():
+        return []
+
+    if is_large_sql_document(text):
+        return [_large_sql_skip_marker()]
+
+    if should_abort and should_abort():
         return []
 
     dialect = _sql_dialect(db_type)
@@ -321,20 +387,44 @@ def validate_sql(
         dialect = _sql_dialect(schema.get("db_type"))
 
     markers: List[SyntaxMarker] = []
+    validated = 0
+    remaining = MAX_SQL_STATEMENTS_TO_VALIDATE
     for batch, start_line in _split_sql_batches(text):
+        if should_abort and should_abort():
+            return markers
+        if remaining <= 0:
+            break
         batch_base = start_line - 1
-        for statement, stmt_line in _iter_sql_statements_in_batch(batch):
+        for statement, stmt_line in _iter_sql_statements_in_batch(
+            batch, max_statements=remaining
+        ):
+            if should_abort and should_abort():
+                return markers
             stmt = statement.strip()
             if not stmt:
                 continue
             line_offset = batch_base + stmt_line - 1
             markers.extend(_validate_sql_batch(stmt, dialect, line_offset))
+            validated += 1
+            remaining -= 1
+            if remaining <= 0:
+                break
 
-    if schema:
+    # Schema walks every statement with growing previous_sql (O(n²)) — never on
+    # medium/large scripts even when under the hard skip threshold.
+    if (
+        schema
+        and validated > 0
+        and sql_document_line_count(text) < 500
+        and len(text) < 40_000
+    ):
+        if should_abort and should_abort():
+            return markers
         try:
             from src.services.sql_schema_validator import validate_sql_schema
 
-            schema_markers = validate_sql_schema(text, schema)
+            with _silence_sqlglot_warnings():
+                schema_markers = validate_sql_schema(text, schema)
             markers.extend(schema_markers)
         except Exception:
             pass
@@ -349,11 +439,17 @@ def validate_code(
     db_type: Optional[str] = None,
     schema: Optional[dict] = None,
     namespace: Optional[dict] = None,
+    should_abort: Optional[Callable[[], bool]] = None,
 ) -> List[SyntaxMarker]:
     """Validate by block language id (python, sql)."""
     lang = (language or "").lower()
     if lang == "python":
         return validate_python(code, namespace=namespace)
     if lang == "sql":
-        return validate_sql(code, db_type=db_type, schema=schema)
+        return validate_sql(
+            code,
+            db_type=db_type,
+            schema=schema,
+            should_abort=should_abort,
+        )
     return []

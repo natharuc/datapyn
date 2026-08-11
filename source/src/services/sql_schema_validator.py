@@ -75,7 +75,12 @@ def _schema_has_objects(schema: dict) -> bool:
     return bool(schema.get("columns"))
 
 
-def _statement_slices(text: str, service: Any) -> List[tuple[str, int]]:
+def _statement_slices(
+    text: str,
+    service: Any,
+    *,
+    max_statements: int | None = None,
+) -> List[tuple[str, int]]:
     """Return (statement_sql, 1-based start line within *text*)."""
     stripped = text.strip()
     if not stripped:
@@ -85,6 +90,9 @@ def _statement_slices(text: str, service: Any) -> List[tuple[str, int]]:
     statements = service._split_sql_statements(normalized)
     if not statements:
         return []
+
+    if max_statements is not None and max_statements >= 0:
+        statements = statements[:max_statements]
 
     results: List[tuple[str, int]] = []
     search_from = 0

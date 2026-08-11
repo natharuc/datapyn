@@ -739,7 +739,10 @@ class DatabaseConnector:
             # Uses databricks-sql-connector with SQLAlchemy dialect
             http_path = kwargs.get("http_path", "")
             access_token = password
-            connect_args = {}
+            # Telemetry runs in a background thread and can race with
+            # SQLAlchemy/HTTP client shutdown (especially during OAuth
+            # reconnects). DataPyn already has its own application logging.
+            connect_args = {"enable_telemetry": False}
             
             if access_token:
                 # Use PAT (Personal Access Token) - no OAuth browser flow

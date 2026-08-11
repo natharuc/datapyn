@@ -85,7 +85,14 @@ class BlockConnectorPool:
         if not entry or entry.get("connection_key") != storage_key:
             return None
         connector = entry.get("connector")
-        if connector is None or not connector.is_connected():
+        if not self._is_reusable(connector):
+            if self._is_abandoned(connector):
+                # Do not disconnect here: a timed-out query may still be using
+                # the connector. Remove it from the reusable pool and let the
+                # owning worker retire it after its thread finishes.
+                self._entries.pop(block_key, None)
+            elif connector is not None:
+                self.release(block_key)
             return None
         self._touch(block_key)
         self._apply_database(connector, database, database_context)
@@ -106,11 +113,16 @@ class BlockConnectorPool:
         entry = self._entries.get(block_key)
         if entry and entry.get("connection_key") == storage_key:
             connector = entry.get("connector")
-            if connector is not None and connector.is_connected():
+            if self._is_reusable(connector):
                 self._touch(block_key)
                 self._apply_database(connector, database, database_context)
                 return connector
-            self.release(block_key)
+            if self._is_abandoned(connector):
+                # A cancel timeout marks the connection unsafe to reuse. Do
+                # not close it while its query thread may still be unwinding.
+                self._entries.pop(block_key, None)
+            else:
+                self.release(block_key)
 
         try:
             connector = connect_connector_from_config(
@@ -143,7 +155,9 @@ class BlockConnectorPool:
         """Adopt an already-connected connector (e.g. after auto-connect worker)."""
         existing = self._entries.get(block_key)
         if existing and existing.get("connector") is not connector:
-            self._disconnect(existing.get("connector"))
+            previous = existing.get("connector")
+            if not self._is_abandoned(previous):
+                self._disconnect(previous)
         self._entries[block_key] = {
             "connector": connector,
             "connection_key": _connection_storage_key(connection_group, connection_name),
@@ -154,6 +168,21 @@ class BlockConnectorPool:
         entry = self._entries.pop(block_key, None)
         if entry:
             self._disconnect(entry.get("connector"))
+
+    def discard(self, block_key: str, connector: Optional[DatabaseConnector] = None) -> bool:
+        """Remove a connector from reuse without disconnecting it.
+
+        This is used when cancellation timed out and the driver connection
+        may still be executing on a worker thread. The worker owns cleanup
+        until its thread has stopped.
+        """
+        entry = self._entries.get(block_key)
+        if entry is None:
+            return False
+        if connector is not None and entry.get("connector") is not connector:
+            return False
+        self._entries.pop(block_key, None)
+        return True
 
     def release_all(self) -> None:
         for key in list(self._entries):
@@ -184,6 +213,19 @@ class BlockConnectorPool:
         entry = self._entries.get(block_key)
         if entry is not None:
             entry["last_used_at"] = time.monotonic()
+
+    @staticmethod
+    def _is_abandoned(connector: Optional[DatabaseConnector]) -> bool:
+        return getattr(connector, "_abandoned", False) is True
+
+    @classmethod
+    def _is_reusable(cls, connector: Optional[DatabaseConnector]) -> bool:
+        if connector is None or cls._is_abandoned(connector):
+            return False
+        try:
+            return bool(connector.is_connected())
+        except Exception:
+            return False
 
     def _apply_database(
         self,

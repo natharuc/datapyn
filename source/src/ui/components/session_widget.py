@@ -311,6 +311,8 @@ class SessionWidget(QWidget):
         self._sql_stopping_connector = None
         self._sql_stopping_thread = None
         self._sql_stopping_worker = None
+        self._sql_stopping_block_key: str | None = None
+        self._retired_sql_connectors: dict[int, tuple[QThread, object, object]] = {}
         self._sql_stop_started_at: float = 0.0
         self._SQL_STOP_TIMEOUT_SEC: float = 15.0
         self._python_finished_handler = None
@@ -1399,6 +1401,7 @@ class SessionWidget(QWidget):
             self._finish_block_after_switch(has_error=True)
             return
 
+        self._adopt_auto_connected_connector(connector, block, connection_name)
         self._execute_download_with_connector(
             connector,
             query,
@@ -1410,6 +1413,24 @@ class SessionWidget(QWidget):
             file_path,
             csv_options,
         )
+
+    def _adopt_auto_connected_connector(self, connector, block, connection_name) -> None:
+        """Make an auto-connected connector the active session or block connector."""
+        conn_group, conn_name = self._sql_connection_identity(block, connection_name)
+        if not conn_name:
+            return
+        if block is not None and hasattr(block, "get_block_key"):
+            self._block_connector_pool.register(
+                block.get_block_key(),
+                conn_group,
+                conn_name,
+                connector,
+            )
+            return
+
+        set_connection = getattr(self.session, "set_connection", None)
+        if callable(set_connection):
+            set_connection(conn_name, connector, conn_group)
 
     def _cleanup_auto_connect_thread(self, thread):
         """Remove finished auto-connect thread from tracking list."""
@@ -1443,11 +1464,7 @@ class SessionWidget(QWidget):
 
         self._touch_db_activity()
 
-        conn_group, conn_name = self._sql_connection_identity(block, connection_name)
-        if block is not None and conn_name and hasattr(block, "get_block_key"):
-            self._block_connector_pool.register(
-                block.get_block_key(), conn_group, conn_name, connector
-            )
+        self._adopt_auto_connected_connector(connector, block, connection_name)
 
         self._execute_sql_with_connector(connector, query, block_name, connection_name, database_name, sql_parameters)
 
@@ -1569,6 +1586,10 @@ class SessionWidget(QWidget):
         thread = self.sender()
         if not isinstance(thread, QThread):
             return
+        # A cancellation timeout can detach the worker from the widget while
+        # the driver is still unwinding. Only close that connector after the
+        # QThread has finished, which guarantees the worker no longer uses it.
+        self._close_retired_sql_connector(thread)
         if thread is getattr(self, "_sql_thread", None):
             self._sql_thread = None
             self._sql_worker = None
@@ -1586,6 +1607,59 @@ class SessionWidget(QWidget):
         if self._sql_stopping:
             QTimer.singleShot(0, self._schedule_sql_stop_finalize)
         self._maybe_emit_execution_idle()
+
+    def _close_retired_sql_connector(self, thread: QThread) -> None:
+        entry = getattr(self, "_retired_sql_connectors", {}).pop(id(thread), None)
+        if entry is None:
+            return
+        connector = entry[2]
+        try:
+            force_disconnect = getattr(connector, "force_disconnect", None)
+            if callable(force_disconnect):
+                force_disconnect()
+            else:
+                disconnect = getattr(connector, "disconnect", None)
+                if callable(disconnect):
+                    disconnect()
+        except Exception as exc:
+            logger.debug("Retired SQL connector cleanup failed: %s", exc)
+
+    def _retire_abandoned_sql_connector(self, thread, worker, connector) -> None:
+        """Remove an abandoned connector from reuse and close it after thread exit."""
+        if connector is None:
+            return
+        block_key = getattr(self, "_sql_stopping_block_key", None)
+        if block_key:
+            self._block_connector_pool.discard(block_key, connector)
+
+        if thread is None:
+            # No worker thread means there is no outstanding driver use.
+            self._close_connector_after_sql_cancel(connector)
+            return
+
+        self._retired_sql_connectors[id(thread)] = (thread, worker, connector)
+        try:
+            thread.finished.connect(
+                lambda t=thread: self._close_retired_sql_connector(t),
+                Qt.ConnectionType.SingleShotConnection,
+            )
+        except (TypeError, RuntimeError) as exc:
+            # _on_sql_thread_terminated is already connected for normal SQL
+            # workers, so it remains the fallback cleanup signal.
+            logger.debug("Could not attach retired connector cleanup: %s", exc)
+
+    @staticmethod
+    def _close_connector_after_sql_cancel(connector) -> None:
+        try:
+            force_disconnect = getattr(connector, "force_disconnect", None)
+            if callable(force_disconnect):
+                force_disconnect()
+                return
+            disconnect = getattr(connector, "disconnect", None)
+            if callable(disconnect):
+                disconnect()
+        except Exception as exc:
+            logger.debug("Retired SQL connector cleanup failed: %s", exc)
 
     def _on_python_thread_terminated(self) -> None:
         thread = self.sender()
@@ -2849,6 +2923,11 @@ class SessionWidget(QWidget):
             connector = self._sql_stopping_connector
             if thread_alive and connector is not None:
                 connector._abandoned = True
+                self._retire_abandoned_sql_connector(
+                    thread,
+                    getattr(self, "_sql_stopping_worker", None),
+                    connector,
+                )
                 logger.warning(
                     "SQL cancel timed out with worker still running; connection marked abandoned"
                 )
@@ -2904,6 +2983,14 @@ class SessionWidget(QWidget):
         self._sql_stopping_thread = thread
         self._sql_stopping_worker = worker
         self._sql_stopping_connector = connector
+        block = getattr(self, "_current_execution_block", None)
+        block_key = None
+        if block is not None and hasattr(block, "get_block_key"):
+            try:
+                block_key = block.get_block_key()
+            except Exception:
+                block_key = None
+        self._sql_stopping_block_key = block_key
         self._sql_stop_started_at = time.time()
 
         def _bump_finalize(*_args):
@@ -2931,6 +3018,7 @@ class SessionWidget(QWidget):
         self._sql_stopping_thread = None
         self._sql_stopping_worker = None
         self._sql_stopping_connector = None
+        self._sql_stopping_block_key = None
         self._sql_stop_started_at = 0.0
 
     def _finalize_sql_stop(self, *, cancelled: bool | None = None) -> None:

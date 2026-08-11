@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from src.database.block_connector_pool import BlockConnectorPool
 from src.database.database_connector import DatabaseConnector
 from src.services.schema_service import SchemaService
 from src.ui.main_window._execution import ExecutionMixin
@@ -229,17 +230,15 @@ def test_on_schema_loaded_updates_requesting_explorer_from_explicit_session_id(q
     assert main_window.object_explorer_dock.show_calls == 1
 
 
-def test_on_schema_loaded_falls_back_to_pending_session_for_explorer_update(qapp):
+def test_on_schema_loaded_requires_explicit_session_id(qapp):
     schema = {"database": "db2", "tables": [{"name": "venda", "schema": "dbo"}], "columns": {}}
     widget = _DummyWidget("sid-1", "Conn")
     explorer = MagicMock()
     main_window = _DummyMainWindow(widget, explorer)
-    main_window._pending_schema_sessions = {"Conn": "sid-1"}
 
     main_window._on_schema_loaded(schema, "Conn", session_id="")
 
-    explorer.set_schema.assert_called_once_with(schema, "Conn", db_type="sqlserver")
-    assert "Conn" not in main_window._pending_schema_sessions
+    explorer.set_schema.assert_not_called()
 
 
 def test_clear_sql_autocomplete_for_session_connection_resets_only_matching_blocks(qapp):
@@ -533,3 +532,230 @@ def test_apply_loaded_schema_applies_to_blocks_without_schema(qapp):
     expected_schema = {**schema, "db_type": "sqlserver"}
     empty_block.set_sql_schema.assert_called_once_with(expected_schema)
     empty_block.set_database_context.assert_called_once_with("Conn:GECON")
+
+
+def test_block_database_change_clears_only_target_and_invalidates_block_cache(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    main_window = _DummyMainWindow(widget, MagicMock())
+    target_block = _DummyBlock()
+    target_block.get_block_key = MagicMock(return_value="block-1")
+    other_block = _DummyBlock()
+    widget.editor._blocks = [target_block, other_block]
+    main_window._switch_block_database_background = MagicMock()
+
+    main_window._on_block_database_changed(target_block, "db_b")
+
+    target_block.set_sql_schema.assert_called_once_with({})
+    target_block.set_database_context.assert_called_once_with("")
+    other_block.set_sql_schema.assert_not_called()
+    main_window._schema_service.invalidate_cache.assert_called_once_with(
+        "Conn",
+        session_id="sid-1",
+        block_key="block-1",
+        connection_group="",
+    )
+    main_window._switch_block_database_background.assert_called_once()
+
+
+def test_block_schema_result_from_previous_database_is_ignored(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    explorer = MagicMock()
+    main_window = _DummyMainWindow(widget, explorer)
+    target_block = _DummyBlock()
+    target_block.get_block_key = MagicMock(return_value="block-1")
+    target_block._database_name = "db_b"
+    widget.editor._blocks = [target_block]
+    widget.editor.get_focused_block = MagicMock(return_value=target_block)
+
+    stale_schema = {
+        "database": "db_a",
+        "connection_context": "db_a",
+        "requested_context": "db_a",
+        "tables": [{"name": "old_table"}],
+        "columns": {},
+    }
+    main_window._on_schema_loaded(
+        stale_schema,
+        "Conn",
+        session_id="sid-1",
+        block_key="block-1",
+    )
+
+    target_block.set_sql_schema.assert_not_called()
+    target_block.set_database_context.assert_not_called()
+
+
+def test_block_schema_result_stays_in_originating_session(qapp):
+    first_widget = _DummyWidget("sid-1", "Conn")
+    second_widget = _DummyWidget("sid-2", "Conn")
+    first_explorer = MagicMock()
+    second_explorer = MagicMock()
+    main_window = _DummyMainWindow(first_widget, first_explorer)
+    main_window._session_widgets["sid-2"] = second_widget
+    main_window._session_explorers["sid-2"] = second_explorer
+
+    first_block = _DummyBlock()
+    first_block.get_block_key = MagicMock(return_value="block-1")
+    first_block._database_name = "db_a"
+    second_block = _DummyBlock()
+    second_block.get_block_key = MagicMock(return_value="block-2")
+    second_block._database_name = "db_a"
+    first_widget.editor._blocks = [first_block]
+    second_widget.editor._blocks = [second_block]
+
+    main_window._on_schema_loaded(
+        {
+            "database": "db_a",
+            "connection_context": "db_a",
+            "requested_context": "db_a",
+            "tables": [{"name": "new_table"}],
+            "columns": {},
+        },
+        "Conn",
+        session_id="sid-1",
+        block_key="block-1",
+    )
+
+    first_block.set_sql_schema.assert_called_once()
+    second_block.set_sql_schema.assert_not_called()
+
+
+def test_block_schema_result_ignores_closing_block(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    main_window = _DummyMainWindow(widget, MagicMock())
+    closing_block = _DummyBlock()
+    closing_block.get_block_key = MagicMock(return_value="block-1")
+    closing_block._database_name = "db_a"
+    closing_block._is_closing = True
+    widget.editor._blocks = [closing_block]
+
+    main_window._on_schema_loaded(
+        {
+            "database": "db_a",
+            "connection_context": "db_a",
+            "requested_context": "db_a",
+            "tables": [{"name": "late_table"}],
+            "columns": {},
+        },
+        "Conn",
+        session_id="sid-1",
+        block_key="block-1",
+    )
+
+    closing_block.set_sql_schema.assert_not_called()
+
+
+def test_session_schema_result_from_previous_database_skips_target_block(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    main_window = _DummyMainWindow(widget, MagicMock())
+    target_block = _DummyBlock()
+    target_block.get_block_key = MagicMock(return_value="block-1")
+    target_block._database_name = "db_b"
+    widget.editor._blocks = [target_block]
+
+    main_window._on_schema_loaded(
+        {
+            "database": "db_a",
+            "connection_context": "db_a",
+            "requested_context": "db_a",
+            "tables": [{"name": "old_table"}],
+            "columns": {},
+        },
+        "Conn",
+        session_id="sid-1",
+    )
+    qapp.processEvents()
+
+    target_block.set_sql_schema.assert_not_called()
+    target_block.set_database_context.assert_not_called()
+
+
+def test_block_database_switch_registers_connector_and_loads_target_schema(qapp, monkeypatch):
+    class _Signal:
+        def __init__(self):
+            self._callbacks = []
+
+        def connect(self, callback, *_args, **_kwargs):
+            self._callbacks.append(callback)
+
+        def emit(self, *args):
+            for callback in list(self._callbacks):
+                callback(*args)
+
+    class _Thread:
+        def __init__(self):
+            self.started = _Signal()
+            self.finished = _Signal()
+
+        def start(self):
+            self.started.emit()
+
+        def quit(self):
+            return None
+
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+    connector._abandoned = False
+
+    class _Worker:
+        def __init__(self, **_kwargs):
+            self.connection_ready = _Signal()
+            self.error = _Signal()
+            self.finished = _Signal()
+
+        def moveToThread(self, _thread):
+            return None
+
+        def run(self):
+            self.connection_ready.emit(connector)
+            self.finished.emit()
+
+    manager = MagicMock()
+    manager.get_connection_config.return_value = {
+        "db_type": "sqlserver",
+        "host": "host",
+        "port": 1433,
+        "database": "db_a",
+    }
+    monkeypatch.setattr("src.database.connection_manager.ConnectionManager", lambda: manager)
+    monkeypatch.setattr("src.ui.main_window._schema.QThread", _Thread)
+    monkeypatch.setattr("src.workers.BlockConnectionWorker", _Worker)
+
+    widget = _DummyWidget("sid-1", "Conn")
+    target_block = _DummyBlock()
+    target_block.get_block_key = MagicMock(return_value="block-1")
+    widget.editor._blocks = [target_block]
+    widget._block_connector_pool = BlockConnectorPool()
+    main_window = _DummyMainWindow(widget, MagicMock())
+    main_window._worker_threads = []
+    main_window._adopt_background_thread = MagicMock()
+    main_window._remove_worker_thread = MagicMock()
+    main_window._get_active_session_id = MagicMock(return_value="sid-1")
+
+    main_window._on_block_database_changed(target_block, "db_b")
+
+    assert widget._block_connector_pool.peek_connected("block-1", "", "Conn") is connector
+    assert any(
+        call.kwargs.get("block_key") == "block-1"
+        and call.kwargs.get("lazy_mode") == "autocomplete"
+        and call.kwargs.get("database_context") == "db_b"
+        for call in main_window._schema_service.load_schema.call_args_list
+    )
+
+
+def test_lazy_block_schema_does_not_use_connection_only_pending_map(qapp):
+    widget = _DummyWidget("sid-1", "Conn")
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+    widget.session.connector = connector
+    block = _DummyBlock()
+    block.get_block_key = MagicMock(return_value="block-1")
+    main_window = _DummyMainWindow(widget, MagicMock())
+    main_window._schema_service.get_cached_schema.return_value = None
+
+    main_window.request_lazy_schema_for_completion(block, widget)
+
+    main_window._schema_service.load_schema.assert_called_once()
+    assert main_window._schema_service.load_schema.call_args.kwargs["session_id"] == "sid-1"
+    assert main_window._schema_service.load_schema.call_args.kwargs["block_key"] == "block-1"
+    assert not getattr(main_window, "_pending_block_schemas", {})

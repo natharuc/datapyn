@@ -76,6 +76,21 @@ class TestMonacoBridge:
 class TestMonacoEditorBasic:
     """Basic tests for MonacoEditor widget."""
 
+    def test_schedule_syntax_validation_ignores_deleted_timer(self, qapp):
+        from PyQt6 import sip
+        from PyQt6.QtWidgets import QWidget
+
+        from src.editors.monaco.monaco_editor import MonacoEditor
+
+        editor = QWidget()
+        editor._cleaned_up = False
+        editor._language = "sql"
+        timer = QTimer(editor)
+        sip.delete(timer)
+        editor._syntax_validate_timer = timer
+
+        MonacoEditor._schedule_syntax_validation(editor)
+
     @pytest.fixture
     def editor_zoom_settings(self):
         from PyQt6.QtCore import QSettings
@@ -758,17 +773,7 @@ class TestMonacoSqlAutocompleteIntegration:
         assert schema_calls
         assert "venda" in schema_calls[-1]
         assert "id" in schema_calls[-1]
-
-        qtbot.waitUntil(
-            lambda: any(
-                c.startswith("registerCompletions(") and '"label": "SELECT"' in c
-                for c in _emitted_js()
-            ),
-            timeout=5000,
-        )
-        completion_calls = [c for c in _emitted_js() if c.startswith("registerCompletions(")]
-        assert completion_calls
-        assert '"label": "SELECT"' in completion_calls[-1]
+        assert not any(c.startswith("registerCompletions(") for c in _emitted_js())
 
     def test_set_sql_schema_is_idempotent_for_same_schema(self, qtbot):
         """Re-applying the SAME schema (every block focus did this) must NOT

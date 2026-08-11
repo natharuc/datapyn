@@ -674,6 +674,20 @@ class SessionsMixin:
                 return
             if not success:
                 return
+            current_database = (
+                get_connector_database_context(getattr(session, "connector", None))
+                or getattr(session, "database_context", "")
+                or ""
+            )
+            if current_database:
+                session.database_context = current_database
+            self._on_session_connection_changed(
+                session,
+                session.connection_name or connection_name,
+                current_database,
+            )
+            if self.session_manager.focused_session is session:
+                self._on_session_focused(session)
             if success and color:
                 idx = self.session_tabs.indexOf(w)
                 if idx >= 0:
@@ -988,13 +1002,17 @@ class SessionsMixin:
             lambda conn_name, db: self._on_session_connection_changed(session, conn_name, db)
         )
         widget.block_connection_changed.connect(
-            lambda block, conn_name: self._on_block_connection_changed(block, conn_name)
+            lambda block, conn_name, w=widget: self._on_block_connection_changed(
+                block, conn_name, session_widget=w
+            )
         )
         widget.connection_drop_requested.connect(
             lambda group, name: self._quick_connect(group, name)
         )
         widget.block_database_changed.connect(
-            lambda block, db_name: self._on_block_database_changed(block, db_name)
+            lambda block, db_name, w=widget: self._on_block_database_changed(
+                block, db_name, session_widget=w
+            )
         )
         widget.execution_started.connect(
             lambda w=widget: self._on_execution_started(w)
@@ -1061,15 +1079,47 @@ class SessionsMixin:
 
         # If session already has an active connection (e.g., after restore), load schema
         if session.is_connected and session.connector and session.connection_name:
-            QTimer.singleShot(100, lambda: self._load_schema_with_loading(
-                session.connector, session.connection_name
-            ))
+            restored_session_id = session.session_id
+            restored_group = getattr(session, "connection_group", "") or ""
+            restored_connector = session.connector
+            restored_connection_name = session.connection_name
+            QTimer.singleShot(
+                100,
+                lambda w=widget, sid=restored_session_id, group=restored_group,
+                connector=restored_connector, name=restored_connection_name:
+                self._load_restored_session_schema(
+                    w, sid, connector, name, group
+                ),
+            )
 
         # Focar automaticamente no primeiro bloco (com delay para garantir renderizacao)
         if widget.editor and hasattr(widget.editor, "focus_first_block"):
             QTimer.singleShot(50, widget.editor.focus_first_block)
 
         return widget
+
+    def _load_restored_session_schema(
+        self,
+        widget,
+        session_id: str,
+        connector,
+        connection_name: str,
+        connection_group: str = "",
+    ) -> None:
+        """Load restored schema only while its originating tab still exists."""
+        if (
+            getattr(self, "_is_closing", False)
+            or not widget_is_valid(widget)
+            or getattr(widget, "_is_closing", False)
+            or getattr(self, "_session_widgets", {}).get(session_id) is not widget
+        ):
+            return
+        self._load_schema_with_loading(
+            connector,
+            connection_name,
+            session_id=session_id,
+            connection_group=connection_group,
+        )
 
     def _on_session_renamed(self, index: int, new_name: str):
         """Callback when session is renamed by SessionTabs component"""
@@ -1199,6 +1249,9 @@ class SessionsMixin:
                 self._original_file_type = None
 
             session_id = widget.session.session_id
+            schema_service = getattr(self, "_schema_service", None)
+            if schema_service is not None:
+                schema_service.invalidate_cache(session_id=session_id)
             if session_id in self._session_widgets:
                 del self._session_widgets[session_id]
 
@@ -1439,7 +1492,7 @@ class SessionsMixin:
         if (
             session.connector
             and isinstance(session.connector, DatabaseConnector)
-            and session.connector.is_connected()
+            and self._connector_is_connected(session.connector)
         ):
             if not hasattr(self, "_oe_current_connection"):
                 self._oe_current_connection = {}
@@ -1774,7 +1827,11 @@ class SessionsMixin:
         while pending:
             session_id, connection_group, connection_name = pending.pop(0)
             widget = self._session_widgets.get(session_id)
-            if widget is None or widget.session.is_connected:
+            if (
+                not widget_is_valid(widget)
+                or getattr(widget, "_is_closing", False)
+                or widget.session.is_connected
+            ):
                 continue
 
             widget.connect_to_database(connection_group, connection_name)

@@ -104,7 +104,14 @@ class Session(QObject):
 
     @property
     def is_connected(self) -> bool:
-        return self._connector is not None and self._connector.is_connected
+        connector = self._connector
+        if connector is None or getattr(connector, "_abandoned", False) is True:
+            return False
+        is_connected = getattr(connector, "is_connected", False)
+        try:
+            return bool(is_connected() if callable(is_connected) else is_connected)
+        except Exception:
+            return False
 
     @property
     def namespace(self) -> Dict[str, Any]:
@@ -288,7 +295,10 @@ class Session(QObject):
                 http_path=config.get("http_path", ""),
             )
 
-            if connector.is_connected:
+            is_connected = getattr(connector, "is_connected", False)
+            if callable(is_connected):
+                is_connected = is_connected()
+            if is_connected:
                 self._apply_saved_database_context(connector)
                 self.set_connection(ref.name, connector, ref.group)
                 return True

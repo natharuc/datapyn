@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.core.session import Session
 from src.core.session_manager import SessionManager
@@ -34,6 +34,29 @@ def test_session_initialize_skips_reconnect_when_disabled():
     manager.create_connection.assert_not_called()
     assert session.connection_name == "analytics"
     assert not session.is_connected
+
+
+def test_session_connect_rejects_disconnected_connector():
+    session = Session(session_id="s1", title="Script 1")
+    manager = MagicMock()
+    manager.get_connection_config.return_value = {
+        "db_type": "sqlserver",
+        "host": "host",
+        "port": 1433,
+        "database": "master",
+    }
+    connector = MagicMock()
+    connector.connect.return_value = False
+    connector.is_connected.return_value = False
+
+    with (
+        patch("src.database.connection_manager.ConnectionManager", return_value=manager),
+        patch("src.database.database_connector.DatabaseConnector", return_value=connector),
+    ):
+        assert session.connect("Prod", "Conn") is False
+
+    assert session.connector is None
+    assert session.connection_name is None
 
 
 def test_session_manager_load_sessions_preserves_connections_without_reconnect(tmp_path):
@@ -72,8 +95,13 @@ def test_session_manager_load_sessions_preserves_connections_without_reconnect(t
 def test_restored_connections_are_dispatched_only_after_async_queue_starts(monkeypatch):
     host = _DummySessionsHost()
     widget = MagicMock()
+    widget._is_closing = False
     widget.session = SimpleNamespace(session_id="s1", is_connected=False, connection_name="analytics")
     host._session_widgets["s1"] = widget
+    monkeypatch.setattr(
+        "src.ui.main_window._sessions.widget_is_valid",
+        lambda candidate: candidate is widget,
+    )
 
     scheduled = []
     monkeypatch.setattr("src.ui.main_window._sessions.QTimer.singleShot", lambda delay, callback: scheduled.append((delay, callback)))
@@ -93,12 +121,55 @@ def test_restored_connections_are_dispatched_only_after_async_queue_starts(monke
     widget.connect_to_database.assert_called_once_with("", "analytics")
 
 
+def test_restored_schema_callback_keeps_session_and_group_context(monkeypatch):
+    host = _DummySessionsHost()
+    widget = MagicMock()
+    widget._is_closing = False
+    host._session_widgets["s1"] = widget
+    host._load_schema_with_loading = MagicMock()
+    connector = MagicMock(name="connector")
+    monkeypatch.setattr(
+        "src.ui.main_window._sessions.widget_is_valid",
+        lambda candidate: candidate is widget,
+    )
+
+    host._load_restored_session_schema(
+        widget,
+        "s1",
+        connector,
+        "analytics",
+        "Prod",
+    )
+
+    host._load_schema_with_loading.assert_called_once_with(
+        connector,
+        "analytics",
+        session_id="s1",
+        connection_group="Prod",
+    )
+
+    host._session_widgets["s1"] = MagicMock()
+    host._load_restored_session_schema(
+        widget,
+        "s1",
+        MagicMock(name="late-connector"),
+        "analytics",
+        "Prod",
+    )
+    assert host._load_schema_with_loading.call_count == 1
+
+
 def test_legacy_workspace_connection_is_queued_for_focused_session(monkeypatch):
     host = _DummySessionsHost()
     widget = MagicMock()
+    widget._is_closing = False
     widget.session = SimpleNamespace(session_id="s1", is_connected=False, connection_name="")
     host._current_widget = widget
     host._session_widgets["s1"] = widget
+    monkeypatch.setattr(
+        "src.ui.main_window._sessions.widget_is_valid",
+        lambda candidate: candidate is widget,
+    )
 
     scheduled = []
     monkeypatch.setattr("src.ui.main_window._sessions.QTimer.singleShot", lambda delay, callback: scheduled.append((delay, callback)))

@@ -168,6 +168,24 @@ def _format_thread_report(args) -> str:
         return f"{getattr(args.exc_type, '__name__', 'Exception')}: {args.exc_value}"
 
 
+def _is_benign_databricks_telemetry_shutdown(
+    args,
+    traceback_text: str,
+) -> bool:
+    """Identify only the connector's known telemetry shutdown race."""
+    exc_type = getattr(args, "exc_type", None)
+    if (
+        getattr(exc_type, "__module__", "") != "databricks.sql.exc"
+        or getattr(exc_type, "__name__", "") != "RequestError"
+    ):
+        return False
+    if "HTTP client is closing or has been closed" not in str(
+        getattr(args, "exc_value", "")
+    ):
+        return False
+    return "_flush_worker" in traceback_text and "telemetry_client" in traceback_text
+
+
 def _record_crash(traceback_text: str, signature: str, *, source: str) -> None:
     """Persist the crash to the rotating crash log and the main log."""
     header = (
@@ -259,6 +277,12 @@ def _handle_exception(exc_type, exc_value, exc_tb) -> None:
 def _thread_excepthook(args) -> None:
     """threading.excepthook replacement for worker threads."""
     traceback_text = _format_thread_report(args)
+    if _is_benign_databricks_telemetry_shutdown(args, traceback_text):
+        logger.warning(
+            "Ignoring Databricks telemetry shutdown race: %s",
+            args.exc_value,
+        )
+        return
     signature = _signature(traceback_text)
     _record_crash(traceback_text, signature, source=f"thread:{args.thread.name}")
     _show_crash_dialog_on_ui(traceback_text, signature)
