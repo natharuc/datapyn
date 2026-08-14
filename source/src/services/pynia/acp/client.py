@@ -43,6 +43,7 @@ class AcpClient(QObject):
         self._alive = False
         self.agent_capabilities: dict[str, Any] = {}
         self.auth_methods: list[dict[str, Any]] = []
+        self.last_session_info: dict[str, Any] = {}
 
     @property
     def is_running(self) -> bool:
@@ -143,6 +144,7 @@ class AcpClient(QObject):
                 "clientCapabilities": {
                     "fs": {"readTextFile": False, "writeTextFile": False},
                     "terminal": False,
+                    "session": {"configOptions": {"boolean": {}}},
                 },
                 "clientInfo": {"name": client_name, "version": client_version},
             },
@@ -162,34 +164,68 @@ class AcpClient(QObject):
             {"cwd": cwd, "mcpServers": mcp_servers or []},
             timeout=30.0,
         )
+        self.last_session_info = result if isinstance(result, dict) else {}
         session_id = result.get("sessionId") or result.get("session_id") or ""
         if not session_id:
             raise RuntimeError("session/new did not return sessionId")
         return str(session_id)
 
     def session_load(self, session_id: str, cwd: str, mcp_servers: list[dict] | None = None) -> Any:
-        return self.request(
+        result = self.request(
             "session/load",
             {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers or []},
             timeout=60.0,
         )
+        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
+            self.last_session_info = {**self.last_session_info, **result}
+        return result
 
     def session_resume(self, session_id: str, cwd: str, mcp_servers: list[dict] | None = None) -> Any:
-        return self.request(
+        result = self.request(
             "session/resume",
             {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers or []},
             timeout=30.0,
         )
+        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
+            self.last_session_info = {**self.last_session_info, **result}
+        return result
 
-    def session_prompt(self, session_id: str, text: str, timeout: float = 300.0) -> dict:
+    def session_prompt(
+        self,
+        session_id: str,
+        text: str = "",
+        timeout: float = 300.0,
+        prompt: list | None = None,
+    ) -> dict:
+        blocks = prompt if prompt else [{"type": "text", "text": text}]
         return self.request(
             "session/prompt",
             {
                 "sessionId": session_id,
-                "prompt": [{"type": "text", "text": text}],
+                "prompt": blocks,
             },
             timeout=timeout,
         )
+
+    def session_set_config_option(self, session_id: str, config_id: str, value: str) -> dict:
+        result = self.request(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": config_id, "type": "id", "value": value},
+            timeout=15.0,
+        )
+        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
+            self.last_session_info = {**self.last_session_info, **result}
+        return result if isinstance(result, dict) else {}
+
+    def session_set_model(self, session_id: str, model_id: str) -> dict:
+        result = self.request(
+            "session/set_model",
+            {"sessionId": session_id, "modelId": model_id, "model": model_id},
+            timeout=15.0,
+        )
+        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
+            self.last_session_info = {**self.last_session_info, **result}
+        return result if isinstance(result, dict) else {}
 
     def session_cancel(self, session_id: str) -> None:
         self.notify("session/cancel", {"sessionId": session_id})

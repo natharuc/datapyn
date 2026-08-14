@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -17,6 +18,12 @@ def empty_pynia_state() -> dict[str, Any]:
     }
 
 
+def _ready_event() -> threading.Event:
+    event = threading.Event()
+    event.set()
+    return event
+
+
 @dataclass
 class TabChatState:
     tab_id: str
@@ -27,6 +34,9 @@ class TabChatState:
     messages: list[dict[str, Any]] = field(default_factory=list)
     acp_session_recreated: bool = False
     busy: bool = False
+    config_snapshot: dict[str, Any] = field(default_factory=dict)
+    config_loading: bool = False
+    session_ready: threading.Event = field(default_factory=_ready_event)
 
     def to_dict(self) -> dict[str, Any]:
         return {

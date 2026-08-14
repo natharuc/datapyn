@@ -13,6 +13,13 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
+MCP_INSTRUCTIONS = (
+    "You are inside DataPyn, a desktop SQL/Python IDE. This MCP server runs "
+    "in-process in the same DataPyn window — there is no HTTP API and nothing "
+    "to curl on localhost. Call datapyn_* tools to inspect results, run SQL, "
+    "edit blocks, and create charts."
+)
+
 
 class PyniaMcpHost(QObject):
     """Accepts localhost TCP connections from mcp_stdio proxies."""
@@ -29,6 +36,7 @@ class PyniaMcpHost(QObject):
         self.port = 0
         self.token = ""
         self.last_prompt_tab: dict[str, str] = {}
+        self.current_tab: str = ""
         self._run_tool.connect(self._on_run_tool, Qt.ConnectionType.QueuedConnection)
 
     def start(self) -> None:
@@ -63,6 +71,7 @@ class PyniaMcpHost(QObject):
         source_root = str(Path(__file__).resolve().parents[4])
         return {
             "name": "datapyn",
+            "type": "stdio",
             "command": sys.executable,
             "args": ["-m", "src.services.pynia.acp.mcp_stdio"],
             "env": [
@@ -73,6 +82,41 @@ class PyniaMcpHost(QObject):
                 {"name": "DATAPYN_TAB_ID", "value": tab_id or ""},
             ],
         }
+
+    def write_copilot_mcp_json(self, workspace: str, tab_id: str = "") -> str:
+        """Copilot --acp ignores session/new mcpServers; load tools via CLI flag."""
+        from pathlib import Path
+
+        cfg = self.mcp_server_config(tab_id or self.current_tab or "")
+        env = {item["name"]: item["value"] for item in cfg["env"]}
+        payload = {
+            "mcpServers": {
+                "datapyn": {
+                    "type": "stdio",
+                    "command": cfg["command"],
+                    "args": cfg["args"],
+                    "tools": ["*"],
+                    "env": env,
+                }
+            }
+        }
+        root = Path(workspace) / ".datapyn"
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.debug("Could not create .datapyn dir: %s", exc)
+            root = Path(workspace)
+        path = root / "copilot-mcp.json"
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        copilot_dir = Path(workspace) / ".copilot"
+        try:
+            copilot_dir.mkdir(parents=True, exist_ok=True)
+            (copilot_dir / "mcp-config.json").write_text(
+                json.dumps(payload, indent=2), encoding="utf-8"
+            )
+        except Exception as exc:
+            logger.debug("Could not write .copilot/mcp-config.json: %s", exc)
+        return str(path)
 
     def write_cursor_mcp_json(self, workspace: str, tab_id: str) -> None:
         from pathlib import Path
@@ -163,13 +207,18 @@ class PyniaMcpHost(QObject):
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "datapyn-mcp", "version": "1.0.0"},
+                "instructions": MCP_INSTRUCTIONS,
             }
         elif method == "tools/list":
             result = {"tools": self._registry.list_tools()}
         elif method == "tools/call":
             name = params.get("name", "")
             arguments = params.get("arguments") or {}
-            effective_tab = tab_id or next(iter(self.last_prompt_tab.values()), "")
+            effective_tab = (
+                tab_id
+                or self.current_tab
+                or next(iter(self.last_prompt_tab.values()), "")
+            )
             result = self._execute_tool(name, arguments, effective_tab)
         elif method == "ping":
             result = {}

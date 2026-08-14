@@ -123,18 +123,23 @@ class PyniaToolDispatcher:
             return self._exec("inspect_variable", {"variable_name": name})
 
         # kind == block (default)
-        if not block_args and not args.get("block_name") and args.get("block_index") is None:
-            return {"error": "block_name or block_index required for kind=block"}
-
         if detail == "outline":
             detail = "structure"
         elif detail == "":
-            # An anchor or line range implies a code read; otherwise default
-            # to the cheap structure outline.
+            # An anchor or line range implies a code read; otherwise the grid
+            # the user is looking at (results are session-wide, not per-block).
             if args.get("around") or args.get("start_line") is not None:
                 detail = "code"
             else:
-                detail = "structure"
+                detail = "result"
+
+        if (
+            not block_args
+            and not args.get("block_name")
+            and args.get("block_index") is None
+            and detail not in {"result", "execution"}
+        ):
+            return {"error": "block_name or block_index required for kind=block"}
 
         if detail == "structure":
             return self._exec("inspect_block", block_args)

@@ -58,6 +58,62 @@ class PyniaSettingsManager:
     def set_autocomplete_enabled(self, enabled: bool) -> None:
         self._settings.setValue("autocomplete_enabled", "true" if enabled else "false")
 
+    @property
+    def model_id(self) -> str:
+        return str(self._settings.value("model_id", "") or "")
+
+    def set_model_id(self, model_id: str) -> None:
+        self._settings.setValue("model_id", model_id or "")
+
+    @property
+    def thought_level(self) -> str:
+        return str(self._settings.value("thought_level", "auto") or "auto")
+
+    def set_thought_level(self, level: str) -> None:
+        self._settings.setValue("thought_level", level or "auto")
+
+    def _agent_pref_key(self, agent_id: str, field: str) -> str:
+        return f"agent_prefs/{agent_id}/{field}"
+
+    def _migrate_global_pref(self, agent_id: str, field: str, legacy: str) -> str:
+        if not legacy:
+            return ""
+        key = self._agent_pref_key(agent_id, field)
+        self._settings.setValue(key, legacy)
+        return legacy
+
+    def agent_model_id(self, agent_id: str) -> str:
+        if agent_id not in AGENT_IDS:
+            return ""
+        raw = str(self._settings.value(self._agent_pref_key(agent_id, "model_id"), "") or "")
+        if raw:
+            return raw
+        if agent_id == self.default_agent_id:
+            return self._migrate_global_pref(agent_id, "model_id", self.model_id)
+        return ""
+
+    def set_agent_model_id(self, agent_id: str, model_id: str) -> None:
+        if agent_id not in AGENT_IDS:
+            return
+        self._settings.setValue(self._agent_pref_key(agent_id, "model_id"), model_id or "")
+
+    def agent_thought_level(self, agent_id: str) -> str:
+        if agent_id not in AGENT_IDS:
+            return ""
+        raw = str(self._settings.value(self._agent_pref_key(agent_id, "thought_level"), "") or "")
+        if raw:
+            return raw
+        if agent_id == self.default_agent_id:
+            legacy = self.thought_level
+            if legacy and legacy != "auto":
+                return self._migrate_global_pref(agent_id, "thought_level", legacy)
+        return ""
+
+    def set_agent_thought_level(self, agent_id: str, level: str) -> None:
+        if agent_id not in AGENT_IDS:
+            return
+        self._settings.setValue(self._agent_pref_key(agent_id, "thought_level"), level or "")
+
 
 def get_pynia_settings() -> PyniaSettingsManager:
     return PyniaSettingsManager()

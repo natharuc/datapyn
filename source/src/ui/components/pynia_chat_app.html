@@ -21,7 +21,11 @@
                     <div id="tabContext" class="chat-subtitle"></div>
                 </div>
             </div>
-            <button id="settingsBtn" class="text-command" type="button">Settings</button>
+            <button id="settingsBtn" class="icon-command ghost" type="button" title="Settings" aria-label="Settings">
+                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path fill="currentColor" d="M8 5.4A2.6 2.6 0 1 0 8 10.6 2.6 2.6 0 0 0 8 5.4zm6.3 2.1-.9-.2a5 5 0 0 0-.4-1l.6-.7a.5.5 0 0 0 0-.7l-.9-.9a.5.5 0 0 0-.7 0l-.7.6a5 5 0 0 0-1-.4l-.2-.9A.5.5 0 0 0 10 3H8.6a.5.5 0 0 0-.5.4l-.2.9a5 5 0 0 0-1 .4l-.7-.6a.5.5 0 0 0-.7 0l-.9.9a.5.5 0 0 0 0 .7l.6.7a5 5 0 0 0-.4 1l-.9.2A.5.5 0 0 0 3 7.4v1.2a.5.5 0 0 0 .4.5l.9.2a5 5 0 0 0 .4 1l-.6.7a.5.5 0 0 0 0 .7l.9.9a.5.5 0 0 0 .7 0l.7-.6a5 5 0 0 0 1 .4l.2.9a.5.5 0 0 0 .5.4H10a.5.5 0 0 0 .5-.4l.2-.9a5 5 0 0 0 1-.4l.7.6a.5.5 0 0 0 .7 0l.9-.9a.5.5 0 0 0 0-.7l-.6-.7a5 5 0 0 0 .4-1l.9-.2a.5.5 0 0 0 .4-.5V7.4a.5.5 0 0 0-.4-.5z"/>
+                </svg>
+            </button>
         </header>
 
         <section id="picker" class="picker" hidden>
@@ -42,11 +46,32 @@
 
         <footer class="composer-wrap">
             <div id="recreatedNote" class="recreated-note" hidden></div>
-            <div class="composer-card">
-                <textarea id="composerInput" rows="1" placeholder="Ask Pynia…"></textarea>
+            <div class="composer-card locked" id="composerCard">
+                <div id="attachRow" class="attach-row" hidden></div>
+                <textarea id="composerInput" rows="1" placeholder="Choose an agent…" disabled></textarea>
                 <div class="composer-footer">
-                    <button id="cancelBtn" class="icon-command danger" type="button" hidden>&times;</button>
-                    <button id="sendBtn" class="icon-command primary" type="button">&uarr;</button>
+                    <div class="config-wrap" id="llmWrap" hidden>
+                        <button id="llmChip" class="config-chip" type="button" aria-haspopup="listbox" aria-expanded="false">…</button>
+                        <div id="llmPopover" class="config-popover" hidden>
+                            <input id="llmSearch" type="search" autocomplete="off" spellcheck="false">
+                            <div id="llmList" class="config-list" role="listbox"></div>
+                        </div>
+                    </div>
+                    <div class="config-wrap" id="reasonWrap" hidden>
+                        <button id="reasonChip" class="config-chip" type="button" aria-haspopup="listbox" aria-expanded="false">…</button>
+                        <div id="reasonPopover" class="config-popover" hidden>
+                            <div id="reasonList" class="config-list" role="listbox"></div>
+                        </div>
+                    </div>
+                    <span class="composer-spacer"></span>
+                    <button id="sendBtn" class="send-btn" type="button" aria-label="Send" disabled>
+                        <svg class="icon-send" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                            <path fill="currentColor" d="M8 2.6 3.2 7.2h2.6V13h4.4V7.2h2.6L8 2.6z"/>
+                        </svg>
+                        <svg class="icon-stop" viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+                            <rect fill="currentColor" x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2"/>
+                        </svg>
+                    </button>
                 </div>
             </div>
         </footer>

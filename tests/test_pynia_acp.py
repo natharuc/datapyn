@@ -24,7 +24,70 @@ def _fake_launch(_spec):
     return sys.executable, [FAKE_AGENT]
 
 
-def test_catalog_lists_four_agents():
+def test_acp_prompt_includes_tools_and_user_text():
+    from src.services.pynia.acp.turn_context import collect_tab_context, format_acp_prompt
+
+    ctx = collect_tab_context("tab-1")
+    text = format_acp_prompt("monta um gráfico com esses dados", ctx)
+    assert "datapyn_chart" in text
+    assert "datapyn_snapshot" in text
+    assert "You are Pynia" in text
+    assert "ALWAYS prefer" in text
+    assert "THIS TURN" in text
+    assert "datapyn_chart operation=create" in text
+    assert "monta um gráfico com esses dados" in text
+
+
+def test_acp_prompt_includes_active_result():
+    from src.services.pynia.acp.turn_context import format_acp_prompt
+
+    ctx = {
+        "tab_id": "t1",
+        "execution_state": {
+            "active_result": {
+                "rows": 10,
+                "columns": ["produto", "premio"],
+                "preview": "produto premio\nA 1",
+            }
+        },
+    }
+    text = format_acp_prompt("grafico", ctx)
+    assert "active_result" in text
+    assert "premio" in text
+    assert "grafico" in text
+
+
+def test_action_directive_chart_and_query():
+    from src.services.pynia.acp.turn_context import action_directive, format_acp_prompt_parts
+
+    chart = action_directive(
+        "preciso criar um gráfico de valor de emissao por mes",
+        {"execution_state": {"active_result": {"columns": ["mes", "valor_emissao"]}}},
+    )
+    assert "datapyn_chart" in chart
+    assert "valor_emissao" in chart
+    assert "Do not ask" in chart
+    query = action_directive("analisar e escrever uma query de premio por produto")
+    assert "datapyn_run" in query
+    parts = format_acp_prompt_parts("cria um grafico", {"tab_id": "t1"})
+    assert parts[-1]["text"] == "cria um grafico"
+    assert parts[0]["type"] == "text"
+    assert parts[1]["type"] == "text"
+    assert "CURRENT TAB JSON" in parts[1]["text"]
+    assert "datapyn://" not in parts[1]["text"]
+    assert "INSIDE DataPyn" in parts[0]["text"]
+    assert "no DataPyn HTTP" in parts[0]["text"]
+
+
+def test_mcp_tool_schema_is_json_schema():
+    from src.services.pynia.tools.registry import PyniaToolRegistry
+
+    registry = PyniaToolRegistry(parent=None, legacy_registry=MagicMock())
+    tools = registry.list_tools()
+    chart = next(t for t in tools if t["name"] == "datapyn_chart")
+    props = chart["inputSchema"]["properties"]
+    assert "optional" not in props["operation"]
+    assert "operation" in chart["inputSchema"]["required"]
     specs = list_agents()
     assert [s.id for s in specs] == list(AGENT_IDS)
     assert {"claude", "cursor", "copilot", "codex"} == set(AGENT_IDS)
@@ -110,6 +173,19 @@ def test_acp_handshake_initialize_session_prompt(qapp, tmp_path):
         assert "pong" in "".join(chunks)
     finally:
         client.stop()
+
+
+def test_send_prompt_requires_agent(qapp):
+    host = PyniaAcpHost(mcp_registry=None)
+    try:
+        with pytest.raises(RuntimeError, match="Choose an agent first"):
+            host.send_prompt("tab-1", "hello")
+        assert host.state("tab-1").agent_id is None
+        assert host.state("tab-1").messages == []
+        host.set_agent("tab-1", "claude")
+        assert host.state("tab-1").agent_id == "claude"
+    finally:
+        host.shutdown()
 
 
 def test_agent_lock_after_first_prompt(qapp, monkeypatch, tmp_path):
@@ -240,6 +316,26 @@ def test_mcp_proxy_dispatches_edit_and_run(qapp):
         host.stop()
 
 
+def test_copilot_mcp_json_enables_datapyn_tools(qapp, tmp_path):
+    registry = MagicMock()
+    registry.list_tools.return_value = [{"name": "datapyn_chart"}]
+    host = PyniaMcpHost(registry)
+    host.start()
+    try:
+        path = Path(host.write_copilot_mcp_json(str(tmp_path), "tab-x"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        server = payload["mcpServers"]["datapyn"]
+        assert server["type"] == "stdio"
+        assert server["tools"] == ["*"]
+        env = server["env"]
+        assert env["DATAPYN_MCP_PORT"] == str(host.port)
+        assert env["DATAPYN_MCP_TOKEN"] == host.token
+        assert env["DATAPYN_TAB_ID"] == "tab-x"
+        assert (tmp_path / ".copilot" / "mcp-config.json").is_file()
+    finally:
+        host.stop()
+
+
 def test_autocomplete_uses_separate_session(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr("src.services.pynia.acp.pool.resolve_launch", _fake_launch)
     monkeypatch.setattr("src.services.pynia.acp.catalog.resolve_launch", _fake_launch)
@@ -247,7 +343,14 @@ def test_autocomplete_uses_separate_session(qapp, monkeypatch, tmp_path):
     settings = type(
         "S",
         (),
-        {"autocomplete_enabled": True, "default_agent_id": "claude"},
+        {
+            "autocomplete_enabled": True,
+            "default_agent_id": "claude",
+            "agent_model_id": lambda self, _id: "",
+            "agent_thought_level": lambda self, _id: "",
+            "set_agent_model_id": lambda self, _id, _value: None,
+            "set_agent_thought_level": lambda self, _id, _value: None,
+        },
     )()
     monkeypatch.setattr("src.services.pynia.settings.get_pynia_settings", lambda: settings)
 
@@ -290,3 +393,446 @@ def test_inline_service_debounce_cancel(monkeypatch, qapp):
     qapp.processEvents()
     assert fired == []
     assert service._pending is None
+
+
+def test_permission_auto_allows_datapyn_rejects_http_probe():
+    from src.services.pynia.acp.permission import (
+        permission_should_ask,
+        permission_should_reject,
+        reject_option_id,
+    )
+
+    curl = {
+        "toolCall": {
+            "toolCallId": "toolu_1",
+            "title": "Verificar se o servidor DataPyn está respondendo",
+            "kind": "execute",
+            "status": "pending",
+            "rawInput": {"command": "curl -s http://localhost:3001/api/chart 2>&1 | head -c 100"},
+            "commands": ["curl -s http://localhost:3001/api/chart 2>&1 | head -c 100"],
+        }
+    }
+    assert permission_should_reject(curl) is True
+    assert permission_should_ask(curl) is False
+    assert reject_option_id(curl) == "reject-once"
+    assert permission_should_ask({"toolCall": {"title": "datapyn_chart", "kind": "other"}}) is False
+    assert permission_should_ask({"toolCall": {"name": "datapyn_snapshot"}}) is False
+    assert permission_should_reject({"toolCall": {"name": "datapyn_inspect"}}) is False
+
+
+def test_permission_asks_only_for_destructive_sql():
+    from src.services.pynia.acp.permission import permission_should_ask
+
+    assert permission_should_ask({"toolCall": {"rawInput": {"command": "DROP TABLE foo"}}}) is True
+    assert permission_should_ask({"toolCall": {"rawInput": {"sql": "DELETE FROM users"}}}) is True
+    assert permission_should_ask({"toolCall": {"rawInput": {"command": "UPDATE accounts SET x=1"}}}) is True
+    assert permission_should_ask({"toolCall": {"rawInput": {"sql": "TRUNCATE TABLE logs"}}}) is True
+    assert permission_should_ask({"toolCall": {"title": "Update chart", "kind": "execute"}}) is False
+    assert permission_should_ask({"toolCall": {"rawInput": {"sql": "SELECT * FROM users"}}}) is False
+    assert permission_should_ask({"toolCall": {"kind": "delete", "title": "Remove file"}}) is True
+
+
+def test_composer_selectors_from_acp_and_saved_prefs():
+    from src.services.pynia.acp.session_config import composer_selectors
+
+    snapshot = {
+        "configOptions": [
+            {
+                "id": "model",
+                "category": "model",
+                "name": "Model",
+                "currentValue": "sonnet",
+                "options": [
+                    {"value": "sonnet", "name": "Sonnet"},
+                    {"value": "opus", "name": "Opus"},
+                ],
+            },
+            {
+                "id": "thought_level",
+                "category": "thought_level",
+                "currentValue": "high",
+                "options": [{"value": "high", "name": "High"}, {"value": "low", "name": "Low"}],
+            },
+        ]
+    }
+    sel = composer_selectors(snapshot)
+    assert sel["model"]["current"] == "sonnet"
+    assert sel["reasoning"]["current"] == "high"
+    assert sel["reasoning"]["hidden"] is False
+    preferred = composer_selectors(snapshot, model_id="opus", thought_level="low")
+    assert preferred["model"]["current"] == "opus"
+    assert preferred["reasoning"]["current"] == "low"
+    foreign = composer_selectors(snapshot, model_id="gpt-4.1", thought_level="xhigh")
+    assert foreign["model"]["current"] == "sonnet"
+    assert foreign["reasoning"]["current"] == "high"
+    assert all(item["value"] != "gpt-4.1" for item in foreign["model"]["values"])
+    empty = composer_selectors({}, model_id="gpt-4.1", thought_level="low")
+    assert empty["model"]["hidden"] is True
+    assert empty["model"]["values"] == []
+    assert empty["reasoning"]["hidden"] is True
+    assert empty["reasoning"]["values"] == []
+    loading = composer_selectors({}, loading=True)
+    assert loading["model"]["loading"] is True
+    assert loading["model"]["hidden"] is False
+    assert loading["reasoning"]["hidden"] is True
+
+
+def test_merge_config_snapshot_keeps_option_lists():
+    from src.services.pynia.acp.session_config import composer_selectors, merge_config_snapshot
+
+    previous = {
+        "sessionId": "sess-1",
+        "configOptions": [
+            {
+                "id": "model",
+                "category": "model",
+                "currentValue": "sonnet",
+                "options": [
+                    {"value": "sonnet", "name": "Sonnet"},
+                    {"value": "opus", "name": "Opus"},
+                ],
+            },
+            {
+                "id": "thought_level",
+                "category": "thought_level",
+                "currentValue": "low",
+                "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}],
+            },
+        ],
+    }
+    incoming = {
+        "configOptions": [
+            {"id": "model", "category": "model", "currentValue": "opus"},
+            {"id": "thought_level", "category": "thought_level", "currentValue": "high"},
+        ]
+    }
+    merged = merge_config_snapshot(previous, incoming)
+    sel = composer_selectors(merged)
+    assert sel["model"]["current"] == "opus"
+    assert {item["value"] for item in sel["model"]["values"]} == {"sonnet", "opus"}
+    assert sel["model"]["hidden"] is False
+    assert sel["reasoning"]["current"] == "high"
+    assert sel["reasoning"]["hidden"] is False
+    wiped = merge_config_snapshot(previous, {"configOptions": []})
+    assert wiped["configOptions"] == previous["configOptions"]
+
+
+def test_composer_selectors_config_id_legacy_models_and_mode():
+    from src.services.pynia.acp.session_config import composer_selectors, filter_values
+
+    sel = composer_selectors(
+        {
+            "configOptions": [
+                {
+                    "configId": "model",
+                    "category": "model",
+                    "currentValue": "a",
+                    "options": [
+                        {"id": "a", "name": "Alpha", "description": "fast"},
+                        {"value": "b", "name": "Beta"},
+                    ],
+                },
+                {
+                    "id": "mode",
+                    "category": "mode",
+                    "currentValue": "ask",
+                    "options": [{"value": "ask", "name": "Ask"}, {"value": "bypass", "name": "Bypass"}],
+                },
+            ]
+        }
+    )
+    assert {item["value"] for item in sel["model"]["values"]} == {"a", "b"}
+    assert sel["model"]["values"][0]["description"] == "fast"
+    assert sel["reasoning"]["hidden"] is True
+    assert all(item["value"] != "ask" for item in sel["model"]["values"])
+
+    legacy = composer_selectors(
+        {
+            "models": {
+                "availableModels": [{"modelId": "sonnet", "name": "Sonnet"}],
+                "currentModelId": "sonnet",
+            }
+        }
+    )
+    assert legacy["model"]["current"] == "sonnet"
+    assert legacy["model"]["hidden"] is False
+    assert legacy["reasoning"]["hidden"] is True
+
+    values = [
+        {"value": "gpt-5", "name": "GPT-5", "description": "flagship"},
+        {"value": "sonnet", "name": "Claude Sonnet"},
+    ]
+    assert [item["value"] for item in filter_values(values, "son")] == ["sonnet"]
+    assert [item["value"] for item in filter_values(values, "FLAG")] == ["gpt-5"]
+    assert len(filter_values(values, "")) == 2
+
+
+def test_agent_prefs_isolated_per_agent(monkeypatch):
+    from src.services.pynia.settings import PyniaSettingsManager, get_pynia_settings, reset_pynia_settings
+
+    store: dict[str, str] = {}
+
+    class Mem:
+        def value(self, key, default=""):
+            return store.get(key, default)
+
+        def setValue(self, key, value):
+            store[key] = value
+
+    mem = Mem()
+    reset_pynia_settings()
+    try:
+        monkeypatch.setattr(
+            PyniaSettingsManager,
+            "_settings",
+            property(lambda self: mem),
+        )
+        settings = get_pynia_settings()
+        store["default_agent_id"] = "claude"
+        store["model_id"] = "legacy-sonnet"
+        store["thought_level"] = "high"
+        assert settings.agent_model_id("claude") == "legacy-sonnet"
+        assert settings.agent_thought_level("claude") == "high"
+        assert settings.agent_model_id("copilot") == ""
+        settings.set_agent_model_id("copilot", "gpt-5")
+        settings.set_agent_thought_level("copilot", "low")
+        settings.set_agent_model_id("claude", "opus")
+        assert settings.agent_model_id("copilot") == "gpt-5"
+        assert settings.agent_thought_level("copilot") == "low"
+        assert settings.agent_model_id("claude") == "opus"
+        assert settings.agent_thought_level("claude") == "high"
+    finally:
+        reset_pynia_settings()
+
+
+class _MemPyniaSettings:
+    def __init__(self):
+        self.autocomplete_enabled = False
+        self.default_agent_id = ""
+        self._models: dict[str, str] = {}
+        self._thoughts: dict[str, str] = {}
+
+    def agent_model_id(self, agent_id: str) -> str:
+        return self._models.get(agent_id, "")
+
+    def set_agent_model_id(self, agent_id: str, value: str) -> None:
+        self._models[agent_id] = value
+
+    def agent_thought_level(self, agent_id: str) -> str:
+        return self._thoughts.get(agent_id, "")
+
+    def set_agent_thought_level(self, agent_id: str, value: str) -> None:
+        self._thoughts[agent_id] = value
+
+
+def test_set_session_config_keeps_prefs_per_agent(qapp, monkeypatch):
+    settings = _MemPyniaSettings()
+    monkeypatch.setattr("src.services.pynia.settings.get_pynia_settings", lambda: settings)
+    host = PyniaAcpHost(mcp_registry=None)
+    try:
+        state = host.state("tab-1")
+        state.agent_id = "copilot"
+        state.config_snapshot = {
+            "configOptions": [
+                {
+                    "id": "model",
+                    "category": "model",
+                    "currentValue": "auto",
+                    "options": [
+                        {"value": "auto", "name": "Auto"},
+                        {"value": "gpt-5", "name": "GPT-5"},
+                    ],
+                }
+            ]
+        }
+        host.set_session_config("tab-1", "model", "sonnet")
+        assert settings.agent_model_id("copilot") == ""
+        host.set_session_config("tab-1", "model", "gpt-5")
+        assert settings.agent_model_id("copilot") == "gpt-5"
+        host.set_session_config("tab-1", "model", "auto")
+        assert settings.agent_model_id("copilot") == "auto"
+        host.state("tab-2").agent_id = "claude"
+        host.state("tab-2").config_snapshot = {
+            "configOptions": [
+                {
+                    "id": "model",
+                    "category": "model",
+                    "currentValue": "sonnet",
+                    "options": [{"value": "sonnet", "name": "Sonnet"}],
+                }
+            ]
+        }
+        host.set_session_config("tab-2", "model", "sonnet")
+        assert settings.agent_model_id("claude") == "sonnet"
+        assert settings.agent_model_id("copilot") == "auto"
+    finally:
+        host.shutdown()
+
+
+def _wait_session_ready(host, qapp, tab_id: str, timeout: float = 15) -> None:
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = host.state(tab_id)
+        if state.session_ready.is_set() and not state.config_loading and state.acp_session_id:
+            qapp.processEvents()
+            return
+        qapp.processEvents()
+        time.sleep(0.05)
+
+
+def test_set_agent_populates_selectors_before_prompt(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr("src.services.pynia.acp.pool.resolve_launch", _fake_launch)
+    monkeypatch.setattr("src.services.pynia.acp.catalog.resolve_launch", _fake_launch)
+    monkeypatch.setattr("src.services.pynia.acp.host.default_cwd", lambda: str(tmp_path))
+    settings = _MemPyniaSettings()
+    monkeypatch.setattr("src.services.pynia.settings.get_pynia_settings", lambda: settings)
+    host = PyniaAcpHost(mcp_registry=None)
+    seen = []
+    host.config_options_changed.connect(lambda _tab, sel: seen.append(sel))
+    try:
+        host.set_agent("tab-1", "claude")
+        assert host.state("tab-1").locked is False
+        _wait_session_ready(host, qapp, "tab-1")
+        state = host.state("tab-1")
+        assert state.acp_session_id
+        assert state.config_snapshot.get("configOptions")
+        assert seen
+        last = seen[-1]
+        assert last["model"]["values"]
+        assert last["reasoning"]["values"]
+        assert last["model"]["hidden"] is False
+        assert last["reasoning"]["hidden"] is False
+        assert last["model"]["loading"] is False
+    finally:
+        host.shutdown()
+
+
+def test_host_auto_allows_non_destructive_tools(qapp):
+    host = PyniaAcpHost(mcp_registry=None)
+    client = MagicMock()
+    client.is_running = True
+    host.pool._clients["claude"] = client
+    host._states["tab-1"] = TabChatState(tab_id="tab-1", agent_id="claude", acp_session_id="sess-1")
+    host._acp_to_tab["sess-1"] = "tab-1"
+    asked = []
+    host.permission_needed.connect(lambda *args: asked.append(args))
+
+    host._on_permission(
+        7,
+        {
+            "sessionId": "sess-1",
+            "toolCall": {
+                "kind": "execute",
+                "title": "Check server",
+                "rawInput": {"command": "curl -s http://localhost:3001/api/chart"},
+            },
+            "options": [{"optionId": "allow-once"}],
+        },
+    )
+    client.respond.assert_called_once()
+    assert asked == []
+
+    host._on_permission(
+        8,
+        {
+            "sessionId": "sess-1",
+            "toolCall": {"rawInput": {"command": "DROP TABLE t"}},
+            "options": [{"optionId": "allow-once"}],
+        },
+    )
+    assert len(asked) == 1
+    assert asked[0][0] == "tab-1"
+
+
+def test_prompt_emits_composer_config(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr("src.services.pynia.acp.pool.resolve_launch", _fake_launch)
+    monkeypatch.setattr("src.services.pynia.acp.catalog.resolve_launch", _fake_launch)
+    monkeypatch.setattr("src.services.pynia.acp.host.default_cwd", lambda: str(tmp_path))
+    host = PyniaAcpHost(mcp_registry=None)
+    seen = []
+    host.config_options_changed.connect(lambda _tab, sel: seen.append(sel))
+    try:
+        host.set_agent("tab-1", "claude")
+        host.send_prompt("tab-1", "hello")
+        import time
+
+        deadline = time.time() + 15
+        while host.state("tab-1").busy and time.time() < deadline:
+            qapp.processEvents()
+            time.sleep(0.05)
+        qapp.processEvents()
+        assert seen
+        last = seen[-1]
+        assert last["model"]["values"]
+        assert last["reasoning"]["values"]
+    finally:
+        host.shutdown()
+
+
+def test_stringify_tool_result_accepts_mcp_dict():
+    from src.ui.components.copilot_output_panel import stringify_tool_result
+
+    text, is_error = stringify_tool_result({"ok": "datapyn_run", "elapsed_ms": 3})
+    assert "datapyn_run" in text
+    assert is_error is False
+    err, is_error = stringify_tool_result({"error": "no block"})
+    assert "no block" in err
+    assert is_error is True
+    clipped, _ = stringify_tool_result("x" * 800)
+    assert clipped.endswith("...")
+    assert len(clipped) == 503
+
+
+def test_prompt_parts_include_image_attachments():
+    from src.services.pynia.acp.turn_context import format_acp_prompt_parts
+
+    parts = format_acp_prompt_parts(
+        "o que e isso?",
+        {"tab_id": "t1"},
+        attachments=[
+            {
+                "kind": "image",
+                "name": "print.png",
+                "mime": "image/png",
+                "data": "aGVsbG8=",
+            }
+        ],
+    )
+    images = [p for p in parts if p.get("type") == "image"]
+    assert len(images) == 1
+    assert images[0]["data"] == "aGVsbG8="
+    assert images[0]["mimeType"] == "image/png"
+    assert parts[-1]["text"] == "o que e isso?"
+
+
+def test_attachments_normalize_and_prompt_blocks():
+    from src.services.pynia.acp.attachments import (
+        attachments_from_image_bytes,
+        display_attachments,
+        normalize_attachments,
+        prompt_blocks_for_attachments,
+    )
+
+    raw = attachments_from_image_bytes(b"\x89PNG", name="shot.png")
+    assert raw and raw["kind"] == "image"
+    files = normalize_attachments([raw, {"kind": "file", "name": "a.sql", "text": "SELECT 1"}])
+    assert len(files) == 2
+    blocks = prompt_blocks_for_attachments(files)
+    assert blocks[0]["type"] == "image"
+    assert "SELECT 1" in blocks[1]["text"]
+    shown = display_attachments(files)
+    assert shown[0]["src"].startswith("data:image/png;base64,")
+
+
+def test_mcp_initialize_includes_in_process_instructions(qapp):
+    from src.services.pynia.acp.mcp_host import MCP_INSTRUCTIONS, PyniaMcpHost
+
+    registry = MagicMock()
+    registry.list_tools.return_value = []
+    host = PyniaMcpHost(registry)
+    result = host._handle_mcp({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, "")
+    assert result["result"]["instructions"] == MCP_INSTRUCTIONS
+    assert "in-process" in MCP_INSTRUCTIONS
+    assert "no HTTP" in MCP_INSTRUCTIONS

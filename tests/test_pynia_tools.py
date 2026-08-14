@@ -178,6 +178,23 @@ class TestPyniaToolDispatcher:
             "resolve_reference", {"reference": "#block:sales"}
         )
 
+    def test_inspect_defaults_to_result_grid(self):
+        legacy = self._legacy()
+        dispatcher = PyniaToolDispatcher(legacy)
+        dispatcher.dispatch(
+            "datapyn_inspect",
+            {"kind": "block", "block_name": "block1"},
+        )
+        legacy.execute.assert_called_with(
+            "get_block_result", {"block_name": "block1"}
+        )
+
+    def test_inspect_result_does_not_require_block_name(self):
+        legacy = self._legacy()
+        dispatcher = PyniaToolDispatcher(legacy)
+        dispatcher.dispatch("datapyn_inspect", {"kind": "block", "detail": "result"})
+        legacy.execute.assert_called_with("get_block_result", {})
+
     def test_notify(self):
         legacy = self._legacy()
         dispatcher = PyniaToolDispatcher(legacy)

@@ -21,7 +21,7 @@ _MAX_PREVIEW_CHARS = 1500
 _MAX_COLUMNS = 40
 
 
-def _panels_for_session(main_window, session_id: str):
+def panels_for_session(main_window, session_id: str = ""):
     """Return (output_panel, results_viewer) for the targeted session.
 
     Falls back to the globally-active panels when the session can't be
@@ -83,7 +83,7 @@ def build_execution_context(main_window, session_id: str = "") -> Optional[Dict[
         return None
 
     try:
-        output_panel, results_viewer = _panels_for_session(main_window, session_id)
+        output_panel, results_viewer = panels_for_session(main_window, session_id)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Pynia execution_context: panel lookup failed: %s", exc)
         return None

@@ -3104,10 +3104,14 @@ class MCPToolRegistry(QObject):
         if not mw:
             return {"error": "Main window not available"}
 
+        from src.services.pynia.execution_context import panels_for_session
+
+        output_panel, results_viewer = panels_for_session(
+            mw, self._pinned_session_id or ""
+        )
         parts = []
 
         # Get output panel text
-        output_panel = getattr(mw, "global_output_panel", None)
         if output_panel and hasattr(output_panel, "get_text"):
             output_text = output_panel.get_text()
             if output_text and output_text.strip():
@@ -3119,7 +3123,6 @@ class MCPToolRegistry(QObject):
                 parts.append("## Output:\n(empty)")
 
         # Get results viewer DataFrame
-        results_viewer = getattr(mw, "global_results_viewer", None)
         if results_viewer:
             current_df = getattr(results_viewer, "current_df", None)
             if current_df is not None and hasattr(current_df, "empty") and not current_df.empty:

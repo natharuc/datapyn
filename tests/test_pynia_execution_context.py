@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from src.services.pynia.execution_context import build_execution_context
+from src.services.pynia.execution_context import build_execution_context, panels_for_session
 
 
 def _make_main_window(output_panel=None, results_viewer=None):
@@ -77,6 +77,20 @@ def test_build_execution_context_empty_returns_none():
     mw = _make_main_window(output_panel=output_panel, results_viewer=viewer)
 
     assert build_execution_context(mw, "sess-1") is None
+
+
+def test_panels_for_session_prefers_pinned_tab():
+    pinned = MagicMock(name="pinned")
+    visual = MagicMock(name="visual")
+    mw = MagicMock()
+    mw._session_panel_indices = {
+        "tab-a": {"output": None, "results": pinned},
+        "tab-b": {"output": None, "results": visual},
+    }
+    mw.global_results_viewer = visual
+    mw.global_output_panel = None
+    _out, results = panels_for_session(mw, "tab-a")
+    assert results is pinned
 
 
 def test_build_execution_context_handles_no_main_window():

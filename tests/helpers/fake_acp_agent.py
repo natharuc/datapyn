@@ -6,6 +6,33 @@ import json
 import sys
 
 
+_FAKE_CONFIG_OPTIONS = [
+    {
+        "id": "model",
+        "category": "model",
+        "name": "Model",
+        "currentValue": "auto",
+        "options": [
+            {"value": "auto", "name": "Auto"},
+            {"value": "sonnet", "name": "Sonnet"},
+        ],
+    },
+    {
+        "id": "thought_level",
+        "category": "thought_level",
+        "name": "Reasoning",
+        "currentValue": "auto",
+        "options": [
+            {"value": "auto", "name": "Auto"},
+            {"value": "off", "name": "Off"},
+            {"value": "low", "name": "Low"},
+            {"value": "medium", "name": "Medium"},
+            {"value": "high", "name": "High"},
+        ],
+    },
+]
+
+
 def _send(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
@@ -44,7 +71,10 @@ def main() -> int:
                 {
                     "jsonrpc": "2.0",
                     "id": rpc_id,
-                    "result": {"sessionId": f"sess-{session_n}"},
+                    "result": {
+                        "sessionId": f"sess-{session_n}",
+                        "configOptions": _FAKE_CONFIG_OPTIONS,
+                    },
                 }
             )
         elif method == "session/prompt":
@@ -88,6 +118,16 @@ def main() -> int:
             _send({"jsonrpc": "2.0", "id": rpc_id, "result": {}})
         elif method == "session/cancel":
             continue
+        elif method in {"session/set_config_option", "session/set_model"}:
+            value = params.get("value") or params.get("modelId") or params.get("model") or "auto"
+            config_id = str(params.get("configId") or "")
+            options = []
+            for option in _FAKE_CONFIG_OPTIONS:
+                item = dict(option)
+                if item["id"] == config_id or (config_id == "" and item["id"] == "model"):
+                    item["currentValue"] = value
+                options.append(item)
+            _send({"jsonrpc": "2.0", "id": rpc_id, "result": {"configOptions": options}})
         elif rpc_id is not None:
             _send(
                 {
