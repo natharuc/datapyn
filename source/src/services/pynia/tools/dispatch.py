@@ -65,7 +65,6 @@ class PyniaToolDispatcher:
             "datapyn_database": self._database,
             "datapyn_chart": self._chart,
             "datapyn_notify": self._notify,
-            "datapyn_subagent": self._subagent,
         }
         handler = handlers.get(tool_name)
         if not handler:
@@ -333,17 +332,6 @@ class PyniaToolDispatcher:
                 payload["path"] = args["path"]
             return self._exec("export_visualization", payload)
         return {"error": f"Unknown chart operation: {operation}"}
-
-    def _subagent(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        if not self._orchestrator:
-            return {"error": "Parallel subagents are not available in this session."}
-        payload = dict(args or {})
-        if self._workspace_context and not str(payload.get("context") or "").strip():
-            payload["context"] = (
-                "## Workspace (auto)\n"
-                f"{self._workspace_context[:12_000]}"
-            )
-        return self._orchestrator.run_subagent_tool(payload)
 
     def _notify(self, args: Dict[str, Any]) -> Dict[str, Any]:
         return self._exec(

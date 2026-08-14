@@ -217,9 +217,9 @@ class LogDetailDialog(QDialog):
             )
             resolve_btn = PrimaryButton(label, size="sm")
             try:
-                from src.ui.components.copilot_chat_panel import _load_pynia_icon
+                from src.assets.pynia_branding import load_pynia_logo
 
-                pynia_icon = _load_pynia_icon("#ffffff", size=16)
+                pynia_icon = load_pynia_logo(16)
                 if pynia_icon:
                     resolve_btn.setIcon(pynia_icon)
             except Exception:

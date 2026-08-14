@@ -40,8 +40,6 @@ dependencies = [
     "matplotlib>=3.10.0",
     "plotly>=5.18.0",
     "jedi>=0.20.0",
-    # GitHub Copilot SDK (optional, requires gh CLI auth)
-    "github-copilot-sdk>=1.0.0",
 ]
 
 [dependency-groups]

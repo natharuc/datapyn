@@ -181,7 +181,8 @@ class BlockEditor(QWidget):
         self._execution_queue_blocks: List[CodeBlock] = []  # Blocks in execution queue
         self._current_executing_block: Optional[CodeBlock] = None  # Currently executing block
         self._dragging_block: Optional[CodeBlock] = None  # Block being dragged
-        self._pynia_client = None  # Pynia agent for inline autocomplete
+        self._pynia_client = None  # Pynia ACP host for inline autocomplete
+        self._pynia_tab_id = ""
         self._copilot_client = None  # Deprecated alias storage
         self._lsp_client = None  # LSP client for inline completions
         self._database_context = ""  # Database schema context for SQL completions
@@ -213,21 +214,25 @@ class BlockEditor(QWidget):
     # === Public Properties ===
 
     def set_pynia_client(self, client) -> None:
-        """Set Pynia agent client for inline autocomplete in all blocks."""
+        """Set Pynia ACP host for inline autocomplete in all blocks."""
         self._pynia_client = client
         self._copilot_client = client
         for block in self._blocks:
             block.set_pynia_client(client)
+
+    def set_pynia_tab_id(self, tab_id: str) -> None:
+        self._pynia_tab_id = tab_id or ""
+        for block in self._blocks:
+            if hasattr(block, "set_pynia_tab_id"):
+                block.set_pynia_tab_id(tab_id)
 
     def set_copilot_client(self, client) -> None:
         """Backward-compatible alias for set_pynia_client."""
         self.set_pynia_client(client)
 
     def set_lsp_client(self, client) -> None:
-        """Set LSP client for inline completions in all blocks."""
-        self._lsp_client = client
-        for block in self._blocks:
-            block.set_lsp_client(client)
+        """No-op: Copilot LSP was replaced by ACP ghost-text."""
+        return
 
     def _schedule_completion_context_refresh(self) -> None:
         """Debounce LSP/Monaco context refresh while the user edits."""
@@ -898,10 +903,9 @@ class BlockEditor(QWidget):
             block.set_pynia_client(self._pynia_client)
         elif self._copilot_client:
             block.set_pynia_client(self._copilot_client)
-
-        # Pass LSP client for inline completions (Monaco)
-        if hasattr(self, "_lsp_client") and self._lsp_client:
-            block.set_lsp_client(self._lsp_client)
+        tab_id = getattr(self, "_pynia_tab_id", "")
+        if tab_id and hasattr(block, "set_pynia_tab_id"):
+            block.set_pynia_tab_id(tab_id)
         
         # Pass database context / SQL schema for completions (Monaco).
         # Skipped when the block will get its own connection (e.g. drag-drop).

@@ -1038,10 +1038,6 @@ class UISetupMixin:
             self._on_settings_pynia_connector_saved,
             Qt.ConnectionType.QueuedConnection,
         )
-        dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
-        dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
-        dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
-        dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
         dialog.exec()
 
     def _on_settings_shortcuts_saved(self) -> None:
@@ -1053,57 +1049,16 @@ class UISetupMixin:
             QTimer.singleShot(50, lambda p=pid: self._on_pynia_connector_changed(p))
 
     def _on_pynia_connector_changed(self, provider_id: str):
-        """A Pynia connector was saved in Settings — switch the live agent and
-        authenticate immediately so the chat reflects it without a restart."""
-        import logging
+        """Default ACP agent changed in Settings."""
+        from src.services.pynia.settings import get_pynia_settings
 
-        agent = getattr(self, "_pynia_agent", None)
-        if not agent:
-            return
         pid = str(provider_id or "").strip()
-        if not pid:
-            return
-        try:
-            from src.services.pynia.settings import get_pynia_settings, get_provider_secret
-
-            settings = get_pynia_settings()
-            previous_pid = getattr(agent, "provider_id", None)
-            was_authenticated = bool(getattr(agent, "is_authenticated", False))
-            settings.set_active_provider(pid)
-
-            if hasattr(agent, "apply_connector_from_settings"):
-                agent.apply_connector_from_settings(pid)
-            elif previous_pid != pid and hasattr(agent, "set_provider"):
-                agent.set_provider(pid)
-
-            connector_changed = previous_pid != pid
-            token_updated = False
-            if pid != "copilot":
-                token = get_provider_secret(pid)
-                if token and hasattr(agent, "set_api_token"):
-                    label = settings.username(pid) or pid
-                    token_updated = bool(agent.set_api_token(token, label))
-
-            panel = getattr(self, "_copilot_chat_panel", None)
-            if panel is not None:
-                if hasattr(panel, "_on_provider_changed"):
-                    panel._on_provider_changed(pid)
-                if hasattr(agent, "available_models"):
-                    panel._populate_model_combo(agent.available_models())
-                panel._update_auth_state()
-
-            if (
-                pid != "copilot"
-                and hasattr(agent, "refresh_metadata")
-                and (connector_changed or not was_authenticated or token_updated)
-            ):
-                from PyQt6.QtCore import QTimer
-
-                QTimer.singleShot(0, agent.refresh_metadata)
-        except Exception as exc:
-            logging.getLogger(__name__).warning(
-                "Failed to apply Pynia connector %s from settings: %s", pid, exc
-            )
+        if pid:
+            get_pynia_settings().set_default_agent_id(pid)
+        panel = getattr(self, "_copilot_chat_panel", None)
+        if panel is not None and hasattr(panel, "_refresh_picker"):
+            panel._refresh_picker()
+            panel._refresh_header()
 
     def _show_settings(self):
         """Shows the settings dialog"""
@@ -1125,13 +1080,6 @@ class UISetupMixin:
             self._on_settings_pynia_connector_saved,
             Qt.ConnectionType.QueuedConnection,
         )
-
-        # Connect Copilot auth signals
-        dialog.copilot_chat_login_requested.connect(self._on_settings_chat_login)
-        dialog.copilot_chat_logout_requested.connect(self._on_settings_chat_logout)
-        dialog.copilot_lsp_login_requested.connect(self._on_settings_lsp_login)
-        dialog.copilot_lsp_logout_requested.connect(self._on_settings_lsp_logout)
-        
         dialog.exec()
 
     def _toggle_auto_update(self, checked: bool):

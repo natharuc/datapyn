@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' qrc: data: blob:; script-src 'self' qrc: 'unsafe-inline'; style-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob: qrc: file:;">
+    <title>Pynia</title>
+    <link rel="stylesheet" href="../assets/css/pynia_chat_app.css">
+    <link rel="stylesheet" href="../assets/js/hljs-vs2015.min.css">
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <script src="../assets/js/marked.min.js"></script>
+    <script src="../assets/js/highlight.min.js"></script>
+</head>
+<body>
+    <main id="app" class="chat-shell">
+        <header class="chat-header">
+            <div class="title-cluster">
+                <img id="agentIcon" class="agent-icon" alt="" hidden>
+                <div>
+                    <div id="chatTitle" class="chat-title">Pynia</div>
+                    <div id="tabContext" class="chat-subtitle"></div>
+                </div>
+            </div>
+            <button id="settingsBtn" class="text-command" type="button">Settings</button>
+        </header>
+
+        <section id="picker" class="picker" hidden>
+            <p id="pickerHint" class="picker-hint"></p>
+            <div id="pickerGrid" class="picker-grid"></div>
+        </section>
+
+        <section id="messages" class="messages" aria-live="polite"></section>
+
+        <div id="permissionBar" class="permission-bar" hidden>
+            <div id="permissionText" class="permission-text"></div>
+            <div class="permission-actions">
+                <button id="permAllowOnce" type="button">Allow once</button>
+                <button id="permAllowAlways" type="button">Always allow</button>
+                <button id="permReject" type="button">Reject</button>
+            </div>
+        </div>
+
+        <footer class="composer-wrap">
+            <div id="recreatedNote" class="recreated-note" hidden></div>
+            <div class="composer-card">
+                <textarea id="composerInput" rows="1" placeholder="Ask Pynia…"></textarea>
+                <div class="composer-footer">
+                    <button id="cancelBtn" class="icon-command danger" type="button" hidden>&times;</button>
+                    <button id="sendBtn" class="icon-command primary" type="button">&uarr;</button>
+                </div>
+            </div>
+        </footer>
+    </main>
+    <script src="../assets/js/pynia_chat_app.js"></script>
+</body>
+</html>

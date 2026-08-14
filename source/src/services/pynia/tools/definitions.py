@@ -287,40 +287,6 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
             },
         },
         {
-            "name": "datapyn_subagent",
-            "description": (
-                "Spawn parallel explore subagents (read-only) for heavy discovery. "
-                "Each runs on a background worker with its own mini tool loop. "
-                "Use for schema + multiple blocks at once. Max 3 per step. "
-                "Provide instruction (required) or tasks[] with task_id + instruction."
-            ),
-            "parameters": {
-                "instruction": {
-                    "type": "string",
-                    "description": "What this subagent should find out (read-only).",
-                    "optional": True,
-                },
-                "context": {
-                    "type": "string",
-                    "description": "Optional extra context for the subagent.",
-                    "optional": True,
-                },
-                "task_id": {
-                    "type": "string",
-                    "description": "Optional id for correlating results.",
-                    "optional": True,
-                },
-                "tasks": {
-                    "type": "array",
-                    "description": (
-                        "Parallel jobs: [{task_id, instruction, context?}, ...]. "
-                        "Prefer this when you need 2+ explores at once."
-                    ),
-                    "optional": True,
-                },
-            },
-        },
-        {
             "name": "datapyn_notify",
             "description": "Show a toast when the task is done or needs attention.",
             "parameters": {

@@ -231,7 +231,7 @@ SPACING = Spacing(
 )
 
 
-# Side dock sizing (Connections, Object Explorer, Variables, Copilot)
+# Side dock sizing (Connections, Object Explorer, Variables)
 SIDE_DOCK_MIN_WIDTH = 200
 SIDE_DOCK_DEFAULT_WIDTH = 280
 SIDE_DOCK_MAX_WIDTH = 340

@@ -10,10 +10,8 @@ from src.services.pynia.tools.registry import PyniaToolRegistry
 
 
 class TestPyniaToolDefinitions:
-    def test_ten_consolidated_tools(self):
+    def test_consolidated_tools(self):
         names = [t["name"] for t in pynia_tool_definitions()]
-        assert len(names) == 10
-        assert "datapyn_subagent" in names
         assert names == [
             "datapyn_snapshot",
             "datapyn_inspect",
@@ -23,7 +21,6 @@ class TestPyniaToolDefinitions:
             "datapyn_blocks",
             "datapyn_database",
             "datapyn_chart",
-            "datapyn_subagent",
             "datapyn_notify",
         ]
 
@@ -198,7 +195,7 @@ class TestPyniaToolRegistry:
     def test_list_openai_format(self):
         registry = PyniaToolRegistry(parent=None, legacy_registry=MagicMock())
         tools = registry.list_tools_openai()
-        assert len(tools) == 10
+        assert len(tools) == 9
         assert tools[0]["type"] == "function"
         assert tools[0]["function"]["name"].startswith("datapyn_")
 

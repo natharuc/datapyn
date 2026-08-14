@@ -65,6 +65,7 @@ class Session(QObject):
         self._shared_parameters_enabled: bool = True
         self.notification_config: Optional[Dict[str, Any]] = None
         self.result_view_state: Dict[str, Any] = {}
+        self.pynia: Dict[str, Any] = {}
 
         # Workers ativos (threads)
         self._active_threads: list = []
@@ -431,6 +432,7 @@ class Session(QObject):
             "created_at": self.created_at.isoformat(),
             "file_path": getattr(self, "file_path", None),  # Original file path
             "original_file_type": getattr(self, "original_file_type", None),  # File type (sql/py/dpw)
+            "pynia": getattr(self, "pynia", None) or {},
             # Don't serialize namespace (may have non-serializable objects)
             # Don't serialize connector (needs to reconnect)
         }
@@ -451,6 +453,7 @@ class Session(QObject):
         session.result_view_state = result_view_state if isinstance(result_view_state, dict) else {}
         session.file_path = data.get("file_path")  # Restore file path
         session.original_file_type = data.get("original_file_type")  # Restore file type
+        session.pynia = data.get("pynia") or {}
         if data.get("created_at"):
             try:
                 session.created_at = datetime.fromisoformat(data["created_at"])
