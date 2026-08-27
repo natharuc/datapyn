@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from src.services.pynia.acp.mcp_host import MCP_INSTRUCTIONS
 from src.services.pynia.tools import PyniaToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ class MCPServer(QObject):
                 "name": "datapyn-mcp",
                 "version": "1.0.0",
             },
+            "instructions": MCP_INSTRUCTIONS,
         }
 
     def _handle_tools_list(self, params: Dict[str, Any]) -> Dict[str, Any]:

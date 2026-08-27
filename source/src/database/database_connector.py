@@ -2,7 +2,7 @@
 Database connector with support for multiple DBMS
 """
 
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Callable
 import pandas as pd
 from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine
@@ -56,14 +56,29 @@ def _gil_yield() -> None:
     time.sleep(0.001)
 
 
-def fetch_rows_chunked(cursor, chunk_size: int = FETCH_CHUNK_ROWS) -> list:
-    """fetchall() replacement that yields the GIL between chunks."""
+def fetch_rows_chunked(
+    cursor,
+    chunk_size: int = FETCH_CHUNK_ROWS,
+    is_cancelled: Optional[Callable[[], bool]] = None,
+) -> list:
+    """fetchall() replacement that yields the GIL between chunks.
+
+    When ``is_cancelled`` becomes true, accumulated rows are dropped and
+    ``OperationCancelled`` is raised so the worker does not keep a giant
+    result set after the user hits Cancel.
+    """
     rows: list = []
     while True:
+        if is_cancelled and is_cancelled():
+            rows.clear()
+            raise OperationCancelled()
         chunk = cursor.fetchmany(chunk_size)
         if not chunk:
             break
         rows.extend(chunk)
+        if is_cancelled and is_cancelled():
+            rows.clear()
+            raise OperationCancelled()
         _gil_yield()
     return rows
 
@@ -1443,7 +1458,7 @@ class DatabaseConnector:
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         if not columns:
             return pd.DataFrame()
-        rows = fetch_rows_chunked(cursor)
+        rows = fetch_rows_chunked(cursor, is_cancelled=lambda: self._cancelled)
         return records_to_dataframe(rows, columns)
 
     def _capture_mysql_thread_id(self, cursor) -> None:
@@ -1651,7 +1666,8 @@ class DatabaseConnector:
             for batch_idx, batch in enumerate(batches, start=1):
                 if self._cancelled:
                     logger.info("Execution cancelled between batches")
-                    break
+                    dataframes.clear()
+                    raise OperationCancelled()
 
                 logger.info(f"Executing batch {batch_idx}/{len(batches)} ({len(batch)} chars)")
 
@@ -1678,12 +1694,20 @@ class DatabaseConnector:
 
                 # Collect all result sets from this batch
                 while True:
+                    if self._cancelled:
+                        dataframes.clear()
+                        raise OperationCancelled()
                     try:
                         if cursor.description:
                             columns = [col[0] for col in cursor.description]
-                            rows = fetch_rows_chunked(cursor)
+                            rows = fetch_rows_chunked(
+                                cursor, is_cancelled=lambda: self._cancelled
+                            )
                             df = records_to_dataframe(rows, columns)
                             dataframes.append(df)
+                    except OperationCancelled:
+                        dataframes.clear()
+                        raise
                     except pyodbc.Error as e:
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                         break
@@ -1750,6 +1774,8 @@ class DatabaseConnector:
 
             return self._success_message_df("success_commands")
 
+        except OperationCancelled:
+            raise
         except Exception as e:
             logger.error(f"Error executing SQL Server batches: {str(e)}")
             raise
@@ -1791,15 +1817,14 @@ class DatabaseConnector:
             else:
                 cursor.execute(query)
             
-            # Check if cancelled
             if self._cancelled:
-                return pd.DataFrame({"Result": ["Query cancelled"]})
-            
+                raise OperationCancelled()
+
             # Try to fetch results
             try:
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 if columns:
-                    rows = fetch_rows_chunked(cursor)
+                    rows = fetch_rows_chunked(cursor, is_cancelled=lambda: self._cancelled)
                     df = records_to_dataframe(rows, columns)
                     logger.info(f"Databricks query executed: {len(df)} rows returned")
                     return df
@@ -1809,16 +1834,19 @@ class DatabaseConnector:
                     if rows_affected >= 0:
                         return self._success_message_df("success_command_rows", rows=rows_affected)
                     return self._success_message_df("success_command")
-            except Exception as fetch_err:
-                # Query was cancelled or had no results
-                if self._cancelled:
-                    return pd.DataFrame({"Result": ["Query cancelled"]})
+            except OperationCancelled:
                 raise
-                
+            except Exception:
+                if self._cancelled:
+                    raise OperationCancelled()
+                raise
+
+        except OperationCancelled:
+            raise
         except Exception as e:
             if self._cancelled:
                 logger.info("Databricks query cancelled by user")
-                return pd.DataFrame({"Result": ["Query cancelled"]})
+                raise OperationCancelled()
             logger.error(f"Error executing Databricks query: {str(e)}")
             raise
             
@@ -2035,7 +2063,9 @@ class DatabaseConnector:
         return statements
 
     @staticmethod
-    def _result_to_dataframe(result) -> pd.DataFrame:
+    def _result_to_dataframe(
+        result, is_cancelled: Optional[Callable[[], bool]] = None
+    ) -> pd.DataFrame:
         """Build a DataFrame directly from the DBAPI/SQLAlchemy result rows.
 
         This avoids pandas SQL readers applying their own dtype inference on top
@@ -2043,7 +2073,7 @@ class DatabaseConnector:
         in chunks so the UI thread is not starved while large results stream in.
         """
         columns = list(result.keys())
-        rows = fetch_rows_chunked(result)
+        rows = fetch_rows_chunked(result, is_cancelled=is_cancelled)
         return records_to_dataframe(rows, columns)
 
     def _execute_generic_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> pd.DataFrame:

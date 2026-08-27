@@ -57,3 +57,33 @@ def test_monaco_completion_service_cancels_previous_worker(qapp, qtbot):
     # Rapid follow-up after worker finished should not crash on deleted C++ object.
     service.request_sql_completions(3, "SELECT name", 1, 12)
     qtbot.waitUntil(lambda: 3 in received, timeout=5000)
+
+
+def test_sql_autocomplete_service_is_reused(qapp):
+    from src.editors.monaco.monaco_completion_service import MonacoCompletionService
+
+    service = MonacoCompletionService()
+    first = service._sql_autocomplete_service()
+    second = service._sql_autocomplete_service()
+    assert first is second
+
+
+def test_sql_typing_path_does_not_wait_for_python_worker():
+    from pathlib import Path
+
+    html = Path("source/src/editors/monaco/monaco_template.html").read_text(encoding="utf-8")
+    assert "const wantsRemote = invokeSuggest;" in html
+    assert "sqlContextWantsRemote(textBeforeCursor)" not in html
+    assert "function collectScopedColumnItems(" in html
+    assert "function lookupColumnsForTable(" in html
+    assert "alias.column — only that table" in html
+    assert "Object.keys(sqlSchemaIndex.columnsByKey || {}).forEach(pushCols)" not in html
+    assert "mergeCompletionItems(dotItems, contextual)" not in html
+
+
+def test_completion_worker_does_not_start_until_requested(qapp):
+    from src.editors.monaco.monaco_completion_service import MonacoCompletionService
+
+    service = MonacoCompletionService()
+    assert service._worker is None
+    assert service._pending is None

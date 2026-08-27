@@ -49,7 +49,7 @@ def build_sql_completions(schema: Optional[dict]) -> List[Dict[str, Any]]:
                 filter_text = f"{table_database}..{table_name}"
             completions.append({
                 "label": table_name,
-                "kind": "property",
+                "kind": "class",
                 "insertText": table_name,
                 "detail": detail,
                 "category": "table",
@@ -64,12 +64,9 @@ def build_sql_completions(schema: Optional[dict]) -> List[Dict[str, Any]]:
         for column in column_list or []:
             if isinstance(column, dict):
                 column_name = column.get("name", "")
-                column_type = column.get("type", "") or column.get("display_type", "")
-                detail = (
-                    f"{table_key}.{column_name} ({column_type})"
-                    if column_type
-                    else f"{table_key}.{column_name}"
-                )
+                column_type = column.get("display_type") or column.get("type") or ""
+                table_label = bare_table or table_key
+                detail = f"{table_label} • {column_type}" if column_type else table_label
             else:
                 column_name = str(column)
                 detail = f"{table_key}.{column_name}"

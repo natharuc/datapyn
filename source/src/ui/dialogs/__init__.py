@@ -8,7 +8,6 @@ from .connection_edit_dialog import ConnectionEditDialog
 from .connections_manager_dialog import ConnectionsManagerDialog
 from .settings_dialog import SettingsDialog
 from .package_manager_dialog import PackageManagerDialog
-from .copilot_download_dialog import CopilotDownloadDialog
 from .entity_info_dialog import EntityInfoDialog
 
 __all__ = [
@@ -16,6 +15,5 @@ __all__ = [
     "ConnectionsManagerDialog",
     "SettingsDialog",
     "PackageManagerDialog",
-    "CopilotDownloadDialog",
     "EntityInfoDialog",
 ]

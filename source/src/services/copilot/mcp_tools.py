@@ -171,6 +171,86 @@ def _session_namespace(session_widget: Any) -> Optional[dict]:
     return None
 
 
+def _flag_is_connected(obj) -> bool:
+    """True when session/connector.is_connected is a true property or method."""
+    if obj is None:
+        return False
+    flag = getattr(obj, "is_connected", False)
+    try:
+        return bool(flag() if callable(flag) else flag)
+    except Exception:
+        return False
+
+
+def _namespace_summary(namespace: Optional[dict]) -> Dict[str, str]:
+    """Compact name → type/shape map for the ACP snapshot and get_context."""
+    if not isinstance(namespace, dict):
+        return {}
+    skip = {"pd", "np", "plt"}
+    variables: Dict[str, str] = {}
+    for name, value in namespace.items():
+        if not name or name.startswith("_") or name in skip:
+            continue
+        if isinstance(value, type) or callable(value):
+            continue
+        try:
+            type_name = type(value).__name__
+            if hasattr(value, "shape"):
+                variables[name] = f"{type_name}{value.shape}"
+            elif hasattr(value, "__len__"):
+                variables[name] = f"{type_name}(len={len(value)})"
+            else:
+                variables[name] = type_name
+        except Exception:
+            variables[name] = "?"
+    return variables
+
+
+def _same_connection_name(left: str, right: str) -> bool:
+    return (left or "").strip().lower() == (right or "").strip().lower()
+
+
+def _already_connected_payload(connection_name: str) -> Dict[str, Any]:
+    name = connection_name or "database"
+    return {
+        "content": [{
+            "type": "text",
+            "text": (
+                f"Already connected to '{name}' on this tab. "
+                "Do not reconnect. Use datapyn_query."
+            ),
+        }]
+    }
+
+
+def _find_session_widget(main_window, session_id: str):
+    """Resolve a session widget by id, even if _session_widgets key differs."""
+    if not main_window or not session_id:
+        return None
+    widgets = getattr(main_window, "_session_widgets", None) or {}
+    widget = widgets.get(session_id) if isinstance(widgets, dict) else None
+    if widget is not None:
+        return widget
+    values = widgets.values() if isinstance(widgets, dict) else []
+    for candidate in values:
+        session = getattr(candidate, "session", None)
+        if session is not None and getattr(session, "session_id", None) == session_id:
+            return candidate
+    tabs = getattr(main_window, "session_tabs", None)
+    if tabs is None:
+        return None
+    try:
+        count = int(tabs.count())
+    except Exception:
+        return None
+    for idx in range(count):
+        candidate = tabs.widget(idx)
+        session = getattr(candidate, "session", None)
+        if session is not None and getattr(session, "session_id", None) == session_id:
+            return candidate
+    return None
+
+
 class MCPTool:
     """Represents a single MCP tool with metadata and handler."""
 
@@ -1418,6 +1498,11 @@ class MCPToolRegistry(QObject):
         if not session_widget:
             return {"error": "No active session."}
 
+        session = getattr(session_widget, "session", None)
+        current_name = getattr(session, "connection_name", "") or ""
+        if session is not None and _flag_is_connected(session) and _same_connection_name(current_name, connection_name):
+            return _already_connected_payload(current_name or connection_name)
+
         if hasattr(session_widget, "connect_to_database"):
             session_widget.connect_to_database(connection_group, connection_name)
             return {
@@ -1457,7 +1542,7 @@ class MCPToolRegistry(QObject):
         }
 
     def _open_connection(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Open a saved connection in a NEW TAB."""
+        """Use a saved connection on the current tab (do not spawn a new tab)."""
         connection_name = args.get("connection_name", "")
         connection_group = str(args.get("connection_group") or "")
         if not connection_name:
@@ -1478,18 +1563,36 @@ class MCPToolRegistry(QObject):
             saved = [ref.display() for ref in conn_manager.get_saved_connections()]
             return {"error": f"Connection '{connection_name}' not found. Available: {saved}"}
 
-        # Use _connect_new_tab which always creates a new tab
-        if hasattr(mw, "_connect_new_tab"):
-            mw._connect_new_tab(connection_group, connection_name)
-            current_widget = mw._get_current_session_widget() if hasattr(mw, "_get_current_session_widget") else None
-            session = getattr(current_widget, "session", None) if current_widget else None
-            if getattr(session, "session_id", None):
-                self.pin_session(session.session_id)
+        session_widget = self._get_active_session_widget()
+        session = getattr(session_widget, "session", None) if session_widget else None
+        current_name = getattr(session, "connection_name", "") or ""
+        if session is not None and _flag_is_connected(session):
+            if _same_connection_name(current_name, connection_name):
+                return _already_connected_payload(current_name or connection_name)
             return {
-                "content": [{"type": "text", "text": f"New tab created and connecting to '{connection_name}'."}]
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"This tab is already connected to '{current_name}'. "
+                        "Do not open a new tab. Use datapyn_query on this session, "
+                        "or datapyn_database operation=connect only if you intend to switch."
+                    ),
+                }]
             }
 
-        return {"error": "MainWindow does not support _connect_new_tab."}
+        if session_widget and hasattr(session_widget, "connect_to_database"):
+            session_widget.connect_to_database(connection_group, connection_name)
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"Connecting this tab to '{connection_name}'. "
+                        "Do not open another tab. Use datapyn_query after connect completes."
+                    ),
+                }]
+            }
+
+        return {"error": "No active session to connect."}
 
     def _read_schema(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Read the loaded database schema."""
@@ -1651,7 +1754,9 @@ class MCPToolRegistry(QObject):
         # Add tool usage guide for smart tool selection (datapyn_* surface —
         # these are the only tool names the agent can call).
         context["tool_guide"] = (
-            "WORKFLOW: (1) Read blocks/html_blocks/focused_block/block_map above. "
+            "WORKFLOW: (0) If is_connected is true, do NOT connect/open — use datapyn_query "
+            "on this tab; in-memory data is in variables. "
+            "(1) Read blocks/html_blocks/focused_block/block_map above. "
             "(2) For large HTML blocks: datapyn_inspect detail=structure → datapyn_inspect detail=code around=... → datapyn_edit operation=lines. "
             "(3) If the target block is clear, use datapyn_edit to UPDATE it (operation=lines for small diffs, replace for rewrites). "
             "(4) Use datapyn_snapshot action=blocks only when the target block is unknown. "
@@ -1660,28 +1765,10 @@ class MCPToolRegistry(QObject):
             "(7) Python blocks with generates_html render HTML in the results panel — edit them with datapyn_edit, not datapyn_chart."
         )
 
-        # Add namespace variables summary
         if session_widget:
-            namespace = _session_namespace(session_widget)
-            if namespace:
-                variables = {}
-                for name, value in namespace.items():
-                    if name.startswith("_") or isinstance(value, type) or callable(value):
-                        continue
-                    if name in ("pd", "np", "plt"):
-                        continue
-                    try:
-                        type_name = type(value).__name__
-                        if hasattr(value, "shape"):
-                            variables[name] = f"{type_name}{value.shape}"
-                        elif hasattr(value, "__len__"):
-                            variables[name] = f"{type_name}(len={len(value)})"
-                        else:
-                            variables[name] = type_name
-                    except Exception:
-                        variables[name] = "?"
-                if variables:
-                    context["variables"] = variables
+            variables = _namespace_summary(_session_namespace(session_widget))
+            if variables:
+                context["variables"] = variables
 
         return {"content": [{"type": "text", "text": json.dumps(context, indent=2, default=str)}]}
 
@@ -1854,10 +1941,9 @@ class MCPToolRegistry(QObject):
             logger.warning("_get_active_session_widget: No main_window")
             return None
 
-        # If pinned, find widget by session_id (tab-safe)
-        if self._pinned_session_id and hasattr(mw, "_session_widgets"):
-            widget = mw._session_widgets.get(self._pinned_session_id)
-            if widget:
+        if self._pinned_session_id:
+            widget = _find_session_widget(mw, self._pinned_session_id)
+            if widget is not None:
                 logger.info(f"_get_active_session_widget: pinned to {self._pinned_session_id}")
                 return widget
 
@@ -2207,25 +2293,52 @@ class MCPToolRegistry(QObject):
         return self._execute_block_with_result(focused_block, block_editor, block_index)
 
     def _list_connections(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """List all saved database connections."""
+        """List saved database connections, with the active tab connection first."""
         mw = self._main_window
         conn_manager = getattr(mw, "connection_manager", None)
         if not conn_manager:
             return {"error": "Connection manager not available."}
 
-        saved_configs = conn_manager.saved_configs.get("connections", {})
-        if not saved_configs:
+        saved_configs = conn_manager.saved_configs.get("connections", {}) or {}
+        entries: List[str] = []
+        for key, value in saved_configs.items():
+            if not isinstance(value, dict):
+                continue
+            if "db_type" in value:
+                db_type = value.get("db_type", "unknown")
+                host = value.get("host", "")
+                database = value.get("database", "")
+                entries.append(f"- {key} ({db_type}): {host}/{database}")
+                continue
+            group = key
+            for name, config in value.items():
+                if not isinstance(config, dict):
+                    continue
+                db_type = config.get("db_type", "unknown")
+                host = config.get("host", "")
+                database = config.get("database", "")
+                label = f"{group}/{name}" if group else name
+                entries.append(f"- {label} ({db_type}): {host}/{database}")
+
+        session = self._get_active_session()
+        active_name = (getattr(session, "connection_name", "") or "") if session else ""
+        active_connected = _flag_is_connected(session) if session else False
+        lines: List[str] = []
+        if active_name:
+            lines.append(
+                f"ACTIVE on this tab: {active_name} (connected={str(active_connected).lower()})"
+            )
+            if active_connected:
+                lines.append("Do not call operation=connect or open. Use datapyn_query.")
+        if entries:
+            lines.append("Saved connections:")
+            lines.extend(entries)
+        elif not lines:
             return {"content": [{"type": "text", "text": "No saved connections."}]}
+        else:
+            lines.append("Saved connections: (none)")
 
-        connections = []
-        for name, config in saved_configs.items():
-            db_type = config.get("db_type", "unknown")
-            host = config.get("host", "")
-            database = config.get("database", "")
-            connections.append(f"- {name} ({db_type}): {host}/{database}")
-
-        text = "Saved connections:\n" + "\n".join(connections)
-        return {"content": [{"type": "text", "text": text}]}
+        return {"content": [{"type": "text", "text": "\n".join(lines)}]}
 
     def _get_variables(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Get Python variables from the session namespace."""
@@ -2747,34 +2860,50 @@ class MCPToolRegistry(QObject):
     # === Database Intelligence Tool Implementations ===
 
     def _get_connector(self, connection_name: str = "", connection_group: str = ""):
-        """Get a database connector — a named one, or the current session's."""
-        name = (connection_name or "").strip()
+        """Get a database connector — the current tab's live one first."""
+        requested = (connection_name or "").strip()
         group = (connection_group or "").strip()
         session = self._get_active_session()
-        if not name:
-            if not session or not session.connection_name:
+        session_name = (getattr(session, "connection_name", None) or "") if session else ""
+        session_group = (getattr(session, "connection_group", None) or "") if session else ""
+        session_connector = getattr(session, "connector", None) if session else None
+        session_live = session is not None and _flag_is_connected(session)
+
+        if not requested:
+            if not session or not session_name:
                 return None, "No database connection in current session."
-            name = session.connection_name
-            group = getattr(session, "connection_group", None) or ""
+            requested = session_name
+            group = session_group or group
+
+        if session_live and session_connector is not None:
+            if not connection_name or _same_connection_name(requested, session_name):
+                if _flag_is_connected(session_connector):
+                    return session_connector, None
+
+        if requested and session_live and session_name and not _same_connection_name(requested, session_name):
+            return None, (
+                f"This tab is connected to '{session_name}', not '{requested}'. "
+                "Use datapyn_query on this session, or datapyn_database "
+                "operation=connect only if you intend to switch connections."
+            )
 
         mw = self._main_window
-        conn_manager = getattr(mw, "_connection_manager", None)
-        if not conn_manager:
-            # Try to import and get
-            try:
-                from ...database import ConnectionManager
-                conn_manager = ConnectionManager()
-            except Exception as e:
-                return None, f"Cannot access connection manager: {e}"
+        conn_manager = getattr(mw, "connection_manager", None)
+        if conn_manager is not None and hasattr(conn_manager, "get_connection"):
+            connector = conn_manager.get_connection(group, requested)
+            if connector is not None and _flag_is_connected(connector):
+                return connector, None
 
-        connector = conn_manager.get_connection(group, name)
-        if not connector:
-            return None, f"Connection '{name}' not found."
-
-        if not connector.is_connected:
-            return None, f"Connection '{name}' is not connected."
-
-        return connector, None
+        if session_live and session_name:
+            return None, (
+                f"This tab is already connected to '{session_name}'. "
+                "Use datapyn_query without connection_name."
+            )
+        return None, (
+            f"Connection '{requested}' is not connected. "
+            "Use datapyn_database operation=connect only if is_connected is false "
+            "in the tab snapshot."
+        )
 
     def _get_database_schema(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Get the complete database schema from cache or live."""
@@ -2956,6 +3085,32 @@ class MCPToolRegistry(QObject):
         if not code:
             return {"error": "code is required."}
 
+        def needs_exec(src: str) -> bool:
+            text = src.strip()
+            if "\n" in text or ";" in text:
+                return True
+            starters = (
+                "import ",
+                "from ",
+                "def ",
+                "class ",
+                "for ",
+                "while ",
+                "with ",
+                "if ",
+                "try:",
+                "async ",
+            )
+            return any(text.startswith(token) for token in starters)
+
+        def last_expr(src: str) -> str:
+            lines = [
+                line.strip()
+                for line in src.strip().splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+            return lines[-1] if lines else ""
+
         session_widget = self._get_active_session_widget()
         if not session_widget:
             return {"error": "No active session."}
@@ -2996,20 +3151,30 @@ class MCPToolRegistry(QObject):
 
         try:
             sys.stdout = stdout_capture
+            statements = needs_exec(code)
+            if statements:
+                exec(compile(code, "<silent>", "exec"), namespace, namespace)
+                last = last_expr(code)
+                if last:
+                    try:
+                        result_value = eval(compile(last, "<silent>", "eval"), namespace, namespace)
+                    except SyntaxError:
+                        result_value = None
+            else:
+                result_value = eval(compile(code, "<silent>", "eval"), namespace, namespace)
 
-            # Try as expression first (returns a value)
-            try:
-                compiled = compile(code, "<silent>", "eval")
-                result_value = eval(compiled, namespace, namespace)
-            except SyntaxError:
-                # Execute as statements
-                compiled = compile(code, "<silent>", "exec")
-                exec(compiled, namespace, namespace)
-
-            # Update session namespace with new variables
             if session and hasattr(session, "update_namespace"):
                 session.update_namespace(namespace)
 
+        except TypeError as exc:
+            hint = ""
+            if "not callable" in str(exc).lower():
+                hint = (
+                    " If this is a list/property (sheet_names, columns, index), "
+                    "print it without (): print(wb.sheet_names)"
+                )
+            error_text = traceback.format_exc()
+            return {"error": f"Python error:\n{error_text}{hint}"}
         except Exception:
             error_text = traceback.format_exc()
             return {"error": f"Python error:\n{error_text}"}
@@ -3104,10 +3269,14 @@ class MCPToolRegistry(QObject):
         if not mw:
             return {"error": "Main window not available"}
 
+        from src.services.pynia.execution_context import panels_for_session
+
+        output_panel, results_viewer = panels_for_session(
+            mw, self._pinned_session_id or ""
+        )
         parts = []
 
         # Get output panel text
-        output_panel = getattr(mw, "global_output_panel", None)
         if output_panel and hasattr(output_panel, "get_text"):
             output_text = output_panel.get_text()
             if output_text and output_text.strip():
@@ -3119,7 +3288,6 @@ class MCPToolRegistry(QObject):
                 parts.append("## Output:\n(empty)")
 
         # Get results viewer DataFrame
-        results_viewer = getattr(mw, "global_results_viewer", None)
         if results_viewer:
             current_df = getattr(results_viewer, "current_df", None)
             if current_df is not None and hasattr(current_df, "empty") and not current_df.empty:

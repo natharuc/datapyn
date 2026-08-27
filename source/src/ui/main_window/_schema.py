@@ -1044,7 +1044,9 @@ class SchemaMixin:
             connection_name: Connection name
             session_id: Session ID for per-session cache (optional, defaults to active)
             lazy: When True, only load current database context (default on connect)
-            lazy_mode: Override lazy level (minimal | autocomplete | full)
+            lazy_mode: Override lazy level (minimal | autocomplete | full).
+                When omitted and lazy=True, loads tables/columns for offline
+                autocomplete (SCHEMA_LAZY_AUTOCOMPLETE).
         """
         # Get or CREATE the explorer for the current session (important: _get_session_explorer creates if needed)
         sid = session_id or self._get_active_session_id()
@@ -1068,7 +1070,9 @@ class SchemaMixin:
             session_id=sid or "",
             connection_group=connection_group,
             lazy=lazy,
-            lazy_mode=lazy_mode,
+            lazy_mode=lazy_mode if lazy_mode is not None else (
+                SCHEMA_LAZY_AUTOCOMPLETE if lazy else None
+            ),
         )
 
     def _reload_schema(self):

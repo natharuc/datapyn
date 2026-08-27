@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
@@ -107,6 +108,8 @@ class _CompletionWorker(QThread):
         prefix: str = "",
         line: int = 1,
         column: int = 1,
+        sql_service=None,
+        sql_lock: Optional[threading.Lock] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -119,23 +122,27 @@ class _CompletionWorker(QThread):
         self.prefix = prefix
         self.line = line
         self.column = column
+        self.sql_service = sql_service
+        self.sql_lock = sql_lock
+
+    def _sql_completions(self) -> List[Any]:
+        from src.services.sql_autocomplete_service import SqlAutoCompleteService
+
+        service = self.sql_service or SqlAutoCompleteService()
+        lock = self.sql_lock
+        if lock is None:
+            service.set_schema(self.schema)
+            return service.get_completions(self.full_text, self.line - 1, self.column - 1)
+        with lock:
+            service.set_schema(self.schema)
+            return service.get_completions(self.full_text, self.line - 1, self.column - 1)
 
     def run(self):
         try:
             if self.kind == "sql":
-                from src.services.sql_autocomplete_service import SqlAutoCompleteService
-
-                service = SqlAutoCompleteService()
-                service.set_schema(self.schema)
-                raw = service.get_completions(self.full_text, self.line - 1, self.column - 1)
-                payload = _format_sql_completions(raw)
+                payload = _format_sql_completions(self._sql_completions())
             elif self.kind == "sql_context":
-                from src.services.sql_autocomplete_service import SqlAutoCompleteService
-
-                service = SqlAutoCompleteService()
-                service.set_schema(self.schema)
-                raw = service.get_completions(self.full_text, self.line - 1, self.column - 1)
-                payload = _format_sql_context_completions(raw, self.prefix)
+                payload = _format_sql_context_completions(self._sql_completions(), self.prefix)
             elif self.kind == "python":
                 from src.services.jedi_completer import JediCompleter
                 from src.editors.monaco.monaco_sql_completions import build_python_completions
@@ -182,6 +189,8 @@ class MonacoCompletionService(QObject):
         self._worker: Optional[_CompletionWorker] = None
         self._context_worker: Optional[_CompletionWorker] = None
         self._pending: Optional[tuple] = None
+        self._sql_ac_service = None
+        self._sql_ac_lock = threading.Lock()
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.setInterval(80)
@@ -193,6 +202,13 @@ class MonacoCompletionService(QObject):
     def set_python_context(self, namespace: Dict[str, Any], global_imports: str = "") -> None:
         self._namespace = namespace or {}
         self._global_imports = global_imports or ""
+
+    def _sql_autocomplete_service(self):
+        if self._sql_ac_service is None:
+            from src.services.sql_autocomplete_service import SqlAutoCompleteService
+
+            self._sql_ac_service = SqlAutoCompleteService()
+        return self._sql_ac_service
 
     def cancel(self) -> None:
         self._debounce_timer.stop()
@@ -251,6 +267,8 @@ class MonacoCompletionService(QObject):
             namespace=self._namespace,
             global_imports=self._global_imports,
             parent=self,
+            sql_service=self._sql_autocomplete_service() if kind in ("sql", "sql_context") else None,
+            sql_lock=self._sql_ac_lock if kind in ("sql", "sql_context") else None,
             **kwargs,
         )
         worker.result_ready.connect(self._on_worker_result)

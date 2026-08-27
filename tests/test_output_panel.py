@@ -243,6 +243,19 @@ class TestOutputPanel:
         assert output_panel._entries[0].message == "msg 0"
         assert output_panel._entries[4].message == "msg 4"
 
+    def test_caps_oldest_entries(self, output_panel, monkeypatch):
+        from src.ui.components import output_panel as output_mod
+
+        monkeypatch.setattr(output_mod, "MAX_OUTPUT_ENTRIES", 5)
+        for i in range(8):
+            output_panel.log(f"msg {i}")
+        assert len(output_panel._entries) == 5
+        assert output_panel._entries[0].message == "msg 3"
+        assert output_panel._entries[-1].message == "msg 7"
+        assert output_panel._list.count() == 5
+        first_item = output_panel._list.item(0)
+        assert first_item.data(Qt.ItemDataRole.UserRole) == 0
+
     def test_cleared_signal(self, output_panel, qtbot):
         output_panel.log("test")
         with qtbot.waitSignal(output_panel.cleared, timeout=1000):

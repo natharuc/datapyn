@@ -49,7 +49,7 @@ def _marker_at(
     end_col: Optional[int] = None,
     severity: str = "error",
 ) -> SyntaxMarker:
-    end = end_col if end_col is not None else col + max(1, len(message) // 4)
+    end = end_col if end_col is not None else col + 1
     return SyntaxMarker(
         start_line=max(1, line),
         start_column=max(1, col),
@@ -65,6 +65,49 @@ def _expression_span(node) -> Tuple[int, int, int]:
     col = int(getattr(node, "col", None) or 1)
     end_col = int(getattr(node, "end_col", None) or (col + len(str(getattr(node, "name", "") or ""))))
     return line, col, end_col
+
+
+def _find_identifier_span(
+    statement: str,
+    name: str,
+    qualifier: str = "",
+) -> Optional[Tuple[int, int, int]]:
+    """Locate ``qualifier.name`` or ``name`` in *statement* (1-based line/col)."""
+    if not statement or not name:
+        return None
+    if qualifier:
+        pattern = (
+            rf"(?<![A-Za-z0-9_@#]){re.escape(qualifier)}\s*\.\s*"
+            rf"{re.escape(name)}(?![A-Za-z0-9_])"
+        )
+    else:
+        pattern = rf"(?<![A-Za-z0-9_@#]){re.escape(name)}(?![A-Za-z0-9_])"
+    matches = list(re.finditer(pattern, statement, flags=re.IGNORECASE))
+    if not matches:
+        return None
+    match = matches[-1]
+    start = match.start()
+    end = match.end()
+    line = 1 + statement[:start].count("\n")
+    line_start = statement.rfind("\n", 0, start) + 1
+    col = start - line_start + 1
+    end_line_start = statement.rfind("\n", 0, max(end - 1, 0)) + 1
+    end_col = end - end_line_start + 1
+    return line, col, end_col
+
+
+def _span_for_identifier(
+    statement: str,
+    node,
+    *,
+    name: str,
+    qualifier: str = "",
+) -> Tuple[int, int, int]:
+    """Prefer a text search so incomplete T-SQL still underlines the bad token."""
+    located = _find_identifier_span(statement, name, qualifier)
+    if located is not None:
+        return located
+    return _expression_span(node)
 
 
 def _schema_has_objects(schema: dict) -> bool:
@@ -252,7 +295,12 @@ def _validate_statement(
             continue
         if any(scope_lookup.get(name) for name in lookup_names):
             continue
-        line, col, end_col = _expression_span(table)
+        line, col, end_col = _span_for_identifier(
+            statement,
+            table,
+            name=str(getattr(table, "name", "") or table_name),
+            qualifier=str(getattr(table, "db", "") or ""),
+        )
         key = ("table", line + line_offset, col)
         if key in seen:
             continue
@@ -294,7 +342,9 @@ def _validate_statement(
                         lookup_names=set(entry.get("lookup_names", set())),
                     )
             if relation is None:
-                line, col, end_col = _expression_span(column)
+                line, col, end_col = _span_for_identifier(
+                    statement, column, name=name, qualifier=qualifier
+                )
                 key = ("qualifier", line + line_offset, col)
                 if key not in seen:
                     seen.add(key)
@@ -310,7 +360,9 @@ def _validate_statement(
                 continue
 
             if service._find_column_definition([relation], qualifier, name) is None:
-                line, col, end_col = _expression_span(column)
+                line, col, end_col = _span_for_identifier(
+                    statement, column, name=name, qualifier=qualifier
+                )
                 key = ("column", line + line_offset, col)
                 if key not in seen:
                     seen.add(key)
@@ -328,7 +380,9 @@ def _validate_statement(
         if scope_sources:
             if service._find_column_definition(scope_sources, "", name) is not None:
                 continue
-            line, col, end_col = _expression_span(column)
+            line, col, end_col = _span_for_identifier(
+                statement, column, name=name, qualifier=""
+            )
             key = ("column", line + line_offset, col)
             if key not in seen:
                 seen.add(key)
@@ -358,7 +412,9 @@ def _validate_statement(
             "",
             name,
         ) is None:
-            line, col, end_col = _expression_span(column)
+            line, col, end_col = _span_for_identifier(
+                statement, column, name=name, qualifier=""
+            )
             key = ("column", line + line_offset, col)
             if key not in seen:
                 seen.add(key)

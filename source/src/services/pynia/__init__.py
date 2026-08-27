@@ -1,27 +1,18 @@
 """
-Pynia — DataPyn's multi-provider AI agent.
-
-Connectors: OpenAI, OpenRouter, Anthropic (Claude), GitHub Copilot (device/MFA).
+Pynia — DataPyn's ACP client. Talks to installed coding agents
+(Claude, Cursor, GitHub Copilot, Codex) and exposes IDE tools over MCP.
 """
 
-from .agent_client import PyniaAgentClient
-from .system_prompt import build_request_prompt, build_system_prompt
-from .auth_service import PyniaAuthService, get_pynia_auth_service, reset_pynia_auth_service
-from .settings import get_pynia_settings, get_provider_secret, set_provider_secret
-from .types import DEFAULT_PROVIDER, PROVIDERS, ProviderId, ProviderInfo
+from .acp.host import PyniaAcpHost
+from .acp.catalog import AGENT_IDS, AgentId, get_agent, list_agents
+from .settings import get_pynia_settings, reset_pynia_settings
 
 __all__ = [
-    "PyniaAgentClient",
-    "build_system_prompt",
-    "build_request_prompt",
-    "PyniaAuthService",
-    "get_pynia_auth_service",
-    "reset_pynia_auth_service",
+    "PyniaAcpHost",
+    "AGENT_IDS",
+    "AgentId",
+    "get_agent",
+    "list_agents",
     "get_pynia_settings",
-    "get_provider_secret",
-    "set_provider_secret",
-    "DEFAULT_PROVIDER",
-    "PROVIDERS",
-    "ProviderId",
-    "ProviderInfo",
+    "reset_pynia_settings",
 ]

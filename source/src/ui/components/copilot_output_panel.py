@@ -19,6 +19,23 @@ from src.language import S
 from src.design_system.tokens import get_colors, SCROLLBAR_STYLE
 from src.design_system.font_manager import get_monospace_font
 
+_RESULT_MAX = 500
+
+
+def stringify_tool_result(result) -> tuple[str, bool]:
+    """Turn a tool payload into truncated text. Dicts from MCP are not slices."""
+    is_error = isinstance(result, dict) and bool(result.get("error") or result.get("isError"))
+    if isinstance(result, str):
+        text = result
+    else:
+        try:
+            text = json.dumps(result, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(result)
+    if len(text) > _RESULT_MAX:
+        text = text[:_RESULT_MAX] + "..."
+    return text, is_error
+
 try:
     import qtawesome as qta
 
@@ -142,27 +159,30 @@ class CopilotOutputPanel(QWidget):
     def log_tool_call(self, tool_name: str, arguments: dict):
         """Log a tool call from Pynia."""
         ts = self._timestamp()
-        args_str = json.dumps(arguments, indent=2, ensure_ascii=False) if arguments else "{}"
+        try:
+            args_str = json.dumps(arguments, indent=2, ensure_ascii=False, default=str) if arguments else "{}"
+        except Exception:
+            args_str = str(arguments)
         escaped_args = html_module.escape(args_str)
         self._append_html(
             f'<span style="color:#888;">[{ts}]</span> '
             f'<span style="color:#569cd6;font-weight:bold;">TOOL</span> '
-            f'<span style="color:#dcdcaa;">{html_module.escape(tool_name)}</span>'
+            f'<span style="color:#dcdcaa;">{html_module.escape(str(tool_name))}</span>'
             f'<pre style="color:#9cdcfe;margin:2px 0 2px 20px;font-size:11px;">{escaped_args}</pre>'
         )
 
-    def log_tool_result(self, tool_name: str, result: str, is_error: bool = False):
-        """Log a tool result."""
+    def log_tool_result(self, tool_name: str, result, is_error: bool = False):
+        """Log a tool result (string or MCP dict)."""
         ts = self._timestamp()
+        text, inferred_error = stringify_tool_result(result)
+        is_error = is_error or inferred_error
         color = "#f14c4c" if is_error else "#4ec9b0"
         label = "ERROR" if is_error else "RESULT"
-        escaped = html_module.escape(result[:500])  # Truncate long results
-        if len(result) > 500:
-            escaped += "..."
+        escaped = html_module.escape(text)
         self._append_html(
             f'<span style="color:#888;">[{ts}]</span> '
             f'<span style="color:{color};font-weight:bold;">{label}</span> '
-            f'<span style="color:#dcdcaa;">{html_module.escape(tool_name)}</span>: '
+            f'<span style="color:#dcdcaa;">{html_module.escape(str(tool_name))}</span>: '
             f'<span style="color:#e0e0e4;">{escaped}</span>'
         )
 

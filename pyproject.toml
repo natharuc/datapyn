@@ -34,14 +34,12 @@ dependencies = [
     "azure-identity>=1.17.0",
     # Code Formatting
     "ruff>=0.15.0",
-    "sqlparse>=0.5.0",
+    "sqlparse>=0.6.0",
     "sqlglot>=30.0.0",
     # Charts
     "matplotlib>=3.10.0",
     "plotly>=5.18.0",
     "jedi>=0.20.0",
-    # GitHub Copilot SDK (optional, requires gh CLI auth)
-    "github-copilot-sdk>=1.0.0",
 ]
 
 [dependency-groups]
@@ -70,6 +68,7 @@ override-dependencies = [
     "pillow>=12.3.0",
     "setuptools>=83.0.0",
     "gitpython>=3.1.55",
+    "pip>=26.2",
 ]
 
 

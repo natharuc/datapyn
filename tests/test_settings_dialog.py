@@ -144,123 +144,33 @@ def test_shortcut_conflicts_are_flagged(qapp):
         dialog.close()
 
 
-def test_pynia_completion_model_picker_round_trips(qapp, mock_shortcut_manager):
-    """The autocomplete model picker persists an explicit pick and 'auto' (blank)."""
-    from src.services.pynia.settings import get_pynia_settings
-
+def test_pynia_settings_page_lists_agents(qapp, mock_shortcut_manager):
+    """Pynia settings shows the four ACP agents and autocomplete toggle."""
     dialog = SettingsDialog(mock_shortcut_manager)
     try:
-        assert hasattr(dialog, "_pynia_completion_model_combo")
-        pid = dialog._current_pynia_connector_id()
-
-        dialog._pynia_completion_model_combo.setEditText("gpt-4.1-mini")
-        dialog._save_pynia_completion_model()
-        assert get_pynia_settings().completion_model_override(pid) == "gpt-4.1-mini"
-
-        # Blank == auto (use chat model): the override is cleared.
-        dialog._pynia_completion_model_combo.setEditText("")
-        dialog._save_pynia_completion_model()
-        assert get_pynia_settings().completion_model_override(pid) == ""
+        assert hasattr(dialog, "_pynia_page")
+        combo = dialog._pynia_page._default_combo
+        agent_ids = [combo.itemData(i) for i in range(combo.count())]
+        assert "" in agent_ids
+        assert "claude" in agent_ids
+        assert "cursor" in agent_ids
+        assert "copilot" in agent_ids
+        assert "codex" in agent_ids
+        assert hasattr(dialog._pynia_page, "_autocomplete")
     finally:
         dialog.close()
 
 
-def test_pynia_save_token_activates_and_emits(qapp, mock_shortcut_manager, monkeypatch):
-    """Saving a connector token makes it active and signals the live agent."""
-    from unittest.mock import MagicMock
-    from src.services.pynia.settings import (
-        get_pynia_settings,
-        get_provider_secret,
-        set_provider_secret,
-    )
-
-    monkeypatch.setattr(
-        "src.services.pynia.settings.threading.Thread",
-        lambda *args, **kwargs: MagicMock(start=lambda: None),
-    )
-
+def test_pynia_default_agent_emits(qapp, mock_shortcut_manager):
     dialog = SettingsDialog(mock_shortcut_manager)
-    dialog._fetch_pynia_models = lambda _pid: None
     emitted = []
     dialog.pynia_connector_changed.connect(lambda pid: emitted.append(pid))
     try:
-        combo = dialog._pynia_provider_combo
-        combo.setCurrentIndex(combo.findData("openrouter"))
-        dialog._pynia_token_edit.setText("sk-or-test")
-        dialog._on_pynia_save_token()
-
-        assert get_pynia_settings().active_provider == "openrouter"
-        assert get_provider_secret("openrouter") == "sk-or-test"
+        combo = dialog._pynia_page._default_combo
+        combo.setCurrentIndex(combo.findData("codex"))
         qapp.processEvents()
-        assert emitted == ["openrouter"]
-    finally:
-        set_provider_secret("openrouter", "")
-        dialog.close()
-
-
-def test_copilot_signin_switches_agent_and_logs_in(qapp, mock_shortcut_manager, monkeypatch):
-    """Clicking Copilot sign-in activates the connector and triggers GitHub login
-    (not the API-token verify path)."""
-    from unittest.mock import MagicMock
-    from src.services.pynia.settings import get_pynia_settings
-
-    fake_auth = MagicMock()
-    fake_auth.login_chat.return_value = True
-    monkeypatch.setattr("src.services.pynia.get_pynia_auth_service", lambda: fake_auth)
-
-    dialog = SettingsDialog(mock_shortcut_manager)
-    emitted = []
-    dialog.pynia_connector_changed.connect(lambda pid: emitted.append(pid))
-    try:
-        dialog._on_chat_auth_clicked()
-        assert emitted == ["copilot"]
-        fake_auth.login_chat.assert_called_once()
-        assert get_pynia_settings().active_provider == "copilot"
-    finally:
-        get_pynia_settings().set_active_provider("openai")
-        dialog.close()
-
-
-def test_pynia_connectors_include_copilot(qapp, mock_shortcut_manager):
-    """GitHub Copilot is listed as a connector and swaps to its sign-in UI."""
-    dialog = SettingsDialog(mock_shortcut_manager)
-    try:
-        combo = dialog._pynia_provider_combo
-        ids = [combo.itemData(i) for i in range(combo.count())]
-        assert "copilot" in ids
-
-        # Copilot selected → GitHub sign-in section shown, API-token hidden.
-        combo.setCurrentIndex(combo.findData("copilot"))
-        assert not dialog._pynia_copilot_section.isHidden()
-        assert dialog._pynia_token_section.isHidden()
-
-        # API connector selected → token fields shown, Copilot hidden.
-        combo.setCurrentIndex(combo.findData("openai"))
-        assert not dialog._pynia_token_section.isHidden()
-        assert dialog._pynia_copilot_section.isHidden()
-    finally:
-        dialog.close()
-
-
-def test_pynia_model_picker_lists_fetched_models(qapp, mock_shortcut_manager):
-    """Fetched connector models populate the picker as a selectable list."""
-    from src.services.pynia.completion import COMPLETION_MODEL_SUGGESTIONS
-
-    dialog = SettingsDialog(mock_shortcut_manager)
-    try:
-        pid = dialog._current_pynia_connector_id()
-        dialog._on_pynia_models_fetched(pid, ["gpt-4.1", "gpt-4.1-mini", "o3-mini"])
-
-        combo = dialog._pynia_completion_model_combo
-        items = [combo.itemText(i) for i in range(combo.count())]
-        # Real fetched models are now in the dropdown.
-        assert "o3-mini" in items
-        assert "gpt-4.1" in items
-        # Curated fast suggestions are still surfaced (for easy picking).
-        for suggestion in COMPLETION_MODEL_SUGGESTIONS.get(pid, [])[:1]:
-            assert suggestion in items
-        # No duplicates in the list.
-        assert len(items) == len(set(items))
+        assert "codex" in emitted
+        assert dialog._current_pynia_connector_id() == "codex"
     finally:
         dialog.close()
 

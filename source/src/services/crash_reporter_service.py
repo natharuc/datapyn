@@ -32,23 +32,16 @@ _GH_TIMEOUT = 25.0
 
 
 def _gh_executable() -> str:
-    try:
-        from src.services.copilot.copilot_client_sdk import _gh_executable as _gh
+    import shutil
 
-        return _gh() or ""
-    except Exception:
-        import shutil
-
-        return shutil.which("gh") or ""
+    return shutil.which("gh") or ""
 
 
 def _is_gh_logged_in(gh_path: str) -> bool:
-    try:
-        from src.services.copilot.copilot_client_sdk import _is_gh_logged_in
-
-        return bool(_is_gh_logged_in(gh_path))
-    except Exception:
+    if not gh_path:
         return False
+    code, _out = _run_gh(["auth", "status"], timeout=8.0)
+    return code == 0
 
 
 def _run_gh(args: list[str], *, timeout: float = _GH_TIMEOUT) -> tuple[int, str]:

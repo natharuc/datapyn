@@ -957,15 +957,11 @@ class SessionsMixin:
         
         # Pynia inline autocomplete for Monaco editors
         if hasattr(widget.editor, "set_pynia_client"):
-            if hasattr(self, "_pynia_agent") and self._pynia_agent:
-                widget.editor.set_pynia_client(self._pynia_agent)
-            elif hasattr(self, "_copilot_client") and self._copilot_client:
-                widget.editor.set_pynia_client(self._copilot_client)
-
-        # Native Copilot LSP completion (preferred over the prompt path).
-        lsp_client = getattr(self, "_lsp_client", None)
-        if lsp_client and hasattr(widget.editor, "set_lsp_client"):
-            widget.editor.set_lsp_client(lsp_client)
+            host = getattr(self, "_pynia_host", None)
+            if host:
+                widget.editor.set_pynia_client(host)
+                if hasattr(widget.editor, "set_pynia_tab_id"):
+                    widget.editor.set_pynia_tab_id(session.session_id)
 
         # Criar paineis por sessao (Results, Output, Variables)
         self._create_session_panels(session.session_id)
@@ -1249,6 +1245,10 @@ class SessionsMixin:
                 self._original_file_type = None
 
             session_id = widget.session.session_id
+            host = getattr(self, "_pynia_host", None)
+            if host:
+                widget.session.pynia = host.export_state(session_id)
+                host.detach_tab(session_id)
             schema_service = getattr(self, "_schema_service", None)
             if schema_service is not None:
                 schema_service.invalidate_cache(session_id=session_id)
@@ -1287,24 +1287,29 @@ class SessionsMixin:
             self._sync_chat_tab_context()
 
     def _sync_chat_tab_context(self):
-        """Point the Pynia chat at the now-active tab.
-
-        Needed where the tab-change signal was suppressed (_creating_session /
-        _closing_session guards) — otherwise the chat keeps targeting the
-        previous tab and the agent works on the wrong session.
-        """
+        """Point the Pynia chat at the now-active tab."""
         if not (hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel):
             return
         try:
             index = self.session_tabs.currentIndex()
             widget = self.session_tabs.widget(index) if index >= 0 else None
             if isinstance(widget, SessionWidget):
+                host = getattr(self, "_pynia_host", None)
+                if host:
+                    host.attach_tab(widget.session.session_id, widget.session.pynia)
                 self._copilot_chat_panel.switch_tab_context(
                     widget.session.session_id,
                     self.session_tabs.tabText(index).strip(),
+                    widget.session.pynia,
                 )
         except Exception as e:
             logger.debug(f"Chat tab context sync skipped: {e}")
+
+    def _on_pynia_state_changed(self, tab_id: str) -> None:
+        widget = getattr(self, "_session_widgets", {}).get(tab_id)
+        host = getattr(self, "_pynia_host", None)
+        if widget is not None and host is not None:
+            widget.session.pynia = host.export_state(tab_id)
 
     def _on_session_tab_changed(self, index: int):
         """Event when session tab changes"""
@@ -1337,13 +1342,15 @@ class SessionsMixin:
             # Atualizar OE para mostrar a conexao efetiva desta aba (deferido)
             QTimer.singleShot(0, lambda w=widget: self._update_oe_for_session(w))
 
-            # Switch Copilot chat context to this tab
+            # Switch Pynia chat to this tab
             if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
                 tab_name = self.session_tabs.tabText(index).strip()
+                host = getattr(self, "_pynia_host", None)
+                if host:
+                    host.attach_tab(widget.session.session_id, widget.session.pynia)
                 self._copilot_chat_panel.switch_tab_context(
-                    widget.session.session_id, tab_name
+                    widget.session.session_id, tab_name, widget.session.pynia
                 )
-                self._copilot_chat_panel.notify_block_focused()
 
             # Restaurar contexto de arquivo da aba selecionada
             if hasattr(widget, "file_path") and widget.file_path:
@@ -1373,7 +1380,6 @@ class SessionsMixin:
         if not hasattr(self, "_copilot_chat_panel") or not self._copilot_chat_panel:
             return
         panel = self._copilot_chat_panel
-        # Build a prompt from the error context
         parts = []
         block_name = context.get("block_name") or f"Block {(context.get('block_index') or 0) + 1}"
         lang = context.get("log_type", "SQL")
@@ -1386,10 +1392,8 @@ class SessionsMixin:
             parts.append(f"Error:\n```\n{err}\n```")
         parts.append("Help me fix it.")
         prompt = "\n\n".join(parts)
-        # Set text in input and trigger send
-        panel._input.setPlainText(prompt)
-        panel._on_send()
-        # Show the Copilot chat dock
+        if hasattr(panel, "submit_prompt"):
+            panel.submit_prompt(prompt)
         if hasattr(self, "copilot_dock"):
             self.show_panel("copilot")
 

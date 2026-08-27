@@ -28,6 +28,7 @@ def test_ci_shard_covers_all_modules_without_duplicates():
 def test_ignored_modules_match_ci_script():
     assert "test_gui.py" in CI_IGNORED_MODULES
     assert "test_monaco_editor.py" in CI_IGNORED_MODULES
+    assert "test_pynia_acp_live.py" in CI_IGNORED_MODULES
 
 
 def test_shard_output_is_one_path_per_line():

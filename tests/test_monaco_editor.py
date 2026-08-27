@@ -290,38 +290,34 @@ class TestMonacoEditorBasic:
 
 
 class TestInlineCompletionService:
-    """Tests for the rewritten (HTTP connector) InlineCompletionService."""
+    """Tests for ACP ghost-text InlineCompletionService."""
 
     def _service(self):
         from src.editors.monaco.inline_completion_service import InlineCompletionService
         return InlineCompletionService()
 
-    def _patch_provider(self, monkeypatch, *, enabled=True, active="openrouter",
-                        token_for=("openrouter",), model="openai/gpt-4.1-mini"):
+    def _enable(self, monkeypatch, enabled=True):
         from src.editors.monaco import inline_completion_service as mod
         settings = Mock()
         settings.autocomplete_enabled = enabled
-        settings.active_provider = active
-        settings.completion_model = lambda pid: model
         monkeypatch.setattr(mod, "get_pynia_settings", lambda: settings)
-        monkeypatch.setattr(mod, "get_provider_secret", lambda pid: "tok" if pid in token_for else "")
 
     def test_service_creates(self):
         service = self._service()
         assert service is not None
         assert hasattr(service, "completion_ready")
-        assert service.has_lsp is False  # native LSP path removed
+        assert service.has_lsp is False
 
     def test_compat_setters_are_noops(self):
         service = self._service()
-        # Old callers still invoke these — must not raise.
         service.set_pynia_client(Mock())
         service.set_copilot_client(Mock())
         service.set_lsp_client(Mock())
-        service.set_blocks_code_context("other block code")  # focused-block only
+        service.set_blocks_code_context("other block code")
         service.set_document_info("file:///x.py", "python")
         service.open_document("file:///x.py", "python", "x = 1")
         service.notify_document_changed("x = 1")
+        service.set_tab_id("tab-1")
 
     def test_skips_short_prefix(self):
         service = self._service()
@@ -337,25 +333,18 @@ class TestInlineCompletionService:
         assert service._pending is None
         assert not service._debounce.isActive()
 
-    def test_resolve_provider_prefers_active_api(self, monkeypatch):
-        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+    def test_has_pynia_requires_host_and_setting(self, monkeypatch):
+        self._enable(monkeypatch, enabled=False)
         service = self._service()
-        assert service._resolve_provider() == ("openrouter", "openai/gpt-4.1-mini")
+        host = Mock()
+        host.complete_inline = Mock(return_value="")
+        service.set_pynia_client(host)
+        assert service.has_pynia is False
+        self._enable(monkeypatch, enabled=True)
         assert service.has_pynia is True
 
-    def test_resolve_provider_none_when_disabled(self, monkeypatch):
-        self._patch_provider(monkeypatch, enabled=False)
-        service = self._service()
-        assert service._resolve_provider() == (None, None)
-        assert service.has_pynia is False
-
-    def test_resolve_provider_none_without_token(self, monkeypatch):
-        self._patch_provider(monkeypatch, token_for=())  # no API token anywhere
-        service = self._service()
-        assert service._resolve_provider() == (None, None)
-
-    def test_fire_without_provider_emits_empty(self, monkeypatch):
-        self._patch_provider(monkeypatch, token_for=())
+    def test_fire_without_host_emits_empty(self, monkeypatch):
+        self._enable(monkeypatch, enabled=True)
         service = self._service()
         results = []
         service.completion_ready.connect(results.append)
@@ -364,30 +353,35 @@ class TestInlineCompletionService:
         assert results == [""]
         assert service._busy is False
 
-    def test_fire_with_provider_starts_worker(self, monkeypatch):
+    def test_fire_with_host_starts_worker(self, monkeypatch):
         from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
 
         reset_ai_autocomplete_circuit_breaker()
-        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+        self._enable(monkeypatch, enabled=True)
         service = self._service()
+        host = Mock()
+        host.complete_inline = Mock(return_value="ghost")
+        service.set_pynia_client(host)
         started = []
-        service._start_worker = lambda pid, model, req: started.append((pid, model, req))
+        service._start_worker = lambda h, req: started.append((h, req))
         service._pending = {"id": 1, "prefix": "x =", "suffix": "", "language": "python", "line": 1, "column": 3}
         service._fire()
         assert service._busy is True
-        assert started and started[0][0] == "openrouter"
-        assert started[0][1] == "openai/gpt-4.1-mini"
+        assert started and started[0][0] is host
 
     def test_circuit_breaker_blocks_ai_fire(self, monkeypatch):
         from src.services.ai_autocomplete_circuit_breaker import get_ai_autocomplete_circuit_breaker
 
-        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+        self._enable(monkeypatch, enabled=True)
         breaker = get_ai_autocomplete_circuit_breaker()
         breaker.reset()
         breaker.record_failure("e1")
         breaker.record_failure("e2")
         breaker.record_failure("e3")
         service = self._service()
+        host = Mock()
+        host.complete_inline = Mock(return_value="x")
+        service.set_pynia_client(host)
         started = []
         service._start_worker = lambda *a: started.append(a)
         results = []
@@ -400,49 +394,6 @@ class TestInlineCompletionService:
         assert results == [""]
         assert service._busy is False
         breaker.reset()
-
-    def test_lsp_preferred_when_authenticated(self):
-        """When the Copilot LSP is signed in, it serves completions (0-indexed)."""
-        lsp = Mock()
-        lsp.is_authenticated = True
-        service = self._service()
-        service.set_lsp_client(lsp)
-        service.set_document_info("file:///x.py", "python")
-        assert service.has_lsp is True
-
-        service._pending = {
-            "id": 1, "prefix": "def f():\n    ", "suffix": "",
-            "language": "python", "line": 2, "column": 5,
-        }
-        service._fire()
-
-        lsp.request_completion.assert_called_once()
-        uri, _version, line, char = lsp.request_completion.call_args[0]
-        assert uri == "file:///x.py"
-        assert (line, char) == (1, 4)  # LSP is 0-indexed
-        assert service._busy is True
-
-    def test_lsp_result_ignored_for_other_block_uri(self):
-        """Shared LSP client must not show one block's ghost-text in another."""
-        lsp = Mock()
-        lsp.is_authenticated = True
-        service = self._service()
-        service.set_lsp_client(lsp)
-        service.set_document_info("file:///sql.sql", "sql")
-
-        results = []
-        service.completion_ready.connect(results.append)
-        service._active_req = {"id": 1, "prefix": "", "suffix": ""}
-        service._active_id = 1
-        service._busy = True
-        service._on_lsp_result("file:///python.py", "df.head()")
-        assert results == []
-
-        service._active_req = {"id": 2, "prefix": "", "suffix": ""}
-        service._active_id = 2
-        service._busy = True
-        service._on_lsp_result("file:///sql.sql", "SELECT 1")
-        assert results == ["SELECT 1"]
 
     def test_on_complete_emits_and_releases(self):
         service = self._service()
@@ -466,7 +417,7 @@ class TestInlineCompletionService:
         service._busy = True
         service._active_req = {"id": 1, "prefix": "", "suffix": ""}
         service._active_id = 1
-        service._on_worker_error(worker, "HTTP 401")
+        service._on_worker_error(worker, "timeout")
         assert results == [""]
         assert service._busy is False
 
@@ -527,34 +478,36 @@ class TestInlineCompletionService:
         service._deliver_completion("stale ghost text")
         assert results == []
 
-    def test_start_worker_does_not_build_context_on_main_thread(self, monkeypatch):
-        import src.services.pynia.completion as completion_mod
+    def test_start_worker_uses_acp_worker(self, monkeypatch):
         from PyQt6.QtCore import QThread
+        from src.editors.monaco import inline_completion_service as mod
 
-        self._patch_provider(monkeypatch, active="openrouter", token_for=("openrouter",))
+        self._enable(monkeypatch, enabled=True)
         service = self._service()
-        service.set_python_namespace({"df": object()})
-
-        context_calls = []
-        monkeypatch.setattr(
-            service,
-            "_context_for",
-            lambda lang: context_calls.append(lang) or "ctx",
-        )
+        host = Mock()
+        service.set_tab_id("tab-a")
         monkeypatch.setattr(service, "_orphan_worker", lambda: None)
+        created = []
 
-        worker = MagicMock()
-        monkeypatch.setattr(completion_mod, "PyniaInlineCompletionWorker", lambda: worker)
+        class FakeWorker:
+            inline_complete = Mock()
+            error = Mock()
+            finished = Mock()
+            deleteLater = Mock()
+
+            def set_request(self, h, tab_id, req, db, ns):
+                created.append((h, tab_id, req))
+
+            def moveToThread(self, _t):
+                return None
+
+        monkeypatch.setattr(mod, "_AcpCompletionWorker", FakeWorker)
 
         class FakeThread(QThread):
             def start(self):
                 pass
 
-        monkeypatch.setattr(
-            "src.editors.monaco.inline_completion_service.QThread",
-            FakeThread,
-        )
-
+        monkeypatch.setattr(mod, "QThread", FakeThread)
         req = {
             "id": 1,
             "prefix": "SELECT ",
@@ -563,16 +516,23 @@ class TestInlineCompletionService:
             "line": 1,
             "column": 8,
         }
-        service._start_worker("openrouter", "test-model", req)
+        service._start_worker(host, req)
+        assert created and created[0][0] is host
+        assert created[0][1] == "tab-a"
 
-        assert context_calls == []
-        worker.set_request.assert_called_once()
-        kwargs = worker.set_request.call_args.kwargs
-        assert "python_namespace_objects" in kwargs
-        assert kwargs.get("context", "") == ""
+    def _service(self):
+        from src.editors.monaco.inline_completion_service import InlineCompletionService
+        return InlineCompletionService()
 
-
-
+    def _patch_provider(self, monkeypatch, *, enabled=True, active="openrouter",
+                        token_for=("openrouter",), model="openai/gpt-4.1-mini"):
+        from src.editors.monaco import inline_completion_service as mod
+        settings = Mock()
+        settings.autocomplete_enabled = enabled
+        settings.active_provider = active
+        settings.completion_model = lambda pid: model
+        monkeypatch.setattr(mod, "get_pynia_settings", lambda: settings)
+        monkeypatch.setattr(mod, "get_provider_secret", lambda pid: "tok" if pid in token_for else "")
 
 class TestEditorConfig:
     """Tests for editor configuration (Monaco only)."""

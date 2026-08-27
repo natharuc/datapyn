@@ -166,6 +166,9 @@ def parse_error_position(error_text: str, sql_code: str = "",
 # OutputPanel Widget
 # ---------------------------------------------------------------------------
 
+MAX_OUTPUT_ENTRIES = 200
+
+
 class OutputPanel(QWidget):
     """Interactive output/logs panel with structured log entries."""
 
@@ -291,9 +294,14 @@ class OutputPanel(QWidget):
     def add_entry(self, entry: LogEntry):
         """Add a structured LogEntry to the panel."""
         self._entries.append(entry)
+        overflow = len(self._entries) - MAX_OUTPUT_ENTRIES
+        if overflow > 0:
+            del self._entries[:overflow]
+            self._rebuild_list()
+            return
         if self._filter_errors_only and entry.level not in ("error", "warning"):
             return  # filtered out
-        self._add_item_for_entry(entry)
+        self._add_item_for_entry(entry, index=len(self._entries) - 1)
 
     # ------------------------------------------------------------------
     # Public API  (backward-compatible)
@@ -413,7 +421,7 @@ class OutputPanel(QWidget):
     # Item rendering
     # ------------------------------------------------------------------
 
-    def _add_item_for_entry(self, entry: LogEntry):
+    def _add_item_for_entry(self, entry: LogEntry, index: Optional[int] = None, *, scroll: bool = True):
         from src.design_system.tokens import get_colors
         colors = get_colors()
 
@@ -526,13 +534,17 @@ class OutputPanel(QWidget):
 
         # Create list item
         item = QListWidgetItem()
-        item.setData(Qt.ItemDataRole.UserRole, len(self._entries) - 1)  # index into _entries
+        item.setData(
+            Qt.ItemDataRole.UserRole,
+            len(self._entries) - 1 if index is None else index,
+        )
         item.setSizeHint(QSize(0, max(32, widget.sizeHint().height())))
         self._list.addItem(item)
         self._list.setItemWidget(item, widget)
 
         # Scroll to bottom
-        self._list.scrollToBottom()
+        if scroll:
+            self._list.scrollToBottom()
 
     # ------------------------------------------------------------------
     # Interactions
@@ -562,10 +574,11 @@ class OutputPanel(QWidget):
 
     def _rebuild_list(self):
         self._list.clear()
-        for entry in self._entries:
+        for i, entry in enumerate(self._entries):
             if self._filter_errors_only and entry.level not in ("error", "warning"):
                 continue
-            self._add_item_for_entry(entry)
+            self._add_item_for_entry(entry, index=i, scroll=False)
+        self._list.scrollToBottom()
 
     # ------------------------------------------------------------------
     # Helpers

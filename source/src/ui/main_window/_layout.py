@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import Qt, QTimer, QSettings
-from PyQt6.QtWidgets import QDockWidget, QStackedWidget, QTabBar
+from PyQt6.QtWidgets import QDockWidget, QSizePolicy, QStackedWidget, QTabBar
 
 from src.design_system.app_dialogs import confirm_yes_no, show_information
 
@@ -15,7 +15,7 @@ from src.ui.components.results_viewer import ResultsViewer
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.summarize_panel import SummarizePanel
-from src.ui.components.copilot_chat_panel import PyniaChatPanel
+from src.ui.components.pynia_chat_panel import PyniaChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.design_system.tokens import get_colors, SIDE_DOCK_DEFAULT_WIDTH, SIDE_DOCK_MAX_WIDTH, configure_side_dock
 from src.language import S
@@ -122,19 +122,18 @@ class LayoutMixin:
         configure_side_dock(self.variables_dock, self, self._variables_stack)
         self.variables_dock.setMinimumHeight(_BOTTOM_DOCK_MIN_HEIGHT)
 
-        # Copilot Chat Panel
-        agent_client = getattr(self, "_pynia_agent", None) or self._copilot_client
+        # Pynia Chat Panel
         self._copilot_chat_panel = PyniaChatPanel(
-            copilot_client=agent_client,
-            mcp_server=self._mcp_server,
+            host=getattr(self, "_pynia_host", None),
             theme_manager=self.theme_manager,
         )
-        self._copilot_chat_panel.set_agent_client(agent_client)
-        self._copilot_chat_panel.set_mcp_server(self._mcp_server)
         self._copilot_chat_panel.insert_code_requested.connect(self._on_insert_code_from_chat)
+        self._copilot_chat_panel.settings_requested.connect(
+            lambda: self.show_settings_dialog("pynia")
+        )
 
         self.copilot_dock = QDockWidget(S.dock.copilot, self)
-        self.copilot_dock.setObjectName("CopilotDock")
+        self.copilot_dock.setObjectName("PyniaDock")
         self.copilot_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.copilot_dock.setWidget(self._copilot_chat_panel)
         self.copilot_dock.setStyleSheet(dock_style_bottom)
@@ -142,6 +141,12 @@ class LayoutMixin:
         self.copilot_dock.setMinimumWidth(280)
         # Chat WebView needs a modest minimum height when the dock is horizontal.
         self.copilot_dock.setMinimumHeight(160)
+        # Pynia is a full chat dock — never inherit the compact side-dock 340px cap.
+        self.copilot_dock.setMaximumWidth(16777215)
+        self.copilot_dock.setMaximumHeight(16777215)
+        self._copilot_chat_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         from src.assets.pynia_branding import load_pynia_logo
 
         pynia_dock_icon = load_pynia_logo(16)
@@ -164,21 +169,9 @@ class LayoutMixin:
         if pynia_dock_icon:
             self.copilot_output_dock.setWindowIcon(pynia_dock_icon)
 
-        # Connect Copilot signals to output panel
+        # Wire Pynia activity log. Autocomplete uses ACP (no Copilot LSP).
         self._connect_copilot_to_output()
-
-        # Wire Pynia auth (chat) + inline autocomplete.
-        self._setup_copilot_auth_service()
         self._update_editors_pynia_client()
-
-        # Start the native Copilot LSP for inline completion (it authenticates
-        # off the existing gh login). Guarded so a hiccup can't block startup.
-        try:
-            if getattr(self, "_lsp_server_available", False) and not getattr(self, "_lsp_client", None):
-                self._setup_lsp_client()
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning("Copilot LSP autocomplete setup skipped: %s", exc)
 
         # Tabifica Results, Summarize e Output por padrao (fica em abas)
         self.tabifyDockWidget(self.results_dock, self.summarize_dock)
@@ -514,8 +507,11 @@ class LayoutMixin:
             getattr(self, "connections_dock", None),
             getattr(self, "object_explorer_dock", None),
             getattr(self, "variables_dock", None),
-            getattr(self, "copilot_dock", None),
         ]
+        copilot = getattr(self, "copilot_dock", None)
+        if copilot is not None:
+            copilot.setMaximumWidth(16777215)
+            copilot.setMaximumHeight(16777215)
         for dock in candidates:
             if dock is None or dock.isFloating() or not dock.isVisible():
                 continue

@@ -29,6 +29,8 @@ CI_IGNORED_MODULES = frozenset(
         "test_new_tab_connection.py",
         "test_session_restoration.py",
         "test_python_output_e2e.py",
+        # Live ACP CLIs need local auth; never run on GitHub Actions.
+        "test_pynia_acp_live.py",
     }
 )
 

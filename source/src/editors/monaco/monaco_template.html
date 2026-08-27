@@ -413,7 +413,7 @@
             if (!fullText) {
                 return aliases;
             }
-            const re = /\b(?:FROM|JOIN)\s+([\w.@#\[\]]+)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?/gi;
+            const re = /\b(?:FROM|JOIN|UPDATE|INTO)\s+([\w.@#\[\]]+)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?/gi;
             let match;
             while ((match = re.exec(fullText)) !== null) {
                 let tableRef = match[1] || '';
@@ -431,13 +431,47 @@
             return aliases;
         }
 
+        function lookupColumnsForTable(tableKey) {
+            const key = normalizeSchemaKey(tableKey);
+            if (!key) {
+                return [];
+            }
+            const direct = sqlSchemaIndex.columnsByKey[key];
+            if (direct && direct.length) {
+                return direct;
+            }
+            const dboKey = 'dbo.' + key;
+            const dboCols = sqlSchemaIndex.columnsByKey[dboKey];
+            if (dboCols && dboCols.length) {
+                return dboCols;
+            }
+            // Short aliases (c, p, t) must not suffix-match unrelated keys like "foo.c".
+            if (key.length < 3) {
+                return [];
+            }
+            const suffix = '.' + key;
+            let best = [];
+            Object.keys(sqlSchemaIndex.columnsByKey || {}).forEach(function(k) {
+                const cols = sqlSchemaIndex.columnsByKey[k] || [];
+                if (!cols.length) {
+                    return;
+                }
+                if (k === key || k.endsWith(suffix)) {
+                    if (k === dboKey || k.indexOf('.dbo.' + key) >= 0) {
+                        best = cols;
+                    } else if (!best.length) {
+                        best = cols;
+                    }
+                }
+            });
+            return best;
+        }
+
         function resolveQualifierColumns(qualifier, fullText) {
             const key = normalizeSchemaKey(qualifier);
             const aliasMap = extractSqlAliases(fullText || '');
             const tableKey = aliasMap[key] || key;
-            return sqlSchemaIndex.columnsByKey[tableKey]
-                || sqlSchemaIndex.columnsByKey[key]
-                || [];
+            return lookupColumnsForTable(tableKey);
         }
 
         function mergeCompletionItems(primary, secondary) {
@@ -454,19 +488,9 @@
             return merged;
         }
 
-        /** Offline (main) + schema index + alias map — always try every source. */
+        /** Columns for alias/table. only — never mix other FROM/JOIN tables. */
         function collectDotColumnItems(qualifier, fullText) {
-            const q = qualifier || '';
-            const qLower = q.toLowerCase();
-            const aliasMap = extractSqlAliases(fullText || '');
-            const bareKey = aliasMap[normalizeSchemaKey(q)] || normalizeSchemaKey(q);
-            return mergeCompletionItems(
-                resolveQualifierColumns(q, fullText),
-                mergeCompletionItems(
-                    columnsByTable[q] || columnsByTable[qLower] || [],
-                    columnsByTable[bareKey] || sqlSchemaIndex.columnsByKey[bareKey] || []
-                )
-            );
+            return resolveQualifierColumns(qualifier || '', fullText);
         }
 
         function isKnownSchemaName(name) {
@@ -639,16 +663,13 @@
             if (dotCtx && isKnownSchemaName(dotCtx.qualifier)) {
                 return collectSchemaTableItems(dotCtx.qualifier, dotCtx.columnPrefix);
             }
+            if (dotCtx) {
+                // alias.column — only that table's columns (never merge other JOIN sources)
+                return collectDotColumnItems(dotCtx.qualifier, fullText);
+            }
             let contextual = filterSqlCompletions(textBefore, null);
             contextual = filterSqlServerDefaultSchema(contextual, textBefore);
-            if (!dotCtx) {
-                return contextual;
-            }
-            const dotItems = filterSqlServerDefaultSchema(
-                collectDotColumnItems(dotCtx.qualifier, fullText),
-                textBefore
-            );
-            return mergeCompletionItems(dotItems, contextual);
+            return contextual;
         }
 
         function buildCopilotSuggestItems(range) {
@@ -1226,16 +1247,19 @@
             });
         }
 
-        function getSortText(c) {
-            if (c.category === 'block') return '00' + (c.blockName || c.label);
-            if (c.category === 'variable') return '0' + c.label;
-            if (c.category === 'column') return '0' + c.label;
-            if (c.category === 'routine') return '1' + c.label;
-            if (c.category === 'table') return '2' + c.label;
-            return '3' + c.label;
+        function getSortText(c, prefix) {
+            const label = String(c.label || '').toLowerCase();
+            const lower = String(prefix || '').toLowerCase().replace(/^@+/, '');
+            const matchRank = (!lower || label.startsWith(lower)) ? '0' : '1';
+            if (c.category === 'block') return matchRank + '00' + (c.blockName || c.label);
+            if (c.category === 'variable') return matchRank + '0' + c.label;
+            if (c.category === 'column') return matchRank + '0' + c.label;
+            if (c.category === 'routine') return matchRank + '1' + c.label;
+            if (c.category === 'table') return matchRank + '2' + c.label;
+            return matchRank + '3' + c.label;
         }
 
-        function toMonacoSuggestions(items, range) {
+        function toMonacoSuggestions(items, range, prefix) {
             return (items || []).map(c => {
                 const insertText = c.insertText != null ? c.insertText : c.label;
                 const suggestion = {
@@ -1244,7 +1268,7 @@
                     insertText: insertText,
                     detail: c.detail || '',
                     range: range,
-                    sortText: getSortText(c)
+                    sortText: getSortText(c, prefix)
                 };
                 // Multiline block snippets: keep full insert, filter by block name / first line
                 if (c.category === 'block') {
@@ -1609,11 +1633,11 @@
                             invokeSuggest
                         );
                         return {
-                            suggestions: toMonacoSuggestions(localItems, range)
+                            suggestions: toMonacoSuggestions(localItems, range, prefixFilter)
                         };
                     }
                     const localRaw = collectSqlLocalItems(textBeforeCursor, dotCtx, crossDbCtx, fullText);
-                    const wantsRemote = invokeSuggest || crossDbCtx || dotCtx || sqlContextWantsRemote(textBeforeCursor);
+                    const wantsRemote = invokeSuggest;
                     const localItems = filterPrefixMatches(
                         localRaw,
                         prefixFilter,
@@ -1624,7 +1648,8 @@
                     const buildSuggestions = function(items) {
                         return toMonacoSuggestions(
                             mergeCompletionItems(copilotItems, items),
-                            range
+                            range,
+                            prefixFilter
                         );
                     };
 
@@ -1763,6 +1788,24 @@
 
         let sqlSchemaDbType = '';
 
+        function columnsForTableKeys(columnsMap, fullKey, fallbackKey, name) {
+            const candidates = [fullKey, fallbackKey, name].filter(Boolean);
+            for (let i = 0; i < candidates.length; i++) {
+                const cols = columnsMap[candidates[i]];
+                if (cols && cols.length) {
+                    return cols;
+                }
+            }
+            const wanted = candidates.map(normalizeSchemaKey);
+            const keys = Object.keys(columnsMap || {});
+            for (let i = 0; i < keys.length; i++) {
+                if (wanted.indexOf(normalizeSchemaKey(keys[i])) >= 0 && columnsMap[keys[i]] && columnsMap[keys[i]].length) {
+                    return columnsMap[keys[i]];
+                }
+            }
+            return [];
+        }
+
         function registerSqlSchemaIndex(schema) {
             schema = schema || {};
             sqlSchemaDbType = String(schema.db_type || '').toLowerCase();
@@ -1805,20 +1848,16 @@
                 }
                 const tableDatabase = typeof table === 'object' ? (table.database || '') : '';
                 const tableCatalog = typeof table === 'object' ? (table.catalog || '') : '';
-                const cols = columnsMap[fullKey]
-                    || columnsMap[fallbackKey]
-                    || columnsMap[name]
-                    || [];
+                const cols = columnsForTableKeys(columnsMap, fullKey, fallbackKey, name);
                 const columnItems = cols.map(function(col) {
                     const colName = col.name || col;
                     const colType = col.display_type || col.type || '';
-                    const tableLabel = tableDatabase ? (tableDatabase + '..' + name) : (fallbackKey || name);
                     return {
                         label: colName,
                         kind: 'field',
                         insertText: colName,
-                        detail: colType ? (tableLabel + ' · ' + colType) : tableLabel,
-                        filterText: colName + ' ' + tableLabel,
+                        detail: colType ? (name + ' • ' + colType) : name,
+                        filterText: colName,
                         category: 'column',
                         table: name
                     };
@@ -1829,7 +1868,14 @@
                     normalizeSchemaKey(name)
                 ]);
                 keys.forEach(function(k) {
-                    if (k) {
+                    if (!k) {
+                        return;
+                    }
+                    const existing = sqlSchemaIndex.columnsByKey[k];
+                    if (existing && existing.length && !columnItems.length) {
+                        return;
+                    }
+                    if (!existing || !existing.length) {
                         sqlSchemaIndex.columnsByKey[k] = columnItems;
                     }
                 });
@@ -1879,6 +1925,42 @@
             );
         }
 
+        function collectScopedColumnItems(fullText) {
+            const aliasMap = extractSqlAliases(fullText || '');
+            const tableKeys = [];
+            const seenKeys = new Set();
+            Object.keys(aliasMap).forEach(function(aliasOrTable) {
+                const tableKey = aliasMap[aliasOrTable];
+                if (tableKey && !seenKeys.has(tableKey)) {
+                    seenKeys.add(tableKey);
+                    tableKeys.push(tableKey);
+                }
+            });
+            const items = [];
+            const seenCol = new Set();
+            tableKeys.forEach(function(tableKey) {
+                lookupColumnsForTable(tableKey).forEach(function(c) {
+                    const label = String(c.label || '');
+                    const dedupe = label.toLowerCase() + '|' + String(c.table || tableKey || '').toLowerCase();
+                    if (!label || seenCol.has(dedupe)) {
+                        return;
+                    }
+                    seenCol.add(dedupe);
+                    items.push({
+                        label: c.label,
+                        kind: 'field',
+                        insertText: c.insertText || c.label,
+                        detail: c.detail || '',
+                        filterText: label,
+                        category: 'column',
+                        table: c.table || tableKey
+                    });
+                });
+            });
+            // Statement has FROM/JOIN: never dump the rest of the schema.
+            return items;
+        }
+
         function getLocalSqlSuggestions(textBefore, dotCtx, fullText) {
             if (dotCtx) {
                 const cols = resolveQualifierColumns(dotCtx.qualifier, fullText || textBefore);
@@ -1901,26 +1983,12 @@
                     lastColumnKwPos = pos;
                 }
             });
-            if (lastTableKwPos > lastColumnKwPos && lastTableKwPos > upperText.length - 120) {
-                return filterDefaultSchemaTables(sqlSchemaIndex.tableItems).slice(0, 80);
+            if (lastTableKwPos > lastColumnKwPos) {
+                return filterDefaultSchemaTables(sqlSchemaIndex.tableItems);
             }
-            if (lastColumnKwPos > lastTableKwPos && lastColumnKwPos > upperText.length - 120) {
-                const allCols = [];
-                const seenCol = new Set();
-                Object.keys(sqlSchemaIndex.columnsByKey).forEach(function(k) {
-                    (sqlSchemaIndex.columnsByKey[k] || []).forEach(function(c) {
-                        const label = String(c.label || '');
-                        const detail = String(c.detail || c.table || k || '');
-                        const dedupe = label + '|' + detail;
-                        if (!label || seenCol.has(dedupe)) {
-                            return;
-                        }
-                        seenCol.add(dedupe);
-                        c.filterText = c.filterText || (label + ' ' + detail);
-                        allCols.push(c);
-                    });
-                });
-                return allCols.slice(0, 200);
+            if (lastColumnKwPos >= 0) {
+                const cols = collectScopedColumnItems(fullText || textBefore);
+                return cols.concat(keywordCompletions || []);
             }
             const fallback = keywordCompletions.length
                 ? keywordCompletions
@@ -1996,11 +2064,7 @@
                 return name.startsWith(lower) || label.includes(lower);
             }
             const label = String(item.label || '').toLowerCase();
-            const filterText = String(item.filterText || item.detail || '').toLowerCase();
             if (label.startsWith(lower)) {
-                return true;
-            }
-            if (filterText && (filterText.startsWith(lower) || filterText.includes(lower))) {
                 return true;
             }
             if (lower.length >= 2 && label.includes(lower)) {
@@ -2035,32 +2099,6 @@
                 }
             });
             return starts.concat(contains).slice(0, maxItems);
-        }
-
-        function sqlContextWantsRemote(textBefore) {
-            const upper = String(textBefore || '').toUpperCase();
-            const cleaned = upper.replace(/--[^\n]*/g, ' ').replace(/'[^']*'/g, "''");
-            const tableKeywords = ['FROM', 'JOIN', 'INTO', 'UPDATE', 'TABLE'];
-            const columnKeywords = ['SELECT', 'WHERE', 'ON', 'ORDER BY', 'GROUP BY', 'HAVING', 'SET', 'BY'];
-            let lastTableKwPos = -1;
-            let lastColumnKwPos = -1;
-            tableKeywords.forEach(function(kw) {
-                const pos = cleaned.lastIndexOf(kw);
-                if (pos > lastTableKwPos) {
-                    lastTableKwPos = pos;
-                }
-            });
-            columnKeywords.forEach(function(kw) {
-                const pos = cleaned.lastIndexOf(kw);
-                if (pos > lastColumnKwPos) {
-                    lastColumnKwPos = pos;
-                }
-            });
-            const nearCursor = cleaned.length - Math.max(lastTableKwPos, lastColumnKwPos) < 200;
-            if (!nearCursor) {
-                return false;
-            }
-            return lastColumnKwPos >= lastTableKwPos || lastTableKwPos >= 0;
         }
 
         function parsePythonDotContext(textBefore) {
@@ -2161,6 +2199,7 @@
                 'function': monaco.languages.CompletionItemKind.Function,
                 'variable': monaco.languages.CompletionItemKind.Variable,
                 'class': monaco.languages.CompletionItemKind.Class,
+                'table': monaco.languages.CompletionItemKind.Class,
                 'module': monaco.languages.CompletionItemKind.Module,
                 'property': monaco.languages.CompletionItemKind.Property,
                 'method': monaco.languages.CompletionItemKind.Method,

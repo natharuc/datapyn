@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSettings, QObject, QThread, pyqtSlot, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal, QSettings, QPoint
 from PyQt6.QtGui import QKeySequence, QColor, QBrush
 from src.core import ShortcutManager
 from src.core.parameter_settings import (
@@ -43,11 +43,9 @@ from src.core.parameter_settings import (
 )
 from src.core.theme_manager import ThemeManager
 from src.language import S, get_available_languages
-import weakref
 
 from src.design_system.frameless_dialog import widget_is_valid
 from src.design_system.tokens import get_colors, RADIUS
-from src.services.copilot.copilot_settings import get_copilot_settings
 from src.ui.components.settings_nav import SettingsNavNode, SettingsNavPanel, section_nav_label
 from src.ui.components.inputs import SearchInput
 from src.ui.components.toggle_switch import LabeledToggleSwitch
@@ -60,55 +58,11 @@ from src.services.notification_delivery_service import (
 )
 
 
-class _PyniaModelFetchWorker(QObject):
-    """Fetch the connector's available model ids off the UI thread."""
-
-    done = pyqtSignal(str, list)  # provider_id, [model_id, ...]
-
-    def __init__(self, provider_id: str):
-        super().__init__()
-        self._provider_id = provider_id
-
-    @pyqtSlot()
-    def run(self):
-        pid = self._provider_id
-        ids: list = []
-        try:
-            from src.services.pynia.settings import get_pynia_settings, get_provider_secret
-            from src.services.pynia.providers.token_worker import FALLBACK_MODELS
-            from src.services.copilot.copilot_models import normalize_models
-
-            token = get_provider_secret(pid)
-            settings = get_pynia_settings()
-            models = list(FALLBACK_MODELS.get(pid, []))
-            if token and pid in ("openai", "openrouter"):
-                from src.services.pynia.openai_agent_loop import fetch_openai_models
-                from src.services.pynia.providers.token_worker import OPENROUTER_HEADERS
-
-                extra = OPENROUTER_HEADERS if pid == "openrouter" else None
-                fetched = fetch_openai_models(
-                    settings.base_url(pid),
-                    token,
-                    extra_headers=extra,
-                    provider_id=pid,
-                )
-                if fetched:
-                    models = normalize_models(fetched) or models
-            ids = [m.get("id") for m in models if isinstance(m, dict) and m.get("id")]
-        except Exception:
-            ids = []
-        self.done.emit(pid, ids)
-
-
 class SettingsDialog(QDialog):
     """Settings dialog with tabs for General and Shortcuts"""
 
     shortcuts_changed = pyqtSignal()  # Signal emitted when shortcuts are saved
     pynia_connector_changed = pyqtSignal(str)  # Active Pynia connector saved (provider_id)
-    copilot_chat_login_requested = pyqtSignal()  # User wants to login to Chat
-    copilot_chat_logout_requested = pyqtSignal()  # User wants to logout from Chat
-    copilot_lsp_login_requested = pyqtSignal()  # User wants to login to LSP/Autocomplete
-    copilot_lsp_logout_requested = pyqtSignal()  # User wants to logout from LSP/Autocomplete
 
     def __init__(self, shortcut_manager: ShortcutManager, theme_manager: ThemeManager = None, parent=None, initial_tab: str = None):
         """
@@ -126,9 +80,6 @@ class SettingsDialog(QDialog):
         self._original_language = S.language_code
         self._initial_tab = initial_tab
         self._pending_notification_test = None
-        self._pynia_model_cache: dict[str, list] = {}
-        self._pynia_model_thread = None
-        self._pynia_model_worker = None
         self._notification_delivery_service = get_notification_delivery_service(self)
         self._section_widgets: dict[str, QWidget] = {}
         self._page_scroll_areas: dict[str, QScrollArea] = {}
@@ -585,7 +536,7 @@ class SettingsDialog(QDialog):
                 label=S.settings.tab_pynia if hasattr(S.settings, "tab_pynia") else "Pynia",
                 page_id="pynia",
                 is_category=True,
-                keywords=["pynia", "copilot", "ai", "openai", "anthropic", "autocomplete"],
+                keywords=["pynia", "agent", "ai", "claude", "cursor", "copilot", "codex", "autocomplete"],
             ),
             SettingsNavNode(
                 id="pynia.connectors",
@@ -595,7 +546,7 @@ class SettingsDialog(QDialog):
                 ),
                 page_id="pynia",
                 parent_id="pynia",
-                keywords=["connector", "token", "copilot", "github", "openai", "openrouter", "anthropic"],
+                keywords=["agent", "install", "login", "claude", "cursor", "copilot", "codex"],
             ),
             SettingsNavNode(
                 id="pynia.autocomplete",
@@ -927,505 +878,40 @@ class SettingsDialog(QDialog):
         self._add_settings_page("shortcuts", page)
         self._register_section("shortcuts", self.table)
 
-    def _setup_copilot_tab(self):
-        """Sets up the Copilot tab with Chat and Autocomplete settings."""
-        copilot_widget = QWidget()
-        copilot_layout = QVBoxLayout(copilot_widget)
-        copilot_layout.setSpacing(16)
-        copilot_layout.setContentsMargins(20, 20, 20, 20)
-
-        colors = get_colors()
-        self._copilot_settings = get_copilot_settings()
-
-        # --- Copilot Chat section ---
-        chat_group = self._make_group(
-            S.settings.section_copilot_chat if hasattr(S.settings, 'section_copilot_chat')
-            else "COPILOT CHAT",
-            colors,
-        )
-        chat_layout = QVBoxLayout(chat_group)
-        chat_layout.setSpacing(8)
-
-        chat_status_row = QHBoxLayout()
-        chat_status_row.setSpacing(8)
-        chat_status_row.addWidget(self._make_label(
-            S.settings.copilot_status if hasattr(S.settings, 'copilot_status') else "Status:",
-            colors,
-        ))
-
-        self._chat_status_value = QLabel()
-        self._chat_status_value.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;")
-        self._update_chat_status_label()
-        chat_status_row.addWidget(self._chat_status_value)
-        chat_status_row.addStretch()
-
-        self._chat_auth_btn = QPushButton()
-        self._chat_auth_btn.setFixedHeight(28)
-        self._chat_auth_btn.setFixedWidth(100)
-        self._update_chat_button_state()
-        self._chat_auth_btn.clicked.connect(self._on_chat_auth_clicked)
-        chat_status_row.addWidget(self._chat_auth_btn)
-        chat_layout.addLayout(chat_status_row)
-
-        chat_hint = QLabel(self._get_chat_auth_hint())
-        chat_hint.setStyleSheet(self._get_hint_style(colors))
-        chat_layout.addWidget(chat_hint)
-        self._chat_hint_label = chat_hint
-        copilot_layout.addWidget(chat_group)
-
-        # --- Autocomplete section ---
-        lsp_group = self._make_group(
-            S.settings.section_copilot_autocomplete if hasattr(S.settings, 'section_copilot_autocomplete')
-            else "AUTOCOMPLETE",
-            colors,
-        )
-        lsp_layout = QVBoxLayout(lsp_group)
-        lsp_layout.setSpacing(8)
-
-        lsp_status_row = QHBoxLayout()
-        lsp_status_row.setSpacing(8)
-        lsp_status_row.addWidget(self._make_label(
-            S.settings.copilot_status if hasattr(S.settings, 'copilot_status') else "Status:",
-            colors,
-        ))
-
-        self._lsp_status_value = QLabel()
-        self._lsp_status_value.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;")
-        self._update_lsp_status_label()
-        lsp_status_row.addWidget(self._lsp_status_value)
-        lsp_status_row.addStretch()
-
-        self._lsp_auth_btn = QPushButton()
-        self._lsp_auth_btn.setFixedHeight(28)
-        self._lsp_auth_btn.setFixedWidth(100)
-        self._update_lsp_button_state()
-        self._lsp_auth_btn.clicked.connect(self._on_lsp_auth_clicked)
-        lsp_status_row.addWidget(self._lsp_auth_btn)
-        lsp_layout.addLayout(lsp_status_row)
-
-        lsp_hint = QLabel(self._get_lsp_auth_hint())
-        lsp_hint.setStyleSheet(self._get_hint_style(colors))
-        lsp_layout.addWidget(lsp_hint)
-        self._lsp_hint_label = lsp_hint
-        copilot_layout.addWidget(lsp_group)
-
-        copilot_layout.addStretch()
-
-        tab_title = S.settings.tab_copilot if hasattr(S.settings, 'tab_copilot') else "Copilot"
-        self.tabs.addTab(copilot_widget, tab_title)
-
-        # Chat auth runs through PyniaAuthService; LSP stays on CopilotAuthService.
-        from src.services.copilot import get_copilot_auth_service
-        from src.services.pynia import get_pynia_auth_service
-
-        pynia_auth = get_pynia_auth_service()
-        pynia_auth.chat_authenticated.connect(self._on_auth_service_chat_updated)
-        pynia_auth.chat_logged_out.connect(self._on_auth_service_chat_updated)
-        pynia_auth.chat_auth_failed.connect(self._on_auth_service_chat_updated)
-        copilot_auth = get_copilot_auth_service()
-        copilot_auth.lsp_authenticated.connect(self._on_auth_service_lsp_updated)
-        copilot_auth.lsp_logged_out.connect(self._on_auth_service_lsp_updated)
-
     def _setup_pynia_tab(self):
-        """Pynia connectors: OpenAI, Open Router, Claude API tokens."""
-        from src.services.pynia import PROVIDERS, get_pynia_settings, get_provider_secret, set_provider_secret
-        from src.services.pynia.types import ProviderId
+        """ACP agents: install, login, test, default agent, autocomplete."""
+        from src.ui.dialogs.pynia_settings_page import PyniaSettingsPage
 
-        colors = get_colors()
-        input_style = self._get_input_style(colors)
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 4, 4, 12)
-        layout.setSpacing(14)
-
-        from src.assets.pynia_branding import load_pynia_logo
-
-        header_row = QHBoxLayout()
-        header_row.setSpacing(10)
-        logo_label = QLabel()
-        logo_label.setFixedSize(40, 40)
-        logo_icon = load_pynia_logo(40)
-        if logo_icon:
-            logo_label.setPixmap(logo_icon.pixmap(40, 40))
-        header_row.addWidget(logo_label)
-        title_label = QLabel(
-            S.pynia.title if hasattr(S, "pynia") else "Pynia"
-        )
-        title_label.setStyleSheet(
-            f"color: {colors.text_primary}; font-size: 18px; font-weight: 600;"
-        )
-        header_row.addWidget(title_label, 1)
-        layout.addLayout(header_row)
-
-        intro = QLabel(
-            S.pynia.settings_intro if hasattr(S, "pynia") else "Configure Pynia AI connectors."
-        )
-        intro.setWordWrap(True)
-        intro.setStyleSheet(self._get_info_box_style(colors))
-        layout.addWidget(intro)
-
-        self._pynia_settings = get_pynia_settings()
-
-        conn_card, form = self._make_section_card(
-            S.pynia.section_connectors if hasattr(S, "pynia") else "CONNECTORS",
-            colors,
-        )
-        form.addWidget(self._make_label(
-            S.pynia.title if hasattr(S, "pynia") else "Connector", colors
-        ))
-        self._pynia_provider_combo = QComboBox()
-        self._pynia_provider_combo.setStyleSheet(input_style)
-        labels = {
-            "copilot": getattr(S.pynia, "provider_copilot", "GitHub Copilot") if hasattr(S, "pynia") else "GitHub Copilot",
-            "openai": S.pynia.provider_openai,
-            "openrouter": S.pynia.provider_openrouter,
-            "anthropic": S.pynia.provider_anthropic,
-        }
-        for pid in ("copilot", "openai", "openrouter", "anthropic"):
-            self._pynia_provider_combo.addItem(labels.get(pid, pid), pid)
-        form.addWidget(self._pynia_provider_combo)
-
-        # --- API-token connectors (OpenAI / OpenRouter / Anthropic) ---
-        self._pynia_token_section = QWidget()
-        token_layout = QVBoxLayout(self._pynia_token_section)
-        token_layout.setContentsMargins(0, 0, 0, 0)
-        token_layout.setSpacing(6)
-        token_layout.addWidget(self._make_label(
-            S.pynia.label_api_token if hasattr(S, "pynia") else "API token", colors
-        ))
-        self._pynia_token_edit = QLineEdit()
-        self._pynia_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._pynia_token_edit.setPlaceholderText(S.pynia.label_api_token if hasattr(S, "pynia") else "API token")
-        self._pynia_token_edit.setStyleSheet(input_style)
-        token_layout.addWidget(self._pynia_token_edit)
-        token_layout.addWidget(self._make_label(
-            S.pynia.label_base_url if hasattr(S, "pynia") else "API base URL (optional)", colors
-        ))
-        self._pynia_base_url_edit = QLineEdit()
-        self._pynia_base_url_edit.setStyleSheet(input_style)
-        token_layout.addWidget(self._pynia_base_url_edit)
-        btn_row = QHBoxLayout()
-        self._pynia_save_btn = QPushButton(S.pynia.btn_save_token if hasattr(S, "pynia") else "Save")
-        self._pynia_verify_btn = QPushButton(S.pynia.btn_verify if hasattr(S, "pynia") else "Verify")
-        self._pynia_save_btn.clicked.connect(self._on_pynia_save_token)
-        self._pynia_verify_btn.clicked.connect(self._on_pynia_verify_token)
-        btn_row.addWidget(self._pynia_save_btn)
-        btn_row.addWidget(self._pynia_verify_btn)
-        btn_row.addStretch()
-        token_layout.addSpacing(4)
-        token_layout.addLayout(btn_row)
-
-        # --- GitHub Copilot connector (GitHub sign-in, no API token) ---
-        self._copilot_settings = get_copilot_settings()
-        self._pynia_copilot_section = QWidget()
-        copilot_layout = QVBoxLayout(self._pynia_copilot_section)
-        copilot_layout.setContentsMargins(0, 0, 0, 0)
-        copilot_layout.setSpacing(6)
-        status_row = QHBoxLayout()
-        status_row.setSpacing(8)
-        status_row.addWidget(self._make_label(
-            S.settings.copilot_status if hasattr(S.settings, "copilot_status") else "Status:", colors
-        ))
-        self._chat_status_value = QLabel()
-        self._chat_status_value.setStyleSheet(
-            f"color: {colors.text_primary}; font-size: 11px; font-weight: normal;"
-        )
-        status_row.addWidget(self._chat_status_value)
-        status_row.addStretch()
-        self._chat_auth_btn = QPushButton()
-        self._chat_auth_btn.setFixedHeight(28)
-        self._chat_auth_btn.setMinimumWidth(100)
-        self._chat_auth_btn.clicked.connect(self._on_chat_auth_clicked)
-        status_row.addWidget(self._chat_auth_btn)
-        copilot_layout.addLayout(status_row)
-        self._chat_hint_label = QLabel(self._get_chat_auth_hint())
-        self._chat_hint_label.setWordWrap(True)
-        self._chat_hint_label.setStyleSheet(self._get_hint_style(colors))
-        copilot_layout.addWidget(self._chat_hint_label)
-        self._update_chat_status_label()
-        self._update_chat_button_state()
-
-        # One page shown at a time — a stack avoids the overlap that
-        # show/hide of sibling widgets produced when switching providers.
-        self._pynia_connector_stack = QStackedWidget()
-        self._pynia_connector_stack.addWidget(self._pynia_token_section)    # index 0
-        self._pynia_connector_stack.addWidget(self._pynia_copilot_section)  # index 1
-        form.addWidget(self._pynia_connector_stack)
-
-        self._pynia_status_label = QLabel("")
-        self._pynia_status_label.setStyleSheet(self._get_hint_style(colors))
-        form.addWidget(self._pynia_status_label)
-
-        layout.addWidget(conn_card)
-        self._register_section("pynia.connectors", conn_card)
-
-        # Reflect the active connector + live Copilot auth updates.
-        active_index = self._pynia_provider_combo.findData(self._pynia_settings.active_provider)
-        if active_index >= 0:
-            self._pynia_provider_combo.setCurrentIndex(active_index)
-        try:
-            # The live Copilot login runs through the Pynia auth service (it
-            # wraps the agent), so listen there to refresh the status row.
-            from src.services.pynia import get_pynia_auth_service
-
-            pynia_auth = get_pynia_auth_service()
-            pynia_auth.chat_authenticated.connect(self._on_auth_service_chat_updated)
-            pynia_auth.chat_logged_out.connect(self._on_auth_service_chat_updated)
-            pynia_auth.chat_auth_failed.connect(self._on_auth_service_chat_updated)
-        except Exception:
-            pass  # Auth service not available — live status updates disabled.
-
-        auto_card, auto_layout = self._make_section_card(
-            S.pynia.section_autocomplete if hasattr(S, "pynia") else "INLINE AUTOCOMPLETE",
-            colors,
-        )
-
-        self._pynia_autocomplete_cb = LabeledToggleSwitch(
-            S.pynia.autocomplete_enable
-            if hasattr(S, "pynia")
-            else "Enable AI inline autocomplete in code blocks",
-            checked=self._pynia_settings.autocomplete_enabled,
-        )
-        auto_layout.addWidget(self._pynia_autocomplete_cb)
-
-        auto_hint = QLabel(
-            S.pynia.autocomplete_hint if hasattr(S, "pynia") else ""
-        )
-        auto_hint.setWordWrap(True)
-        auto_hint.setStyleSheet(self._get_hint_style(colors))
-        auto_layout.addWidget(auto_hint)
-
-        # Autocomplete model picker (editable — blank = use the chat model).
-        model_row = QHBoxLayout()
-        model_label = QLabel(
-            getattr(S.pynia, "autocomplete_model_label", "Autocomplete model:")
-            if hasattr(S, "pynia")
-            else "Autocomplete model:"
-        )
-        model_label.setStyleSheet(self._get_hint_style(colors))
-        self._pynia_completion_model_combo = QComboBox()
-        self._pynia_completion_model_combo.setEditable(True)
-        self._pynia_completion_model_combo.setMinimumWidth(240)
-        self._pynia_completion_model_combo.setStyleSheet(input_style)
-        model_row.addWidget(model_label)
-        model_row.addWidget(self._pynia_completion_model_combo, 1)
-        auto_layout.addLayout(model_row)
-
-        model_hint = QLabel(
-            getattr(
-                S.pynia,
-                "autocomplete_model_hint",
-                "Leave blank to use your chat model. Pick a smaller/faster model for snappier suggestions.",
-            )
-            if hasattr(S, "pynia")
-            else "Leave blank to use your chat model."
-        )
-        model_hint.setWordWrap(True)
-        model_hint.setStyleSheet(self._get_hint_style(colors))
-        auto_layout.addWidget(model_hint)
-
-        self._pynia_autocomplete_status = QLabel("")
-        self._pynia_autocomplete_status.setStyleSheet(self._get_hint_style(colors))
-        auto_layout.addWidget(self._pynia_autocomplete_status)
-        self._refresh_pynia_autocomplete_status()
-
-        layout.addWidget(auto_card)
-        self._register_section("pynia.autocomplete", auto_card)
-        layout.addStretch()
-
-        self._pynia_provider_combo.currentIndexChanged.connect(self._load_pynia_connector_fields)
-        self._pynia_provider_combo.currentIndexChanged.connect(self._refresh_pynia_autocomplete_status)
-        self._load_pynia_connector_fields()
-        self._refresh_pynia_autocomplete_status()
-
+        page = PyniaSettingsPage(self)
+        page.default_agent_changed.connect(self.pynia_connector_changed.emit)
+        self._pynia_page = page
+        self._pynia_snapshot = page.snapshot()
         self._add_settings_page("pynia", page)
-        self._pynia_snapshot = self._capture_pynia_snapshot()
 
     def _capture_pynia_snapshot(self) -> dict:
-        """Snapshot Pynia form values to detect whether live connector refresh is needed."""
-        if not hasattr(self, "_pynia_provider_combo"):
-            return {}
-        pid = self._current_pynia_connector_id()
-        snapshot = {
-            "provider": pid,
-            "autocomplete": self._pynia_autocomplete_cb.isChecked(),
-            "completion_model": self._pynia_completion_model_combo.currentText().strip(),
-        }
-        if pid != "copilot" and hasattr(self, "_pynia_token_edit"):
-            snapshot["token"] = self._pynia_token_edit.text().strip()
-            snapshot["base_url"] = self._pynia_base_url_edit.text().strip()
-        return snapshot
+        if hasattr(self, "_pynia_page"):
+            return self._pynia_page.snapshot()
+        return {}
 
     def _pynia_settings_changed_since_open(self) -> bool:
         if not hasattr(self, "_pynia_snapshot"):
             return False
         return self._capture_pynia_snapshot() != self._pynia_snapshot
 
-    def _refresh_pynia_autocomplete_status(self) -> None:
-        from src.services.pynia.settings import get_provider_secret
-
-        if not hasattr(self, "_pynia_autocomplete_status"):
-            return
-        pid = self._current_pynia_connector_id() if hasattr(self, "_pynia_provider_combo") else "openai"
-        if pid == "copilot":
-            settings = getattr(self, "_copilot_settings", None)
-            ready = bool(
-                settings
-                and settings.chat_was_authenticated
-                and not settings.chat_user_logged_out
-            )
-            self._pynia_autocomplete_status.setText(
-                (S.pynia.autocomplete_ready.format(provider="copilot")
-                 if hasattr(S, "pynia") and hasattr(S.pynia, "autocomplete_ready")
-                 else "Autocomplete will use GitHub Copilot when enabled.")
-                if ready
-                else "Sign in to GitHub Copilot above to enable AI autocomplete."
-            )
-            return
-        if get_provider_secret(pid):
-            text = (
-                S.pynia.autocomplete_ready.format(provider=pid)
-                if hasattr(S, "pynia") and hasattr(S.pynia, "autocomplete_ready")
-                else f"Autocomplete will use the {pid} connector when enabled."
-            )
-        else:
-            text = (
-                S.pynia.autocomplete_need_token
-                if hasattr(S, "pynia")
-                else "Save an API token above to enable AI autocomplete."
-            )
-        self._pynia_autocomplete_status.setText(text)
+    def _persist_pynia_connector_settings(self, *, emit_live_update: bool = True) -> bool:
+        if hasattr(self, "_pynia_page"):
+            self._pynia_page.persist()
+            if emit_live_update:
+                agent_id = self._pynia_page.snapshot().get("default_agent") or ""
+                self.pynia_connector_changed.emit(agent_id)
+        return True
 
     def _current_pynia_connector_id(self) -> str:
-        return self._pynia_provider_combo.currentData() or "openai"
-
-    def _load_pynia_connector_fields(self):
-        from src.services.pynia import get_provider_secret
-
-        pid = self._current_pynia_connector_id()
-        is_copilot = pid == "copilot"
-
-        # Copilot authenticates via GitHub (no API token), so swap the token
-        # fields for the sign-in UI instead of showing an irrelevant token box.
-        if hasattr(self, "_pynia_connector_stack"):
-            self._pynia_connector_stack.setCurrentWidget(
-                self._pynia_copilot_section if is_copilot else self._pynia_token_section
-            )
-
-        if is_copilot:
-            self._update_chat_status_label()
-            self._update_chat_button_state()
-            self._chat_hint_label.setText(self._get_chat_auth_hint())
-        else:
-            self._pynia_token_edit.setText(get_provider_secret(pid))
-            self._pynia_base_url_edit.setText(self._pynia_settings.base_url(pid))
-        self._pynia_status_label.setText("")
-        self._load_pynia_completion_model()
-        self._fetch_pynia_models(pid)
-
-    def _load_pynia_completion_model(self):
-        """Populate the autocomplete model picker for the current connector.
-
-        Order: fast suggestions first (easy to pick), then the chat model, then
-        every model fetched from the connector. Editable so a model that isn't
-        listed can still be typed.
-        """
-        if not hasattr(self, "_pynia_completion_model_combo"):
-            return
-        from src.services.pynia.completion import COMPLETION_MODEL_SUGGESTIONS
-
-        pid = self._current_pynia_connector_id()
-        combo = self._pynia_completion_model_combo
-
-        ordered: list[str] = []
-        seen: set[str] = set()
-
-        def _add(model_id: str) -> None:
-            mid = (model_id or "").strip()
-            if mid and mid not in seen:
-                seen.add(mid)
-                ordered.append(mid)
-
-        for mid in COMPLETION_MODEL_SUGGESTIONS.get(pid, []):
-            _add(mid)
-        _add(self._pynia_settings.selected_model(pid))
-        for mid in self._pynia_model_cache.get(pid, []):
-            _add(mid)
-
-        current = self._pynia_completion_model_combo.currentText().strip()
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(ordered)
-        combo.setEditText(current or self._pynia_settings.completion_model_override(pid))
-        line_edit = combo.lineEdit()
-        if line_edit is not None:
-            placeholder = (
-                getattr(S.pynia, "autocomplete_model_placeholder", "Auto (use chat model)")
-                if hasattr(S, "pynia")
-                else "Auto (use chat model)"
-            )
-            line_edit.setPlaceholderText(placeholder)
-        combo.blockSignals(False)
-
-    def _fetch_pynia_models(self, pid: str):
-        """Fetch the connector's real model list in the background (best-effort)."""
-        from src.services.pynia import get_provider_secret
-
-        if pid in self._pynia_model_cache:
-            return
-        if not get_provider_secret(pid):
-            return  # no token → nothing to fetch; suggestions are shown instead
-        if self._pynia_model_thread is not None:
-            return  # one fetch at a time is enough for a settings dialog
-
-        dialog_ref = weakref.ref(self)
-        main_window = self.window()
-        thread = QThread()
-        thread.setObjectName("PyniaModelFetch")
-        worker = _PyniaModelFetchWorker(pid)
-        worker.moveToThread(thread)
-
-        def _on_models_fetched(provider_id: str, model_ids: list) -> None:
-            dialog = dialog_ref()
-            if dialog is not None and widget_is_valid(dialog):
-                dialog._on_pynia_models_fetched(provider_id, model_ids)
-
-        def _clear_thread_ref() -> None:
-            dialog = dialog_ref()
-            if dialog is not None and widget_is_valid(dialog):
-                dialog._clear_pynia_model_thread()
-
-        thread.started.connect(worker.run)
-        worker.done.connect(_on_models_fetched)
-        worker.done.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(_clear_thread_ref)
-        adopted = False
-        if main_window is not None and hasattr(main_window, "_adopt_background_thread"):
-            adopted = main_window._adopt_background_thread(thread, worker)
-        if not adopted:
-            thread.finished.connect(thread.deleteLater)
-        self._pynia_model_thread = thread
-        self._pynia_model_worker = worker
-        thread.start()
-
-    def _clear_pynia_model_thread(self):
-        self._pynia_model_thread = None
-        self._pynia_model_worker = None
-
-    def _stop_pynia_model_thread(self) -> None:
-        thread = self._pynia_model_thread
-        worker = self._pynia_model_worker
-        if thread is None:
-            return
-        self._pynia_model_thread = None
-        self._pynia_model_worker = None
-        from src.utils.qt_threading import detach_qthread
-
-        detach_qthread(thread, worker)
+        if hasattr(self, "_pynia_page"):
+            return self._pynia_page.snapshot().get("default_agent") or ""
+        return ""
 
     def closeEvent(self, event):
-        self._stop_pynia_model_thread()
         try:
             self._notification_delivery_service.delivery_succeeded.disconnect(
                 self._on_notification_delivery_success
@@ -1435,312 +921,10 @@ class SettingsDialog(QDialog):
             )
         except (TypeError, RuntimeError):
             pass
+        page = getattr(self, "_pynia_page", None)
+        if page is not None and hasattr(page, "cleanup"):
+            page.cleanup()
         super().closeEvent(event)
-
-    def _on_pynia_models_fetched(self, pid: str, model_ids: list):
-        self._pynia_model_cache[pid] = list(model_ids or [])
-        # Repopulate only if the user is still looking at this connector.
-        if hasattr(self, "_pynia_provider_combo") and self._current_pynia_connector_id() == pid:
-            self._load_pynia_completion_model()
-
-    def _save_pynia_completion_model(self):
-        if not hasattr(self, "_pynia_completion_model_combo"):
-            return
-        pid = self._current_pynia_connector_id()
-        self._pynia_settings.set_completion_model(
-            pid, self._pynia_completion_model_combo.currentText().strip()
-        )
-
-    def _persist_pynia_connector_settings(self, *, emit_live_update: bool = True) -> bool:
-        """Save the active API connector token/URL from the form (no-op for Copilot)."""
-        from src.services.pynia import set_provider_secret
-        from src.services.pynia.types import PROVIDERS
-
-        if not hasattr(self, "_pynia_provider_combo"):
-            return False
-        pid = self._current_pynia_connector_id()
-        info = PROVIDERS.get(pid)
-        if not info or info.auth_kind != "api_token":
-            if emit_live_update and pid == "copilot":
-                self._pynia_settings.set_active_provider("copilot")
-                self.pynia_connector_changed.emit("copilot")
-            return False
-
-        token = self._pynia_token_edit.text().strip()
-        set_provider_secret(pid, token)
-        self._pynia_settings.set_base_url(pid, self._pynia_base_url_edit.text().strip())
-        self._save_pynia_completion_model()
-        if token:
-            self._pynia_settings.on_token_authenticated(pid, pid)
-        else:
-            self._pynia_settings.on_logout(pid)
-        self._pynia_settings.set_active_provider(pid)
-        self._pynia_model_cache.pop(pid, None)
-        if emit_live_update:
-            self._fetch_pynia_models(pid)
-            from PyQt6.QtCore import QTimer
-
-            QTimer.singleShot(0, lambda p=pid: self.pynia_connector_changed.emit(p))
-        return bool(token)
-
-    def _on_pynia_save_token(self):
-        saved = self._persist_pynia_connector_settings(emit_live_update=True)
-        from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
-
-        reset_ai_autocomplete_circuit_breaker()
-        if saved:
-            self._pynia_status_label.setText(S.pynia.verify_ok if hasattr(S, "pynia") else "Saved.")
-        self._refresh_pynia_autocomplete_status()
-
-    def _on_pynia_verify_token(self):
-        from PyQt6.QtCore import QThread
-        from src.services.pynia.providers.token_worker import TokenAgentWorker
-        from src.services.pynia.types import ProviderId
-
-        pid: ProviderId = self._current_pynia_connector_id()
-        if not self._persist_pynia_connector_settings(emit_live_update=False):
-            show_danger(
-                self,
-                getattr(S.pynia, "verify_failed_title", "Verification failed"),
-                getattr(S.pynia, "token_required_message", "API token required."),
-            )
-            return
-
-        verifying = getattr(S.pynia, "verifying", "Verifying…") if hasattr(S, "pynia") else "Verifying…"
-        self._pynia_status_label.setText(verifying)
-        self._pynia_verify_btn.setEnabled(False)
-
-        thread = QThread()
-        thread.setObjectName("PyniaVerify")
-        worker = TokenAgentWorker(pid)
-        worker.moveToThread(thread)
-
-        dialog_ref = weakref.ref(self)
-
-        def _ok() -> None:
-            dialog = dialog_ref()
-            if dialog is None or not widget_is_valid(dialog):
-                return
-            dialog._pynia_verify_btn.setEnabled(True)
-            template = S.pynia.verify_ok if hasattr(S, "pynia") else "OK"
-            dialog._pynia_status_label.setText(template)
-            title = (
-                getattr(S.pynia, "verify_ok_title", None)
-                or getattr(S.pynia, "verify_ok", "Connection verified")
-            )
-            detail = getattr(
-                S.pynia,
-                "verify_ok_detail",
-                "Your API token is valid and the connector is ready to use.",
-            )
-            show_success(dialog, title, detail)
-            dialog.pynia_connector_changed.emit(pid)
-
-        def _fail(msg: str) -> None:
-            dialog = dialog_ref()
-            if dialog is None or not widget_is_valid(dialog):
-                return
-            dialog._pynia_verify_btn.setEnabled(True)
-            template = S.pynia.verify_failed if hasattr(S, "pynia") else "Failed: {error}"
-            dialog._pynia_status_label.setText(template.format(error=msg))
-            show_danger(
-                dialog,
-                getattr(S.pynia, "verify_failed_title", "Verification failed"),
-                template.format(error=msg),
-            )
-
-        thread.started.connect(worker.run_verify)
-        worker.auth_ok.connect(_ok)
-        worker.error.connect(_fail)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        main_window = self.window()
-        adopted = False
-        if main_window is not None and hasattr(main_window, "_adopt_background_thread"):
-            adopted = main_window._adopt_background_thread(thread, worker)
-        if not adopted:
-            thread.finished.connect(thread.deleteLater)
-        thread.start()
-
-    def _update_chat_status_label(self):
-        """Update the Chat status label based on current state."""
-        settings = self._copilot_settings
-        if settings.chat_user_logged_out:
-            text = S.settings.copilot_logged_out if hasattr(S.settings, 'copilot_logged_out') else "Logged out by user"
-        elif settings.chat_was_authenticated:
-            username = settings.chat_username or "GitHub User"
-            template = S.settings.copilot_authenticated_as if hasattr(S.settings, 'copilot_authenticated_as') else "Authenticated as {user}"
-            text = template.format(user=username)
-        else:
-            text = S.settings.copilot_never_authenticated if hasattr(S.settings, 'copilot_never_authenticated') else "Never authenticated"
-        self._chat_status_value.setText(text)
-
-    def _update_lsp_status_label(self):
-        """Update the LSP status label based on current state."""
-        settings = self._copilot_settings
-        if settings.lsp_user_logged_out:
-            text = S.settings.copilot_logged_out if hasattr(S.settings, 'copilot_logged_out') else "Logged out by user"
-        elif settings.lsp_was_authenticated:
-            username = settings.lsp_username or "GitHub User"
-            template = S.settings.copilot_authenticated_as if hasattr(S.settings, 'copilot_authenticated_as') else "Authenticated as {user}"
-            text = template.format(user=username)
-        else:
-            text = S.settings.copilot_never_authenticated if hasattr(S.settings, 'copilot_never_authenticated') else "Never authenticated"
-        self._lsp_status_value.setText(text)
-
-    def _on_auth_service_chat_updated(self, *args):
-        """Handle chat auth state change from auth service."""
-        self._update_chat_status_label()
-        self._update_chat_button_state()
-        self._chat_hint_label.setText(self._get_chat_auth_hint())
-
-    def _on_auth_service_lsp_updated(self, *args):
-        """Handle LSP auth state change from auth service."""
-        self._update_lsp_status_label()
-        self._update_lsp_button_state()
-        self._lsp_hint_label.setText(self._get_lsp_auth_hint())
-
-    def _update_chat_button_state(self):
-        """Update Chat button text based on auth state."""
-        colors = get_colors()
-        settings = self._copilot_settings
-        if settings.chat_was_authenticated and not settings.chat_user_logged_out:
-            text = S.settings.copilot_logout if hasattr(S.settings, 'copilot_logout') else "Sign Out"
-            self._chat_auth_btn.setText(text)
-            self._chat_auth_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.bg_elevated};
-                    color: {colors.text_secondary};
-                    border: 1px solid {colors.border_default};
-                    border-radius: 4px;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background-color: {colors.danger};
-                    color: white;
-                }}
-            """)
-        else:
-            text = S.settings.copilot_login if hasattr(S.settings, 'copilot_login') else "Sign In"
-            self._chat_auth_btn.setText(text)
-            self._chat_auth_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.interactive_primary};
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background-color: {colors.interactive_primary}dd;
-                }}
-            """)
-
-    def _update_lsp_button_state(self):
-        """Update LSP button text based on auth state."""
-        colors = get_colors()
-        settings = self._copilot_settings
-        if settings.lsp_was_authenticated and not settings.lsp_user_logged_out:
-            text = S.settings.copilot_logout if hasattr(S.settings, 'copilot_logout') else "Sign Out"
-            self._lsp_auth_btn.setText(text)
-            self._lsp_auth_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.bg_elevated};
-                    color: {colors.text_secondary};
-                    border: 1px solid {colors.border_default};
-                    border-radius: 4px;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background-color: {colors.danger};
-                    color: white;
-                }}
-            """)
-        else:
-            text = S.settings.copilot_login if hasattr(S.settings, 'copilot_login') else "Sign In"
-            self._lsp_auth_btn.setText(text)
-            self._lsp_auth_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {colors.interactive_primary};
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background-color: {colors.interactive_primary}dd;
-                }}
-            """)
-
-    def _get_chat_auth_hint(self) -> str:
-        """Get hint text for Chat auto-auth status."""
-        settings = self._copilot_settings
-        hint_template = S.settings.copilot_auto_connect_hint if hasattr(S.settings, 'copilot_auto_connect_hint') else "Only if you have authenticated before"
-        if settings.should_auto_auth_chat():
-            return f"Auto-connect: ON - {hint_template}"
-        elif settings.chat_user_logged_out:
-            return "Auto-connect: OFF - User logged out"
-        else:
-            return "Auto-connect: OFF - Never authenticated"
-
-    def _get_lsp_auth_hint(self) -> str:
-        """Get hint text for LSP auto-auth status."""
-        settings = self._copilot_settings
-        hint_template = S.settings.copilot_auto_connect_hint if hasattr(S.settings, 'copilot_auto_connect_hint') else "Only if you have authenticated before"
-        if settings.should_auto_auth_lsp():
-            return f"Auto-connect: ON - {hint_template}"
-        elif settings.lsp_user_logged_out:
-            return "Auto-connect: OFF - User logged out"
-        else:
-            return "Auto-connect: OFF - Never authenticated"
-
-    def _on_chat_auth_clicked(self):
-        """Handle the GitHub Copilot sign in/out button.
-
-        Routes through the Pynia auth service (which wraps the live agent) and
-        makes Copilot the active connector first — otherwise login takes the
-        API-token path and fails with "API token not configured".
-        """
-        from src.services.pynia import get_pynia_auth_service
-
-        auth_service = get_pynia_auth_service()
-        settings = self._copilot_settings
-        signed_in = settings.chat_was_authenticated and not settings.chat_user_logged_out
-
-        # Switch the live agent to the Copilot connector for both login & logout.
-        self._pynia_settings.set_active_provider("copilot")
-        self.pynia_connector_changed.emit("copilot")
-
-        if signed_in:
-            auth_service.logout_chat()
-            self.copilot_chat_logout_requested.emit()  # Notify MainWindow
-        else:
-            if auth_service.login_chat():
-                self.copilot_chat_login_requested.emit()  # Notify MainWindow
-            # else: login blocked - auth already in progress
-
-        self._update_chat_status_label()
-        self._update_chat_button_state()
-        self._chat_hint_label.setText(self._get_chat_auth_hint())
-
-    def _on_lsp_auth_clicked(self):
-        """Handle LSP login/logout button click."""
-        from src.services.copilot import get_copilot_auth_service
-        auth_service = get_copilot_auth_service()
-        
-        if auth_service.is_lsp_authenticated or (auth_service.lsp_was_authenticated and not auth_service.lsp_user_logged_out):
-            # Logout
-            auth_service.logout_lsp()
-            self.copilot_lsp_logout_requested.emit()  # Notify MainWindow
-        else:
-            # Login
-            if auth_service.login_lsp():
-                self.copilot_lsp_login_requested.emit()  # Notify MainWindow
-            # else: login blocked - auth already in progress
-        
-        self._update_lsp_status_label()
-        self._update_lsp_button_state()
-        self._lsp_hint_label.setText(self._get_lsp_auth_hint())
 
     def _setup_notifications_tab(self):
         """Sets up the Notifications page with section cards (General tab pattern)."""
@@ -2867,18 +2051,11 @@ class SettingsDialog(QDialog):
         settings.setValue("notifications/error_message", self.notif_error_msg.text())
         self._persist_notification_transport_settings()
 
-        if hasattr(self, "_pynia_autocomplete_cb"):
-            from src.services.pynia.settings import get_pynia_settings
-
-            get_pynia_settings().set_autocomplete_enabled(
-                self._pynia_autocomplete_cb.isChecked()
-            )
-            self._save_pynia_completion_model()
+        if hasattr(self, "_pynia_page"):
+            self._pynia_page.persist()
             from src.services.ai_autocomplete_circuit_breaker import reset_ai_autocomplete_circuit_breaker
 
             reset_ai_autocomplete_circuit_breaker()
-            # Persist token/settings only — live connector switch runs after dialog closes.
-            self._persist_pynia_connector_settings(emit_live_update=False)
 
         # Surface conflicting shortcuts before persisting (e.g. duplicates
         # carried over from an old config). Let the user go back and fix them.
@@ -2906,8 +2083,8 @@ class SettingsDialog(QDialog):
 
         needs_restart = selected_lang != self._original_language
         pynia_pid = ""
-        if hasattr(self, "_pynia_provider_combo"):
-            pynia_pid = self._current_pynia_connector_id()
+        if hasattr(self, "_pynia_page"):
+            pynia_pid = self._pynia_page.snapshot().get("default_agent") or ""
         parent = self.parent()
 
         self.shortcuts_changed.emit()

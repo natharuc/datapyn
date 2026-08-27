@@ -1077,19 +1077,21 @@ class CodeBlock(QFrame):
         return "txt"
     
     def set_pynia_client(self, client):
-        """Set Pynia agent client for AI inline autocomplete (Monaco only)."""
+        """Set Pynia ACP host for AI inline autocomplete (Monaco only)."""
         if hasattr(self, "_completion_service"):
             self._completion_service.set_pynia_client(client)
+
+    def set_pynia_tab_id(self, tab_id: str):
+        if hasattr(self, "_completion_service"):
+            self._completion_service.set_tab_id(tab_id)
 
     def set_copilot_client(self, client):
         """Backward-compatible alias for set_pynia_client."""
         self.set_pynia_client(client)
 
     def set_lsp_client(self, client):
-        """Attach GitHub Copilot LSP for ghost-text completions."""
-        if hasattr(self, "_completion_service"):
-            self._completion_service.set_lsp_client(client)
-            self._update_document_info()
+        """No-op: Copilot LSP was replaced by ACP ghost-text."""
+        return
 
     def _cancel_noisy_completions(self) -> None:
         """Drop in-flight ghost-text while the user is still typing."""

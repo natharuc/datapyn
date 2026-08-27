@@ -62,6 +62,20 @@ from src.language import init_language
 init_language("en-US")
 
 
+def pytest_ignore_collect(collection_path, config):
+    """Live ACP CLI tests stay off the default and CI runs."""
+    name = getattr(collection_path, "name", "")
+    if name != "test_pynia_acp_live.py":
+        return None
+    args = [str(arg).replace("\\", "/") for arg in (config.args or [])]
+    if any("test_pynia_acp_live" in arg for arg in args):
+        return False
+    markexpr = str(getattr(config.option, "markexpr", "") or "")
+    if "integration" in markexpr and "not integration" not in markexpr:
+        return False
+    return True
+
+
 # ==================== ISOLAMENTO DO WORKSPACE PARA TESTES ====================
 
 

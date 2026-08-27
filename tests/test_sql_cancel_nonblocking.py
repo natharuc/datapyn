@@ -626,3 +626,81 @@ def test_lock_not_released_while_thread_alive_after_cancel(qtbot, monkeypatch):
     assert connector._abandoned is True
     force_release.assert_not_called()
     finalize.assert_called_once()
+
+
+def test_fetch_rows_chunked_raises_on_cancel_and_drops_rows():
+    from src.database.database_connector import fetch_rows_chunked
+
+    cursor = MagicMock()
+    cancelled = {"v": False}
+    calls = {"n": 0}
+
+    def fetchmany(_size):
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            cancelled["v"] = True
+        return [(calls["n"],)] * 10
+
+    cursor.fetchmany.side_effect = fetchmany
+
+    with pytest.raises(OperationCancelled):
+        fetch_rows_chunked(cursor, chunk_size=10, is_cancelled=lambda: cancelled["v"])
+
+
+def test_cursor_to_dataframe_stops_mid_fetch_on_cancel():
+    connector = DatabaseConnector()
+    connector._cancelled = False
+    cursor = MagicMock()
+    cursor.description = [("id",)]
+    calls = {"n": 0}
+
+    def fetchmany(_size):
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            connector._cancelled = True
+        return [(calls["n"],)] * 50
+
+    cursor.fetchmany.side_effect = fetchmany
+
+    with pytest.raises(OperationCancelled):
+        connector._cursor_to_dataframe(cursor)
+
+
+def test_mssql_dataframe_fetch_stops_on_cancel():
+    connector = DatabaseConnector()
+    connector.db_type = "sqlserver"
+    connector.engine = MagicMock()
+    connector.connection_params = {"database": ""}
+    connector._sqlserver_supports_use = MagicMock(return_value=False)
+
+    raw_conn = MagicMock()
+    cursor = MagicMock()
+    cursor.description = [("id",)]
+    cursor.nextset.return_value = False
+    calls = {"n": 0}
+
+    def fetchmany(_size):
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            connector._cancelled = True
+        return [(calls["n"],)] * 20
+
+    cursor.fetchmany.side_effect = fetchmany
+    raw_conn.cursor.return_value = cursor
+    connector.engine.raw_connection.return_value = raw_conn
+
+    with pytest.raises(OperationCancelled):
+        connector._execute_mssql_batches(["SELECT * FROM venda"])
+
+
+def test_session_sql_worker_drops_dataframe_when_connector_cancelled():
+    connector = MagicMock()
+    connector.execute_query.return_value = MagicMock(name="huge_df")
+    connector._cancelled = True
+    worker = SessionSqlWorker(connector, "SELECT * FROM venda")
+
+    received = []
+    worker.finished.connect(lambda df, err: received.append((df, err)))
+    worker.run()
+
+    assert received == [(None, "__CANCELLED__")]

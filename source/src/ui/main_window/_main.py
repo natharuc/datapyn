@@ -9,7 +9,7 @@ MainWindow is composed of multiple mixins:
 - SessionsMixin: Session lifecycle, tab events, persistence
 - LayoutMixin: Dockable panels, dock layout
 - UISetupMixin: Menus, toolbar, shortcuts, settings, updates
-- CopilotMixin: LSP setup, authentication, status
+- CopilotMixin: Pynia ACP output wiring
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ from src.ui.components.statusbar import MainStatusBar
 from src.ui.components.output_panel import OutputPanel
 from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.object_explorer_panel import ObjectExplorerPanel
-from src.ui.components.copilot_chat_panel import PyniaChatPanel
+from src.ui.components.pynia_chat_panel import PyniaChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
 from src.ui.docking import DockingMainWindow
 from src.design_system.tokens import get_colors, DARK_COLORS, RADIUS
@@ -96,9 +96,8 @@ from src.design_system.stylesheet import (
 )
 
 from src.services import AutoUpdateService
-from src.services.copilot import MCPServer, CopilotClient
-from src.services.pynia import PyniaAgentClient
-from src.services.copilot.copilot_settings import get_copilot_settings
+from src.services.copilot import MCPServer
+from src.services.pynia import PyniaAcpHost
 from src.language import S
 
 from src.ui.main_window._workers import SqlWorker, PythonWorker, _read_file_with_encoding_fallback
@@ -175,18 +174,16 @@ class MainWindow(
         self._schema_service.columns_loaded.connect(self._on_columns_loaded)
         self._schema_service.databases_loaded.connect(self._on_databases_loaded)
 
-        # Pynia agent (multi-provider chat) + Copilot backend (LSP / Copilot connector)
+        # Pynia ACP host + DataPyn MCP tools
         self._mcp_server = MCPServer() if MCPServer else None
-        self._copilot_client = CopilotClient() if CopilotClient else None
-        self._pynia_agent = (
-            PyniaAgentClient(copilot_client=self._copilot_client) if PyniaAgentClient else None
+        self._pynia_host = PyniaAcpHost(
+            mcp_registry=self._mcp_server.tool_registry if self._mcp_server else None,
         )
-        
-        # LSP server manager for fast inline completions
-        from src.services.copilot import CopilotServerManager, is_copilot_server_available
-        self._copilot_server_manager = CopilotServerManager()
+        self._pynia_agent = self._pynia_host
+        self._copilot_client = None
         self._lsp_client = None
-        self._lsp_server_available = is_copilot_server_available()  # Check now, setup later
+        self._lsp_server_available = False
+        self._copilot_server_manager = None
 
         # Intelligent file management system
         self._original_file_path = None  # Original opened file path (sql/py/dpw)
@@ -268,6 +265,9 @@ class MainWindow(
         # Initialize MCP server with main window reference
         if self._mcp_server:
             self._mcp_server.set_main_window(self)
+        if getattr(self, "_pynia_host", None):
+            self._pynia_host.start()
+            self._pynia_host.messages_changed.connect(self._on_pynia_state_changed)
 
 
     # === DELEGATION PROPERTIES FOR CURRENT SESSION ===
@@ -579,24 +579,13 @@ class MainWindow(
         if hasattr(self, "_copilot_chat_panel") and self._copilot_chat_panel:
             self._copilot_chat_panel.cleanup()
 
-        # Cleanup Copilot auth/LSP before widgets and connections disappear
-        if hasattr(self, "_copilot_auth_service") and self._copilot_auth_service:
-            self._copilot_auth_service.cleanup()
-
-        if hasattr(self, "_lsp_client") and self._lsp_client:
-            self._lsp_client.cleanup()
-            self._lsp_client = None
-
         self.session_manager.cleanup_all()
 
         # Close connections
         self.connection_manager.close_all()
 
-        # Cleanup Copilot client
-        if hasattr(self, "_pynia_agent") and self._pynia_agent:
-            self._pynia_agent.cleanup()
-        elif hasattr(self, "_copilot_client") and self._copilot_client:
-            self._copilot_client.cleanup()
+        if hasattr(self, "_pynia_host") and self._pynia_host:
+            self._pynia_host.shutdown()
 
         # Cleanup docking manager timers
         if hasattr(self, "docking_manager"):

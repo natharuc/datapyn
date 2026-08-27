@@ -50,9 +50,12 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_inspect",
             "description": (
-                "Inspect one target. Defaults to the user's focused block if block_name omitted. "
-                "kind=block: structure|code|result; kind=variable; kind=reference; kind=selection. "
-                "Skip inspect on focused block if code is already in context."
+                "Inspect one target inside this DataPyn tab (in-process, not HTTP). "
+                "Defaults to the focused block. kind=block detail defaults to result "
+                "(the Results grid) when omitted; use structure|code for the editor. "
+                "kind=variable; kind=reference; kind=selection. "
+                "Skip inspect on focused block if code is already in context. "
+                "For grid questions, prefer execution_state.active_result already in the prompt."
             ),
             "parameters": {
                 "kind": {
@@ -61,10 +64,7 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
                 },
                 "detail": {
                     "type": "string",
-                    "description": (
-                        "For block: structure | code | result | execution. "
-                        "For variable: value | dataframe."
-                    ),
+                    "description": "For block: structure | code | result | execution. Default for kind=block is result (the Results grid).",
                     "optional": True,
                 },
                 **_BLOCK_REF,
@@ -103,8 +103,12 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_query",
             "description": (
-                "Run SQL or Python silently (no new visible block). "
-                "Use for exploration before editing. language=sql|python."
+                "Run SQL or Python silently on THIS tab (no new visible block). "
+                "SQL uses the tab's live connection — do not connect/open first "
+                "when is_connected is true. "
+                "Python: use print() for output; session variables (df, wb) already exist. "
+                "For multi-line scripts that should stay in the editor, use datapyn_run or datapyn_edit. "
+                "Prefer this over bash/curl when exploring data. language=sql|python."
             ),
             "parameters": {
                 "language": {
@@ -125,7 +129,8 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_run",
             "description": (
-                "Execute blocks visibly. mode=block: run existing (defaults to focused); "
+                "Execute blocks in the IDE. Call this instead of telling the user to press F5. "
+                "mode=block: run existing (defaults to focused); "
                 "write: with block_name updates that block (or names a new one), "
                 "without block_name creates a new block — then runs it; "
                 "all: run every block in tab."
@@ -151,7 +156,8 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_edit",
             "description": (
-                "Modify blocks. Defaults to focused block if block_name omitted. "
+                "Modify blocks in the editor. Call this instead of pasting code in chat. "
+                "Defaults to focused block if block_name omitted. "
                 "operation=lines: edit ONLY start_line..end_line (use for partial changes); "
                 "replace: swap the ENTIRE block code; undo: restore the block to before "
                 "the last Pynia edit; also selection|rename|delete|language."
@@ -208,7 +214,8 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_blocks",
             "description": (
-                "Manage tabs/blocks. operation=create (no run), focus, tab (new session)."
+                "Create or focus tabs and blocks. Call this instead of asking the user "
+                "to add a block by hand. operation=create (no run), focus, tab (new session)."
             ),
             "parameters": {
                 "operation": {
@@ -229,13 +236,16 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
             "name": "datapyn_database",
             "description": (
                 "Database connections and metadata. "
-                "operation=connect|list|schema|tables|describe|sample|create|open."
+                "operation=list|schema|tables|describe|sample|create. "
+                "connect/open ONLY if is_connected is false in the tab JSON — "
+                "never reconnect a tab that already has a live session."
             ),
             "parameters": {
                 "operation": {
                     "type": "string",
                     "description": (
-                        "connect | list | schema | tables | describe | sample | create | open."
+                        "list | schema | tables | describe | sample | create. "
+                        "connect | open only when the tab is not connected."
                     ),
                 },
                 "connection_name": {"type": "string", "optional": True},
@@ -253,8 +263,13 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_chart",
             "description": (
-                "Charts from results. operation=list|create|edit|get|delete|export. "
-                "Not for HTML blocks — edit those with datapyn_edit."
+                "Create or edit a chart from the Results grid NOW. "
+                "Call this as soon as the user asks for a graph/chart/gráfico. "
+                "Use execution_state.active_result and chart_sources from context; "
+                "do not ask graph vs block vs visualization. "
+                "operation=list|create|edit|get|delete|export. "
+                "Not for HTML blocks — those use datapyn_edit. "
+                "Never use curl or localhost HTTP to make charts."
             ),
             "parameters": {
                 "operation": {
@@ -282,40 +297,6 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
                 "path": {
                     "type": "string",
                     "description": "Export file path.",
-                    "optional": True,
-                },
-            },
-        },
-        {
-            "name": "datapyn_subagent",
-            "description": (
-                "Spawn parallel explore subagents (read-only) for heavy discovery. "
-                "Each runs on a background worker with its own mini tool loop. "
-                "Use for schema + multiple blocks at once. Max 3 per step. "
-                "Provide instruction (required) or tasks[] with task_id + instruction."
-            ),
-            "parameters": {
-                "instruction": {
-                    "type": "string",
-                    "description": "What this subagent should find out (read-only).",
-                    "optional": True,
-                },
-                "context": {
-                    "type": "string",
-                    "description": "Optional extra context for the subagent.",
-                    "optional": True,
-                },
-                "task_id": {
-                    "type": "string",
-                    "description": "Optional id for correlating results.",
-                    "optional": True,
-                },
-                "tasks": {
-                    "type": "array",
-                    "description": (
-                        "Parallel jobs: [{task_id, instruction, context?}, ...]. "
-                        "Prefer this when you need 2+ explores at once."
-                    ),
                     "optional": True,
                 },
             },

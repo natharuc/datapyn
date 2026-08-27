@@ -13,6 +13,13 @@ def test_build_sql_completions_includes_tables_columns_and_keywords():
     assert "vendas" in labels
     assert "id" in labels
     assert "SELECT" in labels
+    column = next(item for item in completions if item["label"] == "id")
+    assert column["kind"] == "field"
+    assert "int" in column["detail"]
+    assert column["category"] == "column"
+    table = next(item for item in completions if item["label"] == "vendas")
+    assert table["kind"] == "class"
+    assert table["category"] == "table"
 
 
 def test_build_python_completions_includes_namespace_and_keywords():

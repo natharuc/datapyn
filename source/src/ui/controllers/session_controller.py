@@ -129,15 +129,11 @@ class SessionController(QObject):
         """Creates widget for a session and adds it to a tab"""
         widget = SessionWidget(session, theme_manager=self.theme_manager)
         
-        if hasattr(self._main, "_pynia_agent") and self._main._pynia_agent:
-            widget.editor.set_pynia_client(self._main._pynia_agent)
-        elif hasattr(self._main, "_copilot_client") and self._main._copilot_client:
-            widget.editor.set_pynia_client(self._main._copilot_client)
-
-        # Native Copilot LSP completion (preferred over the prompt path).
-        lsp_client = getattr(self._main, "_lsp_client", None)
-        if lsp_client and hasattr(widget.editor, "set_lsp_client"):
-            widget.editor.set_lsp_client(lsp_client)
+        host = getattr(self._main, "_pynia_host", None) or getattr(self._main, "_pynia_agent", None)
+        if host and hasattr(widget.editor, "set_pynia_client"):
+            widget.editor.set_pynia_client(host)
+            if hasattr(widget.editor, "set_pynia_tab_id"):
+                widget.editor.set_pynia_tab_id(session.session_id)
 
         # Create panels for session
         self._main._create_session_panels(session.session_id)
