@@ -208,6 +208,7 @@ class PyniaChatPanel(QWidget):
             "pick_agent": getattr(pynia, "pick_agent", "Choose an agent to start this tab's chat."),
             "open_settings": getattr(pynia, "open_settings", "Settings"),
             "thinking": getattr(pynia, "thinking", "Thinking"),
+            "thinking_complete": getattr(pynia, "thinking_complete", "Thought for {seconds}s"),
             "permission_title": getattr(pynia, "permission_title", "Allow this action?"),
             "session_recreated": getattr(pynia, "session_recreated", "Agent session was recreated. History is visible but the agent may not remember it."),
             "llm": getattr(pynia, "llm", "LLM"),
@@ -215,6 +216,14 @@ class PyniaChatPanel(QWidget):
             "search_models": getattr(pynia, "search_models", getattr(pynia, "model_search_placeholder", "Search models")),
             "no_models_found": getattr(pynia, "no_models_found", "No models found"),
             "working": getattr(pynia, "working", "Pynia is working…"),
+            "activity_working": getattr(pynia, "activity_working", "Working…"),
+            "tool_using_one": getattr(pynia, "tool_using_one", "Using 1 tool…"),
+            "tool_using_many": getattr(pynia, "tool_using_many", "Using {count} tools…"),
+            "tool_used_one": getattr(pynia, "tool_used_one", "Used 1 tool"),
+            "tool_used_many": getattr(pynia, "tool_used_many", "Used {count} tools"),
+            "tool_running": getattr(pynia, "tool_running", "running…"),
+            "tool_ok": getattr(pynia, "tool_ok", "ok"),
+            "tool_error": getattr(pynia, "tool_error", "error"),
             "composer_placeholder": getattr(pynia, "composer_placeholder", "Ask Pynia…"),
             "settings": getattr(pynia, "settings_short", "Settings"),
             "allow_once": getattr(pynia, "allow_once", "Allow once"),
@@ -403,53 +412,11 @@ class PyniaChatPanel(QWidget):
     def _on_tool(self, tab_id: str, payload: dict) -> None:
         if tab_id != self._tab_id:
             return
-        kind = str(payload.get("sessionUpdate") or "")
-        nested = payload.get("toolCall") if isinstance(payload.get("toolCall"), dict) else {}
-        title = str(payload.get("title") or nested.get("title") or "").strip()
-        status = str(payload.get("status") or nested.get("status") or "").lower()
-        is_error = bool(
-            payload.get("isError")
-            or nested.get("isError")
-            or status in {"failed", "error"}
-        )
-        error_text = ""
-        if is_error:
-            content = payload.get("content") or nested.get("content") or []
-            if isinstance(content, str):
-                error_text = content
-            elif isinstance(content, list):
-                bits = []
-                for item in content:
-                    if isinstance(item, dict) and item.get("text"):
-                        bits.append(str(item.get("text")))
-                    elif isinstance(item, str):
-                        bits.append(item)
-                error_text = "\n".join(bits).strip()
-            if not error_text:
-                error_text = str(payload.get("error") or nested.get("error") or "")
-        if kind == "tool_call_update":
-            if is_error and (title or error_text):
-                self._js(
-                    f"addTool({json.dumps({'title': title or 'tool', 'error': error_text})})"
-                )
+        from src.services.pynia.acp.activity import format_activity_tool
+
+        card = format_activity_tool(payload)
+        if not card:
             return
-        hidden = {
-            "",
-            "tool_call",
-            "tool_call_update",
-            "tool_search_tool",
-            "execute",
-            "read",
-            "edit",
-            "search",
-            "fetch",
-            "other",
-        }
-        if not title or title.lower() in hidden:
-            return
-        card = {"title": title}
-        if is_error and error_text:
-            card["error"] = error_text
         self._js(f"addTool({json.dumps(card)})")
 
     def _on_permission(self, tab_id: str, rpc_id: object, params: dict) -> None:

@@ -103,7 +103,11 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "datapyn_query",
             "description": (
-                "Run SQL or Python silently (no new visible block). "
+                "Run SQL or Python silently on THIS tab (no new visible block). "
+                "SQL uses the tab's live connection — do not connect/open first "
+                "when is_connected is true. "
+                "Python: use print() for output; session variables (df, wb) already exist. "
+                "For multi-line scripts that should stay in the editor, use datapyn_run or datapyn_edit. "
                 "Prefer this over bash/curl when exploring data. language=sql|python."
             ),
             "parameters": {
@@ -232,13 +236,16 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
             "name": "datapyn_database",
             "description": (
                 "Database connections and metadata. "
-                "operation=connect|list|schema|tables|describe|sample|create|open."
+                "operation=list|schema|tables|describe|sample|create. "
+                "connect/open ONLY if is_connected is false in the tab JSON — "
+                "never reconnect a tab that already has a live session."
             ),
             "parameters": {
                 "operation": {
                     "type": "string",
                     "description": (
-                        "connect | list | schema | tables | describe | sample | create | open."
+                        "list | schema | tables | describe | sample | create. "
+                        "connect | open only when the tab is not connected."
                     ),
                 },
                 "connection_name": {"type": "string", "optional": True},

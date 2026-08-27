@@ -23,6 +23,7 @@ from .catalog import (
     which_command,
 )
 from .client import AcpClient
+from .service import AcpSessionService
 
 logger = logging.getLogger(__name__)
 
@@ -172,10 +173,11 @@ def handshake_test(spec: AgentSpec, cwd: Optional[str] = None, timeout: float = 
     client = AcpClient(spec.id)
     try:
         client.start(command, args, cwd=work)
-        init = client.initialize(client_name="DataPyn", client_version="test")
-        session_id = client.session_new(work, mcp_servers=[])
+        svc = AcpSessionService()
+        init = svc.handshake(client, auth_method_id=spec.auth_method_id, version="test")
+        session_id, _cfg = svc.open_session(client, work, mcp_servers=[])
         try:
-            client.session_prompt(session_id, "Reply with the single word: pong", timeout=timeout)
+            svc.prompt(client, session_id, "Reply with the single word: pong", timeout=timeout)
         except Exception as exc:
             logger.info("Handshake prompt skipped: %s", exc)
         client.session_close(session_id)

@@ -362,30 +362,127 @@
         if (el) el.remove();
     }
 
-    function showLoading() {
-        if ($("pyniaLoading")) {
-            scrollToBottom();
-            return;
+    function fmtLabel(template, vars) {
+        let text = template || "";
+        Object.keys(vars || {}).forEach((key) => {
+            text = text.split("{" + key + "}").join(String(vars[key]));
+        });
+        return text;
+    }
+
+    function activityTitle(el, done) {
+        const tools = el.querySelectorAll(".activity-tool");
+        const n = tools.length;
+        const thinking = (el.querySelector(".activity-thinking") || {}).textContent || "";
+        if (!done) {
+            if (n === 1) return labels.tool_using_one || "Using 1 tool…";
+            if (n > 1) return fmtLabel(labels.tool_using_many || "Using {count} tools…", { count: n });
+            if (thinking) return (labels.thinking || "Thinking") + "…";
+            return labels.activity_working || labels.working || "Working…";
         }
-        hidePicker();
+        const started = Number(el.dataset.started || 0);
+        const seconds = started ? Math.max(1, Math.round((Date.now() - started) / 1000)) : 0;
+        if (thinking) return fmtLabel(labels.thinking_complete || "Thought for {seconds}s", { seconds: seconds });
+        if (n === 1) return labels.tool_used_one || "Used 1 tool";
+        if (n > 1) return fmtLabel(labels.tool_used_many || "Used {count} tools", { count: n });
+        return labels.activity_working || labels.working || "Working…";
+    }
+
+    function refreshActivityTitle(el, done) {
+        if (!el) return;
+        const title = el.querySelector(".activity-title");
+        if (title) title.textContent = activityTitle(el, !!done);
+    }
+
+    function fillActivity(el, activity) {
+        const thinkingEl = el.querySelector(".activity-thinking");
+        const thinking = (activity && activity.thinking) || "";
+        if (thinkingEl) {
+            thinkingEl.textContent = thinking;
+            thinkingEl.hidden = !thinking;
+        }
+        const list = el.querySelector(".activity-tools");
+        if (list) {
+            list.replaceChildren();
+            ((activity && activity.tools) || []).forEach((item) => upsertToolRow(list, item));
+        }
+    }
+
+    function buildActivityEl(live) {
         const el = document.createElement("div");
-        el.id = "pyniaLoading";
-        el.className = "pynia-loading";
-        if (logoSrc) {
-            const img = document.createElement("img");
-            img.alt = "Pynia";
-            img.src = logoSrc;
-            el.appendChild(img);
-        } else {
-            const mark = document.createElement("span");
-            mark.className = "pynia-loading-mark";
-            el.appendChild(mark);
+        el.className = "activity-block expanded";
+        if (live) {
+            el.id = "activityLive";
+            el.classList.add("active");
+            el.dataset.started = String(Date.now());
         }
-        const label = document.createElement("span");
-        label.textContent = labels.working || "Pynia is working…";
-        el.appendChild(label);
-        $("messages").appendChild(el);
+        const header = document.createElement("button");
+        header.type = "button";
+        header.className = "activity-header";
+        header.innerHTML = '<span class="activity-chevron">▶</span>'
+            + '<span class="activity-spark">✧</span>'
+            + '<span class="activity-title"></span>';
+        header.addEventListener("click", () => el.classList.toggle("expanded"));
+        const body = document.createElement("div");
+        body.className = "activity-body";
+        body.innerHTML = '<div class="activity-thinking" hidden></div><ul class="activity-tools"></ul>';
+        el.append(header, body);
+        return el;
+    }
+
+    function ensureActivity() {
+        hideLoading();
+        hidePicker();
+        let el = $("activityLive");
+        if (el) {
+            scrollToBottom();
+            return el;
+        }
+        el = buildActivityEl(true);
+        const box = $("messages");
+        const stream = box.querySelector(".bubble.assistant[data-stream='1']");
+        if (stream) box.insertBefore(el, stream);
+        else box.appendChild(el);
+        refreshActivityTitle(el, false);
         scrollToBottom();
+        return el;
+    }
+
+    function finishActivity() {
+        const el = $("activityLive");
+        if (!el) return;
+        el.classList.remove("active", "expanded");
+        el.removeAttribute("id");
+        refreshActivityTitle(el, true);
+    }
+
+    function upsertToolRow(list, payload) {
+        const data = payload || {};
+        const id = String(data.id || data.title || ("t" + Date.now()));
+        let row = null;
+        list.querySelectorAll(".activity-tool").forEach((item) => {
+            if (item.dataset.toolId === id) row = item;
+        });
+        if (!row) {
+            row = document.createElement("li");
+            row.className = "activity-tool";
+            row.dataset.toolId = id;
+            row.innerHTML = '<span class="activity-tool-status"></span><span class="activity-tool-name"></span>';
+            list.appendChild(row);
+        }
+        const status = data.status || (data.error ? "error" : "running");
+        row.dataset.status = status;
+        row.classList.toggle("error", status === "error");
+        const mark = status === "completed" ? "✓" : (status === "error" ? "✕" : "●");
+        row.querySelector(".activity-tool-status").textContent = mark;
+        const nameEl = row.querySelector(".activity-tool-name");
+        if (data.title) nameEl.textContent = data.title;
+        else if (!nameEl.textContent) nameEl.textContent = "tool";
+        if (data.error) row.title = data.error;
+    }
+
+    function showLoading() {
+        ensureActivity();
     }
 
     function setMessages(messages) {
@@ -395,11 +492,19 @@
             if (msg.role === "user") {
                 const el = addMessage("user", "");
                 fillUserBubble(el, msg.content || "", msg.attachments || []);
-            } else if (msg.error) {
-                const el = addMessage("assistant", "", "error");
-                el.textContent = msg.content || "";
-            } else if ((msg.content || "").trim()) {
-                addMessage("assistant", renderMarkdown(msg.content || ""));
+            } else {
+                if (msg.activity && (msg.activity.thinking || (msg.activity.tools || []).length)) {
+                    const block = buildActivityEl(false);
+                    fillActivity(block, msg.activity);
+                    $("messages").appendChild(block);
+                    refreshActivityTitle(block, true);
+                }
+                if (msg.error) {
+                    const el = addMessage("assistant", "", "error");
+                    el.textContent = msg.content || "";
+                } else if ((msg.content || "").trim()) {
+                    addMessage("assistant", renderMarkdown(msg.content || ""));
+                }
             }
         });
         if ((messages || []).length > 0 && agentReady) {
@@ -410,8 +515,17 @@
     function appendChunk(text) {
         hidePicker();
         hideLoading();
-        let last = $("messages").lastElementChild;
-        if (!last || !last.classList.contains("assistant") || last.dataset.stream !== "1") {
+        const box = $("messages");
+        const nodes = Array.from(box.children);
+        let last = null;
+        for (let i = nodes.length - 1; i >= 0; i -= 1) {
+            const el = nodes[i];
+            if (el.classList.contains("assistant") && el.dataset.stream === "1") {
+                last = el;
+                break;
+            }
+        }
+        if (!last) {
             last = addMessage("assistant", "");
             last.dataset.stream = "1";
             last.dataset.raw = "";
@@ -421,19 +535,21 @@
         scrollToBottom();
     }
 
-    function setThinking(_text) {
-        if ($("messages").querySelector(".bubble.assistant[data-stream='1']")) return;
-        showLoading();
+    function setThinking(text) {
+        const el = ensureActivity();
+        const thinkingEl = el.querySelector(".activity-thinking");
+        if (thinkingEl && text) {
+            thinkingEl.hidden = false;
+            thinkingEl.textContent = (thinkingEl.textContent || "") + text;
+        }
+        refreshActivityTitle(el, false);
+        scrollToBottom();
     }
 
     function addTool(payload) {
-        hideLoading();
-        const el = document.createElement("div");
-        el.className = "tool-card" + (payload && payload.error ? " error" : "");
-        const title = (payload && payload.title) || "tool";
-        el.textContent = payload && payload.error ? (title + ": " + payload.error) : title;
-        $("messages").appendChild(el);
-        if (busy) showLoading();
+        const el = ensureActivity();
+        upsertToolRow(el.querySelector(".activity-tools"), payload);
+        refreshActivityTitle(el, false);
         scrollToBottom();
     }
 
@@ -447,8 +563,11 @@
             send.setAttribute("aria-label", busy ? (labels.cancel || "Stop") : (labels.send || "Send"));
         }
         $("messages").setAttribute("aria-busy", busy ? "true" : "false");
-        if (busy) showLoading();
-        else hideLoading();
+        if (busy) ensureActivity();
+        else {
+            hideLoading();
+            finishActivity();
+        }
     }
 
     function showPermission(payload) {

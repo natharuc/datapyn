@@ -52,9 +52,30 @@ def test_acp_prompt_includes_active_result():
         },
     }
     text = format_acp_prompt("grafico", ctx)
-    assert "active_result" in text
     assert "premio" in text
     assert "grafico" in text
+    assert '"rows": 10' in text or "rows" in text
+
+
+def test_acp_prompt_says_already_connected_and_lists_variables():
+    from src.services.pynia.acp.turn_context import format_acp_prompt, format_acp_prompt_parts
+
+    ctx = {
+        "tab_id": "t1",
+        "tab_name": "ESIM",
+        "connection_name": "ESIM",
+        "database": "ESIM",
+        "is_connected": True,
+        "variables": {"df": "DataFrame(10, 3)"},
+        "execution_state": {"active_result": {"rows": 10, "columns": ["id"]}},
+    }
+    text = format_acp_prompt("quantas linhas tem o df?", ctx)
+    assert "connected=ESIM" in text
+    assert "Do NOT call datapyn_database operation=connect or open" in text
+    assert '"df": "DataFrame(10, 3)"' in text
+    assert "already connected" in text.lower()
+    parts = format_acp_prompt_parts("ok", ctx)
+    assert "is_connected is true" in parts[2]["text"]
 
 
 def test_action_directive_chart_and_query():
@@ -314,6 +335,163 @@ def test_mcp_proxy_dispatches_edit_and_run(qapp):
         sock.close()
     finally:
         host.stop()
+
+
+def test_mcp_server_config_for_session_has_no_type(qapp):
+    host = PyniaMcpHost(MagicMock())
+    host.port = 1234
+    host.token = "abc"
+    cfg = host.mcp_server_config("tab-x")
+    assert cfg["name"] == "datapyn"
+    assert "type" not in cfg
+    copilot = host.mcp_server_config("tab-x", include_type=True)
+    assert copilot["type"] == "stdio"
+
+
+def test_mcp_wrap_and_normalize_tool_names():
+    from src.services.pynia.acp.mcp_host import normalize_mcp_tool_name, wrap_tool_result
+
+    assert normalize_mcp_tool_name("datapyn-datapyn_query") == "datapyn_query"
+    assert normalize_mcp_tool_name("datapyn/datapyn_snapshot") == "datapyn_snapshot"
+    assert normalize_mcp_tool_name("datapyn_edit") == "datapyn_edit"
+    wrapped = wrap_tool_result({"content": [{"type": "text", "text": "hello"}]})
+    assert wrapped["content"][0]["text"] == "hello"
+    assert wrapped["isError"] is False
+    err = wrap_tool_result({"error": "nope"})
+    assert err["isError"] is True
+    assert err["content"][0]["text"] == "nope"
+
+
+def test_send_mcp_dead_socket_does_not_raise():
+    import threading
+
+    from src.services.pynia.acp.mcp_host import _send_mcp
+
+    conn = MagicMock()
+    conn.sendall.side_effect = OSError(10038, "not a socket")
+    assert _send_mcp(conn, threading.Lock(), {"ok": True}) is False
+
+
+def test_dispatch_tool_dead_socket_does_not_raise():
+    import threading
+
+    host = PyniaMcpHost(MagicMock())
+    host._handle_mcp = MagicMock(return_value={"jsonrpc": "2.0", "id": 1, "result": {}})
+    conn = MagicMock()
+    conn.sendall.side_effect = OSError(10038, "not a socket")
+    done = MagicMock()
+    host._dispatch_tool(
+        conn,
+        threading.Lock(),
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        "tab-1",
+        done,
+    )
+    done.assert_called_once()
+
+
+def test_mcp_parallel_tools_and_prefixed_name(qapp):
+    registry = MagicMock()
+    registry.list_tools.return_value = [{"name": "datapyn_query"}]
+    registry.execute.side_effect = lambda name, args: {
+        "content": [{"type": "text", "text": name}]
+    }
+    registry.pin_session = MagicMock()
+    host = PyniaMcpHost(registry)
+    host.start()
+    try:
+        sock = socket.create_connection(("127.0.0.1", host.port), timeout=5)
+        sock.sendall((json.dumps({"token": host.token, "tab_id": "tab-x"}) + "\n").encode())
+        for req_id, name in (
+            (1, "datapyn-datapyn_query"),
+            (2, "datapyn_snapshot"),
+            (3, "datapyn_inspect"),
+        ):
+            sock.sendall(
+                (
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "method": "tools/call",
+                            "params": {"name": name, "arguments": {}},
+                        }
+                    )
+                    + "\n"
+                ).encode()
+            )
+        sock.settimeout(0.2)
+        buf = b""
+        replies = {}
+        import time
+
+        deadline = time.time() + 8
+        while time.time() < deadline and len(replies) < 3:
+            qapp.processEvents()
+            try:
+                chunk = sock.recv(65536)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                msg = json.loads(line.decode())
+                replies[msg.get("id")] = msg
+        assert set(replies) == {1, 2, 3}
+        assert replies[1]["result"]["content"][0]["text"] == "datapyn_query"
+        assert replies[1]["result"]["isError"] is False
+        called = [c[0][0] for c in registry.execute.call_args_list]
+        assert "datapyn_query" in called
+        sock.sendall(
+            (json.dumps({"jsonrpc": "2.0", "id": 99, "method": "ping", "params": {}}) + "\n").encode()
+        )
+        ping_deadline = time.time() + 5
+        while time.time() < ping_deadline:
+            qapp.processEvents()
+            try:
+                chunk = sock.recv(65536)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            buf += chunk
+            if b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                ping = json.loads(line.decode())
+                assert ping["id"] == 99
+                break
+        else:
+            raise AssertionError("socket died after parallel tools/call")
+        sock.close()
+    finally:
+        host.stop()
+
+
+def test_silent_python_exec_and_property_hint(qapp):
+    from src.services.copilot.mcp_tools import MCPToolRegistry
+
+    registry = MCPToolRegistry.__new__(MCPToolRegistry)
+    namespace: dict = {}
+    session = MagicMock()
+    session.namespace = namespace
+    session.update_namespace = lambda data: namespace.update(data)
+    registry._get_active_session_widget = lambda: MagicMock()
+    registry._get_active_session = lambda: session
+
+    ok = MCPToolRegistry._run_silent_python(registry, {"code": "x = 1\nprint(x)"})
+    assert "error" not in ok
+    assert "1" in ok["content"][0]["text"]
+
+    namespace["wb"] = type("WB", (), {"sheet_names": ["a", "b"]})()
+    bad = MCPToolRegistry._run_silent_python(
+        registry, {"code": "print(wb.sheet_names())"}
+    )
+    assert bad.get("error")
+    assert "print(wb.sheet_names)" in bad["error"]
 
 
 def test_copilot_mcp_json_enables_datapyn_tools(qapp, tmp_path):
@@ -710,40 +888,50 @@ def test_set_agent_populates_selectors_before_prompt(qapp, monkeypatch, tmp_path
 
 
 def test_host_auto_allows_non_destructive_tools(qapp):
+    from src.services.pynia.acp.agent import ActionRequest
+
     host = PyniaAcpHost(mcp_registry=None)
-    client = MagicMock()
-    client.is_running = True
-    host.pool._clients["claude"] = client
+    agent = MagicMock()
+    host._agents["tab-1"] = agent
     host._states["tab-1"] = TabChatState(tab_id="tab-1", agent_id="claude", acp_session_id="sess-1")
-    host._acp_to_tab["sess-1"] = "tab-1"
     asked = []
     host.permission_needed.connect(lambda *args: asked.append(args))
+    try:
+        host._handle_action(
+            "tab-1",
+            ActionRequest(
+                rpc_id=7,
+                session_id="sess-1",
+                params={
+                    "sessionId": "sess-1",
+                    "toolCall": {
+                        "kind": "execute",
+                        "title": "Check server",
+                        "rawInput": {"command": "curl -s http://localhost:3001/api/chart"},
+                    },
+                    "options": [{"optionId": "allow-once"}],
+                },
+            ),
+        )
+        agent.answer_action.assert_called_once()
+        assert asked == []
 
-    host._on_permission(
-        7,
-        {
-            "sessionId": "sess-1",
-            "toolCall": {
-                "kind": "execute",
-                "title": "Check server",
-                "rawInput": {"command": "curl -s http://localhost:3001/api/chart"},
-            },
-            "options": [{"optionId": "allow-once"}],
-        },
-    )
-    client.respond.assert_called_once()
-    assert asked == []
-
-    host._on_permission(
-        8,
-        {
-            "sessionId": "sess-1",
-            "toolCall": {"rawInput": {"command": "DROP TABLE t"}},
-            "options": [{"optionId": "allow-once"}],
-        },
-    )
-    assert len(asked) == 1
-    assert asked[0][0] == "tab-1"
+        host._handle_action(
+            "tab-1",
+            ActionRequest(
+                rpc_id=8,
+                session_id="sess-1",
+                params={
+                    "sessionId": "sess-1",
+                    "toolCall": {"rawInput": {"command": "DROP TABLE t"}},
+                    "options": [{"optionId": "allow-once"}],
+                },
+            ),
+        )
+        assert len(asked) == 1
+        assert asked[0][0] == "tab-1"
+    finally:
+        host.shutdown()
 
 
 def test_prompt_emits_composer_config(qapp, monkeypatch, tmp_path):

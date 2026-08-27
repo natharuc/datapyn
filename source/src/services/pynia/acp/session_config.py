@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
@@ -243,3 +244,40 @@ def composer_selectors(
         _prefer(reasoning, thought_level)
 
     return {"model": model, "reasoning": reasoning}
+
+
+@dataclass
+class NormalizedConfig:
+    """Agent-agnostic LLM + reasoning lists for the composer."""
+
+    model: dict[str, Any]
+    reasoning: dict[str, Any]
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def session_id(self) -> str:
+        return str(self.raw.get("sessionId") or self.raw.get("session_id") or "")
+
+    def to_selectors(self) -> dict[str, Any]:
+        return {"model": self.model, "reasoning": self.reasoning}
+
+
+def normalize_config(
+    session_result: Optional[dict[str, Any]] = None,
+    *,
+    model_id: str = "",
+    thought_level: str = "",
+    loading: bool = False,
+) -> NormalizedConfig:
+    raw = dict(session_result or {})
+    selectors = composer_selectors(
+        raw,
+        model_id=model_id,
+        thought_level=thought_level,
+        loading=loading,
+    )
+    return NormalizedConfig(
+        model=selectors["model"],
+        reasoning=selectors["reasoning"],
+        raw=raw,
+    )

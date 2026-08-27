@@ -7,11 +7,12 @@ import logging
 import os
 import subprocess
 import threading
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .catalog import hidden_popen_kwargs, popen_argv
+from .protocol import set_config_option_params, set_model_params
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class AcpClient(QObject):
         self.agent_capabilities: dict[str, Any] = {}
         self.auth_methods: list[dict[str, Any]] = []
         self.last_session_info: dict[str, Any] = {}
+        self._handshook = False
 
     @property
     def is_running(self) -> bool:
@@ -107,6 +109,7 @@ class AcpClient(QObject):
                 slot["error"] = {"code": -32000, "message": "agent process stopped"}
                 event.set()
             self._pending.clear()
+        self._handshook = False
 
     def request(self, method: str, params: Optional[dict] = None, timeout: float = 60.0) -> dict:
         """Synchronous JSON-RPC request. Must not be called on the GUI thread
@@ -137,38 +140,18 @@ class AcpClient(QObject):
         )
 
     def initialize(self, client_name: str = "DataPyn", client_version: str = "0.0.0") -> dict:
-        result = self.request(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "clientCapabilities": {
-                    "fs": {"readTextFile": False, "writeTextFile": False},
-                    "terminal": False,
-                    "session": {"configOptions": {"boolean": {}}},
-                },
-                "clientInfo": {"name": client_name, "version": client_version},
-            },
-            timeout=30.0,
-        )
-        self.agent_capabilities = result.get("agentCapabilities") or {}
-        self.auth_methods = result.get("authMethods") or []
-        self.initialized.emit(result)
-        return result
+        from .service import AcpSessionService
+
+        return AcpSessionService().handshake(self, version=client_version)
 
     def authenticate(self, method_id: str) -> dict:
         return self.request("authenticate", {"methodId": method_id}, timeout=120.0)
 
     def session_new(self, cwd: str, mcp_servers: list[dict] | None = None) -> str:
-        result = self.request(
-            "session/new",
-            {"cwd": cwd, "mcpServers": mcp_servers or []},
-            timeout=30.0,
-        )
-        self.last_session_info = result if isinstance(result, dict) else {}
-        session_id = result.get("sessionId") or result.get("session_id") or ""
-        if not session_id:
-            raise RuntimeError("session/new did not return sessionId")
-        return str(session_id)
+        from .service import AcpSessionService
+
+        session_id, _cfg = AcpSessionService().open_session(self, cwd, mcp_servers)
+        return session_id
 
     def session_load(self, session_id: str, cwd: str, mcp_servers: list[dict] | None = None) -> Any:
         result = self.request(
@@ -176,8 +159,10 @@ class AcpClient(QObject):
             {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers or []},
             timeout=60.0,
         )
-        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
-            self.last_session_info = {**self.last_session_info, **result}
+        from .session_config import merge_config_snapshot
+
+        if isinstance(result, dict):
+            self.last_session_info = merge_config_snapshot(self.last_session_info, result)
         return result
 
     def session_resume(self, session_id: str, cwd: str, mcp_servers: list[dict] | None = None) -> Any:
@@ -186,8 +171,10 @@ class AcpClient(QObject):
             {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers or []},
             timeout=30.0,
         )
-        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
-            self.last_session_info = {**self.last_session_info, **result}
+        from .session_config import merge_config_snapshot
+
+        if isinstance(result, dict):
+            self.last_session_info = merge_config_snapshot(self.last_session_info, result)
         return result
 
     def session_prompt(
@@ -210,22 +197,28 @@ class AcpClient(QObject):
     def session_set_config_option(self, session_id: str, config_id: str, value: str) -> dict:
         result = self.request(
             "session/set_config_option",
-            {"sessionId": session_id, "configId": config_id, "type": "id", "value": value},
+            set_config_option_params(session_id, config_id, value),
             timeout=15.0,
         )
-        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
-            self.last_session_info = {**self.last_session_info, **result}
-        return result if isinstance(result, dict) else {}
+        from .session_config import merge_config_snapshot
+
+        if isinstance(result, dict):
+            self.last_session_info = merge_config_snapshot(self.last_session_info, result)
+            return result
+        return {}
 
     def session_set_model(self, session_id: str, model_id: str) -> dict:
         result = self.request(
             "session/set_model",
-            {"sessionId": session_id, "modelId": model_id, "model": model_id},
+            set_model_params(session_id, model_id),
             timeout=15.0,
         )
-        if isinstance(result, dict) and (result.get("configOptions") or result.get("models")):
-            self.last_session_info = {**self.last_session_info, **result}
-        return result if isinstance(result, dict) else {}
+        from .session_config import merge_config_snapshot
+
+        if isinstance(result, dict):
+            self.last_session_info = merge_config_snapshot(self.last_session_info, result)
+            return result
+        return {}
 
     def session_cancel(self, session_id: str) -> None:
         self.notify("session/cancel", {"sessionId": session_id})
@@ -278,10 +271,16 @@ class AcpClient(QObject):
                 self._dispatch(msg)
         except Exception as exc:
             logger.warning("ACP stdout reader failed: %s", exc)
-            self.rpc_error.emit(str(exc))
+            try:
+                self.rpc_error.emit(str(exc))
+            except RuntimeError:
+                pass
         finally:
             code = proc.poll() if proc else -1
-            self.process_exited.emit(int(code if code is not None else -1))
+            try:
+                self.process_exited.emit(int(code if code is not None else -1))
+            except RuntimeError:
+                pass
 
     def _read_stderr(self) -> None:
         proc = self._proc

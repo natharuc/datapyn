@@ -10,17 +10,10 @@ from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
 
 from .catalog import get_agent, resolve_launch
 from .client import AcpClient
+from .protocol import client_version
+from .service import AcpSessionService
 
 logger = logging.getLogger(__name__)
-
-
-def _client_version() -> str:
-    try:
-        from importlib.metadata import version
-
-        return version("DataPyn")
-    except Exception:
-        return "0.0.0"
 
 
 class AcpProcessPool(QObject):
@@ -77,12 +70,11 @@ class AcpProcessPool(QObject):
             self._clients[agent_id] = client
             client.start(command, args, cwd=cwd, env=extra_env)
             client._launch_key = key
-            client.initialize(client_name="DataPyn", client_version=_client_version())
-            if spec.auth_method_id:
-                try:
-                    client.authenticate(spec.auth_method_id)
-                except Exception as exc:
-                    logger.info("ACP authenticate for %s skipped/failed: %s", agent_id, exc)
+            AcpSessionService().handshake(
+                client,
+                auth_method_id=spec.auth_method_id,
+                version=client_version(),
+            )
             self.client_started.emit(agent_id)
             return client
 

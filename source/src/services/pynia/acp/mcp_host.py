@@ -11,14 +11,44 @@ from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 
+from src.services.pynia.tools.definitions import pynia_tool_definitions
+
 logger = logging.getLogger(__name__)
 
 MCP_INSTRUCTIONS = (
     "You are inside DataPyn, a desktop SQL/Python IDE. This MCP server runs "
     "in-process in the same DataPyn window — there is no HTTP API and nothing "
     "to curl on localhost. Call datapyn_* tools to inspect results, run SQL, "
-    "edit blocks, and create charts."
+    "edit blocks, and create charts: "
+    + ", ".join(spec["name"] for spec in pynia_tool_definitions())
+    + ". A tool error is not a dead server unless the message says Transport closed."
 )
+
+
+def normalize_mcp_tool_name(name: str) -> str:
+    """Strip Copilot chrome prefixes: datapyn-datapyn_query → datapyn_query."""
+    raw = str(name or "").strip()
+    lowered = raw.lower()
+    for prefix in ("datapyn-", "datapyn/", "datapyn."):
+        if lowered.startswith(prefix):
+            raw = raw[len(prefix) :]
+            lowered = raw.lower()
+    return raw
+
+
+def wrap_tool_result(raw: Any) -> dict[str, Any]:
+    """MCP tools/call result. Pass through content; never JSON-stringify it."""
+    if isinstance(raw, dict) and raw.get("error"):
+        return _mcp_error(str(raw["error"]))
+    if isinstance(raw, dict) and isinstance(raw.get("content"), list):
+        return {
+            "content": raw["content"],
+            "isError": bool(raw.get("isError")),
+        }
+    if isinstance(raw, str):
+        return {"content": [{"type": "text", "text": raw}], "isError": False}
+    text = json.dumps(raw, ensure_ascii=False, default=str) if raw is not None else ""
+    return {"content": [{"type": "text", "text": text}], "isError": False}
 
 
 class PyniaMcpHost(QObject):
@@ -64,14 +94,14 @@ class PyniaMcpHost(QObject):
             except Exception:
                 pass
 
-    def mcp_server_config(self, tab_id: str) -> dict[str, Any]:
+    def mcp_server_config(self, tab_id: str, *, include_type: bool = False) -> dict[str, Any]:
+        """ACP session/new payload (no type). Copilot JSON sets include_type=True."""
         import sys
         from pathlib import Path
 
         source_root = str(Path(__file__).resolve().parents[4])
-        return {
+        cfg: dict[str, Any] = {
             "name": "datapyn",
-            "type": "stdio",
             "command": sys.executable,
             "args": ["-m", "src.services.pynia.acp.mcp_stdio"],
             "env": [
@@ -82,12 +112,15 @@ class PyniaMcpHost(QObject):
                 {"name": "DATAPYN_TAB_ID", "value": tab_id or ""},
             ],
         }
+        if include_type:
+            cfg["type"] = "stdio"
+        return cfg
 
     def write_copilot_mcp_json(self, workspace: str, tab_id: str = "") -> str:
         """Copilot --acp ignores session/new mcpServers; load tools via CLI flag."""
         from pathlib import Path
 
-        cfg = self.mcp_server_config(tab_id or self.current_tab or "")
+        cfg = self.mcp_server_config(tab_id or self.current_tab or "", include_type=True)
         env = {item["name"]: item["value"] for item in cfg["env"]}
         payload = {
             "mcpServers": {
@@ -156,9 +189,21 @@ class PyniaMcpHost(QObject):
             threading.Thread(target=self._handle_conn, args=(conn,), daemon=True).start()
 
     def _handle_conn(self, conn: socket.socket) -> None:
-        conn.settimeout(120.0)
+        conn.settimeout(30.0)
         buf = b""
         tab_id = ""
+        write_lock = threading.Lock()
+        inflight = threading.Event()
+        inflight.set()
+        pending = {"n": 0}
+        pending_lock = threading.Lock()
+
+        def _tool_done() -> None:
+            with pending_lock:
+                pending["n"] = max(0, pending["n"] - 1)
+                if pending["n"] == 0:
+                    inflight.set()
+
         try:
             while b"\n" not in buf:
                 chunk = conn.recv(4096)
@@ -171,7 +216,8 @@ class PyniaMcpHost(QObject):
                 conn.close()
                 return
             tab_id = str(hello.get("tab_id") or "")
-            while True:
+            conn.settimeout(None)
+            while self._alive:
                 while b"\n" not in buf:
                     chunk = conn.recv(65536)
                     if not chunk:
@@ -185,16 +231,61 @@ class PyniaMcpHost(QObject):
                     request = json.loads(text)
                 except json.JSONDecodeError:
                     continue
+                method = str(request.get("method") or "")
+                if method == "tools/call":
+                    with pending_lock:
+                        pending["n"] += 1
+                        inflight.clear()
+                    threading.Thread(
+                        target=self._dispatch_tool,
+                        args=(conn, write_lock, request, tab_id, _tool_done),
+                        daemon=True,
+                        name="pynia-mcp-tool",
+                    ).start()
+                    continue
                 response = self._handle_mcp(request, tab_id)
                 if response is not None:
-                    conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
+                    _send_mcp(conn, write_lock, response)
         except Exception as exc:
-            logger.debug("MCP connection ended: %s", exc)
+            logger.info("MCP connection ended: %s", exc)
         finally:
+            inflight.wait(timeout=120.0)
             try:
                 conn.close()
             except Exception:
                 pass
+
+    def _dispatch_tool(
+        self,
+        conn: socket.socket,
+        write_lock: threading.Lock,
+        request: dict,
+        tab_id: str,
+        done=None,
+    ) -> None:
+        try:
+            response = self._handle_mcp(request, tab_id)
+            if response is not None and not _send_mcp(conn, write_lock, response):
+                logger.warning("MCP tools/call reply dropped (socket closed)")
+        except Exception as exc:
+            logger.warning("MCP tools/call failed: %s", exc)
+            req_id = request.get("id")
+            if req_id is not None:
+                _send_mcp(
+                    conn,
+                    write_lock,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32000, "message": str(exc)},
+                    },
+                )
+        finally:
+            if done is not None:
+                try:
+                    done()
+                except Exception:
+                    pass
 
     def _handle_mcp(self, request: dict, tab_id: str) -> Optional[dict]:
         method = request.get("method", "")
@@ -212,7 +303,7 @@ class PyniaMcpHost(QObject):
         elif method == "tools/list":
             result = {"tools": self._registry.list_tools()}
         elif method == "tools/call":
-            name = params.get("name", "")
+            name = normalize_mcp_tool_name(params.get("name", ""))
             arguments = params.get("arguments") or {}
             effective_tab = (
                 tab_id
@@ -240,10 +331,7 @@ class PyniaMcpHost(QObject):
             return _mcp_error("Tool timed out")
         raw = box.get("result") or {"error": "no result"}
         self.tool_executed.emit(tab_id, name, raw if isinstance(raw, dict) else {"result": raw})
-        if isinstance(raw, dict) and raw.get("error"):
-            return _mcp_error(str(raw["error"]))
-        text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, default=str)
-        return {"content": [{"type": "text", "text": text}], "isError": False}
+        return wrap_tool_result(raw)
 
     def _on_run_tool(self, name: str, arguments: dict, tab_id: str, box: dict, event: threading.Event) -> None:
         try:
@@ -254,6 +342,18 @@ class PyniaMcpHost(QObject):
             box["result"] = {"error": str(exc)}
         finally:
             event.set()
+
+
+def _send_mcp(conn: socket.socket, write_lock: threading.Lock, payload: dict) -> bool:
+    """Write one NDJSON MCP message. Dead sockets are dropped, never raised."""
+    line = json.dumps(payload, ensure_ascii=False) + "\n"
+    try:
+        with write_lock:
+            conn.sendall(line.encode("utf-8"))
+        return True
+    except (OSError, ConnectionError) as exc:
+        logger.debug("MCP write dropped: %s", exc)
+        return False
 
 
 def _mcp_error(message: str) -> dict:

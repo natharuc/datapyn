@@ -37,6 +37,36 @@ class TabChatState:
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     config_loading: bool = False
     session_ready: threading.Event = field(default_factory=_ready_event)
+    turn_activity: dict[str, Any] = field(default_factory=dict)
+
+    def reset_activity(self) -> None:
+        self.turn_activity = {"thinking": "", "tools": []}
+
+    def record_thinking(self, text: str) -> None:
+        from src.services.pynia.acp.activity import clip_thinking
+
+        if not self.turn_activity:
+            self.reset_activity()
+        self.turn_activity["thinking"] = clip_thinking(
+            self.turn_activity.get("thinking") or "", text or ""
+        )
+
+    def record_tool(self, card: dict[str, Any]) -> None:
+        from src.services.pynia.acp.activity import merge_activity_tool
+
+        if not self.turn_activity:
+            self.reset_activity()
+        tools = list(self.turn_activity.get("tools") or [])
+        self.turn_activity["tools"] = merge_activity_tool(tools, card)
+
+    def consume_activity(self) -> Optional[dict[str, Any]]:
+        activity = self.turn_activity or {}
+        self.reset_activity()
+        thinking = (activity.get("thinking") or "").strip()
+        tools = [item for item in (activity.get("tools") or []) if isinstance(item, dict)]
+        if not thinking and not tools:
+            return None
+        return {"thinking": thinking, "tools": tools}
 
     def to_dict(self) -> dict[str, Any]:
         return {

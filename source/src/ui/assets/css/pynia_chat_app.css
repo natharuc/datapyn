@@ -291,10 +291,109 @@ button { cursor: pointer; }
     border-radius: 6px;
     padding: 3px 8px;
 }
-.tool-card.error {
-    color: var(--danger, #e06c75);
-    border-color: var(--danger, #e06c75);
+.activity-block {
+    align-self: flex-start;
+    max-width: 94%;
+    margin: 2px 0 4px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+}
+.activity-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: inherit;
+    padding: 4px 2px;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 6px;
+}
+.activity-header:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+.activity-chevron {
+    font-size: 9px;
+    width: 12px;
+    flex: 0 0 auto;
+    transition: transform 0.15s ease;
+    opacity: 0.7;
+}
+.activity-block.expanded .activity-chevron {
+    transform: rotate(90deg);
+}
+.activity-spark {
+    flex: 0 0 auto;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--accent);
+}
+.activity-block.active .activity-spark {
+    animation: pyniaPulse 1.05s ease-in-out infinite;
+}
+.activity-title {
+    font-style: italic;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.activity-body {
+    display: none;
+    padding: 4px 8px 6px 28px;
+}
+.activity-block.expanded .activity-body {
+    display: block;
+}
+.activity-thinking {
     white-space: pre-wrap;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+    margin-bottom: 6px;
+    max-height: 220px;
+    overflow: auto;
+}
+.activity-tools {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.activity-tool {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+.activity-tool-status {
+    flex: 0 0 auto;
+    font-size: 10px;
+    opacity: 0.75;
+    min-width: 12px;
+}
+.activity-tool[data-status="running"] .activity-tool-status {
+    color: var(--accent);
+}
+.activity-tool[data-status="completed"] .activity-tool-status {
+    color: #34d399;
+}
+.activity-tool[data-status="error"] .activity-tool-status,
+.activity-tool.error .activity-tool-name {
+    color: var(--danger, #ef4444);
+}
+.activity-tool-name {
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .pynia-loading {

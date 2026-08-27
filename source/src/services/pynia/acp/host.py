@@ -6,11 +6,12 @@ import logging
 import threading
 from typing import Any, Optional
 
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
+from .agent import ActionRequest, IAcpAgent, QuestionRequest
+from .agents.factory import create_acp_agent
 from .binding import TabChatState
 from .catalog import default_cwd, get_agent
-from .client import AcpClient
 from .mcp_host import PyniaMcpHost
 from .permission import (
     HTTP_PROBE_REJECT_MESSAGE,
@@ -20,19 +21,41 @@ from .permission import (
     reject_option_id,
 )
 from .pool import AcpProcessPool
-from .session_config import composer_selectors, merge_config_snapshot
+from .session_config import composer_selectors
 from .turn_context import collect_tab_context, format_acp_prompt_parts
 
 logger = logging.getLogger(__name__)
 
-_COMPLETION_PROMPT = (
-    "You are a code completion engine. Return ONLY the ghost-text to insert "
-    "at the cursor. No markdown, no explanation, no tools.\n\n{body}"
-)
+
+class _TabListener:
+    """Forwards IAcpAgent callbacks to the host for one DataPyn tab."""
+
+    def __init__(self, host: "PyniaAcpHost", tab_id: str):
+        self._host = host
+        self._tab_id = tab_id
+
+    def on_receive_message(self, text: str) -> None:
+        self._host._on_agent_message(self._tab_id, text)
+
+    def on_thinking(self, text: str) -> None:
+        self._host._record_thinking(self._tab_id, text)
+        self._host.thinking.emit(self._tab_id, text)
+
+    def on_action(self, request: ActionRequest) -> None:
+        self._host._handle_action(self._tab_id, request)
+
+    def on_questions(self, request: QuestionRequest) -> None:
+        self._host._handle_questions(self._tab_id, request)
+
+    def on_tool_event(self, payload: dict[str, Any]) -> None:
+        self._host._emit_tool(self._tab_id, payload)
+
+    def on_config_changed(self) -> None:
+        self._host._emit_config(self._tab_id)
 
 
 class PyniaAcpHost(QObject):
-    """Owns ACP processes and one chat binding per DataPyn tab."""
+    """Owns one IAcpAgent conversation per DataPyn tab."""
 
     messages_changed = pyqtSignal(str)
     chunk = pyqtSignal(str, str)  # tab_id, text
@@ -51,10 +74,11 @@ class PyniaAcpHost(QObject):
         self.pool = AcpProcessPool(parent=self)
         self.mcp = PyniaMcpHost(mcp_registry, parent=self) if mcp_registry is not None else None
         self._states: dict[str, TabChatState] = {}
-        self._acp_to_tab: dict[str, str] = {}
-        self._permission_client: dict[object, AcpClient] = {}
+        self._agents: dict[str, IAcpAgent] = {}
+        self._permission_tab: dict[object, str] = {}
         self._lock = threading.Lock()
         self.pool.stderr_line.connect(self._on_stderr)
+        self.chunk.connect(self._append_assistant_chunk)
         if self.mcp:
             self.mcp.tool_executed.connect(self._on_mcp_tool_result)
 
@@ -63,6 +87,8 @@ class PyniaAcpHost(QObject):
             self.mcp.start()
 
     def shutdown(self) -> None:
+        for tab_id in list(self._agents):
+            self._close_agent(tab_id)
         self.pool.stop_all()
         if self.mcp:
             self.mcp.stop()
@@ -72,33 +98,13 @@ class PyniaAcpHost(QObject):
             return self._states[tab_id]
         state = TabChatState.from_dict(tab_id, data)
         self._states[tab_id] = state
-        if state.acp_session_id:
-            self._acp_to_tab[state.acp_session_id] = tab_id
         if state.agent_id:
             self._kick_prepare_session(tab_id, state.agent_id)
         return state
 
     def detach_tab(self, tab_id: str) -> None:
-        state = self._states.pop(tab_id, None)
-        if not state:
-            return
-        if state.acp_session_id:
-            self._acp_to_tab.pop(state.acp_session_id, None)
-            client = self.pool.get(state.agent_id or "")
-            if client:
-                try:
-                    client.session_close(state.acp_session_id)
-                except Exception:
-                    pass
-            if state.agent_id:
-                self.pool.release_session(state.agent_id)
-        if state.completion_session_id and state.agent_id:
-            client = self.pool.get(state.agent_id)
-            if client:
-                try:
-                    client.session_close(state.completion_session_id)
-                except Exception:
-                    pass
+        self._states.pop(tab_id, None)
+        self._close_agent(tab_id)
 
     def state(self, tab_id: str) -> TabChatState:
         if tab_id not in self._states:
@@ -120,15 +126,18 @@ class PyniaAcpHost(QObject):
         state = self.state(tab_id)
         if state.config_loading and state.agent_id == agent_id:
             return
-        client = self.pool.get(agent_id)
+        existing = self._agents.get(tab_id)
+        if existing is not None and existing.agent_id != agent_id:
+            self._close_agent(tab_id)
+            existing = None
         if (
             state.agent_id == agent_id
-            and state.acp_session_id
-            and client
-            and client.is_running
-            and str((client.last_session_info or {}).get("sessionId") or "") == state.acp_session_id
+            and existing is not None
+            and existing.agent_id == agent_id
+            and existing.is_ready
         ):
-            self._store_snapshot(state, client)
+            state.acp_session_id = existing.session_id
+            state.config_snapshot = existing.config_snapshot
             self._emit_config(tab_id)
             return
         state.agent_id = agent_id
@@ -148,35 +157,24 @@ class PyniaAcpHost(QObject):
         try:
             if state.agent_id != agent_id:
                 return
-            cwd = default_cwd()
-            extra_args = self._agent_extra_args(agent_id, cwd, tab_id)
-            client = self.pool.acquire(agent_id, cwd=cwd, extra_args=extra_args or None)
-            self._wire_client(client)
+            agent = self._ensure_agent(tab_id, agent_id)
+            result = agent.grant_configuration(install=False)
             if state.agent_id != agent_id:
                 return
-            mcp_servers = self._mcp_servers_for(agent_id, tab_id, cwd)
-            live_id = str((client.last_session_info or {}).get("sessionId") or "")
-            if state.acp_session_id and live_id == state.acp_session_id:
-                self._store_snapshot(state, client)
-                self._apply_saved_config(client, state)
-            else:
-                old = state.acp_session_id
-                if old:
-                    self._acp_to_tab.pop(old, None)
-                    state.acp_session_recreated = True
-                    self.session_recreated.emit(state.tab_id)
-                session_id = self._open_session(client, state, cwd, mcp_servers)
-                if state.agent_id != agent_id:
-                    return
-                state.acp_session_id = session_id
-                self.pool.retain(agent_id)
+            if not result.ok:
+                state.acp_session_id = None
+                self.turn_error.emit(tab_id, result.detail or result.status)
+                return
+            old = state.acp_session_id
+            state.acp_session_id = agent.session_id
+            state.config_snapshot = agent.config_snapshot
+            if old and old != agent.session_id:
+                state.acp_session_recreated = True
+                self.session_recreated.emit(tab_id)
         except Exception as exc:
             logger.warning("Pynia session prepare failed: %s", exc)
             if state.agent_id == agent_id:
-                client = self.pool.get(agent_id)
-                live_id = str((client.last_session_info or {}).get("sessionId") or "") if client else ""
-                if state.acp_session_id != live_id:
-                    state.acp_session_id = None
+                state.acp_session_id = None
                 self.turn_error.emit(tab_id, str(exc))
         finally:
             if state.agent_id == agent_id:
@@ -192,37 +190,46 @@ class PyniaAcpHost(QObject):
             self.mcp.write_cursor_mcp_json(cwd, tab_id)
         self.mcp.current_tab = tab_id
         self.mcp.last_prompt_tab[agent_id] = tab_id
+        if agent_id == "copilot":
+            # CLI --additional-mcp-config is the sole source; session/new would duplicate.
+            return []
         return [self.mcp.mcp_server_config(tab_id)]
 
     def set_session_config(self, tab_id: str, kind: str, value: str) -> None:
         """Persist LLM / reasoning per agent and push it to the live ACP session."""
-        from src.services.pynia.settings import get_pynia_settings
-
         state = self.state(tab_id)
         value = str(value or "").strip()
         if not state.agent_id or not value:
             return
-        selectors = composer_selectors(state.config_snapshot)
+        agent = self._agents.get(tab_id)
+        snapshot = state.config_snapshot
+        if agent is not None:
+            snapshot = agent.config_snapshot or snapshot
+        selectors = composer_selectors(snapshot)
         key = "model" if kind == "model" else "reasoning"
         selector = selectors.get(key) or {}
         allowed = {item["value"] for item in selector.get("values") or []}
         if allowed and value not in allowed:
             return
-        settings = get_pynia_settings()
         if kind == "model":
-            settings.set_agent_model_id(state.agent_id, value)
+            if agent is not None:
+                agent.set_model(value)
+            else:
+                from src.services.pynia.settings import get_pynia_settings
+
+                get_pynia_settings().set_agent_model_id(state.agent_id, value)
         elif kind in {"reasoning", "thought_level"}:
-            settings.set_agent_thought_level(state.agent_id, value)
+            if agent is not None:
+                agent.set_reasoning(value)
+            else:
+                from src.services.pynia.settings import get_pynia_settings
+
+                get_pynia_settings().set_agent_thought_level(state.agent_id, value)
         else:
             return
-        if not state.acp_session_id:
-            return
-        threading.Thread(
-            target=self._push_config,
-            args=(tab_id, kind, value),
-            daemon=True,
-            name=f"pynia-config-{tab_id}",
-        ).start()
+        if agent is not None:
+            state.config_snapshot = agent.config_snapshot
+        self._emit_config(tab_id)
 
     def send_prompt(
         self,
@@ -247,6 +254,7 @@ class PyniaAcpHost(QObject):
         if not (text or "").strip() and not files:
             return
         state.busy = True
+        state.reset_activity()
         self.busy_changed.emit(tab_id, True)
         extra: dict[str, Any] = {}
         shown = display_attachments(files)
@@ -271,19 +279,17 @@ class PyniaAcpHost(QObject):
         ).start()
 
     def cancel(self, tab_id: str) -> None:
-        state = self.state(tab_id)
-        client = self.pool.get(state.agent_id or "")
-        if client and state.acp_session_id:
-            client.session_cancel(state.acp_session_id)
+        agent = self._agents.get(tab_id)
+        if agent:
+            agent.cancel()
 
     def answer_permission(self, rpc_id: object, option_id: str) -> None:
-        client = self._permission_client.pop(rpc_id, None)
-        if not client:
+        tab_id = self._permission_tab.pop(rpc_id, None)
+        if not tab_id:
             return
-        client.respond(
-            rpc_id,
-            {"outcome": {"outcome": "selected", "optionId": option_id}},
-        )
+        agent = self._agents.get(tab_id)
+        if agent:
+            agent.answer_action(rpc_id, option_id)
 
     def complete_inline(self, tab_id: str, body: str, timeout: float = 4.0) -> str:
         """Short completion prompt on a dedicated ACP session. Never mixes with chat."""
@@ -295,47 +301,14 @@ class PyniaAcpHost(QObject):
         agent_id = state.agent_id or get_pynia_settings().default_agent_id
         if not agent_id:
             return ""
-        cwd = default_cwd()
-        client = self.pool.acquire(agent_id, cwd=cwd, extra_args=self._agent_extra_args(agent_id, cwd) or None)
-        self._wire_client(client)
-        session_id = state.completion_session_id
-        if not session_id:
-            session_id = client.session_new(cwd, mcp_servers=[])
-            state.completion_session_id = session_id
-        prompt = _COMPLETION_PROMPT.format(body=body)
-        chunks: list[str] = []
-
-        def on_update(_sid: str, update: dict) -> None:
-            if _sid != session_id:
-                return
-            if update.get("sessionUpdate") == "agent_message_chunk":
-                content = update.get("content") or {}
-                if content.get("type") == "text":
-                    chunks.append(content.get("text") or "")
-            if update.get("sessionUpdate") == "tool_call":
-                try:
-                    client.session_cancel(session_id)
-                except Exception:
-                    pass
-
-        client.session_update.connect(on_update, Qt.ConnectionType.DirectConnection)
-        try:
-            client.session_prompt(session_id, prompt, timeout=timeout)
-        except Exception:
-            return ""
-        finally:
-            try:
-                client.session_update.disconnect(on_update)
-            except Exception:
-                pass
-        text = "".join(chunks).strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines)
+        agent = self._ensure_agent(tab_id, agent_id)
+        if not agent.is_ready:
+            result = agent.grant_configuration(install=False)
+            if not result.ok:
+                return ""
+            state.acp_session_id = agent.session_id
+        text = agent.complete(body, timeout=timeout)
+        state.completion_session_id = agent.completion_session_id or None
         return text
 
     def _agent_extra_args(self, agent_id: str, cwd: str, tab_id: str = "") -> list[str]:
@@ -348,21 +321,51 @@ class PyniaAcpHost(QObject):
             logger.debug("Copilot MCP config skipped: %s", exc)
             return []
 
+    def _ensure_agent(self, tab_id: str, agent_id: str):
+        existing = self._agents.get(tab_id)
+        if existing is not None and existing.agent_id == agent_id:
+            cwd = default_cwd()
+            existing.bind(
+                cwd=cwd,
+                extra_args=self._agent_extra_args(agent_id, cwd, tab_id),
+                mcp_servers=self._mcp_servers_for(agent_id, tab_id, cwd),
+            )
+            return existing
+        if existing is not None:
+            existing.close()
+        cwd = default_cwd()
+        agent = create_acp_agent(
+            agent_id,
+            _TabListener(self, tab_id),
+            pool=self.pool,
+            cwd=cwd,
+            extra_args=self._agent_extra_args(agent_id, cwd, tab_id) or None,
+            mcp_servers=self._mcp_servers_for(agent_id, tab_id, cwd),
+        )
+        self._agents[tab_id] = agent
+        return agent
+
+    def _close_agent(self, tab_id: str) -> None:
+        agent = self._agents.pop(tab_id, None)
+        if agent is None:
+            return
+        try:
+            agent.close()
+        except Exception:
+            pass
+
     def _run_turn(self, tab_id: str, agent_id: str, prompt: Any) -> None:
         state = self.state(tab_id)
         try:
-            cwd = default_cwd()
-            extra_args = self._agent_extra_args(agent_id, cwd, tab_id)
-            client = self.pool.acquire(agent_id, cwd=cwd, extra_args=extra_args or None)
-            self._wire_client(client)
+            agent = self._ensure_agent(tab_id, agent_id)
             state.session_ready.wait(timeout=45)
-            mcp_servers = self._mcp_servers_for(agent_id, tab_id, cwd)
-
-            if not state.acp_session_id:
-                state.acp_session_id = self._open_session(client, state, cwd, mcp_servers)
-                self.pool.retain(agent_id)
-
+            if not agent.is_ready:
+                result = agent.grant_configuration(install=False)
+                if not result.ok:
+                    raise RuntimeError(result.detail or result.status)
             state.agent_id = agent_id
+            state.acp_session_id = agent.session_id
+            state.config_snapshot = agent.config_snapshot
             if not state.locked:
                 state.locked = True
                 self.agent_locked.emit(tab_id, agent_id)
@@ -370,9 +373,9 @@ class PyniaAcpHost(QObject):
             assistant = state.append_message("assistant", "")
             self.messages_changed.emit(tab_id)
             if isinstance(prompt, list):
-                result = client.session_prompt(state.acp_session_id, prompt=prompt)
+                result = agent.send_message(blocks=prompt)
             else:
-                result = client.session_prompt(state.acp_session_id, str(prompt))
+                result = agent.send_message(str(prompt))
             stop = (result or {}).get("stopReason") or ""
             if stop == "cancelled" and not (assistant.get("content") or "").strip():
                 assistant["content"] = ""
@@ -382,224 +385,111 @@ class PyniaAcpHost(QObject):
             state.append_message("assistant", str(exc), error=True)
             self.messages_changed.emit(tab_id)
         finally:
+            self._seal_activity(state)
             state.busy = False
             self.busy_changed.emit(tab_id, False)
             self.turn_ended.emit(tab_id)
 
-    def _open_session(self, client: AcpClient, state: TabChatState, cwd: str, mcp_servers: list) -> str:
-        session_id = client.session_new(cwd, mcp_servers=mcp_servers)
-        self._acp_to_tab[session_id] = state.tab_id
-        state.acp_session_id = session_id
-        self._store_snapshot(state, client)
-        self._apply_saved_config(client, state)
-        self._emit_config(state.tab_id)
-        return session_id
+    def _emit_tool(self, tab_id: str, payload: dict[str, Any]) -> None:
+        self._record_tool_event(tab_id, payload)
+        self.tool_event.emit(tab_id, payload)
 
-    def _ensure_session(self, client: AcpClient, state: TabChatState, cwd: str, mcp_servers: list) -> None:
-        caps = client.agent_capabilities or {}
-        session_caps = caps.get("sessionCapabilities") or {}
-        sid = state.acp_session_id
-        if not sid:
-            return
-        try:
-            if session_caps.get("resume") is not None:
-                client.session_resume(sid, cwd, mcp_servers)
-                return
-            if caps.get("loadSession"):
-                client.session_load(sid, cwd, mcp_servers)
-                return
-        except Exception as exc:
-            logger.info("ACP session restore failed, creating a new one: %s", exc)
-        new_id = client.session_new(cwd, mcp_servers=mcp_servers)
-        self._acp_to_tab.pop(sid, None)
-        self._acp_to_tab[new_id] = state.tab_id
-        state.acp_session_id = new_id
-        state.acp_session_recreated = True
-        self._store_snapshot(state, client)
-        self._apply_saved_config(client, state)
-        self._emit_config(state.tab_id)
-        self.session_recreated.emit(state.tab_id)
+    def _record_thinking(self, tab_id: str, text: str) -> None:
+        self.state(tab_id).record_thinking(text)
 
-    def _wire_client(self, client: AcpClient) -> None:
-        try:
-            client.session_update.disconnect(self._on_session_update)
-        except TypeError:
-            pass
-        try:
-            client.permission_request.disconnect(self._on_permission)
-        except TypeError:
-            pass
-        client.session_update.connect(self._on_session_update)
-        client.permission_request.connect(self._on_permission)
+    def _record_tool_event(self, tab_id: str, payload: dict[str, Any]) -> None:
+        from src.services.pynia.acp.activity import format_activity_tool
 
-    def _on_session_update(self, acp_session_id: str, update: dict) -> None:
-        tab_id = self._acp_to_tab.get(acp_session_id)
-        if not tab_id:
-            return
-        kind = update.get("sessionUpdate") or ""
-        if kind in {"agent_message_chunk", "agent_thought_chunk"}:
-            content = update.get("content") or {}
-            text = content.get("text") or ""
-            if not text:
-                return
-            if kind == "agent_thought_chunk":
-                self.thinking.emit(tab_id, text)
-                return
-            state = self.state(tab_id)
-            if state.messages and state.messages[-1].get("role") == "assistant":
-                state.messages[-1]["content"] = (state.messages[-1].get("content") or "") + text
-            self.chunk.emit(tab_id, text)
-            return
-        if kind in {"tool_call", "tool_call_update"}:
-            self.tool_event.emit(tab_id, update)
-            return
-        if kind == "config_option_update":
-            state = self.state(tab_id)
-            incoming = {}
-            if update.get("configOptions") is not None:
-                incoming["configOptions"] = update.get("configOptions")
-            if update.get("models") is not None:
-                incoming["models"] = update.get("models")
-            if not incoming:
-                return
-            state.config_snapshot = merge_config_snapshot(state.config_snapshot, incoming)
-            client = self.pool.get(state.agent_id or "")
-            if client:
-                client.last_session_info = merge_config_snapshot(client.last_session_info, incoming)
-            self._emit_config(tab_id)
-            return
+        card = format_activity_tool(payload)
+        if card:
+            self.state(tab_id).record_tool(card)
 
-    def _client_for_permission(self, params: dict) -> Optional[AcpClient]:
-        acp_session_id = str((params or {}).get("sessionId") or "")
-        tab_id = self._acp_to_tab.get(acp_session_id, "")
-        state = self._states.get(tab_id)
-        if state and state.agent_id:
-            client = self.pool.get(state.agent_id)
-            if client:
-                return client
-        running = [client for client in self.pool.clients() if client.is_running]
-        if len(running) == 1:
-            return running[0]
-        return running[0] if running else None
-
-    def _on_permission(self, rpc_id: object, params: dict) -> None:
-        acp_session_id = str((params or {}).get("sessionId") or "")
-        tab_id = self._acp_to_tab.get(acp_session_id, "")
-        client = self._client_for_permission(params or {})
-        if client:
-            self._permission_client[rpc_id] = client
-        if permission_should_reject(params or {}):
-            self.answer_permission(rpc_id, reject_option_id(params or {}))
-            if tab_id:
-                self.tool_event.emit(
-                    tab_id,
-                    {
-                        "sessionUpdate": "tool_call_update",
-                        "title": "Blocked HTTP probe",
-                        "status": "failed",
-                        "isError": True,
-                        "content": [{"type": "text", "text": HTTP_PROBE_REJECT_MESSAGE}],
-                    },
-                )
+    def _seal_activity(self, state: TabChatState) -> None:
+        activity = state.consume_activity()
+        if not activity:
             return
-        if not permission_should_ask(params or {}):
-            self.answer_permission(rpc_id, allow_option_id(params or {}))
+        for msg in reversed(state.messages):
+            if msg.get("role") == "assistant":
+                msg["activity"] = activity
+                return
+
+    def _on_agent_message(self, tab_id: str, text: str) -> None:
+        self.chunk.emit(tab_id, text)
+
+    def _append_assistant_chunk(self, tab_id: str, text: str) -> None:
+        state = self.state(tab_id)
+        if state.messages and state.messages[-1].get("role") == "assistant":
+            state.messages[-1]["content"] = (state.messages[-1].get("content") or "") + text
+
+    def _handle_action(self, tab_id: str, request: ActionRequest) -> None:
+        params = request.params or {}
+        if permission_should_reject(params):
+            self._reply_permission(tab_id, request.rpc_id, reject_option_id(params))
+            self._emit_tool(
+                tab_id,
+                {
+                    "sessionUpdate": "tool_call_update",
+                    "title": "Blocked HTTP probe",
+                    "status": "failed",
+                    "isError": True,
+                    "content": [{"type": "text", "text": HTTP_PROBE_REJECT_MESSAGE}],
+                },
+            )
+            return
+        if not permission_should_ask(params):
+            self._reply_permission(tab_id, request.rpc_id, allow_option_id(params))
             return
         if not tab_id:
             logger.warning("ACP permission with no tab mapping; rejecting")
-            self.answer_permission(rpc_id, "reject-once")
+            self._reply_permission(tab_id, request.rpc_id, "reject-once")
             return
-        self.permission_needed.emit(tab_id, rpc_id, params or {})
+        self._permission_tab[request.rpc_id] = tab_id
+        self.permission_needed.emit(tab_id, request.rpc_id, params)
 
-    def _store_snapshot(self, state: TabChatState, client: AcpClient) -> None:
-        state.config_snapshot = merge_config_snapshot(
-            state.config_snapshot, client.last_session_info or {}
-        )
-
-    def _merge_config_result(self, state: TabChatState, client: AcpClient, result: dict) -> None:
-        if not isinstance(result, dict):
+    def _handle_questions(self, tab_id: str, request: QuestionRequest) -> None:
+        if not tab_id:
+            self._reply_permission(tab_id, request.rpc_id, "reject-once")
             return
-        merged = merge_config_snapshot(state.config_snapshot or client.last_session_info, result)
-        client.last_session_info = merged
-        state.config_snapshot = dict(merged)
+        self._permission_tab[request.rpc_id] = tab_id
+        params = dict(request.params or {})
+        if request.prompt and not params.get("title"):
+            params["title"] = request.prompt
+        self.permission_needed.emit(tab_id, request.rpc_id, params)
+
+    def _reply_permission(self, tab_id: str, rpc_id: object, option_id: str) -> None:
+        agent = self._agents.get(tab_id)
+        if agent:
+            agent.answer_action(rpc_id, option_id)
 
     def _emit_config(self, tab_id: str) -> None:
         state = self.state(tab_id)
+        agent = self._agents.get(tab_id)
+        if agent is not None:
+            state.config_snapshot = agent.config_snapshot or state.config_snapshot
+            selectors = agent.composer_config()
+            if state.config_loading and not state.config_snapshot:
+                from .session_config import composer_selectors as _selectors
+
+                selectors = _selectors({}, loading=True)
+            self.config_options_changed.emit(tab_id, selectors)
+            return
         from src.services.pynia.settings import get_pynia_settings
 
         settings = get_pynia_settings()
         agent_id = state.agent_id or ""
-        loading = bool(state.config_loading and not (state.config_snapshot or {}).get("configOptions"))
-        self.config_options_changed.emit(
-            tab_id,
-            composer_selectors(
-                state.config_snapshot,
-                model_id=settings.agent_model_id(agent_id) if agent_id else "",
-                thought_level=settings.agent_thought_level(agent_id) if agent_id else "",
-                loading=loading,
-            ),
+        snap = state.config_snapshot or {}
+        loading = bool(
+            state.config_loading
+            and not snap.get("configOptions")
+            and not snap.get("models")
         )
-
-    def _apply_saved_config(self, client: AcpClient, state: TabChatState) -> None:
-        from src.services.pynia.settings import get_pynia_settings
-
-        if not state.acp_session_id or not state.agent_id:
-            return
-        settings = get_pynia_settings()
-        snapshot = state.config_snapshot or client.last_session_info or {}
         selectors = composer_selectors(
-            snapshot,
-            model_id=settings.agent_model_id(state.agent_id),
-            thought_level=settings.agent_thought_level(state.agent_id),
+            snap,
+            model_id=settings.agent_model_id(agent_id) if agent_id else "",
+            thought_level=settings.agent_thought_level(agent_id) if agent_id else "",
+            loading=loading,
         )
-        model = selectors.get("model") or {}
-        pref_model = settings.agent_model_id(state.agent_id)
-        model_ids = {item["value"] for item in model.get("values") or []}
-        if pref_model and pref_model in model_ids and not model.get("hidden"):
-            self._set_config_option(client, state, model["id"], pref_model, kind="model")
-        reasoning = composer_selectors(
-            state.config_snapshot or client.last_session_info,
-            thought_level=settings.agent_thought_level(state.agent_id),
-        ).get("reasoning") or {}
-        pref_thought = settings.agent_thought_level(state.agent_id)
-        thought_ids = {item["value"] for item in reasoning.get("values") or []}
-        if pref_thought and pref_thought in thought_ids and not reasoning.get("hidden"):
-            self._set_config_option(client, state, reasoning["id"], pref_thought, kind="reasoning")
-
-    def _set_config_option(
-        self,
-        client: AcpClient,
-        state: TabChatState,
-        config_id: str,
-        value: str,
-        *,
-        kind: str,
-    ) -> None:
-        try:
-            result = client.session_set_config_option(state.acp_session_id, config_id, value)
-            self._merge_config_result(state, client, result)
-            return
-        except Exception as exc:
-            logger.debug("ACP set_config_option failed: %s", exc)
-        if kind != "model":
-            return
-        try:
-            result = client.session_set_model(state.acp_session_id, value)
-            self._merge_config_result(state, client, result)
-        except Exception as exc:
-            logger.debug("ACP set_model failed: %s", exc)
-
-    def _push_config(self, tab_id: str, kind: str, value: str) -> None:
-        state = self.state(tab_id)
-        client = self.pool.get(state.agent_id or "")
-        if not client or not state.acp_session_id or not value:
-            return
-        selectors = composer_selectors(state.config_snapshot or client.last_session_info)
-        selector = selectors["model"] if kind == "model" else selectors["reasoning"]
-        if selector.get("hidden"):
-            return
-        self._set_config_option(client, state, selector["id"], value, kind=kind)
-        self._emit_config(tab_id)
+        self.config_options_changed.emit(tab_id, selectors)
 
     def _on_mcp_tool_result(self, tab_id: str, name: str, result: dict) -> None:
         if not isinstance(result, dict) or not result.get("error"):
@@ -607,7 +497,7 @@ class PyniaAcpHost(QObject):
         target = tab_id or (self.mcp.current_tab if self.mcp else "")
         if not target:
             return
-        self.tool_event.emit(
+        self._emit_tool(
             target,
             {
                 "sessionUpdate": "tool_call_update",
@@ -632,7 +522,7 @@ class PyniaAcpHost(QObject):
                     iter(self.mcp.last_prompt_tab.values()), ""
                 )
             if tab_id:
-                self.tool_event.emit(
+                self._emit_tool(
                     tab_id,
                     {
                         "sessionUpdate": "tool_call_update",

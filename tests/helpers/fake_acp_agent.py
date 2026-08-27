@@ -83,9 +83,44 @@ def main() -> int:
             for part in params.get("prompt") or []:
                 if isinstance(part, dict):
                     text += part.get("text") or ""
-            reply = "pong" if "pong" in text.lower() else "ok"
-            if "ghost" in text.lower() or "<CURSOR>" in text:
+            lower = text.lower()
+            reply = "pong" if "pong" in lower else "ok"
+            if "ghost" in lower or "<CURSOR>" in text:
                 reply = "ghost_text"
+            if "think" in lower:
+                _send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": sid,
+                            "update": {
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {"type": "text", "text": "hmm"},
+                            },
+                        },
+                    }
+                )
+            if "ask-permission" in lower:
+                _send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 9001,
+                        "method": "session/request_permission",
+                        "params": {
+                            "sessionId": sid,
+                            "toolCall": {
+                                "kind": "delete",
+                                "title": "Remove file",
+                                "rawInput": {"command": "rm -rf /tmp/x"},
+                            },
+                            "options": [
+                                {"optionId": "allow-once"},
+                                {"optionId": "reject-once"},
+                            ],
+                        },
+                    }
+                )
             _send(
                 {
                     "jsonrpc": "2.0",
