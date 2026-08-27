@@ -1,6 +1,6 @@
 [project]
 name = "DataPyn"
-version = "1.54.3"
+version = "1.55.0"
 requires-python = ">=3.12"
 dependencies = [
     # GUI Framework

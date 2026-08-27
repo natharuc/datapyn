@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v1.55.0 (2026-08-27)
+
+### Bug Fixes
+
+- **ci**: Run semantic-release from uv after GitPython 3.1.60
+  ([`785a65a`](https://github.com/natharuc/datapyn/commit/785a65a02299c36b4137a1775452765d915834ba))
+
+- **ci**: Run semantic-release from uv after GitPython 3.1.60
+  ([`8b14435`](https://github.com/natharuc/datapyn/commit/8b144358d9ab46ee0fe81deab786d5ee0e967ab2))
+
+- **ci**: Skip live ACP tests and patch pip-audit CVEs
+  ([`4eb8861`](https://github.com/natharuc/datapyn/commit/4eb8861cd930e56ce922d747980947c4a485adda))
+
+### Features
+
+- Pynia v7 fase1
+  ([`52ec72d`](https://github.com/natharuc/datapyn/commit/52ec72d84811f0eea47b3feb92810418ab60fe71))
+
+- **pynia**: Harden ACP agents, MCP tools, and activity UI
+  ([`62dbef1`](https://github.com/natharuc/datapyn/commit/62dbef18e9d5f2b273d660cf5ab002228724846c))
+
+- **sql**: Stop fetch on cancel and speed offline autocomplete
+  ([`e82eaf4`](https://github.com/natharuc/datapyn/commit/e82eaf455cd177e11ffb01bb0854b0128a3883a5))
+
+### Heuristic
+
+- Merge branch 'main' of github-nac:natharuc/datapyn into feature/feature-pynia-v7
+  ([`f502ced`](https://github.com/natharuc/datapyn/commit/f502ced507a9adcc5ba2d761c81a05ee0afd1f55))
+
+- Merge pull request #153 from natharuc/feature/feature-pynia-v7
+  ([`8b2c4d0`](https://github.com/natharuc/datapyn/commit/8b2c4d084085ba77031522294606204936e6e05e))
+
+- Merge pull request #154 from natharuc/fix/psr-gitpython-360
+  ([`785a65a`](https://github.com/natharuc/datapyn/commit/785a65a02299c36b4137a1775452765d915834ba))
+
+
 ## v1.54.3 (2026-08-11)
 
 ### Bug Fixes
