@@ -915,6 +915,7 @@ class SqlAutoCompleteService:
             "scope_lookup": scope_lookup,
             "cte_sources": cte_sources,
             "cte_lookup": cte_lookup,
+            "statement_sql": current_statement,
         }
 
     def _inject_cursor_placeholder(self, statement_sql: str, cursor_offset: int, context: str) -> str:
@@ -998,6 +999,11 @@ class SqlAutoCompleteService:
         update_relation = self._resolve_update_target(parsed, script_state)
         if update_relation is not None:
             self._append_relation(scope_sources, scope_lookup, update_relation)
+
+        if not scope_sources:
+            fallback_sources, fallback_lookup = self._fallback_scope_relations(statement_sql, script_state)
+            if fallback_sources:
+                scope_sources, scope_lookup = fallback_sources, fallback_lookup
 
         return {
             "scope_sources": scope_sources,
@@ -1801,13 +1807,23 @@ class SqlAutoCompleteService:
         return result
 
     def _column_completions(self, analysis: dict[str, Any]) -> List[Tuple[str, str, str]]:
-        """Return column completions from the visible scope, plus variables."""
-        scope_sources = analysis.get("scope_sources", [])
+        """Return column completions from the visible FROM/JOIN scope."""
+        scope_sources = list(analysis.get("scope_sources") or [])
         if not scope_sources:
+            fallback, _ = self._fallback_scope_relations(
+                analysis.get("statement_sql", "") or "",
+                analysis.get("script_state") or {"relation_lookup": {}},
+            )
+            scope_sources = fallback
+        if not scope_sources:
+            mentioned = self._fallback_resolve_aliases(analysis.get("statement_sql", "") or "")
+            if mentioned:
+                return self._variable_completions(analysis)
             return self._all_columns_flat() + self._variable_completions(analysis)
 
         result: List[Tuple[str, str, str]] = []
         seen_entries: Set[str] = set()
+        multi_table = len(scope_sources) > 1
 
         for relation in scope_sources:
             qualifier = relation.get("preferred_qualifier") or relation.get("display_name")
@@ -1817,21 +1833,21 @@ class SqlAutoCompleteService:
                     continue
                 detail_name = relation.get("display_name", qualifier) or qualifier or ""
                 display_type = str(column.get("display_type") or column.get("type") or "")
-                qualified_label = f"{qualifier}.{column_name}" if qualifier else column_name
-
-                detail = f"{detail_name}.{column_name}" if detail_name else column_name
-                if display_type:
-                    detail = f"{detail} ({display_type})"
+                if detail_name and display_type:
+                    detail = f"{detail_name} • {display_type}"
+                else:
+                    detail = display_type or detail_name or column_name
                 unqualified_key = f"{detail_name}|{column_name}|{display_type}"
                 if unqualified_key not in seen_entries:
                     seen_entries.add(unqualified_key)
                     result.append((column_name, CAT_COLUMN, detail))
 
-                if qualifier:
+                if multi_table and qualifier:
+                    qualified_label = f"{qualifier}.{column_name}"
                     qualified_key = f"{qualified_label}|{display_type}"
                     if qualified_key not in seen_entries:
                         seen_entries.add(qualified_key)
-                        result.append((qualified_label, CAT_COLUMN, display_type))
+                        result.append((qualified_label, CAT_COLUMN, display_type or detail))
 
         return result + self._variable_completions(analysis)
 

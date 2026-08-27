@@ -135,6 +135,9 @@ class SessionSqlWorker(QObject):
     def run(self):
         try:
             df = self.connector.execute_query(self.query, parameters=self.sql_parameters)
+            if getattr(self.connector, "_cancelled", False):
+                self.finished.emit(None, "__CANCELLED__")
+                return
             self.finished.emit(df, "")
         except OperationCancelled:
             self.finished.emit(None, "__CANCELLED__")

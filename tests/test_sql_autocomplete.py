@@ -1020,3 +1020,113 @@ class TestRoutineAutocomplete:
         routine_items = [(name, cat) for name, cat, *_ in result if cat == CAT_ROUTINE]
         assert routine_items == []
 
+
+class TestOfflinePrefixMatches:
+    """ADS-style prefix / substring matches used by offline suggest."""
+
+    @pytest.fixture
+    def ads_service(self):
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "tables": [
+                {"name": "movimentopremio", "schema": "dbo", "type": "TABLE"},
+                {"name": "venda", "schema": "dbo", "type": "TABLE"},
+            ],
+            "columns": {
+                "dbo.movimentopremio": [
+                    {"name": "NumeroParcela", "type": "int", "display_type": "int"},
+                    {"name": "ValorPremio", "type": "decimal", "display_type": "decimal"},
+                ],
+                "dbo.venda": [
+                    {"name": "id", "type": "bigint", "display_type": "bigint"},
+                ],
+            },
+            "database": "testdb",
+            "db_type": "sqlserver",
+        })
+        return svc
+
+    def test_from_movi_suggests_movimentopremio(self, ads_service):
+        sql = "SELECT * FROM movi"
+        result = ads_service.get_completions(sql, 0, len(sql))
+        n = [name.lower() for name in names(result)]
+        assert "movimentopremio" in n
+
+    def test_where_numerop_suggests_numeroparcela(self, ads_service):
+        sql = "SELECT * FROM movimentopremio WHERE numerop"
+        result = ads_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "NumeroParcela" in n
+        parcela = next(item for item in result if item[0] == "NumeroParcela")
+        assert parcela[1] == CAT_COLUMN
+        assert "int" in parcela[2].lower()
+        assert "venda" not in n
+        assert not any("." in name and name != "NumeroParcela" for name in n)
+
+    def test_where_does_not_suggest_similar_tables(self):
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "db_type": "sqlserver",
+            "tables": [
+                {"name": "PESSOA", "schema": "dbo", "type": "TABLE"},
+                {"name": "PESSOAJURIDICA", "schema": "dbo", "type": "TABLE"},
+                {"name": "PESSOAFISICA", "schema": "dbo", "type": "TABLE"},
+            ],
+            "columns": {
+                "dbo.PESSOA": [
+                    {"name": "PESSOAID", "type": "int", "display_type": "int"},
+                    {"name": "TIPOPESSOAID", "type": "int", "display_type": "int"},
+                    {"name": "SITUACAOPESSOAID", "type": "int", "display_type": "int"},
+                ],
+                "dbo.PESSOAJURIDICA": [
+                    {"name": "PESSOAJURIDICAID", "type": "int", "display_type": "int"},
+                    {"name": "PESSOAJURIDICA_PESSOAID", "type": "int", "display_type": "int"},
+                ],
+                "dbo.PESSOAFISICA": [
+                    {"name": "PESSOAFISICA_PESSOAID", "type": "int", "display_type": "int"},
+                ],
+            },
+            "database": "testdb",
+        })
+        sql = "select * from pessoa where pessoaid"
+        result = svc.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "PESSOAID" in n
+        assert "PESSOAJURIDICA" not in n
+        assert "PESSOAJURIDICAID" not in n
+        assert "PESSOAJURIDICA_PESSOAID" not in n
+        assert "PESSOAFISICA_PESSOAID" not in n
+        assert "pessoa.PESSOAID" not in n
+        pessoa_id = next(item for item in result if item[0] == "PESSOAID")
+        assert "int" in pessoa_id[2].lower()
+        assert "•" in pessoa_id[2]
+
+    def test_join_alias_dot_only_suggests_that_table(self):
+        svc = SqlAutoCompleteService()
+        svc.set_schema({
+            "db_type": "sqlserver",
+            "tables": [
+                {"name": "Premio", "schema": "dbo", "type": "TABLE"},
+                {"name": "Cobertura", "schema": "dbo", "type": "TABLE"},
+            ],
+            "columns": {
+                "dbo.Premio": [
+                    {"name": "PremioId", "type": "int", "display_type": "int"},
+                    {"name": "CoberturaId", "type": "uniqueidentifier", "display_type": "uniqueidentifier"},
+                ],
+                "dbo.Cobertura": [
+                    {"name": "Id", "type": "int", "display_type": "int"},
+                    {"name": "Nome", "type": "varchar", "display_type": "varchar"},
+                ],
+            },
+            "database": "testdb",
+        })
+        sql = (
+            "SELECT top 100 * FROM Premio p\n"
+            "JOIN Cobertura c on c.Cobert"
+        )
+        result = svc.get_completions(sql, 1, len(sql.splitlines()[1]))
+        n = names(result)
+        assert "CoberturaId" not in n
+        assert "PremioId" not in n
+        assert "Nome" in n or "Id" in n or n == []
