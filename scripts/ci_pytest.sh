@@ -36,6 +36,7 @@ else
     test_new_tab_connection.py
     test_session_restoration.py
     test_python_output_e2e.py
+    test_pynia_acp_live.py
   )
   for mod in "${CI_IGNORES[@]}"; do
     PYTEST_ARGS+=(--ignore="tests/${mod}")

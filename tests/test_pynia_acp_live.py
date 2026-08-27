@@ -10,6 +10,7 @@ Run locally:
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -20,7 +21,14 @@ from src.services.pynia.acp.catalog import AGENT_IDS
 from tests.helpers.acp_listener import RecordingAcpListener
 from tests.helpers.acp_live_report import LiveAgentOutcome, format_live_report
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.timeout(300),
+    pytest.mark.skipif(
+        os.environ.get("CI") == "true",
+        reason="live ACP requires local CLI authentication",
+    ),
+]
 
 
 def _exercise(agent_id: str, tmp_path, qapp) -> LiveAgentOutcome:
