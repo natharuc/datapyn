@@ -64,6 +64,7 @@ jobs:
       - name: Setup | Checkout Repository on Release Branch
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.workflow_run.head_branch }}
           ssh-key: ${{ (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true) && secrets.ACTIONS_DEPLOY_KEY || '' }}
 
@@ -72,25 +73,51 @@ jobs:
         run: |
           git reset --hard ${{ github.event.workflow_run.head_sha }}
 
+      - name: Setup | Python
+        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup | Install uv
+        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Setup | Install dependencies
+        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        run: uv sync --dev
+
+      # Official PSR docker action pip-installs latest GitPython on every run.
+      # GitPython 3.1.60 removed Actor.name_email_regex, which PSR 10.5/10.6 still
+      # uses while loading config. Run the locked CLI plus our compatibility shim.
       - name: Action | Semantic Version Release
         id: release
         if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
-        uses: python-semantic-release/python-semantic-release@v10.5.3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          git_committer_name: "github-actions"
-          git_committer_email: "actions@users.noreply.github.com"
-          force: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_COMMIT_AUTHOR: "github-actions <actions@users.noreply.github.com>"
+          FORCE_LEVEL: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '' }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          extra=()
+          if [ -n "${FORCE_LEVEL}" ]; then
+            extra+=("--${FORCE_LEVEL}")
+          fi
+          uv run python scripts/ci_semantic_release.py -v version "${extra[@]}"
 
       - name: Fallback | Force patch when new commits did not match a release
         id: release_fallback
         if: steps.release.outputs.released != 'true' && (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true)
-        uses: python-semantic-release/python-semantic-release@v10.5.3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          git_committer_name: "github-actions"
-          git_committer_email: "actions@users.noreply.github.com"
-          force: patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_COMMIT_AUTHOR: "github-actions <actions@users.noreply.github.com>"
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          uv run python scripts/ci_semantic_release.py -v version --patch
 
       - name: Set release job outputs
         id: set_release_outputs
