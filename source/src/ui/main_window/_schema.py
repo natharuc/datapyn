@@ -1219,19 +1219,14 @@ class SchemaMixin:
         )
 
         # Update Object Explorer for the session that REQUESTED this schema
-        # (not all sessions - each session has its own OE state)
         if hasattr(self, "_session_explorers"):
             if requesting_sid:
-                # Only update the requesting session's OE
                 explorer = self._get_session_explorer(requesting_sid)
                 explorer.set_schema(schema, connection_name, db_type=db_type)
-                
-                # Update OE tracking for this session
                 if not hasattr(self, "_oe_current_connection"):
                     self._oe_current_connection = {}
                 self._oe_current_connection[requesting_sid] = connection_name
-            
-            # Ensure we're showing the active session's OE
+
             current_widget = self._get_current_session_widget()
             if (
                 not self._schema_object_is_invalid(current_widget)
@@ -1240,9 +1235,149 @@ class SchemaMixin:
             ):
                 active_sid = current_widget.session.session_id
                 self._switch_session_explorer(active_sid)
-                # Show dock if the active session requested this schema
                 if requesting_sid == active_sid:
                     self.object_explorer_dock.show()
+
+        self._maybe_warm_databricks_catalog_schemas(
+            schema, connection_name, db_type, requesting_sid, connection_group
+        )
+
+    def _maybe_warm_databricks_catalog_schemas(
+        self,
+        schema: dict,
+        connection_name: str,
+        db_type: str,
+        session_id: str,
+        connection_group: str = "",
+    ):
+        if str(db_type or schema.get("db_type") or "").lower() != "databricks":
+            return
+        sid = session_id or ""
+        if not sid:
+            return
+        catalogs = list(schema.get("databases") or [])
+        if len(catalogs) <= 1:
+            return
+        current_catalog = str(schema.get("database") or "")
+        already = getattr(self, "_databricks_schema_warm_done", set())
+        warm_key = (sid, connection_name)
+        if warm_key in already:
+            return
+        already.add(warm_key)
+        self._databricks_schema_warm_done = already
+
+        def _load(connector, _group, name):
+            if connector is None:
+                already.discard(warm_key)
+                return
+            self._schema_service.warm_catalog_schemas(
+                connector,
+                name,
+                catalogs,
+                skip_catalog=current_catalog,
+                session_id=sid,
+            )
+
+        self._run_with_metadata_connector(sid, _load)
+
+    def _on_catalog_schemas_warmed(self, payload: dict):
+        if not isinstance(payload, dict):
+            return
+        sid = str(payload.get("session_id") or "")
+        connection_name = str(payload.get("connection_name") or "")
+        loaded = payload.get("loaded") or {}
+        remaining = list(payload.get("remaining") or [])
+        if not sid:
+            return
+        explorer = self._session_explorers.get(sid) if hasattr(self, "_session_explorers") else None
+        if explorer:
+            for catalog_name, schemas in loaded.items():
+                explorer.add_schemas_to_catalog(catalog_name, schemas)
+        widget = self._session_widgets.get(sid) if hasattr(self, "_session_widgets") else None
+        connection_group = self._session_connection_group(sid)
+        cached = None
+        if connection_name:
+            cached = self._schema_service.get_cached_schema(
+                connection_name, session_id=sid, connection_group=connection_group
+            )
+        if cached and loaded:
+            catalog_schemas = cached.setdefault("catalog_schemas", {})
+            for catalog_name, schemas in loaded.items():
+                existing = set(catalog_schemas.get(catalog_name, []) or [])
+                for schema_name in schemas or []:
+                    if schema_name:
+                        existing.add(str(schema_name))
+                catalog_schemas[catalog_name] = sorted(existing)
+            self._schema_service.update_cached_schema(
+                connection_name, cached, session_id=sid, connection_group=connection_group
+            )
+            db_type = self._get_connection_db_type(connection_name, connection_group)
+            self._apply_schema_to_session_blocks(
+                sid,
+                connection_name,
+                cached,
+                db_type=db_type,
+                connection_group=connection_group,
+            )
+        if remaining:
+            def _retry(connector, _group, name):
+                if connector is None:
+                    return
+                self._schema_service.warm_catalog_schemas(
+                    connector,
+                    name,
+                    remaining,
+                    session_id=sid,
+                )
+
+            QTimer.singleShot(
+                1500,
+                lambda: self._run_with_metadata_connector(sid, _retry),
+            )
+
+    def request_databricks_namespace(self, block, catalog: str, schema: str = "", session_widget=None):
+        """Load schemas or tables for a catalog.schema typed in the SQL editor."""
+        catalog = str(catalog or "").strip()
+        schema = str(schema or "").strip()
+        if not catalog:
+            return
+        sid = ""
+        if session_widget is not None:
+            sid = getattr(getattr(session_widget, "session", None), "session_id", "") or ""
+        if not sid:
+            sid = self._get_active_session_id() or ""
+        if not sid:
+            return
+        key = (sid, catalog.lower(), schema.lower())
+        in_flight = getattr(self, "_databricks_namespace_fetches", set())
+        if key in in_flight:
+            return
+        in_flight.add(key)
+        self._databricks_namespace_fetches = in_flight
+
+        def _load(connector, _group, connection_name):
+            if connector is None:
+                in_flight.discard(key)
+                return
+            if not schema:
+                self._store_pending_oe_request(
+                    "_pending_oe_schema_requests",
+                    self._pending_oe_key(sid, catalog),
+                    sid,
+                )
+                self._schema_service.load_schemas_for_catalog(connector, connection_name, catalog)
+            else:
+                self._store_pending_oe_request(
+                    "_pending_oe_table_requests",
+                    self._pending_oe_key(sid, catalog, schema),
+                    sid,
+                )
+                self._schema_service.load_tables_for_schema(
+                    connector, connection_name, catalog, schema
+                )
+            QTimer.singleShot(8000, lambda: in_flight.discard(key))
+
+        self._run_with_metadata_connector(sid, _load)
 
     def _apply_loaded_schema_to_blocks(
         self,
@@ -1646,6 +1781,11 @@ class SchemaMixin:
         if hasattr(block, "set_available_databases"):
             all_databases = self._available_databases_from_schema(schema, db_type)
             block.set_available_databases(all_databases)
+        if hasattr(block, "set_namespace_options") and str(db_type or schema.get("db_type") or "").lower() == "databricks":
+            block.set_namespace_options(
+                schema.get("databases") or [],
+                schema.get("catalog_schemas") or {},
+            )
 
     def _update_oe_for_block_connection(self, block, connection_name: str, schema: dict):
         """Update Object Explorer if the given block is currently focused.
@@ -1749,6 +1889,7 @@ class SchemaMixin:
                 trust_server_certificate=config.get("trust_server_certificate", False),
                 http_path=config.get("http_path", ""),
                 database_context=database_context,
+                schema=config.get("schema") or config.get("databricks_schema") or "",
             )
             worker.moveToThread(thread)
 
@@ -1858,6 +1999,82 @@ class SchemaMixin:
             lazy_mode=SCHEMA_LAZY_FULL,
         )
 
+    def _set_block_namespace_switching(self, block, switching: bool) -> None:
+        setter = getattr(block, "set_namespace_switching", None)
+        if callable(setter):
+            setter(switching)
+
+    def _peek_live_block_connector(
+        self,
+        block,
+        session_widget,
+        connection_group: str,
+        connection_name: str,
+    ):
+        """Return a live connector without applying USE (never opens a new connection)."""
+        block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
+        pool = getattr(session_widget, "_block_connector_pool", None) if session_widget else None
+        if pool is not None and block_key:
+            peek = getattr(pool, "peek_connected", None)
+            if callable(peek):
+                connector = peek(block_key, connection_group, connection_name)
+                if connector is not None:
+                    return connector
+
+        block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
+        if block_conn:
+            return None
+        session = getattr(session_widget, "session", None) if session_widget else None
+        connector = getattr(session, "connector", None)
+        if connector is not None and self._connector_is_connected(connector):
+            return connector
+        return None
+
+    def _patch_block_schema_context(self, block, database_name: str) -> None:
+        """Update catalog/schema fields in-place so autocomplete follows USE immediately."""
+        getter = getattr(block, "get_sql_schema", None)
+        setter = getattr(block, "set_sql_schema", None)
+        if not callable(getter) or not callable(setter):
+            return
+        schema = getter() or {}
+        if not schema:
+            return
+        from src.database.namespace import has_dual_namespace, parse_context
+
+        updated = dict(schema)
+        db_type = str(schema.get("db_type") or "")
+        if has_dual_namespace(db_type):
+            ctx = parse_context(db_type, database_name)
+            if ctx.catalog:
+                updated["database"] = ctx.catalog
+            if ctx.schema:
+                updated["current_schema"] = ctx.schema
+            updated["current_context"] = database_name
+        else:
+            updated["database"] = database_name
+        setter(updated)
+
+    def _maybe_set_explorer_loading_for_block(self, session_widget, block, session_id: str) -> None:
+        if not session_id or session_widget is None:
+            return
+        editor = getattr(session_widget, "editor", None)
+        focused = None
+        if editor is not None:
+            for name in ("get_last_focused_block", "get_focused_block"):
+                getter = getattr(editor, name, None)
+                if callable(getter):
+                    focused = getter()
+                    break
+        if focused is not block:
+            return
+        explorer = (
+            self._get_session_explorer(session_id)
+            if hasattr(self, "_get_session_explorer")
+            else None
+        )
+        if explorer is not None and hasattr(explorer, "set_loading"):
+            explorer.set_loading(True, S.object_explorer.loading)
+
     def _on_block_database_changed(
         self,
         block,
@@ -1881,19 +2098,12 @@ class SchemaMixin:
             return
         session = current_widget.session if current_widget and hasattr(current_widget, "session") else None
 
-        block_conn_name = block.get_connection_name() if hasattr(block, "get_connection_name") else None
         connection_group, connection_name = self._effective_connection_for_block(block, session)
         if not connection_name:
             self.statusBar().showMessage(S.status.no_active_connection, 3000)
             return
 
         block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
-        if hasattr(block, "set_sql_schema"):
-            block.set_sql_schema({})
-        elif hasattr(block, "editor") and hasattr(block.editor, "set_sql_schema"):
-            block.editor.set_sql_schema({})
-        if hasattr(block, "set_database_context"):
-            block.set_database_context("")
         self._schema_service.invalidate_cache(
             connection_name,
             session_id=getattr(session, "session_id", "") if session else "",
@@ -1902,6 +2112,7 @@ class SchemaMixin:
         )
 
         try:
+            self._set_block_namespace_switching(block, True)
             self._switch_block_database_background(
                 block,
                 connection_name,
@@ -1910,6 +2121,7 @@ class SchemaMixin:
                 connection_group=connection_group,
             )
         except Exception as exc:
+            self._set_block_namespace_switching(block, False)
             logger.warning("Block database change failed: %s", exc)
             self.statusBar().showMessage(str(exc)[:80], 5000)
             if current_widget is not None and hasattr(current_widget, "append_output"):
@@ -1938,6 +2150,97 @@ class SchemaMixin:
         if hasattr(self, "main_statusbar"):
             self.main_statusbar.set_cursor_position(line, column)
 
+    def _reload_block_schema_after_switch(
+        self,
+        block,
+        connector,
+        connection_name: str,
+        database_name: str,
+        session_widget=None,
+        connection_group: str = "",
+        session_id: str = "",
+    ) -> None:
+        """Reload autocomplete schema after a successful USE / reconnect."""
+        self._set_block_namespace_switching(block, False)
+        self._patch_block_schema_context(block, database_name)
+        block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
+        self._schema_service.invalidate_cache(
+            connection_name,
+            session_id=session_id,
+            block_key=block_key,
+            connection_group=connection_group,
+        )
+        self._maybe_set_explorer_loading_for_block(session_widget, block, session_id)
+        self._schema_service.load_schema(
+            connector,
+            connection_name,
+            session_id=session_id,
+            block_key=block_key,
+            connection_group=connection_group,
+            lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE,
+            database_context=database_name,
+        )
+        self.statusBar().showMessage(
+            S.status.database_changed.format(name=database_name), 3000
+        )
+
+    def _switch_block_database_via_use(
+        self,
+        block,
+        connector,
+        connection_name: str,
+        database_name: str,
+        session_widget=None,
+        connection_group: str = "",
+        session_id: str = "",
+    ) -> None:
+        """Switch catalog/schema with USE on an existing connector."""
+        from src.workers import DatabaseSwitchWorker
+
+        thread = QThread()
+        worker = DatabaseSwitchWorker(connector, database_name)
+        worker.moveToThread(thread)
+
+        def on_switch_success(_db, session_id=session_id):
+            if (
+                self._schema_object_is_invalid(self)
+                or self._schema_object_is_invalid(block)
+                or (
+                    session_widget is not None
+                    and (
+                        self._schema_object_is_invalid(session_widget)
+                        or getattr(session_widget, "_is_closing", False)
+                    )
+                )
+            ):
+                return
+            self._reload_block_schema_after_switch(
+                block,
+                connector,
+                connection_name,
+                database_name,
+                session_widget=session_widget,
+                connection_group=connection_group,
+                session_id=session_id,
+            )
+
+        def on_switch_error(msg: str, widget=session_widget):
+            self._set_block_namespace_switching(block, False)
+            short = (msg or "Database switch failed")[:120]
+            self.statusBar().showMessage(f"Error: {short[:50]}", 5000)
+            if widget is not None and hasattr(widget, "append_output"):
+                widget.append_output(short, error=True)
+
+        thread.started.connect(worker.run)
+        worker.switch_success.connect(on_switch_success)
+        worker.error.connect(on_switch_error)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(lambda: self._remove_worker_thread(thread))
+
+        self._worker_threads.append((thread, worker))
+        self._adopt_background_thread(thread, worker)
+        thread.start()
+
     def _switch_block_database_background(
         self,
         block,
@@ -1955,6 +2258,7 @@ class SchemaMixin:
                 and self._schema_object_is_invalid(session_widget)
             )
         ):
+            self._set_block_namespace_switching(block, False)
             return
         from src.database.connection_manager import ConnectionManager
         from src.workers import BlockConnectionWorker
@@ -1964,6 +2268,7 @@ class SchemaMixin:
             connection_group = block.get_connection_group() or ""
         config = manager.get_connection_config(connection_group, connection_name)
         if not config:
+            self._set_block_namespace_switching(block, False)
             self._log_info(f"Connection config not found: {connection_name}")
             return
 
@@ -1978,6 +2283,21 @@ class SchemaMixin:
             sid = getattr(session_widget.session, "session_id", "") or ""
         if not sid:
             sid = self._get_active_session_id() or ""
+
+        live_connector = self._peek_live_block_connector(
+            block, session_widget, connection_group, connection_name
+        )
+        if live_connector is not None:
+            self._switch_block_database_via_use(
+                block,
+                live_connector,
+                connection_name,
+                database_name,
+                session_widget=session_widget,
+                connection_group=connection_group,
+                session_id=sid,
+            )
+            return
 
         # Create connection with the NEW database
         thread = QThread()
@@ -1999,6 +2319,7 @@ class SchemaMixin:
             trust_server_certificate=config.get("trust_server_certificate", False),
             http_path=config.get("http_path", ""),
             database_context=database_context,
+            schema=config.get("schema") or config.get("databricks_schema") or "",
         )
         worker.moveToThread(thread)
 
@@ -2028,29 +2349,20 @@ class SchemaMixin:
                     connector,
                 )
 
-            # Invalidate only this block's cache and load the target context.
-            self._schema_service.invalidate_cache(
-                connection_name,
-                session_id=session_id,
-                block_key=block_key,
-                connection_group=connection_group,
-            )
-            self._schema_service.load_schema(
+            self._reload_block_schema_after_switch(
+                block,
                 connector,
                 connection_name,
-                session_id=session_id,
-                block_key=block_key,
+                database_name,
+                session_widget=session_widget,
                 connection_group=connection_group,
-                lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE,
-                database_context=database_name,
-            )
-            self.statusBar().showMessage(
-                S.status.database_changed.format(name=database_name), 3000
+                session_id=session_id,
             )
 
         thread.started.connect(worker.run)
         worker.connection_ready.connect(on_connection_ready)
         def _on_block_db_error(msg: str, widget=session_widget):
+            self._set_block_namespace_switching(block, False)
             short = (msg or "Connection failed")[:120]
             self.statusBar().showMessage(f"Error: {short[:50]}", 5000)
             if widget is not None and hasattr(widget, "append_output"):

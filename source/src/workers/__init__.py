@@ -263,7 +263,8 @@ class BlockConnectionWorker(BaseWorker):
                  sqlserver_auth_mode: str = "",
                  trust_server_certificate: bool = False,
                  http_path: str = "",
-                 database_context: str = ""):
+                 database_context: str = "",
+                 schema: str = ""):
         super().__init__()
         self.db_type = db_type
         self.host = host
@@ -276,6 +277,7 @@ class BlockConnectionWorker(BaseWorker):
         self.trust_server_certificate = trust_server_certificate
         self.http_path = http_path
         self.database_context = database_context
+        self.schema = schema
 
     def run(self):
         """Connect to database"""
@@ -299,6 +301,8 @@ class BlockConnectionWorker(BaseWorker):
                 connect_kwargs["sqlserver_auth_mode"] = self.sqlserver_auth_mode
             if self.db_type == "databricks":
                 connect_kwargs["http_path"] = self.http_path
+                if self.schema:
+                    connect_kwargs["schema"] = self.schema
 
             connector.connect(
                 **connect_kwargs

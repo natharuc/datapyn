@@ -162,6 +162,32 @@ def test_schema_worker_minimal_loads_current_catalog_schemas(qapp):
     assert captured[0]["catalog_schemas"]["main"] == ["audit", "default"]
 
 
+def test_warm_catalog_schemas_skips_current_and_merges_others(qapp):
+    service = SchemaService()
+    run_schema_service_sync(service)
+    connector = FakeDatabricksConnector({
+        "SHOW SCHEMAS IN `mag_bronze`": pd.DataFrame([{"databaseName": "esim"}, {"databaseName": "default"}]),
+        "SHOW SCHEMAS IN `hive_metastore`": pd.DataFrame([{"databaseName": "legacy"}]),
+    })
+    captured = []
+    service.catalog_schemas_warmed.connect(lambda payload: captured.append(payload))
+
+    service.warm_catalog_schemas(
+        connector,
+        "Dbx",
+        ["main", "mag_bronze", "hive_metastore"],
+        skip_catalog="main",
+        session_id="sid-1",
+    )
+
+    assert captured
+    loaded = captured[0]["loaded"]
+    assert "main" not in loaded
+    assert loaded["mag_bronze"] == ["esim", "default"]
+    assert loaded["hive_metastore"] == ["legacy"]
+    assert captured[0]["remaining"] == []
+
+
 def test_block_connection_worker_passes_databricks_http_path(qapp):
     with patch("src.database.database_connector.DatabaseConnector") as connector_cls:
         connector = MagicMock()

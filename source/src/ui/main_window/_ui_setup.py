@@ -104,8 +104,12 @@ class UISetupMixin:
         # Configure central area with sessions in the docking system
         self.set_central_content(session_container)
 
-        # Restore sessions
-        self._restore_sessions()
+        # Restore sessions (or defer when a CLI/file-association open must win first)
+        if getattr(self, "_defer_session_restore", False):
+            self._session_restore_deferred = True
+            self._show_empty_state()
+        else:
+            self._restore_sessions()
         self._setup_session_autosave()
 
         # Dock for connections (left side)
@@ -116,6 +120,11 @@ class UISetupMixin:
 
         # Object Explorer (lateral direita, abaixo de Variables)
         self._create_object_explorer_dock()
+
+        # Deferred restore: empty state was queued before docks existed — apply
+        # dock hide rules now so bottom panels stay hidden until the CLI file opens.
+        if getattr(self, "_session_restore_deferred", False):
+            self._show_empty_state()
 
         # Layout restore deferred to after toolbar creation (see __init__)
 
@@ -192,7 +201,7 @@ class UISetupMixin:
         self.btn_disconnect = self.connection_panel.active_widget.btn_disconnect
 
     def _create_object_explorer_dock(self):
-        """Creates Object Explorer panel (right side, below Variables).
+        """Creates Object Explorer panel (left, tabbed with Connections).
 
         Usa QStackedWidget para que cada sessao tenha seu proprio Object Explorer.
         """
@@ -234,7 +243,10 @@ class UISetupMixin:
             }}
         """)
 
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.object_explorer_dock)
+        if hasattr(self, "connections_dock") and self.connections_dock is not None:
+            self.tabifyDockWidget(self.connections_dock, self.object_explorer_dock)
+            self.connections_dock.raise_()
 
         from src.design_system.tokens import configure_side_dock
 
@@ -248,7 +260,7 @@ class UISetupMixin:
         )
         self.object_explorer_dock.setFeatures(features)
 
-        # Hide until there is an active connection
+        # Hide until there is an active connection (Connections tab stays visible)
         self.object_explorer_dock.hide()
 
         # Smart lazy load: when the dock becomes visible, ask the active

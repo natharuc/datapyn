@@ -1813,22 +1813,37 @@ class TestResultsViewerGridPrepare:
         assert viewer.model.rowCount() == 0
         assert len(viewer.current_df) == 0
 
-    def test_prepare_grid_data_formats_epoch_nanoseconds_as_datetime(self):
+    def test_prepare_grid_data_keeps_numeric_epoch_looking_ids_as_numbers(self):
         from src.ui.components.results_viewer import prepare_grid_data
 
         df = pd.DataFrame(
             {
+                "EventoOperacionalId": [1642585836, 1642585837],
                 "DataCriacao": [1779799229610000000, 1779799227757000000],
                 "Total": [0.0, 31.28],
             }
         )
         result = prepare_grid_data(df, {}, {}, limit=10)
 
-        assert "2026" in result.prepared.display_value(0, 0)
-        assert ":" in result.prepared.display_value(0, 0)
+        # Name/value heuristics must not promote ints to datetime.
+        assert result.prepared.display_value(0, 0) == "1642585836"
+        assert result.prepared.display_value(0, 1) == "1779799229610000000"
         # Integer-valued floats display without the trailing ".0"; real decimals stay.
-        assert result.prepared.display_value(0, 1) == "0"
-        assert result.prepared.display_value(1, 1) == "31.28"
+        assert result.prepared.display_value(0, 2) == "0"
+        assert result.prepared.display_value(1, 2) == "31.28"
+
+    def test_prepare_grid_data_auto_formats_real_datetime_dtype(self):
+        from src.ui.components.results_viewer import prepare_grid_data
+
+        df = pd.DataFrame(
+            {
+                "created_at": pd.to_datetime(
+                    ["2022-01-19 09:50:36", "2022-01-20 10:00:00"]
+                ),
+            }
+        )
+        result = prepare_grid_data(df, {}, {}, limit=10)
+        assert result.prepared.display_value(0, 0) == "2022-01-19 09:50:36"
 
     def test_prepare_grid_data_respects_explicit_datetime_format(self):
         from src.ui.components.results_viewer import prepare_grid_data

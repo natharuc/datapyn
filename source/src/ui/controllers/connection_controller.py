@@ -176,6 +176,7 @@ class ConnectionController(QObject):
                 config.get("trust_server_certificate", True),
                 config.get("http_path", ""),
                 config.get("sqlserver_auth_mode", ""),
+                schema=config.get("schema", ""),
             )
             
             self.update_connection_status()
@@ -223,6 +224,7 @@ class ConnectionController(QObject):
                     new_config.get("trust_server_certificate", True),
                     new_config.get("http_path", ""),
                     new_config.get("sqlserver_auth_mode", ""),
+                    schema=new_config.get("schema", ""),
                 )
             except DuplicateConnectionError:
                 self._show_warning(

@@ -202,3 +202,45 @@ class TestNewTabConnection:
 
         connection_panel.connections_list.new_tab_connection_requested.emit("Prod", "TestConnection")
         assert hasattr(connection_panel.connections_list, "new_tab_connection_requested")
+
+
+class TestActiveConnectionWidget:
+    @pytest.fixture
+    def app(self):
+        from PyQt6.QtWidgets import QApplication
+        import sys
+
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication(sys.argv)
+        return app
+
+    def test_disconnect_icon_emits_and_shows_engine_icon(self, app):
+        from src.language import S
+        from source.src.ui.components.connection_panel import ActiveConnectionWidget
+
+        widget = ActiveConnectionWidget()
+        received = []
+        widget.disconnect_clicked.connect(lambda: received.append(True))
+
+        widget.set_connection(
+            "Lakehouse",
+            host="adb.azuredatabricks.net",
+            database="mag_bronze.esim",
+            db_type="databricks",
+        )
+        assert widget.name_label.text() == "Lakehouse"
+        assert widget.host_label.text() == "adb.azuredatabricks.net"
+        assert widget.database_label.text() == "mag_bronze.esim"
+        assert "(databricks)" not in widget.database_label.text()
+        assert widget.btn_disconnect.toolTip() == S.connection_panel.btn_disconnect
+        assert widget.btn_disconnect.isEnabled()
+        assert not widget.btn_disconnect.text().strip()
+        assert widget.info_label is widget.database_label
+
+        widget.btn_disconnect.click()
+        assert received == [True]
+
+        widget.set_disconnected()
+        assert widget.name_label.text() == S.connection_panel.label_none
+        assert not widget.btn_disconnect.isEnabled()

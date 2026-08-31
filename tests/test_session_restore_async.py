@@ -121,6 +121,63 @@ def test_restored_connections_are_dispatched_only_after_async_queue_starts(monke
     widget.connect_to_database.assert_called_once_with("", "analytics")
 
 
+def test_restore_sessions_keeps_cli_opened_session(tmp_path, monkeypatch):
+    """Deferred restore must keep the CLI tab first and not recreate its widget."""
+    host = _DummySessionsHost()
+    host.session_manager = SessionManager(workspace_path=tmp_path)
+    cli = host.session_manager.create_session(title="Opened.sql")
+    cli_widget = MagicMock()
+    host._session_widgets[cli.session_id] = cli_widget
+    host.session_manager.focus_session(cli.session_id)
+
+    host.session_manager._sessions_file.write_text(
+        "{\n"
+        '  "version": 1,\n'
+        '  "focused_session": "s1",\n'
+        '  "session_order": ["s1"],\n'
+        '  "sessions": {\n'
+        '    "s1": {\n'
+        '      "session_id": "s1",\n'
+        '      "title": "Saved",\n'
+        '      "connection_name": "",\n'
+        '      "database_context": "",\n'
+        '      "code": "",\n'
+        '      "blocks": [],\n'
+        '      "notification_config": null\n'
+        "    }\n"
+        "  }\n"
+        "}",
+        encoding="utf-8",
+    )
+
+    host.connection_manager = MagicMock()
+    host.connection_manager.get_connection.return_value = None
+    host.workspace_manager = MagicMock()
+    host.workspace_manager.load_workspace.return_value = {}
+    host.session_tabs = MagicMock()
+    host._show_empty_state = MagicMock()
+    host._create_session_widget = MagicMock()
+    host._queue_restored_session_connection = MagicMock()
+    host._start_restored_session_reconnects = MagicMock()
+    monkeypatch.setattr(
+        "src.ui.main_window._sessions.QTimer.singleShot",
+        lambda _delay, callback: callback(),
+    )
+
+    host._restore_sessions()
+
+    assert cli.session_id in host.session_manager._session_order
+    assert host.session_manager._session_order[0] == cli.session_id
+    assert host.session_manager.focused_session.session_id == cli.session_id
+    assert host._session_widgets[cli.session_id] is cli_widget
+    created_ids = [call.args[0].session_id for call in host._create_session_widget.call_args_list]
+    assert cli.session_id not in created_ids
+    assert "s1" in created_ids
+    host._show_empty_state.assert_not_called()
+    host.session_tabs.setCurrentIndex.assert_called()
+    host._start_restored_session_reconnects.assert_called_once()
+
+
 def test_restored_schema_callback_keeps_session_and_group_context(monkeypatch):
     host = _DummySessionsHost()
     widget = MagicMock()

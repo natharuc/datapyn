@@ -822,6 +822,19 @@ class SettingsDialog(QDialog):
             colors,
         ))
         editor_layout.addWidget(self._make_hint("Powered by Monaco (VS Code editor engine)", colors))
+        self.maximize_first_block_cb = LabeledToggleSwitch(
+            S.settings.label_maximize_first_block
+            if hasattr(S.settings, "label_maximize_first_block")
+            else "Start new tabs with the first block maximized",
+            checked=settings.value("editor/maximize_first_block", False, type=bool),
+        )
+        editor_layout.addWidget(self.maximize_first_block_cb)
+        editor_layout.addWidget(self._make_hint(
+            S.settings.maximize_first_block_hint
+            if hasattr(S.settings, "maximize_first_block_hint")
+            else "Useful for SQL-only workflows. Esc restores the normal block list.",
+            colors,
+        ))
         general_layout.addWidget(editor_card)
         self._register_section("general.editor", editor_card)
 
@@ -2029,6 +2042,11 @@ class SettingsDialog(QDialog):
         # Save grid display row limit
         settings.setValue("grid/display_row_limit", self.grid_row_limit_spin.value())
         settings.setValue("connections/idle_timeout_sec", self.idle_timeout_spin.value())
+        if hasattr(self, "maximize_first_block_cb"):
+            settings.setValue(
+                "editor/maximize_first_block",
+                self.maximize_first_block_cb.isChecked(),
+            )
 
         if hasattr(self, "shared_delimiter_edit"):
             set_shared_parameter_delimiter(self.shared_delimiter_edit.text())

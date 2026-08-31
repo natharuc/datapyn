@@ -887,9 +887,33 @@ class TestDatabricksAutocomplete:
         n = names(result)
         assert "customers" in n
         assert "orders" in n
-        assert "main.audit.customers" in n
-        assert "hive_metastore.legacy.events" in n
+        assert "main.audit.customers" not in n
+        assert "hive_metastore.legacy.events" not in n
         assert "main.default.customers" not in n
+
+    def test_unqualified_from_does_not_list_foreign_catalog_tables(self, databricks_service):
+        databricks_service.set_schema({
+            **databricks_service._schema,
+            "databases": ["main", "mag_bronze"],
+            "catalog_schemas": {
+                **(databricks_service._schema.get("catalog_schemas") or {}),
+                "mag_bronze": ["esim"],
+            },
+            "tables": list(databricks_service._schema.get("tables") or []) + [
+                {
+                    "name": "sim_cards",
+                    "schema": "esim",
+                    "catalog": "mag_bronze",
+                    "key": "mag_bronze.esim.sim_cards",
+                    "type": "BASE TABLE",
+                }
+            ],
+        })
+        result = databricks_service.get_completions("SELECT * FROM ", 0, 14)
+        n = names(result)
+        assert "customers" in n
+        assert "sim_cards" not in n
+        assert "mag_bronze.esim.sim_cards" not in n
 
     def test_bare_table_lookup_prefers_current_catalog_schema(self, databricks_service):
         sql = "SELECT customers."
@@ -898,6 +922,119 @@ class TestDatabricksAutocomplete:
         assert "id" in n
         assert "name" in n
         assert "audit_only" not in n
+
+    def test_foreign_catalog_dot_suggests_schemas(self, databricks_service):
+        databricks_service.set_schema({
+            **databricks_service._schema,
+            "databases": ["main", "hive_metastore", "mag_bronze"],
+            "catalog_schemas": {
+                **(databricks_service._schema.get("catalog_schemas") or {}),
+                "mag_bronze": ["esim", "default"],
+            },
+        })
+        sql = "SELECT * FROM mag_bronze."
+        result = databricks_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "esim" in n
+        assert "default" in n
+        assert "customers" not in n
+
+    def test_foreign_catalog_schema_dot_suggests_tables(self, databricks_service):
+        databricks_service.set_schema({
+            **databricks_service._schema,
+            "databases": ["main", "mag_bronze"],
+            "catalog_schemas": {
+                **(databricks_service._schema.get("catalog_schemas") or {}),
+                "mag_bronze": ["esim"],
+            },
+            "tables": list(databricks_service._schema.get("tables") or []) + [
+                {
+                    "name": "sim_cards",
+                    "schema": "esim",
+                    "catalog": "mag_bronze",
+                    "key": "mag_bronze.esim.sim_cards",
+                    "type": "BASE TABLE",
+                }
+            ],
+            "columns": {
+                **(databricks_service._schema.get("columns") or {}),
+                "mag_bronze.esim.sim_cards": [
+                    {"name": "imsi", "type": "string", "display_type": "string"},
+                ],
+            },
+        })
+        sql = "SELECT * FROM mag_bronze.esim."
+        result = databricks_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "sim_cards" in n
+        assert "customers" not in n
+
+    def test_catalog_name_wins_over_schema_name_collision(self, databricks_service):
+        databricks_service.set_schema({
+            **databricks_service._schema,
+            "databases": ["main", "audit"],
+            "catalog_schemas": {
+                "main": ["default", "audit"],
+                "audit": ["raw"],
+            },
+            "tables": list(databricks_service._schema.get("tables") or []) + [
+                {
+                    "name": "events",
+                    "schema": "raw",
+                    "catalog": "audit",
+                    "key": "audit.raw.events",
+                    "type": "BASE TABLE",
+                }
+            ],
+        })
+        sql = "SELECT * FROM audit."
+        result = databricks_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "raw" in n
+        assert "customers" not in n
+
+    def test_catalog_lookup_is_case_insensitive(self, databricks_service):
+        sql = "SELECT * FROM MAIN."
+        result = databricks_service.get_completions(sql, 0, len(sql))
+        n = names(result)
+        assert "default" in n
+        assert "audit" in n
+
+    def test_three_part_from_fallback_resolves_alias_columns(self, databricks_service):
+        sql = "SELECT c. FROM mag_bronze.esim.sim_cards c"
+        databricks_service.set_schema({
+            **databricks_service._schema,
+            "tables": list(databricks_service._schema.get("tables") or []) + [
+                {
+                    "name": "sim_cards",
+                    "schema": "esim",
+                    "catalog": "mag_bronze",
+                    "key": "mag_bronze.esim.sim_cards",
+                    "type": "BASE TABLE",
+                }
+            ],
+            "columns": {
+                **(databricks_service._schema.get("columns") or {}),
+                "mag_bronze.esim.sim_cards": [
+                    {"name": "imsi", "type": "string", "display_type": "string"},
+                ],
+            },
+        })
+        result = databricks_service.get_completions(sql, 0, 9)
+        n = names(result)
+        assert "imsi" in n
+
+    def test_missing_namespace_reports_cache_miss(self, databricks_service):
+        databricks_service.set_schema({
+            **databricks_service._schema,
+            "databases": ["main", "mag_bronze"],
+            "catalog_schemas": {"main": ["default", "audit"]},
+        })
+        sql = "SELECT * FROM mag_bronze.esim."
+        assert databricks_service.missing_databricks_namespace(sql, 0, len(sql)) == (
+            "mag_bronze",
+            "esim",
+        )
 
 
 class TestDerivedAndTemporarySources:

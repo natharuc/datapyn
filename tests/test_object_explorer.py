@@ -1355,6 +1355,26 @@ class TestObjectExplorerLazyLoading:
                 return
         pytest.fail("hive_metastore not found")
 
+    def test_warmed_inactive_catalog_shows_schemas(self, explorer, databricks_schema):
+        schema = dict(databricks_schema)
+        schema["catalog_schemas"] = {
+            **(databricks_schema.get("catalog_schemas") or {}),
+            "hive_metastore": ["legacy"],
+        }
+        explorer.set_schema(schema, "conn1", db_type="databricks")
+        for i in range(explorer.tree.topLevelItemCount()):
+            item = explorer.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("name") == "hive_metastore":
+                names = [
+                    item.child(j).data(0, Qt.ItemDataRole.UserRole).get("name")
+                    for j in range(item.childCount())
+                    if item.child(j).data(0, Qt.ItemDataRole.UserRole)
+                ]
+                assert "legacy" in names
+                return
+        pytest.fail("hive_metastore not found")
+
     def test_active_schema_has_placeholder(self, explorer, databricks_schema):
         """Schemas do catalogo ativo tem placeholder para tabelas"""
         explorer.set_schema(databricks_schema, "conn1", db_type="databricks")

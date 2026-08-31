@@ -158,6 +158,7 @@ class MonacoEditor(QWidget):
     completion_requested = pyqtSignal(str, str, int, int)
     force_completion_requested = pyqtSignal(str, str, int, int)  # bypasses throttling
     sql_schema_requested = pyqtSignal()
+    namespace_fetch_needed = pyqtSignal(str, str)
     
     # Cursor position signal
     cursor_changed = pyqtSignal(int, int)  # line, column (1-based)
@@ -388,6 +389,7 @@ class MonacoEditor(QWidget):
         self._completion_service.sql_completions_ready.connect(self._deliver_sql_completions)
         self._completion_service.sql_context_completions_ready.connect(self._deliver_sql_context_completions)
         self._completion_service.python_completions_ready.connect(self._deliver_python_completions)
+        self._completion_service.namespace_fetch_needed.connect(self.namespace_fetch_needed.emit)
     
     def _deliver_sql_completions(self, request_id: int, completions: list) -> None:
         items = completions or []

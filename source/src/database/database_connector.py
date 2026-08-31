@@ -21,6 +21,7 @@ from src.utils.sql_parameter_service import (
     prepare_sqlserver_batch,
 )
 from src.language import S
+from src.database.namespace import format_context, parse_context
 from src.database.query_stream_exporter import (
     ExportFormat,
     StreamExportResult,
@@ -315,8 +316,7 @@ def _prepare_sqlserver_mfa_credential(host: str, login_hint: str = "", tenant_id
 
 
 def _build_databricks_context_name(catalog: str, schema: str) -> str:
-    parts = [str(part or "").strip() for part in (catalog, schema)]
-    return ".".join(part for part in parts if part)
+    return format_context(catalog, schema)
 
 
 def get_connector_database_context(connector) -> str:
@@ -583,9 +583,12 @@ class DatabaseConnector:
             # For Databricks, initialize catalog/schema tracking
             # If user didn't specify a catalog, query Databricks for current catalog/schema
             if db_type == "databricks":
+                initial_schema = str(
+                    kwargs.get("schema") or kwargs.get("databricks_schema") or "default"
+                ).strip() or "default"
                 if database:
                     self.connection_params["databricks_catalog"] = database
-                    self.connection_params["databricks_schema"] = "default"
+                    self.connection_params["databricks_schema"] = initial_schema
                 else:
                     # Query Databricks for current catalog and schema
                     try:
@@ -783,7 +786,10 @@ class DatabaseConnector:
                 params.append(f"http_path={quote_plus(http_path)}")
             if database:
                 params.append(f"catalog={quote_plus(database)}")
-                params.append("schema=default")
+                initial_schema = str(
+                    kwargs.get("schema") or kwargs.get("databricks_schema") or "default"
+                ).strip() or "default"
+                params.append(f"schema={quote_plus(initial_schema)}")
             if params:
                 conn_str += "?" + "&".join(params)
             return conn_str, connect_args
@@ -2198,23 +2204,32 @@ class DatabaseConnector:
         # Skip if already on the same database (avoid unnecessary roundtrip)
         current_db = self.connection_params.get("database", "")
         if self.db_type == "databricks":
-            if database.startswith("CATALOG:"):
-                target = database[8:]
-                if current_db.lower() == target.lower():
-                    logger.debug(f"Already on catalog '{target}', skipping USE CATALOG")
+            parsed = parse_context(
+                "databricks",
+                database,
+                current_catalog=self.get_current_catalog(),
+                current_schema=self.get_current_schema(),
+            )
+            current_catalog = self.get_current_catalog()
+            current_schema = self.get_current_schema()
+            if parsed.schema_only:
+                if parsed.schema and parsed.schema.lower() == current_schema.lower():
+                    logger.debug(f"Already on schema '{parsed.schema}', skipping USE SCHEMA")
                     return True
-            elif database.startswith("SCHEMA:"):
-                target = database[7:]
-                current_schema = self.connection_params.get("databricks_schema", "")
-                if current_schema.lower() == target.lower():
-                    logger.debug(f"Already on schema '{target}', skipping USE SCHEMA")
+            elif parsed.catalog_only:
+                if parsed.catalog and parsed.catalog.lower() == current_catalog.lower():
+                    logger.debug(f"Already on catalog '{parsed.catalog}', skipping USE CATALOG")
                     return True
-            elif "." not in database:
-                # Schema-only for Databricks
-                current_schema = self.connection_params.get("databricks_schema", "")
-                if current_schema.lower() == database.lower():
-                    logger.debug(f"Already on schema '{database}', skipping USE SCHEMA")
-                    return True
+            elif (
+                parsed.catalog
+                and parsed.schema
+                and parsed.catalog.lower() == current_catalog.lower()
+                and parsed.schema.lower() == current_schema.lower()
+            ):
+                logger.debug(
+                    f"Already on '{parsed.catalog}.{parsed.schema}', skipping USE"
+                )
+                return True
         else:
             # Non-Databricks: simple database comparison
             if current_db.lower() == database.lower():
@@ -2231,31 +2246,31 @@ class DatabaseConnector:
                 current_catalog = self.connection_params.get("databricks_catalog", self.connection_params.get("database", ""))
                 current_schema = self.connection_params.get("databricks_schema", "default")
                 logger.debug(f"Databricks change_database: target='{database}', current_catalog='{current_catalog}', current_schema='{current_schema}', command='{use_command}'")
-            with self.engine.connect() as conn:
-                # For Databricks, may have multiple commands separated by ;
-                if self.db_type == "databricks" and ";" in use_command:
-                    for cmd in use_command.split(";"):
-                        cmd = cmd.strip()
-                        if cmd:
-                            conn.execute(text(cmd))
-                else:
-                    conn.execute(text(use_command))
-                conn.commit()
+            if use_command:
+                with self.engine.connect() as conn:
+                    # For Databricks, may have multiple commands separated by ;
+                    if self.db_type == "databricks" and ";" in use_command:
+                        for cmd in use_command.split(";"):
+                            cmd = cmd.strip()
+                            if cmd:
+                                conn.execute(text(cmd))
+                    else:
+                        conn.execute(text(use_command))
+                    conn.commit()
 
             # Update internal params for Databricks (track catalog and schema separately)
             if self.db_type == "databricks":
-                if database.startswith("CATALOG:"):
-                    self.connection_params["database"] = database[8:]
-                    self.connection_params["databricks_catalog"] = database[8:]
-                elif database.startswith("SCHEMA:"):
-                    self.connection_params["databricks_schema"] = database[7:]
-                elif "." in database:
-                    parts = database.split(".", 1)
-                    self.connection_params["database"] = parts[0]
-                    self.connection_params["databricks_catalog"] = parts[0]
-                    self.connection_params["databricks_schema"] = parts[1]
-                else:
-                    self.connection_params["databricks_schema"] = database
+                parsed = parse_context(
+                    "databricks",
+                    database,
+                    current_catalog=self.get_current_catalog(),
+                    current_schema=self.get_current_schema(),
+                )
+                if parsed.catalog:
+                    self.connection_params["database"] = parsed.catalog
+                    self.connection_params["databricks_catalog"] = parsed.catalog
+                if parsed.schema:
+                    self.connection_params["databricks_schema"] = parsed.schema
             else:
                 self.connection_params["database"] = database
 
@@ -2324,32 +2339,23 @@ class DatabaseConnector:
             # within the current database, which is the closest equivalent.
             return f'SET search_path TO "{database}"'
         elif self.db_type == "databricks":
-            # Databricks uses 3-level namespace: catalog.schema.table
-            # Support explicit CATALOG: or SCHEMA: prefix from UI
-            if database.startswith("CATALOG:"):
-                catalog_name = database[8:]  # Remove "CATALOG:" prefix
-                return f"USE CATALOG `{catalog_name}`"
-            elif database.startswith("SCHEMA:"):
-                schema_name = database[7:]  # Remove "SCHEMA:" prefix
-                return f"USE SCHEMA `{schema_name}`"
-            # If database contains a dot, it's catalog.schema format
-            elif "." in database:
-                parts = database.split(".", 1)
-                return f"USE CATALOG `{parts[0]}`; USE SCHEMA `{parts[1]}`"
-            else:
-                # No prefix, no dot - need to determine if it's a catalog or schema
-                # Heuristic: if it matches the current catalog name, it's a catalog switch
-                # Otherwise, assume it's a schema within the current catalog
-                current_catalog = self.connection_params.get("databricks_catalog", 
-                                                             self.connection_params.get("database", ""))
-                if current_catalog and database.lower() == current_catalog.lower():
-                    # Already on this catalog, no action needed
-                    logger.debug(f"Databricks: '{database}' matches current catalog, skipping USE")
-                    return ""  # Empty command - will be skipped
-                else:
-                    # Try as catalog first (safer) - if fails, Databricks will error
-                    # This handles the case where user specifies a catalog name directly
-                    return f"USE CATALOG `{database}`"
+            parsed = parse_context(
+                "databricks",
+                database,
+                current_catalog=self.get_current_catalog(),
+                current_schema=self.get_current_schema(),
+            )
+            if parsed.schema_only and parsed.schema:
+                return f"USE SCHEMA `{parsed.schema}`"
+            if parsed.catalog_only and parsed.catalog:
+                return f"USE CATALOG `{parsed.catalog}`"
+            if parsed.catalog and parsed.schema:
+                return f"USE CATALOG `{parsed.catalog}`; USE SCHEMA `{parsed.schema}`"
+            if parsed.catalog:
+                return f"USE CATALOG `{parsed.catalog}`"
+            if parsed.schema:
+                return f"USE SCHEMA `{parsed.schema}`"
+            return ""
         else:
             return f"USE {database}"
 

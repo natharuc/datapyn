@@ -215,9 +215,12 @@ class SplashScreen(QSplashScreen):
         if app is not None:
             app.processEvents()
 
-    def finish_with_window(self, window) -> None:
+    def finish_with_window(self, window, *, delay_ms: int = 120) -> None:
         self.set_progress(100, "Pronto!")
-        QTimer.singleShot(120, lambda: self._do_finish(window))
+        if delay_ms <= 0:
+            self._do_finish(window)
+            return
+        QTimer.singleShot(int(delay_ms), lambda: self._do_finish(window))
 
     def _do_finish(self, window) -> None:
         self.finish(window)

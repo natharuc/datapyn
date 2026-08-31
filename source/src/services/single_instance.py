@@ -12,7 +12,8 @@ from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 logger = logging.getLogger(__name__)
 
-_CONNECT_MS = 800
+# Cold-start probe: keep short so double-click open is not blocked when alone.
+_CONNECT_MS = 200
 _WRITE_MS = 2000
 
 

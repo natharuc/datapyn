@@ -180,6 +180,7 @@ class MonacoCompletionService(QObject):
     sql_completions_ready = pyqtSignal(int, list)
     sql_context_completions_ready = pyqtSignal(int, list)
     python_completions_ready = pyqtSignal(int, list)
+    namespace_fetch_needed = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -191,6 +192,7 @@ class MonacoCompletionService(QObject):
         self._pending: Optional[tuple] = None
         self._sql_ac_service = None
         self._sql_ac_lock = threading.Lock()
+        self._namespace_fetch_keys: set[tuple[str, str]] = set()
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.setInterval(80)
@@ -198,6 +200,26 @@ class MonacoCompletionService(QObject):
 
     def set_sql_schema(self, schema: Dict[str, Any]) -> None:
         self._schema = schema or {}
+        self._namespace_fetch_keys.clear()
+
+    def _maybe_request_databricks_namespace(self, full_text: str, line: int, column: int) -> None:
+        if str(self._schema.get("db_type") or "").lower() != "databricks":
+            return
+        try:
+            service = self._sql_autocomplete_service()
+            with self._sql_ac_lock:
+                service.set_schema(self._schema)
+                target = service.missing_databricks_namespace(full_text, line - 1, column - 1)
+        except Exception:
+            return
+        if not target:
+            return
+        catalog, schema_name = target
+        key = (str(catalog).lower(), str(schema_name or "").lower())
+        if key in self._namespace_fetch_keys:
+            return
+        self._namespace_fetch_keys.add(key)
+        self.namespace_fetch_needed.emit(catalog, schema_name or "")
 
     def set_python_context(self, namespace: Dict[str, Any], global_imports: str = "") -> None:
         self._namespace = namespace or {}
@@ -217,6 +239,7 @@ class MonacoCompletionService(QObject):
         self._stop_context_worker()
 
     def request_sql_completions(self, request_id: int, full_text: str, line: int, column: int) -> None:
+        self._maybe_request_databricks_namespace(full_text, line, column)
         self._start_worker(
             request_id,
             "sql",
@@ -226,6 +249,7 @@ class MonacoCompletionService(QObject):
         )
 
     def request_sql_context(self, request_id: int, full_text: str, prefix: str, line: int, column: int) -> None:
+        self._maybe_request_databricks_namespace(full_text, line, column)
         self._start_worker(
             request_id,
             "sql_context",

@@ -1252,6 +1252,33 @@ class TestBlockMaximize:
         editor._restore_all_blocks()
         assert not editor.is_maximized
 
+    def test_apply_startup_maximize_preference_respects_setting(self, editor, monkeypatch):
+        store = {"editor/maximize_first_block": False}
+
+        class FakeSettings:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def value(self, key, default=None, type=None):
+                return store.get(key, default)
+
+        monkeypatch.setattr("PyQt6.QtCore.QSettings", FakeSettings)
+
+        editor.apply_startup_maximize_preference()
+        assert editor._maximized_block is None
+
+        store["editor/maximize_first_block"] = True
+        editor.apply_startup_maximize_preference()
+        assert editor._maximized_block is editor._blocks[0]
+        assert editor._blocks[0].is_maximized
+
+    def test_maximized_block_hides_focus_accent(self, editor):
+        block = editor._blocks[0]
+        block._is_focused = True
+        editor._maximize_block(block)
+        style = block.styleSheet()
+        assert "border-left: 3px solid transparent" in style
+
     def test_generate_import_code_xlsx(self, editor):
         """Deve gerar codigo de importacao para XLSX"""
         code = editor._generate_import_code("/path/to/data.xlsx")

@@ -138,6 +138,7 @@ def apply_import(connection_manager, data: dict) -> int:
                 http_path=config.get("http_path", ""),
                 sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
                 allow_overwrite=True,
+                schema=config.get("schema", ""),
             )
             count += 1
         except DuplicateConnectionError:
