@@ -197,7 +197,10 @@ def main():
     splash.set_progress(55, "Abrindo interface…")
     from src.ui import MainWindow
 
-    window = MainWindow(splash=splash)
+    window = MainWindow(
+        splash=splash,
+        defer_session_restore=bool(startup_files),
+    )
 
     from src.services.single_instance import install_single_instance_server
 
@@ -205,18 +208,26 @@ def main():
         if paths:
             window.open_startup_files(paths)
         if focus:
-            window.showNormal()
-            window.raise_()
-            window.activateWindow()
+            # Keep maximized/normal geometry — never showNormal() (that resets
+            # a maximized window to its "restored" size/position).
+            window._focus_window()
 
     install_single_instance_server(app, _on_second_instance)
-
-    splash.finish_with_window(window)
 
     if startup_files:
         from PyQt6.QtCore import QTimer
 
-        QTimer.singleShot(0, lambda: window.open_startup_files(startup_files))
+        window.open_startup_files(startup_files)
+        splash.finish_with_window(window, delay_ms=0)
+
+        def _restore_saved_sessions() -> None:
+            if getattr(window, "_session_restore_deferred", False):
+                window._session_restore_deferred = False
+                window._restore_sessions()
+
+        QTimer.singleShot(0, _restore_saved_sessions)
+    else:
+        splash.finish_with_window(window, delay_ms=120)
 
     # Iniciar loop de eventos
     sys.exit(app.exec())

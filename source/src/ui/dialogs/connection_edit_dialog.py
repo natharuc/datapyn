@@ -64,6 +64,7 @@ class ConnectionTestWorker(QThread):
         sqlserver_auth_mode="",
         trust_server_certificate=True,
         http_path="",
+        schema="",
     ):
         super().__init__()
         self.db_type = db_type
@@ -76,6 +77,7 @@ class ConnectionTestWorker(QThread):
         self.sqlserver_auth_mode = sqlserver_auth_mode
         self.trust_server_certificate = trust_server_certificate
         self.http_path = http_path
+        self.schema = schema
 
     def run(self):
         try:
@@ -92,6 +94,8 @@ class ConnectionTestWorker(QThread):
             kwargs["trust_server_certificate"] = self.trust_server_certificate
             if self.http_path:
                 kwargs["http_path"] = self.http_path
+            if self.schema:
+                kwargs["schema"] = self.schema
 
             connector.connect(
                 db_type=self.db_type,
@@ -250,7 +254,15 @@ class ConnectionEditDialog(QDialog):
 
         self.txt_database = QLineEdit()
         self.txt_database.setPlaceholderText(S.connection_edit.placeholder_database)
-        basic_layout.addRow(S.connection_edit.label_database, self.txt_database)
+        self.lbl_database = QLabel(S.connection_edit.label_database)
+        basic_layout.addRow(self.lbl_database, self.txt_database)
+
+        self.txt_schema = QLineEdit()
+        self.txt_schema.setPlaceholderText(S.connection_edit.placeholder_schema)
+        self.lbl_schema = QLabel(S.connection_edit.label_schema)
+        basic_layout.addRow(self.lbl_schema, self.txt_schema)
+        self.txt_schema.hide()
+        self.lbl_schema.hide()
 
         # HTTP Path (Databricks only)
         self.txt_http_path = QLineEdit()
@@ -428,6 +440,7 @@ class ConnectionEditDialog(QDialog):
 
         # Databricks-specific field
         self.txt_http_path.setText(self.config.get("http_path", ""))
+        self.txt_schema.setText(self.config.get("schema") or self.config.get("databricks_schema") or "default")
 
         use_windows_auth = self.config.get("use_windows_auth", False)
         self.chk_windows_auth.setChecked(use_windows_auth)
@@ -518,6 +531,15 @@ class ConnectionEditDialog(QDialog):
         # Databricks-specific fields
         self.txt_http_path.setVisible(is_databricks)
         self.lbl_http_path.setVisible(is_databricks)
+        self.txt_schema.setVisible(is_databricks)
+        self.lbl_schema.setVisible(is_databricks)
+        if is_databricks:
+            self.lbl_database.setText(S.connection_edit.label_catalog)
+            self.txt_database.setPlaceholderText(S.connection_edit.placeholder_catalog)
+        else:
+            self.lbl_database.setText(S.connection_edit.label_database)
+            self.txt_database.setPlaceholderText(S.connection_edit.placeholder_database)
+            self.txt_schema.clear()
         
         # For Databricks, adjust username/password labels for token auth
         if is_databricks:
@@ -589,6 +611,7 @@ class ConnectionEditDialog(QDialog):
         # Create and start worker
         self._test_cancelled = False
         http_path = self.txt_http_path.text() if self._current_db_type() == "databricks" else ""
+        schema = self.txt_schema.text().strip() if self._current_db_type() == "databricks" else ""
         self.test_worker = ConnectionTestWorker(
             db_type=self._current_db_type(),
             host=self.txt_host.text(),
@@ -600,6 +623,7 @@ class ConnectionEditDialog(QDialog):
             sqlserver_auth_mode=self._current_sqlserver_auth_mode(),
             trust_server_certificate=self.chk_trust_cert.isChecked(),
             http_path=http_path,
+            schema=schema,
         )
         self.test_worker.finished.connect(self._on_test_finished)
         self.test_worker.start()
@@ -677,6 +701,7 @@ class ConnectionEditDialog(QDialog):
         # Databricks-specific field
         if db_type == "databricks":
             config["http_path"] = self.txt_http_path.text().strip()
+            config["schema"] = self.txt_schema.text().strip() or "default"
 
         if self.chk_save_password.isChecked():
             config["password"] = self.txt_password.text()

@@ -388,6 +388,7 @@ class ConnectionsMixin:
                     config.get("trust_server_certificate", True),
                     config.get("http_path", ""),
                     config.get("sqlserver_auth_mode", ""),
+                    schema=config.get("schema", ""),
                 )
             except DuplicateConnectionError:
                 msg = getattr(

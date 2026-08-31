@@ -1070,6 +1070,7 @@ class EntityMetadataWorker(QObject):
                             sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
                             trust_server_certificate=config.get("trust_server_certificate", False),
                             http_path=config.get("http_path", ""),
+                            schema=config.get("schema") or config.get("databricks_schema") or "",
                         )
                         connector = temp_connector
                     except Exception:

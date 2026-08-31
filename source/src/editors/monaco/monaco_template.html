@@ -540,6 +540,38 @@
             return [cat, sch, tableName].filter(function(part) { return part; }).join('.');
         }
 
+        function lookupCatalogSchemas(catalog) {
+            const map = sqlSchemaIndex.catalogSchemas || {};
+            const key = normalizeSchemaKey(catalog);
+            if (map[catalog]) {
+                return map[catalog] || [];
+            }
+            const names = Object.keys(map);
+            for (let i = 0; i < names.length; i++) {
+                if (normalizeSchemaKey(names[i]) === key) {
+                    return map[names[i]] || [];
+                }
+            }
+            return [];
+        }
+
+        function isKnownCatalogName(name) {
+            const key = normalizeSchemaKey(name);
+            if (!key) {
+                return false;
+            }
+            const catalogs = sqlSchemaIndex.catalogs || [];
+            for (let i = 0; i < catalogs.length; i++) {
+                if (normalizeSchemaKey(catalogs[i]) === key) {
+                    return true;
+                }
+            }
+            const map = sqlSchemaIndex.catalogSchemas || {};
+            return Object.keys(map).some(function(catalog) {
+                return normalizeSchemaKey(catalog) === key;
+            });
+        }
+
         function collectDatabricksNamespaceItems(prefix) {
             const parts = String(prefix || '').split('.').filter(function(part) { return part; });
             if (!parts.length) {
@@ -547,7 +579,7 @@
             }
             if (parts.length === 1) {
                 const catalog = parts[0];
-                const schemas = ((sqlSchemaIndex.catalogSchemas || {})[catalog] || []).slice();
+                const schemas = lookupCatalogSchemas(catalog).slice();
                 const seen = new Set();
                 (sqlSchemaIndex.tableItems || []).forEach(function(item) {
                     if (normalizeSchemaKey(item.catalog || '') === normalizeSchemaKey(catalog) && item.schemaName) {
@@ -611,7 +643,26 @@
             return '';
         }
 
+        function filterDatabricksCurrentContextTables(items) {
+            if (!isDatabricksSchema()) {
+                return items || [];
+            }
+            const curCat = databricksCurrentCatalog().toLowerCase();
+            const curSch = databricksCurrentSchema().toLowerCase();
+            if (!curCat || !curSch) {
+                return items || [];
+            }
+            return (items || []).filter(function(item) {
+                const cat = String(item.catalog || '').toLowerCase();
+                const sch = String(item.schemaName || '').toLowerCase();
+                return cat === curCat && sch === curSch;
+            });
+        }
+
         function filterDefaultSchemaTables(items) {
+            if (isDatabricksSchema()) {
+                return filterDatabricksCurrentContextTables(items);
+            }
             if (!isSqlServerSchema()) {
                 return items || [];
             }
@@ -622,6 +673,20 @@
                 }
                 return schema === 'dbo';
             });
+        }
+
+        function shouldUseDatabricksCurrentContextOnly(textBefore) {
+            if (!isDatabricksSchema()) {
+                return false;
+            }
+            if (parseSqlDotContext(textBefore)) {
+                return false;
+            }
+            const currentLine = (textBefore.split('\n').pop() || '').replace(/\s+$/, '');
+            if (/(?:^|[\s,(])[\w@#]+\.[\w$]*$/.test(currentLine)) {
+                return false;
+            }
+            return true;
         }
 
         function shouldUseSqlServerDefaultSchemaOnly(textBefore) {
@@ -644,6 +709,9 @@
         }
 
         function filterSqlServerDefaultSchema(items, textBefore) {
+            if (shouldUseDatabricksCurrentContextOnly(textBefore)) {
+                return filterDatabricksCurrentContextTables(items || []);
+            }
             if (!shouldUseSqlServerDefaultSchemaOnly(textBefore)) {
                 return items || [];
             }
@@ -655,7 +723,25 @@
                 return collectCrossDatabaseTableItems(crossDbCtx);
             }
             if (dotCtx && isDatabricksSchema()) {
-                const nsItems = collectDatabricksNamespaceItems(dotCtx.qualifier);
+                const qualifier = String(dotCtx.qualifier || '');
+                const parts = qualifier.split('.').filter(function(part) { return part; });
+                if (parts.length === 1 && isKnownCatalogName(parts[0])) {
+                    return filterPrefixMatches(
+                        collectDatabricksNamespaceItems(qualifier),
+                        dotCtx.columnPrefix,
+                        80,
+                        false
+                    );
+                }
+                if (parts.length >= 2) {
+                    return filterPrefixMatches(
+                        collectDatabricksNamespaceItems(qualifier),
+                        dotCtx.columnPrefix,
+                        80,
+                        false
+                    );
+                }
+                const nsItems = collectDatabricksNamespaceItems(qualifier);
                 if (nsItems.length) {
                     return filterPrefixMatches(nsItems, dotCtx.columnPrefix, 80, false);
                 }
@@ -1815,7 +1901,8 @@
                 schemaNames: new Set(),
                 currentDatabase: schema.database || '',
                 currentSchema: schema.current_schema || '',
-                catalogSchemas: schema.catalog_schemas || {}
+                catalogSchemas: schema.catalog_schemas || {},
+                catalogs: schema.databases || []
             };
             const columnsMap = schema.columns || {};
             const tables = schema.tables || [];
@@ -2066,6 +2153,14 @@
             const label = String(item.label || '').toLowerCase();
             if (label.startsWith(lower)) {
                 return true;
+            }
+            if (
+                isDatabricksSchema()
+                && item.category === 'table'
+                && label.indexOf('.') >= 0
+                && lower.indexOf('.') < 0
+            ) {
+                return false;
             }
             if (lower.length >= 2 && label.includes(lower)) {
                 return true;

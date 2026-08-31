@@ -24,6 +24,7 @@ import logging
 
 from src.language import S
 from src.design_system.tokens import get_colors
+from src.design_system.icon_button import IconButton
 
 logger = logging.getLogger(__name__)
 
@@ -279,11 +280,11 @@ class ActiveConnectionWidget(QFrame):
     def _setup_ui(self):
         colors = get_colors()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
 
-        # Header with icon
         header = QHBoxLayout()
+        header.setSpacing(8)
         icon_label = QLabel()
         icon_label.setPixmap(qta.icon("mdi.connection", color=colors.info).pixmap(20, 20))
         header.addWidget(icon_label)
@@ -291,46 +292,76 @@ class ActiveConnectionWidget(QFrame):
         title.setStyleSheet(f"font-weight: 500; font-size: 11px; color: {colors.text_secondary};")
         header.addWidget(title)
         header.addStretch()
-        layout.addLayout(header)
-
-        # Name
-        self.name_label = QLabel(S.connection_panel.label_none)
-        self.name_label.setStyleSheet(f"font-size: 14px; font-weight: 500; color: {colors.text_primary};")
-        layout.addWidget(self.name_label)
-
-        # Info
-        self.info_label = QLabel("")
-        self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
-        layout.addWidget(self.info_label)
-
-        # Button
-        self.btn_disconnect = QPushButton(f" {S.connection_panel.btn_disconnect}")
-        self.btn_disconnect.setIcon(qta.icon("mdi.link-off", color="white"))
-        self.btn_disconnect.setObjectName("danger")
+        self.btn_disconnect = IconButton(
+            icon_name="mdi.power-plug-off",
+            tooltip=S.connection_panel.btn_disconnect,
+            size="compact",
+            variant="danger",
+            icon_color=colors.danger,
+            parent=self,
+        )
         self.btn_disconnect.setEnabled(False)
         self.btn_disconnect.clicked.connect(self.disconnect_clicked.emit)
-        layout.addWidget(self.btn_disconnect)
+        header.addWidget(self.btn_disconnect)
+        layout.addLayout(header)
+
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        self._db_icon_label = QLabel()
+        self._db_icon_label.setFixedSize(28, 28)
+        self._db_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._db_icon_label.hide()
+        body.addWidget(self._db_icon_label, 0, Qt.AlignmentFlag.AlignTop)
+
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        self.name_label = QLabel(S.connection_panel.label_none)
+        self.name_label.setStyleSheet(
+            f"font-size: 14px; font-weight: 500; color: {colors.text_primary};"
+        )
+        text.addWidget(self.name_label)
+
+        self.host_label = QLabel("")
+        self.host_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
+        self.host_label.hide()
+        text.addWidget(self.host_label)
+
+        self.database_label = QLabel("")
+        self.database_label.setWordWrap(True)
+        self.database_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 12px;")
+        self.database_label.hide()
+        text.addWidget(self.database_label)
+        body.addLayout(text, 1)
+        layout.addLayout(body)
+
+        # Compatibility alias used by MainWindow._setup_connection_panel_compat.
+        self.info_label = self.database_label
 
     def set_connection(self, name: str, host: str = "", database: str = "", db_type: str = ""):
         """Set connection"""
         self.name_label.setText(name)
-
-        info_parts = []
-        if host:
-            info_parts.append(host)
-        if database:
-            info_parts.append(database)
+        self.host_label.setText(host or "")
+        self.host_label.setVisible(bool(host))
+        self.database_label.setText(database or "")
+        self.database_label.setVisible(bool(database))
         if db_type:
-            info_parts.append(f"({db_type})")
-
-        self.info_label.setText(" / ".join(info_parts))
+            icon = get_db_icon(db_type, size=28)
+            self._db_icon_label.setPixmap(icon.pixmap(28, 28))
+            self._db_icon_label.show()
+        else:
+            self._db_icon_label.clear()
+            self._db_icon_label.hide()
         self.btn_disconnect.setEnabled(True)
 
     def set_disconnected(self):
         """Set as disconnected"""
         self.name_label.setText(S.connection_panel.label_none)
-        self.info_label.setText("")
+        self.host_label.setText("")
+        self.host_label.hide()
+        self.database_label.setText("")
+        self.database_label.hide()
+        self._db_icon_label.clear()
+        self._db_icon_label.hide()
         self.btn_disconnect.setEnabled(False)
 
 

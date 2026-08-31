@@ -100,9 +100,12 @@ class IconButton(QPushButton):
                 "bg_pressed": colors.interactive_primary_active,
             },
             "danger": {
+                # Soft tint keeps a colored icon readable (solid danger wash
+                # fights a red icon and looks like a harsh square).
                 "bg": "transparent",
-                "bg_hover": colors.danger,
-                "bg_pressed": colors.danger_active,
+                "bg_hover": "rgba(239, 68, 68, 0.16)",
+                "bg_pressed": "rgba(239, 68, 68, 0.28)",
+                "radius": RADIUS.radius_sm,
             },
             "success": {
                 "bg": colors.success,
@@ -112,12 +115,13 @@ class IconButton(QPushButton):
         }
         
         v = variants.get(self._variant, variants["ghost"])
+        radius = v.get("radius", RADIUS.radius_none)
         
         self.setStyleSheet(f"""
             QPushButton {{
                 background-color: {v["bg"]};
                 border: none;
-                border-radius: {RADIUS.radius_none}px;
+                border-radius: {radius}px;
                 padding: 0;
             }}
             QPushButton:hover {{

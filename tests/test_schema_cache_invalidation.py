@@ -534,7 +534,7 @@ def test_apply_loaded_schema_applies_to_blocks_without_schema(qapp):
     empty_block.set_database_context.assert_called_once_with("Conn:GECON")
 
 
-def test_block_database_change_clears_only_target_and_invalidates_block_cache(qapp):
+def test_block_database_change_keeps_schema_and_invalidates_block_cache(qapp):
     widget = _DummyWidget("sid-1", "Conn")
     main_window = _DummyMainWindow(widget, MagicMock())
     target_block = _DummyBlock()
@@ -545,8 +545,8 @@ def test_block_database_change_clears_only_target_and_invalidates_block_cache(qa
 
     main_window._on_block_database_changed(target_block, "db_b")
 
-    target_block.set_sql_schema.assert_called_once_with({})
-    target_block.set_database_context.assert_called_once_with("")
+    target_block.set_sql_schema.assert_not_called()
+    target_block.set_database_context.assert_not_called()
     other_block.set_sql_schema.assert_not_called()
     main_window._schema_service.invalidate_cache.assert_called_once_with(
         "Conn",
@@ -739,6 +739,107 @@ def test_block_database_switch_registers_connector_and_loads_target_schema(qapp,
         call.kwargs.get("block_key") == "block-1"
         and call.kwargs.get("lazy_mode") == "autocomplete"
         and call.kwargs.get("database_context") == "db_b"
+        for call in main_window._schema_service.load_schema.call_args_list
+    )
+
+
+def test_block_database_switch_reuses_pool_connector_without_reconnect(qapp, monkeypatch):
+    class _Signal:
+        def __init__(self):
+            self._callbacks = []
+
+        def connect(self, callback, *_args, **_kwargs):
+            self._callbacks.append(callback)
+
+        def emit(self, *args):
+            for callback in list(self._callbacks):
+                callback(*args)
+
+    class _Thread:
+        def __init__(self):
+            self.started = _Signal()
+            self.finished = _Signal()
+
+        def start(self):
+            self.started.emit()
+
+        def quit(self):
+            return None
+
+    connector = MagicMock()
+    connector.is_connected.return_value = True
+    connector._abandoned = False
+    switch_workers = []
+    reconnect_workers = []
+
+    class _SwitchWorker:
+        def __init__(self, live_connector, database_name):
+            self.connector = live_connector
+            self.database_name = database_name
+            self.switch_success = _Signal()
+            self.error = _Signal()
+            self.finished = _Signal()
+            switch_workers.append(self)
+
+        def moveToThread(self, _thread):
+            return None
+
+        def run(self):
+            self.connector.change_database(self.database_name)
+            self.switch_success.emit(self.database_name)
+            self.finished.emit()
+
+    class _ReconnectWorker:
+        def __init__(self, **_kwargs):
+            reconnect_workers.append(self)
+            self.connection_ready = _Signal()
+            self.error = _Signal()
+            self.finished = _Signal()
+
+        def moveToThread(self, _thread):
+            return None
+
+        def run(self):
+            self.finished.emit()
+
+    manager = MagicMock()
+    manager.get_connection_config.return_value = {
+        "db_type": "databricks",
+        "host": "host",
+        "port": 443,
+        "database": "hive_metastore",
+    }
+    monkeypatch.setattr("src.database.connection_manager.ConnectionManager", lambda: manager)
+    monkeypatch.setattr("src.ui.main_window._schema.QThread", _Thread)
+    monkeypatch.setattr("src.workers.DatabaseSwitchWorker", _SwitchWorker)
+    monkeypatch.setattr("src.workers.BlockConnectionWorker", _ReconnectWorker)
+
+    widget = _DummyWidget("sid-1", "Conn")
+    target_block = _DummyBlock()
+    target_block.get_block_key = MagicMock(return_value="block-1")
+    target_block._sql_schema = {
+        "db_type": "databricks",
+        "databases": ["main", "mag_bronze"],
+        "catalog_schemas": {"main": ["default"], "mag_bronze": ["esim"]},
+    }
+    widget.editor._blocks = [target_block]
+    widget._block_connector_pool = BlockConnectorPool()
+    widget._block_connector_pool.register("block-1", "", "Conn", connector)
+    main_window = _DummyMainWindow(widget, MagicMock())
+    main_window._worker_threads = []
+    main_window._adopt_background_thread = MagicMock()
+    main_window._remove_worker_thread = MagicMock()
+    main_window._get_active_session_id = MagicMock(return_value="sid-1")
+
+    main_window._on_block_database_changed(target_block, "mag_bronze.esim")
+
+    assert reconnect_workers == []
+    assert len(switch_workers) == 1
+    connector.change_database.assert_called_once_with("mag_bronze.esim")
+    assert any(
+        call.kwargs.get("block_key") == "block-1"
+        and call.kwargs.get("lazy_mode") == "autocomplete"
+        and call.kwargs.get("database_context") == "mag_bronze.esim"
         for call in main_window._schema_service.load_schema.call_args_list
     )
 

@@ -451,6 +451,25 @@ class TestUseSyntax:
         result = connector._build_use_command("testdb")
         assert result == 'SET search_path TO "testdb"'
 
+    def test_build_use_command_databricks_canonical_context(self):
+        from src.database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        connector.db_type = "databricks"
+        connector.connection_params = {
+            "database": "main",
+            "databricks_catalog": "main",
+            "databricks_schema": "default",
+        }
+
+        assert connector._build_use_command("mag_bronze.esim") == (
+            "USE CATALOG `mag_bronze`; USE SCHEMA `esim`"
+        )
+        assert connector._build_use_command("CATALOG:mag_bronze") == "USE CATALOG `mag_bronze`"
+        assert connector._build_use_command("SCHEMA:esim") == "USE SCHEMA `esim`"
+        # Bare name is a catalog switch, not a schema heuristic.
+        assert connector._build_use_command("mag_bronze") == "USE CATALOG `mag_bronze`"
+
     def test_use_regex_matches_backtick_syntax(self):
         """Regex USE deve aceitar sintaxe com backticks"""
         pattern = r"^\s*USE\s+[\[`]?([^\]`\s;]+)[\]`]?\s*;?\s*$"
@@ -637,3 +656,93 @@ class TestDatabaseSelectorPopup:
         block.db_panel.database_selected.emit("")
 
         assert block._database_name is None
+
+
+class TestDatabricksNamespaceChips:
+    def test_databricks_sql_block_shows_catalog_and_schema_chips(self, qapp):
+        block = CodeBlock()
+        block.set_language("sql")
+        block.set_connection_name("Dbx", "databricks")
+        block.set_sql_schema({
+            "db_type": "databricks",
+            "databases": ["main", "mag_bronze"],
+            "catalog_schemas": {
+                "main": ["default"],
+                "mag_bronze": ["esim", "default"],
+            },
+        })
+        assert block.db_panel.isHidden()
+        assert not block.catalog_panel.isHidden()
+        assert not block.schema_panel.isHidden()
+
+        block.set_database_name("mag_bronze.esim")
+        assert block.get_database_name() == "mag_bronze.esim"
+        assert block.catalog_panel.get_database_name() == "mag_bronze"
+        assert block.schema_panel.get_database_name() == "esim"
+
+    def test_catalog_change_falls_back_to_default_schema(self, qapp):
+        block = CodeBlock()
+        block.set_language("sql")
+        block.set_connection_name("Dbx", "databricks")
+        block.set_sql_schema({
+            "db_type": "databricks",
+            "databases": ["main", "mag_bronze"],
+            "catalog_schemas": {
+                "main": ["default", "audit"],
+                "mag_bronze": ["esim"],
+            },
+        })
+        block.set_database_name("mag_bronze.esim")
+        block._on_catalog_selected("main")
+        assert block.get_database_name() == "main.default"
+
+    def test_sqlserver_keeps_single_database_chip(self, qapp):
+        block = CodeBlock()
+        block.set_language("sql")
+        block.set_connection_name("App", "sqlserver")
+        assert not block.db_panel.isHidden()
+        assert block.catalog_panel.isHidden()
+        assert block.schema_panel.isHidden()
+
+    def test_empty_schema_keeps_databricks_chips_and_options(self, qapp):
+        block = CodeBlock()
+        block.set_language("sql")
+        block.set_connection_name("Dbx", "databricks")
+        block.set_sql_schema({
+            "db_type": "databricks",
+            "databases": ["main", "mag_bronze"],
+            "catalog_schemas": {
+                "main": ["default"],
+                "mag_bronze": ["esim", "default"],
+            },
+        })
+        block.set_database_name("mag_bronze.esim")
+        block.set_sql_schema({})
+        assert block.db_panel.isHidden()
+        assert not block.catalog_panel.isHidden()
+        assert not block.schema_panel.isHidden()
+        assert block.catalog_panel.get_available_databases() == ["main", "mag_bronze"]
+        assert block.catalog_panel.get_database_name() == "mag_bronze"
+        assert block.schema_panel.get_database_name() == "esim"
+
+    def test_namespace_switching_feedback_restores_labels(self, qapp):
+        from src.language import S
+
+        block = CodeBlock()
+        block.set_language("sql")
+        block.set_connection_name("Dbx", "databricks")
+        block.set_sql_schema({
+            "db_type": "databricks",
+            "databases": ["main", "mag_bronze"],
+            "catalog_schemas": {"main": ["default"], "mag_bronze": ["esim"]},
+        })
+        block.set_database_name("mag_bronze.esim")
+        block.set_namespace_switching(True)
+        assert block.catalog_panel.name_label.text() == S.block.db_switching
+        assert block.schema_panel.name_label.text() == S.block.db_switching
+        assert not block.catalog_panel.isHidden()
+        assert not block.schema_panel.isHidden()
+        block.set_namespace_switching(False)
+        assert block.catalog_panel.get_database_name() == "mag_bronze"
+        assert block.schema_panel.get_database_name() == "esim"
+        assert block.catalog_panel.name_label.text() == "mag_bronze"

@@ -76,6 +76,9 @@ def test_sql_typing_path_does_not_wait_for_python_worker():
     assert "sqlContextWantsRemote(textBeforeCursor)" not in html
     assert "function collectScopedColumnItems(" in html
     assert "function lookupColumnsForTable(" in html
+    assert "function filterDatabricksCurrentContextTables(" in html
+    assert "shouldUseDatabricksCurrentContextOnly(textBefore)" in html
+    assert "lower.indexOf('.') < 0" in html
     assert "alias.column — only that table" in html
     assert "Object.keys(sqlSchemaIndex.columnsByKey || {}).forEach(pushCols)" not in html
     assert "mergeCompletionItems(dotItems, contextual)" not in html

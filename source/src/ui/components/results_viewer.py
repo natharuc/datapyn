@@ -51,7 +51,6 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from numbers import Integral, Real
 from typing import Optional, Any
-import re
 import subprocess
 import os
 import qtawesome as qta
@@ -244,16 +243,6 @@ def _grid_format_decimals(format_config: dict, default: int = 2) -> int:
     return max(0, min(decimals, 8))
 
 
-_DATETIME_COLUMN_HINT = re.compile(
-    r"(data|date|time|timestamp|created|updated|modified|evento|criacao|criado|nascimento)",
-    re.IGNORECASE,
-)
-
-
-def _grid_column_name_suggests_datetime(column_name: str) -> bool:
-    return bool(_DATETIME_COLUMN_HINT.search(str(column_name or "").strip()))
-
-
 def _grid_epoch_int(value) -> Optional[int]:
     if isinstance(value, bool):
         return None
@@ -324,38 +313,20 @@ def _grid_parse_datetime_value(value) -> pd.Timestamp:
     return pd.NaT
 
 
-def _grid_column_values_look_like_epoch(series: pd.Series) -> bool:
-    if series is None or series.empty:
-        return False
+def _grid_should_auto_datetime_format(series: pd.Series) -> bool:
+    """Auto-format as datetime only when the series dtype is already datetime.
 
-    checked = 0
-    parsed = 0
-    for value in series.dropna().head(25):
-        epoch_value = _grid_epoch_int(value)
-        if epoch_value is None:
-            continue
-        checked += 1
-        if not pd.isna(_grid_parse_datetime_from_epoch_numeric(epoch_value)):
-            parsed += 1
-
-    return checked > 0 and parsed == checked
-
-
-def _grid_should_auto_datetime_format(column_name: str, series: pd.Series) -> bool:
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return True
-    if not _grid_column_is_numeric(series):
-        return False
-    if not _grid_column_name_suggests_datetime(column_name):
-        return False
-    return _grid_column_values_look_like_epoch(series)
+    Numeric columns (even with date-like names or epoch-looking ints) stay
+    numeric unless the user explicitly picks Date/DateTime in the column menu.
+    """
+    return bool(pd.api.types.is_datetime64_any_dtype(series))
 
 
 def _grid_resolve_display_format(column_name: str, series: pd.Series, format_config) -> dict:
     config = _grid_normalize_format_config(format_config)
     if config.get("type") != "default":
         return config
-    if _grid_should_auto_datetime_format(column_name, series):
+    if _grid_should_auto_datetime_format(series):
         return {"type": "datetime"}
     return config
 

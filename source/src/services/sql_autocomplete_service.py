@@ -144,10 +144,10 @@ _RE_FROM_ITEM = re.compile(
 # NOTE: alias group uses [ \t] instead of \s to avoid consuming newlines
 # which could steal the FROM/JOIN keyword of the next clause.
 _RE_TABLE_REF = re.compile(
-    r"(?:(?:FROM|JOIN)\s+|,\s*)"         # preceded by FROM/JOIN or comma
-    r"(?:(\[?\w+\]?)\.)?(\[?\w+\]?)"     # optional schema.table
-    r"(?:[ \t]+(?:AS[ \t]+)?(\w+))?"     # optional alias (same line only)
-    ,
+    r"(?:(?:FROM|JOIN)\s+|,\s*)"
+    r"((?:`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)"
+    r"(?:\.(?:`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)){0,2})"
+    r"(?:[ \t]+(?:AS[ \t]+)?(\w+))?",
     re.IGNORECASE,
 )
 
@@ -296,17 +296,20 @@ class SqlContextParser:
 
         # Use existing regex pattern for basic alias detection
         for match in _RE_TABLE_REF.finditer(sql):
-            table = match.group(2)
-            alias = match.group(3)
+            parts = SqlAutoCompleteService._split_identifier_parts(match.group(1) or "")
+            table = parts[-1] if parts else ""
+            alias = match.group(2)
 
             if table:
-                table_clean = table.strip("[]")
+                table_clean = table.strip("[]`\"")
+                full_table = ".".join(parts)
                 if alias:
                     alias_clean = alias.strip("[]")
-                    # Don't treat SQL keywords as aliases
                     if alias_clean.upper() not in {kw.upper() for kw in SQL_KEYWORDS}:
-                        result[alias_clean.lower()] = table_clean
-                result[table_clean.lower()] = table_clean
+                        result[alias_clean.lower()] = full_table
+                result[table_clean.lower()] = full_table
+                if full_table.lower() != table_clean.lower():
+                    result[full_table.lower()] = full_table
 
         # Basic CTE detection with regex
         cte_pattern = re.compile(
@@ -1616,18 +1619,23 @@ class SqlAutoCompleteService:
     def _fallback_resolve_aliases(self, sql: str) -> Dict[str, str]:
         result: Dict[str, str] = {}
         for match in _RE_TABLE_REF.finditer(sql):
-            schema_name = self._strip_identifier_quotes(match.group(1) or "")
-            table_name = self._strip_identifier_quotes(match.group(2) or "")
-            alias_name = self._strip_identifier_quotes(match.group(3) or "")
+            parts = self._split_identifier_parts(match.group(1) or "")
+            if not parts:
+                continue
+            table_name = self._strip_identifier_quotes(parts[-1])
+            schema_name = self._strip_identifier_quotes(parts[-2]) if len(parts) >= 2 else ""
+            catalog_name = self._strip_identifier_quotes(parts[-3]) if len(parts) >= 3 else ""
+            alias_name = self._strip_identifier_quotes(match.group(2) or "")
             if not table_name:
                 continue
-            bare_table = table_name
-            full_table = f"{schema_name}.{table_name}" if schema_name else table_name
-            result[bare_table.lower()] = bare_table
+            full_table = ".".join(part for part in (catalog_name, schema_name, table_name) if part)
+            result[table_name.lower()] = full_table
             if alias_name and alias_name.upper() not in {kw.upper() for kw in SQL_KEYWORDS}:
-                result[alias_name.lower()] = bare_table
+                result[alias_name.lower()] = full_table
             if schema_name:
-                result[full_table.lower()] = bare_table
+                result[f"{schema_name}.{table_name}".lower()] = full_table
+            if catalog_name and schema_name:
+                result[full_table.lower()] = full_table
         return result
 
     def _build_completions(
@@ -1710,6 +1718,39 @@ class SqlAutoCompleteService:
     def _is_known_schema(self, name: str) -> bool:
         norm = self._normalize_name(name)
         return bool(norm) and norm in self._known_schema_names()
+
+    def _is_known_catalog(self, name: str) -> bool:
+        from src.database.namespace import is_known_catalog
+
+        return is_known_catalog(
+            name,
+            self._schema.get("databases") or [],
+            self._schema.get("catalog_schemas") or {},
+        )
+
+    def missing_databricks_namespace(self, text: str, line: int, column: int) -> Optional[Tuple[str, str]]:
+        """Return (catalog, schema) when cache cannot satisfy a 3-level dot completion."""
+        if self._schema_db_type != "databricks":
+            return None
+        before = self._text_before_cursor(text, line, column)
+        match = _RE_DOT_CONTEXT.search((before or "").rstrip())
+        if not match:
+            return None
+        prefix = match.group(1) or ""
+        parts = self._split_identifier_parts(prefix)
+        if len(parts) == 1:
+            catalog = parts[0]
+            if self._is_known_catalog(catalog) and not self._databricks_namespace_completions(prefix):
+                return (catalog, "")
+            return None
+        if len(parts) == 2:
+            catalog, schema_name = parts[0], parts[1]
+            if not self._is_known_catalog(catalog):
+                return None
+            if self._databricks_namespace_completions(prefix):
+                return None
+            return (catalog, schema_name)
+        return None
 
     def _schema_table_completions(
         self,
@@ -1798,6 +1839,14 @@ class SqlAutoCompleteService:
                 entry, default_schema=default_schema
             ):
                 continue
+            if (
+                self._schema_db_type == "databricks"
+                and not database_filter
+                and self._current_databricks_catalog()
+                and self._current_databricks_schema()
+                and not self._is_current_databricks_entry(entry)
+            ):
+                continue
             detail = f'{entry["type"]} - {entry["detail"]}'
             if self._schema_db_type == "databricks":
                 append_table(self._databricks_table_label(entry), detail)
@@ -1854,6 +1903,15 @@ class SqlAutoCompleteService:
     def _dot_completions(self, prefix: str, analysis: dict[str, Any]) -> List[Tuple[str, str, str]]:
         """Return columns for the table, alias, CTE, subquery or temp relation before the dot."""
         parts = self._split_identifier_parts(prefix)
+        if self._schema_db_type == "databricks" and len(parts) <= 2:
+            namespace_result = self._databricks_namespace_completions(prefix)
+            if namespace_result:
+                return namespace_result
+            if len(parts) == 1 and self._is_known_catalog(parts[0]):
+                return []
+            if len(parts) == 2:
+                return []
+
         if len(parts) == 1 and self._is_known_schema(parts[0]):
             return self._schema_table_completions(
                 parts[0],
@@ -1880,9 +1938,6 @@ class SqlAutoCompleteService:
                 )
 
         if relation is None:
-            namespace_result = self._databricks_namespace_completions(prefix)
-            if namespace_result:
-                return namespace_result
             logger.debug("No columns found for prefix: %s", prefix)
             return []
 
@@ -1924,18 +1979,21 @@ class SqlAutoCompleteService:
 
         if len(parts) == 1:
             catalog_name = parts[0]
-            schemas = set()
-            for schema_name in (self._schema.get("catalog_schemas", {}) or {}).get(catalog_name, []) or []:
-                if schema_name:
-                    schemas.add(str(schema_name))
+            from src.database.namespace import schemas_for_catalog
+
+            schemas = set(schemas_for_catalog(self._schema.get("catalog_schemas", {}) or {}, catalog_name))
             for entry in self._table_entries:
                 if self._normalize_name(entry.get("catalog", "")) == self._normalize_name(catalog_name):
                     schema_name = entry.get("schema", "")
                     if schema_name:
                         schemas.add(schema_name)
             if schemas:
-                return [(schema_name, CAT_DATABASE, f"schema - {catalog_name}.{schema_name}") for schema_name in sorted(schemas)]
-
+                return [
+                    (schema_name, CAT_DATABASE, f"schema - {catalog_name}.{schema_name}")
+                    for schema_name in sorted(schemas)
+                ]
+            if self._is_known_catalog(catalog_name):
+                return []
             current_catalog = str(self._schema.get("database", "") or "")
             return table_items(current_catalog, catalog_name)
 
@@ -1954,6 +2012,13 @@ class SqlAutoCompleteService:
             entries = sorted(entries, key=self._databricks_entry_sort_key)
 
         for entry in entries:
+            if (
+                self._schema_db_type == "databricks"
+                and self._current_databricks_catalog()
+                and self._current_databricks_schema()
+                and not self._is_current_databricks_entry(entry)
+            ):
+                continue
             table_label = self._databricks_table_label(entry) if self._schema_db_type == "databricks" else entry["name"]
             normalized_name = self._normalize_name(table_label)
             if normalized_name in seen:

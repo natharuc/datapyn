@@ -126,8 +126,12 @@ class MainWindow(
 ):
     """Janela principal da IDE"""
 
-    def __init__(self, splash=None):
+    def __init__(self, splash=None, *, defer_session_restore: bool = False):
         self._splash = splash
+        # When True, skip restore during _setup_ui; caller opens CLI files first,
+        # then calls _restore_sessions() (faster cold-start file association).
+        self._defer_session_restore = bool(defer_session_restore)
+        self._session_restore_deferred = False
 
         def _sp(value, msg):
             if self._splash:
@@ -173,6 +177,7 @@ class MainWindow(
         self._schema_service.tables_loaded.connect(self._on_tables_loaded)
         self._schema_service.columns_loaded.connect(self._on_columns_loaded)
         self._schema_service.databases_loaded.connect(self._on_databases_loaded)
+        self._schema_service.catalog_schemas_warmed.connect(self._on_catalog_schemas_warmed)
 
         # Pynia ACP host + DataPyn MCP tools
         self._mcp_server = MCPServer() if MCPServer else None

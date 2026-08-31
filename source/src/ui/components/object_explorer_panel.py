@@ -636,16 +636,14 @@ class ObjectExplorerPanel(QWidget):
         return str(table_name)
 
     def _schemas_for_catalog(self, catalog: str, tables: list) -> list:
-        schemas = set()
-        catalog_schemas = (self._current_schema or {}).get("catalog_schemas", {})
-        for schema_name in catalog_schemas.get(catalog, []) or []:
-            if schema_name:
-                schemas.add(schema_name)
+        from src.database.namespace import schemas_for_catalog
 
+        schemas = set(schemas_for_catalog((self._current_schema or {}).get("catalog_schemas", {}), catalog))
         current_catalog = (self._current_schema or {}).get("database", "")
+        needle = str(catalog or "").lower()
         for table in tables or []:
             table_catalog = table.get("catalog", current_catalog)
-            if table_catalog == catalog and table.get("schema"):
+            if str(table_catalog or "").lower() == needle and table.get("schema"):
                 schemas.add(table.get("schema"))
         return sorted(schemas)
 
@@ -943,7 +941,7 @@ class ObjectExplorerPanel(QWidget):
             self._build_tree_databricks_full(tables, columns, current_catalog, all_catalogs, filter_text)
             return
 
-        # Lazy loading mode: show catalogs with placeholder children
+        # Lazy loading mode: show catalogs; schemas appear when already cached
         for catalog in sorted(all_catalogs):
             is_current = (catalog.lower() == current_catalog.lower()) if current_catalog else False
 
@@ -966,22 +964,20 @@ class ObjectExplorerPanel(QWidget):
                 font.setBold(True)
                 cat_item.setFont(0, font)
 
-                schemas = self._schemas_for_catalog(catalog, tables)
-                if schemas:
-                    for schema_name in schemas:
-                        schema_item = QTreeWidgetItem(cat_item, [schema_name])
-                        schema_item.setData(0, Qt.ItemDataRole.UserRole, {
-                            "type": "schema", "name": schema_name, "catalog": catalog
-                        })
-                        if HAS_QTAWESOME:
-                            schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
-                        self._add_placeholder_child(schema_item)
-                else:
-                    self._add_placeholder_child(cat_item)
-                cat_item.setExpanded(True)
+            schemas = self._schemas_for_catalog(catalog, tables)
+            if schemas:
+                for schema_name in schemas:
+                    schema_item = QTreeWidgetItem(cat_item, [schema_name])
+                    schema_item.setData(0, Qt.ItemDataRole.UserRole, {
+                        "type": "schema", "name": schema_name, "catalog": catalog
+                    })
+                    if HAS_QTAWESOME:
+                        schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
+                    self._add_placeholder_child(schema_item)
             else:
-                # Non-current catalogs get placeholder for lazy loading
                 self._add_placeholder_child(cat_item)
+            if is_current:
+                cat_item.setExpanded(True)
 
     def _build_tree_databricks_full(self, tables, columns, current_catalog, all_catalogs, filter_text):
         """Build full tree for Databricks with filter active (loads everything)."""
@@ -1430,16 +1426,23 @@ class ObjectExplorerPanel(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             data = item.data(0, Qt.ItemDataRole.UserRole)
-            if data and data.get("type") == "catalog" and data.get("name") == catalog_name:
+            if data and data.get("type") == "catalog" and str(data.get("name") or "").lower() == str(catalog_name or "").lower():
+                existing = {
+                    str(item.child(j).data(0, Qt.ItemDataRole.UserRole).get("name") or "").lower()
+                    for j in range(item.childCount())
+                    if item.child(j).data(0, Qt.ItemDataRole.UserRole)
+                    and item.child(j).data(0, Qt.ItemDataRole.UserRole).get("type") == "schema"
+                }
                 self._remove_placeholder_children(item)
                 for schema_name in sorted(schemas):
+                    if str(schema_name or "").lower() in existing:
+                        continue
                     schema_item = QTreeWidgetItem(item, [schema_name])
                     schema_item.setData(0, Qt.ItemDataRole.UserRole, {
                         "type": "schema", "name": schema_name, "catalog": catalog_name
                     })
                     if HAS_QTAWESOME:
                         schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
-                    # Add placeholder for tables
                     self._add_placeholder_child(schema_item)
                 return
 
@@ -1617,12 +1620,20 @@ class ObjectExplorerPanel(QWidget):
 
         item_type = data.get("type", "")
         name = data.get("name", "")
+        catalog = data.get("catalog", "")
 
-        if item_type != "database" or not name:
+        payload = ""
+        if item_type == "database" and name:
+            payload = name
+        elif item_type == "catalog" and name:
+            payload = f"CATALOG:{name}"
+        elif item_type == "schema" and name:
+            payload = f"{catalog}.{name}" if catalog else f"SCHEMA:{name}"
+        if not payload:
             return
 
         mime_data = QMimeData()
-        mime_data.setData("application/x-database-name", name.encode("utf-8"))
+        mime_data.setData("application/x-database-name", payload.encode("utf-8"))
 
         # Include connection name so drop target knows which connection to use
         if self._current_connection:

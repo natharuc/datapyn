@@ -518,6 +518,7 @@ class SchemaService(QObject):
     schemas_loaded = pyqtSignal(str, list)  # catalog_name, schemas_list
     tables_loaded = pyqtSignal(str, str, object)  # catalog_name, schema_name, tables_list|busy
     columns_loaded = pyqtSignal(str, str, str, object)  # catalog_name, schema_name, table_name, columns|busy
+    catalog_schemas_warmed = pyqtSignal(dict)  # {loaded, remaining, session_id, connection_name}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -997,6 +998,58 @@ class SchemaService(QObject):
                 return []
 
         self._run_in_thread_with_signal(_run, lambda result: self.schemas_loaded.emit(catalog_name, result))
+
+    def warm_catalog_schemas(
+        self,
+        connector,
+        connection_name: str,
+        catalogs: list,
+        *,
+        skip_catalog: str = "",
+        session_id: str = "",
+    ):
+        """Load schema names for catalogs other than the current one (sequential)."""
+
+        def _run():
+            from src.database.database_connector import QueryBusyError
+
+            loaded = {}
+            remaining = []
+            defer_rest = False
+            skip = str(skip_catalog or "").lower()
+            for catalog in catalogs or []:
+                catalog_name = str(catalog or "").strip()
+                if not catalog_name or catalog_name.lower() == skip:
+                    continue
+                if defer_rest:
+                    remaining.append(catalog_name)
+                    continue
+                try:
+                    query = f"SHOW SCHEMAS IN {_quote_databricks_identifier(catalog_name)}"
+                    df = connector.execute_query(query)
+                    schemas = []
+                    if df is not None and len(df) > 0:
+                        for _, row in df.iterrows():
+                            schema_name = str(row.iloc[0])
+                            if schema_name.lower() not in ("information_schema",):
+                                schemas.append(schema_name)
+                    loaded[catalog_name] = schemas
+                except QueryBusyError:
+                    remaining.append(catalog_name)
+                    defer_rest = True
+                except Exception as exc:
+                    logger.debug("Error warming schemas for %s: %s", catalog_name, exc)
+            return {
+                "loaded": loaded,
+                "remaining": remaining,
+                "session_id": session_id,
+                "connection_name": connection_name,
+            }
+
+        self._run_in_thread_with_signal(
+            _run,
+            lambda result: self.catalog_schemas_warmed.emit(result or {}),
+        )
 
     def load_tables_for_schema(self, connector, connection_name: str, catalog_name: str, schema_name: str):
         """Load tables for a schema in background.

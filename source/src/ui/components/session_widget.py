@@ -973,6 +973,8 @@ class SessionWidget(QWidget):
             self.editor.sql_schema_requested.connect(self._on_editor_sql_schema_requested)
         if hasattr(self.editor, "databases_requested"):
             self.editor.databases_requested.connect(self._on_editor_databases_requested)
+        if hasattr(self.editor, "namespace_fetch_needed"):
+            self.editor.namespace_fetch_needed.connect(self._on_editor_namespace_fetch_needed)
 
         # Drop data file (opens import dialog)
         self.editor.file_dropped.connect(self._on_file_dropped)
@@ -1108,6 +1110,13 @@ class SessionWidget(QWidget):
         main_window = self._get_main_window()
         if main_window is not None and hasattr(main_window, "request_databases_for_block"):
             main_window.request_databases_for_block(block, self)
+
+    def _on_editor_namespace_fetch_needed(self, block, catalog: str, schema: str) -> None:
+        """Autocomplete cache miss for catalog.schema. -> load metadata."""
+        self._touch_db_activity()
+        main_window = self._get_main_window()
+        if main_window is not None and hasattr(main_window, "request_databricks_namespace"):
+            main_window.request_databricks_namespace(block, catalog, schema or "", self)
 
     # === SQL EXECUTION ===
 

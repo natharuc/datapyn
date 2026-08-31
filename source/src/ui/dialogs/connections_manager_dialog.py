@@ -445,6 +445,7 @@ class ConnectionsManagerDialog(QDialog):
                 config.get("trust_server_certificate", False),
                 config.get("http_path", ""),
                 config.get("sqlserver_auth_mode", ""),
+                schema=config.get("schema", ""),
             )
         except DuplicateConnectionError:
             show_warning(self, S.dialogs.warning, getattr(
@@ -703,6 +704,7 @@ class ConnectionsManagerDialog(QDialog):
                     config.get("http_path", ""),
                     config.get("sqlserver_auth_mode", ""),
                     allow_overwrite=True,
+                    schema=config.get("schema", ""),
                 )
             except DuplicateConnectionError:
                 show_warning(self, S.dialogs.warning, getattr(
@@ -766,6 +768,7 @@ class ConnectionsManagerDialog(QDialog):
                     new_config.get("trust_server_certificate", False),
                     new_config.get("http_path", ""),
                     new_config.get("sqlserver_auth_mode", ""),
+                    schema=new_config.get("schema", ""),
                 )
             except DuplicateConnectionError:
                 show_warning(self, S.dialogs.warning, getattr(
@@ -820,6 +823,7 @@ class ConnectionsManagerDialog(QDialog):
                 config.get("trust_server_certificate", False),
                 config.get("http_path", ""),
                 config.get("sqlserver_auth_mode", ""),
+                schema=config.get("schema", ""),
             )
 
             self._load_connections()

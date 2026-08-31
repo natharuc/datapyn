@@ -167,6 +167,7 @@ class BlockEditor(QWidget):
     block_focused = pyqtSignal(object)  # CodeBlock that gained focus
     sql_schema_requested = pyqtSignal(object)  # CodeBlock
     databases_requested = pyqtSignal(object)  # CodeBlock (empty dropdown clicked)
+    namespace_fetch_needed = pyqtSignal(object, str, str)  # CodeBlock, catalog, schema
 
     # Signal when any block text changes and shared {{parameters}} should be rescanned
     shared_parameters_scan_needed = pyqtSignal()
@@ -931,6 +932,8 @@ class BlockEditor(QWidget):
         block.select_connection_requested.connect(self.select_connection_for_block.emit)
         block.connection_name_changed.connect(self.block_connection_changed.emit)
         block.database_changed.connect(self.block_database_changed.emit)
+        if hasattr(block, "namespace_fetch_needed"):
+            block.namespace_fetch_needed.connect(self.namespace_fetch_needed.emit)
         block.completion_log.connect(self.completion_log.emit)
         block.editor.textChanged.connect(self.content_changed.emit)
         block.editor.textChanged.connect(self._schedule_completion_context_refresh)
@@ -1018,6 +1021,17 @@ class BlockEditor(QWidget):
 
         self.content_changed.emit()
         QTimer.singleShot(0, self._update_sticky_header)
+
+    def apply_startup_maximize_preference(self) -> None:
+        """Maximize the first block when the user setting is enabled."""
+        from PyQt6.QtCore import QSettings
+
+        enabled = QSettings("DataPyn", "DataPyn").value(
+            "editor/maximize_first_block", False, type=bool
+        )
+        if not enabled or not self._blocks:
+            return
+        self._maximize_block(self._blocks[0])
 
     def _toggle_maximize_block(self, block: CodeBlock):
         """Toggle maximize/restore for a block."""

@@ -201,8 +201,8 @@ class BlockConnectionPanel(QFrame):
 
 class BlockDatabasePanel(QFrame):
     """
-    Panel to display and allow switching the database for a block.
-    Shows icon + database name, accepts drag & drop of databases from Object Explorer.
+    Panel to display and allow switching database / catalog / schema for a block.
+    Shows icon + name, accepts drag & drop from Object Explorer.
     """
 
     database_clicked = pyqtSignal()  # User clicked on panel
@@ -210,14 +210,43 @@ class BlockDatabasePanel(QFrame):
     database_selected = pyqtSignal(str)  # database_name (selected from popup menu)
     databases_requested = pyqtSignal()  # empty dropdown clicked -> request server db list
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, kind: str = "database"):
         super().__init__(parent)
+        self._kind = kind if kind in {"database", "catalog", "schema"} else "database"
         self._database_name = None
         self._available_databases: list = []
         self._loading_feedback = False
+        self._switching_feedback = False
         self._setup_ui()
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _default_label(self) -> str:
+        if self._kind == "catalog":
+            return getattr(S.block, "catalog_default", "Catalog")
+        if self._kind == "schema":
+            return getattr(S.block, "schema_default", "Schema")
+        return S.block.db_default
+
+    def _loading_label(self) -> str:
+        if self._kind == "catalog":
+            return getattr(S.block, "catalog_loading", S.block.db_loading)
+        if self._kind == "schema":
+            return getattr(S.block, "schema_loading", S.block.db_loading)
+        return S.block.db_loading
+
+    def _switching_label(self) -> str:
+        return getattr(S.block, "db_switching", "Switching...")
+
+    def _idle_icon_name(self) -> str:
+        if self._kind == "schema":
+            return "mdi.folder-outline"
+        return "mdi.database-outline"
+
+    def _active_icon_name(self) -> str:
+        if self._kind == "schema":
+            return "mdi.folder"
+        return "mdi.database"
 
     def _setup_ui(self):
         from src.design_system.tokens import get_colors
@@ -246,11 +275,11 @@ class BlockDatabasePanel(QFrame):
         self.icon_label = QLabel()
         self.icon_label.setFixedSize(16, 16)
         self.icon_label.setScaledContents(True)
-        self.icon_label.setPixmap(qta.icon("mdi.database-outline", color=colors.text_tertiary).pixmap(16, 16))
+        self.icon_label.setPixmap(qta.icon(self._idle_icon_name(), color=colors.text_tertiary).pixmap(16, 16))
         layout.addWidget(self.icon_label)
 
         # Database name
-        self.name_label = QLabel(S.block.db_default)
+        self.name_label = QLabel(self._default_label())
         self.name_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px;")
         self.name_label.setMinimumWidth(40)
         layout.addWidget(self.name_label, 1)
@@ -261,6 +290,8 @@ class BlockDatabasePanel(QFrame):
         colors = get_colors()
         
         self._database_name = database_name
+        if getattr(self, "_switching_feedback", False):
+            return
         display_name = database_name
         if isinstance(display_name, str):
             if display_name.startswith("CATALOG:"):
@@ -271,11 +302,11 @@ class BlockDatabasePanel(QFrame):
         if database_name:
             self.name_label.setText(display_name)
             self.name_label.setStyleSheet(f"color: {colors.text_primary}; font-size: 11px; font-weight: 500;")
-            self.icon_label.setPixmap(qta.icon("mdi.database", color=colors.info).pixmap(16, 16))
+            self.icon_label.setPixmap(qta.icon(self._active_icon_name(), color=colors.info).pixmap(16, 16))
         else:
-            self.name_label.setText(S.block.db_default)
+            self.name_label.setText(self._default_label())
             self.name_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px;")
-            self.icon_label.setPixmap(qta.icon("mdi.database-outline", color=colors.text_tertiary).pixmap(16, 16))
+            self.icon_label.setPixmap(qta.icon(self._idle_icon_name(), color=colors.text_tertiary).pixmap(16, 16))
 
     def get_database_name(self):
         """Return current database name (None = connection default)"""
@@ -312,7 +343,7 @@ class BlockDatabasePanel(QFrame):
 
         self._loading_feedback = True
         colors = get_colors()
-        self.name_label.setText(S.block.db_loading)
+        self.name_label.setText(self._loading_label())
         self.name_label.setStyleSheet(
             f"color: {colors.text_tertiary}; font-size: 11px; font-style: italic;"
         )
@@ -323,6 +354,24 @@ class BlockDatabasePanel(QFrame):
             return
         self._loading_feedback = False
         # Re-apply the current database label/style via set_database.
+        self.set_database(self._database_name)
+
+    def show_switching_feedback(self):
+        """Non-blocking 'switching catalog/schema' overlay on the chip label."""
+        from src.design_system.tokens import get_colors
+
+        self._switching_feedback = True
+        colors = get_colors()
+        self.name_label.setText(self._switching_label())
+        self.name_label.setStyleSheet(
+            f"color: {colors.text_tertiary}; font-size: 11px; font-style: italic;"
+        )
+
+    def clear_switching_feedback(self):
+        """Restore the chip label after a catalog/schema switch completes."""
+        if not getattr(self, "_switching_feedback", False):
+            return
+        self._switching_feedback = False
         self.set_database(self._database_name)
 
     def _show_database_menu(self):
@@ -357,15 +406,15 @@ class BlockDatabasePanel(QFrame):
 
         # Option to reset to connection default
         default_action = menu.addAction(
-            qta.icon("mdi.database-outline", color=colors.text_tertiary),
-            S.block.db_default,
+            qta.icon(self._idle_icon_name(), color=colors.text_tertiary),
+            self._default_label(),
         )
         default_action.setData(None)
         menu.addSeparator()
 
         # Add each database
         for db in sorted(self._available_databases):
-            icon_name = "mdi.database"
+            icon_name = self._active_icon_name()
             icon_color = colors.info
             if db == self._database_name:
                 icon_name = "mdi.database-check"
@@ -442,6 +491,7 @@ class CodeBlock(QFrame):
     select_connection_requested = pyqtSignal(object)  # self - to open connection dialog
     connection_name_changed = pyqtSignal(object, str)  # self, connection_name - when block connection changes
     database_changed = pyqtSignal(object, str)  # self, database_name - when block database changes
+    namespace_fetch_needed = pyqtSignal(object, str, str)  # self, catalog, schema
     completion_log = pyqtSignal(str, str)  # message, level - for autocomplete logging
     maximize_requested = pyqtSignal(object)  # self - toggle maximize/restore
     download_requested = pyqtSignal(object, str)  # self, export_format ("csv"|"parquet")
@@ -483,6 +533,8 @@ class CodeBlock(QFrame):
         self._connection_group = None
         self._connection_name = None  # None = use session connection
         self._database_name = None  # None = use connection default database
+        self._catalog_schemas: dict = {}
+        self._available_catalogs: list = []
         self._sql_parameters = []  # Custom SQL parameters detected from @name tokens
         self._sql_parameters_enabled = True  # False = user chose to define variables manually in the query
         self._sql_schema = {}  # Cached SQL schema for parameter inference/autocomplete
@@ -707,12 +759,26 @@ class CodeBlock(QFrame):
         self.conn_panel.setMaximumWidth(220)
         control_layout.addWidget(self.conn_panel)
 
-        # Database panel (only visible for SQL)
-        self.db_panel = BlockDatabasePanel()
+        # Database panel (only visible for SQL on single-level engines)
+        self.db_panel = BlockDatabasePanel(kind="database")
         self.db_panel.setFixedHeight(CTRL_H)
         self.db_panel.setMinimumWidth(80)
         self.db_panel.setMaximumWidth(180)
         control_layout.addWidget(self.db_panel)
+
+        self.catalog_panel = BlockDatabasePanel(kind="catalog")
+        self.catalog_panel.setFixedHeight(CTRL_H)
+        self.catalog_panel.setMinimumWidth(80)
+        self.catalog_panel.setMaximumWidth(160)
+        self.catalog_panel.hide()
+        control_layout.addWidget(self.catalog_panel)
+
+        self.schema_panel = BlockDatabasePanel(kind="schema")
+        self.schema_panel.setFixedHeight(CTRL_H)
+        self.schema_panel.setMinimumWidth(80)
+        self.schema_panel.setMaximumWidth(160)
+        self.schema_panel.hide()
+        control_layout.addWidget(self.schema_panel)
 
         from src.ui.components.toggle_switch import ToggleSwitch
 
@@ -870,6 +936,12 @@ class CodeBlock(QFrame):
         self.db_panel.database_dropped.connect(self._on_database_dropped)
         self.db_panel.database_selected.connect(self._on_database_selected)
         self.db_panel.databases_requested.connect(self._on_databases_requested)
+        self.catalog_panel.database_selected.connect(self._on_catalog_selected)
+        self.catalog_panel.database_dropped.connect(self._on_namespace_dropped)
+        self.catalog_panel.databases_requested.connect(self._on_databases_requested)
+        self.schema_panel.database_selected.connect(self._on_schema_selected)
+        self.schema_panel.database_dropped.connect(self._on_namespace_dropped)
+        self.schema_panel.databases_requested.connect(self._on_databases_requested)
         self.run_btn.clicked.connect(self._on_run_btn_clicked)
         self.maximize_btn.clicked.connect(lambda: self.maximize_requested.emit(self))
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
@@ -882,6 +954,10 @@ class CodeBlock(QFrame):
         self.sql_parameters_panel.parameters_changed.connect(self._on_sql_parameters_panel_changed)
         self.sql_parameters_panel.close_requested.connect(self._on_sql_parameters_panel_close_requested)
         self.show_sql_parameters_btn.clicked.connect(lambda: self.set_sql_parameters_enabled(True))
+        if hasattr(self.editor, "namespace_fetch_needed"):
+            self.editor.namespace_fetch_needed.connect(
+                lambda catalog, schema, block=self: self.namespace_fetch_needed.emit(block, catalog, schema)
+            )
         
         # Setup inline completion service for Copilot
         if hasattr(self.editor, 'completion_requested'):
@@ -1120,9 +1196,21 @@ class CodeBlock(QFrame):
 
     def set_sql_schema(self, schema: dict):
         """Set SQL schema for completions and parameter type inference."""
+        from src.database.namespace import has_dual_namespace
+
         self._sql_schema = schema or {}
         if hasattr(self.editor, "set_sql_schema"):
             self.editor.set_sql_schema(self._sql_schema)
+        db_type = str((schema or {}).get("db_type") or self._block_db_type())
+        if has_dual_namespace(db_type):
+            catalogs = (schema or {}).get("databases")
+            catalog_schemas = (schema or {}).get("catalog_schemas")
+            if catalogs or catalog_schemas:
+                self.set_namespace_options(
+                    catalogs if catalogs is not None else self._available_catalogs,
+                    catalog_schemas if catalog_schemas is not None else self._catalog_schemas,
+                )
+        self._update_connection_panel_visibility()
         if self.get_language() == "sql":
             self.sync_sql_parameters_from_query()
     
@@ -1245,6 +1333,94 @@ class CodeBlock(QFrame):
         self.conn_panel.set_connection(connection_name, db_type or None, color or None)
         self._sync_syntax_dialect_to_editor()
         self.connection_name_changed.emit(self, connection_name)
+        self._update_connection_panel_visibility()
+
+    def _block_db_type(self) -> str:
+        from_conn = str(getattr(self.conn_panel, "_db_type", "") or "").lower()
+        if from_conn:
+            return from_conn
+        return str((self._sql_schema or {}).get("db_type") or "").lower()
+
+    def _uses_dual_namespace(self) -> bool:
+        from src.database.namespace import has_dual_namespace
+
+        return has_dual_namespace(self._block_db_type())
+
+    def _sync_namespace_chips(self):
+        """Keep catalog/schema chips in sync with persisted catalog.schema."""
+        from src.database.namespace import parse_context
+
+        if not self._uses_dual_namespace():
+            self.db_panel.set_database(self._database_name)
+            return
+        ctx = parse_context(
+            "databricks",
+            self._database_name,
+        )
+        self.catalog_panel.set_database(ctx.catalog or None)
+        self.schema_panel.set_database(ctx.schema or None)
+        self._refresh_schema_chip_options()
+
+    def _refresh_schema_chip_options(self):
+        from src.database.namespace import parse_context, schemas_for_catalog
+
+        ctx = parse_context("databricks", self._database_name)
+        catalog = ctx.catalog or self.catalog_panel.get_database_name() or ""
+        self.schema_panel.set_available_databases(schemas_for_catalog(self._catalog_schemas, catalog))
+
+    def _apply_namespace_context(self, catalog: str, schema: str):
+        from src.database.namespace import format_context
+
+        catalog = str(catalog or "").strip()
+        schema = str(schema or "").strip()
+        value = format_context(catalog, schema) if catalog or schema else None
+        self._database_name = value
+        self._sync_namespace_chips()
+        self.database_changed.emit(self, value or "")
+
+    def _on_catalog_selected(self, catalog_name: str):
+        from src.database.namespace import parse_context, resolve_schema_after_catalog_change
+
+        if not catalog_name:
+            self._apply_namespace_context("", "")
+            return
+        current = parse_context("databricks", self._database_name)
+        schema_name = resolve_schema_after_catalog_change(
+            self._catalog_schemas,
+            catalog_name,
+            current.schema,
+        )
+        self._apply_namespace_context(catalog_name, schema_name)
+
+    def _on_schema_selected(self, schema_name: str):
+        from src.database.namespace import parse_context
+
+        current = parse_context("databricks", self._database_name)
+        catalog = current.catalog or self.catalog_panel.get_database_name() or ""
+        if not schema_name:
+            self._apply_namespace_context(catalog, "")
+            return
+        self._apply_namespace_context(catalog, schema_name)
+
+    def _on_namespace_dropped(self, raw_name: str):
+        from src.database.namespace import parse_context, resolve_schema_after_catalog_change
+
+        current = parse_context("databricks", self._database_name)
+        parsed = parse_context(
+            "databricks",
+            raw_name,
+            current_catalog=current.catalog,
+            current_schema=current.schema,
+        )
+        catalog = parsed.catalog or current.catalog
+        schema = parsed.schema
+        if parsed.catalog_only:
+            schema = resolve_schema_after_catalog_change(
+                self._catalog_schemas,
+                catalog,
+                current.schema,
+            )
+        self._apply_namespace_context(catalog, schema)
 
     def _on_database_panel_clicked(self):
         """Database panel was clicked - emit signal (fallback when no db list)"""
@@ -1266,7 +1442,12 @@ class CodeBlock(QFrame):
         lang = self.lang_combo.currentData()
         is_sql = lang == "sql"
         self.conn_panel.setVisible(is_sql)
-        self.db_panel.setVisible(is_sql)
+        dual = is_sql and self._uses_dual_namespace()
+        self.db_panel.setVisible(is_sql and not dual)
+        self.catalog_panel.setVisible(dual)
+        self.schema_panel.setVisible(dual)
+        if dual:
+            self._sync_namespace_chips()
         if not is_sql:
             self._refresh_sql_parameter_ui()
         else:
@@ -1370,7 +1551,10 @@ class CodeBlock(QFrame):
         accent = self.LANGUAGE_COLORS.get(lang, "#888")
         radius = 0 if self._is_maximized else self.BLOCK_RADIUS
 
-        if self._is_copilot_editing:
+        if self._is_maximized:
+            # Maximized block is the sole focus — skip the colored left accent.
+            accent_left = "transparent"
+        elif self._is_copilot_editing:
             accent_left = "#b48ead"
         elif self._is_focused:
             accent_left = colors.interactive_primary
@@ -1556,6 +1740,7 @@ class CodeBlock(QFrame):
         self.conn_panel.set_connection(conn_name, db_type, color)
         self._sync_syntax_dialect_to_editor()
         self.connection_name_changed.emit(self, conn_name)
+        self._update_connection_panel_visibility()
 
     def set_connection_locked(self, locked: bool):
         """Lock/unlock connection changes (first block cannot change connection)"""
@@ -1576,12 +1761,39 @@ class CodeBlock(QFrame):
     def set_database_name(self, database_name: str):
         """Set custom database for this block"""
         self._database_name = database_name
-        self.db_panel.set_database(database_name)
+        self._sync_namespace_chips()
         self.database_changed.emit(self, database_name or "")
 
     def set_available_databases(self, databases: list):
         """Set list of databases available for this block's connection."""
         self.db_panel.set_available_databases(databases)
+        if self._uses_dual_namespace() and databases:
+            catalogs = [name for name in databases if name and "." not in str(name)]
+            if catalogs:
+                self._available_catalogs = catalogs
+                self.catalog_panel.set_available_databases(catalogs)
+
+    def set_namespace_options(self, catalogs: list | None = None, catalog_schemas: dict | None = None):
+        """Populate Databricks catalog/schema chips from schema metadata."""
+        if catalogs is not None:
+            self._available_catalogs = list(catalogs)
+            self.catalog_panel.set_available_databases(self._available_catalogs)
+        if catalog_schemas is not None:
+            self._catalog_schemas = dict(catalog_schemas)
+        self._refresh_schema_chip_options()
+
+    def set_namespace_switching(self, switching: bool) -> None:
+        """Show or clear switching overlay on catalog/schema or database chips."""
+        panels = (
+            [self.catalog_panel, self.schema_panel]
+            if self._uses_dual_namespace()
+            else [self.db_panel]
+        )
+        for panel in panels:
+            if switching:
+                panel.show_switching_feedback()
+            else:
+                panel.clear_switching_feedback()
 
     def is_focused(self) -> bool:
         return self._is_focused

@@ -102,6 +102,7 @@ class ConnectionManager:
         sqlserver_auth_mode: str = "",
         *,
         allow_overwrite: bool = False,
+        schema: str = "",
     ):
         """Save a connection configuration keyed by (group, name)."""
         group = group or ""
@@ -134,6 +135,8 @@ class ConnectionManager:
 
         if db_type == "databricks" and http_path:
             config["http_path"] = http_path
+        if db_type == "databricks" and schema:
+            config["schema"] = schema
 
         if save_password and password:
             config["password"] = password
@@ -197,6 +200,7 @@ class ConnectionManager:
         trust_server_certificate: bool = False,
         http_path: str = "",
         sqlserver_auth_mode: str = "",
+        schema: str = "",
     ):
         """Update an existing connection configuration (may move between groups)."""
         old_group = old_group or ""
@@ -231,6 +235,7 @@ class ConnectionManager:
             http_path,
             sqlserver_auth_mode,
             allow_overwrite=True,
+            schema=schema,
         )
         self._group_bucket(group)[new_name]["created_at"] = created_at
         self._save_configs()

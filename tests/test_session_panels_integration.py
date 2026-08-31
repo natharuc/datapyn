@@ -391,3 +391,5 @@ class TestEmptyStateTransitions:
         assert not main_window.results_dock.isVisible()
         assert not main_window.output_dock.isVisible()
         assert not main_window.variables_dock.isVisible()
+        assert not main_window.summarize_dock.isVisible()
+        assert not main_window.copilot_output_dock.isVisible()

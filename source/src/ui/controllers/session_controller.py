@@ -172,7 +172,15 @@ class SessionController(QObject):
         
         # Focus on first block with delay for rendering
         if widget.editor and hasattr(widget.editor, "focus_first_block"):
-            QTimer.singleShot(50, widget.editor.focus_first_block)
+            def _focus_and_maybe_maximize(ed=widget.editor):
+                try:
+                    ed.focus_first_block()
+                    if hasattr(ed, "apply_startup_maximize_preference"):
+                        ed.apply_startup_maximize_preference()
+                except RuntimeError:
+                    return
+
+            QTimer.singleShot(50, _focus_and_maybe_maximize)
         
         return widget
     

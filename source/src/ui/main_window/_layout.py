@@ -7,7 +7,13 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import Qt, QTimer, QSettings
-from PyQt6.QtWidgets import QDockWidget, QSizePolicy, QStackedWidget, QTabBar
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDockWidget,
+    QSizePolicy,
+    QStackedWidget,
+    QTabBar,
+)
 
 from src.design_system.app_dialogs import confirm_yes_no, show_information
 
@@ -17,6 +23,7 @@ from src.ui.components.variables_panel import VariablesPanel
 from src.ui.components.summarize_panel import SummarizePanel
 from src.ui.components.pynia_chat_panel import PyniaChatPanel
 from src.ui.components.copilot_output_panel import CopilotOutputPanel
+from src.design_system.frameless_dialog import widget_is_valid
 from src.design_system.tokens import get_colors, SIDE_DOCK_DEFAULT_WIDTH, SIDE_DOCK_MAX_WIDTH, configure_side_dock
 from src.language import S
 
@@ -25,6 +32,10 @@ logger = logging.getLogger(__name__)
 # Bottom tab strip (Results / Output / Pynia Output / Summarize). Panels scroll internally;
 # high minimums (140–180px) blocked shrinking the area below the code editor.
 _BOTTOM_DOCK_MIN_HEIGHT = 80
+
+# Bump when the canonical dock arrangement changes so saved QSettings
+# windowState is migrated once to the new default (then user tweaks persist).
+_DOCK_LAYOUT_VERSION = 4
 
 
 class LayoutMixin:
@@ -173,13 +184,15 @@ class LayoutMixin:
         self._connect_copilot_to_output()
         self._update_editors_pynia_client()
 
-        # Tabifica Results, Summarize e Output por padrao (fica em abas)
+        # Canonical tab groups (areas already set above; OE joins Connections later).
         self.tabifyDockWidget(self.results_dock, self.summarize_dock)
         self.tabifyDockWidget(self.results_dock, self.output_dock)
-        self.tabifyDockWidget(self.output_dock, self.copilot_output_dock)
+        self.tabifyDockWidget(self.results_dock, self.copilot_output_dock)
+        self.tabifyDockWidget(self.variables_dock, self.copilot_dock)
 
-        # Results fica como aba ativa
+        # Results / Variables as active tabs in their groups
         self.results_dock.raise_()
+        self.variables_dock.raise_()
 
         # Esconder Results, Summarize e Variables ate a primeira execucao
         self.results_dock.hide()
@@ -426,9 +439,36 @@ class LayoutMixin:
             self.hide_panel("output")
 
     def _restore_default_layout(self):
-        """Restores the default panel layout"""
+        """Restores the default panel layout and persists it for the next launch."""
         self._setup_default_layout()
+        try:
+            settings = QSettings("DataPyn", "MainWindow")
+            settings.setValue("layoutVersion", _DOCK_LAYOUT_VERSION)
+            settings.sync()
+        except Exception:
+            pass
+        self._save_dock_layout()
         self._sync_view_menu_checks()
+
+    def _managed_docks(self) -> list:
+        """All main-window docks that participate in layout persistence."""
+        docks = [
+            getattr(self, "connections_dock", None),
+            getattr(self, "object_explorer_dock", None),
+            getattr(self, "results_dock", None),
+            getattr(self, "summarize_dock", None),
+            getattr(self, "output_dock", None),
+            getattr(self, "copilot_output_dock", None),
+            getattr(self, "variables_dock", None),
+            getattr(self, "copilot_dock", None),
+        ]
+        return [dock for dock in docks if dock is not None]
+
+    def _saved_layout_version(self, settings: QSettings) -> int:
+        try:
+            return int(settings.value("layoutVersion", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _save_dock_layout(self):
         """Save current dock layout to QSettings."""
@@ -439,6 +479,7 @@ class LayoutMixin:
             settings = QSettings("DataPyn", "MainWindow")
             settings.setValue("geometry", self.saveGeometry())
             settings.setValue("windowState", self.saveState(3))  # version=3
+            settings.setValue("layoutVersion", _DOCK_LAYOUT_VERSION)
             settings.sync()
         except Exception:
             pass
@@ -452,13 +493,23 @@ class LayoutMixin:
             settings = QSettings("DataPyn", "MainWindow")
             geometry = settings.value("geometry")
             window_state = settings.value("windowState")
+            layout_version = self._saved_layout_version(settings)
 
             restored = False
 
             if geometry and len(geometry) > 20:
                 self.restoreGeometry(geometry)
 
-            if window_state and len(window_state) > 50:
+            # Canonical dock arrangement changed: apply default once, keep geometry.
+            migrated = False
+            if layout_version != _DOCK_LAYOUT_VERSION:
+                settings.remove("windowState")
+                settings.setValue("layoutVersion", _DOCK_LAYOUT_VERSION)
+                settings.sync()
+                self._setup_default_layout()
+                restored = True
+                migrated = True
+            elif window_state and len(window_state) > 50:
                 # Window is NOT visible at this point (show() is called later
                 # by the splash screen), so restoreState runs invisibly.
                 if self.restoreState(window_state, 3):  # version=3
@@ -473,13 +524,7 @@ class LayoutMixin:
                 self._setup_default_layout()
 
             # Ensure all non-hidden docks are properly docked (not floating)
-            for dock in [
-                self.connections_dock,
-                self.results_dock,
-                self.summarize_dock,
-                self.output_dock,
-                self.variables_dock,
-            ]:
+            for dock in self._managed_docks():
                 if dock.isFloating() and dock.isVisible():
                     dock.setFloating(False)
 
@@ -487,7 +532,10 @@ class LayoutMixin:
                 self._show_empty_state()
 
             # Sync view menu after a short delay (docks need to settle)
-            QTimer.singleShot(300, self._finish_layout_restore)
+            QTimer.singleShot(
+                300,
+                lambda: self._finish_layout_restore(persist=migrated),
+            )
 
         except Exception:
             self._setup_default_layout()
@@ -495,25 +543,31 @@ class LayoutMixin:
                 self._show_empty_state()
             self._restoring_layout = False
 
-    def _finish_layout_restore(self):
+    def _finish_layout_restore(self, persist: bool = False):
         """Called after layout restore settles - sync menu and allow auto-save."""
+        if getattr(self, "_is_closing", False) or not widget_is_valid(self):
+            return
         self._restoring_layout = False
         self._clamp_side_dock_widths()
         self._sync_view_menu_checks()
+        if persist:
+            self._save_dock_layout()
 
     def _clamp_side_dock_widths(self) -> None:
         """Shrink restored side docks that were saved too wide."""
+        if getattr(self, "_is_closing", False) or not widget_is_valid(self):
+            return
         candidates = [
             getattr(self, "connections_dock", None),
             getattr(self, "object_explorer_dock", None),
             getattr(self, "variables_dock", None),
         ]
         copilot = getattr(self, "copilot_dock", None)
-        if copilot is not None:
+        if copilot is not None and widget_is_valid(copilot):
             copilot.setMaximumWidth(16777215)
             copilot.setMaximumHeight(16777215)
         for dock in candidates:
-            if dock is None or dock.isFloating() or not dock.isVisible():
+            if dock is None or not widget_is_valid(dock) or dock.isFloating() or not dock.isVisible():
                 continue
             if dock.width() > SIDE_DOCK_MAX_WIDTH:
                 try:
@@ -530,6 +584,7 @@ class LayoutMixin:
         for dock in (
             getattr(self, "connections_dock", None),
             getattr(self, "object_explorer_dock", None),
+            getattr(self, "variables_dock", None),
         ):
             if dock is None or dock.isFloating():
                 continue
@@ -550,18 +605,7 @@ class LayoutMixin:
         self._layout_save_timer.timeout.connect(self._save_dock_layout)
 
         # Connect dock visibility changes to schedule save
-        all_docks = [
-            self.connections_dock,
-            self.results_dock,
-            self.summarize_dock,
-            self.output_dock,
-            self.variables_dock,
-        ]
-        if hasattr(self, "object_explorer_dock"):
-            all_docks.append(self.object_explorer_dock)
-        if hasattr(self, "copilot_dock"):
-            all_docks.append(self.copilot_dock)
-        for dock in all_docks:
+        for dock in self._managed_docks():
             dock.visibilityChanged.connect(self._on_dock_changed)
             dock.dockLocationChanged.connect(self._on_dock_changed)
             dock.topLevelChanged.connect(self._on_dock_changed)
@@ -579,68 +623,82 @@ class LayoutMixin:
             settings = QSettings("DataPyn", "MainWindow")
             settings.remove("geometry")
             settings.remove("windowState")
+            settings.remove("layoutVersion")
             settings.sync()
         except Exception:
             pass
 
+    def _arrange_default_docks(self) -> None:
+        """Canonical areas and tab groups for all managed docks."""
+        for dock in self._managed_docks():
+            dock.setFloating(False)
+
+        # Left: Connections + Object Explorer
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
+        if hasattr(self, "object_explorer_dock"):
+            self.addDockWidget(
+                Qt.DockWidgetArea.LeftDockWidgetArea, self.object_explorer_dock
+            )
+            self.tabifyDockWidget(self.connections_dock, self.object_explorer_dock)
+        self.connections_dock.raise_()
+
+        # Bottom center: Results, Summarize, Output, Pynia Output
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.summarize_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
+        if hasattr(self, "copilot_output_dock"):
+            self.addDockWidget(
+                Qt.DockWidgetArea.BottomDockWidgetArea, self.copilot_output_dock
+            )
+        self.tabifyDockWidget(self.results_dock, self.summarize_dock)
+        self.tabifyDockWidget(self.results_dock, self.output_dock)
+        if hasattr(self, "copilot_output_dock"):
+            self.tabifyDockWidget(self.results_dock, self.copilot_output_dock)
+        self.results_dock.raise_()
+
+        # Right: Variables + Pynia
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
+        if hasattr(self, "copilot_dock"):
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
+            self.tabifyDockWidget(self.variables_dock, self.copilot_dock)
+        self.variables_dock.raise_()
+
     def _setup_default_layout(self):
         """Configures the default dock layout."""
         try:
-            all_docks = [
-                self.connections_dock,
-                self.results_dock,
-                self.summarize_dock,
-                self.output_dock,
-                self.variables_dock,
-            ]
-            if hasattr(self, "object_explorer_dock"):
-                all_docks.append(self.object_explorer_dock)
-            if hasattr(self, "copilot_dock"):
-                all_docks.append(self.copilot_dock)
+            self._arrange_default_docks()
 
-            # Reset: make all non-floating
-            for dock in all_docks:
-                dock.setFloating(False)
-
-            # Position docks in their default areas
-            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.connections_dock)
-            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
-            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.summarize_dock)
-            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.variables_dock)
-
-            if hasattr(self, "object_explorer_dock"):
-                self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.object_explorer_dock)
-                self.object_explorer_dock.hide()
-
-            if hasattr(self, "copilot_dock"):
-                self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
-                self.copilot_dock.hide()
-
-            # Tabify Results, Summarize and Output (bottom tabs)
-            self.tabifyDockWidget(self.results_dock, self.summarize_dock)
-            self.tabifyDockWidget(self.results_dock, self.output_dock)
-            self.results_dock.raise_()
-
-            # Show main panels
+            # Show grouped panels (tabs stay together)
             self.connections_dock.show()
+            if hasattr(self, "object_explorer_dock"):
+                self.object_explorer_dock.show()
             self.results_dock.show()
+            self.summarize_dock.show()
             self.output_dock.show()
+            if hasattr(self, "copilot_output_dock"):
+                self.copilot_output_dock.show()
             self.variables_dock.show()
+            if hasattr(self, "copilot_dock"):
+                self.copilot_dock.show()
+
+            self.connections_dock.raise_()
+            self.results_dock.raise_()
+            self.variables_dock.raise_()
 
             self._apply_default_side_dock_widths()
 
-            # Window size
-            screen = QApplication.primaryScreen()
-            if screen:
-                available = screen.availableGeometry()
-                w = min(1400, int(available.width() * 0.8))
-                h = min(900, int(available.height() * 0.8))
-                x = available.x() + (available.width() - w) // 2
-                y = available.y() + (available.height() - h) // 2
-                self.setGeometry(x, y, w, h)
-            else:
-                self.setGeometry(100, 100, 1400, 900)
+            # Window size (keep existing geometry if already restored)
+            if self.width() < 400 or self.height() < 300:
+                screen = QApplication.primaryScreen()
+                if screen:
+                    available = screen.availableGeometry()
+                    w = min(1400, int(available.width() * 0.8))
+                    h = min(900, int(available.height() * 0.8))
+                    x = available.x() + (available.width() - w) // 2
+                    y = available.y() + (available.height() - h) // 2
+                    self.setGeometry(x, y, w, h)
+                else:
+                    self.setGeometry(100, 100, 1400, 900)
 
         except Exception:
             # Fallback: just show docks

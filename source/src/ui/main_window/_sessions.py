@@ -814,6 +814,10 @@ class SessionsMixin:
             self.output_dock.hide()
         if hasattr(self, "variables_dock"):
             self.variables_dock.hide()
+        if hasattr(self, "summarize_dock"):
+            self.summarize_dock.hide()
+        if hasattr(self, "copilot_output_dock"):
+            self.copilot_output_dock.hide()
 
         if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
             return  # Ja esta mostrando
@@ -947,8 +951,12 @@ class SessionsMixin:
             self.output_dock.show()
         if hasattr(self, "variables_dock"):
             self.variables_dock.show()
+        if hasattr(self, "summarize_dock"):
+            self.summarize_dock.show()
+        if hasattr(self, "copilot_output_dock"):
+            self.copilot_output_dock.show()
 
-    def _create_session_widget(self, session):
+    def _create_session_widget(self, session, *, from_restore: bool = False):
         """Creates widget for a session and adds it to a tab"""
         if hasattr(self, "_empty_state_widget") and self._empty_state_widget:
             self._hide_empty_state()
@@ -1090,7 +1098,17 @@ class SessionsMixin:
 
         # Focar automaticamente no primeiro bloco (com delay para garantir renderizacao)
         if widget.editor and hasattr(widget.editor, "focus_first_block"):
-            QTimer.singleShot(50, widget.editor.focus_first_block)
+            def _focus_and_maybe_maximize(ed=widget.editor, restore=from_restore, w=widget):
+                if not widget_is_valid(w) or not widget_is_valid(ed):
+                    return
+                try:
+                    ed.focus_first_block()
+                    if not restore and hasattr(ed, "apply_startup_maximize_preference"):
+                        ed.apply_startup_maximize_preference()
+                except RuntimeError:
+                    return
+
+            QTimer.singleShot(50, _focus_and_maybe_maximize)
 
         return widget
 
@@ -1641,21 +1659,57 @@ class SessionsMixin:
         self._restored_session_reconnects_active = False
         self._pending_legacy_active_connection = None
 
+        # Sessions already opened from CLI/file association (must not be wiped).
+        preserve_ids = set(getattr(self, "_session_widgets", {}) or {})
+        preserved_sessions = {
+            sid: self.session_manager._sessions[sid]
+            for sid in preserve_ids
+            if sid in self.session_manager._sessions
+        }
+        preserve_focus_id = None
+        focused = self.session_manager.focused_session
+        if focused and focused.session_id in preserved_sessions:
+            preserve_focus_id = focused.session_id
+
         # Load sessions from disk
         self.session_manager.load_sessions(self.connection_manager, reconnect=False)
+
+        # load_sessions replaces session_order from disk — keep CLI sessions first.
+        for sid, session in reversed(list(preserved_sessions.items())):
+            self.session_manager._sessions[sid] = session
+            if sid not in self.session_manager._session_order:
+                self.session_manager._session_order.insert(0, sid)
+        if preserve_focus_id:
+            self.session_manager.focus_session(preserve_focus_id)
+            self._preserve_startup_focus_id = preserve_focus_id
+        else:
+            self._preserve_startup_focus_id = None
 
         # Salvar workspace para restaurar geometria depois
         workspace = self.workspace_manager.load_workspace()
         self._pending_workspace_restore = workspace
 
-        # Queue of sessions to load incrementally
-        self._sessions_to_load = list(self.session_manager.sessions)
+        # Queue disk sessions only (CLI widgets already exist)
+        self._sessions_to_load = [
+            session
+            for session in self.session_manager.sessions
+            if session.session_id not in preserve_ids
+        ]
 
         self._restoring_sessions = False
 
         # Start loading sessions incrementally
         if self._sessions_to_load:
             QTimer.singleShot(50, self._load_next_session)
+        elif preserve_ids:
+            # Startup file already open — do not bounce to empty state.
+            if self._preserve_startup_focus_id:
+                index = self.session_manager.get_session_index(
+                    self._preserve_startup_focus_id
+                )
+                if index >= 0:
+                    self.session_tabs.setCurrentIndex(index)
+            self._preserve_startup_focus_id = None
         else:
             # If there are no sessions, show empty state
             self._show_empty_state()
@@ -1666,28 +1720,40 @@ class SessionsMixin:
             return
 
         if not self._sessions_to_load:
-            # Focus on active session
-            focused = self.session_manager.focused_session
-            if focused:
-                index = self.session_manager.get_session_index(focused.session_id)
+            # Prefer the CLI/file-association tab when restore was deferred.
+            preserve_id = getattr(self, "_preserve_startup_focus_id", None)
+            if preserve_id:
+                index = self.session_manager.get_session_index(preserve_id)
                 if index >= 0:
                     self.session_tabs.setCurrentIndex(index)
+                self._preserve_startup_focus_id = None
+            else:
+                # Focus on active session
+                focused = self.session_manager.focused_session
+                if focused:
+                    index = self.session_manager.get_session_index(focused.session_id)
+                    if index >= 0:
+                        self.session_tabs.setCurrentIndex(index)
 
-                # Update connection indicator (if connection_panel exists)
-                if focused.is_connected and hasattr(self, "connection_panel"):
-                    # database_name removed - Session only has connection_name
-                    self.connection_panel.set_active_connection(
-                        focused.connection_name,
-                        focused.connection_name,  # usar connection_name no lugar de database_name
-                    )
+                    # Update connection indicator (if connection_panel exists)
+                    if focused.is_connected and hasattr(self, "connection_panel"):
+                        # database_name removed - Session only has connection_name
+                        self.connection_panel.set_active_connection(
+                            focused.connection_name,
+                            focused.connection_name,  # usar connection_name no lugar de database_name
+                        )
 
             self._start_restored_session_reconnects()
             return
 
         session = self._sessions_to_load.pop(0)
 
+        if session.session_id in getattr(self, "_session_widgets", {}):
+            QTimer.singleShot(0, self._load_next_session)
+            return
+
         # Create widget for session
-        self._create_session_widget(session)
+        self._create_session_widget(session, from_restore=True)
 
         if session.connection_name and not session.is_connected:
             self._queue_restored_session_connection(
