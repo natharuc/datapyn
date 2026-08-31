@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.56.0 (2026-08-31)
+
+### Features
+
+- **ui**: Speed file open and polish SQL workspace
+  ([`d3d1995`](https://github.com/natharuc/datapyn/commit/d3d1995bcd15b6648ffb14c309da969ba93b4b60))
+
+- **ui**: Speed file open and polish SQL workspace
+  ([`757719e`](https://github.com/natharuc/datapyn/commit/757719e102559b2195497a608c626fc3d59bb557))
+
+### Heuristic
+
+- Merge pull request #155 from natharuc/feat/sql-workspace-ux
+  ([`d3d1995`](https://github.com/natharuc/datapyn/commit/d3d1995bcd15b6648ffb14c309da969ba93b4b60))
+
+
 ## v1.55.0 (2026-08-27)
 
 ### Bug Fixes
