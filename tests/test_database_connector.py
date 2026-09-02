@@ -99,6 +99,20 @@ class TestDatabaseConnectorConnectionString:
         assert "localhost" in result
         assert "charset=utf8mb4" in result
 
+    def test_mariadb_connection_string(self):
+        """MariaDB uses the PyMySQL dialect (no C connector)."""
+        from database.database_connector import DatabaseConnector
+
+        connector = DatabaseConnector()
+        result, _ = connector._build_connection_string(
+            db_type="mariadb", host="localhost", port=3306, database="testdb", username="user", password="pass"
+        )
+
+        assert "mysql+pymysql" in result
+        assert "mariadbconnector" not in result
+        assert "localhost" in result
+        assert "charset=utf8mb4" in result
+
     def test_postgresql_connection_string(self):
         """Deve construir string PostgreSQL"""
         from database.database_connector import DatabaseConnector

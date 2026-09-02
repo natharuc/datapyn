@@ -24,8 +24,18 @@ uv run pyinstaller installer/datapyn_setup.spec --clean
 
 CI publishes:
 
+CI publishes (same GitHub Release):
+
+Windows:
 - `DataPyn-{version}-windows.zip` — PyInstaller folder
 - `DataPyn-Setup.exe` — version-agnostic bootstrap (always fetches latest)
 - `DataPyn-Setup-{version}.exe` — pinned to that release
 
-The desktop app auto-update downloads the ZIP and applies it on exit.
+Linux (amd64, built on Ubuntu 22.04):
+- `datapyn_amd64.deb` / `datapyn_{version}_amd64.deb`
+- `DataPyn-linux-x86_64.tar.gz` / `DataPyn-{version}-linux-x86_64.tar.gz`
+
+macOS (Apple Silicon, unsigned):
+- `DataPyn-macos-arm64.dmg` / `DataPyn-{version}-macos-arm64.dmg`
+
+The desktop app auto-update downloads the Windows ZIP and applies it on exit.

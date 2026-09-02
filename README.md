@@ -107,36 +107,34 @@ Site e documentacao publica: [datapyn.page](https://datapyn.page)
 
 ## Instalacao
 
-**Requisito:** Python **3.12+**
+Instaladores oficiais: [datapyn.page/downloads.html](https://datapyn.page/downloads.html) ou [GitHub Releases](https://github.com/natharuc/datapyn/releases/latest).
 
-O projeto usa [uv](https://docs.astral.sh/uv/) como gerenciador de dependencias.
+| Sistema | Artefato | Notas |
+|---------|----------|--------|
+| Windows x64 | `DataPyn-Setup.exe` | Instala em `%LOCALAPPDATA%\DataPyn` |
+| Linux amd64 | `datapyn_amd64.deb` | Ubuntu/Debian 22.04+. Outras distros: `DataPyn-linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `DataPyn-macos-arm64.dmg` | Unsigned — no Gatekeeper use **Open** no menu de contexto ou `xattr -cr /Applications/DataPyn.app` |
+
+SQL Server no Linux: use o driver **pymssql** (FreeTDS no wheel). `pyodbc` exige `unixodbc` + driver Microsoft/FreeTDS no sistema.
+
+**Desenvolvedores** (Python **3.12+**, [uv](https://docs.astral.sh/uv/)):
 
 ### Windows
-
-**End users:** download `DataPyn-Setup.exe` from [GitHub Releases](https://github.com/natharuc/datapyn/releases/latest). The setup wizard installs the latest build under `%LOCALAPPDATA%\DataPyn` and creates Start Menu / Desktop shortcuts.
-
-**Developers:**
 
 ```powershell
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
-
 scripts\install.bat
 scripts\run.bat
-
-# Ou manualmente:
-uv sync
-uv run python source/main.py
 ```
 
-Build the setup helper locally: `uv run pyinstaller installer/datapyn_setup.spec --clean`
+Build the Windows setup helper locally: `uv run pyinstaller installer/datapyn_setup.spec --clean`
 
 ### Linux (Ubuntu/Debian)
 
 ```bash
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
-
 chmod +x scripts/linux/install.sh scripts/linux/run.sh
 ./scripts/linux/install.sh
 ./scripts/linux/run.sh
@@ -144,13 +142,14 @@ chmod +x scripts/linux/install.sh scripts/linux/run.sh
 
 O `install.sh` instala dependencias de sistema (Qt, ODBC, libpq, etc.) quando necessario.
 
+Empacotar `.deb` apos PyInstaller: `bash scripts/linux/package.sh <version>` (requer `fpm`). Dry-run no CI: Actions → **Build Linux Installers (dry run)**.
+
 ### macOS
 
 ```bash
 brew install python@3.12
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
-
 chmod +x scripts/linux/install.sh scripts/linux/run.sh
 ./scripts/linux/install.sh
 ./scripts/linux/run.sh

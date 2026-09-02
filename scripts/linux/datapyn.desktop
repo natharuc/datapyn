@@ -1,10 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=DataPyn
-Comment=Data Analysis Tool
-Exec=/opt/datapyn/DataPyn %F
+Comment=SQL + Python IDE for data analysis
+Exec=/opt/datapyn/datapyn-wrapper.sh %F
 Icon=/opt/datapyn/datapyn_logo.svg
 Terminal=false
 Categories=Development;Database;DataVisualization;
 StartupNotify=true
 MimeType=application/x-datapyn-workspace;
+StartupWMClass=DataPyn

@@ -68,10 +68,20 @@ def _get_version() -> str:
 
 
 def _ui_font(size: int, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
-    family = "Segoe UI" if sys.platform == "win32" else "Ubuntu"
+    if sys.platform == "win32":
+        family = "Segoe UI"
+    elif sys.platform == "darwin":
+        font = QFont()
+        font.setPointSize(size)
+        font.setWeight(weight)
+        return font
+    else:
+        family = "Ubuntu"
     font = QFont(family, size, weight)
     if not font.exactMatch() and family != "Segoe UI":
-        font = QFont("Segoe UI", size, weight)
+        font = QFont()
+        font.setPointSize(size)
+        font.setWeight(weight)
     return font
 
 

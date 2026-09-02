@@ -726,17 +726,11 @@ class DatabaseConnector:
 
             return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_string)}", {}
 
-        elif db_type == "mysql":
-            # URL encode username and password for special characters
+        elif db_type in ("mysql", "mariadb"):
+            # MariaDB uses PyMySQL (mysql dialect) — the C mariadb connector is not a runtime dep.
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
             return f"mysql+pymysql://{user_encoded}:{pass_encoded}@{host}:{port}/{database}?charset=utf8mb4", {}
-
-        elif db_type == "mariadb":
-            # URL encode username and password for special characters
-            user_encoded = quote_plus(username)
-            pass_encoded = quote_plus(password)
-            return f"mariadb+mariadbconnector://{user_encoded}:{pass_encoded}@{host}:{port}/{database}", {}
 
         elif db_type == "postgresql":
             # URL encode username and password for special characters
