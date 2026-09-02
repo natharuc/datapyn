@@ -147,13 +147,15 @@ Empacotar `.deb` apos PyInstaller: `bash scripts/linux/package.sh <version>` (re
 ### macOS
 
 ```bash
-brew install python@3.12
+brew install python@3.12 unixodbc
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
 chmod +x scripts/linux/install.sh scripts/linux/run.sh
 ./scripts/linux/install.sh
 ./scripts/linux/run.sh
 ```
+
+`unixodbc` is required to import `pyodbc` (SQL Server ODBC). The CD macOS job installs it before PyInstaller.
 
 ### Docker (experimental)
 

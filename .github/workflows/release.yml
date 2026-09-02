@@ -359,6 +359,9 @@ jobs:
       - name: Setup | Install project dependencies
         run: uv sync --dev
 
+      - name: Setup | Install unixODBC (required by pyodbc on macOS)
+        run: brew install unixodbc
+
       - name: Build | Generate datapyn.icns
         env:
           QT_QPA_PLATFORM: offscreen
