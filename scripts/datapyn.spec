@@ -1,108 +1,180 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller spec file para DataPyn
-Execute: pyinstaller datapyn.spec
+Execute: pyinstaller scripts/datapyn.spec
 """
 
+import glob
 import os
+import site
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
+import sysconfig
+
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 # Diretorio raiz do projeto (um nivel acima de scripts/)
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(SPEC), '..'))
 
 block_cipher = None
 
-# Coletar pacote mariadb completo (inclui .pyd nativo + constants)
-# Filtramos apenas binarios e dados essenciais, excluindo docs e testes
-_mariadb_datas, _mariadb_binaries, _mariadb_hiddenimports = collect_all('mariadb')
-# Filtrar dados do mariadb para excluir documentacao e arquivos desnecessarios
-_mariadb_datas = [(src, dst) for src, dst in _mariadb_datas 
-                  if not any(x in src.lower() for x in ['.md', '.txt', '.rst', 'test', 'doc', 'license', 'readme'])]
 
-# Coletar todos os submódulos necessários
+def _collect_optional(module_name):
+    """collect_all that returns empty lists when the package is not installed."""
+    try:
+        return collect_all(module_name)
+    except Exception:
+        return [], [], []
+
+
+# mariadb C connector is optional (MariaDB connections use PyMySQL).
+_mariadb_datas, _mariadb_binaries, _mariadb_hiddenimports = [], [], []
+try:
+    import mariadb  # noqa: F401
+except ImportError:
+    pass
+else:
+    _mariadb_datas, _mariadb_binaries, _mariadb_hiddenimports = collect_all('mariadb')
+    _mariadb_datas = [
+        (src, dst)
+        for src, dst in _mariadb_datas
+        if not any(x in src.lower() for x in ['.md', '.txt', '.rst', 'test', 'doc', 'license', 'readme'])
+    ]
+
+# Qt WebEngine (Monaco, Pynia chat) — plugins, locales, and resources.
+_we_datas, _we_binaries, _we_hiddenimports = [], [], []
+for _we_mod in ('PyQt6.QtWebEngineCore', 'PyQt6.QtWebEngineWidgets', 'PyQt6.QtWebEngine'):
+    _d, _b, _h = _collect_optional(_we_mod)
+    _we_datas += _d
+    _we_binaries += _b
+    _we_hiddenimports += _h
+
 hiddenimports = [
     'PyQt6',
     'PyQt6.QtCore',
-    'PyQt6.QtGui', 
+    'PyQt6.QtGui',
     'PyQt6.QtWidgets',
     'PyQt6.QtSvg',
-    'PyQt6.Qsci',
+    'PyQt6.QtWebEngineCore',
+    'PyQt6.QtWebEngineWidgets',
+    'PyQt6.QtWebEngine',
     'pandas',
     'numpy',
     'pyodbc',
     'sqlalchemy',
     'json',
     'yaml',
-    # Database drivers
     'psycopg2',
     'pymysql',
-] + _mariadb_hiddenimports + collect_submodules("qtawesome")
+] + _mariadb_hiddenimports + _we_hiddenimports + collect_submodules('qtawesome')
 
-_qtawesome_datas = collect_data_files("qtawesome")
+_qtawesome_datas = collect_data_files('qtawesome')
 
 # Dados adicionais (assets)
 # Destino 'src/assets' para que _MEIPASS atua como equivalente do diretorio source/
-# Filtramos apenas arquivos necessarios (excluindo .md, .txt, .rst, etc)
-import glob
 assets_files = []
-for ext in ['*.ico', '*.svg', '*.png', '*.jpg']:
-    assets_files.extend(glob.glob(os.path.join(ROOT_DIR, 'source', 'src', 'assets', '**', ext), recursive=True))
+for ext in ['*.ico', '*.svg', '*.png', '*.jpg', '*.icns']:
+    assets_files.extend(
+        glob.glob(os.path.join(ROOT_DIR, 'source', 'src', 'assets', '**', ext), recursive=True)
+    )
 
-assets_datas = [(f, os.path.join('src', 'assets', os.path.relpath(os.path.dirname(f), os.path.join(ROOT_DIR, 'source', 'src', 'assets')))) 
-                for f in assets_files]
+assets_datas = [
+    (
+        f,
+        os.path.join(
+            'src',
+            'assets',
+            os.path.relpath(os.path.dirname(f), os.path.join(ROOT_DIR, 'source', 'src', 'assets')),
+        ),
+    )
+    for f in assets_files
+]
 
-# Language files (i18n JSON translations)
 language_dir = os.path.join(ROOT_DIR, 'source', 'src', 'language')
-language_datas = [(f, os.path.join('src', 'language'))
-                  for f in glob.glob(os.path.join(language_dir, '*.json'))]
+language_datas = [
+    (f, os.path.join('src', 'language')) for f in glob.glob(os.path.join(language_dir, '*.json'))
+]
 
-# Monaco Editor HTML templates
 monaco_dir = os.path.join(ROOT_DIR, 'source', 'src', 'editors', 'monaco')
-monaco_datas = [(f, os.path.join('src', 'editors', 'monaco'))
-                for f in glob.glob(os.path.join(monaco_dir, '*.html'))]
+monaco_datas = [
+    (f, os.path.join('src', 'editors', 'monaco')) for f in glob.glob(os.path.join(monaco_dir, '*.html'))
+]
 
-# Copilot chat templates (in ui/components directory)
 chat_templates_dir = os.path.join(ROOT_DIR, 'source', 'src', 'ui', 'components')
-chat_datas = [(f, os.path.join('src', 'ui', 'components'))
-              for f in glob.glob(os.path.join(chat_templates_dir, '*chat*.html'))]
+chat_datas = [
+    (f, os.path.join('src', 'ui', 'components'))
+    for f in glob.glob(os.path.join(chat_templates_dir, '*chat*.html'))
+]
 
-# Bundled JS libraries for chat WebView (highlight.js, marked.js)
 js_assets_dir = os.path.join(ROOT_DIR, 'source', 'src', 'ui', 'assets', 'js')
-js_assets_datas = [(f, os.path.join('src', 'ui', 'assets', 'js'))
-                   for f in glob.glob(os.path.join(js_assets_dir, '*'))]
+js_assets_datas = [
+    (f, os.path.join('src', 'ui', 'assets', 'js')) for f in glob.glob(os.path.join(js_assets_dir, '*'))
+]
 
-# Bundled CSS for WebView-based UI components
 css_assets_dir = os.path.join(ROOT_DIR, 'source', 'src', 'ui', 'assets', 'css')
-css_assets_datas = [(f, os.path.join('src', 'ui', 'assets', 'css'))
-                    for f in glob.glob(os.path.join(css_assets_dir, '*'))]
+css_assets_datas = [
+    (f, os.path.join('src', 'ui', 'assets', 'css')) for f in glob.glob(os.path.join(css_assets_dir, '*'))
+]
 
-# Copilot SDK CLI binary (copilot.exe for Windows)
-# The SDK requires the CLI to be available at runtime
-import site
-_site_packages = None
-for sp in site.getsitepackages():
-    if os.path.isdir(os.path.join(sp, 'copilot', 'bin')):
-        _site_packages = sp
-        break
-if not _site_packages:
-    # Fallback to venv site-packages
-    _site_packages = os.path.join(ROOT_DIR, '.venv', 'Lib', 'site-packages')
-_copilot_bin = os.path.join(_site_packages, 'copilot', 'bin')
+
+def _find_copilot_bin():
+    candidates = []
+    try:
+        candidates.extend(site.getsitepackages())
+    except Exception:
+        pass
+    try:
+        candidates.append(sysconfig.get_paths()['purelib'])
+    except Exception:
+        pass
+    py_tag = f'python{sys.version_info.major}.{sys.version_info.minor}'
+    candidates.append(os.path.join(ROOT_DIR, '.venv', 'Lib', 'site-packages'))
+    candidates.append(os.path.join(ROOT_DIR, '.venv', 'lib', py_tag, 'site-packages'))
+    for sp in candidates:
+        copilot_bin = os.path.join(sp, 'copilot', 'bin')
+        if os.path.isdir(copilot_bin):
+            return copilot_bin
+    return None
+
+
 copilot_cli_datas = []
-if os.path.isdir(_copilot_bin):
+_copilot_bin = _find_copilot_bin()
+if _copilot_bin:
     for f in glob.glob(os.path.join(_copilot_bin, '*')):
         copilot_cli_datas.append((f, os.path.join('copilot', 'bin')))
 
-datas = assets_datas + language_datas + monaco_datas + chat_datas + js_assets_datas + css_assets_datas + copilot_cli_datas + _qtawesome_datas + [
-    # pyproject.toml para leitura de versao
-    (os.path.join(ROOT_DIR, 'pyproject.toml'), '.'),
-] + _mariadb_datas
+_logo_svg = os.path.join(ROOT_DIR, 'source', 'src', 'assets', 'datapyn_logo.svg')
+_logo_datas = [(_logo_svg, '.')] if os.path.isfile(_logo_svg) else []
+
+datas = (
+    assets_datas
+    + language_datas
+    + monaco_datas
+    + chat_datas
+    + js_assets_datas
+    + css_assets_datas
+    + copilot_cli_datas
+    + _qtawesome_datas
+    + _logo_datas
+    + [
+        (os.path.join(ROOT_DIR, 'pyproject.toml'), '.'),
+    ]
+    + _mariadb_datas
+    + _we_datas
+)
+
+_icon_icns = os.path.join(ROOT_DIR, 'source', 'src', 'assets', 'datapyn.icns')
+_icon_ico = os.path.join(ROOT_DIR, 'source', 'src', 'assets', 'datapyn-logo.ico')
+if sys.platform == 'darwin' and os.path.isfile(_icon_icns):
+    _app_icon = _icon_icns
+elif os.path.isfile(_icon_ico):
+    _app_icon = _icon_ico
+else:
+    _app_icon = None
 
 a = Analysis(
     [os.path.join(ROOT_DIR, 'source', 'main.py')],
     pathex=[ROOT_DIR],
-    binaries=[] + _mariadb_binaries,
+    binaries=[] + _mariadb_binaries + _we_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -125,10 +197,9 @@ exe = EXE(
     name='DataPyn',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,  # strip is a Unix tool, not available on Windows
+    strip=False,
     upx=True,
     upx_exclude=[
-        # Exclude files that don't compress well or may cause issues
         'vcruntime*.dll',
         'python*.dll',
         'Qt6Core.dll',
@@ -136,13 +207,13 @@ exe = EXE(
         'Qt6Widgets.dll',
     ],
     runtime_tmpdir=None,
-    console=False,  # False = sem console (aplicacao GUI)
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(ROOT_DIR, 'source', 'src', 'assets', 'datapyn-logo.ico'),  # Icone do EXE
+    icon=_app_icon,
 )
 
 coll = COLLECT(
@@ -150,10 +221,9 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,  # strip is a Unix tool, not available on Windows
+    strip=False,
     upx=True,
     upx_exclude=[
-        # Exclude files that don't compress well or may cause issues
         'vcruntime*.dll',
         'python*.dll',
         'Qt6Core.dll',
@@ -162,3 +232,20 @@ coll = COLLECT(
     ],
     name='DataPyn',
 )
+
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='DataPyn.app',
+        icon=_app_icon,
+        bundle_identifier='page.datapyn.app',
+        info_plist={
+            'CFBundleName': 'DataPyn',
+            'CFBundleDisplayName': 'DataPyn',
+            'CFBundleIdentifier': 'page.datapyn.app',
+            'CFBundlePackageType': 'APPL',
+            'NSHighResolutionCapable': True,
+            'LSMinimumSystemVersion': '13.0',
+            'NSPrincipalClass': 'NSApplication',
+        },
+    )

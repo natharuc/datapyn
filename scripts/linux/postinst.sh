@@ -2,7 +2,7 @@
 # Post-install: cria symlink, registra MIME .dpw e atualiza desktop database.
 set -e
 
-ln -sf /opt/datapyn/DataPyn /usr/local/bin/datapyn
+ln -sf /opt/datapyn/datapyn-wrapper.sh /usr/local/bin/datapyn
 
 if command -v update-mime-database &> /dev/null; then
     update-mime-database /usr/share/mime 2>/dev/null || true

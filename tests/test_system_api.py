@@ -320,6 +320,16 @@ class TestDatabaseConnectorAPI:
 
         assert "mysql+pymysql" in result
 
+    def test_connection_string_mariadb(self):
+        """String de conexao MariaDB usa PyMySQL."""
+        from database.database_connector import DatabaseConnector
+
+        conn = DatabaseConnector()
+        result, _connect_args = conn._build_connection_string("mariadb", "localhost", 3306, "testdb", "user", "pass")
+
+        assert "mysql+pymysql" in result
+        assert "mariadbconnector" not in result
+
     def test_connection_string_postgresql(self):
         """String de conexao PostgreSQL"""
         from database.database_connector import DatabaseConnector
