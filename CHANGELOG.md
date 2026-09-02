@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.57.0 (2026-09-02)
+
+### Bug Fixes
+
+- **deps**: Bump thrift to 0.24 for CVE-2026-41608
+  ([`2984d9a`](https://github.com/natharuc/datapyn/commit/2984d9a7c026a3721244f23c5bc2ef446b7b65df))
+
+### Features
+
+- **release**: Publish Linux .deb and unsigned macOS DMG
+  ([`541ce65`](https://github.com/natharuc/datapyn/commit/541ce653cbc0cebe314d95187967bae4583d7cfa))
+
+- **release**: Publish Linux .deb and unsigned macOS DMG
+  ([`caf3dbd`](https://github.com/natharuc/datapyn/commit/caf3dbd6879b7dc433206eb5995000ab01b09eb7))
+
+### Heuristic
+
+- Merge pull request #156 from natharuc/feat/linux-macos-distribution
+  ([`541ce65`](https://github.com/natharuc/datapyn/commit/541ce653cbc0cebe314d95187967bae4583d7cfa))
+
+
 ## v1.56.0 (2026-08-31)
 
 ### Features
