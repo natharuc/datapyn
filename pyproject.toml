@@ -69,6 +69,7 @@ override-dependencies = [
     "setuptools>=83.0.0",
     "gitpython>=3.1.55",
     "pip>=26.2",
+    "thrift>=0.24.0",
 ]
 
 
