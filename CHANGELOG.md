@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v1.58.0 (2026-09-05)
+
+### Bug Fixes
+
+- **database**: Keep PostgreSQL connect hooks off mocked engines
+  ([`abca707`](https://github.com/natharuc/datapyn/commit/abca707f009ba06dbc56373ddccc335375f7238e))
+
+- **database**: Register pool checkout hooks on mocked engines
+  ([`479b2e8`](https://github.com/natharuc/datapyn/commit/479b2e82cbe67fd3c007094792e450b0ccdbdab5))
+
+### Features
+
+- **database**: Improve PostgreSQL schema UX and quote identifiers
+  ([`7db01fe`](https://github.com/natharuc/datapyn/commit/7db01fecf2bdc8ae7a9045e76da9124f18ab37ba))
+
+- **database**: Improve PostgreSQL schema UX and quote identifiers
+  ([`9d55a6b`](https://github.com/natharuc/datapyn/commit/9d55a6b463f26ad3d0c666243f20dbd04143b467))
+
+### Heuristic
+
+- Merge pull request #158 from natharuc/feat/postgresql-schema-ux
+  ([`7db01fe`](https://github.com/natharuc/datapyn/commit/7db01fecf2bdc8ae7a9045e76da9124f18ab37ba))
+
+
 ## v1.57.0 (2026-09-02)
 
 ### Bug Fixes
