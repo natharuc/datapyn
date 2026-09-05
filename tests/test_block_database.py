@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QMimeData, QPointF
 from PyQt6.QtGui import QDropEvent
 from PyQt6.QtWidgets import QApplication
 
-from src.editors.code_block import CodeBlock, BlockDatabasePanel
+from src.editors.code_block import CodeBlock, BlockDatabasePanel, SearchableDatabasePopup
 from src.editors.block_editor import BlockEditor
 
 
@@ -34,6 +34,88 @@ def _cleanup_qt_events(qapp):
     yield
     # Processar eventos pendentes para limpar animacoes do qtawesome
     qapp.processEvents()
+
+
+# ===== SearchableDatabasePopup =====
+
+
+class TestSearchableDatabasePopup:
+    """Searchable scrollable picker for db/catalog/schema chips."""
+
+    def test_filters_items_by_query(self, qapp):
+        popup = SearchableDatabasePopup(
+            ["alpha", "beta", "application_insights", "esim"],
+            default_label="Default DB",
+        )
+        popup._rebuild_list("esi")
+        names = [
+            popup._list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(popup._list.count())
+        ]
+        assert None not in names  # default label does not match "esi"
+        assert names == ["esim"]
+        popup.close()
+
+    def test_keeps_default_option_when_query_matches_label(self, qapp):
+        popup = SearchableDatabasePopup(["alpha"], default_label="Default DB")
+        popup._rebuild_list("default")
+        roles = [
+            popup._list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(popup._list.count())
+        ]
+        assert None in roles
+        popup.close()
+
+    def test_accept_current_selects_database(self, qapp):
+        popup = SearchableDatabasePopup(["db1", "db2"], current="db2")
+        # current should be selected
+        assert popup._list.currentItem().data(Qt.ItemDataRole.UserRole) == "db2"
+        popup._accept_current()
+        assert popup._accepted is True
+        assert popup._result == "db2"
+
+    def test_panel_uses_searchable_popup(self, qapp):
+        panel = BlockDatabasePanel()
+        panel.set_available_databases(["a", "b"])
+        with patch.object(SearchableDatabasePopup, "pick", return_value=(True, "b")) as mock_pick:
+            panel._show_database_menu()
+            mock_pick.assert_called_once()
+        assert panel.get_database_name() == "b"
+
+    def test_panel_cancel_does_not_change_database(self, qapp):
+        panel = BlockDatabasePanel()
+        panel.set_database("keep")
+        panel.set_available_databases(["a", "b"])
+        with patch.object(SearchableDatabasePopup, "pick", return_value=(False, None)):
+            panel._show_database_menu()
+        assert panel.get_database_name() == "keep"
+
+    def test_max_height_is_capped(self, qapp):
+        many = [f"db_{i:03d}" for i in range(80)]
+        popup = SearchableDatabasePopup(many)
+        assert popup.maximumHeight() == SearchableDatabasePopup.MAX_HEIGHT
+        assert popup._list.height() <= SearchableDatabasePopup.MAX_HEIGHT
+        popup.close()
+
+    def test_single_filtered_item_list_is_compact(self, qapp):
+        """One match must not leave a large empty list area (no 80px floor)."""
+        popup = SearchableDatabasePopup(
+            ["alpha", "Geocon", "beta"],
+            default_label="Default DB",
+        )
+        popup._rebuild_list("geocon")
+        assert popup._list.count() == 1
+        row_h = max(popup._list.sizeHintForRow(0), 1)
+        assert popup._list.height() <= row_h * 2 + 8
+        popup.close()
+
+    def test_selected_item_uses_white_icon(self, qapp):
+        popup = SearchableDatabasePopup(["Geocon"], current="Geocon")
+        item = popup._list.currentItem()
+        assert item is not None
+        # White icon pixmap should be non-null after selection refresh
+        assert not item.icon().isNull()
+        popup.close()
 
 
 # ===== BlockDatabasePanel =====
@@ -248,6 +330,20 @@ class TestCodeBlockDatabase:
 
         block.set_language("sql")
         assert not block.db_panel.isHidden()
+
+    def test_postgresql_db_panel_kind_is_schema(self, qapp):
+        """PostgreSQL blocks show Database + Schema chips."""
+        from src.language import S
+
+        block = CodeBlock(default_language="sql")
+        block.set_connection_name("ProdConn", "postgresql")
+
+        assert block.db_panel.isHidden()
+        assert not block.catalog_panel.isHidden()
+        assert not block.schema_panel.isHidden()
+        assert block.catalog_panel._kind == "database"
+        assert block.schema_panel._kind == "schema"
+        assert block.schema_panel.name_label.text() == S.block.schema_default
 
 
 # ===== Persistencia Database =====

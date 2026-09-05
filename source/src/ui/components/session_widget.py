@@ -28,6 +28,7 @@ from src.database.database_connector import (
     _format_sql_error_for_user,
     _safe_exception_text,
     get_connector_database_context,
+    get_connector_switch_chip_value,
     OperationCancelled,
     QueryBusyError,
 )
@@ -200,7 +201,9 @@ class BlockAutoConnectWorker(QObject):
             target_db = self._database_name
             connect_database = config.get("database", "")
             database_context = None
-            if db_type == "databricks" and target_db:
+            if db_type in ("databricks", "postgresql") and target_db:
+                # Databricks: catalog.schema context. PostgreSQL: schema/search_path.
+                # Never treat the chip value as the connect database name.
                 database_context = target_db
             elif target_db:
                 connect_database = target_db
@@ -276,6 +279,8 @@ class SessionWidget(QWidget):
         self._sql_thread: Optional[QThread] = None
         self._sql_worker: Optional[SessionSqlWorker] = None
         self._sql_is_download: bool = False
+        self._download_cancel_pending: bool = False
+        self._current_download_block = None
         self._python_thread: Optional[QThread] = None
         self._connection_thread: Optional[QThread] = None
         self._connection_worker: Optional[SessionConnectionWorker] = None
@@ -1137,6 +1142,9 @@ class SessionWidget(QWidget):
         db_type = str(config.get("db_type", "")).lower()
         if db_type == "databricks":
             return config.get("database", ""), target or None
+        if db_type == "postgresql":
+            # PostgreSQL connection fixes the database; chip override is schema.
+            return config.get("database", ""), target or None
         return target or config.get("database", ""), None
 
     def _sql_connection_identity(self, block, connection_name=None):
@@ -1196,6 +1204,29 @@ class SessionWidget(QWidget):
     def _update_block_database_ui(self, block, database_name: str) -> None:
         """Update only the executing block's database context (not other blocks)."""
         if block is None or not database_name:
+            return
+        db_type = ""
+        if hasattr(block, "_block_db_type"):
+            db_type = str(block._block_db_type() or "").lower()
+        if db_type == "postgresql" and hasattr(block, "set_postgresql_schema_display"):
+            connector = getattr(self, "_current_connector", None) or getattr(
+                self.session, "connector", None
+            )
+            schema_name = get_connector_switch_chip_value(connector)
+            normalized = None
+            if hasattr(block, "_normalize_postgresql_chip_value"):
+                normalized = block._normalize_postgresql_chip_value(database_name)
+            display = normalized or schema_name
+            if display:
+                had_override = bool(block.get_database_name())
+                block.set_postgresql_schema_display(
+                    display, override=had_override and bool(normalized)
+                )
+            elif hasattr(block, "_sync_postgresql_schema_chip"):
+                block._sync_postgresql_schema_chip()
+            emitted = block.get_database_name() or ""
+            if emitted:
+                self.block_database_changed.emit(block, emitted)
             return
         block.set_database_name(database_name)
         if hasattr(block, "db_panel"):
@@ -1262,7 +1293,7 @@ class SessionWidget(QWidget):
 
             thread.started.connect(worker.run)
             worker.finished.connect(
-                lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name, sp=sql_parameters, b=block:
+                lambda conn, err, q=query, bn=block_name, cn=conn_name, dn=database_name, sp=sql_parameters, b=block:
                     self._on_auto_connect_finished(conn, err, q, bn, cn, dn, sp, b)
             )
             worker.finished.connect(thread.quit)
@@ -1286,6 +1317,11 @@ class SessionWidget(QWidget):
         if not getattr(self, "_sql_is_download", False):
             return
         self._current_download_block = block
+        self._download_cancel_pending = True
+        # Clear bars immediately — download_finished is often skipped after
+        # _stop_sql_execution bumps _sql_execution_token.
+        if block is not None and hasattr(block, "clear_downloads"):
+            block.clear_downloads()
         self._on_cancel_execution()
 
     @staticmethod
@@ -1359,7 +1395,7 @@ class SessionWidget(QWidget):
 
             thread.started.connect(worker.run)
             worker.finished.connect(
-                lambda conn, err, q=query, bn=block_name, cn=connection_name, dn=database_name,
+                lambda conn, err, q=query, bn=block_name, cn=conn_name, dn=database_name,
                 sp=sql_parameters, ef=export_format, fp=file_path, co=csv_options, b=block:
                     self._on_download_auto_connect_finished(
                         conn, err, q, bn, cn, dn, sp, ef, fp, co, b
@@ -1405,8 +1441,9 @@ class SessionWidget(QWidget):
         if self._reject_if_cancelling_sql():
             return
         if not connector or error_msg:
+            display_name = connection_name or getattr(self.session, "connection_name", "") or "connection"
             self.append_output(
-                S.session_widget.block_connect_error.format(name=connection_name, error=error_msg),
+                S.session_widget.block_connect_error.format(name=display_name, error=error_msg),
                 error=True,
             )
             self.status_changed.emit(S.session_widget.status_conn_failed)
@@ -1466,8 +1503,9 @@ class SessionWidget(QWidget):
         if self._reject_if_cancelling_sql():
             return
         if not connector or error_msg:
+            display_name = connection_name or getattr(self.session, "connection_name", "") or "connection"
             self.append_output(
-                S.session_widget.block_connect_error.format(name=connection_name, error=error_msg),
+                S.session_widget.block_connect_error.format(name=display_name, error=error_msg),
                 error=True
             )
             self.status_changed.emit(S.session_widget.status_conn_failed)
@@ -3055,8 +3093,28 @@ class SessionWidget(QWidget):
             QTimer.singleShot(0, self._process_next_in_queue)
         self._maybe_emit_execution_idle()
 
+    def _clear_download_ui(self) -> None:
+        """Remove download progress bars; safe if none are showing."""
+        block = getattr(self, "_current_download_block", None)
+        if block is None and hasattr(self, "editor"):
+            try:
+                block = self.editor.get_current_executing_block()
+            except Exception:
+                block = None
+        if block is not None and hasattr(block, "clear_downloads"):
+            block.clear_downloads()
+        self._current_download_block = None
+
     def _complete_user_cancel(self) -> None:
         """Apply cancelled UI/output after SQL worker and lock are idle."""
+        was_download = bool(
+            getattr(self, "_download_cancel_pending", False)
+            or getattr(self, "_sql_is_download", False)
+        )
+        self._download_cancel_pending = False
+        self._sql_is_download = False
+        self._clear_download_ui()
+
         self._is_executing = False
         self._current_block_name = None
 
@@ -3065,16 +3123,29 @@ class SessionWidget(QWidget):
         else:
             self.editor.mark_execution_finished()
 
-        self.append_output(
-            self._format_log(
-                "CANCELLED",
-                S.session_widget.cancelled_output.replace("[CANCELLED] ", ""),
-            ),
-            error=True,
-        )
-        self._show_output()
-        self.status_changed.emit(S.session_widget.status_cancelled)
-        self.session.finish_execution(False, S.session_widget.execution_cancelled)
+        # Closing a busy tab already stops workers; skip noisy CANCELLED log/status.
+        if getattr(self, "_is_closing", False):
+            self.session.finish_execution(False, S.session_widget.execution_cancelled)
+            self.execution_cancelled.emit()
+            return
+
+        if was_download:
+            msg = S.block.download_cancelled
+            self.append_output(self._format_log("CANCELLED", msg), error=True)
+            self._show_output()
+            self.status_changed.emit(msg)
+            self.session.finish_execution(False, msg)
+        else:
+            self.append_output(
+                self._format_log(
+                    "CANCELLED",
+                    S.session_widget.cancelled_output.replace("[CANCELLED] ", ""),
+                ),
+                error=True,
+            )
+            self._show_output()
+            self.status_changed.emit(S.session_widget.status_cancelled)
+            self.session.finish_execution(False, S.session_widget.execution_cancelled)
         self.execution_cancelled.emit()
 
     def _on_cancel_execution(self):
@@ -3086,6 +3157,10 @@ class SessionWidget(QWidget):
         self._cancel_requested = True
         self._execution_queue.clear()
         self._cancel_pending_db_switches()
+
+        if getattr(self, "_sql_is_download", False):
+            self._download_cancel_pending = True
+            self._clear_download_ui()
 
         worker = getattr(self, "_sql_worker", None)
         stopping_thread = getattr(self, "_sql_thread", None)

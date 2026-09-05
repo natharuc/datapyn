@@ -84,6 +84,57 @@ def test_sql_typing_path_does_not_wait_for_python_worker():
     assert "mergeCompletionItems(dotItems, contextual)" not in html
 
 
+def test_sql_template_quotes_postgresql_identifiers():
+    from pathlib import Path
+
+    html = Path("source/src/editors/monaco/monaco_template.html").read_text(encoding="utf-8")
+    assert "function isPostgresqlSchema(" in html
+    assert "function quotePostgresIdentifier(" in html
+    assert "function quoteSqlIdentifierIfNeeded(" in html
+    assert "function getSqlCompletionReplaceRange(" in html
+    assert "SQL_IDENT_ATOM" in html
+    assert 'insertText: quoteSqlIdentifierIfNeeded(colName)' in html
+    assert 'insertText: quoteSqlIdentifierIfNeeded(schemaName)' in html
+
+
+def test_format_sql_completions_quotes_postgresql_not_keywords():
+    from src.editors.monaco.monaco_completion_service import (
+        _format_sql_completions,
+        _format_sql_context_completions,
+    )
+
+    items = _format_sql_completions(
+        [
+            ("PullRequests", "table", "table"),
+            ("Id", "column", "int"),
+            ("metrics", "schema", "schema"),
+            ("SELECT", "keyword", ""),
+            ("now", "function", ""),
+        ],
+        "postgresql",
+    )
+    by_label = {item["label"]: item for item in items}
+    assert by_label["PullRequests"]["insertText"] == '"PullRequests"'
+    assert by_label["PullRequests"]["filterText"] == "PullRequests"
+    assert by_label["Id"]["insertText"] == '"Id"'
+    assert by_label["metrics"]["insertText"] == '"metrics"'
+    assert by_label["SELECT"]["insertText"] == "SELECT"
+    assert by_label["now"]["insertText"] == "now"
+
+    qualified = _format_sql_completions(
+        [("metrics.PullRequests", "table", "table")],
+        "postgresql",
+    )
+    assert qualified[0]["insertText"] == '"metrics"."PullRequests"'
+
+    mssql = _format_sql_completions([("PullRequests", "table", "table")], "sqlserver")
+    assert mssql[0]["insertText"] == "PullRequests"
+
+    context = _format_sql_context_completions([("Id", "column", "int")], "pr", "postgresql")
+    assert context[0]["insertText"] == '"Id"'
+    assert context[0]["label"] == "Id"
+
+
 def test_completion_worker_does_not_start_until_requested(qapp):
     from src.editors.monaco.monaco_completion_service import MonacoCompletionService
 

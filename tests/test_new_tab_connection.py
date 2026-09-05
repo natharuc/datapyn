@@ -164,6 +164,43 @@ class TestNewTabConnection:
         normal_signal.emit.assert_called_once_with("", "TestConnection")
         new_tab_signal.emit.assert_not_called()
 
+    def test_middle_click_emits_new_tab_signal(self, app, qtbot):
+        """Middle-click (scroll wheel) on a connection opens it in a new tab."""
+        from PyQt6.QtCore import QPointF, QEvent
+        from PyQt6.QtGui import QMouseEvent
+        from PyQt6.QtWidgets import QTreeWidgetItem
+
+        connections_list = ConnectionsList()
+        qtbot.addWidget(connections_list)
+
+        group_item = QTreeWidgetItem(["Prod"])
+        connections_list.tree_widget.addTopLevelItem(group_item)
+        conn_item = QTreeWidgetItem(["TestConnection"])
+        conn_item.setData(
+            0,
+            Qt.ItemDataRole.UserRole,
+            {"type": "connection", "group": "Prod", "name": "TestConnection"},
+        )
+        group_item.addChild(conn_item)
+        group_item.setExpanded(True)
+
+        received = []
+        connections_list.new_tab_connection_requested.connect(
+            lambda g, n: received.append((g, n))
+        )
+
+        rect = connections_list.tree_widget.visualItemRect(conn_item)
+        pos = rect.center()
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(pos),
+            Qt.MouseButton.MiddleButton,
+            Qt.MouseButton.MiddleButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        assert connections_list.eventFilter(connections_list.tree_widget.viewport(), event) is True
+        assert received == [("Prod", "TestConnection")]
+
     def test_context_menu_has_new_tab_option(self, app):
         connections_list = ConnectionsList()
         assert hasattr(connections_list, "_show_context_menu")

@@ -183,7 +183,7 @@ class SchemaMixin:
 
     # DB types that expose a server-wide database/catalog list worth fetching
     # automatically so the per-block database dropdown is populated.
-    _SERVER_DB_LIST_TYPES = frozenset(("mssql", "sqlserver", "mysql", "mariadb", "databricks"))
+    _SERVER_DB_LIST_TYPES = frozenset(("mssql", "sqlserver", "mysql", "mariadb", "databricks", "postgresql"))
 
     def _maybe_auto_request_databases(
         self,
@@ -193,12 +193,10 @@ class SchemaMixin:
         session_id: str,
         connection_group: str = "",
     ) -> None:
-        """After a lazy/minimal schema load, fetch the server database list once.
+        """Fallback: if connect schema did not include databases, fetch them once.
 
-        Minimal mode (default on connect) loads neither tables nor the server
-        database list, so the per-block database dropdown would stay empty until
-        the user manually expands the OE "Databases" node. Trigger the cheap
-        single-query list load automatically instead.
+        Autocomplete/minimal now preload the switch list in SchemaWorker; this
+        remains a safety net when the list is still empty (failed query, race).
         """
         if not connection_name or not session_id:
             return
@@ -208,13 +206,6 @@ class SchemaMixin:
             return
         if str(db_type or "").lower() not in self._SERVER_DB_LIST_TYPES:
             return
-
-        if not hasattr(self, "_auto_db_list_requested"):
-            self._auto_db_list_requested = set()
-        key = (connection_name, session_id)
-        if key in self._auto_db_list_requested:
-            return
-        self._auto_db_list_requested.add(key)
 
         if not hasattr(self, "_auto_db_list_requested"):
             self._auto_db_list_requested = set()
@@ -872,6 +863,12 @@ class SchemaMixin:
         )
         if not target:
             return True
+        db_type = str(schema.get("db_type") or "").lower()
+        if db_type == "postgresql":
+            # Block chip stores the schema (search_path), while requested/connection
+            # context remain the real database name.
+            incoming_schema = str(schema.get("current_schema") or "").strip()
+            return self._database_context_matches(target, incoming_schema)
         incoming = (
             schema.get("requested_context")
             or schema.get("connection_context")
@@ -952,6 +949,20 @@ class SchemaMixin:
                 block.editor.set_sql_schema({})
 
     def _available_databases_from_schema(self, schema: dict, db_type: str = "") -> list:
+        db_type = str(db_type or schema.get("db_type") or "").lower()
+        if db_type == "postgresql":
+            # Chip lists schemas (search_path), not databases.
+            schemas = list(schema.get("schemas", []) or [])
+            if schemas:
+                return schemas
+            # Fallback: derive unique schemas from loaded tables.
+            derived = sorted({
+                str(table.get("schema") or "")
+                for table in (schema.get("tables", []) or [])
+                if table.get("schema")
+            })
+            return derived or list(schema.get("databases", []) or [])
+
         all_databases = list(schema.get("databases", []) or [])
         if db_type != "databricks":
             return all_databases
@@ -1211,9 +1222,7 @@ class SchemaMixin:
             ),
         )
 
-        # Lazy connect: minimal mode loads no server database list. Request it
-        # once so the per-block database dropdown and the OE get populated without
-        # forcing the user to expand the "Databases" node manually.
+        # Safety net if connect autocomplete did not populate databases.
         self._maybe_auto_request_databases(
             schema, connection_name, db_type, requesting_sid, connection_group
         )
@@ -1778,14 +1787,17 @@ class SchemaMixin:
             block.editor.set_sql_schema(schema)
         if connection_name and hasattr(block, "set_database_context"):
             block.set_database_context(self._build_schema_context(schema, connection_name))
+        resolved_db_type = str(db_type or schema.get("db_type") or "").lower()
         if hasattr(block, "set_available_databases"):
-            all_databases = self._available_databases_from_schema(schema, db_type)
+            all_databases = self._available_databases_from_schema(schema, resolved_db_type)
             block.set_available_databases(all_databases)
-        if hasattr(block, "set_namespace_options") and str(db_type or schema.get("db_type") or "").lower() == "databricks":
+        if hasattr(block, "set_namespace_options") and resolved_db_type == "databricks":
             block.set_namespace_options(
                 schema.get("databases") or [],
                 schema.get("catalog_schemas") or {},
             )
+        if resolved_db_type == "postgresql" and hasattr(block, "_sync_postgresql_schema_chip"):
+            block._sync_postgresql_schema_chip()
 
     def _update_oe_for_block_connection(self, block, connection_name: str, schema: dict):
         """Update Object Explorer if the given block is currently focused.
@@ -1873,9 +1885,16 @@ class SchemaMixin:
             database_name = block.get_database_name() if hasattr(block, "get_database_name") else ""
             connect_database = database_name or config["database"]
             database_context = ""
-            if config["db_type"] == "databricks":
+            db_type = str(config.get("db_type") or "").lower()
+            if db_type == "databricks":
                 connect_database = config["database"]
                 database_context = database_name or ""
+            elif db_type == "postgresql":
+                # PostgreSQL: the block "database" switch is actually schema
+                # (search_path). The connector itself must still connect to the
+                # real database to avoid treating the schema name as database.
+                connect_database = config["database"]
+                database_context = ""
 
             worker = BlockConnectionWorker(
                 db_type=config["db_type"],
@@ -1925,7 +1944,7 @@ class SchemaMixin:
                     block_key=block_key,
                     connection_group=connection_group,
                     lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE,
-                    database_context=database_name,
+                    database_context=database_context,
                 )
 
             thread.started.connect(worker.run)
@@ -2051,7 +2070,14 @@ class SchemaMixin:
                 updated["current_schema"] = ctx.schema
             updated["current_context"] = database_name
         else:
-            updated["database"] = database_name
+            if db_type == "postgresql":
+                # PostgreSQL block chip represents a schema (search_path).
+                # Keep the real DB in `database` and reflect the chosen schema
+                # via `current_schema` / `current_context`.
+                updated["current_schema"] = database_name
+                updated["current_context"] = database_name
+            else:
+                updated["database"] = database_name
         setter(updated)
 
     def _maybe_set_explorer_loading_for_block(self, session_widget, block, session_id: str) -> None:
@@ -2163,6 +2189,7 @@ class SchemaMixin:
         """Reload autocomplete schema after a successful USE / reconnect."""
         self._set_block_namespace_switching(block, False)
         self._patch_block_schema_context(block, database_name)
+        db_type = str(self._get_connection_db_type(connection_name, connection_group) or "").lower()
         block_key = block.get_block_key() if hasattr(block, "get_block_key") else ""
         self._schema_service.invalidate_cache(
             connection_name,
@@ -2170,7 +2197,31 @@ class SchemaMixin:
             block_key=block_key,
             connection_group=connection_group,
         )
-        self._maybe_set_explorer_loading_for_block(session_widget, block, session_id)
+        database_context_for_service = database_name
+        if db_type == "postgresql":
+            # For PostgreSQL the block's "database_name" is the chosen schema
+            # (search_path). SchemaService caching expects the real DB context.
+            # Tables/columns do not change — avoid OE "Loading schema..." overlay.
+            try:
+                getter = getattr(connector, "get_current_database", None)
+                database_context_for_service = (
+                    str(getter() or "") if callable(getter) else ""
+                )
+            except Exception:
+                database_context_for_service = ""
+            # Reflect active schema on OE immediately from the patched block schema.
+            if session_id and hasattr(self, "_session_explorers"):
+                explorer = self._session_explorers.get(session_id)
+                if explorer is not None and hasattr(explorer, "_current_schema"):
+                    oe_schema = dict(getattr(explorer, "_current_schema") or {})
+                    if oe_schema:
+                        oe_schema["current_schema"] = database_name
+                        oe_schema["db_type"] = "postgresql"
+                        explorer.set_schema(
+                            oe_schema, connection_name, db_type="postgresql"
+                        )
+        else:
+            self._maybe_set_explorer_loading_for_block(session_widget, block, session_id)
         self._schema_service.load_schema(
             connector,
             connection_name,
@@ -2178,7 +2229,7 @@ class SchemaMixin:
             block_key=block_key,
             connection_group=connection_group,
             lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE,
-            database_context=database_name,
+            database_context=database_context_for_service,
         )
         self.statusBar().showMessage(
             S.status.database_changed.format(name=database_name), 3000
@@ -2303,7 +2354,12 @@ class SchemaMixin:
         thread = QThread()
         connect_database = database_name
         database_context = ""
-        if config["db_type"] == "databricks":
+        db_type_conn = str(config.get("db_type") or "").lower()
+        if db_type_conn == "databricks":
+            connect_database = config["database"]
+            database_context = database_name
+        elif db_type_conn == "postgresql":
+            # For PostgreSQL the chip value is schema (search_path), not the real database.
             connect_database = config["database"]
             database_context = database_name
 
@@ -2319,7 +2375,11 @@ class SchemaMixin:
             trust_server_certificate=config.get("trust_server_certificate", False),
             http_path=config.get("http_path", ""),
             database_context=database_context,
-            schema=config.get("schema") or config.get("databricks_schema") or "",
+            schema=(
+                database_name
+                if db_type_conn == "postgresql" and database_name
+                else (config.get("schema") or config.get("databricks_schema") or "")
+            ),
         )
         worker.moveToThread(thread)
 

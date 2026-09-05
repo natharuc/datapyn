@@ -13,8 +13,11 @@ from src.database.query_stream_exporter import (
     CsvStreamWriter,
     ParquetStreamWriter,
     StreamExportResult,
+    _arrow_table_rows,
+    _csv_options_use_native_arrow,
     iter_rows_chunked,
     make_result_path,
+    normalize_csv_options,
     stream_arrow_to_file,
     stream_result_set_to_file,
 )
@@ -117,6 +120,46 @@ class TestStreamArrowToFile:
         df = pq.read_table(path).to_pandas()
         assert len(df) == 3
         assert str(df["val"].iloc[2]) == "text"
+
+    def test_arrow_csv_with_default_csv_options_uses_native_path(self, tmp_path):
+        """UI always passes csv_options; default decimal must avoid Python cell materialization."""
+        opts = normalize_csv_options(
+            {"delimiter": ",", "decimal": ".", "encoding": "utf-8-sig", "header": True}
+        )
+        assert _csv_options_use_native_arrow(opts) is True
+        cursor = MockArrowCursor([pa.table({"id": [1, 2], "name": ["a", "b"]})])
+        path = tmp_path / "native.csv"
+        rows = stream_arrow_to_file(
+            cursor.fetchmany_arrow,
+            path=path,
+            export_format="csv",
+            csv_options=opts,
+        )
+        assert rows == 2
+        text = path.read_text(encoding="utf-8-sig")
+        assert "id" in text and "name" in text
+        assert "1" in text and "a" in text
+        assert "2" in text and "b" in text
+
+    def test_arrow_csv_custom_decimal_still_formats(self, tmp_path):
+        opts = {"delimiter": ";", "decimal": ",", "encoding": "utf-8", "header": True}
+        assert _csv_options_use_native_arrow(normalize_csv_options(opts)) is False
+        cursor = MockArrowCursor([pa.table({"amount": [1.5, 2.25], "qty": [2, 3]})])
+        path = tmp_path / "custom_arrow.csv"
+        rows = stream_arrow_to_file(
+            cursor.fetchmany_arrow,
+            path=path,
+            export_format="csv",
+            csv_options=opts,
+        )
+        assert rows == 2
+        content = path.read_text(encoding="utf-8")
+        assert "1,5;2" in content
+        assert "2,25;3" in content
+
+    def test_arrow_table_rows_column_oriented(self):
+        table = pa.table({"a": [1, 2], "b": ["x", "y"]})
+        assert _arrow_table_rows(table) == [[1, "x"], [2, "y"]]
 
 
 class TestIterRowsChunked:

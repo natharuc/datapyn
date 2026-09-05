@@ -343,6 +343,25 @@ def get_connector_database_context(connector) -> str:
     return ""
 
 
+def get_connector_switch_chip_value(connector) -> str:
+    """Value shown on the SQL-block switch chip.
+
+    PostgreSQL: schema (search_path). Other engines: database/catalog context.
+    """
+    if connector is None:
+        return ""
+    db_type = str(getattr(connector, "db_type", "") or "").lower()
+    if db_type == "postgresql":
+        getter = getattr(connector, "get_current_schema", None)
+        if callable(getter):
+            try:
+                return str(getter() or "").strip() or "public"
+            except Exception:
+                return "public"
+        return "public"
+    return get_connector_database_context(connector)
+
+
 def _get_oauth_token_cache_path(host: str) -> Path:
     """Get path for OAuth token cache file.
     
@@ -475,6 +494,19 @@ class DatabaseConnector:
                 **engine_kwargs,
             )
 
+            if db_type == "postgresql":
+                initial_schema = str(
+                    kwargs.get("schema") or kwargs.get("postgresql_schema") or "public"
+                ).strip() or "public"
+                self.connection_params = {
+                    "host": host,
+                    "port": port,
+                    "database": database,
+                    "username": username,
+                    "postgresql_schema": initial_schema,
+                }
+            self._register_engine_checkout_hooks(db_type)
+
             if db_type == "sqlserver" and sqlserver_auth_mode == SQLSERVER_AUTH_ENTRA_MFA:
                 credential = sqlserver_mfa_credential
 
@@ -484,25 +516,6 @@ class DatabaseConnector:
                     attrs_before = dict(cparams.get("attrs_before") or {})
                     attrs_before[SQL_COPT_SS_ACCESS_TOKEN] = _build_sqlserver_access_token_struct(token.token)
                     cparams["attrs_before"] = attrs_before
-
-            # Register pool event to ensure every connection
-            # pulled from pool uses correct database (solves problem
-            # with USE <db> that only affects one pool connection)
-            if db_type == "sqlserver":
-                connector_ref = self
-
-                @event.listens_for(self.engine, "checkout")
-                def on_checkout(dbapi_conn, connection_record, connection_proxy):
-                    if not connector_ref._sqlserver_supports_use():
-                        return
-                    current_db = connector_ref.connection_params.get("database", "")
-                    if current_db:
-                        try:
-                            cursor = dbapi_conn.cursor()
-                            cursor.execute(f"USE [{current_db}]")
-                            cursor.close()
-                        except Exception:
-                            pass  # Silence - USE in batch will catch error
 
             # Test connection
             try:
@@ -546,6 +559,7 @@ class DatabaseConnector:
                         try:
                             self.engine.dispose()
                             self.engine = retry_engine
+                            self._register_engine_checkout_hooks(db_type)
                             with self.engine.connect() as conn:
                                 conn.execute(text("SELECT 1"))
                             kwargs["postgresql_client_encoding"] = client_encoding
@@ -563,6 +577,7 @@ class DatabaseConnector:
                     raise
 
             self.db_type = db_type
+            existing_pg_schema = str(self.connection_params.get("postgresql_schema") or "").strip()
             self.connection_params = {
                 "host": host,
                 "port": port,
@@ -570,6 +585,11 @@ class DatabaseConnector:
                 "username": username,
                 "sqlserver_supports_use": not _is_azure_sql_host(host) if db_type == "sqlserver" else True,
             }
+            if db_type == "postgresql":
+                self.connection_params["postgresql_schema"] = existing_pg_schema or (
+                    str(kwargs.get("schema") or kwargs.get("postgresql_schema") or "public").strip()
+                    or "public"
+                )
             self._connection_config = {
                 "db_type": db_type,
                 "host": host,
@@ -606,6 +626,13 @@ class DatabaseConnector:
                         logger.warning(f"Could not query Databricks current catalog/schema: {e}")
                         self.connection_params["databricks_catalog"] = ""
                         self.connection_params["databricks_schema"] = "default"
+
+            # PostgreSQL schema is applied on every pool checkout (search_path).
+            if db_type == "postgresql" and not self.connection_params.get("postgresql_schema"):
+                self.connection_params["postgresql_schema"] = (
+                    str(kwargs.get("schema") or kwargs.get("postgresql_schema") or "public").strip()
+                    or "public"
+                )
 
             logger.info(f"Connected to {self.SUPPORTED_DATABASES[db_type]}: {host}/{database}")
             return True
@@ -744,6 +771,17 @@ class DatabaseConnector:
             client_encoding = str(kwargs.get("postgresql_client_encoding", "") or "").strip()
             if client_encoding:
                 connect_args["client_encoding"] = client_encoding
+            initial_schema = str(
+                kwargs.get("schema") or kwargs.get("postgresql_schema") or "public"
+            ).strip() or "public"
+            # New backends pick this up; pooled checkouts also SET search_path
+            # because pool_size > 1 (same issue as SQL Server USE).
+            search_path = DatabaseConnector._postgresql_search_path_value(initial_schema)
+            existing_options = str(connect_args.get("options") or "").strip()
+            search_option = f"-csearch_path={search_path}"
+            connect_args["options"] = (
+                f"{existing_options} {search_option}".strip() if existing_options else search_option
+            )
             return f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{host}:{port}/{database}", connect_args
 
         elif db_type == "databricks":
@@ -936,7 +974,10 @@ class DatabaseConnector:
         parameters: Optional[List[Dict[str, Any]]],
         is_cancelled: Optional[Any] = None,
     ) -> Optional[int]:
-        """Best-effort COUNT(*) over the user query. None if not countable."""
+        """Best-effort COUNT(*) over the user query. None if not countable.
+
+        Sets ``_active_cursor`` so interrupt/cancel can stop a long warehouse COUNT.
+        """
         if is_cancelled and is_cancelled():
             return None
         stmts = self._split_sql_statements(query)
@@ -951,22 +992,34 @@ class DatabaseConnector:
         count_sql = f"SELECT COUNT(*) AS __dp_count FROM ({stmt}) AS __dp_count_sub"
         raw = None
         cur = None
+        prev_raw = getattr(self, "_active_raw_conn", None)
+        prev_cur = getattr(self, "_active_cursor", None)
         try:
             raw = self.engine.raw_connection()
+            self._active_raw_conn = raw
             cur = raw.cursor()
+            self._active_cursor = cur
+            if is_cancelled and is_cancelled():
+                return None
             prepared = prepare_databricks_sql(count_sql, parameters) if parameters else None
             if prepared:
                 cur.execute(prepared.query, prepared.params)
             else:
                 cur.execute(count_sql)
+            if is_cancelled and is_cancelled():
+                return None
             row = cur.fetchone()
             if row and row[0] is not None:
                 return int(row[0])
             return None
         except Exception as e:
+            if self._cancelled or (is_cancelled and is_cancelled()):
+                return None
             logger.info(f"Databricks COUNT estimation skipped: {_safe_exception_text(e)}")
             return None
         finally:
+            self._active_cursor = prev_cur
+            self._active_raw_conn = prev_raw
             if cur:
                 try:
                     cur.close()
@@ -1257,16 +1310,9 @@ class DatabaseConnector:
         result = StreamExportResult()
 
         try:
-            if on_total is not None:
-                total = self._estimate_databricks_row_count(query, parameters, is_cancelled)
-                if is_cancelled and is_cancelled():
-                    result.cancelled = True
-                    return result
-                if total is not None:
-                    try:
-                        on_total(1, total)
-                    except Exception:
-                        pass
+            # Skip blocking COUNT(*) before streaming — warehouse estimates can take
+            # minutes and freeze perceived UX. Progress stays indeterminate until rows flow.
+            # on_total is kept for API compatibility but not used for a pre-stream COUNT.
 
             raw_conn = self.engine.raw_connection()
             self._active_raw_conn = raw_conn
@@ -2195,7 +2241,7 @@ class DatabaseConnector:
         if not self.engine:
             raise ConnectionError("No active database connection")
 
-        # Skip if already on the same database (avoid unnecessary roundtrip)
+        # Skip if already on the same database/schema (avoid unnecessary roundtrip)
         current_db = self.connection_params.get("database", "")
         if self.db_type == "databricks":
             parsed = parse_context(
@@ -2224,8 +2270,22 @@ class DatabaseConnector:
                     f"Already on '{parsed.catalog}.{parsed.schema}', skipping USE"
                 )
                 return True
+        elif self.db_type == "postgresql":
+            # PostgreSQL chip/switch value is a schema (search_path), not the database.
+            target_schema = str(database or "").strip()
+            real_db = str(self.connection_params.get("database") or "").strip()
+            if real_db and target_schema.lower() == real_db.lower():
+                logger.debug(
+                    "Ignoring PostgreSQL schema switch to the database name '%s'",
+                    target_schema,
+                )
+                return True
+            current_schema = str(self.connection_params.get("postgresql_schema") or "").strip()
+            if current_schema and current_schema.lower() == target_schema.lower():
+                logger.debug(f"Already on schema '{database}', skipping SET search_path")
+                return True
         else:
-            # Non-Databricks: simple database comparison
+            # Other engines: simple database comparison
             if current_db.lower() == database.lower():
                 logger.debug(f"Already on database '{database}', skipping USE")
                 return True
@@ -2265,6 +2325,9 @@ class DatabaseConnector:
                     self.connection_params["databricks_catalog"] = parsed.catalog
                 if parsed.schema:
                     self.connection_params["databricks_schema"] = parsed.schema
+            elif self.db_type == "postgresql":
+                # Keep the real database; only track schema (search_path).
+                self.connection_params["postgresql_schema"] = database
             else:
                 self.connection_params["database"] = database
 
@@ -2314,6 +2377,68 @@ class DatabaseConnector:
             **reconnect_config,
         )
 
+    def _register_engine_checkout_hooks(self, db_type: str) -> None:
+        """Apply database/schema context on every pooled connection.
+
+        SQL Server ``USE`` and PostgreSQL ``SET search_path`` only affect the
+        connection they run on. With pool_size > 1 the next query can check
+        out a different backend and silently use the wrong database/schema.
+        """
+        if self.engine is None:
+            return
+        connector_ref = self
+
+        def listen_checkout(handler) -> None:
+            try:
+                event.listens_for(self.engine, "checkout")(handler)
+            except Exception:
+                # Tests mock create_engine(); SQLAlchemy rejects MagicMock targets.
+                return
+
+        if db_type == "sqlserver":
+            def on_sqlserver_checkout(dbapi_conn, connection_record, connection_proxy):
+                if not connector_ref._sqlserver_supports_use():
+                    return
+                current_db = connector_ref.connection_params.get("database", "")
+                if not current_db:
+                    return
+                try:
+                    cursor = dbapi_conn.cursor()
+                    cursor.execute(f"USE [{current_db}]")
+                    cursor.close()
+                except Exception:
+                    pass
+            listen_checkout(on_sqlserver_checkout)
+            return
+        if db_type == "postgresql":
+            def on_postgresql_checkout(dbapi_conn, connection_record, connection_proxy):
+                schema = (
+                    str(connector_ref.connection_params.get("postgresql_schema") or "public").strip()
+                    or "public"
+                )
+                try:
+                    cursor = dbapi_conn.cursor()
+                    cursor.execute(DatabaseConnector._postgresql_search_path_sql(schema))
+                    cursor.close()
+                except Exception:
+                    pass
+            listen_checkout(on_postgresql_checkout)
+
+    @staticmethod
+    def _postgresql_quote_ident(name: str) -> str:
+        return '"' + str(name or "").replace('"', '""') + '"'
+
+    @staticmethod
+    def _postgresql_search_path_value(schema: str) -> str:
+        return str(schema or "public").strip() or "public"
+
+    @staticmethod
+    def _postgresql_search_path_sql(schema: str) -> str:
+        ident = DatabaseConnector._postgresql_quote_ident(
+            DatabaseConnector._postgresql_search_path_value(schema)
+        )
+        return f"SET search_path TO {ident}"
+
     def _build_use_command(self, database: str) -> str:
         """Build the USE command with correct syntax for the current database type.
 
@@ -2328,10 +2453,9 @@ class DatabaseConnector:
         elif self.db_type in ("mysql", "mariadb"):
             return f"USE `{database}`"
         elif self.db_type == "postgresql":
-            # PostgreSQL does not support USE command for database switching
-            # (that requires a new connection). This changes the schema search path
-            # within the current database, which is the closest equivalent.
-            return f'SET search_path TO "{database}"'
+            # PostgreSQL does not support USE for databases (needs a new connection).
+            # This changes search_path within the current database.
+            return self._postgresql_search_path_sql(database)
         elif self.db_type == "databricks":
             parsed = parse_context(
                 "databricks",
@@ -2363,7 +2487,9 @@ class DatabaseConnector:
                                           self.connection_params.get("database", ""))
 
     def get_current_schema(self) -> str:
-        """Return current Databricks schema name"""
+        """Return current schema name (Databricks or PostgreSQL search_path)."""
+        if self.db_type == "postgresql":
+            return str(self.connection_params.get("postgresql_schema") or "public")
         return self.connection_params.get("databricks_schema", "default")
 
     def get_current_database_context(self) -> str:

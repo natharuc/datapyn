@@ -1116,6 +1116,12 @@ class TestQuoteIdentifier:
         explorer._db_type = "postgresql"
         assert explorer._quote_identifier("public.users") == '"public"."users"'
 
+    def test_quote_for_editor_insert_only_postgresql(self, explorer):
+        explorer._db_type = "postgresql"
+        assert explorer._quote_for_editor_insert("PullRequests") == '"PullRequests"'
+        explorer._db_type = "mssql"
+        assert explorer._quote_for_editor_insert("PullRequests") == "PullRequests"
+
     def test_quote_mysql(self, explorer):
         """MySQL usa backticks"""
         explorer._db_type = "mysql"
@@ -1158,13 +1164,21 @@ class TestObjectExplorerPostgres:
         explorer.set_schema(pg_single_db_schema, "conn1", db_type="postgresql")
         db_item = explorer.tree.topLevelItem(0)
 
-        # Com apenas 1 schema (public), tabelas ficam direto sob banco
         users_item = None
         for i in range(db_item.childCount()):
             child = db_item.child(i)
-            data = child.data(0, Qt.ItemDataRole.UserRole)
-            if data and data.get("type") == "table" and data.get("name") == "users":
+            data = child.data(0, Qt.ItemDataRole.UserRole) or {}
+            if data.get("type") == "table" and data.get("name") == "users":
                 users_item = child
+                break
+            if data.get("type") == "schema":
+                for j in range(child.childCount()):
+                    table = child.child(j)
+                    tdata = table.data(0, Qt.ItemDataRole.UserRole) or {}
+                    if tdata.get("type") == "table" and tdata.get("name") == "users":
+                        users_item = table
+                        break
+            if users_item is not None:
                 break
 
         assert users_item is not None
@@ -1184,6 +1198,42 @@ class TestObjectExplorerPostgres:
         text = explorer.info_label.text()
         assert "2 tables" in text
         assert "3 columns" in text
+
+    def test_pg_insert_name_quotes_identifiers(self, explorer, pg_single_db_schema, qtbot):
+        """>> on PostgreSQL table/column inserts quoted identifiers."""
+        explorer.set_schema(pg_single_db_schema, "conn1", db_type="postgresql")
+        db_item = explorer.tree.topLevelItem(0)
+        users_item = None
+        for i in range(db_item.childCount()):
+            child = db_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "table" and data.get("name") == "users":
+                users_item = child
+                break
+            if data and data.get("type") == "schema":
+                for j in range(child.childCount()):
+                    table = child.child(j)
+                    tdata = table.data(0, Qt.ItemDataRole.UserRole)
+                    if tdata and tdata.get("name") == "users":
+                        users_item = table
+                        break
+            if users_item is not None:
+                break
+
+        assert users_item is not None
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_insert_clicked(users_item)
+        inserted = blocker.args[0]
+        assert inserted.startswith('"')
+        assert "users" in inserted.replace('"', "")
+        assert inserted == explorer._quote_identifier(
+            explorer._get_item_qualified_name(users_item.data(0, Qt.ItemDataRole.UserRole))
+        )
+
+        col_item = users_item.child(0)
+        with qtbot.waitSignal(explorer.insert_text_requested, timeout=1000) as blocker:
+            explorer._on_insert_clicked(col_item)
+        assert blocker.args == ['"id"']
 
 
 # ---------------------------------------------------------------------------
@@ -1870,14 +1920,23 @@ class TestObjectExplorerEnhancedContextMenu:
     """Testes do context menu aprimorado"""
 
     def _find_table_item(self, explorer, table_name="users"):
-        """Helper para encontrar item de tabela"""
+        """Helper para encontrar item de tabela (incluindo pastas de schema)."""
         db_item = explorer.tree.topLevelItem(0)
-        for i in range(db_item.childCount()):
-            child = db_item.child(i)
-            data = child.data(0, Qt.ItemDataRole.UserRole)
-            if data and data.get("type") == "table" and data.get("name") == table_name:
-                return child
-        return None
+        if db_item is None:
+            return None
+
+        def walk(node):
+            for i in range(node.childCount()):
+                child = node.child(i)
+                data = child.data(0, Qt.ItemDataRole.UserRole) or {}
+                if data.get("type") == "table" and data.get("name") == table_name:
+                    return child
+                found = walk(child)
+                if found is not None:
+                    return found
+            return None
+
+        return walk(db_item)
 
     def _find_column_item(self, explorer, table_name="users", col_index=0):
         """Helper para encontrar item de coluna"""

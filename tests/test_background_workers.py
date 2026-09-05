@@ -250,6 +250,7 @@ class TestBlockConnectionWorker:
             password="secret",
             use_windows_auth=True,
             trust_server_certificate=True,
+            schema="public",
         )
 
     @patch("src.database.database_connector.DatabaseConnector")

@@ -124,7 +124,7 @@ def confirm_ok_cancel(
         title,
         message,
         confirm_label=confirm_label or S.dialogs.btn_ok,
-        cancel_label=cancel_label or S.dialogs.btn_cancel,
+        cancel_label=cancel_label or S.dialogs.cancel_btn,
         destructive=destructive,
     )
 
@@ -169,7 +169,7 @@ class FramelessProgressDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel_btn = GhostButton(cancel_text or S.dialogs.btn_cancel, size="sm")
+        cancel_btn = GhostButton(cancel_text or S.dialogs.cancel_btn, size="sm")
         cancel_btn.clicked.connect(self._handle_cancel)
         footer.addWidget(cancel_btn)
         layout.addLayout(footer)
@@ -242,7 +242,7 @@ def show_periodic_execution_dialog(
     layout.addLayout(preset_row)
 
     footer = QHBoxLayout()
-    cancel_btn = GhostButton(S.dialogs.btn_cancel, size="sm")
+    cancel_btn = GhostButton(S.dialogs.cancel_btn, size="sm")
     start_btn = PrimaryButton(S.toolbar.run_timer_start, size="sm")
     cancel_btn.clicked.connect(dialog.reject)
     start_btn.clicked.connect(dialog.accept)

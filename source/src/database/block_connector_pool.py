@@ -21,7 +21,14 @@ def connect_connector_from_config(
 ) -> DatabaseConnector:
     """Open a new connector from saved connection settings."""
     connector = DatabaseConnector()
+    db_type = str(config.get("db_type", "")).lower()
     initial_db = database or config.get("database", "")
+    # PostgreSQL: chip/context is schema (search_path); always connect to the real DB.
+    if db_type == "postgresql":
+        initial_db = config.get("database", "") or initial_db
+    initial_schema = config.get("schema") or config.get("databricks_schema") or ""
+    if db_type == "postgresql":
+        initial_schema = database_context or initial_schema or "public"
     try:
         connector.connect(
             db_type=config["db_type"],
@@ -34,7 +41,7 @@ def connect_connector_from_config(
             sqlserver_auth_mode=config.get("sqlserver_auth_mode", ""),
             trust_server_certificate=config.get("trust_server_certificate", False),
             http_path=config.get("http_path", ""),
-            schema=config.get("schema") or config.get("databricks_schema") or "",
+            schema=initial_schema,
         )
     except Exception as exc:
         logger.warning(
@@ -50,9 +57,13 @@ def connect_connector_from_config(
         return connector
 
     target_context = database_context
-    if not target_context and database and database != config.get("database", ""):
-        if str(config.get("db_type", "")).lower() != "databricks":
-            target_context = database
+    if (
+        not target_context
+        and database
+        and database != config.get("database", "")
+        and db_type not in ("databricks", "postgresql")
+    ):
+        target_context = database
     if target_context and connector.is_connected():
         try:
             connector.change_database(target_context)
@@ -234,10 +245,19 @@ class BlockConnectorPool:
         database: Optional[str],
         database_context: Optional[str],
     ) -> None:
-        target = database_context or database
-        if not target:
-            return
-        current = get_connector_database_context(connector)
+        db_type = str(getattr(connector, "db_type", "") or "").lower()
+        if db_type == "postgresql":
+            # Schema/search_path only — never treat the connect database as schema.
+            target = database_context
+            if not target:
+                return
+            getter = getattr(connector, "get_current_schema", None)
+            current = str(getter() or "") if callable(getter) else ""
+        else:
+            target = database_context or database
+            if not target:
+                return
+            current = get_connector_database_context(connector)
         if current and current.lower() == str(target).lower():
             return
         try:
