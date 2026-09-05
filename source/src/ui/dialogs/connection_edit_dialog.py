@@ -438,9 +438,18 @@ class ConnectionEditDialog(QDialog):
         self.spin_port.setValue(self.config.get("port", 1433))
         self.txt_database.setText(self.config.get("database", ""))
 
-        # Databricks-specific field
+        # Databricks / PostgreSQL schema field
         self.txt_http_path.setText(self.config.get("http_path", ""))
-        self.txt_schema.setText(self.config.get("schema") or self.config.get("databricks_schema") or "default")
+        if db_type == "postgresql":
+            self.txt_schema.setText(
+                self.config.get("schema")
+                or self.config.get("postgresql_schema")
+                or "public"
+            )
+        else:
+            self.txt_schema.setText(
+                self.config.get("schema") or self.config.get("databricks_schema") or "default"
+            )
 
         use_windows_auth = self.config.get("use_windows_auth", False)
         self.chk_windows_auth.setChecked(use_windows_auth)
@@ -529,17 +538,27 @@ class ConnectionEditDialog(QDialog):
             self.chk_windows_auth.setChecked(False)
         
         # Databricks-specific fields
+        is_postgresql = db_type == "postgresql"
         self.txt_http_path.setVisible(is_databricks)
         self.lbl_http_path.setVisible(is_databricks)
-        self.txt_schema.setVisible(is_databricks)
-        self.lbl_schema.setVisible(is_databricks)
+        # Schema is meaningful for Databricks (catalog schema) and PostgreSQL (search_path).
+        self.txt_schema.setVisible(is_databricks or is_postgresql)
+        self.lbl_schema.setVisible(is_databricks or is_postgresql)
         if is_databricks:
             self.lbl_database.setText(S.connection_edit.label_catalog)
             self.txt_database.setPlaceholderText(S.connection_edit.placeholder_catalog)
+            self.txt_schema.setPlaceholderText(S.connection_edit.placeholder_schema)
+            if not self.txt_schema.text().strip():
+                self.txt_schema.setText("default")
         else:
             self.lbl_database.setText(S.connection_edit.label_database)
             self.txt_database.setPlaceholderText(S.connection_edit.placeholder_database)
-            self.txt_schema.clear()
+            if is_postgresql:
+                self.txt_schema.setPlaceholderText("public")
+                if not self.txt_schema.text().strip():
+                    self.txt_schema.setText("public")
+            else:
+                self.txt_schema.clear()
         
         # For Databricks, adjust username/password labels for token auth
         if is_databricks:
@@ -610,8 +629,13 @@ class ConnectionEditDialog(QDialog):
 
         # Create and start worker
         self._test_cancelled = False
-        http_path = self.txt_http_path.text() if self._current_db_type() == "databricks" else ""
-        schema = self.txt_schema.text().strip() if self._current_db_type() == "databricks" else ""
+        current_type = self._current_db_type()
+        http_path = self.txt_http_path.text() if current_type == "databricks" else ""
+        schema = ""
+        if current_type == "databricks":
+            schema = self.txt_schema.text().strip() or "default"
+        elif current_type == "postgresql":
+            schema = self.txt_schema.text().strip() or "public"
         self.test_worker = ConnectionTestWorker(
             db_type=self._current_db_type(),
             host=self.txt_host.text(),
@@ -702,6 +726,8 @@ class ConnectionEditDialog(QDialog):
         if db_type == "databricks":
             config["http_path"] = self.txt_http_path.text().strip()
             config["schema"] = self.txt_schema.text().strip() or "default"
+        elif db_type == "postgresql":
+            config["schema"] = self.txt_schema.text().strip() or "public"
 
         if self.chk_save_password.isChecked():
             config["password"] = self.txt_password.text()

@@ -464,14 +464,17 @@ class TestExportToTableDialog:
         dialog.table_name_edit.setText("my_table")
         assert dialog._validate() is True
 
-    def test_dialog_progress_initially_hidden(self, qtbot):
-        """Progresso comeca invisivel"""
+    def test_dialog_progress_initially_ready(self, qtbot):
+        """Progress group stays visible (ready) so layout does not jump on export."""
         df = _sample_df()
         conns = _make_connections(srv=True)
         dialog = ExportToTableDialog(df, conns)
         qtbot.addWidget(dialog)
+        dialog.show()
+        qtbot.waitExposed(dialog)
 
-        assert dialog.progress_group.isVisible() is False
+        assert dialog.progress_group.isVisible() is True
+        assert dialog.progress_bar.value() == 0
 
     def test_dialog_on_progress_updates_bar(self, qtbot):
         """_on_progress atualiza barra de progresso"""

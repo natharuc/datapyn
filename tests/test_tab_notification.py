@@ -127,13 +127,13 @@ class TestTabNotificationDialog:
 
     def test_config_restores_message(self, dialog_with_config):
         """Config restores message input."""
-        assert dialog_with_config._message_input.text() == "Got {{result[0][0]}}"
+        assert dialog_with_config._message_input.toPlainText() == "Got {{result[0][0]}}"
 
     def test_save_returns_config(self, dialog, qtbot):
         """Clicking save returns config dict."""
         dialog._enable_cb.setChecked(True)
         dialog._title_input.setText("Test Title")
-        dialog._message_input.setText("Test Msg")
+        dialog._message_input.setPlainText("Test Msg")
         dialog._on_save()
         config = dialog.get_config()
         assert config is not None

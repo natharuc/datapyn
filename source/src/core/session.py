@@ -222,9 +222,31 @@ class Session(QObject):
         if not target_context:
             return
 
-        current_context = self._connector_database_context(connector)
-        if current_context and current_context.lower() == target_context.lower():
-            return
+        db_type = str(getattr(connector, "db_type", "") or "").lower()
+        if db_type == "postgresql":
+            # Legacy sessions stored the real database here. Never apply it as search_path.
+            real_db = ""
+            getter = getattr(connector, "get_current_database", None)
+            if callable(getter):
+                try:
+                    real_db = str(getter() or "").strip()
+                except Exception:
+                    real_db = ""
+            if real_db and target_context.lower() == real_db.lower():
+                return
+            current_schema = ""
+            schema_getter = getattr(connector, "get_current_schema", None)
+            if callable(schema_getter):
+                try:
+                    current_schema = str(schema_getter() or "").strip()
+                except Exception:
+                    current_schema = ""
+            if current_schema and current_schema.lower() == target_context.lower():
+                return
+        else:
+            current_context = self._connector_database_context(connector)
+            if current_context and current_context.lower() == target_context.lower():
+                return
 
         try:
             connector.change_database(target_context)

@@ -303,12 +303,22 @@ class BlockConnectionWorker(BaseWorker):
                 connect_kwargs["http_path"] = self.http_path
                 if self.schema:
                     connect_kwargs["schema"] = self.schema
+            elif self.db_type == "postgresql":
+                # Prefer per-block schema context, else connection default schema.
+                schema = self.database_context or self.schema or "public"
+                connect_kwargs["schema"] = schema
 
             connector.connect(
                 **connect_kwargs
             )
 
             if self.db_type == "databricks" and self.database_context:
+                connector.change_database(self.database_context)
+            elif (
+                self.db_type == "postgresql"
+                and self.database_context
+                and self.database_context != connect_kwargs.get("schema")
+            ):
                 connector.change_database(self.database_context)
 
             if connector.is_connected():

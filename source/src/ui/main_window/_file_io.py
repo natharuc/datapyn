@@ -17,7 +17,7 @@ from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QFileDialog
 
 from src.design_system.app_dialogs import show_danger, show_information, show_warning
-from src.database.database_connector import get_connector_database_context
+from src.database.database_connector import get_connector_database_context, get_connector_switch_chip_value
 from src.ui.main_window._workers import _read_file_with_encoding_fallback
 from src.language import S
 
@@ -126,9 +126,15 @@ class FileIOMixin:
                 previous_connection = current_widget.session.connection_name
                 previous_group = getattr(current_widget.session, "connection_group", None) or ""
                 previous_database_context = getattr(current_widget.session, "database_context", "") or ""
-                if not previous_database_context:
+                previous_connector = getattr(current_widget.session, "connector", None)
+                previous_db_type = str(getattr(previous_connector, "db_type", "") or "").lower()
+                if previous_db_type == "postgresql":
+                    previous_database_context = get_connector_switch_chip_value(
+                        previous_connector
+                    )
+                elif not previous_database_context:
                     previous_database_context = get_connector_database_context(
-                        getattr(current_widget.session, "connector", None)
+                        previous_connector
                     )
                 if previous_connection:
                     config = self.connection_manager.get_connection_config(

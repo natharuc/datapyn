@@ -106,3 +106,78 @@ class TestCodeBlockDownloadProgress:
         block.start_download(1, "x.csv")
         block._download_bars[1].cancel_btn.click()
         assert seen == [block]
+
+
+class TestSessionDownloadCancel:
+    """Cancel must clear bars even when download_finished is token-skipped."""
+
+    def test_download_cancel_clears_bars_immediately(self, qtbot):
+        from unittest.mock import MagicMock, patch
+        from src.core.session import Session
+        from src.ui.components.session_widget import SessionWidget
+
+        session = Session("dl-cancel", title="dl-cancel")
+        widget = SessionWidget(session)
+        qtbot.addWidget(widget)
+        block = widget.editor.get_blocks()[0]
+        block.start_download(1, "out.csv")
+        assert block._download_bars
+
+        widget._sql_is_download = True
+        widget._sql_worker = MagicMock()
+        widget._sql_worker.connector = MagicMock()
+        widget._sql_thread = MagicMock()
+        widget._sql_thread.isRunning.return_value = True
+
+        with (
+            patch.object(widget, "_stop_sql_execution"),
+            patch.object(widget, "_release_sql_slot"),
+            patch.object(widget, "_stop_python_execution"),
+            patch.object(widget, "_arm_sql_stop_watch"),
+            patch.object(widget, "_schedule_sql_stop_finalize"),
+        ):
+            widget._on_download_cancel_requested(block)
+
+        assert not block._download_bars
+        assert widget._download_cancel_pending is True
+
+    def test_complete_user_cancel_quiet_when_closing(self, qtbot):
+        from unittest.mock import MagicMock
+        from src.core.session import Session
+        from src.ui.components.session_widget import SessionWidget
+
+        session = Session("dl-close", title="dl-close")
+        widget = SessionWidget(session)
+        qtbot.addWidget(widget)
+        widget._is_closing = True
+        widget._download_cancel_pending = True
+        widget.append_output = MagicMock()
+
+        widget._complete_user_cancel()
+
+        widget.append_output.assert_not_called()
+
+    def test_complete_user_cancel_download_uses_download_message(self, qtbot):
+        from unittest.mock import MagicMock
+        from src.core.session import Session
+        from src.language import S
+        from src.ui.components.session_widget import SessionWidget
+
+        session = Session("dl-msg", title="dl-msg")
+        widget = SessionWidget(session)
+        qtbot.addWidget(widget)
+        widget._download_cancel_pending = True
+        widget._is_closing = False
+        logged = []
+        statuses = []
+        widget.append_output = MagicMock(side_effect=lambda *a, **k: logged.append(a))
+        widget.status_changed.connect(lambda s: statuses.append(s))
+
+        widget._complete_user_cancel()
+
+        assert logged
+        joined = " ".join(str(x) for x in logged[0])
+        assert S.block.download_cancelled in joined or "Download cancelled" in joined
+        assert "Execution cancelled by user" not in joined
+        assert statuses
+        assert S.block.download_cancelled in statuses[0] or "Download cancelled" in statuses[0]

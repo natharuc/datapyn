@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDialog,
+    QFormLayout,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -12,6 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -19,7 +21,13 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from typing import Optional, Dict, Any
 
-from src.design_system.tokens import get_colors
+from src.design_system.button import PrimaryButton, SecondaryButton
+from src.design_system.tokens import (
+    RADIUS,
+    apply_combobox_style,
+    get_colors,
+    get_groupbox_stylesheet,
+)
 from src.language import S
 
 
@@ -56,58 +64,23 @@ class TabNotificationDialog(QDialog):
         colors = get_colors()
         from src.design_system.frameless_dialog import install_frameless_shell
 
-        title = S.tab_notification.dialog_title if hasattr(S, "tab_notification") else "Tab Notification"
+        title = S.tab_notification.dialog_title
         self.setWindowTitle(title)
         self.setMaximumWidth(1040)
 
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: transparent;
-            }}
-        """)
-
-        layout = install_frameless_shell(
-            self,
-            title,
-            min_width=860,
-            content_margins=(20, 16, 20, 20),
-            content_spacing=16,
-        )
-
-        group_style = f"""
-            QGroupBox {{
-                font-weight: bold;
-                font-size: 11px;
-                color: {colors.text_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 20px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-            }}
-        """
-        input_style = f"""
-            QLineEdit, QComboBox {{
+        body_extra = f"""
+            {get_groupbox_stylesheet()}
+            QLineEdit, QTextEdit, QComboBox {{
                 background-color: {colors.bg_secondary};
                 color: {colors.text_primary};
                 border: 1px solid {colors.border_default};
-                border-radius: 4px;
+                border-radius: {RADIUS.radius_sm}px;
                 padding: 6px 10px;
                 font-size: 12px;
             }}
-            QLineEdit:focus, QComboBox:focus {{
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{
                 border-color: {colors.interactive_primary};
             }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 22px;
-            }}
-        """
-        checkbox_style = f"""
             QCheckBox {{
                 color: {colors.text_primary};
                 font-size: 12px;
@@ -115,7 +88,16 @@ class TabNotificationDialog(QDialog):
                 font-weight: normal;
             }}
         """
-        label_style = f"color: {colors.text_secondary}; font-size: 11px; font-weight: normal;"
+
+        layout = install_frameless_shell(
+            self,
+            title,
+            min_width=860,
+            content_margins=(20, 16, 20, 20),
+            content_spacing=16,
+            body_stylesheet_extra=body_extra,
+        )
+
         header_style = f"color: {colors.text_tertiary}; font-size: 10px; font-weight: bold;"
         hint_style = f"""
             QLabel {{
@@ -124,93 +106,56 @@ class TabNotificationDialog(QDialog):
                 font-size: 11px;
                 padding: 8px 8px 8px 12px;
                 border-left: 3px solid {colors.interactive_primary};
-                border-radius: 4px;
+                border-radius: {RADIUS.radius_sm}px;
                 font-weight: normal;
             }}
         """
-        button_style = f"""
-            QPushButton {{
-                background-color: {colors.bg_elevated};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                font-size: 11px;
-                padding: 0 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.bg_tertiary};
-            }}
-        """
 
-        config_group = QGroupBox(
-            S.tab_notification.section_config if hasattr(S, 'tab_notification') else "NOTIFICATION CONFIG"
-        )
-        config_group.setStyleSheet(group_style)
+        config_group = QGroupBox(S.tab_notification.section_config)
         config_layout = QVBoxLayout(config_group)
+        config_layout.setContentsMargins(12, 16, 12, 12)
         config_layout.setSpacing(8)
 
-        self._enable_cb = QCheckBox(
-            S.tab_notification.enable_custom if hasattr(S, 'tab_notification') else "Enable custom notification for this tab"
-        )
-        self._enable_cb.setStyleSheet(checkbox_style)
+        self._enable_cb = QCheckBox(S.tab_notification.enable_custom)
         self._enable_cb.setChecked(self._config.get("enabled", False))
         self._enable_cb.toggled.connect(self._on_enable_toggled)
         config_layout.addWidget(self._enable_cb)
         layout.addWidget(config_group)
 
-        template_group = QGroupBox(
-            S.tab_notification.section_template if hasattr(S, 'tab_notification') else "MESSAGE TEMPLATE"
-        )
-        template_group.setStyleSheet(group_style)
+        template_group = QGroupBox(S.tab_notification.section_template)
         template_layout = QVBoxLayout(template_group)
+        template_layout.setContentsMargins(12, 16, 12, 12)
         template_layout.setSpacing(10)
 
-        hint_label = QLabel(
-            S.tab_notification.variables_hint if hasattr(S, 'tab_notification')
-            else "Variables: {{rows}}, {{blocks}}, {{tab_name}}, {{block_name}}, {{connection}}, {{database}}, {{type}}."
-        )
+        hint_label = QLabel(S.tab_notification.variables_hint)
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(hint_style)
         template_layout.addWidget(hint_label)
 
-        default_title = self._config.get(
-            "title",
-            S.tab_notification.default_title if hasattr(S, 'tab_notification') else "{{tab_name}}",
-        )
-        default_message = self._config.get(
-            "message",
-            S.tab_notification.default_message if hasattr(S, 'tab_notification') else "{{rows}} rows - {{result[0][0]}}",
-        )
+        default_title = self._config.get("title", S.tab_notification.default_title)
+        default_message = self._config.get("message", S.tab_notification.default_message)
 
-        title_row = QHBoxLayout()
-        title_label = QLabel(S.tab_notification.label_title if hasattr(S, 'tab_notification') else "Title:")
-        title_label.setStyleSheet(label_style)
-        title_label.setFixedWidth(80)
-        title_row.addWidget(title_label)
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
         self._title_input = QLineEdit()
         self._title_input.setText(default_title)
-        self._title_input.setStyleSheet(input_style)
-        title_row.addWidget(self._title_input)
-        template_layout.addLayout(title_row)
+        form.addRow(S.tab_notification.label_title, self._title_input)
 
-        msg_row = QHBoxLayout()
-        msg_label = QLabel(S.tab_notification.label_message if hasattr(S, 'tab_notification') else "Message:")
-        msg_label.setStyleSheet(label_style)
-        msg_label.setFixedWidth(80)
-        msg_row.addWidget(msg_label)
-        self._message_input = QLineEdit()
-        self._message_input.setText(default_message)
-        self._message_input.setStyleSheet(input_style)
-        msg_row.addWidget(self._message_input)
-        template_layout.addLayout(msg_row)
+        self._message_input = QTextEdit()
+        self._message_input.setAcceptRichText(False)
+        self._message_input.setPlainText(default_message)
+        self._message_input.setFixedHeight(72)
+        form.addRow(S.tab_notification.label_message, self._message_input)
 
-        color_row = QHBoxLayout()
-        color_label = QLabel(
-            S.tab_notification.label_color if hasattr(S, 'tab_notification') else "Color:"
-        )
-        color_label.setStyleSheet(label_style)
-        color_label.setFixedWidth(80)
-        color_row.addWidget(color_label)
+        color_row = QWidget()
+        color_layout = QHBoxLayout(color_row)
+        color_layout.setContentsMargins(0, 0, 0, 0)
+        color_layout.setSpacing(8)
 
         self._color_value = self._config.get("color", "#1e8a3e")
         self._color_btn = QPushButton()
@@ -218,27 +163,24 @@ class TabNotificationDialog(QDialog):
         self._color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._update_color_btn()
         self._color_btn.clicked.connect(self._pick_color)
-        color_row.addWidget(self._color_btn)
+        color_layout.addWidget(self._color_btn)
 
         self._color_hex_label = QLabel(self._color_value)
-        self._color_hex_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px; font-weight: normal;")
-        color_row.addWidget(self._color_hex_label)
-        color_row.addStretch()
-        template_layout.addLayout(color_row)
+        self._color_hex_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 11px;")
+        color_layout.addWidget(self._color_hex_label)
+        color_layout.addStretch()
+        form.addRow(S.tab_notification.label_color, color_row)
 
+        template_layout.addLayout(form)
         self._template_group = template_group
         layout.addWidget(template_group)
 
-        rules_group = QGroupBox(
-            S.tab_notification.section_rules if hasattr(S, 'tab_notification') else "RULES"
-        )
-        rules_group.setStyleSheet(group_style)
+        rules_group = QGroupBox(S.tab_notification.section_rules)
         rules_layout = QVBoxLayout(rules_group)
+        rules_layout.setContentsMargins(12, 16, 12, 12)
         rules_layout.setSpacing(10)
 
-        rules_hint = QLabel(
-            S.tab_notification.rules_hint if hasattr(S, 'tab_notification') else "Rules are evaluated in order."
-        )
+        rules_hint = QLabel(S.tab_notification.rules_hint)
         rules_hint.setWordWrap(True)
         rules_hint.setStyleSheet(hint_style)
         rules_layout.addWidget(rules_hint)
@@ -279,8 +221,7 @@ class TabNotificationDialog(QDialog):
         self._rules_container.addStretch()
         rules_layout.addWidget(rules_scroll)
 
-        add_rule_btn = QPushButton(S.tab_notification.btn_add_rule if hasattr(S, 'tab_notification') else "Add rule")
-        add_rule_btn.setStyleSheet(button_style)
+        add_rule_btn = SecondaryButton(S.tab_notification.btn_add_rule, size="sm")
         add_rule_btn.clicked.connect(self._add_rule_row)
         rules_layout.addWidget(add_rule_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
@@ -290,30 +231,17 @@ class TabNotificationDialog(QDialog):
         for rule in self._config.get("rules", []):
             self._add_rule_row(rule)
 
+        layout.addStretch(1)
+
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         btn_row.addStretch()
 
-        cancel_btn = QPushButton(S.tab_notification.btn_cancel if hasattr(S, 'tab_notification') else "Cancel")
-        cancel_btn.setFixedHeight(30)
-        cancel_btn.setStyleSheet(button_style)
+        cancel_btn = SecondaryButton(S.tab_notification.btn_cancel, size="sm")
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
 
-        save_btn = QPushButton(S.tab_notification.btn_save if hasattr(S, 'tab_notification') else "Save")
-        save_btn.setFixedHeight(30)
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.interactive_primary};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 11px;
-                padding: 0 16px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.interactive_primary}dd;
-            }}
-        """)
+        save_btn = PrimaryButton(S.tab_notification.btn_save, size="sm")
         save_btn.clicked.connect(self._on_save)
         btn_row.addWidget(save_btn)
 
@@ -329,7 +257,7 @@ class TabNotificationDialog(QDialog):
             QPushButton {{
                 background-color: {self._color_value};
                 border: 1px solid rgba(255,255,255,0.3);
-                border-radius: 4px;
+                border-radius: {RADIUS.radius_sm}px;
             }}
             QPushButton:hover {{
                 border: 1px solid rgba(255,255,255,0.6);
@@ -338,8 +266,9 @@ class TabNotificationDialog(QDialog):
 
     def _pick_color(self):
         color = QColorDialog.getColor(
-            QColor(self._color_value), self,
-            S.tab_notification.color_picker_title if hasattr(S, 'tab_notification') else "Notification Color",
+            QColor(self._color_value),
+            self,
+            S.tab_notification.color_picker_title,
         )
         if not color.isValid():
             return
@@ -353,7 +282,7 @@ class TabNotificationDialog(QDialog):
             QPushButton {{
                 background-color: {row['action_value']};
                 border: 1px solid rgba(255,255,255,0.3);
-                border-radius: 4px;
+                border-radius: {RADIUS.radius_sm}px;
             }}
             QPushButton:hover {{
                 border: 1px solid rgba(255,255,255,0.6);
@@ -391,22 +320,12 @@ class TabNotificationDialog(QDialog):
 
     def _add_rule_row(self, rule: Optional[Dict[str, Any]] = None):
         colors = get_colors()
-        input_style = f"""
-            QLineEdit, QComboBox {{
-                background-color: {colors.bg_secondary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """
         remove_style = f"""
             QPushButton {{
                 background-color: transparent;
                 color: {colors.text_secondary};
                 border: 1px solid {colors.border_default};
-                border-radius: 4px;
+                border-radius: {RADIUS.radius_sm}px;
                 padding: 0 10px;
             }}
             QPushButton:hover {{
@@ -438,28 +357,26 @@ class TabNotificationDialog(QDialog):
 
         left_input = QLineEdit(str(normalized_rule.get("left", "")))
         left_input.setPlaceholderText(S.tab_notification.rule_left_placeholder)
-        left_input.setStyleSheet(input_style)
         row_layout.addWidget(left_input, 2)
 
         operator_combo = QComboBox()
-        operator_combo.setStyleSheet(input_style)
         for operator_value, label_key in RULE_OPERATORS:
             operator_combo.addItem(getattr(S.tab_notification, label_key), operator_value)
         operator_index = max(operator_combo.findData(str(normalized_rule.get("operator", "equals"))), 0)
         operator_combo.setCurrentIndex(operator_index)
+        apply_combobox_style(operator_combo)
         row_layout.addWidget(operator_combo, 1)
 
         value_input = QLineEdit(str(normalized_rule.get("value", "")))
         value_input.setPlaceholderText(S.tab_notification.rule_value_placeholder)
-        value_input.setStyleSheet(input_style)
         row_layout.addWidget(value_input, 2)
 
         action_combo = QComboBox()
-        action_combo.setStyleSheet(input_style)
         for action_value, label_key in RULE_ACTIONS:
             action_combo.addItem(getattr(S.tab_notification, label_key), action_value)
         action_index = max(action_combo.findData(str(normalized_rule.get("action", "suppress"))), 0)
         action_combo.setCurrentIndex(action_index)
+        apply_combobox_style(action_combo)
         row_layout.addWidget(action_combo, 1)
 
         action_value_widget = QWidget()
@@ -470,7 +387,7 @@ class TabNotificationDialog(QDialog):
         action_color_btn.setFixedSize(26, 24)
         action_color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         action_color_label = QLabel(str(normalized_rule.get("action_value", DEFAULT_RULE_COLOR)))
-        action_color_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px; font-weight: normal;")
+        action_color_label.setStyleSheet(f"color: {colors.text_tertiary}; font-size: 10px;")
         action_value_layout.addWidget(action_color_btn)
         action_value_layout.addWidget(action_color_label)
         action_value_layout.addStretch()
@@ -535,7 +452,7 @@ class TabNotificationDialog(QDialog):
         self._result_config = {
             "enabled": self._enable_cb.isChecked(),
             "title": self._title_input.text(),
-            "message": self._message_input.text(),
+            "message": self._message_input.toPlainText(),
             "color": self._color_value,
             "rules": self._collect_rules(),
         }

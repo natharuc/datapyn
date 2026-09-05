@@ -13,6 +13,9 @@ NAMESPACE_LEVELS: dict[str, tuple[str, ...]] = {
     "mssql": ("database",),
     "mysql": ("database",),
     "mariadb": ("database",),
+    # PostgreSQL keeps a single switch level (not dual catalog/schema).
+    # Semantically the block chip is schema via search_path; the connection
+    # still fixes the real database.
     "postgresql": ("database",),
 }
 

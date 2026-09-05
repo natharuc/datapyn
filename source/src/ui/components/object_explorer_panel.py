@@ -565,6 +565,14 @@ class ObjectExplorerPanel(QWidget):
         
         return ".".join(quoted_parts)
 
+    def _quote_for_editor_insert(self, identifier: str) -> str:
+        """Quote identifiers inserted into the SQL editor for PostgreSQL."""
+        if not identifier:
+            return identifier
+        if self._db_type in ("postgres", "postgresql"):
+            return self._quote_identifier(identifier)
+        return identifier
+
     def _get_column_display_type(self, column_info: dict) -> str:
         return str(
             column_info.get("display_type")
@@ -864,9 +872,14 @@ class ObjectExplorerPanel(QWidget):
         filter_text = self.search_input.text().strip().lower()
 
         is_databricks = self._db_type == "databricks"
+        is_postgresql = self._db_type in ("postgres", "postgresql")
 
         if is_databricks:
             self._build_tree_databricks(tables, columns, db_name, all_databases, filter_text)
+        elif is_postgresql:
+            # PostgreSQL: one connected database with schema folders.
+            # Never treat schema names as multi-database roots.
+            self._build_tree_postgresql(tables, columns, db_name, schema, filter_text)
         elif all_databases and len(all_databases) > 1:
             self._build_tree_multi_db(tables, columns, db_name, all_databases, filter_text)
         elif (
@@ -876,7 +889,7 @@ class ObjectExplorerPanel(QWidget):
         ):
             self._build_tree_lazy_server(tables, columns, db_name, filter_text)
         else:
-            # Single database (PostgreSQL, or single MySQL/MariaDB)
+            # Single database (or single MySQL/MariaDB)
             db_display = db_name or self._current_connection or "Database"
             db_item = QTreeWidgetItem(self.tree, [db_display])
             db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
@@ -899,6 +912,16 @@ class ObjectExplorerPanel(QWidget):
             self.info_label.setText(S.object_explorer.info_catalogs_tables.format(
                 catalogs=db_count, tables=table_count
             ))
+        elif is_postgresql:
+            schema_count = len(schema.get("schemas") or [])
+            if schema_count > 0:
+                self.info_label.setText(
+                    S.object_explorer.info_dbs_tables.format(dbs=1, tables=table_count)
+                )
+            else:
+                self.info_label.setText(
+                    S.object_explorer.info_tables_cols.format(tables=table_count, cols=col_count)
+                )
         elif db_count > 0:
             self.info_label.setText(S.object_explorer.info_dbs_tables.format(dbs=db_count, tables=table_count))
         else:
@@ -1029,6 +1052,79 @@ class ObjectExplorerPanel(QWidget):
                 if HAS_QTAWESOME:
                     cat_item.setIcon(0, qta.icon("mdi.database", color="#888888"))
 
+    def _build_tree_postgresql(self, tables, columns, db_name, schema: dict, filter_text: str):
+        """Build Database -> Schema -> Table tree for PostgreSQL."""
+        db_display = db_name or self._current_connection or "Database"
+        db_item = QTreeWidgetItem(self.tree, [db_display])
+        db_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "database", "name": db_name})
+        if HAS_QTAWESOME:
+            db_item.setIcon(0, qta.icon("mdi.database", color="#569cd6"))
+        font = db_item.font(0)
+        font.setBold(True)
+        db_item.setFont(0, font)
+
+        known_schemas = [
+            str(name)
+            for name in (schema.get("schemas") or [])
+            if str(name or "").strip()
+        ]
+        # Ensure schemas inferred from tables are present even if list load failed.
+        for table in tables or []:
+            table_schema = str(table.get("schema") or "").strip()
+            if table_schema and table_schema not in known_schemas:
+                known_schemas.append(table_schema)
+        known_schemas = sorted(known_schemas)
+
+        current_schema = str(schema.get("current_schema") or "").strip()
+        if known_schemas:
+            tables_by_schema: dict[str, list] = {name: [] for name in known_schemas}
+            for table in tables or []:
+                table_schema = str(table.get("schema") or "").strip() or "public"
+                tables_by_schema.setdefault(table_schema, []).append(table)
+
+            for schema_name in sorted(tables_by_schema.keys()):
+                schema_tables = tables_by_schema[schema_name]
+                if filter_text:
+                    # Keep schema node only when it or a child matches.
+                    schema_match = filter_text in schema_name.lower()
+                    child_match = any(
+                        filter_text in str(t.get("name", "")).lower()
+                        for t in schema_tables
+                    )
+                    if not schema_match and not child_match:
+                        continue
+
+                schema_item = QTreeWidgetItem(db_item, [schema_name])
+                schema_item.setData(
+                    0,
+                    Qt.ItemDataRole.UserRole,
+                    {"type": "schema", "name": schema_name, "catalog": db_name},
+                )
+                if HAS_QTAWESOME:
+                    schema_item.setIcon(0, qta.icon("mdi.folder", color="#dcdc8b"))
+                if current_schema and schema_name.lower() == current_schema.lower():
+                    font = schema_item.font(0)
+                    font.setBold(True)
+                    schema_item.setFont(0, font)
+
+                self._add_tables_to_node(
+                    schema_item,
+                    schema_tables,
+                    columns,
+                    filter_text,
+                    catalog=db_name,
+                    group_by_schema=False,
+                )
+                # Expand active schema (and any schema when filtering).
+                if filter_text or (
+                    current_schema and schema_name.lower() == current_schema.lower()
+                ) or (not current_schema and schema_name == "public"):
+                    schema_item.setExpanded(True)
+        else:
+            self._add_tables_to_node(db_item, tables, columns, filter_text)
+
+        db_item.setExpanded(True)
+
     def _build_tree_multi_db(self, tables, columns, db_name, all_databases, filter_text):
         """Build tree for multi-database servers (SQL Server, MySQL)
         
@@ -1114,7 +1210,16 @@ class ObjectExplorerPanel(QWidget):
                 if HAS_QTAWESOME:
                     db_item.setIcon(0, qta.icon("mdi.database", color="#888888"))
 
-    def _add_tables_to_node(self, parent_item, tables, columns, filter_text="", catalog: str = ""):
+    def _add_tables_to_node(
+        self,
+        parent_item,
+        tables,
+        columns,
+        filter_text="",
+        catalog: str = "",
+        *,
+        group_by_schema: bool = True,
+    ):
         """Adiciona tabelas e colunas a um no da arvore.
 
         Args:
@@ -1123,6 +1228,8 @@ class ObjectExplorerPanel(QWidget):
             columns: dict de colunas por table_key (schema.table_name)
             filter_text: filtro de busca (lowercase)
             catalog: Databricks catalog name (for full namespace references)
+            group_by_schema: when False, never create nested schema folders
+                (parent is already a schema node)
         """
         # Agrupar tabelas por schema
         schema_groups = {}
@@ -1132,7 +1239,7 @@ class ObjectExplorerPanel(QWidget):
                 schema_groups[table_schema] = []
             schema_groups[table_schema].append(table)
 
-        use_schema_nodes = len(schema_groups) > 1
+        use_schema_nodes = group_by_schema and len(schema_groups) > 1
 
         for schema_name, schema_tables in sorted(schema_groups.items()):
             schema_item = None
@@ -1596,17 +1703,17 @@ class ObjectExplorerPanel(QWidget):
             return
 
         if item_type == "table":
-            self.insert_text_requested.emit(self._get_item_qualified_name(data))
+            self.insert_text_requested.emit(
+                self._quote_for_editor_insert(self._get_item_qualified_name(data))
+            )
         elif item_type == "column":
-            self.insert_text_requested.emit(name)
+            self.insert_text_requested.emit(self._quote_for_editor_insert(name))
         elif item_type == "schema":
             catalog = data.get("catalog", "")
-            if catalog:
-                self.insert_text_requested.emit(f"{catalog}.{name}")
-            else:
-                self.insert_text_requested.emit(name)
+            ident = f"{catalog}.{name}" if catalog else name
+            self.insert_text_requested.emit(self._quote_for_editor_insert(ident))
         elif item_type == "catalog" or item_type == "database":
-            self.insert_text_requested.emit(name)
+            self.insert_text_requested.emit(self._quote_for_editor_insert(name))
 
     def _start_drag(self, supported_actions):
         """Start drag for database items from Object Explorer"""
@@ -1628,7 +1735,10 @@ class ObjectExplorerPanel(QWidget):
         elif item_type == "catalog" and name:
             payload = f"CATALOG:{name}"
         elif item_type == "schema" and name:
-            payload = f"{catalog}.{name}" if catalog else f"SCHEMA:{name}"
+            if str(self._db_type or "").lower() in ("postgres", "postgresql"):
+                payload = f"SCHEMA:{name}"
+            else:
+                payload = f"{catalog}.{name}" if catalog else f"SCHEMA:{name}"
         if not payload:
             return
 
@@ -1742,7 +1852,11 @@ class ObjectExplorerPanel(QWidget):
             # Insert name in editor (full qualified for Databricks)
             insert_name = qualified if qualified != name else name
             act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
-            act_insert.triggered.connect(lambda _, n=insert_name: self.insert_text_requested.emit(n))
+            act_insert.triggered.connect(
+                lambda _, n=insert_name: self.insert_text_requested.emit(
+                    self._quote_for_editor_insert(n)
+                )
+            )
 
             # Copy name (simple table name)
             act_copy = menu.addAction(S.object_explorer.ctx_copy_name)
@@ -1797,7 +1911,11 @@ class ObjectExplorerPanel(QWidget):
 
             # Insert name in editor
             act_insert = menu.addAction(S.object_explorer.ctx_insert_name)
-            act_insert.triggered.connect(lambda _, n=name: self.insert_text_requested.emit(n))
+            act_insert.triggered.connect(
+                lambda _, n=name: self.insert_text_requested.emit(
+                    self._quote_for_editor_insert(n)
+                )
+            )
 
             # Copy name
             act_copy = menu.addAction(S.object_explorer.ctx_copy_name)

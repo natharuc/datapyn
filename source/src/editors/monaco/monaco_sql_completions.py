@@ -15,6 +15,25 @@ SQL_KEYWORDS = [
     "CAST", "CASE", "WHEN", "THEN", "ELSE", "END",
 ]
 
+_POSTGRES_DB_TYPES = frozenset({"postgres", "postgresql"})
+_QUOTE_COMPLETION_CATEGORIES = frozenset({"table", "column", "schema", "database"})
+
+
+def quote_sql_completion_insert(name: str, db_type: str = "", category: str = "") -> str:
+    """Quote identifier insertText for PostgreSQL table/column/schema/database completions."""
+    if not name:
+        return name
+    if (db_type or "").lower() not in _POSTGRES_DB_TYPES:
+        return name
+    if category not in _QUOTE_COMPLETION_CATEGORIES:
+        return name
+    from src.services.entity_metadata_service import quote_identifier, split_qualified_name
+
+    parts = split_qualified_name(name)
+    if not parts:
+        return name
+    return quote_identifier("postgresql", *parts)
+
 
 def build_sql_completions(schema: Optional[dict]) -> List[Dict[str, Any]]:
     """Build Monaco completion items from a schema dict (CPU-only, thread-safe)."""
@@ -22,6 +41,7 @@ def build_sql_completions(schema: Optional[dict]) -> List[Dict[str, Any]]:
         return []
 
     completions: List[Dict[str, Any]] = []
+    db_type = str(schema.get("db_type") or "")
 
     for table in schema.get("tables", []) or []:
         if isinstance(table, dict):
@@ -50,7 +70,7 @@ def build_sql_completions(schema: Optional[dict]) -> List[Dict[str, Any]]:
             completions.append({
                 "label": table_name,
                 "kind": "class",
-                "insertText": table_name,
+                "insertText": quote_sql_completion_insert(table_name, db_type, "table"),
                 "detail": detail,
                 "category": "table",
                 "database": table_database,
@@ -76,7 +96,7 @@ def build_sql_completions(schema: Optional[dict]) -> List[Dict[str, Any]]:
             completions.append({
                 "label": column_name,
                 "kind": "field",
-                "insertText": column_name,
+                "insertText": quote_sql_completion_insert(column_name, db_type, "column"),
                 "detail": detail,
                 "category": "column",
                 "table": table_key,

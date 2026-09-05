@@ -942,7 +942,7 @@ class CSVExportDialog(QDialog):
         bar = QHBoxLayout()
         bar.addStretch()
         btn_ok = PrimaryButton(S.dialogs.btn_ok, size="sm")
-        btn_cancel = SecondaryButton(S.dialogs.btn_cancel, size="sm")
+        btn_cancel = SecondaryButton(S.dialogs.cancel_btn, size="sm")
         btn_ok.clicked.connect(self.accept)
         btn_cancel.clicked.connect(self.reject)
         bar.addWidget(btn_ok)

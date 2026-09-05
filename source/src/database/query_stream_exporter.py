@@ -409,11 +409,31 @@ def _abort_stream_path(path: Path) -> None:
         pass
 
 
+def _csv_options_use_native_arrow(opts: dict[str, Any]) -> bool:
+    """True when pyarrow.csv can write without Python cell materialization.
+
+    Custom decimal separators still need the manual path (Arrow writes '.' for floats).
+    """
+    sep = opts.get("sep", ",")
+    decimal = opts.get("decimal", ".")
+    encoding = str(opts.get("encoding", "utf-8-sig") or "utf-8-sig").lower()
+    if decimal != ".":
+        return False
+    if not isinstance(sep, str) or len(sep) != 1:
+        return False
+    return encoding in ("utf-8", "utf-8-sig", "utf8", "utf8-sig")
+
+
 def _arrow_table_rows(table: pa.Table) -> list[list[Any]]:
-    return [
-        [table.column(col_idx)[row_idx].as_py() for col_idx in range(table.num_columns)]
-        for row_idx in range(table.num_rows)
-    ]
+    """Convert Arrow table to row lists without nested per-cell as_py() (GIL-heavy)."""
+    if table.num_rows == 0 or table.num_columns == 0:
+        return []
+    columns: list[list[Any]] = []
+    for col_idx in range(table.num_columns):
+        columns.append(table.column(col_idx).to_pylist())
+        if (col_idx + 1) % 4 == 0:
+            _gil_yield()
+    return [list(row) for row in zip(*columns)]
 
 
 def _stream_arrow_to_csv_manual(
@@ -476,12 +496,18 @@ def stream_arrow_to_file(
     csv_options: dict | None = None,
 ) -> int:
     """Stream Arrow tables from fetchmany_arrow directly to CSV or Parquet."""
-    if export_format == "csv" and csv_options is not None:
+    normalized_csv = normalize_csv_options(csv_options) if csv_options is not None else None
+    if (
+        export_format == "csv"
+        and normalized_csv is not None
+        and not _csv_options_use_native_arrow(normalized_csv)
+    ):
+        # Custom decimal (e.g. ',') still needs Python formatting.
         return _stream_arrow_to_csv_manual(
             arrow_fetcher,
             path=path,
             columns=columns,
-            csv_options=csv_options,
+            csv_options=normalized_csv,
             is_cancelled=is_cancelled,
             on_chunk=on_chunk,
         )
@@ -493,6 +519,18 @@ def stream_arrow_to_file(
     pq_writer: pq.ParquetWriter | None = None
     csv_file = None
     csv_writer: pacsv.CSVWriter | None = None
+    csv_write_opts: pacsv.WriteOptions | None = None
+    write_bom = True
+    include_header = True
+    if export_format == "csv":
+        opts = normalized_csv or normalize_csv_options(None)
+        include_header = bool(opts.get("header", True))
+        encoding = str(opts.get("encoding", "utf-8-sig") or "utf-8-sig").lower()
+        write_bom = encoding in ("utf-8-sig", "utf8-sig")
+        csv_write_opts = pacsv.WriteOptions(
+            include_header=include_header,
+            delimiter=opts.get("sep", ","),
+        )
 
     def _abort() -> None:
         nonlocal pq_writer, csv_file, csv_writer
@@ -566,8 +604,10 @@ def stream_arrow_to_file(
             else:
                 if csv_writer is None:
                     csv_file = path.open("wb")
-                    csv_file.write(b"\xef\xbb\xbf")
-                    csv_writer = pacsv.CSVWriter(csv_file, schema)
+                    if write_bom:
+                        csv_file.write(b"\xef\xbb\xbf")
+                    write_options = csv_write_opts or pacsv.WriteOptions(include_header=True)
+                    csv_writer = pacsv.CSVWriter(csv_file, schema, write_options=write_options)
                 csv_writer.write_table(cast_table)
                 rows_written += cast_table.num_rows
 
@@ -586,8 +626,10 @@ def stream_arrow_to_file(
                 pq_writer.close()
             else:
                 csv_file = path.open("wb")
-                csv_file.write(b"\xef\xbb\xbf")
-                csv_writer = pacsv.CSVWriter(csv_file, empty_schema)
+                if write_bom:
+                    csv_file.write(b"\xef\xbb\xbf")
+                write_options = csv_write_opts or pacsv.WriteOptions(include_header=True)
+                csv_writer = pacsv.CSVWriter(csv_file, empty_schema, write_options=write_options)
                 csv_writer.write_table(empty_schema.empty_table())
                 csv_writer.close()
                 csv_file.close()

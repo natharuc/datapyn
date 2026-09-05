@@ -28,7 +28,7 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
                 "Read workspace state in one call. "
                 "action=context: tab + blocks summary; blocks: block list; "
                 "schema: DB schema; variables: namespace; full: context+blocks. "
-                "Skip if turn context already has blocks/schema."
+                "Use when you need fresher state than CURRENT TAB JSON, or before schema exploration."
             ),
             "parameters": {
                 "action": {
@@ -52,10 +52,9 @@ def pynia_tool_definitions() -> List[Dict[str, Any]]:
             "description": (
                 "Inspect one target inside this DataPyn tab (in-process, not HTTP). "
                 "Defaults to the focused block. kind=block detail defaults to result "
-                "(the Results grid) when omitted; use structure|code for the editor. "
+                "(the Results grid) when omitted; use detail=code|structure for the editor source. "
                 "kind=variable; kind=reference; kind=selection. "
-                "Skip inspect on focused block if code is already in context. "
-                "For grid questions, prefer execution_state.active_result already in the prompt."
+                "Call this when you need full code or result detail beyond the prompt snapshot."
             ),
             "parameters": {
                 "kind": {

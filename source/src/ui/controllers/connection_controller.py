@@ -95,7 +95,7 @@ class ConnectionController(QObject):
     def connect_new_tab(self, group: str, connection_name: str):
         """
         Connects to a database ALWAYS creating a new tab.
-        Used for CTRL+double-click or 'Connect in New Tab' menu.
+        Used for CTRL+double-click, middle-click, or 'Connect in New Tab' menu.
         """
         # Always create new tab WITHOUT inheriting the previous connection:
         # the deferred inherited auto-connect would race with (and override)

@@ -163,7 +163,11 @@ def run_login(spec: AgentSpec, timeout: float = 5.0) -> tuple[int, str]:
 
 
 def handshake_test(spec: AgentSpec, cwd: Optional[str] = None, timeout: float = 45.0) -> tuple[bool, str]:
-    """Spawn the agent, initialize, session/new, tiny prompt, then stop."""
+    """Spawn the agent, initialize, session/new, tiny prompt, then stop.
+
+    Validates ACP connectivity only. DataPyn MCP tools (`datapyn_*`) are attached
+    when a real chat turn starts (via session/new mcpServers or Copilot/Cursor config).
+    """
     prepend_bin_dirs_to_path()
     launch = resolve_launch(spec)
     if launch is None:
@@ -182,7 +186,11 @@ def handshake_test(spec: AgentSpec, cwd: Optional[str] = None, timeout: float = 
             logger.info("Handshake prompt skipped: %s", exc)
         client.session_close(session_id)
         proto = init.get("protocolVersion", "?")
-        return True, f"ACP {proto} · session {session_id}"
+        return (
+            True,
+            f"ACP {proto} · session {session_id} · "
+            "DataPyn MCP tools attach on the next chat message",
+        )
     except Exception as exc:
         return False, str(exc)
     finally:

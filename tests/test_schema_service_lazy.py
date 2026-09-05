@@ -129,7 +129,8 @@ def test_schema_worker_carries_requested_database_context():
     assert captured["_schema_request_token"] == 17
 
 
-def test_schema_worker_autocomplete_loads_tables_not_databases():
+def test_schema_worker_autocomplete_loads_databases_and_tables():
+    """Autocomplete (connect path) preloads switch lists + table metadata."""
     connector = MagicMock()
     connector.db_type = "sqlserver"
     connector.get_current_database.return_value = "AppDb"
@@ -140,10 +141,72 @@ def test_schema_worker_autocomplete_loads_tables_not_databases():
     worker.run()
 
     calls = [str(call.args[0]) for call in connector.execute_query.call_args_list]
-    assert not any("sys.databases" in q for q in calls)
+    assert any("sys.databases" in q for q in calls)
     assert any("INFORMATION_SCHEMA.TABLES" in q for q in calls)
     assert any("INFORMATION_SCHEMA.COLUMNS" in q for q in calls)
     assert any("INFORMATION_SCHEMA.ROUTINES" in q for q in calls)
+
+
+def test_schema_worker_autocomplete_loads_databricks_catalogs_and_current_schemas():
+    import pandas as pd
+
+    connector = MagicMock()
+    connector.db_type = "databricks"
+    connector.get_current_catalog.return_value = "main"
+    connector.get_current_schema.return_value = "default"
+    connector.get_current_database.return_value = "main"
+    connector.get_current_database_context.return_value = "main.default"
+
+    def _exec(query):
+        q = str(query).upper()
+        if "SHOW CATALOGS" in q:
+            return pd.DataFrame({"catalog": ["main", "hive_metastore"]})
+        if "SHOW SCHEMAS" in q:
+            return pd.DataFrame({"schema": ["default", "bronze"]})
+        return None
+
+    connector.execute_query.side_effect = _exec
+    captured = {}
+    worker = SchemaWorker(connector, lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE)
+    worker.finished.connect(lambda schema: captured.update(schema))
+    worker.run()
+
+    assert "main" in captured.get("databases", [])
+    assert "default" in (captured.get("catalog_schemas") or {}).get("main", [])
+    assert "bronze" in (captured.get("catalog_schemas") or {}).get("main", [])
+
+
+def test_schema_worker_autocomplete_loads_postgresql_schemas():
+    import pandas as pd
+
+    connector = MagicMock()
+    connector.db_type = "postgresql"
+    connector.get_current_database.return_value = "real_db"
+    connector.get_current_database_context.return_value = "real_db"
+    connector.get_current_schema.return_value = "public"
+
+    def _exec(query):
+        q = str(query).lower()
+        if "current_database()" in q:
+            return pd.DataFrame({"db": ["real_db"]})
+        if "information_schema.schemata" in q:
+            return pd.DataFrame({"schema_name": ["public", "metrics"]})
+        return None
+
+    connector.execute_query.side_effect = _exec
+    captured = {}
+    worker = SchemaWorker(connector, lazy_mode=SCHEMA_LAZY_AUTOCOMPLETE)
+    worker.finished.connect(lambda schema: captured.update(schema))
+    worker.run()
+
+    calls = [str(call.args[0]) for call in connector.execute_query.call_args_list]
+    assert any("current_database()" in q.lower() for q in calls)
+    assert any("information_schema.schemata" in q.lower() for q in calls)
+    assert captured.get("databases") == ["real_db"]
+    assert "public" in captured.get("schemas", [])
+    assert "metrics" in captured.get("schemas", [])
+    assert "pg_toast" not in captured.get("schemas", [])
+    assert captured.get("current_schema") == "public"
 
 
 def test_schema_service_ignores_stale_block_schema_result(qapp):
