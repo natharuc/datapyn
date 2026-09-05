@@ -2384,7 +2384,7 @@ class DatabaseConnector:
         connection they run on. With pool_size > 1 the next query can check
         out a different backend and silently use the wrong database/schema.
         """
-        if self.engine is None:
+        if self.engine is None or not isinstance(self.engine, Engine):
             return
         connector_ref = self
         if db_type == "sqlserver":
