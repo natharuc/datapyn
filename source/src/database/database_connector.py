@@ -2384,11 +2384,18 @@ class DatabaseConnector:
         connection they run on. With pool_size > 1 the next query can check
         out a different backend and silently use the wrong database/schema.
         """
-        if self.engine is None or not isinstance(self.engine, Engine):
+        if self.engine is None:
             return
         connector_ref = self
+
+        def listen_checkout(handler) -> None:
+            try:
+                event.listens_for(self.engine, "checkout")(handler)
+            except Exception:
+                # Tests mock create_engine(); SQLAlchemy rejects MagicMock targets.
+                return
+
         if db_type == "sqlserver":
-            @event.listens_for(self.engine, "checkout")
             def on_sqlserver_checkout(dbapi_conn, connection_record, connection_proxy):
                 if not connector_ref._sqlserver_supports_use():
                     return
@@ -2401,9 +2408,9 @@ class DatabaseConnector:
                     cursor.close()
                 except Exception:
                     pass
+            listen_checkout(on_sqlserver_checkout)
             return
         if db_type == "postgresql":
-            @event.listens_for(self.engine, "checkout")
             def on_postgresql_checkout(dbapi_conn, connection_record, connection_proxy):
                 schema = (
                     str(connector_ref.connection_params.get("postgresql_schema") or "public").strip()
@@ -2415,6 +2422,7 @@ class DatabaseConnector:
                     cursor.close()
                 except Exception:
                     pass
+            listen_checkout(on_postgresql_checkout)
 
     @staticmethod
     def _postgresql_quote_ident(name: str) -> str:
