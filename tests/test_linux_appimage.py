@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,48 @@ def test_ut028_fuse3_environment_rejects_missing_fusermount3(tmp_path: Path) -> 
     assert "required executable 'fusermount3' is missing" in result.stderr
 
 
+def _controlled_fuse3_environment_error(
+    command_lookup: Callable[[str], str | None] = shutil.which,
+    fuse_device: Path = Path("/dev/fuse"),
+) -> str | None:
+    missing: list[str] = []
+    if command_lookup("fusermount3") is None:
+        missing.append("fusermount3")
+    if not fuse_device.exists():
+        missing.append("/dev/fuse")
+    if not missing:
+        return None
+    return "controlled FUSE3 mount environment is unavailable; missing: " + ", ".join(missing)
+
+
+def _require_controlled_fuse3_environment() -> None:
+    error = _controlled_fuse3_environment_error()
+    if error:
+        pytest.fail(error)
+
+
+@pytest.mark.parametrize(
+    ("command_path", "fuse_device", "missing"),
+    [
+        (None, Path("/dev/fuse"), "fusermount3"),
+        ("/usr/bin/fusermount3", Path("/dev/null/datapyn-fuse"), "/dev/fuse"),
+    ],
+)
+def test_it010_missing_controlled_fuse3_prerequisite_fails(
+    command_path: str | None,
+    fuse_device: Path,
+    missing: str,
+) -> None:
+    error = _controlled_fuse3_environment_error(
+        command_lookup=lambda _name: command_path,
+        fuse_device=fuse_device,
+    )
+
+    assert error is not None
+    assert missing in error
+    assert "skipped" not in error
+
+
 def test_pinned_tool_checksum_rejects_changed_bytes(tmp_path: Path) -> None:
     changed_tool = tmp_path / "appimagetool"
     changed_tool.write_bytes(b"changed pinned tool")
@@ -224,7 +267,17 @@ def _appimage_toolchain_available() -> tuple[str, str] | None:
 
 
 @pytest.fixture(scope="module")
-def fixture_appimage(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+def fixture_appimage(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path | None]:
+    packaged_artifact = os.environ.get("DATAPYN_APPIMAGE_SMOKE_ARTIFACT")
+    if packaged_artifact:
+        artifact = Path(packaged_artifact)
+        if not artifact.is_file():
+            pytest.fail(f"package.sh AppImage artifact is missing: {artifact}")
+        if not artifact.stat().st_mode & 0o111:
+            pytest.fail(f"package.sh AppImage artifact is not executable: {artifact}")
+        smoke_log = os.environ.get("DATAPYN_APPIMAGE_SMOKE_LOG")
+        return artifact, Path(smoke_log) if smoke_log else None
+
     toolchain = _appimage_toolchain_available()
     if toolchain is None:
         pytest.skip("pinned AppImage builder/runtime are not available")
@@ -268,40 +321,51 @@ def fixture_appimage(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pa
 
 
 @pytest.mark.integration
-def test_appimage_extract_and_run_fallback_forwards_arguments(fixture_appimage: tuple[Path, Path]) -> None:
+def test_appimage_extract_and_run_fallback_forwards_arguments(
+    fixture_appimage: tuple[Path, Path | None],
+) -> None:
     artifact, smoke_log = fixture_appimage
+    arguments = ("first", "two words") if smoke_log else ("first", "two words", "--help")
     result = run_package(
         "--smoke-appimage-extract-and-run",
         str(artifact),
-        "first",
-        "two words",
-        env={"DATAPYN_APPIMAGE_SMOKE_LOG": str(smoke_log)},
+        *arguments,
+        env={"DATAPYN_APPIMAGE_SMOKE_LOG": str(smoke_log)} if smoke_log else None,
     )
 
     assert result.returncode == 0, result.stderr
-    assert smoke_log.read_text(encoding="utf-8").splitlines() == [
-        "sandbox=1",
-        "flags=--no-sandbox",
-        "arg=first",
-        "arg=two words",
-    ]
+    if smoke_log:
+        assert smoke_log.read_text(encoding="utf-8").splitlines() == [
+            "sandbox=1",
+            "flags=--no-sandbox",
+            "arg=first",
+            "arg=two words",
+        ]
+    else:
+        assert "DataPyn" in (result.stdout + result.stderr)
 
 
 @pytest.mark.integration
-def test_appimage_normal_fuse3_smoke_with_fuse3_mount(
-    fixture_appimage: tuple[Path, Path],
-) -> None:
-    if not shutil.which("fusermount3") or not Path("/dev/fuse").exists():
-        pytest.skip("controlled FUSE3 mount environment is unavailable")
+def test_appimage_normal_fuse3_smoke_with_fuse3_mount(request: pytest.FixtureRequest) -> None:
+    packaged_artifact = os.environ.get("DATAPYN_APPIMAGE_SMOKE_ARTIFACT")
+    if packaged_artifact:
+        # Release workflows set the already-built artifact before entering the strict smoke path;
+        # validate prerequisites before resolving the fixture so a missing device cannot skip.
+        _require_controlled_fuse3_environment()
 
-    artifact, smoke_log = fixture_appimage
+    artifact, smoke_log = request.getfixturevalue("fixture_appimage")
+    if not packaged_artifact:
+        _require_controlled_fuse3_environment()
+    arguments = ("first", "two words") if smoke_log else ("first", "two words", "--help")
     result = run_package(
         "--smoke-appimage",
         str(artifact),
-        "first",
-        "two words",
-        env={"DATAPYN_APPIMAGE_SMOKE_LOG": str(smoke_log)},
+        *arguments,
+        env={"DATAPYN_APPIMAGE_SMOKE_LOG": str(smoke_log)} if smoke_log else None,
     )
 
     assert result.returncode == 0, result.stderr
-    assert "arg=two words" in smoke_log.read_text(encoding="utf-8")
+    if smoke_log:
+        assert "arg=two words" in smoke_log.read_text(encoding="utf-8")
+    else:
+        assert "DataPyn" in (result.stdout + result.stderr)

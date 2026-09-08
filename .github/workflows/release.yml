@@ -359,7 +359,16 @@ jobs:
             "${{ needs.release.outputs.version }}" "${{ needs.release.outputs.tag }}"
 
       - name: Verify | Run AppImage FUSE3 smoke tests
-        run: uv run pytest tests/test_linux_appimage.py -m integration -q
+        env:
+          DATAPYN_APPIMAGE_VERSION: ${{ needs.release.outputs.version }}
+        run: bash scripts/linux/run_fuse3_smoke_container.sh "$DATAPYN_APPIMAGE_VERSION"
+
+      - name: Verify | Run AppImage extract-and-run fallback on host
+        env:
+          DATAPYN_APPIMAGE_SMOKE_ARTIFACT: ${{ github.workspace }}/DataPyn-${{ needs.release.outputs.version }}-x86_64.AppImage
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+          QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox"
+        run: uv run pytest tests/test_linux_appimage.py -m integration -k extract_and_run -q
 
       - name: Verify | Resolve Linux release asset list
         id: release_assets
