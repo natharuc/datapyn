@@ -109,11 +109,42 @@ Site e documentacao publica: [datapyn.page](https://datapyn.page)
 
 Instaladores oficiais: [datapyn.page/downloads.html](https://datapyn.page/downloads.html) ou [GitHub Releases](https://github.com/natharuc/datapyn/releases/latest).
 
-| Sistema | Artefato | Notas |
-|---------|----------|--------|
+| Sistema | Rótulo do artefato | Nome e instalação |
+|---------|---------------------|-------------------|
 | Windows x64 | `DataPyn-Setup.exe` | Instala em `%LOCALAPPDATA%\DataPyn` |
-| Linux amd64 | `datapyn_amd64.deb` | Ubuntu/Debian 22.04+. Outras distros: `DataPyn-linux-x86_64.tar.gz` |
+| Linux x86_64/amd64 — Debian/Ubuntu | `Ubuntu/Debian (.deb)` | Ubuntu/Debian 22.04+ — `datapyn_VERSION_amd64.deb` (alias estável: `datapyn_amd64.deb`) — `sudo apt install ./datapyn_amd64.deb` |
+| Linux x86_64 — Fedora/RHEL/openSUSE | `Fedora/RHEL/openSUSE (.rpm)` | `datapyn-VERSION-1.x86_64.rpm` (alias estável: `datapyn-x86_64.rpm`) — `sudo dnf install ./datapyn-x86_64.rpm` ou `sudo zypper install ./datapyn-x86_64.rpm` |
+| Linux x86_64 — Arch/Manjaro | `Arch/Manjaro (.pkg.tar.zst)` | `datapyn-VERSION-1-x86_64.pkg.tar.zst` (alias estável: `datapyn-x86_64.pkg.tar.zst`) — `sudo pacman -U ./datapyn-x86_64.pkg.tar.zst` |
+| Linux x86_64 — portátil | `Universal Linux (AppImage, FUSE3)` | `DataPyn-VERSION-x86_64.AppImage` (alias estável: `DataPyn-x86_64.AppImage`) |
+| Linux x86_64 — fallback | `Other Linux (.tar.gz)` | `DataPyn-VERSION-linux-x86_64.tar.gz` (alias estável: `DataPyn-linux-x86_64.tar.gz`) |
 | macOS Apple Silicon | `DataPyn-macos-arm64.dmg` | Unsigned — no Gatekeeper use **Open** no menu de contexto ou `xattr -cr /Applications/DataPyn.app` |
+
+Nos nomes versionados, `VERSION` é substituído pela versão da release (por exemplo, `1.57.0`). A
+primeira arquitetura Linux publicada é **x86_64** (chamada **amd64** no nome do pacote Debian);
+“Universal Linux” descreve o formato AppImage, não suporte a outras arquiteturas ou a qualquer
+host Linux.
+
+Para o AppImage, o caminho normal usa **FUSE3** e `fusermount3`. Depois do download, torne o
+arquivo executável e inicie-o:
+
+```bash
+chmod +x DataPyn-x86_64.AppImage
+./DataPyn-x86_64.AppImage
+```
+
+Se a montagem normal não estiver disponível, use o modo extract-and-run ou escolha um pacote
+nativo/tarball:
+
+```bash
+./DataPyn-x86_64.AppImage --appimage-extract-and-run
+```
+
+O AppImage não requer um pacote de FUSE legado. O tarball é um fallback manual:
+
+```bash
+tar -xzf DataPyn-linux-x86_64.tar.gz
+./DataPyn/DataPyn
+```
 
 SQL Server no Linux: use o driver **pymssql** (FreeTDS no wheel). `pyodbc` exige `unixodbc` + driver Microsoft/FreeTDS no sistema.
 
@@ -142,7 +173,10 @@ chmod +x scripts/linux/install.sh scripts/linux/run.sh
 
 O `install.sh` instala dependencias de sistema (Qt, ODBC, libpq, etc.) quando necessario.
 
-Empacotar `.deb` apos PyInstaller: `bash scripts/linux/package.sh <version>` (requer `fpm`). Dry-run no CI: Actions → **Build Linux Installers (dry run)**.
+Empacotar os artefatos Linux apos PyInstaller: `bash scripts/linux/package.sh <version>` (requer
+`fpm`). O comando gera `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage e tar.gz para x86_64, além do
+manifesto `DataPyn-linux-artifacts.json` e `SHA256SUMS`. Dry-run no CI: Actions → **Build Linux
+Installers (dry run)**.
 
 ### macOS
 
