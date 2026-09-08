@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package the PyInstaller onedir payload as native Linux packages and a tarball.
+# Package the PyInstaller onedir payload as native Linux packages, an AppImage, and a tarball.
 # Usage: scripts/linux/package.sh <version>
 # Expects dist/DataPyn/ from: uv run pyinstaller scripts/datapyn.spec --clean
 set -euo pipefail
@@ -8,6 +8,10 @@ ROOT="${DATAPYN_PACKAGE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
 OUTPUT_DIR="${DATAPYN_PACKAGE_OUTPUT_DIR:-$ROOT}"
 DIST_DIR="${DATAPYN_PACKAGE_DIST_DIR:-$ROOT/dist/DataPyn}"
 STAGE_DIR="${DATAPYN_PACKAGE_STAGE_DIR:-$ROOT/pkg}"
+APPDIR="${DATAPYN_PACKAGE_APPDIR:-$ROOT/pkg-appimage}"
+APPIMAGE_TOOLCHAIN_FILE="${DATAPYN_APPIMAGE_TOOLCHAIN_FILE:-$ROOT/scripts/linux/appimage-toolchain.env}"
+APPIMAGETOOL_PATH="${DATAPYN_APPIMAGE_TOOL:-${APPIMAGETOOL:-}}"
+APPIMAGE_RUNTIME_PATH="${DATAPYN_APPIMAGE_RUNTIME:-${APPIMAGE_RUNTIME_FILE:-}}"
 
 # The Debian dependency list is the source capability list. Every capability must have a
 # family-specific mapping before its target package is built; an omitted mapping is an error.
@@ -196,6 +200,187 @@ validate_version() {
   fi
 }
 
+load_appimage_toolchain() {
+  if [[ ! -f "$APPIMAGE_TOOLCHAIN_FILE" ]]; then
+    echo "error: pinned AppImage toolchain input is missing: $APPIMAGE_TOOLCHAIN_FILE" >&2
+    return 1
+  fi
+
+  # shellcheck disable=SC1090
+  source "$APPIMAGE_TOOLCHAIN_FILE"
+
+  local required_variable
+  for required_variable in \
+    APPIMAGETOOL_VERSION APPIMAGETOOL_URL APPIMAGETOOL_SHA256 \
+    APPIMAGE_RUNTIME_VERSION APPIMAGE_RUNTIME_URL APPIMAGE_RUNTIME_SHA256 \
+    APPIMAGE_ARCHITECTURE APPIMAGE_RUNTIME_KIND; do
+    if [[ -z "${!required_variable:-}" ]]; then
+      echo "error: pinned AppImage toolchain input is missing $required_variable" >&2
+      return 1
+    fi
+  done
+}
+
+validate_checksum_value() {
+  local label="$1"
+  local checksum="$2"
+
+  if [[ ! "$checksum" =~ ^[[:xdigit:]]{64}$ || "$checksum" != "${checksum,,}" ]]; then
+    echo "error: $label must be a lowercase 64-character SHA-256 value" >&2
+    return 1
+  fi
+}
+
+validate_appimage_toolchain_input() {
+  load_appimage_toolchain
+
+  case "$APPIMAGETOOL_VERSION" in
+    continuous|latest)
+      echo "error: AppImage builder version must be immutable, not $APPIMAGETOOL_VERSION" >&2
+      return 1
+      ;;
+  esac
+  case "$APPIMAGE_RUNTIME_VERSION" in
+    continuous|latest)
+      echo "error: AppImage runtime version must be immutable, not $APPIMAGE_RUNTIME_VERSION" >&2
+      return 1
+      ;;
+  esac
+
+  if [[ "$APPIMAGE_ARCHITECTURE" != "x86_64" ]]; then
+    echo "error: AppImage packaging supports x86_64 only: $APPIMAGE_ARCHITECTURE" >&2
+    return 1
+  fi
+  if [[ "$APPIMAGE_RUNTIME_KIND" != "type2" ]]; then
+    echo "error: AppImage runtime must be Type 2: $APPIMAGE_RUNTIME_KIND" >&2
+    return 1
+  fi
+
+  local expected_tool_url
+  local expected_runtime_url
+  expected_tool_url="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+  expected_runtime_url="https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-x86_64"
+  if [[ "$APPIMAGETOOL_URL" != "$expected_tool_url" ]]; then
+    echo "error: AppImage builder URL is not the pinned official x86_64 release URL" >&2
+    return 1
+  fi
+  if [[ "$APPIMAGE_RUNTIME_URL" != "$expected_runtime_url" ]]; then
+    echo "error: AppImage runtime URL is not the pinned official x86_64 release URL" >&2
+    return 1
+  fi
+
+  validate_checksum_value APPIMAGETOOL_SHA256 "$APPIMAGETOOL_SHA256"
+  validate_checksum_value APPIMAGE_RUNTIME_SHA256 "$APPIMAGE_RUNTIME_SHA256"
+}
+
+resolve_appimage_toolchain() {
+  validate_appimage_toolchain_input
+
+  if [[ -z "$APPIMAGETOOL_PATH" ]]; then
+    APPIMAGETOOL_PATH="$(command -v appimagetool || true)"
+  fi
+  if [[ -z "$APPIMAGETOOL_PATH" || ! -f "$APPIMAGETOOL_PATH" ]]; then
+    echo "error: pinned AppImage builder is unavailable; set DATAPYN_APPIMAGE_TOOL to the verified appimagetool binary." >&2
+    return 1
+  fi
+  if [[ ! -x "$APPIMAGETOOL_PATH" ]]; then
+    echo "error: pinned AppImage builder is not executable: $APPIMAGETOOL_PATH" >&2
+    return 1
+  fi
+
+  if [[ -z "$APPIMAGE_RUNTIME_PATH" || ! -f "$APPIMAGE_RUNTIME_PATH" ]]; then
+    echo "error: pinned Type 2 AppImage runtime is unavailable; set DATAPYN_APPIMAGE_RUNTIME to the verified runtime-x86_64 file." >&2
+    return 1
+  fi
+  if [[ ! -x "$APPIMAGE_RUNTIME_PATH" ]]; then
+    echo "error: pinned Type 2 AppImage runtime is not executable: $APPIMAGE_RUNTIME_PATH" >&2
+    return 1
+  fi
+
+  verify_pinned_file "AppImage builder" "$APPIMAGETOOL_PATH" "$APPIMAGETOOL_SHA256"
+  verify_pinned_file "Type 2 AppImage runtime" "$APPIMAGE_RUNTIME_PATH" "$APPIMAGE_RUNTIME_SHA256"
+}
+
+verify_pinned_file() {
+  local label="$1"
+  local path="$2"
+  local expected="$3"
+  local actual
+
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "error: required executable 'sha256sum' is missing; it blocks $label verification." >&2
+    return 1
+  fi
+  actual="$(sha256sum -- "$path" | awk '{print $1}')"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "error: $label checksum mismatch: $path" >&2
+    echo "expected: $expected" >&2
+    echo "actual: $actual" >&2
+    return 1
+  fi
+}
+
+check_appimage_toolchain() {
+  resolve_appimage_toolchain
+}
+
+validate_fuse3_policy() {
+  local policy_input="${1:-${DATAPYN_APPIMAGE_FUSE_POLICY:-}}"
+  local policy_text="$policy_input"
+
+  if [[ -n "$policy_input" && -f "$policy_input" ]]; then
+    policy_text="$(<"$policy_input")"
+  fi
+  if grep -Eiq '(^|[^[:alnum:]_])(libfuse2(t64)?|fusermount)([^[:alnum:]_]|$)' <<<"$policy_text"; then
+    echo "error: FUSE2-only AppImage policy is rejected; use fuse3/fusermount3 or extract-and-run." >&2
+    return 1
+  fi
+}
+
+validate_fuse3_environment() {
+  validate_fuse3_policy "${DATAPYN_APPIMAGE_FUSE_POLICY:-}"
+
+  if ! command -v fusermount3 >/dev/null 2>&1; then
+    echo "error: required executable 'fusermount3' is missing; it blocks normal AppImage smoke validation." >&2
+    return 1
+  fi
+  if command -v fusermount >/dev/null 2>&1; then
+    echo "error: FUSE2-only 'fusermount' is present; AppImage validation requires fusermount3." >&2
+    return 1
+  fi
+
+  if command -v dpkg-query >/dev/null 2>&1; then
+    local package
+    for package in libfuse2 libfuse2t64; do
+      if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
+        echo "error: FUSE2 package is installed and rejected for AppImage validation: $package" >&2
+        return 1
+      fi
+    done
+  fi
+}
+
+print_appimage_metadata() {
+  local version="$1"
+
+  validate_version "$version"
+  set_artifact_names "$version"
+  validate_appimage_toolchain_input
+  printf 'appimage_format=appimage\n'
+  printf 'appimage_distro_family=universal\n'
+  printf 'appimage_architecture=x86_64\n'
+  printf 'appimage_display_name=Universal Linux (AppImage, FUSE3)\n'
+  printf 'appimage_filename=%s\n' "$APPIMAGE_VERSIONED"
+  printf 'appimage_stable_alias=%s\n' "$APPIMAGE_STABLE"
+  printf 'appimage_requires=fuse3\n'
+  printf 'appimage_install_mode=portable\n'
+  printf 'appimage_runtime=type2\n'
+  printf 'appimage_runtime_version=%s\n' "$APPIMAGE_RUNTIME_VERSION"
+  printf 'appimage_runtime_sha256=%s\n' "$APPIMAGE_RUNTIME_SHA256"
+  printf 'appimage_builder_version=%s\n' "$APPIMAGETOOL_VERSION"
+  printf 'appimage_builder_sha256=%s\n' "$APPIMAGETOOL_SHA256"
+}
+
 dependency_map_for_family() {
   case "$1" in
     deb) printf '%s\n' DEBIAN_DEPENDENCY_MAP ;;
@@ -327,12 +512,155 @@ stage_payload() {
   fi
 }
 
+prepare_appimage_dir() {
+  local appimage_payload="$STAGE_DIR/opt/datapyn"
+  local appimage_desktop="$APPDIR/datapyn.desktop"
+
+  if [[ ! -d "$appimage_payload" ]]; then
+    echo "error: shared staged payload not found: $appimage_payload" >&2
+    return 1
+  fi
+  if [[ ! -x "$appimage_payload/DataPyn" ]]; then
+    echo "error: staged DataPyn executable is missing or not executable: $appimage_payload/DataPyn" >&2
+    return 1
+  fi
+  if [[ "$APPDIR" == "/" || "$APPDIR" == "$ROOT" || -z "$APPDIR" ]]; then
+    echo "error: refusing to use an unsafe AppDir path: $APPDIR" >&2
+    return 1
+  fi
+
+  rm -rf -- "$APPDIR"
+  mkdir -p \
+    "$APPDIR/usr/bin" \
+    "$APPDIR/usr/share/applications" \
+    "$APPDIR/usr/share/mime/packages" \
+    "$APPDIR/usr/share/icons/hicolor/scalable/apps"
+
+  # Keep the PyInstaller onedir files together. The executable resolves its support files relative
+  # to this directory, so the shared native payload is copied as one logical bundle.
+  cp -a "$appimage_payload/." "$APPDIR/usr/bin/"
+  install -m 755 "$ROOT/scripts/linux/datapyn-appimage-apprun.sh" "$APPDIR/AppRun"
+
+  # AppImage requires a root desktop entry and icon. Translate the native absolute launcher paths
+  # into AppDir-local names while retaining the existing metadata and MIME declaration.
+  sed \
+    -e 's#^Exec=.*#Exec=DataPyn %F#' \
+    -e 's#^Icon=.*#Icon=datapyn_logo#' \
+    "$ROOT/scripts/linux/datapyn.desktop" >"$appimage_desktop"
+  install -m 644 "$appimage_desktop" "$APPDIR/usr/share/applications/datapyn.desktop"
+  install -m 644 "$STAGE_DIR/usr/share/mime/packages/datapyn-workspace.xml" \
+    "$APPDIR/usr/share/mime/packages/datapyn-workspace.xml"
+
+  install -m 644 "$APPDIR/usr/bin/datapyn_logo.svg" "$APPDIR/datapyn_logo.svg"
+  install -m 644 "$APPDIR/usr/bin/datapyn_logo.svg" \
+    "$APPDIR/usr/share/icons/hicolor/scalable/apps/datapyn_logo.svg"
+}
+
+validate_appdir() {
+  local required_path
+  for required_path in \
+    "$APPDIR/AppRun" \
+    "$APPDIR/datapyn.desktop" \
+    "$APPDIR/datapyn_logo.svg" \
+    "$APPDIR/usr/bin/DataPyn" \
+    "$APPDIR/usr/bin/datapyn-wrapper.sh" \
+    "$APPDIR/usr/share/applications/datapyn.desktop" \
+    "$APPDIR/usr/share/mime/packages/datapyn-workspace.xml"; do
+    if [[ ! -e "$required_path" ]]; then
+      echo "error: AppDir is missing required path: $required_path" >&2
+      return 1
+    fi
+  done
+  if [[ ! -x "$APPDIR/AppRun" || ! -x "$APPDIR/usr/bin/DataPyn" || ! -x "$APPDIR/usr/bin/datapyn-wrapper.sh" ]]; then
+    echo "error: AppDir launch entrypoints must be executable" >&2
+    return 1
+  fi
+  grep -Eq '^Exec=DataPyn %F$' "$APPDIR/datapyn.desktop" || {
+    echo "error: AppImage desktop entry does not point at the AppRun payload" >&2
+    return 1
+  }
+  grep -Eq '^Icon=datapyn_logo$' "$APPDIR/datapyn.desktop" || {
+    echo "error: AppImage desktop entry does not point at the bundled icon" >&2
+    return 1
+  }
+}
+
+validate_appimage_artifact() {
+  local artifact_path="$1"
+  local file_description
+  local offset
+
+  if [[ ! -s "$artifact_path" || ! -x "$artifact_path" ]]; then
+    echo "error: AppImage artifact is missing or not executable: $artifact_path" >&2
+    return 1
+  fi
+  require_command file "AppImage type validation"
+  file_description="$(file -b "$artifact_path")"
+  if ! grep -Eiq 'ELF 64-bit.*executable' <<<"$file_description"; then
+    echo "error: AppImage is not an x86_64 ELF executable: $artifact_path ($file_description)" >&2
+    return 1
+  fi
+  offset="$("$artifact_path" --appimage-offset 2>/dev/null)" || {
+    echo "error: AppImage does not expose a Type 2 runtime offset: $artifact_path" >&2
+    return 1
+  }
+  if [[ ! "$offset" =~ ^[0-9]+$ ]]; then
+    echo "error: AppImage runtime offset is invalid: $artifact_path ($offset)" >&2
+    return 1
+  fi
+}
+
+build_appimage() {
+  local output_path="$OUTPUT_DIR/$APPIMAGE_VERSIONED"
+
+  prepare_appimage_dir
+  validate_appdir
+  mkdir -p "$OUTPUT_DIR"
+
+  local -a appimage_tool_args=(
+    --no-appstream
+    --runtime-file "$APPIMAGE_RUNTIME_PATH"
+    "$APPDIR"
+    "$output_path"
+  )
+  # appimagetool is itself an AppImage. Use its built-in fallback by default so packaging does not
+  # require the build runner to mount the builder; the produced artifact is still smoke-tested on
+  # the normal FUSE3 path when that controlled environment is available.
+  if [[ "${DATAPYN_APPIMAGE_TOOL_EXTRACT_AND_RUN:-1}" == "1" ]]; then
+    ARCH="$APPIMAGE_ARCHITECTURE" VERSION="$VERSION" \
+      "$APPIMAGETOOL_PATH" --appimage-extract-and-run "${appimage_tool_args[@]}"
+  else
+    ARCH="$APPIMAGE_ARCHITECTURE" VERSION="$VERSION" \
+      "$APPIMAGETOOL_PATH" "${appimage_tool_args[@]}"
+  fi
+  validate_appimage_artifact "$output_path"
+}
+
+smoke_appimage() {
+  local artifact_path="$1"
+  shift
+
+  validate_fuse3_environment
+  validate_appimage_artifact "$artifact_path"
+  "$artifact_path" "$@"
+}
+
+smoke_appimage_extract_and_run() {
+  local artifact_path="$1"
+  shift
+
+  validate_fuse3_policy "${DATAPYN_APPIMAGE_FUSE_POLICY:-}"
+  validate_appimage_artifact "$artifact_path"
+  "$artifact_path" --appimage-extract-and-run "$@"
+}
+
 cleanup_outputs() {
   local output
   for output in \
     "$DEB_VERSIONED" "$DEB_STABLE" \
     "$RPM_VERSIONED" "$RPM_STABLE" \
     "$PACMAN_VERSIONED" "$PACMAN_STABLE" \
+    "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE" \
     "$TAR_VERSIONED" "$TAR_STABLE"; do
     [[ -z "$output" ]] || rm -f "$OUTPUT_DIR/$output"
   done
@@ -524,6 +852,82 @@ copy_stable_alias() {
 }
 
 main() {
+  if [[ "${1:-}" == "--print-appimage-metadata" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: version required (e.g. 1.57.0)" >&2; return 1; }
+    print_appimage_metadata "$2"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--validate-appimage-toolchain" ]]; then
+    check_appimage_toolchain
+    echo "Validated pinned AppImage builder/runtime"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--validate-fuse-policy" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: FUSE policy input required" >&2; return 1; }
+    validate_fuse3_policy "$2"
+    echo "Validated FUSE3-only AppImage policy"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--validate-fuse3-environment" ]]; then
+    validate_fuse3_environment
+    echo "Validated FUSE3/fusermount3 environment"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--validate-appimage" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: AppImage path required" >&2; return 1; }
+    validate_appimage_artifact "$2"
+    echo "Validated $2"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--smoke-appimage" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: AppImage path required" >&2; return 1; }
+    local smoke_path="$2"
+    shift 2
+    smoke_appimage "$smoke_path" "$@"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--smoke-appimage-extract-and-run" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: AppImage path required" >&2; return 1; }
+    local fallback_path="$2"
+    shift 2
+    smoke_appimage_extract_and_run "$fallback_path" "$@"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--appimage-only" ]]; then
+    local appimage_version="${2:-}"
+    if [[ -z "$appimage_version" ]]; then
+      echo "error: version required (e.g. 1.57.0)" >&2
+      return 1
+    fi
+    validate_version "$appimage_version"
+    set_artifact_names "$appimage_version"
+    VERSION="$appimage_version"
+
+    if [[ ! -d "$DIST_DIR" ]]; then
+      echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
+      return 1
+    fi
+
+    trap cleanup_on_error EXIT
+    mkdir -p "$OUTPUT_DIR"
+    cleanup_outputs
+    check_appimage_toolchain
+    stage_payload
+    build_appimage
+    copy_stable_alias "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
+    trap - EXIT
+    echo "Created:"
+    printf '%s\n' "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
+    return 0
+  fi
+
   if [[ "${1:-}" == "--print-plan" ]]; then
     [[ -n "${2:-}" ]] || { echo "error: version required (e.g. 1.57.0)" >&2; return 1; }
     validate_version "$2"
@@ -557,7 +961,10 @@ main() {
   mkdir -p "$OUTPUT_DIR"
   cleanup_outputs
   check_toolchain
+  check_appimage_toolchain
   stage_payload
+
+  build_appimage
 
   build_fpm_package deb deb amd64 "$OUTPUT_DIR/$DEB_VERSIONED"
   collect_dependencies deb
@@ -576,13 +983,14 @@ main() {
   copy_stable_alias "$DEB_VERSIONED" "$DEB_STABLE"
   copy_stable_alias "$RPM_VERSIONED" "$RPM_STABLE"
   copy_stable_alias "$PACMAN_VERSIONED" "$PACMAN_STABLE"
+  copy_stable_alias "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
   copy_stable_alias "$TAR_VERSIONED" "$TAR_STABLE"
 
   trap - EXIT
   echo "Created:"
   printf '%s\n' \
-    "$DEB_VERSIONED" "$RPM_VERSIONED" "$PACMAN_VERSIONED" "$TAR_VERSIONED" \
-    "$DEB_STABLE" "$RPM_STABLE" "$PACMAN_STABLE" "$TAR_STABLE"
+    "$DEB_VERSIONED" "$RPM_VERSIONED" "$PACMAN_VERSIONED" "$APPIMAGE_VERSIONED" "$TAR_VERSIONED" \
+    "$DEB_STABLE" "$RPM_STABLE" "$PACMAN_STABLE" "$APPIMAGE_STABLE" "$TAR_STABLE"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

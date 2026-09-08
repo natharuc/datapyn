@@ -302,9 +302,36 @@ jobs:
             libnspr4 \
             libgbm1 \
             libasound2 \
+            fuse3 \
             ruby \
             ruby-dev \
             build-essential
+
+      - name: Setup | Install pinned Type 2 AppImage toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/linux/appimage-toolchain.env
+          test "${APPIMAGE_ARCHITECTURE}" = "x86_64"
+          test "${APPIMAGE_RUNTIME_KIND}" = "type2"
+          test "${APPIMAGETOOL_VERSION}" != "continuous"
+          test "${APPIMAGE_RUNTIME_VERSION}" != "continuous"
+          tool_path="${RUNNER_TEMP}/appimagetool-x86_64.AppImage"
+          runtime_path="${RUNNER_TEMP}/runtime-x86_64"
+          curl --fail --location --retry 3 --output "${tool_path}" "${APPIMAGETOOL_URL}"
+          printf '%s  %s\n' "${APPIMAGETOOL_SHA256}" "${tool_path}" | sha256sum --check --status
+          curl --fail --location --retry 3 --output "${runtime_path}" "${APPIMAGE_RUNTIME_URL}"
+          printf '%s  %s\n' "${APPIMAGE_RUNTIME_SHA256}" "${runtime_path}" | sha256sum --check --status
+          chmod 755 "${tool_path}" "${runtime_path}"
+          echo "DATAPYN_APPIMAGE_TOOL=${tool_path}" >> "${GITHUB_ENV}"
+          echo "DATAPYN_APPIMAGE_RUNTIME=${runtime_path}" >> "${GITHUB_ENV}"
+
+      - name: Verify | Require FUSE3 AppImage environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$(command -v fusermount3)"
+          bash scripts/linux/package.sh --validate-fuse3-environment
 
       - name: Setup | Install project dependencies
         run: uv sync --dev
@@ -317,8 +344,11 @@ jobs:
 
       - name: Build | Package .deb and tar.gz
         run: |
-          chmod +x scripts/linux/package.sh scripts/linux/datapyn-wrapper.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
+          chmod +x scripts/linux/package.sh scripts/linux/datapyn-wrapper.sh scripts/linux/datapyn-appimage-apprun.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
           bash scripts/linux/package.sh "${{ needs.release.outputs.version }}"
+
+      - name: Verify | Run AppImage FUSE3 smoke tests
+        run: uv run pytest tests/test_linux_appimage.py -m integration -q
 
       - name: Publish | Upload Linux installers to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -381,4 +411,3 @@ jobs:
             DataPyn-macos-arm64.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

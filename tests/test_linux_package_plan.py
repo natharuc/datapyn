@@ -231,14 +231,21 @@ def test_unmapped_dependency_capability_fails_target_mapping() -> None:
 
 @pytest.mark.integration
 def test_native_package_metadata_and_aliases(tmp_path: Path) -> None:
-    required_tools = ("fpm", "dpkg-deb", "rpm", "rpmbuild", "pacman", "zstd")
+    required_tools = ("fpm", "dpkg-deb", "rpm", "rpmbuild", "pacman", "zstd", "file")
     missing_tools = [tool for tool in required_tools if shutil.which(tool) is None]
+    appimage_tool = os.environ.get("DATAPYN_APPIMAGE_TOOL") or shutil.which("appimagetool")
+    appimage_runtime = os.environ.get("DATAPYN_APPIMAGE_RUNTIME")
+    if not appimage_tool:
+        missing_tools.append("pinned appimagetool")
+    if not appimage_runtime or not Path(appimage_runtime).is_file():
+        missing_tools.append("pinned type2 runtime")
     if missing_tools:
         pytest.skip(f"native packaging toolchain unavailable: {', '.join(missing_tools)}")
 
     dist_dir = tmp_path / "dist" / "DataPyn"
     output_dir = tmp_path / "output"
     stage_dir = tmp_path / "pkg"
+    appdir = tmp_path / "AppDir"
     dist_dir.mkdir(parents=True)
     executable = dist_dir / "DataPyn"
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -250,6 +257,9 @@ def test_native_package_metadata_and_aliases(tmp_path: Path) -> None:
             "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
             "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
             "DATAPYN_PACKAGE_STAGE_DIR": str(stage_dir),
+            "DATAPYN_PACKAGE_APPDIR": str(appdir),
+            "DATAPYN_APPIMAGE_TOOL": appimage_tool,
+            "DATAPYN_APPIMAGE_RUNTIME": appimage_runtime,
         },
     )
     assert result.returncode == 0, result.stderr
@@ -258,12 +268,14 @@ def test_native_package_metadata_and_aliases(tmp_path: Path) -> None:
         "datapyn_1.57.0_amd64.deb",
         "datapyn-1.57.0-1.x86_64.rpm",
         "datapyn-1.57.0-1-x86_64.pkg.tar.zst",
+        "DataPyn-1.57.0-x86_64.AppImage",
         "DataPyn-1.57.0-linux-x86_64.tar.gz",
     )
     aliases = (
         "datapyn_amd64.deb",
         "datapyn-x86_64.rpm",
         "datapyn-x86_64.pkg.tar.zst",
+        "DataPyn-x86_64.AppImage",
         "DataPyn-linux-x86_64.tar.gz",
     )
     for filename in (*versioned, *aliases):
