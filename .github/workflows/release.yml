@@ -342,23 +342,48 @@ jobs:
       - name: Build | Generate Linux binary with PyInstaller
         run: uv run pyinstaller scripts/datapyn.spec --clean
 
-      - name: Build | Package .deb and tar.gz
+      - name: Build | Package complete Linux release set
+        env:
+          DATAPYN_RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          chmod +x scripts/linux/package.sh scripts/linux/datapyn-wrapper.sh scripts/linux/datapyn-appimage-apprun.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
+          chmod +x scripts/linux/package.sh scripts/linux/release_metadata.py scripts/linux/datapyn-wrapper.sh scripts/linux/datapyn-appimage-apprun.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
           bash scripts/linux/package.sh "${{ needs.release.outputs.version }}"
+
+      - name: Verify | Gate complete Linux release metadata
+        env:
+          DATAPYN_RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          bash scripts/linux/package.sh --validate-release \
+            "${{ needs.release.outputs.version }}" "${{ needs.release.outputs.tag }}"
 
       - name: Verify | Run AppImage FUSE3 smoke tests
         run: uv run pytest tests/test_linux_appimage.py -m integration -q
+
+      - name: Verify | Resolve Linux release asset list
+        id: release_assets
+        run: |
+          {
+            echo 'files<<EOF'
+            bash scripts/linux/package.sh --print-release-assets "${{ needs.release.outputs.version }}"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify | Summarize Linux release assets
+        env:
+          LINUX_RELEASE_ASSETS: ${{ steps.release_assets.outputs.files }}
+        run: |
+          echo "=== Linux release assets ready for ${{ needs.release.outputs.tag }} ==="
+          while IFS= read -r asset; do
+            [[ -z "$asset" ]] || ls -lh -- "$asset"
+          done <<< "$LINUX_RELEASE_ASSETS"
 
       - name: Publish | Upload Linux installers to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release.outputs.tag }}
-          files: |
-            datapyn_${{ needs.release.outputs.version }}_amd64.deb
-            datapyn_amd64.deb
-            DataPyn-${{ needs.release.outputs.version }}-linux-x86_64.tar.gz
-            DataPyn-linux-x86_64.tar.gz
+          files: ${{ steps.release_assets.outputs.files }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -12,6 +12,9 @@ APPDIR="${DATAPYN_PACKAGE_APPDIR:-$ROOT/pkg-appimage}"
 APPIMAGE_TOOLCHAIN_FILE="${DATAPYN_APPIMAGE_TOOLCHAIN_FILE:-$ROOT/scripts/linux/appimage-toolchain.env}"
 APPIMAGETOOL_PATH="${DATAPYN_APPIMAGE_TOOL:-${APPIMAGETOOL:-}}"
 APPIMAGE_RUNTIME_PATH="${DATAPYN_APPIMAGE_RUNTIME:-${APPIMAGE_RUNTIME_FILE:-}}"
+RELEASE_METADATA_SCRIPT="${DATAPYN_RELEASE_METADATA_SCRIPT:-$ROOT/scripts/linux/release_metadata.py}"
+MANIFEST_FILENAME="DataPyn-linux-artifacts.json"
+CHECKSUMS_FILENAME="SHA256SUMS"
 
 # The Debian dependency list is the source capability list. Every capability must have a
 # family-specific mapping before its target package is built; an omitted mapping is an error.
@@ -173,6 +176,60 @@ set_artifact_names() {
   APPIMAGE_STABLE="DataPyn-x86_64.AppImage"
   TAR_VERSIONED="DataPyn-${version}-linux-x86_64.tar.gz"
   TAR_STABLE="DataPyn-linux-x86_64.tar.gz"
+}
+
+release_tag_for_version() {
+  local version="$1"
+  local requested_tag="${2:-}"
+
+  printf '%s\n' "${requested_tag:-${DATAPYN_RELEASE_TAG:-v$version}}"
+}
+
+run_release_metadata() {
+  local action="$1"
+  local version="$2"
+  local release_tag="$3"
+
+  require_command python3 "Linux release metadata"
+  if [[ ! -f "$RELEASE_METADATA_SCRIPT" ]]; then
+    echo "error: Linux release metadata helper is missing: $RELEASE_METADATA_SCRIPT" >&2
+    return 1
+  fi
+  python3 "$RELEASE_METADATA_SCRIPT" "$action" \
+    --output-dir "$OUTPUT_DIR" \
+    --version "$version" \
+    --release-tag "$release_tag" \
+    --repository "${GITHUB_REPOSITORY:-natharuc/datapyn}"
+}
+
+generate_release_metadata() {
+  local version="$1"
+  local release_tag="${2:-$(release_tag_for_version "$version")}"
+
+  if run_release_metadata build "$version" "$release_tag"; then
+    return 0
+  fi
+  set_artifact_names "$version"
+  cleanup_outputs
+  return 1
+}
+
+validate_release_completeness() {
+  local version="$1"
+  local release_tag="${2:-$(release_tag_for_version "$version")}"
+
+  run_release_metadata validate "$version" "$release_tag"
+}
+
+print_release_assets() {
+  local version="$1"
+
+  require_command python3 "Linux release asset list"
+  if [[ ! -f "$RELEASE_METADATA_SCRIPT" ]]; then
+    echo "error: Linux release metadata helper is missing: $RELEASE_METADATA_SCRIPT" >&2
+    return 1
+  fi
+  python3 "$RELEASE_METADATA_SCRIPT" print-assets --version "$version"
 }
 
 print_plan() {
@@ -488,6 +545,7 @@ check_toolchain() {
   require_command pacman ".pkg.tar.zst"
   require_command zstd ".pkg.tar.zst"
   require_command tar "tar.gz"
+  require_command python3 "Linux release metadata"
 }
 
 stage_payload() {
@@ -661,7 +719,8 @@ cleanup_outputs() {
     "$RPM_VERSIONED" "$RPM_STABLE" \
     "$PACMAN_VERSIONED" "$PACMAN_STABLE" \
     "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE" \
-    "$TAR_VERSIONED" "$TAR_STABLE"; do
+    "$TAR_VERSIONED" "$TAR_STABLE" \
+    "$MANIFEST_FILENAME" "$CHECKSUMS_FILENAME"; do
     [[ -z "$output" ]] || rm -f "$OUTPUT_DIR/$output"
   done
 }
@@ -852,6 +911,26 @@ copy_stable_alias() {
 }
 
 main() {
+  if [[ "${1:-}" == "--generate-release-metadata" || "${1:-}" == "--generate-manifest" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: version required (e.g. 1.57.0)" >&2; return 1; }
+    validate_version "$2"
+    generate_release_metadata "$2" "${3:-$(release_tag_for_version "$2")}"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--validate-release" || "${1:-}" == "--validate-release-completeness" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: version required (e.g. 1.57.0)" >&2; return 1; }
+    validate_version "$2"
+    validate_release_completeness "$2" "${3:-$(release_tag_for_version "$2")}"
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--print-release-assets" ]]; then
+    [[ -n "${2:-}" ]] || { echo "error: version required (e.g. 1.57.0)" >&2; return 1; }
+    print_release_assets "$2"
+    return 0
+  fi
+
   if [[ "${1:-}" == "--print-appimage-metadata" ]]; then
     [[ -n "${2:-}" ]] || { echo "error: version required (e.g. 1.57.0)" >&2; return 1; }
     print_appimage_metadata "$2"
@@ -944,6 +1023,7 @@ main() {
   fi
 
   local version="${1:-}"
+  local release_tag
   if [[ -z "$version" ]]; then
     echo "error: version required (e.g. 1.57.0)" >&2
     return 1
@@ -951,6 +1031,7 @@ main() {
   validate_version "$version"
   set_artifact_names "$version"
   VERSION="$version"
+  release_tag="$(release_tag_for_version "$version")"
 
   if [[ ! -d "$DIST_DIR" ]]; then
     echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
@@ -986,11 +1067,15 @@ main() {
   copy_stable_alias "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
   copy_stable_alias "$TAR_VERSIONED" "$TAR_STABLE"
 
+  generate_release_metadata "$version" "$release_tag"
+  validate_release_completeness "$version" "$release_tag"
+
   trap - EXIT
   echo "Created:"
   printf '%s\n' \
     "$DEB_VERSIONED" "$RPM_VERSIONED" "$PACMAN_VERSIONED" "$APPIMAGE_VERSIONED" "$TAR_VERSIONED" \
-    "$DEB_STABLE" "$RPM_STABLE" "$PACMAN_STABLE" "$APPIMAGE_STABLE" "$TAR_STABLE"
+    "$DEB_STABLE" "$RPM_STABLE" "$PACMAN_STABLE" "$APPIMAGE_STABLE" "$TAR_STABLE" \
+    "$MANIFEST_FILENAME" "$CHECKSUMS_FILENAME"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
