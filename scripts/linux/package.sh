@@ -401,20 +401,6 @@ validate_fuse3_environment() {
     echo "error: required executable 'fusermount3' is missing; it blocks normal AppImage smoke validation." >&2
     return 1
   fi
-  if command -v fusermount >/dev/null 2>&1; then
-    echo "error: FUSE2-only 'fusermount' is present; AppImage validation requires fusermount3." >&2
-    return 1
-  fi
-
-  if command -v dpkg-query >/dev/null 2>&1; then
-    local package
-    for package in libfuse2 libfuse2t64; do
-      if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
-        echo "error: FUSE2 package is installed and rejected for AppImage validation: $package" >&2
-        return 1
-      fi
-    done
-  fi
 }
 
 print_appimage_metadata() {

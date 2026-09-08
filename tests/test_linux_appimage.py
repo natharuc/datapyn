@@ -65,6 +65,66 @@ def test_fuse3_policy_accepts_fusermount3_without_fuse2() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def _run_fuse3_environment_check(
+    tmp_path: Path,
+    commands: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    for utility in ("dirname", "grep", "pwd"):
+        utility_path = shutil.which(utility)
+        assert utility_path is not None, f"required test utility is unavailable: {utility}"
+        (bin_dir / utility).symlink_to(utility_path)
+
+    for name, contents in commands.items():
+        command_path = bin_dir / name
+        command_path.write_text(contents, encoding="utf-8")
+        command_path.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment["PATH"] = str(bin_dir)
+    environment.pop("DATAPYN_APPIMAGE_FUSE_POLICY", None)
+    bash = shutil.which("bash")
+    assert bash is not None, "bash is required for the shell gate test"
+    return subprocess.run(
+        [bash, str(PACKAGE_SCRIPT), "--validate-fuse3-environment"],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_ut028_fuse3_environment_accepts_coexisting_legacy_command(tmp_path: Path) -> None:
+    result = _run_fuse3_environment_check(
+        tmp_path,
+        {"fusermount3": "", "fusermount": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_ut028_fuse3_environment_ignores_legacy_packages(tmp_path: Path) -> None:
+    result = _run_fuse3_environment_check(
+        tmp_path,
+        {
+            "fusermount3": "",
+            "dpkg-query": "#!/bin/sh\nprintf '%s\\n' 'install ok installed'\n",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_ut028_fuse3_environment_rejects_missing_fusermount3(tmp_path: Path) -> None:
+    result = _run_fuse3_environment_check(tmp_path, {"fusermount": ""})
+
+    assert result.returncode != 0
+    assert "required executable 'fusermount3' is missing" in result.stderr
+
+
 def test_pinned_tool_checksum_rejects_changed_bytes(tmp_path: Path) -> None:
     changed_tool = tmp_path / "appimagetool"
     changed_tool.write_bytes(b"changed pinned tool")
@@ -228,10 +288,10 @@ def test_appimage_extract_and_run_fallback_forwards_arguments(fixture_appimage: 
 
 
 @pytest.mark.integration
-def test_appimage_normal_fuse3_smoke_without_legacy_path(
+def test_appimage_normal_fuse3_smoke_with_fuse3_mount(
     fixture_appimage: tuple[Path, Path],
 ) -> None:
-    if not shutil.which("fusermount3") or shutil.which("fusermount") or not Path("/dev/fuse").exists():
+    if not shutil.which("fusermount3") or not Path("/dev/fuse").exists():
         pytest.skip("controlled FUSE3 mount environment is unavailable")
 
     artifact, smoke_log = fixture_appimage
