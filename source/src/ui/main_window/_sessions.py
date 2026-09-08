@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont, QColor
 
 from src.design_system.app_dialogs import confirm_yes_no
-from src.database.database_connector import get_connector_database_context
+from src.database.database_connector import get_connector_database_context, get_connector_switch_chip_value
 from src.ui.components.session_widget import SessionWidget
 from src.design_system.frameless_dialog import widget_is_valid
 from src.design_system.tokens import get_colors
@@ -364,9 +364,15 @@ class SessionsMixin:
                 previous_connection = current_widget.session.connection_name
                 previous_group = getattr(current_widget.session, "connection_group", None) or ""
                 previous_database_context = getattr(current_widget.session, "database_context", "") or ""
-                if not previous_database_context:
+                previous_connector = getattr(current_widget.session, "connector", None)
+                previous_db_type = str(getattr(previous_connector, "db_type", "") or "").lower()
+                if previous_db_type == "postgresql":
+                    previous_database_context = get_connector_switch_chip_value(
+                        previous_connector
+                    )
+                elif not previous_database_context:
                     previous_database_context = get_connector_database_context(
-                        getattr(current_widget.session, "connector", None)
+                        previous_connector
                     )
                 if previous_connection:
                     config = self.connection_manager.get_connection_config(
@@ -801,7 +807,12 @@ class SessionsMixin:
             )
 
         if db_name:
-            block.set_database_name(db_name)
+            if str(db_type or "").lower() in ("postgres", "postgresql"):
+                raw = str(db_name)
+                if raw.startswith("SCHEMA:") or raw.startswith("schema:") or "." in raw:
+                    block.set_database_name(raw)
+            else:
+                block.set_database_name(db_name)
 
         block.editor.setFocus()
 
@@ -1447,11 +1458,16 @@ class SessionsMixin:
 
             current_widget = self._get_current_session_widget()
             if current_widget and getattr(current_widget, "session", None) == session and hasattr(current_widget, "editor"):
+                chip_value = get_connector_switch_chip_value(session.connector)
+                db_type = str((config or {}).get("db_type") or getattr(session.connector, "db_type", "") or "").lower()
                 for block in current_widget.editor.get_blocks():
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
                     if not block_conn and block.uses_tab_default_database():
-                        block._database_name = current_db or None
-                        block.db_panel.set_database(current_db or None)
+                        if db_type == "postgresql" and hasattr(block, "set_postgresql_schema_display"):
+                            block.set_postgresql_schema_display(chip_value, database=current_db)
+                        else:
+                            block._database_name = current_db or None
+                            block.db_panel.set_database(current_db or None)
 
             # Highlight connection in list
             group = session.connection_group or ""
@@ -1560,12 +1576,17 @@ class SessionsMixin:
 
         # === ATUALIZAR BLOCOS NO PADRAO DA ABA (sem override de banco) ===
         if current_widget and hasattr(current_widget, "editor"):
+            db_type = str(config.get("db_type", "") or "").lower()
+            chip_value = get_connector_switch_chip_value(getattr(session, "connector", None))
             for block in current_widget.editor.get_blocks():
                 if hasattr(block, "db_panel"):
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
                     if not block_conn and block.uses_tab_default_database():
-                        block._database_name = current_db
-                        block.db_panel.set_database(current_db)
+                        if db_type == "postgresql" and hasattr(block, "set_postgresql_schema_display"):
+                            block.set_postgresql_schema_display(chip_value, database=current_db)
+                        else:
+                            block._database_name = current_db
+                            block.db_panel.set_database(current_db)
 
     def _get_current_session_widget(self) -> SessionWidget:
         """Returns active tab SessionWidget"""

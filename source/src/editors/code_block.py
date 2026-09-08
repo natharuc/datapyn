@@ -19,10 +19,13 @@ from PyQt6.QtWidgets import (
     QFrame,
     QSizePolicy,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
+    QApplication,
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QPoint, QTimer, QSize
-from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor
+from PyQt6.QtCore import pyqtSignal, Qt, QEvent, QEventLoop, QMimeData, QPoint, QTimer, QSize
+from PyQt6.QtGui import QDrag, QPixmap, QPainter, QColor, QKeyEvent
 import qtawesome as qta
 
 from src.core.theme_manager import ThemeManager
@@ -199,6 +202,274 @@ class BlockConnectionPanel(QFrame):
             self.dragLeaveEvent(event)
 
 
+class SearchableDatabasePopup(QFrame):
+    """Compact searchable picker for database / catalog / schema lists.
+
+    Caps height with a scrollable list and filters as the user types —
+    including when focus is on the list (browser-style typeahead).
+    """
+
+    MAX_HEIGHT = 320
+    MAX_WIDTH = 360
+    MIN_WIDTH = 220
+
+    def __init__(
+        self,
+        items: list,
+        *,
+        current: str | None = None,
+        default_label: str = "Default",
+        idle_icon: str = "mdi.database-outline",
+        active_icon: str = "mdi.database",
+        search_placeholder: str = "Filter…",
+        parent=None,
+    ):
+        super().__init__(
+            parent,
+            Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint,
+        )
+        self._all_items = sorted(str(x) for x in (items or []))
+        self._current = current
+        self._default_label = default_label
+        self._idle_icon = idle_icon
+        self._active_icon = active_icon
+        self._accepted = False
+        self._result: str | None = None
+        self._loop: QEventLoop | None = None
+        self._setup_ui(search_placeholder)
+        self._rebuild_list("")
+
+    def _setup_ui(self, search_placeholder: str) -> None:
+        from src.design_system.tokens import get_colors, RADIUS
+
+        colors = get_colors()
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setMinimumWidth(self.MIN_WIDTH)
+        self.setMaximumWidth(self.MAX_WIDTH)
+        self.setMaximumHeight(self.MAX_HEIGHT)
+        self.setStyleSheet(
+            f"""
+            SearchableDatabasePopup {{
+                background-color: {colors.bg_secondary};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+            }}
+            QLineEdit {{
+                background-color: {colors.bg_primary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 6px 8px;
+                font-size: 12px;
+            }}
+            QLineEdit:focus {{
+                border-color: {colors.interactive_primary};
+            }}
+            QListWidget {{
+                background-color: transparent;
+                border: none;
+                outline: none;
+                font-size: 12px;
+                color: {colors.text_primary};
+            }}
+            QListWidget::item {{
+                padding: 6px 10px;
+                border-radius: 4px;
+            }}
+            QListWidget::item:selected {{
+                background-color: {colors.interactive_primary};
+                color: #ffffff;
+            }}
+            QListWidget::item:hover:!selected {{
+                background-color: {colors.bg_elevated};
+            }}
+            """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText(search_placeholder)
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(self._on_filter_changed)
+        self._search.returnPressed.connect(self._accept_current)
+        layout.addWidget(self._search)
+
+        self._list = QListWidget()
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self._list.itemActivated.connect(self._on_item_activated)
+        self._list.itemClicked.connect(self._on_item_activated)
+        self._list.currentItemChanged.connect(self._on_current_item_changed)
+        self._list.installEventFilter(self)
+        # No stretch: popup height follows filtered content (avoids 1-item "floating" gap)
+        layout.addWidget(self._list, 0)
+
+        self._search.installEventFilter(self)
+
+    def _icon_for_value(self, value: str | None, *, selected: bool) -> object:
+        from src.design_system.tokens import get_colors
+
+        colors = get_colors()
+        if value is None:
+            color = "#ffffff" if selected else colors.text_tertiary
+            return qta.icon(self._idle_icon, color=color)
+        if value == self._current:
+            color = "#ffffff" if selected else colors.success
+            return qta.icon("mdi.database-check", color=color)
+        # Avoid info/accent blue on selected blue background (icon would vanish)
+        color = "#ffffff" if selected else colors.text_secondary
+        return qta.icon(self._active_icon, color=color)
+
+    def _rebuild_list(self, query: str) -> None:
+        needle = (query or "").strip().casefold()
+        self._list.blockSignals(True)
+        self._list.clear()
+
+        default_item = QListWidgetItem(self._icon_for_value(None, selected=False), self._default_label)
+        default_item.setData(Qt.ItemDataRole.UserRole, None)
+        if not needle or needle in self._default_label.casefold():
+            self._list.addItem(default_item)
+
+        for name in self._all_items:
+            if needle and needle not in name.casefold():
+                continue
+            item = QListWidgetItem(self._icon_for_value(name, selected=False), name)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            self._list.addItem(item)
+
+        select_row = 0
+        if self._list.count() > 0 and self._current:
+            for i in range(self._list.count()):
+                if self._list.item(i).data(Qt.ItemDataRole.UserRole) == self._current:
+                    select_row = i
+                    break
+        if self._list.count() > 0:
+            self._list.setCurrentRow(select_row)
+        self._list.blockSignals(False)
+        if self._list.count() > 0:
+            self._refresh_item_icons(self._list.currentItem())
+
+        # Content-sized height (no 80px floor — that centered a single filtered row)
+        count = self._list.count()
+        row_h = self._list.sizeHintForRow(0) if count else 28
+        if row_h <= 0:
+            row_h = 28
+        visible = min(count, 12) if count else 1
+        list_h = row_h * visible + 4
+        max_list = self.MAX_HEIGHT - 56
+        self._list.setFixedHeight(min(max(list_h, row_h + 4), max_list))
+        self.adjustSize()
+
+    def _refresh_item_icons(self, selected_item: QListWidgetItem | None = None) -> None:
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item is None:
+                continue
+            value = item.data(Qt.ItemDataRole.UserRole)
+            item.setIcon(self._icon_for_value(value, selected=(item is selected_item)))
+
+    def _on_current_item_changed(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
+        self._refresh_item_icons(current)
+
+    def _on_filter_changed(self, text: str) -> None:
+        self._rebuild_list(text)
+
+    def _on_item_activated(self, item: QListWidgetItem) -> None:
+        if item is None:
+            return
+        self._accepted = True
+        self._result = item.data(Qt.ItemDataRole.UserRole)
+        self._finish()
+
+    def _accept_current(self) -> None:
+        item = self._list.currentItem()
+        if item is not None:
+            self._on_item_activated(item)
+
+    def _finish(self) -> None:
+        if self._loop is not None and self._loop.isRunning():
+            self._loop.quit()
+        self.hide()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Escape:
+                self._accepted = False
+                self._finish()
+                return True
+            if obj is self._list:
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self._accept_current()
+                    return True
+                if key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown, Qt.Key.Key_Home, Qt.Key.Key_End):
+                    return False
+                # Typeahead: printable keys go to the search field
+                text = event.text()
+                if text and (text.isprintable() or key == Qt.Key.Key_Backspace):
+                    self._search.setFocus()
+                    if key == Qt.Key.Key_Backspace:
+                        self._search.backspace()
+                    else:
+                        self._search.insert(text)
+                    return True
+            if obj is self._search:
+                if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                    self._list.setFocus()
+                    if key == Qt.Key.Key_Down and self._list.currentRow() < 0 and self._list.count():
+                        self._list.setCurrentRow(0)
+                    elif key == Qt.Key.Key_Down:
+                        row = min(self._list.currentRow() + 1, self._list.count() - 1)
+                        self._list.setCurrentRow(row)
+                    elif key == Qt.Key.Key_Up:
+                        row = max(self._list.currentRow() - 1, 0)
+                        self._list.setCurrentRow(row)
+                    return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Escape:
+            self._accepted = False
+            self._finish()
+            return
+        super().keyPressEvent(event)
+
+    def hideEvent(self, event):
+        if self._loop is not None and self._loop.isRunning():
+            self._loop.quit()
+        super().hideEvent(event)
+
+    def pick(self, global_pos: QPoint) -> tuple[bool, str | None]:
+        """Show popup at *global_pos*. Returns (accepted, value). value None = default."""
+        width = max(self.MIN_WIDTH, min(self.MAX_WIDTH, self.sizeHint().width() + 40))
+        # Prefer anchoring under the chip; clamp to screen
+        screen = QApplication.screenAt(global_pos) or QApplication.primaryScreen()
+        geo = screen.availableGeometry() if screen else None
+        self.adjustSize()
+        h = min(self.sizeHint().height(), self.MAX_HEIGHT)
+        x, y = global_pos.x(), global_pos.y()
+        if geo is not None:
+            if y + h > geo.bottom():
+                y = max(geo.top(), global_pos.y() - h)
+            if x + width > geo.right():
+                x = max(geo.left(), geo.right() - width)
+        self.setFixedWidth(width)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self._search.setFocus()
+        self._search.selectAll()
+
+        self._loop = QEventLoop(self)
+        self._loop.exec()
+        self._loop = None
+        return self._accepted, self._result
+
+
 class BlockDatabasePanel(QFrame):
     """
     Panel to display and allow switching database / catalog / schema for a block.
@@ -283,6 +554,17 @@ class BlockDatabasePanel(QFrame):
         self.name_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px;")
         self.name_label.setMinimumWidth(40)
         layout.addWidget(self.name_label, 1)
+
+    def set_kind(self, kind: str) -> None:
+        """Update chip kind (database/catalog/schema) and refresh label/icon."""
+        kind = str(kind or "").lower().strip()
+        if kind not in {"database", "catalog", "schema"}:
+            kind = "database"
+        if self._kind == kind:
+            return
+        self._kind = kind
+        # Re-apply current value (or default) so label/icon match the new kind.
+        self.set_database(self._database_name)
 
     def set_database(self, database_name: str = None):
         """Set the database to display"""
@@ -374,60 +656,29 @@ class BlockDatabasePanel(QFrame):
         self._switching_feedback = False
         self.set_database(self._database_name)
 
+    def _search_placeholder(self) -> str:
+        if self._kind == "catalog":
+            return S.block.catalog_search_placeholder
+        if self._kind == "schema":
+            return S.block.schema_search_placeholder
+        return S.block.db_search_placeholder
+
     def _show_database_menu(self):
-        """Show popup menu with available databases."""
-        from src.design_system.tokens import get_colors
-        colors = get_colors()
-        
-        menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {colors.bg_secondary};
-                border: 1px solid {colors.border_default};
-                border-radius: 4px;
-                padding: 6px;
-            }}
-            QMenu::item {{
-                padding: 8px 24px 8px 12px;
-                color: {colors.text_primary};
-                font-size: 12px;
-                border-radius: 4px;
-            }}
-            QMenu::item:selected {{
-                background-color: {colors.interactive_primary};
-                color: #ffffff;
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background: {colors.border_default};
-                margin: 6px 8px;
-            }}
-        """)
-
-        # Option to reset to connection default
-        default_action = menu.addAction(
-            qta.icon(self._idle_icon_name(), color=colors.text_tertiary),
-            self._default_label(),
+        """Show searchable popup with available databases / catalogs / schemas."""
+        popup = SearchableDatabasePopup(
+            self._available_databases,
+            current=self._database_name,
+            default_label=self._default_label(),
+            idle_icon=self._idle_icon_name(),
+            active_icon=self._active_icon_name(),
+            search_placeholder=self._search_placeholder(),
+            parent=self.window(),
         )
-        default_action.setData(None)
-        menu.addSeparator()
-
-        # Add each database
-        for db in sorted(self._available_databases):
-            icon_name = self._active_icon_name()
-            icon_color = colors.info
-            if db == self._database_name:
-                icon_name = "mdi.database-check"
-                icon_color = colors.success
-            action = menu.addAction(
-                qta.icon(icon_name, color=icon_color),
-                db,
-            )
-            action.setData(db)
-
-        chosen = menu.exec(self.mapToGlobal(self.rect().bottomLeft()))
-        if chosen is not None:
-            db_name = chosen.data()
+        # Slightly wider than the chip when possible
+        anchor = self.mapToGlobal(self.rect().bottomLeft())
+        accepted, db_name = popup.pick(anchor)
+        popup.deleteLater()
+        if accepted:
             self.set_database(db_name)
             self.database_selected.emit(db_name or "")
 
@@ -1210,6 +1461,15 @@ class CodeBlock(QFrame):
                     catalogs if catalogs is not None else self._available_catalogs,
                     catalog_schemas if catalog_schemas is not None else self._catalog_schemas,
                 )
+        elif db_type == "postgresql":
+            db_name = str((schema or {}).get("database") or "").strip()
+            schemas = list((schema or {}).get("schemas") or [])
+            if db_name:
+                self.catalog_panel.set_kind("database")
+                self.catalog_panel.set_available_databases([db_name])
+            if schemas:
+                self.schema_panel.set_available_databases(schemas)
+            self._sync_postgresql_namespace_chips()
         self._update_connection_panel_visibility()
         if self.get_language() == "sql":
             self.sync_sql_parameters_from_query()
@@ -1346,10 +1606,17 @@ class CodeBlock(QFrame):
 
         return has_dual_namespace(self._block_db_type())
 
+    def _uses_split_namespace(self) -> bool:
+        """True when the block shows separate database/catalog + schema chips."""
+        return self._uses_dual_namespace() or self._block_db_type() == "postgresql"
+
     def _sync_namespace_chips(self):
         """Keep catalog/schema chips in sync with persisted catalog.schema."""
         from src.database.namespace import parse_context
 
+        if self._block_db_type() == "postgresql":
+            self._sync_postgresql_namespace_chips()
+            return
         if not self._uses_dual_namespace():
             self.db_panel.set_database(self._database_name)
             return
@@ -1360,6 +1627,88 @@ class CodeBlock(QFrame):
         self.catalog_panel.set_database(ctx.catalog or None)
         self.schema_panel.set_database(ctx.schema or None)
         self._refresh_schema_chip_options()
+
+    def _postgresql_known_database_names(self) -> set[str]:
+        """Real database/catalog names that must never appear on the schema chip."""
+        sql = self._sql_schema or {}
+        names: set[str] = set()
+        for key in ("database",):
+            value = str(sql.get(key) or "").strip().lower()
+            if value:
+                names.add(value)
+        for item in sql.get("databases") or []:
+            value = str(item or "").strip().lower()
+            if value:
+                names.add(value)
+        schema_names = {
+            str(item or "").strip().lower()
+            for item in (sql.get("schemas") or [])
+            if str(item or "").strip()
+        }
+        return names - schema_names
+
+    def _normalize_postgresql_chip_value(self, raw: str | None) -> str | None:
+        """Map a chip/drop value to a PostgreSQL schema name (never the database)."""
+        name = str(raw or "").strip()
+        if not name:
+            return None
+        if name.startswith("SCHEMA:"):
+            name = name[7:].strip()
+        elif name.startswith("CATALOG:"):
+            return None
+        elif "." in name:
+            name = name.split(".")[-1].strip()
+        if not name:
+            return None
+        lowered = name.lower()
+        if lowered in self._postgresql_known_database_names():
+            return None
+        schemas = [
+            str(item or "").strip().lower()
+            for item in (self._sql_schema or {}).get("schemas") or []
+            if str(item or "").strip()
+        ]
+        if schemas and lowered not in schemas:
+            return None
+        return name
+
+    def _sync_postgresql_schema_chip(self) -> None:
+        """Compatibility wrapper — PostgreSQL now uses Database + Schema chips."""
+        self._sync_postgresql_namespace_chips()
+
+    def _sync_postgresql_namespace_chips(self) -> None:
+        """Show the real database and the active schema on separate chips."""
+        self.catalog_panel.set_kind("database")
+        self.schema_panel.set_kind("schema")
+        sql = self._sql_schema or {}
+        db_name = str(sql.get("database") or "").strip() or None
+        self.catalog_panel.set_database(db_name)
+        override = self._normalize_postgresql_chip_value(self._database_name)
+        if override != self._database_name:
+            self._database_name = override
+        display = override or str(sql.get("current_schema") or "").strip() or None
+        display = self._normalize_postgresql_chip_value(display)
+        if not display and (sql.get("database") or sql.get("schemas") or sql.get("current_schema")):
+            display = "public"
+        self.schema_panel.set_database(display)
+
+    def set_postgresql_schema_display(
+        self, schema_name: str, *, override: bool = False, database: str | None = None
+    ) -> None:
+        """Update the Schema chip (and optional override) without treating it as a database."""
+        schema_name = self._normalize_postgresql_chip_value(schema_name)
+        sql = dict(self._sql_schema or {})
+        sql["db_type"] = "postgresql"
+        if database:
+            sql["database"] = str(database).strip()
+            self.catalog_panel.set_kind("database")
+            self.catalog_panel.set_available_databases([sql["database"]])
+        if schema_name:
+            sql["current_schema"] = schema_name
+        self._sql_schema = sql
+        if override:
+            self._database_name = schema_name
+        self._sync_postgresql_namespace_chips()
 
     def _refresh_schema_chip_options(self):
         from src.database.namespace import parse_context, schemas_for_catalog
@@ -1381,6 +1730,10 @@ class CodeBlock(QFrame):
     def _on_catalog_selected(self, catalog_name: str):
         from src.database.namespace import parse_context, resolve_schema_after_catalog_change
 
+        if self._block_db_type() == "postgresql":
+            # Database is fixed at connect time; keep the chip in sync and ignore switches.
+            self._sync_postgresql_namespace_chips()
+            return
         if not catalog_name:
             self._apply_namespace_context("", "")
             return
@@ -1395,6 +1748,17 @@ class CodeBlock(QFrame):
     def _on_schema_selected(self, schema_name: str):
         from src.database.namespace import parse_context
 
+        if self._block_db_type() == "postgresql":
+            schema_name = self._normalize_postgresql_chip_value(schema_name) or ""
+            self._database_name = schema_name or None
+            if schema_name:
+                sql = dict(self._sql_schema or {})
+                sql["db_type"] = "postgresql"
+                sql["current_schema"] = schema_name
+                self._sql_schema = sql
+            self._sync_postgresql_namespace_chips()
+            self.database_changed.emit(self, schema_name or "")
+            return
         current = parse_context("databricks", self._database_name)
         catalog = current.catalog or self.catalog_panel.get_database_name() or ""
         if not schema_name:
@@ -1405,6 +1769,19 @@ class CodeBlock(QFrame):
     def _on_namespace_dropped(self, raw_name: str):
         from src.database.namespace import parse_context, resolve_schema_after_catalog_change
 
+        if self._block_db_type() == "postgresql":
+            schema_name = self._normalize_postgresql_chip_value(raw_name) or ""
+            if schema_name:
+                self._database_name = schema_name
+                sql = dict(self._sql_schema or {})
+                sql["db_type"] = "postgresql"
+                sql["current_schema"] = schema_name
+                self._sql_schema = sql
+                self._sync_postgresql_namespace_chips()
+                self.database_changed.emit(self, schema_name)
+            else:
+                self._sync_postgresql_namespace_chips()
+            return
         current = parse_context("databricks", self._database_name)
         parsed = parse_context(
             "databricks",
@@ -1428,13 +1805,30 @@ class CodeBlock(QFrame):
 
     def _on_database_selected(self, database_name: str):
         """Database was selected from popup menu."""
+        if self._block_db_type() == "postgresql":
+            database_name = self._normalize_postgresql_chip_value(database_name) or ""
+            self._database_name = database_name or None
+            if database_name:
+                sql = dict(self._sql_schema or {})
+                sql["db_type"] = "postgresql"
+                sql["current_schema"] = database_name
+                self._sql_schema = sql
+            self._sync_postgresql_schema_chip()
+            self.database_changed.emit(self, database_name or "")
+            return
         self._database_name = database_name or None
         self.database_changed.emit(self, database_name or "")
 
     def _on_database_dropped(self, database_name: str):
         """Database was dragged from Object Explorer to panel"""
-        self._database_name = database_name
-        self.db_panel.set_database(database_name)
+        if self._block_db_type() == "postgresql":
+            database_name = self._normalize_postgresql_chip_value(database_name) or ""
+            self._database_name = database_name or None
+            self._sync_postgresql_schema_chip()
+            self.database_changed.emit(self, database_name or "")
+            return
+        self._database_name = database_name or None
+        self.db_panel.set_database(database_name or None)
         self.database_changed.emit(self, database_name or "")
 
     def _update_connection_panel_visibility(self):
@@ -1442,12 +1836,19 @@ class CodeBlock(QFrame):
         lang = self.lang_combo.currentData()
         is_sql = lang == "sql"
         self.conn_panel.setVisible(is_sql)
-        dual = is_sql and self._uses_dual_namespace()
-        self.db_panel.setVisible(is_sql and not dual)
-        self.catalog_panel.setVisible(dual)
-        self.schema_panel.setVisible(dual)
-        if dual:
-            self._sync_namespace_chips()
+        split = is_sql and self._uses_split_namespace()
+        self.db_panel.setVisible(is_sql and not split)
+        if is_sql and not split:
+            self.db_panel.set_kind("database")
+        self.catalog_panel.setVisible(split)
+        self.schema_panel.setVisible(split)
+        if split:
+            if self._block_db_type() == "postgresql":
+                self.catalog_panel.set_kind("database")
+                self._sync_postgresql_namespace_chips()
+            else:
+                self.catalog_panel.set_kind("catalog")
+                self._sync_namespace_chips()
         if not is_sql:
             self._refresh_sql_parameter_ui()
         else:
@@ -1759,13 +2160,18 @@ class CodeBlock(QFrame):
         return not self._database_name
 
     def set_database_name(self, database_name: str):
-        """Set custom database for this block"""
-        self._database_name = database_name
+        """Set custom database/schema for this block."""
+        if self._block_db_type() == "postgresql":
+            database_name = self._normalize_postgresql_chip_value(database_name)
+        self._database_name = database_name or None
         self._sync_namespace_chips()
-        self.database_changed.emit(self, database_name or "")
+        self.database_changed.emit(self, self._database_name or "")
 
     def set_available_databases(self, databases: list):
         """Set list of databases available for this block's connection."""
+        if self._block_db_type() == "postgresql":
+            self.schema_panel.set_available_databases(databases)
+            return
         self.db_panel.set_available_databases(databases)
         if self._uses_dual_namespace() and databases:
             catalogs = [name for name in databases if name and "." not in str(name)]
@@ -1786,7 +2192,7 @@ class CodeBlock(QFrame):
         """Show or clear switching overlay on catalog/schema or database chips."""
         panels = (
             [self.catalog_panel, self.schema_panel]
-            if self._uses_dual_namespace()
+            if self._uses_split_namespace()
             else [self.db_panel]
         )
         for panel in panels:

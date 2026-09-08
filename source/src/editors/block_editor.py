@@ -1533,7 +1533,12 @@ class BlockEditor(QWidget):
             )
 
         if db_name:
-            block.set_database_name(db_name)
+            if str(db_type or "").lower() in ("postgres", "postgresql"):
+                raw = str(db_name)
+                if raw.startswith("SCHEMA:") or raw.startswith("schema:") or "." in raw:
+                    block.set_database_name(raw)
+            else:
+                block.set_database_name(db_name)
 
         self.refresh_completion_context(focus_block=block)
         block.editor.setFocus()

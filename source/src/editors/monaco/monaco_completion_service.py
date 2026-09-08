@@ -8,12 +8,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
+from src.editors.monaco.monaco_sql_completions import quote_sql_completion_insert
+
 logger = logging.getLogger(__name__)
 
 CompletionTuple = Tuple[str, str, str]
 
 
-def _format_sql_completions(raw: List[Any]) -> List[Dict[str, Any]]:
+def _format_sql_completions(raw: List[Any], db_type: str = "") -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for comp in raw or []:
         name = comp[0] if len(comp) > 0 else ""
@@ -31,20 +33,23 @@ def _format_sql_completions(raw: List[Any]) -> List[Dict[str, Any]]:
             kind = "field"
         elif category == "variable":
             kind = "variable"
-        elif category == "database":
+        elif category in {"database", "schema"}:
             kind = "module"
 
         items.append({
             "label": name,
             "kind": kind,
-            "insertText": name,
+            "insertText": quote_sql_completion_insert(name, db_type, category),
             "detail": detail,
             "category": category,
+            "filterText": name,
         })
     return items
 
 
-def _format_sql_context_completions(raw: List[Any], prefix: str) -> List[Dict[str, Any]]:
+def _format_sql_context_completions(
+    raw: List[Any], prefix: str, db_type: str = ""
+) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for comp in raw or []:
         name = comp[0] if len(comp) > 0 else ""
@@ -53,10 +58,11 @@ def _format_sql_context_completions(raw: List[Any], prefix: str) -> List[Dict[st
         items.append({
             "label": name,
             "kind": "field" if category != "variable" else "variable",
-            "insertText": name,
+            "insertText": quote_sql_completion_insert(name, db_type, category),
             "detail": detail,
             "category": category,
             "table": prefix,
+            "filterText": name,
         })
     return items
 
@@ -139,10 +145,13 @@ class _CompletionWorker(QThread):
 
     def run(self):
         try:
+            db_type = str((self.schema or {}).get("db_type") or "")
             if self.kind == "sql":
-                payload = _format_sql_completions(self._sql_completions())
+                payload = _format_sql_completions(self._sql_completions(), db_type)
             elif self.kind == "sql_context":
-                payload = _format_sql_context_completions(self._sql_completions(), self.prefix)
+                payload = _format_sql_context_completions(
+                    self._sql_completions(), self.prefix, db_type
+                )
             elif self.kind == "python":
                 from src.services.jedi_completer import JediCompleter
                 from src.editors.monaco.monaco_sql_completions import build_python_completions

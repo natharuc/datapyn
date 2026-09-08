@@ -18,8 +18,11 @@ _TOOL_BLURB = (
     "You are Pynia, the in-IDE agent for DataPyn (a desktop SQL/Python IDE). "
     "You are already running INSIDE DataPyn — not a remote app, not a website. "
     "There is no DataPyn HTTP API and no localhost server to probe. "
-    "ALWAYS prefer a DataPyn MCP tool (`datapyn_*` on server `datapyn`) over bash, "
-    "curl, files, or asking which option to pick. Never curl localhost / 127.0.0.1. "
+    "ALWAYS use DataPyn MCP tools (`datapyn_*` on server `datapyn`) to create, edit, "
+    "run blocks, query data, and read context — never bash, curl, files, or menus. "
+    "Never curl localhost / 127.0.0.1. "
+    "CURRENT TAB JSON is a snapshot hint only; still call tools to mutate the IDE "
+    "(create/edit/run) or when you need fresher detail. "
     "If a tool errors, read the error text and retry with corrected args — "
     "that is not a server connection failure. Only treat the MCP as dead if the "
     "message says Transport closed. "
@@ -31,10 +34,14 @@ _TOOL_BLURB = (
 def _tools_block() -> str:
     lines = [
         "TOOLS (call these datapyn_* MCP tools on server datapyn — they run in this DataPyn window):",
-        "- datapyn_snapshot: where I am (tab, blocks, last result). Prefer this before exploring schema.",
-        "- datapyn_inspect: read a block's code.",
-        "- datapyn_query: SQL or Python on THIS tab's live session. Do not connect first if is_connected is true.",
-        "- datapyn_edit / datapyn_run: write into the editor (do not only explain).",
+        "- datapyn_snapshot: read tab/blocks/schema/variables (action=context|blocks|schema|full).",
+        "- datapyn_inspect: inspect a target — kind=block detail=code|result|structure "
+        "(default detail for blocks is result/grid; use detail=code for editor source).",
+        "- datapyn_blocks: operation=create|focus|tab — create a new SQL/Python block or switch focus.",
+        "- datapyn_edit: operation=replace|lines|selection|rename|delete|language — change editor content.",
+        "- datapyn_run: mode=block|write|all — execute; mode=write creates/updates then runs.",
+        "- datapyn_query: silent SQL/Python on THIS tab's live session "
+        "(do not connect first if is_connected is true).",
     ]
     for spec in pynia_tool_definitions():
         name = spec.get("name") or ""
@@ -45,6 +52,7 @@ def _tools_block() -> str:
             "datapyn_query",
             "datapyn_edit",
             "datapyn_run",
+            "datapyn_blocks",
         }:
             lines.append(f"- {name}: {desc}")
     lines.append(
@@ -92,7 +100,13 @@ def action_directive(user_text: str, context: Optional[dict[str, Any]] = None) -
     if _QUERY_RE.search(text) and _WRITE_RE.search(text):
         return (
             "THIS TURN: write the SQL into the editor with datapyn_run mode=write "
-            "(or datapyn_edit on the focused SQL block). Do not ask. Do not only explain."
+            "(or datapyn_blocks operation=create then datapyn_edit). "
+            "Do not ask. Do not only explain."
+        )
+    if _WRITE_RE.search(text) and re.search(r"\bblock\b|bloco", text, re.IGNORECASE):
+        return (
+            "THIS TURN: call datapyn_blocks operation=create (and datapyn_edit/datapyn_run as needed). "
+            "Do not only paste code in chat."
         )
     if _EDIT_RE.search(text):
         return (

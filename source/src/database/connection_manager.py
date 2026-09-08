@@ -137,6 +137,8 @@ class ConnectionManager:
             config["http_path"] = http_path
         if db_type == "databricks" and schema:
             config["schema"] = schema
+        elif db_type == "postgresql":
+            config["schema"] = (schema or "public").strip() or "public"
 
         if save_password and password:
             config["password"] = password
@@ -210,6 +212,14 @@ class ConnectionManager:
             return
 
         created_at = old_config.get("created_at", datetime.now().isoformat())
+        if not str(schema or "").strip():
+            # Call sites that omit schema must not wipe Databricks/PostgreSQL schema.
+            schema = (
+                old_config.get("schema")
+                or old_config.get("postgresql_schema")
+                or old_config.get("databricks_schema")
+                or ""
+            )
         moved = old_group != group or old_name != new_name
 
         if moved:

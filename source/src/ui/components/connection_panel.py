@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QByteArray, QMimeData, QRectF
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QSize, QByteArray, QMimeData, QRectF
 from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap, QPainter, QDrag
 from PyQt6.QtSvg import QSvgRenderer
 import qtawesome as qta
@@ -407,6 +407,8 @@ class ConnectionsList(QFrame):
         self._saved_list.connection_activated.connect(self._on_connection_activated)
         self.tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree_widget.customContextMenuRequested.connect(self._show_context_menu)
+        # Middle-click (scroll wheel) opens connection in a new tab, like Ctrl+activate
+        self.tree_widget.viewport().installEventFilter(self)
         layout.addWidget(self._saved_list, 1)
 
         btn_layout = QHBoxLayout()
@@ -432,6 +434,20 @@ class ConnectionsList(QFrame):
             self.new_tab_connection_requested.emit(group, name)
         else:
             self.connection_double_clicked.emit(group, name)
+
+    def eventFilter(self, obj, event):
+        """Middle-click a connection → open in a new tab (browser-style)."""
+        if (
+            obj is self.tree_widget.viewport()
+            and event.type() == QEvent.Type.MouseButtonPress
+            and event.button() == Qt.MouseButton.MiddleButton
+        ):
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            group, name = self._connection_at_pos(pos)
+            if name:
+                self.new_tab_connection_requested.emit(group, name)
+                return True
+        return super().eventFilter(obj, event)
 
     def _connection_at_pos(self, pos):
         item = self.tree_widget.itemAt(pos)

@@ -1229,7 +1229,7 @@ class UISetupMixin:
             self.main_toolbar.set_update_enabled(False)
         if hasattr(self, "statusbar"):
             self.statusbar.showMessage(
-                getattr(S.status, "preparing_update", "Preparing update…"),
+                S.status.preparing_update,
                 0,
             )
 

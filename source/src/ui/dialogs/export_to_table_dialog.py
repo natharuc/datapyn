@@ -246,10 +246,16 @@ class ExportToTableDialog(QDialog):
         """Sets up the UI"""
         from src.design_system.frameless_dialog import install_frameless_shell
         from src.design_system.button import PrimaryButton, SecondaryButton
-        from src.design_system.tokens import apply_combobox_style, get_colors, RADIUS
+        from src.design_system.tokens import (
+            apply_combobox_style,
+            get_colors,
+            get_groupbox_stylesheet,
+            RADIUS,
+        )
 
         colors = get_colors()
         body_extra = f"""
+            {get_groupbox_stylesheet()}
             QProgressBar {{
                 background-color: {colors.bg_tertiary};
                 border: none;
@@ -273,13 +279,24 @@ class ExportToTableDialog(QDialog):
             QSpinBox:focus {{
                 border-color: {colors.interactive_primary};
             }}
+            QLineEdit {{
+                background-color: {colors.bg_secondary};
+                color: {colors.text_primary};
+                border: 1px solid {colors.border_default};
+                border-radius: {RADIUS.radius_sm}px;
+                padding: 4px 8px;
+                min-height: 28px;
+            }}
+            QLineEdit:focus {{
+                border-color: {colors.interactive_primary};
+            }}
         """
 
         layout = install_frameless_shell(
             self,
             S.export_to_table.title,
-            min_width=480,
-            min_height=360,
+            min_width=560,
+            min_height=400,
             content_margins=(16, 12, 16, 16),
             content_spacing=12,
             body_stylesheet_extra=body_extra,
@@ -290,7 +307,10 @@ class ExportToTableDialog(QDialog):
         info_label.setStyleSheet(f"color: {colors.text_secondary}; font-size: 11px;")
         layout.addWidget(info_label)
 
-        form_layout = QFormLayout()
+        form_group = QGroupBox()
+        form_group.setObjectName("exportFormGroup")
+        form_layout = QFormLayout(form_group)
+        form_layout.setContentsMargins(12, 12, 12, 12)
         form_layout.setHorizontalSpacing(12)
         form_layout.setVerticalSpacing(10)
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -302,7 +322,8 @@ class ExportToTableDialog(QDialog):
         form_layout.addRow(S.export_to_table.label_table, self.table_name_edit)
 
         self.connection_combo = QComboBox()
-        self.connection_combo.setMinimumWidth(280)
+        self.connection_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.connection_combo.setMinimumContentsLength(24)
         for name in sorted(self.connections.keys()):
             connector = self.connections[name]
             if connector and connector.is_connected():
@@ -333,15 +354,16 @@ class ExportToTableDialog(QDialog):
         self.chunk_spin.setMaximum(100000)
         self.chunk_spin.setValue(1000)
         self.chunk_spin.setSuffix(S.export_to_table.suffix_rows)
-        self.chunk_spin.setToolTip("Number of rows per insert batch")
+        self.chunk_spin.setToolTip(S.export_to_table.label_batch)
         form_layout.addRow(S.export_to_table.label_batch, self.chunk_spin)
 
-        layout.addLayout(form_layout)
+        layout.addWidget(form_group)
 
-        # Progress
+        # Progress reserved always so layout does not jump when export starts
         self.progress_group = QGroupBox(S.export_to_table.group_progress)
         progress_layout = QVBoxLayout(self.progress_group)
-        progress_layout.setContentsMargins(8, 16, 8, 8)
+        progress_layout.setContentsMargins(12, 16, 12, 12)
+        progress_layout.setSpacing(8)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -352,12 +374,16 @@ class ExportToTableDialog(QDialog):
 
         self.status_label = QLabel(S.export_to_table.status_ready)
         self.status_label.setFont(QFont("Inter", 9))
+        self.status_label.setStyleSheet(f"color: {colors.text_secondary};")
         progress_layout.addWidget(self.status_label)
 
-        self.progress_group.setVisible(False)
+        self.progress_group.setMinimumHeight(88)
         layout.addWidget(self.progress_group)
 
+        layout.addStretch(1)
+
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
         btn_layout.addStretch()
 
         self.btn_cancel = SecondaryButton(S.export_to_table.btn_cancel, size="sm")
@@ -425,8 +451,7 @@ class ExportToTableDialog(QDialog):
         self.chunk_spin.setEnabled(False)
         self.btn_cancel.setText(S.export_to_table.btn_cancel_export)
 
-        # Show progress
-        self.progress_group.setVisible(True)
+        # Reset progress (group stays visible to keep dialog height stable)
         self.progress_bar.setValue(0)
         self.status_label.setText(S.export_to_table.status_starting)
 

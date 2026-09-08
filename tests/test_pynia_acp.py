@@ -32,7 +32,7 @@ def test_acp_prompt_includes_tools_and_user_text():
     assert "datapyn_chart" in text
     assert "datapyn_snapshot" in text
     assert "You are Pynia" in text
-    assert "ALWAYS prefer" in text
+    assert "ALWAYS use" in text
     assert "THIS TURN" in text
     assert "datapyn_chart operation=create" in text
     assert "monta um gráfico com esses dados" in text

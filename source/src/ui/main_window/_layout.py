@@ -731,7 +731,7 @@ class LayoutMixin:
         if confirm_yes_no(
             self,
             S.dialogs.confirm_reset_title,
-            S.dialogs.layout_reset_confirm_msg if hasattr(S.dialogs, 'layout_reset_confirm_msg') else "This will completely reset the panel layout.\nAll layout settings will be lost.\n\nContinue?",
+            S.dialogs.confirm_reset_msg,
         ):
             self._clear_saved_layout()
             self._setup_default_layout()

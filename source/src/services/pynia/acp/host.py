@@ -184,10 +184,16 @@ class PyniaAcpHost(QObject):
 
     def _mcp_servers_for(self, agent_id: str, tab_id: str, cwd: str) -> list:
         if not self.mcp:
+            logger.warning("Pynia MCP host missing — agent %s will have no datapyn_* tools", agent_id)
             return []
         spec = get_agent(agent_id)
         if spec and spec.mcp_via_cursor_json:
-            self.mcp.write_cursor_mcp_json(cwd, tab_id)
+            ok = self.mcp.write_cursor_mcp_json(cwd, tab_id)
+            if not ok:
+                logger.warning(
+                    "Cursor MCP config write failed for tab %s — tools may be unavailable",
+                    tab_id,
+                )
         self.mcp.current_tab = tab_id
         self.mcp.last_prompt_tab[agent_id] = tab_id
         if agent_id == "copilot":
@@ -318,7 +324,7 @@ class PyniaAcpHost(QObject):
             cfg_path = self.mcp.write_copilot_mcp_json(cwd, tab_id)
             return ["--additional-mcp-config", f"@{cfg_path}"]
         except Exception as exc:
-            logger.debug("Copilot MCP config skipped: %s", exc)
+            logger.warning("Copilot MCP config skipped — datapyn_* tools unavailable: %s", exc)
             return []
 
     def _ensure_agent(self, tab_id: str, agent_id: str):

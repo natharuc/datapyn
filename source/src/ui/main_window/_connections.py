@@ -8,7 +8,7 @@ import logging
 
 from PyQt6.QtCore import Qt, QThread
 from src.design_system.message_box import show_error, show_info, show_warning
-from src.database.database_connector import get_connector_database_context
+from src.database.database_connector import get_connector_database_context, get_connector_switch_chip_value
 from src.ui.dialogs.connection_edit_dialog import ConnectionEditDialog
 from src.ui.dialogs.connections_manager_dialog import ConnectionsManagerDialog
 from src.language import S
@@ -131,7 +131,7 @@ class ConnectionsMixin:
         Only updates the specific block's database panel and refreshes the OE.
         Does NOT touch the session-level connection or other blocks.
         """
-        display_name = get_connector_database_context(connector) or database_name
+        display_name = get_connector_switch_chip_value(connector) or database_name
         if display_name.startswith("CATALOG:"):
             display_name = display_name[8:]
         elif display_name.startswith("SCHEMA:"):
@@ -141,8 +141,16 @@ class ConnectionsMixin:
 
         # Update only this block's database panel
         if block and hasattr(block, "db_panel"):
-            block._database_name = display_name
-            block.db_panel.set_database(display_name)
+            db_type = str(getattr(connector, "db_type", "") or "").lower()
+            if db_type == "postgresql" and hasattr(block, "set_postgresql_schema_display"):
+                block.set_postgresql_schema_display(
+                    display_name,
+                    override=True,
+                    database=get_connector_database_context(connector),
+                )
+            else:
+                block._database_name = display_name
+                block.db_panel.set_database(display_name)
 
         # Get session_id for per-session cache
         sid = ""
@@ -227,12 +235,20 @@ class ConnectionsMixin:
 
         # --- Update tab-default blocks' database panel (not per-block overrides) ---
         if hasattr(widget, "editor"):
+            db_type = str(getattr(connector, "db_type", "") or "").lower()
+            chip_value = get_connector_switch_chip_value(connector) or display_name
             for block in widget.editor.get_blocks():
                 if hasattr(block, "db_panel"):
                     block_conn = block.get_connection_name() if hasattr(block, "get_connection_name") else None
                     if not block_conn and block.uses_tab_default_database():
-                        block._database_name = display_name
-                        block.db_panel.set_database(display_name)
+                        if db_type == "postgresql" and hasattr(block, "set_postgresql_schema_display"):
+                            block.set_postgresql_schema_display(
+                                chip_value,
+                                database=get_connector_database_context(connector),
+                            )
+                        else:
+                            block._database_name = display_name
+                            block.db_panel.set_database(display_name)
 
     def _get_effective_connector_info(self):
         """Return (connector, connection_group, connection_name) for the effective connection.
@@ -323,7 +339,7 @@ class ConnectionsMixin:
     def _connect_new_tab(self, group: str, connection_name: str):
         """
         Connects to a database ALWAYS creating a new tab.
-        Used when CTRL+double-click or 'Connect in New Tab' in menu.
+        Used when CTRL+double-click, middle-click, or 'Connect in New Tab' in menu.
         """
         self._new_session(inherit_connection=False)
         current_widget = self._get_current_session_widget()
@@ -441,6 +457,7 @@ class ConnectionsMixin:
                     new_config.get("trust_server_certificate", True),
                     new_config.get("http_path", ""),
                     new_config.get("sqlserver_auth_mode", ""),
+                    schema=new_config.get("schema", ""),
                 )
             except DuplicateConnectionError:
                 msg = getattr(

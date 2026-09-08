@@ -125,7 +125,7 @@ class TestDatabaseConnectorConnectionString:
         assert "postgresql+psycopg2" in result
         assert "localhost" in result
         assert "client_encoding" not in result
-        assert connect_args == {}
+        assert connect_args == {"options": "-csearch_path=public"}
 
     def test_postgresql_connection_string_accepts_encoding_fallback(self):
         """Fallback de encoding deve ir em connect_args, nao na URL."""
@@ -144,7 +144,8 @@ class TestDatabaseConnectorConnectionString:
 
         assert "postgresql+psycopg2" in result
         assert "client_encoding" not in result
-        assert connect_args == {"client_encoding": "WIN1252"}
+        assert connect_args["client_encoding"] == "WIN1252"
+        assert "search_path=public" in str(connect_args.get("options") or "")
 
     def test_postgresql_undefined_table_mixed_case_gets_identifier_hint(self):
         """Erro de tabela inexistente com CamelCase deve explicar aspas no PostgreSQL."""
@@ -200,7 +201,9 @@ class TestDatabaseConnectorConnectionString:
 
         assert connected is True
         assert connector.engine is retry_engine
-        assert mock_create_engine.call_args_list[1].kwargs["connect_args"] == {"client_encoding": "WIN1252"}
+        retry_args = mock_create_engine.call_args_list[1].kwargs["connect_args"]
+        assert retry_args["client_encoding"] == "WIN1252"
+        assert "search_path=public" in str(retry_args.get("options") or "")
         assert connector._connection_config["postgresql_client_encoding"] == "WIN1252"
 
     def test_connect_postgresql_decode_retry_preserves_readable_fallback_error(self):

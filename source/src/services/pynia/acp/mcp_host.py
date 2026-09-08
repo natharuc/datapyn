@@ -18,10 +18,15 @@ logger = logging.getLogger(__name__)
 MCP_INSTRUCTIONS = (
     "You are inside DataPyn, a desktop SQL/Python IDE. This MCP server runs "
     "in-process in the same DataPyn window — there is no HTTP API and nothing "
-    "to curl on localhost. Call datapyn_* tools to inspect results, run SQL, "
-    "edit blocks, and create charts: "
+    "to curl on localhost. Always call these datapyn_* tools (never bash/curl/HTTP): "
     + ", ".join(spec["name"] for spec in pynia_tool_definitions())
-    + ". A tool error is not a dead server unless the message says Transport closed."
+    + ". Examples: datapyn_snapshot action=context|blocks|full; "
+    "datapyn_blocks operation=create language=sql|python; "
+    "datapyn_edit operation=replace|lines; "
+    "datapyn_run mode=block|write|all; "
+    "datapyn_inspect kind=block detail=code|result; "
+    "datapyn_query language=sql|python. "
+    "A tool error is not a dead server unless the message says Transport closed."
 )
 
 
@@ -140,7 +145,11 @@ class PyniaMcpHost(QObject):
             logger.debug("Could not create .datapyn dir: %s", exc)
             root = Path(workspace)
         path = root / "copilot-mcp.json"
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        try:
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Could not write Copilot MCP config %s: %s", path, exc)
+            raise
         copilot_dir = Path(workspace) / ".copilot"
         try:
             copilot_dir.mkdir(parents=True, exist_ok=True)
@@ -148,10 +157,12 @@ class PyniaMcpHost(QObject):
                 json.dumps(payload, indent=2), encoding="utf-8"
             )
         except Exception as exc:
-            logger.debug("Could not write .copilot/mcp-config.json: %s", exc)
+            logger.warning("Could not write .copilot/mcp-config.json: %s", exc)
+        logger.info("Wrote Copilot MCP config for tab %s → %s", tab_id or self.current_tab, path)
         return str(path)
 
-    def write_cursor_mcp_json(self, workspace: str, tab_id: str) -> None:
+    def write_cursor_mcp_json(self, workspace: str, tab_id: str) -> bool:
+        """Write `.cursor/mcp.json` for Cursor ACP. Returns True on success."""
         from pathlib import Path
 
         root = Path(workspace)
@@ -159,8 +170,8 @@ class PyniaMcpHost(QObject):
         try:
             cursor_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            logger.debug("Could not create .cursor dir: %s", exc)
-            return
+            logger.warning("Could not create .cursor dir for MCP: %s", exc)
+            return False
         cfg = self.mcp_server_config(tab_id)
         env = {item["name"]: item["value"] for item in cfg["env"]}
         payload = {
@@ -176,7 +187,10 @@ class PyniaMcpHost(QObject):
         try:
             path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         except Exception as exc:
-            logger.debug("Could not write Cursor MCP config: %s", exc)
+            logger.warning("Could not write Cursor MCP config %s: %s", path, exc)
+            return False
+        logger.info("Wrote Cursor MCP config for tab %s → %s", tab_id, path)
+        return True
 
     def _accept_loop(self) -> None:
         while self._alive and self._sock:

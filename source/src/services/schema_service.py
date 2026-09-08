@@ -149,6 +149,7 @@ class SchemaWorker(QObject):
                 "current_schema": "",
                 "current_context": "",
                 "databases": [],
+                "schemas": [],
                 "db_type": "",
                 "routines": [],
                 "lazy": self._lazy_mode != SCHEMA_LAZY_FULL,
@@ -176,6 +177,15 @@ class SchemaWorker(QObject):
                     schema["current_schema"] = current_schema or ""
                     schema["current_context"] = current_context or ""
                     logger.info(f"[SchemaService] Databricks current_catalog: '{db_name}'")
+                elif db_type == "postgresql":
+                    db_name = self.connector.get_current_database()
+                    current_schema = (
+                        self.connector.get_current_schema()
+                        if hasattr(self.connector, "get_current_schema")
+                        else "public"
+                    )
+                    schema["current_schema"] = current_schema or "public"
+                    schema["current_context"] = db_name or ""
                 else:
                     db_name = self.connector.get_current_database()
                     schema["current_context"] = db_name or ""
@@ -192,15 +202,19 @@ class SchemaWorker(QObject):
 
             # The server database/catalog list is a single cheap catalog query
             # (sys.databases / SHOW DATABASES / SHOW CATALOGS / current_database).
-            # Load it even in minimal mode so the per-block database dropdown is
-            # populated right after connect -- the user must not see an empty
-            # combobox that only "comes alive" after a manual OE expand.
-            # Tables/columns/routines stay lazy (those are the expensive queries).
-            load_databases = self._lazy_mode in (SCHEMA_LAZY_FULL, SCHEMA_LAZY_MINIMAL)
+            # Load it in minimal AND autocomplete so per-block switch chips are
+            # populated right after connect — not only after OE expand / chip click.
+            # For Databricks, also load schemas of the current catalog (below).
+            # Tables/columns/routines stay lazy unless autocomplete/full.
+            load_databases = self._lazy_mode in (
+                SCHEMA_LAZY_FULL,
+                SCHEMA_LAZY_MINIMAL,
+                SCHEMA_LAZY_AUTOCOMPLETE,
+            )
             load_metadata = self._lazy_mode in (SCHEMA_LAZY_FULL, SCHEMA_LAZY_AUTOCOMPLETE)
             schema["metadata_loaded"] = load_metadata
 
-            # Get list of all server databases (full schema / OE expand only)
+            # Get list of all server databases / catalogs
             if load_databases:
                 try:
                     databases_query = self._get_databases_query()
@@ -234,6 +248,21 @@ class SchemaWorker(QObject):
                         catalog_schemas[current_catalog] = sorted(schemas)
                 except Exception as e:
                     logger.debug(f"Error loading Databricks schemas for {schema.get('database')}: {e}")
+
+            if load_databases and schema.get("db_type") == "postgresql":
+                try:
+                    schemas_query = self._get_schemas_query()
+                    if schemas_query:
+                        df = self.connector.execute_query(schemas_query)
+                        schemas = []
+                        if df is not None and len(df) > 0:
+                            for _, row in df.iterrows():
+                                schema_name = str(row.iloc[0])
+                                if schema_name and schema_name not in schemas:
+                                    schemas.append(schema_name)
+                        schema["schemas"] = sorted(schemas)
+                except Exception as e:
+                    logger.debug(f"Error loading PostgreSQL schemas: {e}")
 
             if self._cancelled:
                 return
@@ -364,14 +393,28 @@ class SchemaWorker(QObject):
         if db_type in ("mssql", "sqlserver"):
             return "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name"
         elif db_type == "postgresql":
-            # PostgreSQL: only show the currently connected database
-            # (switching databases requires a new connection)
+            # PostgreSQL cannot switch databases without a new connection.
+            # Keep OE database list as the connected database only.
             return "SELECT current_database()"
         elif db_type == "databricks":
             return "SHOW CATALOGS"
         else:
             # MySQL, MariaDB
             return "SHOW DATABASES"
+
+    def _get_schemas_query(self) -> str | None:
+        """Query to get schema names for engines where the block chip is schema."""
+        db_type = getattr(self.connector, "db_type", "").lower()
+        if db_type != "postgresql":
+            return None
+        return """
+            SELECT schema_name
+            FROM information_schema.schemata
+            WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND schema_name NOT LIKE 'pg_temp%'
+              AND schema_name NOT LIKE 'pg_toast_temp%'
+            ORDER BY 1
+        """
 
     def _get_tables_query(self) -> str:
         """Query to get tables - compatible with all DBMS"""

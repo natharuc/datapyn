@@ -277,6 +277,46 @@
             );
         }
 
+        const SQL_IDENT_ATOM = '(?:"(?:[^"]|"")*"|[\\w@#\\[\\]]+)';
+
+        function getSqlCompletionReplaceRange(model, position, dotCtx, crossDbCtx) {
+            const line = model.getLineContent(position.lineNumber);
+            const col = position.column;
+            if (crossDbCtx) {
+                const prefixLen = (crossDbCtx.tablePrefix || '').length;
+                return {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn: col - prefixLen,
+                    endColumn: col
+                };
+            }
+            if (dotCtx) {
+                const prefix = String(dotCtx.columnPrefix || '');
+                let startColumn = col - prefix.length;
+                if (startColumn > 1 && line.charAt(startColumn - 2) === '"') {
+                    startColumn -= 1;
+                }
+                return {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn: Math.max(1, startColumn),
+                    endColumn: col
+                };
+            }
+            const before = line.substring(0, Math.max(0, col - 1));
+            const match = before.match(/"?[\w$]*$/);
+            const startColumn = match
+                ? Math.max(1, col - match[0].length)
+                : col;
+            return {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: startColumn,
+                endColumn: col
+            };
+        }
+
         /** Ghost text range at cursor only (Monaco 0.45 / VS Code — do not replace the word before cursor). */
         function getInlineGhostRange(model, position) {
             return new monaco.Range(
@@ -318,11 +358,18 @@
                 return null;
             }
             const currentLine = (textBefore.split('\n').pop() || '');
-            const match = currentLine.match(/([\w@#]+)\.([\w$]*)$/);
+            const re = new RegExp(
+                '(' + SQL_IDENT_ATOM + '(?:\\s*\\.\\s*' + SQL_IDENT_ATOM + ')*)'
+                    + '\\s*\\.\\s*("(?:[^"]|"")*|[\\w$]*)$'
+            );
+            const match = currentLine.match(re);
             if (!match) {
                 return null;
             }
-            return { qualifier: match[1], columnPrefix: match[2] || '' };
+            return {
+                qualifier: (match[1] || '').replace(/[\[\]`"]/g, '').replace(/\s+/g, ''),
+                columnPrefix: (match[2] || '').replace(/^"+|"+$/g, '')
+            };
         }
 
         function getSqlCompletionPrefix(textBefore, dotCtx, crossDbCtx) {
@@ -413,11 +460,18 @@
             if (!fullText) {
                 return aliases;
             }
-            const re = /\b(?:FROM|JOIN|UPDATE|INTO)\s+([\w.@#\[\]]+)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?/gi;
+            const re = new RegExp(
+                '\\b(?:FROM|JOIN|UPDATE|INTO)\\s+('
+                    + SQL_IDENT_ATOM
+                    + '(?:\\s*\\.\\s*'
+                    + SQL_IDENT_ATOM
+                    + ')*)(?:\\s+(?:AS\\s+)?([A-Za-z_]\\w*))?',
+                'gi'
+            );
             let match;
             while ((match = re.exec(fullText)) !== null) {
                 let tableRef = match[1] || '';
-                tableRef = tableRef.replace(/[\[\]`"]/g, '');
+                tableRef = tableRef.replace(/[\[\]`"]/g, '').replace(/\s+/g, '');
                 const bare = tableRef.split('.').pop() || tableRef;
                 const alias = match[2] || '';
                 const bareKey = normalizeSchemaKey(bare);
@@ -521,6 +575,35 @@
             return String(sqlSchemaDbType || '').toLowerCase() === 'databricks';
         }
 
+        function isPostgresqlSchema() {
+            const t = String(sqlSchemaDbType || '').toLowerCase();
+            return t === 'postgres' || t === 'postgresql';
+        }
+
+        function quotePostgresIdentifier(name) {
+            const raw = String(name || '');
+            if (!raw) {
+                return raw;
+            }
+            return raw.split('.').map(function(part) {
+                if (!part) {
+                    return part;
+                }
+                let inner = part;
+                if (inner.charAt(0) === '"' && inner.charAt(inner.length - 1) === '"' && inner.length >= 2) {
+                    inner = inner.slice(1, -1).replace(/""/g, '"');
+                }
+                return '"' + inner.replace(/"/g, '""') + '"';
+            }).join('.');
+        }
+
+        function quoteSqlIdentifierIfNeeded(name) {
+            if (!isPostgresqlSchema()) {
+                return name;
+            }
+            return quotePostgresIdentifier(name);
+        }
+
         function databricksCurrentCatalog() {
             return String(sqlSchemaIndex.currentDatabase || '');
         }
@@ -597,7 +680,7 @@
                     return {
                         label: schemaName,
                         kind: 'module',
-                        insertText: schemaName,
+                        insertText: quoteSqlIdentifierIfNeeded(schemaName),
                         detail: catalog + '.' + schemaName,
                         category: 'schema'
                     };
@@ -1356,6 +1439,9 @@
                     range: range,
                     sortText: getSortText(c, prefix)
                 };
+                if (c.filterText) {
+                    suggestion.filterText = c.filterText;
+                }
                 // Multiline block snippets: keep full insert, filter by block name / first line
                 if (c.category === 'block') {
                     suggestion.filterText = c.filterText || c.blockName || c.label;
@@ -1694,20 +1780,7 @@
                         && context.triggerKind === monaco.languages.CompletionTriggerKind.Invoke;
                     const crossDbCtx = parseSqlCrossDatabaseTableContext(textBeforeCursor);
                     const dotCtx = parseSqlDotContext(textBeforeCursor);
-                    const word = model.getWordUntilPosition(position);
-                    const range = crossDbCtx
-                        ? {
-                            startLineNumber: position.lineNumber,
-                            endLineNumber: position.lineNumber,
-                            startColumn: position.column - (crossDbCtx.tablePrefix || '').length,
-                            endColumn: position.column
-                        }
-                        : {
-                            startLineNumber: position.lineNumber,
-                            endLineNumber: position.lineNumber,
-                            startColumn: word.startColumn,
-                            endColumn: word.endColumn
-                        };
+                    const range = getSqlCompletionReplaceRange(model, position, dotCtx, crossDbCtx);
                     const prefixFilter = getSqlCompletionPrefix(textBeforeCursor, dotCtx, crossDbCtx);
                     // Huge scripts: local-only suggestions — never ship fullText to Python/sqlglot.
                     if (isLargeDocument(model)) {
@@ -1898,6 +1971,7 @@
             sqlSchemaIndex = {
                 columnsByKey: {},
                 tableItems: [],
+                schemaItems: [],
                 schemaNames: new Set(),
                 currentDatabase: schema.database || '',
                 currentSchema: schema.current_schema || '',
@@ -1907,10 +1981,12 @@
             const columnsMap = schema.columns || {};
             const tables = schema.tables || [];
             const catalogSchemas = schema.catalog_schemas || {};
+            const schemaLabelSet = new Set();
             Object.keys(catalogSchemas).forEach(function(catalog) {
                 (catalogSchemas[catalog] || []).forEach(function(schemaName) {
                     if (schemaName) {
                         sqlSchemaIndex.schemaNames.add(normalizeSchemaKey(schemaName));
+                        schemaLabelSet.add(schemaName);
                     }
                 });
             });
@@ -1932,6 +2008,7 @@
                 const schemaName = inferSqlServerTableSchemaName(table, name, tableKey, fallbackKey);
                 if (schemaName) {
                     sqlSchemaIndex.schemaNames.add(normalizeSchemaKey(schemaName));
+                    schemaLabelSet.add(schemaName);
                 }
                 const tableDatabase = typeof table === 'object' ? (table.database || '') : '';
                 const tableCatalog = typeof table === 'object' ? (table.catalog || '') : '';
@@ -1942,7 +2019,7 @@
                     return {
                         label: colName,
                         kind: 'field',
-                        insertText: colName,
+                        insertText: quoteSqlIdentifierIfNeeded(colName),
                         detail: colType ? (name + ' • ' + colType) : name,
                         filterText: colName,
                         category: 'column',
@@ -1970,7 +2047,9 @@
                 const displayLabel = isDatabricksSchema()
                     ? databricksTableLabel(tableCatalog, rawSchemaName, name)
                     : name;
-                const insertValue = isDatabricksSchema() ? displayLabel : name;
+                const insertValue = isDatabricksSchema()
+                    ? displayLabel
+                    : quoteSqlIdentifierIfNeeded(name);
                 sqlSchemaIndex.tableItems.push({
                     label: displayLabel,
                     kind: 'class',
@@ -1981,6 +2060,17 @@
                     catalog: tableCatalog,
                     schemaName: schemaName,
                     filterText: displayLabel + ' ' + filterText
+                });
+            });
+
+            schemaLabelSet.forEach(function(schemaName) {
+                sqlSchemaIndex.schemaItems.push({
+                    label: schemaName,
+                    kind: 'module',
+                    insertText: quoteSqlIdentifierIfNeeded(schemaName),
+                    detail: 'schema',
+                    filterText: schemaName,
+                    category: 'schema'
                 });
             });
 
@@ -1995,7 +2085,7 @@
                     return {
                         label: colName,
                         kind: 'field',
-                        insertText: colName,
+                        insertText: quoteSqlIdentifierIfNeeded(colName),
                         detail: col.display_type || col.type || '',
                         category: 'column',
                         table: key
@@ -2071,7 +2161,11 @@
                 }
             });
             if (lastTableKwPos > lastColumnKwPos) {
-                return filterDefaultSchemaTables(sqlSchemaIndex.tableItems);
+                const tables = filterDefaultSchemaTables(sqlSchemaIndex.tableItems);
+                if (isPostgresqlSchema()) {
+                    return (sqlSchemaIndex.schemaItems || []).concat(tables);
+                }
+                return tables;
             }
             if (lastColumnKwPos >= 0) {
                 const cols = collectScopedColumnItems(fullText || textBefore);

@@ -2,6 +2,57 @@
 
 <!-- version list -->
 
+## v1.59.0 (2026-09-08)
+
+### Documentation
+
+- **linux**: Document distribution installers
+  ([`048d97a`](https://github.com/natharuc/datapyn/commit/048d97ab0b1de1f254b6bb5db97e36bbaaeccf1f))
+
+### Features
+
+- **release**: Add FUSE3 AppImage packaging
+  ([`8966ae4`](https://github.com/natharuc/datapyn/commit/8966ae4a2c28855ce0048d1ca8858d0ee8883b68))
+
+- **release**: Add native Linux package outputs
+  ([`70a8e30`](https://github.com/natharuc/datapyn/commit/70a8e308edc974dff38bca93d9f9c56ff5a4871b))
+
+- **release**: Gate complete Linux artifact publication
+  ([`b4cd1e1`](https://github.com/natharuc/datapyn/commit/b4cd1e177c058a8e5126927f46bf1cba9143f379))
+
+- **release**: Publish complete Linux artifact set
+  ([`0bebc98`](https://github.com/natharuc/datapyn/commit/0bebc98ebdc5096d3c90a2eb7b7087699d6381f1))
+
+### Heuristic
+
+- Merge pull request #159 from natharuc/feat/linux-distribution-installers
+  ([`0bebc98`](https://github.com/natharuc/datapyn/commit/0bebc98ebdc5096d3c90a2eb7b7087699d6381f1))
+
+
+## v1.58.0 (2026-09-05)
+
+### Bug Fixes
+
+- **database**: Keep PostgreSQL connect hooks off mocked engines
+  ([`abca707`](https://github.com/natharuc/datapyn/commit/abca707f009ba06dbc56373ddccc335375f7238e))
+
+- **database**: Register pool checkout hooks on mocked engines
+  ([`479b2e8`](https://github.com/natharuc/datapyn/commit/479b2e82cbe67fd3c007094792e450b0ccdbdab5))
+
+### Features
+
+- **database**: Improve PostgreSQL schema UX and quote identifiers
+  ([`7db01fe`](https://github.com/natharuc/datapyn/commit/7db01fecf2bdc8ae7a9045e76da9124f18ab37ba))
+
+- **database**: Improve PostgreSQL schema UX and quote identifiers
+  ([`9d55a6b`](https://github.com/natharuc/datapyn/commit/9d55a6b463f26ad3d0c666243f20dbd04143b467))
+
+### Heuristic
+
+- Merge pull request #158 from natharuc/feat/postgresql-schema-ux
+  ([`7db01fe`](https://github.com/natharuc/datapyn/commit/7db01fecf2bdc8ae7a9045e76da9124f18ab37ba))
+
+
 ## v1.57.0 (2026-09-02)
 
 ### Bug Fixes
