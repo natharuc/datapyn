@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run: build .deb + tar.gz and upload workflow artifacts (never publishes a GitHub Release)"
+        description: "Dry run: build all Linux artifacts and upload workflow artifacts (never publishes a GitHub Release)"
         required: true
         default: true
         type: boolean
@@ -83,9 +83,36 @@ jobs:
             libnspr4 \
             libgbm1 \
             libasound2 \
+            fuse3 \
             ruby \
             ruby-dev \
             build-essential
+
+      - name: Setup | Install pinned Type 2 AppImage toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/linux/appimage-toolchain.env
+          test "${APPIMAGE_ARCHITECTURE}" = "x86_64"
+          test "${APPIMAGE_RUNTIME_KIND}" = "type2"
+          test "${APPIMAGETOOL_VERSION}" != "continuous"
+          test "${APPIMAGE_RUNTIME_VERSION}" != "continuous"
+          tool_path="${RUNNER_TEMP}/appimagetool-x86_64.AppImage"
+          runtime_path="${RUNNER_TEMP}/runtime-x86_64"
+          curl --fail --location --retry 3 --output "${tool_path}" "${APPIMAGETOOL_URL}"
+          printf '%s  %s\n' "${APPIMAGETOOL_SHA256}" "${tool_path}" | sha256sum --check --status
+          curl --fail --location --retry 3 --output "${runtime_path}" "${APPIMAGE_RUNTIME_URL}"
+          printf '%s  %s\n' "${APPIMAGE_RUNTIME_SHA256}" "${runtime_path}" | sha256sum --check --status
+          chmod 755 "${tool_path}" "${runtime_path}"
+          echo "DATAPYN_APPIMAGE_TOOL=${tool_path}" >> "${GITHUB_ENV}"
+          echo "DATAPYN_APPIMAGE_RUNTIME=${runtime_path}" >> "${GITHUB_ENV}"
+
+      - name: Verify | Require FUSE3 AppImage environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$(command -v fusermount3)"
+          bash scripts/linux/package.sh --validate-fuse3-environment
 
       - name: Setup | Install project dependencies
         run: uv sync --dev
@@ -96,23 +123,46 @@ jobs:
       - name: Build | Generate Linux binary with PyInstaller
         run: uv run pyinstaller scripts/datapyn.spec --clean
 
-      - name: Build | Package .deb and tar.gz
+      - name: Build | Package complete Linux release set
+        env:
+          DATAPYN_RELEASE_TAG: v${{ steps.version.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          chmod +x scripts/linux/package.sh scripts/linux/datapyn-wrapper.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
+          chmod +x scripts/linux/package.sh scripts/linux/release_metadata.py scripts/linux/datapyn-wrapper.sh scripts/linux/datapyn-appimage-apprun.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
           bash scripts/linux/package.sh "${{ steps.version.outputs.version }}"
+
+      - name: Verify | Gate complete Linux release metadata
+        env:
+          DATAPYN_RELEASE_TAG: v${{ steps.version.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          bash scripts/linux/package.sh --validate-release \
+            "${{ steps.version.outputs.version }}" "v${{ steps.version.outputs.version }}"
+
+      - name: Verify | Run AppImage FUSE3 smoke tests
+        run: uv run pytest tests/test_linux_appimage.py -m integration -q
+
+      - name: Verify | Resolve Linux release asset list
+        id: release_assets
+        run: |
+          {
+            echo 'files<<EOF'
+            bash scripts/linux/package.sh --print-release-assets "${{ steps.version.outputs.version }}"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
 
       - name: Dry Run | Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-installers-dryrun
-          path: |
-            datapyn_${{ steps.version.outputs.version }}_amd64.deb
-            datapyn_amd64.deb
-            DataPyn-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
-            DataPyn-linux-x86_64.tar.gz
+          path: ${{ steps.release_assets.outputs.files }}
           if-no-files-found: error
 
       - name: Dry Run | List generated artifacts
+        env:
+          LINUX_RELEASE_ASSETS: ${{ steps.release_assets.outputs.files }}
         run: |
           echo "=== DRY RUN — Linux installers (not published to GitHub Releases) ==="
-          ls -lh *.deb *.tar.gz
+          while IFS= read -r asset; do
+            [[ -z "$asset" ]] || ls -lh -- "$asset"
+          done <<< "$LINUX_RELEASE_ASSETS"
