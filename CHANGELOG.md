@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.60.1 (2026-09-09)
+
+### Bug Fixes
+
+- **ci**: Harden Linux package validation
+  ([`2c7fc61`](https://github.com/natharuc/datapyn/commit/2c7fc615bd9bb37767b343fa5bf92a0d00552054))
+
+### Heuristic
+
+- Merge pull request #161 from natharuc/feat/linux-distribution-installers
+  ([`2c7fc61`](https://github.com/natharuc/datapyn/commit/2c7fc615bd9bb37767b343fa5bf92a0d00552054))
+
+- Merge remote-tracking branch 'origin/main' into feat/linux-distribution-installers
+  ([`c91fa3a`](https://github.com/natharuc/datapyn/commit/c91fa3afed0d8e50ab056b7fb016776622d48766))
+
+
 ## v1.60.0 (2026-09-09)
 
 ### Features
