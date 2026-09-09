@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.60.0 (2026-09-09)
+
+### Features
+
+- **release**: Add Linux distribution installers
+  ([`eb8bd55`](https://github.com/natharuc/datapyn/commit/eb8bd55c6a6e37c276d223d4151a86b057b7aebc))
+
+### Heuristic
+
+- Merge pull request #160 from natharuc/feat/linux-distribution-installers
+  ([`eb8bd55`](https://github.com/natharuc/datapyn/commit/eb8bd55c6a6e37c276d223d4151a86b057b7aebc))
+
+- Merge remote-tracking branch 'origin/main' into feat/linux-distribution-installers
+  ([`9adf604`](https://github.com/natharuc/datapyn/commit/9adf604def6d4e0bf96333825320c77128e70c14))
+
+
 ## v1.59.0 (2026-09-08)
 
 ### Documentation
