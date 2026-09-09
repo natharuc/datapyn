@@ -73,8 +73,15 @@ docker run --rm \
     test -c /dev/fuse
     test -x "$(command -v fusermount3)"
     if command -v fusermount >/dev/null 2>&1; then
-      echo "error: controlled FUSE3 image unexpectedly contains legacy fusermount" >&2
-      exit 1
+      fusermount_path="$(command -v fusermount)"
+      fusermount_name="$(basename "$fusermount_path")"
+      if ! {
+        dpkg-query -S "$fusermount_path" 2>/dev/null
+        dpkg-query -S "/bin/$fusermount_name" 2>/dev/null
+      } | grep -q '^fuse3:'; then
+        echo "error: controlled FUSE3 image unexpectedly contains legacy fusermount" >&2
+        exit 1
+      fi
     fi
     for package in fuse libfuse2 libfuse2t64; do
       if dpkg-query -W -f="${Status}\n" "$package" 2>/dev/null | grep -q "install ok installed"; then
