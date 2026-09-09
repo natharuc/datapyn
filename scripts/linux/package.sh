@@ -531,6 +531,7 @@ check_toolchain() {
   require_command rpmbuild ".rpm"
   require_command "$PACMAN_COMMAND" ".pkg.tar.zst"
   require_command zstd ".pkg.tar.zst"
+  require_command bsdtar ".pkg.tar.zst"
   require_command tar "tar.gz"
   require_command python3 "Linux release metadata"
 }

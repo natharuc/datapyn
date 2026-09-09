@@ -84,6 +84,7 @@ jobs:
             libgbm1 \
             libasound2 \
             fuse3 \
+            libarchive-tools \
             rpm \
             zstd \
             ruby \
