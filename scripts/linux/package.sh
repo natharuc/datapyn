@@ -12,6 +12,7 @@ APPDIR="${DATAPYN_PACKAGE_APPDIR:-$ROOT/pkg-appimage}"
 APPIMAGE_TOOLCHAIN_FILE="${DATAPYN_APPIMAGE_TOOLCHAIN_FILE:-$ROOT/scripts/linux/appimage-toolchain.env}"
 APPIMAGETOOL_PATH="${DATAPYN_APPIMAGE_TOOL:-${APPIMAGETOOL:-}}"
 APPIMAGE_RUNTIME_PATH="${DATAPYN_APPIMAGE_RUNTIME:-${APPIMAGE_RUNTIME_FILE:-}}"
+PACMAN_COMMAND="${DATAPYN_PACMAN_COMMAND:-pacman}"
 RELEASE_METADATA_SCRIPT="${DATAPYN_RELEASE_METADATA_SCRIPT:-$ROOT/scripts/linux/release_metadata.py}"
 MANIFEST_FILENAME="DataPyn-linux-artifacts.json"
 CHECKSUMS_FILENAME="SHA256SUMS"
@@ -528,7 +529,7 @@ check_toolchain() {
   require_command dpkg-deb ".deb"
   require_command rpm ".rpm"
   require_command rpmbuild ".rpm"
-  require_command pacman ".pkg.tar.zst"
+  require_command "$PACMAN_COMMAND" ".pkg.tar.zst"
   require_command zstd ".pkg.tar.zst"
   require_command tar "tar.gz"
   require_command python3 "Linux release metadata"
@@ -793,7 +794,7 @@ validate_pacman() {
   local listing
   local dependency
 
-  metadata="$(pacman -Qip "$package_path")"
+  metadata="$("$PACMAN_COMMAND" -Qip "$package_path")"
   grep -Eq "^Version[[:space:]]*:[[:space:]]*${VERSION//./\\.}(-1)?$" <<<"$metadata" || {
     echo "error: pacman metadata version does not match $VERSION: $package_path" >&2
     return 1
@@ -802,7 +803,7 @@ validate_pacman() {
     echo "error: pacman metadata architecture is not x86_64: $package_path" >&2
     return 1
   }
-  listing="$(pacman -Qlp "$package_path")"
+  listing="$("$PACMAN_COMMAND" -Qlp "$package_path")"
   validate_contents "$listing" "$package_path"
 
   for dependency in "${MAPPED_DEPENDENCIES[@]}"; do

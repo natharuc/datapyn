@@ -13,6 +13,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_SCRIPT = ROOT / "scripts/linux/package.sh"
+PACMAN_CONTAINER_SCRIPT = ROOT / "scripts/linux/pacman-in-arch-container.sh"
 
 
 def run_package(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -227,6 +228,47 @@ def test_unmapped_dependency_capability_fails_target_mapping() -> None:
 
     assert result.returncode != 0
     assert "missing rpm dependency mapping for capability: missing_capability" in result.stderr
+
+
+def test_pacman_container_wrapper_maps_repository_paths(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture_path = tmp_path / "docker-args.txt"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$@\" > \"$DATAPYN_TEST_DOCKER_ARGS\"\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    package_path = ROOT / "datapyn-test.pkg.tar.zst"
+    result = subprocess.run(
+        [str(PACMAN_CONTAINER_SCRIPT), "-Qip", str(package_path)],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "DATAPYN_PACKAGE_ROOT": str(ROOT),
+            "DATAPYN_TEST_DOCKER_ARGS": str(capture_path),
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', os.defpath)}",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture_path.read_text(encoding="utf-8").splitlines() == [
+        "run",
+        "--rm",
+        "--pull=always",
+        "--volume",
+        f"{ROOT}:/workspace:ro",
+        "archlinux:base",
+        "pacman",
+        "-Qip",
+        "/workspace/datapyn-test.pkg.tar.zst",
+    ]
 
 
 @pytest.mark.integration
