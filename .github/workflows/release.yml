@@ -303,6 +303,9 @@ jobs:
             libgbm1 \
             libasound2 \
             fuse3 \
+            libarchive-tools \
+            rpm \
+            zstd \
             ruby \
             ruby-dev \
             build-essential
@@ -346,8 +349,9 @@ jobs:
         env:
           DATAPYN_RELEASE_TAG: ${{ needs.release.outputs.tag }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          DATAPYN_PACMAN_COMMAND: ${{ github.workspace }}/scripts/linux/pacman-in-arch-container.sh
         run: |
-          chmod +x scripts/linux/package.sh scripts/linux/release_metadata.py scripts/linux/datapyn-wrapper.sh scripts/linux/datapyn-appimage-apprun.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
+          chmod +x scripts/linux/package.sh scripts/linux/release_metadata.py scripts/linux/datapyn-wrapper.sh scripts/linux/datapyn-appimage-apprun.sh scripts/linux/postinst.sh scripts/linux/prerm.sh scripts/linux/pacman-in-arch-container.sh
           bash scripts/linux/package.sh "${{ needs.release.outputs.version }}"
 
       - name: Verify | Gate complete Linux release metadata
