@@ -65,3 +65,8 @@ On Ubuntu/Debian, match CI (`.github/workflows/tests.yml`) or run `./scripts/lin
 ### External services (optional)
 
 Live databases, GitHub Copilot (`gh` auth), and GitHub Releases (auto-update) are **not** required for the default test suite. No in-repo database container is provided.
+
+## tlc-spec-lean
+
+profile: standard
+budget: 150k
