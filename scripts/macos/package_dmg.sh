@@ -14,7 +14,7 @@ if [ ! -d "$APP" ]; then
 fi
 
 DMG_VERSIONED="DataPyn-${VERSION}-macos-arm64.dmg"
-rm -f "$DMG_VERSIONED"
+rm -f "$DMG_VERSIONED" "DataPyn-macos-arm64.dmg"
 
 STAGE="$(mktemp -d)"
 cleanup() { rm -rf "$STAGE"; }

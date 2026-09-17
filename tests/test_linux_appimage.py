@@ -31,7 +31,10 @@ def run_package(*args: str, env: dict[str, str] | None = None) -> subprocess.Com
     )
 
 
-@pytest.mark.parametrize("library", ("libstdc++.so.6", "libgcc_s.so.1"))
+@pytest.mark.parametrize(
+    "library",
+    ("libstdc++.so.6", "libstdc++.so.fixture", "libgcc_s.so.1", "libgcc_s.so.fixture"),
+)
 def test_bundled_host_runtime_library_blocks_appimage(tmp_path: Path, library: str) -> None:
     dist_dir = tmp_path / "dist" / "DataPyn"
     internal = dist_dir / "_internal"
@@ -101,6 +104,8 @@ def test_appimage_only_writes_versioned_name_only(tmp_path: Path) -> None:
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
     output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "DataPyn-x86_64.AppImage").write_text("stale alias", encoding="utf-8")
     wrapper = tmp_path / "stubbed_appimage.sh"
     wrapper.write_text(
         "#!/usr/bin/env bash\n"

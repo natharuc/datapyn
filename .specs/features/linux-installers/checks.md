@@ -181,5 +181,6 @@ Intended split, with the arithmetic, written before any code:
 - **Next phase:** VERIFY
 
 - **Boundary:** C1-C4 closed at `1855005a2965127153f3d01521a53821d4804f0a`; C7-C15 closed at `6b0d2ad43970613e070df283bca71c088af72f54`; C16-C18 closed at `09d94bacd5908a63970c8aefbaeb663441fd0eb5`; C19-C21 closed at `71f7db894edb6f67fa910e063939c4c690f5c54a`. The C2/C3 stale-output behavior and C14/C18 exact-set proof gaps are fixed at `c9e903190f57763b23d2e3c774144bac362569a7`; their named proofs and the six-file packaging suite passed (75 passed, 4 skipped). C5, C6, C22 remain pending external actions.
+- **Boundary:** BUILD fix round 2 removes the known stale Linux and macOS aliases before successful packaging, pins each Linux workflow's upload-list generator to its complete five-line recipe, and proves wildcard runtime names plus the existing metadata, print-command, and macOS error paths. The focused proofs passed (18 passed) and the requested packaging suite passed (84 passed, 4 skipped). C5, C6, and C22 remain pending their external actions.
 - **Settled mid-build:** none
 - **Abandoned:** none

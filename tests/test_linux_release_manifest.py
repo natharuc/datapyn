@@ -143,14 +143,21 @@ def test_appimage_manifest_declares_fuse3_and_portable_mode(tmp_path: Path) -> N
     assert appimage["install_mode"] == "portable"
 
 
-def test_missing_artifact_blocks_metadata_generation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("empty", (False, True))
+def test_missing_artifact_blocks_metadata_generation(tmp_path: Path, empty: bool) -> None:
     seed_release(tmp_path)
-    (tmp_path / VERSIONED[1]).unlink()
+    artifact = tmp_path / VERSIONED[1]
+    if empty:
+        artifact.write_bytes(b"")
+    else:
+        artifact.unlink()
 
     result = run_package("--generate-release-metadata", VERSION, TAG, output_dir=tmp_path)
 
     assert result.returncode != 0
     assert VERSIONED[1] in result.stderr
+    if empty:
+        assert "empty" in result.stderr
     assert not (tmp_path / RELEASE_METADATA[0]).exists()
     assert not (tmp_path / RELEASE_METADATA[1]).exists()
 
@@ -294,13 +301,20 @@ def test_workflows_share_versioned_assets_and_dry_run_never_publishes() -> None:
     dry_run_job = load_workflow_yaml(DRY_RUN_WORKFLOW)["jobs"]["build-linux-deb"]
     release_assets_output = "${{ steps.release_assets.outputs.files }}"
 
-    for job in (main_job, dry_run_job):
+    for job, version in (
+        (main_job, "${{ needs.release.outputs.version }}"),
+        (dry_run_job, "${{ steps.version.outputs.version }}"),
+    ):
         release_assets_step = next(
             step for step in job["steps"] if step.get("id") == "release_assets"
         )
-        assert "bash scripts/linux/package.sh --print-release-assets" in release_assets_step["run"]
-        assert "echo 'files<<EOF'" in release_assets_step["run"]
-        assert '>> "$GITHUB_OUTPUT"' in release_assets_step["run"]
+        assert release_assets_step["run"] == (
+            "{\n"
+            "  echo 'files<<EOF'\n"
+            f'  bash scripts/linux/package.sh --print-release-assets "{version}"\n'
+            "  echo EOF\n"
+            '} >> "$GITHUB_OUTPUT"'
+        )
 
     assert [
         step["with"]["files"]

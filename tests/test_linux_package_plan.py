@@ -104,7 +104,10 @@ VERSIONED_ARTIFACTS = (
 RELEASE_METADATA = ("DataPyn-linux-artifacts.json", "SHA256SUMS")
 
 
-@pytest.mark.parametrize("library", ("libstdc++.so.6", "libgcc_s.so.1"))
+@pytest.mark.parametrize(
+    "library",
+    ("libstdc++.so.6", "libstdc++.so.fixture", "libgcc_s.so.1", "libgcc_s.so.fixture"),
+)
 def test_bundled_host_runtime_library_blocks_packaging(tmp_path: Path, library: str) -> None:
     dist_dir = tmp_path / "dist" / "DataPyn"
     internal = dist_dir / "_internal"
@@ -157,6 +160,9 @@ def test_full_package_run_writes_versioned_names_only(tmp_path: Path) -> None:
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
     output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    for alias in UNVERSIONED_ALIASES:
+        (output_dir / alias).write_text("stale alias", encoding="utf-8")
     stage_dir = tmp_path / "pkg"
     appdir = tmp_path / "AppDir"
     wrapper = tmp_path / "stubbed_package.sh"
@@ -205,6 +211,20 @@ def test_full_package_run_writes_versioned_names_only(tmp_path: Path) -> None:
     assert present == set(C7_RELEASE_ASSETS)
     for alias in UNVERSIONED_ALIASES:
         assert alias not in present
+
+
+@pytest.mark.parametrize(
+    "command",
+    ("--print-release-assets", "--print-appimage-metadata", "--print-plan"),
+)
+def test_print_commands_reject_missing_and_invalid_versions(command: str) -> None:
+    missing = run_package(command)
+    invalid = run_package(command, "invalid/version")
+
+    assert missing.returncode == 1
+    assert missing.stderr.strip() == "error: version required (e.g. 1.57.0)"
+    assert invalid.returncode == 1
+    assert invalid.stderr.strip() == "error: invalid release version: invalid/version"
 
 
 @pytest.mark.parametrize(

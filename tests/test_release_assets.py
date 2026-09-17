@@ -229,6 +229,7 @@ def test_macos_dmg_package_writes_versioned_name_only(tmp_path: Path) -> None:
     app = tree / "dist" / "DataPyn.app"
     app.mkdir(parents=True)
     (app / "Contents").mkdir()
+    (tree / "DataPyn-macos-arm64.dmg").write_text("stale alias", encoding="utf-8")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     hdiutil = fake_bin / "hdiutil"
@@ -250,6 +251,29 @@ def test_macos_dmg_package_writes_versioned_name_only(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert (tree / "DataPyn-1.57.0-macos-arm64.dmg").is_file()
     assert not (tree / "DataPyn-macos-arm64.dmg").exists()
+
+
+def test_macos_dmg_package_rejects_missing_app(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    script_dir = tree / "scripts" / "macos"
+    script_dir.mkdir(parents=True)
+    script = script_dir / "package_dmg.sh"
+    script.write_text(
+        (ROOT / "scripts/macos/package_dmg.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(script), "1.57.0"],
+        cwd=tree,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "error: dist/DataPyn.app not found. Run PyInstaller first."
 
 
 def test_macos_release_uploads_versioned_dmg_only() -> None:

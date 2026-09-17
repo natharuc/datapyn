@@ -16,6 +16,13 @@ PACMAN_COMMAND="${DATAPYN_PACMAN_COMMAND:-pacman}"
 RELEASE_METADATA_SCRIPT="${DATAPYN_RELEASE_METADATA_SCRIPT:-$ROOT/scripts/linux/release_metadata.py}"
 MANIFEST_FILENAME="DataPyn-linux-artifacts.json"
 CHECKSUMS_FILENAME="SHA256SUMS"
+readonly UNVERSIONED_ALIASES=(
+  "datapyn_amd64.deb"
+  "datapyn-x86_64.rpm"
+  "datapyn-x86_64.pkg.tar.zst"
+  "DataPyn-x86_64.AppImage"
+  "DataPyn-linux-x86_64.tar.gz"
+)
 
 # The Debian dependency list is the source capability list. Every capability must have a
 # family-specific mapping before its target package is built; an omitted mapping is an error.
@@ -709,7 +716,8 @@ cleanup_outputs() {
     "$PACMAN_VERSIONED" \
     "$APPIMAGE_VERSIONED" \
     "$TAR_VERSIONED" \
-    "$MANIFEST_FILENAME" "$CHECKSUMS_FILENAME"; do
+    "$MANIFEST_FILENAME" "$CHECKSUMS_FILENAME" \
+    "${UNVERSIONED_ALIASES[@]}"; do
     [[ -z "$output" ]] || rm -f "$OUTPUT_DIR/$output"
   done
 }
