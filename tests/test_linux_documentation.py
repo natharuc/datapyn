@@ -45,19 +45,13 @@ def generated_manifest(tmp_path: Path) -> dict[str, object]:
     for index, artifact in enumerate(definitions):
         payload = f"fixture-{index}\n".encode()
         (tmp_path / artifact["filename"]).write_bytes(payload)
-        (tmp_path / artifact["stable_alias"]).write_bytes(payload)
 
     metadata.build_manifest(tmp_path, VERSION, TAG, "natharuc/datapyn")
     return json.loads((tmp_path / metadata.MANIFEST_FILENAME).read_text(encoding="utf-8"))
 
 
 def manifest_filenames(manifest: dict[str, object]) -> set[str]:
-    versioned = {artifact["filename"] for artifact in manifest["artifacts"]}
-    aliases = {
-        artifact["stable_alias"]
-        for artifact in load_metadata_helper().expected_artifacts(VERSION)
-    }
-    return versioned | aliases
+    return {artifact["filename"] for artifact in manifest["artifacts"]}
 
 
 def test_readme_lists_required_labels_and_fuse3_guidance(tmp_path: Path) -> None:
@@ -92,3 +86,39 @@ def test_missing_documented_filename_is_reported(tmp_path: Path) -> None:
     absent = sorted(documented - manifest_filenames(manifest))
 
     assert absent == [missing]
+
+
+INSTALL_COMMANDS = (
+    "apt install",
+    "dnf install",
+    "zypper install",
+    "pacman -U",
+    "chmod +x",
+    "--appimage-extract-and-run",
+    "tar -xzf",
+)
+VERSIONED_INSTALL_NAME = re.compile(
+    r"(?:datapyn_VERSION_amd64\.deb|datapyn-VERSION-1\.x86_64\.rpm|"
+    r"datapyn-VERSION-1-x86_64\.pkg\.tar\.zst|DataPyn-VERSION-x86_64\.AppImage|"
+    r"DataPyn-VERSION-linux-x86_64\.tar\.gz)"
+)
+
+
+def test_readme_install_commands_use_versioned_names() -> None:
+    readme = README.read_text(encoding="utf-8")
+    section = readme[readme.index("## Instalacao") : readme.index("**Desenvolvedores**")]
+
+    for command in INSTALL_COMMANDS:
+        matching_lines = [line for line in section.splitlines() if command in line]
+        assert matching_lines, command
+        for line in matching_lines:
+            assert VERSIONED_INSTALL_NAME.search(line), line
+
+    launch_lines = [
+        line
+        for line in section.splitlines()
+        if "./DataPyn-" in line and "--appimage-extract-and-run" not in line
+    ]
+    assert launch_lines
+    for line in launch_lines:
+        assert VERSIONED_INSTALL_NAME.search(line), line

@@ -16,6 +16,13 @@ PACMAN_COMMAND="${DATAPYN_PACMAN_COMMAND:-pacman}"
 RELEASE_METADATA_SCRIPT="${DATAPYN_RELEASE_METADATA_SCRIPT:-$ROOT/scripts/linux/release_metadata.py}"
 MANIFEST_FILENAME="DataPyn-linux-artifacts.json"
 CHECKSUMS_FILENAME="SHA256SUMS"
+readonly UNVERSIONED_ALIASES=(
+  "datapyn_amd64.deb"
+  "datapyn-x86_64.rpm"
+  "datapyn-x86_64.pkg.tar.zst"
+  "DataPyn-x86_64.AppImage"
+  "DataPyn-linux-x86_64.tar.gz"
+)
 
 # The Debian dependency list is the source capability list. Every capability must have a
 # family-specific mapping before its target package is built; an omitted mapping is an error.
@@ -152,15 +159,10 @@ declare -Ar PACMAN_DEPENDENCY_MAP=(
 
 VERSION="${1:-}"
 DEB_VERSIONED=""
-DEB_STABLE=""
 RPM_VERSIONED=""
-RPM_STABLE=""
 PACMAN_VERSIONED=""
-PACMAN_STABLE=""
 APPIMAGE_VERSIONED=""
-APPIMAGE_STABLE=""
 TAR_VERSIONED=""
-TAR_STABLE=""
 MAPPED_DEPENDENCIES=()
 MAPPED_RECOMMENDS=()
 
@@ -168,15 +170,10 @@ set_artifact_names() {
   local version="$1"
 
   DEB_VERSIONED="datapyn_${version}_amd64.deb"
-  DEB_STABLE="datapyn_amd64.deb"
   RPM_VERSIONED="datapyn-${version}-1.x86_64.rpm"
-  RPM_STABLE="datapyn-x86_64.rpm"
   PACMAN_VERSIONED="datapyn-${version}-1-x86_64.pkg.tar.zst"
-  PACMAN_STABLE="datapyn-x86_64.pkg.tar.zst"
   APPIMAGE_VERSIONED="DataPyn-${version}-x86_64.AppImage"
-  APPIMAGE_STABLE="DataPyn-x86_64.AppImage"
   TAR_VERSIONED="DataPyn-${version}-linux-x86_64.tar.gz"
-  TAR_STABLE="DataPyn-linux-x86_64.tar.gz"
 }
 
 release_tag_for_version() {
@@ -238,15 +235,10 @@ print_plan() {
 
   set_artifact_names "$version"
   printf 'deb_versioned=%s\n' "$DEB_VERSIONED"
-  printf 'deb_stable=%s\n' "$DEB_STABLE"
   printf 'rpm_versioned=%s\n' "$RPM_VERSIONED"
-  printf 'rpm_stable=%s\n' "$RPM_STABLE"
   printf 'pacman_versioned=%s\n' "$PACMAN_VERSIONED"
-  printf 'pacman_stable=%s\n' "$PACMAN_STABLE"
   printf 'appimage_versioned=%s\n' "$APPIMAGE_VERSIONED"
-  printf 'appimage_stable=%s\n' "$APPIMAGE_STABLE"
   printf 'tar_versioned=%s\n' "$TAR_VERSIONED"
-  printf 'tar_stable=%s\n' "$TAR_STABLE"
 }
 
 validate_version() {
@@ -415,7 +407,6 @@ print_appimage_metadata() {
   printf 'appimage_architecture=x86_64\n'
   printf 'appimage_display_name=Universal Linux (AppImage, FUSE3)\n'
   printf 'appimage_filename=%s\n' "$APPIMAGE_VERSIONED"
-  printf 'appimage_stable_alias=%s\n' "$APPIMAGE_STABLE"
   printf 'appimage_requires=fuse3\n'
   printf 'appimage_install_mode=portable\n'
   printf 'appimage_runtime=type2\n'
@@ -536,11 +527,28 @@ check_toolchain() {
   require_command python3 "Linux release metadata"
 }
 
+refuse_bundled_host_runtime() {
+  local path
+  local relative
+
+  shopt -s globstar nullglob
+  for path in \
+    "$DIST_DIR"/libstdc++.so* "$DIST_DIR"/**/libstdc++.so* \
+    "$DIST_DIR"/libgcc_s.so* "$DIST_DIR"/**/libgcc_s.so*; do
+    relative="${path#"$DIST_DIR"/}"
+    shopt -u globstar nullglob
+    echo "error: dist/DataPyn must not bundle host runtime library: $relative" >&2
+    return 1
+  done
+  shopt -u globstar nullglob
+}
+
 stage_payload() {
   if [[ ! -d "$DIST_DIR" ]]; then
     echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
     return 1
   fi
+  refuse_bundled_host_runtime
 
   rm -rf "$STAGE_DIR"
   mkdir -p \
@@ -703,12 +711,13 @@ smoke_appimage_extract_and_run() {
 cleanup_outputs() {
   local output
   for output in \
-    "$DEB_VERSIONED" "$DEB_STABLE" \
-    "$RPM_VERSIONED" "$RPM_STABLE" \
-    "$PACMAN_VERSIONED" "$PACMAN_STABLE" \
-    "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE" \
-    "$TAR_VERSIONED" "$TAR_STABLE" \
-    "$MANIFEST_FILENAME" "$CHECKSUMS_FILENAME"; do
+    "$DEB_VERSIONED" \
+    "$RPM_VERSIONED" \
+    "$PACMAN_VERSIONED" \
+    "$APPIMAGE_VERSIONED" \
+    "$TAR_VERSIONED" \
+    "$MANIFEST_FILENAME" "$CHECKSUMS_FILENAME" \
+    "${UNVERSIONED_ALIASES[@]}"; do
     [[ -z "$output" ]] || rm -f "$OUTPUT_DIR/$output"
   done
 }
@@ -887,17 +896,6 @@ build_tarball() {
   tar -czf "$OUTPUT_DIR/$TAR_VERSIONED" -C "$(dirname "$DIST_DIR")" "$(basename "$DIST_DIR")"
 }
 
-copy_stable_alias() {
-  local versioned="$1"
-  local stable="$2"
-
-  cp "$OUTPUT_DIR/$versioned" "$OUTPUT_DIR/$stable"
-  cmp -s "$OUTPUT_DIR/$versioned" "$OUTPUT_DIR/$stable" || {
-    echo "error: stable alias is not byte-identical to $versioned: $stable" >&2
-    return 1
-  }
-}
-
 main() {
   if [[ "${1:-}" == "--generate-release-metadata" || "${1:-}" == "--generate-manifest" ]]; then
     [[ -n "${2:-}" ]] || { echo "error: version required (e.g. 1.57.0)" >&2; return 1; }
@@ -981,17 +979,17 @@ main() {
       echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
       return 1
     fi
-
-    trap cleanup_on_error EXIT
     mkdir -p "$OUTPUT_DIR"
     cleanup_outputs
+    refuse_bundled_host_runtime
+
+    trap cleanup_on_error EXIT
     check_appimage_toolchain
     stage_payload
     build_appimage
-    copy_stable_alias "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
     trap - EXIT
     echo "Created:"
-    printf '%s\n' "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
+    printf '%s\n' "$APPIMAGE_VERSIONED"
     return 0
   fi
 
@@ -1025,10 +1023,11 @@ main() {
     echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
     return 1
   fi
-
-  trap cleanup_on_error EXIT
   mkdir -p "$OUTPUT_DIR"
   cleanup_outputs
+  refuse_bundled_host_runtime
+
+  trap cleanup_on_error EXIT
   check_toolchain
   check_appimage_toolchain
   stage_payload
@@ -1049,12 +1048,6 @@ main() {
 
   build_tarball
 
-  copy_stable_alias "$DEB_VERSIONED" "$DEB_STABLE"
-  copy_stable_alias "$RPM_VERSIONED" "$RPM_STABLE"
-  copy_stable_alias "$PACMAN_VERSIONED" "$PACMAN_STABLE"
-  copy_stable_alias "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
-  copy_stable_alias "$TAR_VERSIONED" "$TAR_STABLE"
-
   generate_release_metadata "$version" "$release_tag"
   validate_release_completeness "$version" "$release_tag"
 
@@ -1062,7 +1055,6 @@ main() {
   echo "Created:"
   printf '%s\n' \
     "$DEB_VERSIONED" "$RPM_VERSIONED" "$PACMAN_VERSIONED" "$APPIMAGE_VERSIONED" "$TAR_VERSIONED" \
-    "$DEB_STABLE" "$RPM_STABLE" "$PACMAN_STABLE" "$APPIMAGE_STABLE" "$TAR_STABLE" \
     "$MANIFEST_FILENAME" "$CHECKSUMS_FILENAME"
 }
 

@@ -14,8 +14,7 @@ if [ ! -d "$APP" ]; then
 fi
 
 DMG_VERSIONED="DataPyn-${VERSION}-macos-arm64.dmg"
-DMG_STABLE="DataPyn-macos-arm64.dmg"
-rm -f "$DMG_VERSIONED" "$DMG_STABLE"
+rm -f "$DMG_VERSIONED" "DataPyn-macos-arm64.dmg"
 
 STAGE="$(mktemp -d)"
 cleanup() { rm -rf "$STAGE"; }
@@ -31,5 +30,4 @@ hdiutil create \
   -format UDZO \
   "$DMG_VERSIONED"
 
-cp "$DMG_VERSIONED" "$DMG_STABLE"
-ls -lh "$DMG_VERSIONED" "$DMG_STABLE"
+ls -lh "$DMG_VERSIONED"

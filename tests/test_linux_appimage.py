@@ -31,6 +31,136 @@ def run_package(*args: str, env: dict[str, str] | None = None) -> subprocess.Com
     )
 
 
+@pytest.mark.parametrize(
+    "library",
+    ("libstdc++.so.6", "libstdc++.so.fixture", "libgcc_s.so.1", "libgcc_s.so.fixture"),
+)
+def test_bundled_host_runtime_library_blocks_appimage(tmp_path: Path, library: str) -> None:
+    dist_dir = tmp_path / "dist" / "DataPyn"
+    internal = dist_dir / "_internal"
+    internal.mkdir(parents=True)
+    (internal / library).write_bytes(b"dummy-host-runtime")
+    executable = dist_dir / "DataPyn"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "DataPyn-1.57.0-x86_64.AppImage").write_text(
+        "stale artifact", encoding="utf-8"
+    )
+
+    result = run_package(
+        "--appimage-only",
+        "1.57.0",
+        env={
+            "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
+            "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
+            "DATAPYN_PACKAGE_STAGE_DIR": str(tmp_path / "pkg"),
+            "DATAPYN_PACKAGE_APPDIR": str(tmp_path / "AppDir"),
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        result.stderr.strip()
+        == f"error: dist/DataPyn must not bundle host runtime library: _internal/{library}"
+    )
+    assert not (output_dir / "DataPyn-1.57.0-x86_64.AppImage").exists()
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_error"),
+    (
+        ((), "error: version required (e.g. 1.57.0)"),
+        (("invalid/version",), "error: invalid release version: invalid/version"),
+    ),
+    ids=("missing-version", "invalid-version"),
+)
+def test_appimage_only_rejects_missing_and_invalid_versions(
+    args: tuple[str, ...], expected_error: str
+) -> None:
+    result = run_package("--appimage-only", *args)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == expected_error
+
+
+def test_host_runtime_gate_allows_other_libraries(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist" / "DataPyn"
+    internal = dist_dir / "_internal"
+    internal.mkdir(parents=True)
+    (internal / "libssl.so.3").write_bytes(b"dummy-ssl")
+    (internal / "libz.so.1").write_bytes(b"dummy-z")
+    executable = dist_dir / "DataPyn"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output"
+    missing_tool = tmp_path / "missing-appimagetool"
+
+    result = run_package(
+        "--appimage-only",
+        "1.57.0",
+        env={
+            "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
+            "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
+            "DATAPYN_PACKAGE_STAGE_DIR": str(tmp_path / "pkg"),
+            "DATAPYN_PACKAGE_APPDIR": str(tmp_path / "AppDir"),
+            "DATAPYN_APPIMAGE_TOOL": str(missing_tool),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "pinned AppImage builder is unavailable" in result.stderr
+    assert "must not bundle host runtime library" not in result.stderr
+
+
+def test_appimage_only_writes_versioned_name_only(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist" / "DataPyn"
+    dist_dir.mkdir(parents=True)
+    executable = dist_dir / "DataPyn"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "DataPyn-x86_64.AppImage").write_text("stale alias", encoding="utf-8")
+    wrapper = tmp_path / "stubbed_appimage.sh"
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        f"source {shlex.quote(str(PACKAGE_SCRIPT))}\n"
+        "check_appimage_toolchain() { return 0; }\n"
+        "build_appimage() {\n"
+        '  mkdir -p "$OUTPUT_DIR"\n'
+        '  printf "appimage-fixture\\n" > "$OUTPUT_DIR/$APPIMAGE_VERSIONED"\n'
+        '  chmod +x "$OUTPUT_DIR/$APPIMAGE_VERSIONED"\n'
+        "}\n"
+        'main "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(wrapper), "--appimage-only", "1.57.0"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
+            "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
+            "DATAPYN_PACKAGE_STAGE_DIR": str(tmp_path / "pkg"),
+            "DATAPYN_PACKAGE_APPDIR": str(tmp_path / "AppDir"),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    created_index = result.stdout.splitlines().index("Created:")
+    created = tuple(result.stdout.splitlines()[created_index + 1 :])
+    assert created == ("DataPyn-1.57.0-x86_64.AppImage",)
+    assert (output_dir / "DataPyn-1.57.0-x86_64.AppImage").is_file()
+    assert not (output_dir / "DataPyn-x86_64.AppImage").exists()
+
+
 def test_appimage_metadata_declares_portable_x86_64_fuse3_contract() -> None:
     result = run_package("--print-appimage-metadata", "1.57.0")
 
@@ -42,7 +172,6 @@ def test_appimage_metadata_declares_portable_x86_64_fuse3_contract() -> None:
         "appimage_architecture": "x86_64",
         "appimage_display_name": "Universal Linux (AppImage, FUSE3)",
         "appimage_filename": "DataPyn-1.57.0-x86_64.AppImage",
-        "appimage_stable_alias": "DataPyn-x86_64.AppImage",
         "appimage_requires": "fuse3",
         "appimage_install_mode": "portable",
         "appimage_runtime": "type2",
@@ -51,6 +180,8 @@ def test_appimage_metadata_declares_portable_x86_64_fuse3_contract() -> None:
         "appimage_builder_version": "1.9.1",
         "appimage_builder_sha256": "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0",
     }
+    assert len(metadata) == 12
+    assert "appimage_stable_alias" not in metadata
 
 
 def test_fuse2_only_policy_is_rejected() -> None:
@@ -316,7 +447,7 @@ def fixture_appimage(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pa
     artifact = output_dir / "DataPyn-1.57.0-x86_64.AppImage"
     assert artifact.is_file()
     assert artifact.stat().st_mode & 0o111
-    assert (output_dir / "DataPyn-x86_64.AppImage").read_bytes() == artifact.read_bytes()
+    assert not (output_dir / "DataPyn-x86_64.AppImage").exists()
     return artifact, smoke_log
 
 

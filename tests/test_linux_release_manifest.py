@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_release_assets import load_workflow_yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_SCRIPT = ROOT / "scripts/linux/package.sh"
@@ -25,7 +27,7 @@ VERSIONED = (
     f"DataPyn-{VERSION}-x86_64.AppImage",
     f"DataPyn-{VERSION}-linux-x86_64.tar.gz",
 )
-ALIASES = (
+UNVERSIONED_ALIASES = (
     "datapyn_amd64.deb",
     "datapyn-x86_64.rpm",
     "datapyn-x86_64.pkg.tar.zst",
@@ -33,7 +35,18 @@ ALIASES = (
     "DataPyn-linux-x86_64.tar.gz",
 )
 RELEASE_METADATA = ("DataPyn-linux-artifacts.json", "SHA256SUMS")
-ALL_RELEASE_ASSETS = (*VERSIONED, *ALIASES, *RELEASE_METADATA)
+ALL_RELEASE_ASSETS = (*VERSIONED, *RELEASE_METADATA)
+ARTIFACT_KEYS = {
+    "id",
+    "format",
+    "distro_family",
+    "display_name",
+    "filename",
+    "download_url",
+    "sha256",
+    "requires",
+    "install_mode",
+}
 
 
 def run_package(
@@ -57,10 +70,9 @@ def run_package(
 
 def seed_release(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    for index, (versioned, alias) in enumerate(zip(VERSIONED, ALIASES, strict=True)):
+    for index, versioned in enumerate(VERSIONED):
         payload = f"fixture-{index}\n".encode()
         (output_dir / versioned).write_bytes(payload)
-        (output_dir / alias).write_bytes(payload)
 
 
 def generate_fixture(output_dir: Path) -> None:
@@ -73,7 +85,7 @@ def generate_fixture(output_dir: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_release_asset_list_contains_versioned_alias_metadata_set() -> None:
+def test_release_asset_list_contains_versioned_metadata_set() -> None:
     result = run_package("--print-release-assets", VERSION)
 
     assert result.returncode == 0, result.stderr
@@ -98,15 +110,18 @@ def test_manifest_and_checksums_describe_complete_fixture(tmp_path: Path) -> Non
     assert manifest["version"] == VERSION
     assert manifest["release_tag"] == TAG
     assert manifest["architecture"] == "x86_64"
+    assert len(manifest["artifacts"]) == 5
     assert [artifact["filename"] for artifact in manifest["artifacts"]] == list(VERSIONED)
+    for artifact in manifest["artifacts"]:
+        assert set(artifact) == ARTIFACT_KEYS
 
+    checksum_lines = (tmp_path / RELEASE_METADATA[1]).read_text(encoding="utf-8").splitlines()
+    assert len(checksum_lines) == 5
     checksums = {
         filename: digest
-        for digest, filename in (
-            line.split(maxsplit=1)
-            for line in (tmp_path / RELEASE_METADATA[1]).read_text(encoding="utf-8").splitlines()
-        )
+        for digest, filename in (line.split(maxsplit=1) for line in checksum_lines)
     }
+    assert set(checksums) == set(VERSIONED)
     for artifact in manifest["artifacts"]:
         digest = hashlib.sha256((tmp_path / artifact["filename"]).read_bytes()).hexdigest()
         assert artifact["sha256"] == digest
@@ -128,14 +143,21 @@ def test_appimage_manifest_declares_fuse3_and_portable_mode(tmp_path: Path) -> N
     assert appimage["install_mode"] == "portable"
 
 
-def test_missing_artifact_blocks_metadata_generation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("empty", (False, True))
+def test_missing_artifact_blocks_metadata_generation(tmp_path: Path, empty: bool) -> None:
     seed_release(tmp_path)
-    (tmp_path / VERSIONED[1]).unlink()
+    artifact = tmp_path / VERSIONED[1]
+    if empty:
+        artifact.write_bytes(b"")
+    else:
+        artifact.unlink()
 
     result = run_package("--generate-release-metadata", VERSION, TAG, output_dir=tmp_path)
 
     assert result.returncode != 0
     assert VERSIONED[1] in result.stderr
+    if empty:
+        assert "empty" in result.stderr
     assert not (tmp_path / RELEASE_METADATA[0]).exists()
     assert not (tmp_path / RELEASE_METADATA[1]).exists()
 
@@ -189,15 +211,14 @@ def test_missing_checksum_blocks_release_validation(tmp_path: Path) -> None:
     assert VERSIONED[2] in result.stderr
 
 
-def test_stable_aliases_must_be_byte_identical(tmp_path: Path) -> None:
+def test_stale_unversioned_alias_does_not_block_validation(tmp_path: Path) -> None:
     seed_release(tmp_path)
     generate_fixture(tmp_path)
-    (tmp_path / ALIASES[0]).write_bytes(b"changed alias")
+    (tmp_path / UNVERSIONED_ALIASES[0]).write_bytes(b"changed alias")
 
     result = run_package("--validate-release", VERSION, TAG, output_dir=tmp_path)
 
-    assert result.returncode != 0
-    assert ALIASES[0] in result.stderr
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -273,17 +294,40 @@ def test_release_metadata_isolated_by_output_directory(tmp_path: Path) -> None:
     assert not (second / "partial-upload-marker").exists()
 
 
-def test_main_and_dry_run_workflows_share_assets_and_dry_run_never_publishes() -> None:
-    main = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    dry_run = DRY_RUN_WORKFLOW.read_text(encoding="utf-8")
+def test_workflows_share_versioned_assets_and_dry_run_never_publishes() -> None:
+    main_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    dry_run_text = DRY_RUN_WORKFLOW.read_text(encoding="utf-8")
+    main_job = load_workflow_yaml(RELEASE_WORKFLOW)["jobs"]["build-linux-release"]
+    dry_run_job = load_workflow_yaml(DRY_RUN_WORKFLOW)["jobs"]["build-linux-deb"]
+    release_assets_output = "${{ steps.release_assets.outputs.files }}"
 
-    assert "bash scripts/linux/package.sh --print-release-assets" in main
-    assert "bash scripts/linux/package.sh --print-release-assets" in dry_run
-    assert main.count("steps.release_assets.outputs.files") >= 2
-    assert dry_run.count("steps.release_assets.outputs.files") >= 2
-    assert "id: release_assets" in main
-    assert "id: release_assets" in dry_run
-    assert "softprops/action-gh-release" in main
-    assert "softprops/action-gh-release" not in dry_run
-    assert "--validate-release" in main
-    assert "--validate-release" in dry_run
+    for job, version in (
+        (main_job, "${{ needs.release.outputs.version }}"),
+        (dry_run_job, "${{ steps.version.outputs.version }}"),
+    ):
+        release_assets_step = next(
+            step for step in job["steps"] if step.get("id") == "release_assets"
+        )
+        assert release_assets_step["run"] == (
+            "{\n"
+            "  echo 'files<<EOF'\n"
+            f'  bash scripts/linux/package.sh --print-release-assets "{version}"\n'
+            "  echo EOF\n"
+            '} >> "$GITHUB_OUTPUT"'
+        )
+
+    assert [
+        step["with"]["files"]
+        for step in main_job["steps"]
+        if str(step.get("uses", "")).startswith("softprops/action-gh-release")
+    ] == [release_assets_output]
+    assert [
+        step["with"]["path"]
+        for step in dry_run_job["steps"]
+        if str(step.get("uses", "")).startswith("actions/upload-artifact")
+    ] == [release_assets_output]
+    assert "--validate-release" in main_text
+    assert "--validate-release" in dry_run_text
+    for alias in UNVERSIONED_ALIASES:
+        assert alias not in main_text
+        assert alias not in dry_run_text

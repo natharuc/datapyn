@@ -112,12 +112,12 @@ Instaladores oficiais: [datapyn.page/downloads.html](https://datapyn.page/downlo
 | Sistema | Rótulo do artefato | Nome e instalação |
 |---------|---------------------|-------------------|
 | Windows x64 | `DataPyn-Setup.exe` | Instala em `%LOCALAPPDATA%\DataPyn` |
-| Linux x86_64/amd64 — Debian/Ubuntu | `Ubuntu/Debian (.deb)` | Ubuntu/Debian 22.04+ — `datapyn_VERSION_amd64.deb` (alias estável: `datapyn_amd64.deb`) — `sudo apt install ./datapyn_amd64.deb` |
-| Linux x86_64 — Fedora/RHEL/openSUSE | `Fedora/RHEL/openSUSE (.rpm)` | `datapyn-VERSION-1.x86_64.rpm` (alias estável: `datapyn-x86_64.rpm`) — `sudo dnf install ./datapyn-x86_64.rpm` ou `sudo zypper install ./datapyn-x86_64.rpm` |
-| Linux x86_64 — Arch/Manjaro | `Arch/Manjaro (.pkg.tar.zst)` | `datapyn-VERSION-1-x86_64.pkg.tar.zst` (alias estável: `datapyn-x86_64.pkg.tar.zst`) — `sudo pacman -U ./datapyn-x86_64.pkg.tar.zst` |
-| Linux x86_64 — portátil | `Universal Linux (AppImage, FUSE3)` | `DataPyn-VERSION-x86_64.AppImage` (alias estável: `DataPyn-x86_64.AppImage`) |
-| Linux x86_64 — fallback | `Other Linux (.tar.gz)` | `DataPyn-VERSION-linux-x86_64.tar.gz` (alias estável: `DataPyn-linux-x86_64.tar.gz`) |
-| macOS Apple Silicon | `DataPyn-macos-arm64.dmg` | Unsigned — no Gatekeeper use **Open** no menu de contexto ou `xattr -cr /Applications/DataPyn.app` |
+| Linux x86_64/amd64 — Debian/Ubuntu | `Ubuntu/Debian (.deb)` | Ubuntu/Debian 22.04+ — `datapyn_VERSION_amd64.deb` — `sudo apt install ./datapyn_VERSION_amd64.deb` |
+| Linux x86_64 — Fedora/RHEL/openSUSE | `Fedora/RHEL/openSUSE (.rpm)` | `datapyn-VERSION-1.x86_64.rpm` — `sudo dnf install ./datapyn-VERSION-1.x86_64.rpm` ou `sudo zypper install ./datapyn-VERSION-1.x86_64.rpm` |
+| Linux x86_64 — Arch/Manjaro | `Arch/Manjaro (.pkg.tar.zst)` | `datapyn-VERSION-1-x86_64.pkg.tar.zst` — `sudo pacman -U ./datapyn-VERSION-1-x86_64.pkg.tar.zst` |
+| Linux x86_64 — portátil | `Universal Linux (AppImage, FUSE3)` | `DataPyn-VERSION-x86_64.AppImage` |
+| Linux x86_64 — fallback | `Other Linux (.tar.gz)` | `DataPyn-VERSION-linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `DataPyn-VERSION-macos-arm64.dmg` | Unsigned — no Gatekeeper use **Open** no menu de contexto ou `xattr -cr /Applications/DataPyn.app` |
 
 Nos nomes versionados, `VERSION` é substituído pela versão da release (por exemplo, `1.57.0`). A
 primeira arquitetura Linux publicada é **x86_64** (chamada **amd64** no nome do pacote Debian);
@@ -128,21 +128,21 @@ Para o AppImage, o caminho normal usa **FUSE3** e `fusermount3`. Depois do downl
 arquivo executável e inicie-o:
 
 ```bash
-chmod +x DataPyn-x86_64.AppImage
-./DataPyn-x86_64.AppImage
+chmod +x DataPyn-VERSION-x86_64.AppImage
+./DataPyn-VERSION-x86_64.AppImage
 ```
 
 Se a montagem normal não estiver disponível, use o modo extract-and-run ou escolha um pacote
 nativo/tarball:
 
 ```bash
-./DataPyn-x86_64.AppImage --appimage-extract-and-run
+./DataPyn-VERSION-x86_64.AppImage --appimage-extract-and-run
 ```
 
 O AppImage não requer um pacote de FUSE legado. O tarball é um fallback manual:
 
 ```bash
-tar -xzf DataPyn-linux-x86_64.tar.gz
+tar -xzf DataPyn-VERSION-linux-x86_64.tar.gz
 ./DataPyn/DataPyn
 ```
 

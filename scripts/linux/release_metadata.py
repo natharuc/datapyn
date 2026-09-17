@@ -2,7 +2,7 @@
 """Build and validate the Linux release manifest and checksum list.
 
 This module is intentionally dependency-free.  ``package.sh`` owns the build order and invokes
-this helper only after the five versioned artifacts and their stable aliases exist.
+this helper only after the five versioned artifacts exist.
 """
 
 from __future__ import annotations
@@ -65,7 +65,6 @@ def expected_artifacts(version: str) -> list[dict[str, Any]]:
             "distro_family": "debian",
             "display_name": "Ubuntu/Debian (.deb)",
             "filename": f"datapyn_{version}_amd64.deb",
-            "stable_alias": "datapyn_amd64.deb",
             "requires": [],
             "install_mode": "native-package",
         },
@@ -75,7 +74,6 @@ def expected_artifacts(version: str) -> list[dict[str, Any]]:
             "distro_family": "rpm",
             "display_name": "Fedora/RHEL/openSUSE (.rpm)",
             "filename": f"datapyn-{version}-1.x86_64.rpm",
-            "stable_alias": "datapyn-x86_64.rpm",
             "requires": [],
             "install_mode": "native-package",
         },
@@ -85,7 +83,6 @@ def expected_artifacts(version: str) -> list[dict[str, Any]]:
             "distro_family": "arch",
             "display_name": "Arch/Manjaro (.pkg.tar.zst)",
             "filename": f"datapyn-{version}-1-x86_64.pkg.tar.zst",
-            "stable_alias": "datapyn-x86_64.pkg.tar.zst",
             "requires": [],
             "install_mode": "native-package",
         },
@@ -95,7 +92,6 @@ def expected_artifacts(version: str) -> list[dict[str, Any]]:
             "distro_family": "universal",
             "display_name": "Universal Linux (AppImage, FUSE3)",
             "filename": f"DataPyn-{version}-x86_64.AppImage",
-            "stable_alias": "DataPyn-x86_64.AppImage",
             "requires": ["fuse3"],
             "install_mode": "portable",
         },
@@ -105,7 +101,6 @@ def expected_artifacts(version: str) -> list[dict[str, Any]]:
             "distro_family": "generic",
             "display_name": "Other Linux (.tar.gz)",
             "filename": f"DataPyn-{version}-linux-x86_64.tar.gz",
-            "stable_alias": "DataPyn-linux-x86_64.tar.gz",
             "requires": [],
             "install_mode": "manual-extract",
         },
@@ -116,16 +111,11 @@ def versioned_filenames(version: str) -> list[str]:
     return [artifact["filename"] for artifact in expected_artifacts(version)]
 
 
-def stable_aliases(version: str) -> list[str]:
-    return [artifact["stable_alias"] for artifact in expected_artifacts(version)]
-
-
 def release_asset_filenames(version: str) -> list[str]:
     """Return the exact files that the release workflows must upload."""
 
     return [
         *versioned_filenames(version),
-        *stable_aliases(version),
         MANIFEST_FILENAME,
         CHECKSUMS_FILENAME,
     ]
@@ -175,20 +165,10 @@ def _require_file(output_dir: Path, filename: str, *, label: str = "artifact") -
 
 
 def validate_artifact_set(output_dir: Path, version: str) -> None:
-    """Validate versioned artifacts and byte-identical stable aliases."""
+    """Validate the five versioned artifacts."""
 
-    definitions = expected_artifacts(version)
-    for artifact in definitions:
-        versioned = _require_file(output_dir, artifact["filename"])
-        alias = _require_file(output_dir, artifact["stable_alias"], label="stable alias")
-        try:
-            same_bytes = versioned.read_bytes() == alias.read_bytes()
-        except OSError as exc:
-            raise MetadataError(f"cannot compare stable alias {artifact['stable_alias']}: {exc}") from exc
-        if not same_bytes:
-            raise MetadataError(
-                f"stable alias is not byte-identical to {artifact['filename']}: {artifact['stable_alias']}"
-            )
+    for artifact in expected_artifacts(version):
+        _require_file(output_dir, artifact["filename"])
 
 
 def _manifest_artifact(artifact: dict[str, Any], output_dir: Path, repository: str, release_tag: str) -> dict[str, Any]:

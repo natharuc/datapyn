@@ -4,6 +4,7 @@ PyInstaller spec file para DataPyn
 Execute: pyinstaller scripts/datapyn.spec
 """
 
+import fnmatch
 import glob
 import os
 import site
@@ -186,6 +187,14 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+if sys.platform.startswith('linux'):
+    def _is_host_cxx_runtime(dest_name):
+        base = os.path.basename(str(dest_name).replace('\\', '/'))
+        return fnmatch.fnmatch(base, 'libstdc++.so*') or fnmatch.fnmatch(base, 'libgcc_s.so*')
+
+    a.binaries = [entry for entry in a.binaries if not _is_host_cxx_runtime(entry[0])]
+    a.datas = [entry for entry in a.datas if not _is_host_cxx_runtime(entry[0])]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

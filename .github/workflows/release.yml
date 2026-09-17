@@ -219,13 +219,9 @@ jobs:
       - name: Build | Generate DataPyn-Setup.exe
         run: uv run pyinstaller installer/datapyn_setup.spec --clean
 
-      - name: Build | Rename setup executable
+      - name: Build | Place DataPyn-Setup.exe
         shell: pwsh
-        run: |
-          $version = "${{ needs.release.outputs.version }}"
-          Move-Item -Force "dist\DataPyn-Setup.exe" "DataPyn-Setup-${version}.exe"
-          Copy-Item "DataPyn-Setup-${version}.exe" "DataPyn-Setup.exe"
-          Write-Host "Setup executables ready"
+        run: Move-Item -Force "dist\DataPyn-Setup.exe" "DataPyn-Setup.exe"
 
       - name: Publish | Upload artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -233,7 +229,6 @@ jobs:
           tag_name: ${{ needs.release.outputs.tag }}
           files: |
             DataPyn-${{ needs.release.outputs.version }}-windows.zip
-            DataPyn-Setup-${{ needs.release.outputs.version }}.exe
             DataPyn-Setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -446,6 +441,5 @@ jobs:
           tag_name: ${{ needs.release.outputs.tag }}
           files: |
             DataPyn-${{ needs.release.outputs.version }}-macos-arm64.dmg
-            DataPyn-macos-arm64.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
